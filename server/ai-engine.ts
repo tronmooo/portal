@@ -9561,9 +9561,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const year = /^\d{4}-/.test(iso) ? Number(iso.slice(0, 4)) : NaN;
         const thisYear = new Date().getFullYear();
         if (label && year < thisYear) {
-          const profs = await storage.getProfiles();
+          const allProfs = await storage.getProfiles();
+          // Only records that HAVE a birthday. `matchProfileByName` searches
+          // every profile, so "Sam's Birthday" could land on a vehicle called
+          // Sam.
+          const profs = allProfs.filter((p: any) =>
+            p.type === "person" || p.type === "self" || p.type === "pet");
+          // An explicit target may be matched loosely; a name read out of the
+          // TITLE must be unambiguous. `matchProfileByName` returns the first
+          // of a tie, and writing a date of birth onto "whichever Sam matched
+          // first" is not a guess worth making — with two Sams this stays an
+          // ordinary event.
+          const byTitle = label.name.length >= 2
+            ? profs.filter((p: any) => matchProfileByName([p], label.name))
+            : [];
           const target = (input.forProfile && matchProfileByName(profs, input.forProfile))
-            || (label.name.length >= 2 ? matchProfileByName(profs, label.name) : null);
+            || (byTitle.length === 1 ? byTitle[0] : null);
           if (target) {
             const field = label.kind === "birthday" ? "dateOfBirth" : "anniversary";
             const existing: Record<string, any> = (target as any).fields || {};

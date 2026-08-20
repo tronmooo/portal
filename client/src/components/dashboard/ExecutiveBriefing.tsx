@@ -1287,8 +1287,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     {visibleDocs.slice(0, 4).map((d: any) => {
                       const name = d.documentName || d.name || d.fieldName || "Document";
                       const tone = tonePalette(toneForDays(d.daysUntil));
+                      // One row per RULE, not per record — a person with both a
+                      // passport and a licence expiring renders two, and keying
+                      // on the shared source-entity id gave them the same key.
                       return (
-                        <div key={d.documentId || d.id}
+                        <div key={d.ruleId || d.documentId || d.id}
                           role="button" tabIndex={0}
                           onClick={() => setPopup("docs")}
                           onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("docs"); } }}

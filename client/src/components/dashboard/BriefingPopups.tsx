@@ -622,7 +622,13 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
 
   const renew = useMutation({
     mutationFn: async (vars: { row: any; newDate: string }) => {
-      const full = docById.get(vars.row.documentId);
+      // Read the document being edited rather than hoping it is in the list.
+      // `/api/documents` is paginated, so a document past the first page missed
+      // the map and the fallback `{}` then PATCHed an empty extractedData over
+      // it — wiping every other field the document held.
+      const full = docById.get(vars.row.documentId)
+        ?? await apiRequest("GET", `/api/documents/${vars.row.documentId}`).then((r) => r.json());
+      if (!full) throw new Error("Couldn't load that document.");
       // Write the date back WHERE IT LIVES. A document's dates can sit inside a
       // nested group, and writing the leaf name at the top level left the stale
       // nested one in place — so renewing a licence gave the record two

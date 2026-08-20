@@ -463,75 +463,18 @@ function profileHref(p: any): string {
   return `#/profiles/${p.id}`;
 }
 
-/** Walk a fields record (flat or nested one-level) looking for date-like leaves. */
-function walkProfileFields(fields: any, profileType: string, profileId: string, profileName: string): UpcomingDate[] {
-  const out: UpcomingDate[] = [];
-  const today = todayISO();
-  if (!fields || typeof fields !== "object") return out;
-
-  const visit = (obj: any, parentKey = "") => {
-    if (!obj || typeof obj !== "object") return;
-    for (const [k, v] of Object.entries(obj)) {
-      if (v && typeof v === "object" && !Array.isArray(v)) {
-        visit(v, k);
-        continue;
-      }
-      if (typeof v !== "string") continue;
-      // Skip obviously non-date strings.
-      if (!/^\d{4}-\d{2}-\d{2}/.test(v) && !/\d{4}/.test(v)) continue;
-      const compositeKey = parentKey ? `${parentKey}.${k}` : k;
-      const category = inferCategoryFromKey(k, profileType) || (parentKey ? inferCategoryFromKey(parentKey, profileType) : null);
-      if (!category) continue;
-      const parsed = parseDate(v);
-      if (!parsed) continue;
-      const isAnnual = ANNUAL_RECURRING.has(category);
-      const nextDate = isAnnual ? rollAnnual(v, today) : (parsed.getTime() >= parseDate(today)!.getTime() ? isoFromDate(parsed) : null);
-      if (!nextDate) continue;
-      const daysUntil = daysBetween(today, nextDate);
-      out.push({
-        id: hashId([profileId, compositeKey, nextDate]),
-        sourceId: profileId,
-        category,
-        entityKind: classifyEntityKind({ type: profileType }),
-        title: `${profileName} — ${CATEGORY_LABELS[category]}`,
-        subtitle: prettyKey(compositeKey),
-        nextDate,
-        daysUntil,
-        urgency: classifyUrgency(daysUntil),
-        timeframe: classifyTimeframe(daysUntil),
-        recurring: isAnnual,
-        href: profileHref({ id: profileId }),
-        relatedProfileId: profileId,
-        needsActionSoon: daysUntil <= 14 && needsActionCategory(category),
-        icon: CATEGORY_ICONS[category],
-      });
-    }
-  };
-  visit(fields);
-  return out;
-}
-
-function prettyKey(k: string): string {
-  return k.replace(/[._]/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, c => c.toUpperCase());
-}
-
-function needsActionCategory(c: UpcomingCategory): boolean {
-  return c === "bill_due" || c === "loan_payment" || c === "credit_card_payment"
-    || c === "insurance_renewal" || c === "vehicle_registration" || c === "drivers_license_expiration"
-    || c === "passport_expiration" || c === "visa_expiration" || c === "tax_filing"
-    || c === "medication_refill" || c === "court_date" || c === "legal_filing"
-    || c === "document_expiration" || c === "warranty_expiration";
-}
-
-/** "9:00 AM" for a task with a clock time; "" for an all-day one. */
+/** "14:30" → "2:30 PM". Used by the task rows, which show the hour. */
 function clockLabel(hhmm: unknown): string {
   const v = String(hhmm || "");
   if (!/^\d{2}:\d{2}$/.test(v)) return "";
   const [h, m] = v.split(":").map(Number);
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 }
+
+// (Removed: `walkProfileFields`. It was this module's own idea of which profile
+// field is a meaningful date, and it disagreed with the calendar's — a licence
+// on a person reached here and nowhere else. Superseded by the Date Rule engine
+// below, and deleted rather than left dead so nothing calls it again.)
 
 // ── Profiles & documents: derived from the ONE Date Rule engine ─────────────
 //

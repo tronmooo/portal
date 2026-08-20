@@ -102,6 +102,13 @@ export function useCalendarOccurrences(
     queryKey: [...scopedKey("/api/documents", mode, kIds)],
     queryFn: () => get(`/api/documents${profileParam}`),
   });
+  // Recurring income. Without this the paycheck adapter existed and ran
+  // nowhere: "I get paid every other Friday" was in the finance tables and on
+  // no calendar surface at all.
+  const incomes = useQuery<any[]>({
+    queryKey: [...scopedKey("/api/incomes", mode, kIds)],
+    queryFn: () => get(`/api/incomes${profileParam}`),
+  });
 
   const profileList: any[] = Array.isArray(profiles.data)
     ? profiles.data
@@ -121,8 +128,9 @@ export function useCalendarOccurrences(
         obligations: Array.isArray(obligations.data) ? obligations.data : [],
         tasks: Array.isArray(tasks.data) ? tasks.data : [],
         documents: Array.isArray(documents.data) ? documents.data : [],
+        incomes: Array.isArray(incomes.data) ? incomes.data : [],
       }),
-    [profileList, eventList, obligations.data, tasks.data, documents.data],
+    [profileList, eventList, obligations.data, tasks.data, documents.data, incomes.data],
   );
 
   // Self ids drive the soft-orphan rule: an unassigned record belongs to the

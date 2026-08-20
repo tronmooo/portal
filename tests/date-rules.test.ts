@@ -31,6 +31,7 @@ import {
   isBareExpiryStatement,
   parseBirthdayLabel,
   dedupeRules,
+  EXPIRY_RULE_TYPES,
 } from "../shared/date-rules";
 import { seriesFromAll } from "../shared/calendar-adapters";
 import { resolveLiabilityDueDate, resolveLiabilityEndDate } from "../shared/liability-schedule";
@@ -1187,5 +1188,40 @@ describe("a liability's end date, like its due date", () => {
       }],
     });
     expect(series.find(s => s.source.system === "liability")?.recurrenceEnd).toBe("2029-09-01");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 22. Eleventh review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("the expirations list is for things that expire", () => {
+  it("does not file a premium due date as an expiring document", () => {
+    const [rule] = rulesFromProfiles([{
+      id: "ins-1", name: "Auto Policy", type: "insurance", fields: { premiumDueDate: "2026-08-08" },
+    }]);
+    expect(rule.ruleType).toBe("due");
+    // It counts down — but a bill belongs on the bills surface, not in a list
+    // of documents about to lapse reading "Expired 3d ago".
+    expect(rule.countdownEnabled).toBe(true);
+    expect(EXPIRY_RULE_TYPES.has(rule.ruleType)).toBe(false);
+  });
+
+  it("keeps the ones that really do lapse", () => {
+    for (const t of ["expiration", "renewal", "end", "cancellation"] as const) {
+      expect(EXPIRY_RULE_TYPES.has(t), t).toBe(true);
+    }
+  });
+});
+
+describe("recurring income reaches the calendar", () => {
+  it("is generated as its own kind, on its own cadence", () => {
+    const series = seriesFromAll({
+      incomes: [{ id: "inc-1", description: "Paycheck", amount: 2400, frequency: "biweekly", date: "2026-08-21", linkedProfiles: ["p1"] }],
+    });
+    expect(series.map(s => s.kind)).toEqual(["income"]);
+    const occ = buildCalendarOccurrences(series, { todayISO: TODAY });
+    expect(occ.length).toBeGreaterThan(1);
+    expect(new Set(occ.map(o => new Date(`${o.date}T12:00:00`).getDay()))).toEqual(new Set([5]));
   });
 });

@@ -123,60 +123,12 @@ const ANNIVERSARY_KEYS = /anniversary/i;
 
 // ─── Profiles: birthdays & anniversaries ─────────────────────────────────────
 
-/**
- * Birthdays and anniversaries carried on a profile's `fields`. These are the
- * AUTHORITATIVE source for those dates — editing a birthday means editing the
- * profile, so `dedupeSeries` prefers these over any typed-in event.
- *
- * Only one birthday series is emitted per profile even if several field
- * spellings are present (`dob` and `birthday` both set), because the identity
- * key is per-profile and the first match wins.
- */
-export function seriesFromProfiles(profiles: readonly any[]): CalendarSeries[] {
-  const out: CalendarSeries[] = [];
-  for (const p of profiles || []) {
-    if (!p?.id) continue;
-    const fields = p.fields && typeof p.fields === "object" ? p.fields : {};
-    const name = p.name || "Unnamed";
-    const seenKinds = new Set<OccurrenceKind>();
-
-    const visit = (obj: any, depth: number) => {
-      if (!obj || typeof obj !== "object" || depth > 2) return;
-      for (const [key, value] of Object.entries(obj)) {
-        if (value && typeof value === "object" && !Array.isArray(value)) {
-          visit(value, depth + 1);
-          continue;
-        }
-        if (typeof value !== "string" || !isISO(value)) continue;
-        const kind: OccurrenceKind | null = BIRTHDAY_KEYS.test(key)
-          ? "birthday"
-          : ANNIVERSARY_KEYS.test(key)
-            ? "anniversary"
-            : null;
-        if (!kind || seenKinds.has(kind)) continue;
-        seenKinds.add(kind);
-        out.push({
-          id: `profile:${p.id}:${kind}`,
-          kind,
-          title: kind === "birthday" ? `${name}'s Birthday` : `${name} — Anniversary`,
-          subtitle: name,
-          source: {
-            system: "profile",
-            id: p.id,
-            profileId: p.id,
-            ownerIds: uniq([p.id, p.parentProfileId]),
-            label: name,
-            href: sourceHref("profile", p.id, p.id),
-          },
-          baseDate: clip(value),
-          recurrence: "yearly",
-        });
-      }
-    };
-    visit(fields, 0);
-  }
-  return out;
-}
+// (Removed: `seriesFromProfiles`. It knew about birthdays and anniversaries and
+// nothing else, which is why a licence expiration typed onto a person reached
+// Upcoming and no calendar. Profile-carried dates come from the Date Rule
+// engine now — shared/date-rules — and it is deliberately gone rather than left
+// exported: an unused second vocabulary is an invitation to re-create the
+// divergence this whole change exists to remove.)
 
 // ─── Calendar events ─────────────────────────────────────────────────────────
 
@@ -624,40 +576,9 @@ export function seriesFromTasks(tasks: readonly any[]): CalendarSeries[] {
 
 // ─── Documents ───────────────────────────────────────────────────────────────
 
-/** Document expirations — one-off dates that still belong on the calendar. */
-export function seriesFromDocuments(documents: readonly any[]): CalendarSeries[] {
-  const out: CalendarSeries[] = [];
-  const KEYS = [
-    "expiration_date", "expirationDate", "expiry", "expires", "exp_date",
-    "expiration", "valid_until", "validUntil", "renewal_date", "renewalDate",
-  ];
-  for (const d of documents || []) {
-    if (!d?.id) continue;
-    const ed = d.extractedData && typeof d.extractedData === "object" ? d.extractedData : {};
-    let found: string | null = null;
-    for (const k of KEYS) {
-      if (isISO(ed[k])) { found = clip(ed[k]); break; }
-    }
-    if (!found) continue;
-    const profileId = Array.isArray(d.linkedProfiles) ? d.linkedProfiles[0] : undefined;
-    out.push({
-      id: `document:${d.id}`,
-      kind: "document",
-      title: humanizeTitle(d.name, "Document"),
-      subtitle: d.type || undefined,
-      source: {
-        system: "document",
-        id: d.id,
-        profileId,
-        ownerIds: uniq(Array.isArray(d.linkedProfiles) ? d.linkedProfiles : []),
-        href: sourceHref("document", d.id, profileId),
-      },
-      baseDate: found,
-      recurrence: "none",
-    });
-  }
-  return out;
-}
+// (Removed: `seriesFromDocuments`, for the same reason as `seriesFromProfiles`
+// above — its ten hard-coded expiry key spellings were one of the three
+// vocabularies that disagreed. Documents are read by the Date Rule engine.)
 
 // ─── Recurring income ────────────────────────────────────────────────────────
 

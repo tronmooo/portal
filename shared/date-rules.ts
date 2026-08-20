@@ -284,6 +284,15 @@ const IMPORTANT_TYPES = new Set<DateRuleType>([
   "expiration", "renewal", "due", "deadline", "cancellation", "end", "start", "maintenance",
 ]);
 
+/**
+ * The rule types that describe something running OUT — what belongs in an
+ * "expirations" list. Narrower than `countdownEnabled`, which also covers due
+ * dates and deadlines: those are bills and tasks, not documents about to lapse.
+ */
+export const EXPIRY_RULE_TYPES = new Set<DateRuleType>([
+  "expiration", "renewal", "end", "cancellation",
+]);
+
 /** Every actionable type — i.e. everything except pure metadata. */
 export function isActionableRuleType(t: DateRuleType): boolean {
   return t !== "informational";

@@ -4,7 +4,7 @@ import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEF
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields } from "@shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "@shared/date-rules";
 import { seriesFromEvents } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
@@ -2099,7 +2099,8 @@ export class MemStorage implements IStorage {
     {
       const profilesForExp = Array.from(this.profiles.values()).filter(p => matchesFilter([p.id]));
       for (const rule of rulesFromAll({ profiles: profilesForExp, documents })) {
-        if (!rule.countdownEnabled) continue;
+        // Only things that EXPIRE — see the twin in supabase-storage.
+        if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;
         const daysUntil = daysBetweenISO(now.toLocaleDateString("en-CA"), rule.date);
         expiringDocs.push({
           documentId: rule.sourceEntityId,

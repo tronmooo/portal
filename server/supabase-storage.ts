@@ -49,7 +49,7 @@ import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } fr
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents } from "../shared/calendar-adapters";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields } from "../shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "../shared/date-rules";
 import { deleteProfileFields } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
@@ -6613,9 +6613,12 @@ export class SupabaseStorage implements IStorage {
     {
       const scopedProfilesForExp = allProfiles.filter(p => matchesProfileEnhanced([p.id]));
       for (const rule of rulesFromAll({ profiles: scopedProfilesForExp, documents: filteredDocs })) {
-        // Only dates you count DOWN to belong in an expirations list; a
-        // birthday is a celebration, not a warning.
-        if (!rule.countdownEnabled) continue;
+        // Only things that EXPIRE. `countdownEnabled` is wider than that — it
+        // covers due dates and deadlines too — and only liability profiles have
+        // their payment rules stripped, so an insurance profile's
+        // `premiumDueDate` landed in the Documents-expiring tile reading
+        // "Expired 3d ago". A bill belongs on the bills surface.
+        if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;
         const daysUntil = daysBetweenISO(today, rule.date);
         expiringDocs.push({
           documentId: rule.sourceEntityId,

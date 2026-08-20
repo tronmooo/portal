@@ -5,20 +5,18 @@
 // a managed recurring event ("Every year on Feb 11 · Joe · Next: Feb 11 2029")
 // and again in the cross-app feed ("Joe — Birthday · Feb 11 · IN 7 MO").
 import { describe, it, expect } from "vitest";
-import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import {
-  seriesFromProfiles,
   seriesFromEvents,
   seriesFromObligations,
   seriesFromLiabilityProfiles,
   seriesFromTasks,
-  seriesFromDocuments,
   seriesFromAll,
   filterSeriesByProfiles,
   frequencyToRecurrence,
   inferKindFromText,
   parseAmountFromTitle,
 } from "../shared/calendar-adapters";
+import { rulesFromProfiles, rulesFromDocuments, seriesFromDateRules } from "../shared/date-rules";
 import {
   buildCalendarOccurrences, generateSeriesOccurrences, seriesIdentityKey, dedupeSeries,
 } from "../shared/calendar-occurrences";
@@ -96,9 +94,18 @@ describe("the reported duplicate: Joe's birthday renders once", () => {
   });
 });
 
-describe("seriesFromProfiles", () => {
+// Profile- and document-carried dates are no longer adapted by hand: they come
+// from the Date Rule engine (shared/date-rules), which is the whole point —
+// three modules used to disagree about which field is a meaningful date. These
+// keep pinning the behaviour, through the function the app actually calls.
+const profileSeries = (profiles: any[]) =>
+  seriesFromDateRules(rulesFromProfiles(profiles));
+const documentSeries = (documents: any[]) =>
+  seriesFromDateRules(rulesFromDocuments(documents));
+
+describe("profile-carried dates", () => {
   it("emits a yearly birthday from the profile's date of birth", () => {
-    const [s] = seriesFromProfiles([joeProfile]);
+    const [s] = profileSeries([joeProfile]);
     expect(s).toMatchObject({
       kind: "birthday", title: "Joe's Birthday", baseDate: "1990-02-11", recurrence: "yearly",
     });
@@ -107,38 +114,38 @@ describe("seriesFromProfiles", () => {
 
   it("recognizes every spelling of the birthday field", () => {
     for (const key of ["birthday", "birthDate", "birth_date", "dob", "dateOfBirth", "date_of_birth"]) {
-      const out = seriesFromProfiles([{ id: "p", name: "P", type: "person", fields: { [key]: "1990-02-11" } }]);
+      const out = profileSeries([{ id: "p", name: "P", type: "person", fields: { [key]: "1990-02-11" } }]);
       expect(out.map((s) => s.kind)).toContain("birthday");
     }
   });
 
   it("emits ONE birthday even when two field spellings are present", () => {
-    const out = seriesFromProfiles([
+    const out = profileSeries([
       { id: "p", name: "P", type: "person", fields: { dob: "1990-02-11", birthday: "1990-02-11" } },
     ]);
     expect(out.filter((s) => s.kind === "birthday")).toHaveLength(1);
   });
 
   it("finds a date nested one level down", () => {
-    const out = seriesFromProfiles([
+    const out = profileSeries([
       { id: "p", name: "P", type: "person", fields: { personal: { birthday: "1990-02-11" } } },
     ]);
     expect(out).toHaveLength(1);
   });
 
   it("emits anniversaries too", () => {
-    const out = seriesFromProfiles([
+    const out = profileSeries([
       { id: "p", name: "P", type: "person", fields: { anniversary: "2010-06-05" } },
     ]);
     expect(out[0]).toMatchObject({ kind: "anniversary", recurrence: "yearly", baseDate: "2010-06-05" });
   });
 
   it("ignores non-date and unrelated fields", () => {
-    expect(seriesFromProfiles([
+    expect(profileSeries([
       { id: "p", name: "P", type: "person", fields: { birthday: "sometime", nickname: "Jo", color: "blue" } },
     ])).toEqual([]);
-    expect(seriesFromProfiles([{ id: "p", name: "P", type: "person" }])).toEqual([]);
-    expect(seriesFromProfiles([null as any, undefined as any])).toEqual([]);
+    expect(profileSeries([{ id: "p", name: "P", type: "person" }])).toEqual([]);
+    expect(profileSeries([null as any, undefined as any])).toEqual([]);
   });
 });
 
@@ -272,11 +279,11 @@ describe("seriesFromTasks / Documents", () => {
 
   it("picks up a document expiration under any of its field spellings", () => {
     for (const key of ["expiration_date", "expirationDate", "valid_until", "renewalDate"]) {
-      const out = seriesFromDocuments([{ id: "d1", name: "Passport", extractedData: { [key]: "2027-01-01" } }]);
-      expect(out[0]).toMatchObject({ kind: "document", baseDate: "2027-01-01" });
+      const out = documentSeries([{ id: "d1", name: "Passport", extractedData: { [key]: "2027-01-01" } }]);
+      expect(out[0]).toMatchObject({ kind: "expiration", baseDate: "2027-01-01" });
       expect(out[0].source.href).toBe("#/documents/d1");
     }
-    expect(seriesFromDocuments([{ id: "d2", name: "X", extractedData: { note: "hello" } }])).toEqual([]);
+    expect(documentSeries([{ id: "d2", name: "X", extractedData: { note: "hello" } }])).toEqual([]);
   });
 });
 
@@ -353,9 +360,9 @@ describe("grid and stream cannot diverge", () => {
 
   it("both paths suppress the same shadow event", () => {
     // What the server timeline computes to exclude from the grid…
-    const profileSeries = seriesFromProfiles(inputs.profiles);
+    const profileDates = profileSeries(inputs.profiles);
     const knownBirthdayProfiles = new Set(
-      profileSeries.filter((s) => s.kind === "birthday").map((s) => s.source.profileId!),
+      profileDates.filter((s) => s.kind === "birthday").map((s) => s.source.profileId!),
     );
     const shadowIds = new Set(
       seriesFromEvents(inputs.events, { knownBirthdayProfiles })
@@ -372,7 +379,7 @@ describe("grid and stream cannot diverge", () => {
   });
 
   it("both paths render the birthday from the profile, on the same date", () => {
-    const fromProfileRecord = seriesFromProfiles(inputs.profiles).find((s) => s.kind === "birthday")!;
+    const fromProfileRecord = profileSeries(inputs.profiles).find((s) => s.kind === "birthday")!;
     const gridDates = generateSeriesOccurrences(fromProfileRecord, { todayISO: TODAY }).map((o) => o.date);
     const streamDates = buildCalendarOccurrences(seriesFromAll(inputs), { todayISO: TODAY })
       .filter((o) => o.kind === "birthday")
