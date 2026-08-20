@@ -66,7 +66,7 @@ import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import { inferKindFromText } from "@shared/calendar-adapters";
-import { classifyDateField } from "@shared/date-rules";
+import { classifyDateField, isBareExpiryStatement } from "@shared/date-rules";
 import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
@@ -9494,9 +9494,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // the identity.
       {
         const evtTitle = String(input.title || "");
-        const expiryWord = /\b(expir\w*|renew\w*|valid until|good thru)\b/i.test(evtTitle);
         const evtRepeats = !!input.recurrence && String(input.recurrence).toLowerCase() !== "none";
-        if (expiryWord && !evtRepeats) {
+        // Deliberately narrow — see isBareExpiryStatement. "Renew passport at
+        // the embassy" is an errand and stays an event; only a bare statement
+        // that something expires is redirected onto the record that expires.
+        if (isBareExpiryStatement(evtTitle) && !evtRepeats) {
           const profs = await storage.getProfiles();
           const subject = evtTitle
             .replace(/\b(expir\w*|renew\w*|valid until|good thru|date|on)\b/gi, " ")

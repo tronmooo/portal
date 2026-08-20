@@ -882,6 +882,42 @@ const RULE_TYPE_FOR_KIND: Partial<Record<OccurrenceKind, DateRuleType>> = {
   custom: "event",
 };
 
+// ─── Does this "event" actually belong to a record? ──────────────────────────
+
+/**
+ * True when an event title is a bare STATEMENT that something expires, rather
+ * than a thing the user intends to do.
+ *
+ * The chat can be told "my driver's licence expires July 18 2034". The licence
+ * is what expires, so the date belongs on the licence and the important date is
+ * derived from it — writing an event instead creates the second, disconnected
+ * record this whole module exists to remove.
+ *
+ * But the same words appear in events that are genuinely events: "Renew
+ * passport at the embassy" is an errand with a place and a time, and silently
+ * turning it into a profile field would lose what the user asked for. So the
+ * test is deliberately narrow:
+ *
+ *   • the title must say something EXPIRES (a renewal is usually an errand);
+ *   • it must contain no action the user means to perform;
+ *   • it must be short — a statement, not a description.
+ *
+ *   "Driver's License Expiration"      → true
+ *   "Passport expires"                 → true
+ *   "Renew passport at the embassy"    → false
+ *   "Call the DMV about the expiring licence" → false
+ */
+const EXPIRY_STATEMENT = /\bexpir\w*\b|\bvalid (?:un)?til\b|\bgood thru\b/i;
+const AN_ACTION = /\b(renew|call|email|visit|go|going|book|schedule|apply|submit|file|pick ?up|drop ?off|bring|take|mail|send|meet|appointment|appt|reminder|remind|order|replace|update|check|review|pay)\b/i;
+
+export function isBareExpiryStatement(title: unknown): boolean {
+  const t = String(title ?? "").trim();
+  if (!t || !EXPIRY_STATEMENT.test(t)) return false;
+  if (AN_ACTION.test(t)) return false;
+  // A statement of fact is short. Anything longer is describing something.
+  return t.split(/\s+/).filter(Boolean).length <= 6;
+}
+
 // ─── Write-path normalization ────────────────────────────────────────────────
 
 /**

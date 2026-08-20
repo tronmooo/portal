@@ -28,6 +28,7 @@ import {
   countdownLabel,
   calendarDelta,
   seriesFromDateRules,
+  isBareExpiryStatement,
 } from "../shared/date-rules";
 import { seriesFromAll } from "../shared/calendar-adapters";
 import {
@@ -476,5 +477,44 @@ describe("nothing leaks between accounts", () => {
     expect(mine).toHaveLength(1);
     expect(mine[0].sourceEntityId).toBe("p-mine");
     expect(rulesFromAll({ profiles: [], documents: [] })).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. What the chat may quietly turn into a field, and what it may not
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("telling the chat a date vs asking it for an event", () => {
+  it("treats a bare statement that something expires as a fact about a record", () => {
+    for (const t of [
+      "Driver's License Expiration",
+      "Passport expires",
+      "Licence valid until",
+      "Registration expiry",
+      "⚠️ Expiration Date",
+    ]) {
+      expect(isBareExpiryStatement(t), t).toBe(true);
+    }
+  });
+
+  it("leaves an errand alone, however much it talks about expiring", () => {
+    // Silently turning any of these into a profile field would lose exactly
+    // what the user asked for.
+    for (const t of [
+      "Renew passport at the embassy",
+      "Call the DMV about the expiring licence",
+      "Book an appointment before my licence expires",
+      "Pick up the renewed registration",
+      "Reminder: passport expires next month, sort it out this week",
+      "Review the insurance policy that expires in March and compare quotes",
+    ]) {
+      expect(isBareExpiryStatement(t), t).toBe(false);
+    }
+  });
+
+  it("says nothing about titles that are not about expiry at all", () => {
+    for (const t of ["House Viewing", "Soccer Game", "Joe's Birthday", ""]) {
+      expect(isBareExpiryStatement(t), t).toBe(false);
+    }
   });
 });
