@@ -1312,7 +1312,15 @@ const AN_ACTION = /\b(renew|call|email|visit|go|going|book|schedule|apply|submit
 export function parseBirthdayLabel(
   title: unknown,
 ): { name: string; kind: "birthday" | "anniversary" } | null {
-  const t = String(title ?? "").trim().replace(/\s+/g, " ");
+  // Strip leading/trailing decoration before parsing. The chat tool guidance
+  // asks for the title "🎂 <Name>'s Birthday", and with the cake left on the
+  // front the captured name was "🎂 Bob" — which matches no profile, so the
+  // birthday silently stayed an ordinary event and never reached the person's
+  // profile. The name is what is left once the ornaments come off.
+  const t = String(title ?? "")
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\u{FE0F}\u{200D}]/gu, " ")
+    .replace(/^[\s\-–—:*·•]+|[\s\-–—:*·•]+$/g, "")
+    .trim().replace(/\s+/g, " ");
   if (!t) return null;
   const m = t.match(/^(?:(.+?)(?:['\u2019]s)?\s+)?(birthday|b-?day|anniversary)$/i);
   if (!m) return null;

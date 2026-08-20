@@ -109,7 +109,7 @@ import {
   type AssetPartyLink, type InsertAssetPartyLink,
   type OwnershipHistoryEntry,
   type AiActionLog, type InsertAiActionLog,
-  MOOD_SCORES,
+  MOOD_SCORES, childProfileTimelineEntry,
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
@@ -1458,6 +1458,14 @@ export class SupabaseStorage implements IStorage {
     for (const d of relatedDocuments) timeline.push({ id: d.id, type: "document", title: d.name, description: d.type, timestamp: d.createdAt });
     for (const o of relatedObligations) timeline.push({ id: o.id, type: "obligation", title: o.name, description: `$${o.amount}/${o.frequency}`, timestamp: o.createdAt });
     for (const j of relatedJournal) timeline.push({ id: j.id, type: "journal", title: j.content?.slice(0, 80) || "Journal entry", description: j.mood ? `Mood: ${j.mood}` : undefined, timestamp: j.date || (j as any).createdAt });
+    // Habits and the profile's OWN records (its assets, liabilities, accounts,
+    // subscriptions) belong on its activity feed too. Without them, adding an
+    // asset and a liability to a person and then opening their Activity tab
+    // showed "No activity yet" — the two records the user had just created
+    // were the two kinds the feed did not carry. Both collections are already
+    // in memory here, so this costs no extra query.
+    for (const h of relatedHabits) timeline.push({ id: h.id, type: "habit", title: h.name, description: h.frequency, timestamp: (h as any).createdAt });
+    for (const c of childProfiles) timeline.push(childProfileTimelineEntry(c));
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     // Annotate each asset/liability child with THIS profile's ownership share

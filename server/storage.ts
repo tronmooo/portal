@@ -36,7 +36,7 @@ import {
   type Goal, type InsertGoal,
   type EntityLink, type InsertEntityLink,
   type Income, type InsertIncome,
-  MOOD_SCORES,
+  MOOD_SCORES, childProfileTimelineEntry,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -894,13 +894,19 @@ export class MemStorage implements IStorage {
     for (const d of relatedDocuments) { timeline.push({ id: d.id, type: "document", title: d.name, description: d.type, timestamp: d.createdAt }); }
     for (const o of relatedObligations) { timeline.push({ id: o.id, type: "obligation", title: o.name, description: `$${o.amount}/${o.frequency}`, timestamp: o.createdAt }); }
     for (const j of relatedJournal) { timeline.push({ id: j.id, type: "journal", title: j.content?.slice(0, 80) || "Journal entry", description: j.mood ? `Mood: ${j.mood}` : undefined, timestamp: j.date || j.createdAt }); }
-    timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     // Find child profiles (assets, subscriptions, loans nested under this profile)
     const allProfiles = await this.getProfiles();
     const childProfiles = allProfiles.filter(p => p.parentProfileId === profile.id);
 
     const relatedHabits = Array.from(this.habits.values()).filter(h => (h.linkedProfiles || []).includes(id));
+
+    // Parity with SupabaseStorage: habits and the profile's OWN records (its
+    // assets, liabilities, accounts) are activity too. The sort runs after
+    // these so the feed stays newest-first with them included.
+    for (const h of relatedHabits) { timeline.push({ id: h.id, type: "habit", title: h.name, description: h.frequency, timestamp: (h as any).createdAt }); }
+    for (const c of childProfiles) { timeline.push(childProfileTimelineEntry(c)); }
+    timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     // PERF 2026-07-21: same additive caps as SupabaseStorage.getProfileDetail —
     // newest N per section + true *Total/*Sum sibling fields (see

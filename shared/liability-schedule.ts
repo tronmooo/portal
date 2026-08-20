@@ -115,8 +115,18 @@ import { addMonthsISO } from "./date-math";
  * Precedence is most-deliberate first: `nextPaymentDate` and `nextPayment` are
  * what the Payments tab writes when the user edits "Next Due", and that edit
  * must not be shadowed by the `dueDate` written when the liability was created.
+ *
+ * LAST in the chain is `dueDay`, a bare day-of-month (1-31) projected onto the
+ * next month it occurs in. `create_liability` stores a monthly due date that
+ * way and writes no dated spelling at all, so every reader that stopped at the
+ * dated spellings answered "no due date" for a liability the user had given an
+ * explicit due day — the card pill, the calendar series, the schedule. Deriving
+ * it here fixes all of them at once and keeps them agreeing on the same day.
  */
-export function resolveLiabilityDueDate(f: Record<string, any> | null | undefined): string | null {
+export function resolveLiabilityDueDate(
+  f: Record<string, any> | null | undefined,
+  todayISO?: string,
+): string | null {
   const fields = f || {};
   // The first spelling that PARSES, not the first that is merely present.
   // Coalescing with `??` first meant an empty-string `nextPayment` — which `??`
@@ -131,7 +141,28 @@ export function resolveLiabilityDueDate(f: Record<string, any> | null | undefine
     const iso = normalizeDateString(v);
     if (iso) return iso;
   }
-  return null;
+  return dueDateFromDueDay(fields, todayISO);
+}
+
+/**
+ * Project a bare day-of-month (`dueDay` and its spellings) onto the next date
+ * that day lands on, relative to `todayISO`. Returns null when the fields carry
+ * no usable day. Month-end is clamped, so `dueDay: 31` is Feb 28/29 in February.
+ */
+export function dueDateFromDueDay(
+  f: Record<string, any> | null | undefined,
+  todayISO?: string,
+): string | null {
+  const fields = f || {};
+  const raw = fields.dueDay ?? fields.due_day ?? fields.paymentDueDay ?? fields.payment_due_day;
+  const day = parseInt(String(raw ?? ""), 10);
+  if (!(day >= 1 && day <= 31)) return null;
+  const base = ISO_RE.test(clip(todayISO)) ? new Date(clip(todayISO) + "T00:00:00") : new Date();
+  let mo = base.getMonth() + (base.getDate() > day ? 1 : 0);
+  const yr = base.getFullYear() + (mo > 11 ? 1 : 0);
+  mo = ((mo % 12) + 12) % 12;
+  const last = new Date(yr, mo + 1, 0).getDate();
+  return new Date(yr, mo, Math.min(day, last)).toLocaleDateString("en-CA");
 }
 
 /**
@@ -169,18 +200,8 @@ export function deriveScheduleFields(
   // it is a spelling the profile writer produces, and without it this falls
   // through to `todayISO` — putting a payment on the wrong day rather than
   // none at all, which is worse.
-  let due = clip(resolveLiabilityDueDate(f) ?? "");
-  if (!ISO_RE.test(due)) {
-    const day = parseInt(String(f.dueDay ?? ""), 10);
-    if (day >= 1 && day <= 31) {
-      const d = new Date(todayISO + "T00:00:00");
-      let mo = d.getMonth() + (d.getDate() > day ? 1 : 0);
-      const yr = d.getFullYear() + (mo > 11 ? 1 : 0);
-      mo = ((mo % 12) + 12) % 12;
-      const last = new Date(yr, mo + 1, 0).getDate();
-      due = new Date(yr, mo, Math.min(day, last)).toLocaleDateString("en-CA");
-    }
-  }
+  // The resolver projects `dueDay` itself, anchored to the caller's today.
+  let due = clip(resolveLiabilityDueDate(f, todayISO) ?? "");
   if (!ISO_RE.test(due)) due = todayISO;
 
   let count: number | null = null;

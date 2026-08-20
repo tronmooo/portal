@@ -1232,11 +1232,50 @@ export interface ProfileDetail extends Profile {
 
 export interface TimelineEntry {
   id: string;
-  type: "tracker" | "expense" | "task" | "event" | "document" | "note" | "habit" | "obligation" | "journal";
+  type: "tracker" | "expense" | "task" | "event" | "document" | "note" | "habit" | "obligation" | "journal" | "profile";
   title: string;
   description?: string;
   data?: Record<string, any>;
   timestamp: string;
+}
+
+/** Human label for a profile row's type, for feeds and summaries. */
+const PROFILE_TYPE_LABEL: Record<string, string> = {
+  liability: "Liability", loan: "Liability", asset: "Asset", vehicle: "Vehicle",
+  property: "Property", account: "Account", investment: "Investment",
+  subscription: "Subscription", person: "Person", pet: "Pet", medical: "Medical",
+  self: "Profile",
+};
+
+/**
+ * THE timeline row for a profile's own record (an asset, a liability, an
+ * account nested under it).
+ *
+ * A person's activity feed used to carry only the things LINKED to them —
+ * tasks, expenses, events, documents — and never the records filed UNDER them.
+ * So adding an asset and a liability to someone and opening their Activity tab
+ * showed "No activity yet", which is the one reading that was certainly wrong.
+ * Both storage implementations build the row through here so the two feeds
+ * cannot drift.
+ */
+export function childProfileTimelineEntry(child: {
+  id: string; name?: string; type?: string; type_key?: string | null;
+  fields?: Record<string, any> | null; createdAt?: string; updatedAt?: string;
+}): TimelineEntry {
+  const label = PROFILE_TYPE_LABEL[String(child.type || "")] || "Record";
+  const f = child.fields || {};
+  const amount = [
+    f.currentBalance, f.currentValue, f.value, f.balance, f.purchasePrice,
+  ].map((v) => Number(v)).find((n) => Number.isFinite(n) && n !== 0);
+  return {
+    id: child.id,
+    type: "profile",
+    title: child.name || label,
+    description: amount != null
+      ? `${label} — $${Math.abs(amount).toLocaleString("en-US", { maximumFractionDigits: 2 })}`
+      : `${label} added`,
+    timestamp: child.createdAt || child.updatedAt || new Date(0).toISOString(),
+  };
 }
 
 // ============================================================

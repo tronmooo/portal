@@ -31,7 +31,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag } from "lucide-react";
+import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag, Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { stringifyField, previewUnrenderable } from "@/lib/field-display";
 import { SectionHeading } from "@/components/ui/section-heading";
@@ -223,6 +234,7 @@ function SingleProfileInfo({ id }: { id: string }) {
   const [addingField, setAddingField] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newVal, setNewVal] = useState("");
+  const [showDelete, setShowDelete] = useState(false);
 
   const { data: profile, isLoading, error } = useQuery<any>({
     queryKey: ["/api/profiles", id, "detail"],
@@ -289,6 +301,26 @@ function SingleProfileInfo({ id }: { id: string }) {
       }
     })();
   };
+
+  // DELETING A PERSON.
+  //
+  // People redirect here instead of the per-type detail page, and this page
+  // carried no delete control — so a person profile could be created from
+  // anywhere and then removed from nowhere. Same endpoint, same cascade and
+  // same invalidation set as the detail page's delete, so the two agree.
+  const deleteProfile = useMutation({
+    mutationFn: async () => { await apiRequest("DELETE", `/api/profiles/${id}`); },
+    onSuccess: () => {
+      queryClient.setQueryData(["/api/profiles"], (old: any[]) =>
+        old?.filter((p: any) => p.id !== id) || []);
+      queryClient.removeQueries({ queryKey: ["/api/profiles", id, "detail"] });
+      toast({ title: "Profile deleted", description: "All linked data has been removed" });
+      invalidateDomains("profiles", "obligations", "events", "expenses", "tasks", "trackers");
+      navigate("/profiles");
+    },
+    onError: (err: Error) =>
+      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
+  });
 
   const avatarMutation = useMutation({
     mutationFn: async (payload: { fileData: string; mimeType: string }) => {
@@ -402,7 +434,43 @@ function SingleProfileInfo({ id }: { id: string }) {
         <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAddingField(v => !v)} data-testid="info-add-field">
           <Plus className="h-3.5 w-3.5" /> Add field
         </Button>
+        {/* The primary `self` profile is the account's own record — every other
+            person and pet can be removed from here. */}
+        {profile.type !== "self" && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1 text-xs text-destructive hover:text-destructive"
+            onClick={() => setShowDelete(true)}
+            data-testid="button-delete-profile"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Delete
+          </Button>
+        )}
       </div>
+
+      <AlertDialog open={showDelete} onOpenChange={setShowDelete}>
+        <AlertDialogContent data-testid="dialog-confirm-delete-profile">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{profile.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes this profile and everything filed under it —
+              its assets, liabilities, documents and linked records. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-delete-profile">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteProfile.mutate()}
+              disabled={deleteProfile.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-confirm-delete-profile"
+            >
+              {deleteProfile.isPending ? "Deleting..." : "Delete Profile"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Add-field inline form */}
       {addingField && (

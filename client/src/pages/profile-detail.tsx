@@ -188,6 +188,7 @@ import {
   PawPrint,
   Car,
   Building2,
+  Boxes,
   Home,
   CreditCard,
   Stethoscope,
@@ -7645,6 +7646,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
     tracker: HeartPulse, expense: DollarSign, task: ListTodo,
     event: Calendar, document: FileText, note: FileText,
     habit: Activity, obligation: CreditCard, journal: FileText,
+    profile: Boxes,
   };
 
   const typeCounts: Record<string, number> = {};

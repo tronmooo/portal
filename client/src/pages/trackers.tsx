@@ -12,6 +12,7 @@ import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { liabilityFamily } from "@shared/liability-types";
+import { resolveLiabilityDueDate } from "@shared/liability-schedule";
 import { passesProfileFilter } from "@shared/profile-filter";
 import {
   ASSET_TAB_TYPES, assetTypeLabel, isAssetTabProfile, isLiabilityTabProfile,
@@ -7168,7 +7169,12 @@ export default function TrackersPage() {
                 const subtype = liabilitySubcategoryOf(liab);
                 const original = toNumLiab(fields.originalBalance ?? fin.originalBalance ?? fields.originalLoanAmount ?? fin.originalLoanAmount ?? fields.creditLimit ?? fin.creditLimit);
                 const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
-                const rawDue = fields.dueDate ?? fields.nextDueDate ?? fields.due_date ?? fin.dueDate;
+                // THE resolver (shared/liability-schedule), not a hand-rolled
+                // spelling chain: it also projects a bare `dueDay`, which is
+                // all `create_liability` writes for "due on the 15th monthly".
+                // Reading only the dated spellings here showed "No due date"
+                // on liabilities the user had given an explicit due day.
+                const rawDue = resolveLiabilityDueDate({ ...fin, ...fields });
                 const due = fmtDue(rawDue);
                 const dueIn = daysUntilDue(rawDue);
                 const freqUnit = subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo';

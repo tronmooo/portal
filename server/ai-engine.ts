@@ -6042,9 +6042,25 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
     case "create_task": {
       if (!normalized.title?.trim()) errors.push("Task title is required");
       else normalized.title = normalized.title.trim();
+      // PARSE the due date before giving up on it. Clearing anything that
+      // wasn't already ISO threw away every date the model passed in the
+      // user's own words ("next Friday", "Aug 25") — the task was then created
+      // with no due date and the reply asked for the one the request already
+      // contained. Only a value that no parser can read is dropped.
       if (normalized.dueDate && !/^\d{4}-\d{2}-\d{2}/.test(normalized.dueDate)) {
-        warnings.push(`Due date "${normalized.dueDate}" is not valid — clearing`);
-        normalized.dueDate = undefined;
+        const rawDue = String(normalized.dueDate);
+        const tz = aiUserTimezone();
+        let iso = normalizeDateString(rawDue) || "";
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+          const parsed = parseUserDateTime(rawDue, tz);
+          if (parsed && !isNaN(parsed.getTime())) iso = toLocalDateStr(parsed, tz);
+        }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+          normalized.dueDate = iso;
+        } else {
+          warnings.push(`Due date "${rawDue}" is not valid — clearing`);
+          normalized.dueDate = undefined;
+        }
       }
       if (!normalized.priority) normalized.priority = "medium";
       const validPriorities = ["low", "medium", "high", "urgent"];

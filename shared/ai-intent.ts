@@ -234,6 +234,37 @@ const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number }> 
 const ASSET_NOUNS =
   /\b(car|truck|suv|vehicle|motorcycle|boat|trailer|rv|house|home|condo|apartment|property|land|laptop|computer|phone|tv|television|watch|jewelry|bike|bicycle|tractor|mower)\b/;
 
+/**
+ * Rules at or above this weight name an entity with an unambiguous NOUN
+ * ("asset", "liability", "note"). Below it a rule fires on a weaker signal —
+ * `expense` matches a bare "$40" — which is fine for picking the single best
+ * read but far too loose to conclude the user asked for a second object.
+ */
+const NAMED_ENTITY_WEIGHT = 0.9;
+
+/**
+ * EVERY entity the message names, not just the best one.
+ *
+ * `detectEntity` answers "what is this message about" with a single winner —
+ * the earliest noun. That is the right answer for routing one write, and the
+ * wrong one for "add a bicycle asset for Bob, a dental loan, and a note":
+ * there the winner is `asset`, and the routing gate then refused the liability
+ * and the note tools as wrong-entity calls, so one message produced one record
+ * and two rejections. Callers use this to notice that a single-intent read does
+ * not cover the whole request.
+ */
+export function detectEntities(message: string): IntentEntity[] {
+  const m = lc(message);
+  if (!m) return [];
+  const found: IntentEntity[] = [];
+  for (const rule of ENTITY_RULES) {
+    if (rule.weight < NAMED_ENTITY_WEIGHT) continue;
+    if (!rule.re.test(m)) continue;
+    if (!found.includes(rule.entity)) found.push(rule.entity);
+  }
+  return found;
+}
+
 export function detectEntity(message: string): { entity: IntentEntity; confidence: number } {
   const m = lc(message);
   if (!m) return { entity: "unknown", confidence: 0 };
@@ -457,7 +488,7 @@ export function parseTurnPlan(message: string): TurnIntentPlan {
   const clauses = splitIntentClauses(raw);
 
   if (clauses.length <= 1) {
-    return { message: raw, intents: [whole], exhaustive: isActionable(whole) };
+    return { message: raw, intents: [whole], exhaustive: coversNamedEntities(raw, [whole]) && isActionable(whole) };
   }
 
   const writeClauses = clauses.filter((c) => WRITE_SHAPED.test(c));
@@ -466,7 +497,11 @@ export function parseTurnPlan(message: string): TurnIntentPlan {
   const exhaustive = writeClauses.length > 0 && actionable.length === writeClauses.length;
 
   if (actionable.length === 0) {
-    return { message: raw, intents: [whole], exhaustive: isActionable(whole) && writeClauses.length <= 1 };
+    return {
+      message: raw,
+      intents: [whole],
+      exhaustive: isActionable(whole) && writeClauses.length <= 1 && coversNamedEntities(raw, [whole]),
+    };
   }
   // Keep the whole-message read alongside the clause reads: it is the one that
   // sees attributes spread across sentences.
@@ -474,7 +509,26 @@ export function parseTurnPlan(message: string): TurnIntentPlan {
     isActionable(whole) && !actionable.some((i) => i.entity === whole.entity)
       ? [whole, ...actionable]
       : actionable;
-  return { message: raw, intents, exhaustive };
+  return { message: raw, intents, exhaustive: exhaustive && coversNamedEntities(raw, intents) };
+}
+
+/**
+ * False when the message NAMES an entity none of the parsed intents is about.
+ *
+ * The clause splitter only cuts where the next clause opens with a write verb,
+ * so "add a blue bicycle asset for Bob, a dental loan, and a note for Bob" is
+ * one clause and reads as a single `asset` intent — while naming three
+ * entities. Calling that plan exhaustive armed the routing gate against the two
+ * requests it had not seen, and the liability and the note were refused rather
+ * than written. An uncovered noun is exactly the "clause we could not classify"
+ * the `exhaustive` flag exists to report, so report it: the gate then lets
+ * those tools through instead of blocking them.
+ */
+function coversNamedEntities(message: string, intents: readonly ParsedIntent[]): boolean {
+  const named = detectEntities(message);
+  if (named.length <= 1) return true;
+  const covered = new Set(intents.map((i) => i.entity));
+  return named.every((e) => covered.has(e));
 }
 
 /** Convenience wrapper for callers that only want the intent list. */
