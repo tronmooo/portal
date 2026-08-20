@@ -429,6 +429,34 @@ export function countdownLabel(
 
 // ─── Scanning entities for dates ─────────────────────────────────────────────
 
+/** Month names, so "Jun 4, 2029" counts as a bare date and "after" does not. */
+const MONTH_WORD = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
+
+/**
+ * The ISO date a value IS, or null when the value merely CONTAINS one.
+ *
+ * `normalizeDateString` searches anywhere in a string, which is right for
+ * parsing a field a user typed and wrong for deciding what a field means.
+ * "Expires 30 days after 6/4/2029" is a sentence about a term, not a date; a
+ * "2026-08-20T14:32:11Z" timestamp is a moment, not a day.
+ *
+ * Both the write path (which would otherwise replace the sentence with the
+ * date, irreversibly) and the read path (which would otherwise derive a rule
+ * on the wrong day) ask this same question, so they cannot disagree about it.
+ */
+export function bareDateOf(value: unknown): string | null {
+  const t = String(value ?? "").trim();
+  if (!t) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  if (/\d{1,2}:\d{2}/.test(t)) return null;                    // carries a time
+  // Any word that is not a month name means this is prose.
+  const withoutMonths = t.replace(/[A-Za-z]{3,9}\.?(?=\s|,|$)/g, (w) => (MONTH_WORD.test(w) ? "" : w));
+  if (/[A-Za-z]{3,}/.test(withoutMonths)) return null;
+  if (t.split(/\s+/).filter(Boolean).length > 3) return null;   // a phrase
+  return normalizeDateString(t);
+}
+
+
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
 
 function uniq(ids: Array<string | null | undefined>): string[] {
@@ -492,7 +520,10 @@ export function scanEntityDates(
       if (typeof value !== "string" && typeof value !== "number") continue;
       const raw = String(value).trim();
       if (!raw) continue;
-      const iso = normalizeDateString(raw);
+      // The value must BE a date, not merely mention one — the same question
+      // the write path asks, so a field holding "Expires 30 days after
+      // 6/4/2029" does not quietly become an important date on 4 June.
+      const iso = bareDateOf(raw);
       if (!iso) continue;
 
       const cls = classifyDateField(key, `${ctx.contextKey ?? ""} ${path}`);
@@ -527,7 +558,30 @@ export function scanEntityDates(
   };
 
   visit(fields, 0, "");
-  return out;
+
+  // Within ONE record, a GENERIC date field and a qualified one describing the
+  // same thing on the same day are one fact: a licence document carrying both
+  // `expirationDate` and `licenseExpiration` has one expiration, not two. The
+  // qualified name is the more informative of the pair, so it survives.
+  //
+  // Two qualified names that differ (auto vs home insurance) are two facts and
+  // both stay — which is why this cannot be done by type alone.
+  const byTypeAndDate = new Map<string, DateRule[]>();
+  for (const r of out) {
+    const k = `${r.ruleType}:${r.date}`;
+    const arr = byTypeAndDate.get(k);
+    if (arr) arr.push(r); else byTypeAndDate.set(k, [r]);
+  }
+  const dropped = new Set<string>();
+  for (const group of byTypeAndDate.values()) {
+    if (group.length < 2) continue;
+    const qualified = group.filter((r) => dateFieldQualifier(r.sourceField) !== "");
+    if (qualified.length === 0) continue;
+    for (const r of group) {
+      if (dateFieldQualifier(r.sourceField) === "") dropped.add(r.id);
+    }
+  }
+  return dropped.size > 0 ? out.filter((r) => !dropped.has(r.id)) : out;
 }
 
 function buildRule(a: ScanContext & {
@@ -843,11 +897,19 @@ export function seriesFromDateRules(rules: readonly DateRule[]): CalendarSeries[
   const out: CalendarSeries[] = [];
   for (const r of rules || []) {
     if (!r?.active || !r.calendarVisible) continue;
+    // A one-time renewal (a registration that renews once, on a date) is an
+    // important one-off, so it takes the `expiration` kind and with it the long
+    // horizon a 2034 date needs. A RECURRING renewal keeps the `renewal` kind
+    // on the ordinary one-year horizon — widening that kind wholesale expanded
+    // a yearly "Car Registration Renewal" into twelve occurrences.
+    const kind = r.ruleType === "renewal" && r.occurrenceType === "one_time"
+      ? "expiration"
+      : (KIND_FOR_RULE[r.ruleType] ?? "custom");
     out.push({
       // The rule id IS the series id, so a calendar occurrence can always be
       // traced back: occurrence → series → rule → source entity + field.
       id: `rule:${r.id}`,
-      kind: KIND_FOR_RULE[r.ruleType] ?? "custom",
+      kind,
       title: r.label,
       subtitle: r.subtitle,
       amount: r.amount,
@@ -1015,9 +1077,6 @@ export function isBareExpiryStatement(title: unknown): boolean {
  * value parses as a date, so a licence number or an address is never rewritten.
  * Returns the same object shape plus the list of keys that changed.
  */
-/** Month names, so "Jun 4, 2029" counts as a bare date and "after" does not. */
-const MONTH_WORD = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
-
 export function normalizeEntityDateFields<T extends Record<string, any>>(
   fields: T,
   ctx: { contextKey?: string; maxDepth?: number } = {},
@@ -1051,17 +1110,15 @@ export function normalizeEntityDateFields<T extends Record<string, any>>(
       // A bare date is a short token with no prose around it. Anything else —
       // a sentence, a range, a timestamp with a clock — is left exactly as the
       // user wrote it, and the rule engine reads it as-is.
-      if (/\d{1,2}:\d{2}/.test(trimmed)) continue;             // carries a time
-      if (/[A-Za-z]{3,}/.test(trimmed.replace(/[A-Za-z]{3,9}\.?(?=\s|,|$)/g, (w) =>
-        MONTH_WORD.test(w) ? "" : w))) continue;                // carries non-month words
-      if (trimmed.split(/\s+/).filter(Boolean).length > 3) continue;  // a phrase
+      const bare = bareDateOf(trimmed);
+      if (!bare) continue;
       // Only rewrite fields whose NAME says they hold a date. A free-text note
       // that happens to contain "6/4/2029" keeps its wording.
       const cls = classifyDateField(key, ctx.contextKey);
       const looksDated = cls.ruleType !== "informational" || /date|dob|birth|expir|due|renew|valid|start|end/i.test(key);
       if (!looksDated) continue;
-      const iso = normalizeDateString(trimmed);
-      if (!iso || iso === trimmed) continue;
+      if (bare === trimmed) continue;
+      const iso = bare;
       copy = copy || { ...obj };
       copy[key] = iso;
       changed.push(here);

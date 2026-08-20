@@ -605,6 +605,10 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
   const [renewId, setRenewId] = useState<string | null>(null);
   const [renewDate, setRenewDate] = useState("");
 
+  /** Where this expiration's record actually lives. */
+  const recordHref = (row: any): string =>
+    String(row?.href || "").replace(/^#/, "") || `/documents/${row?.documentId}`;
+
   const renew = useMutation({
     mutationFn: async (vars: { row: any; newDate: string }) => {
       const full = docById.get(vars.row.documentId);
@@ -676,9 +680,18 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
             </div>
           ) : (
             <div className="flex items-center flex-wrap gap-1.5 pt-1">
-              <ActionBtn label="View" icon={FileText} onClick={() => { onClose(); navigate(`/documents/${d.documentId}`); }} testId={`doc-view-${d.documentId}`} />
-              <ActionBtn label="Edit" icon={Pencil} onClick={() => { onClose(); navigate(`/documents/${d.documentId}`); }} testId={`doc-edit-${d.documentId}`} />
-              <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(d.documentId); setRenewDate(""); }} testId={`doc-renew-${d.documentId}`} />
+              {/* This list is no longer documents-only: an expiration can be
+                  carried by a PROFILE (a passport typed onto a person), and
+                  `/documents/<profileId>` is not a page. The row carries the
+                  link to its own record. */}
+              <ActionBtn label="View" icon={FileText} onClick={() => { onClose(); navigate(recordHref(d)); }} testId={`doc-view-${d.documentId}`} />
+              <ActionBtn label="Edit" icon={Pencil} onClick={() => { onClose(); navigate(recordHref(d)); }} testId={`doc-edit-${d.documentId}`} />
+              {/* "Renewed" PATCHes the DOCUMENT's extractedData, so it is only
+                  offered for a row a document actually owns. A profile-carried
+                  expiration is edited on the profile, which Edit opens. */}
+              {d.sourceEntityType !== "profile" && (
+                <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(d.documentId); setRenewDate(""); }} testId={`doc-renew-${d.documentId}`} />
+              )}
               <ActionBtn label="Dismiss 30d" icon={BellOff} onClick={() => dismiss(d.documentId)} testId={`doc-dismiss-${d.documentId}`} />
             </div>
           )}

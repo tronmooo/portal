@@ -172,7 +172,11 @@ export function computeNowItems(input: NowInputs): NowItem[] {
       key: `doc:${id}:${d.fieldName || ""}`, sourceId: id, kind: "document",
       title: name,
       detail: `expires ${dayLabel(du)}`,
-      daysUntil: du, action: "open", href: `/documents/${id}`,
+      // An expiration can be carried by a PROFILE (a passport typed onto a
+      // person) as well as by a document, and `/documents/<profileId>` leads
+      // nowhere. The row knows its own link; fall back only when it doesn't.
+      daysUntil: du, action: "open",
+      href: String(d?.href || "").replace(/^#/, "") || `/documents/${id}`,
       accent: ACCENT.document, score: urgencyScore(du) + (critical ? 160 : 20),
     });
   }

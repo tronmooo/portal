@@ -107,7 +107,12 @@ export const HORIZON_DAYS: Record<OccurrenceKind, number> = {
   subscription: 366,
   liability: 366,
   bill: 366,
-  renewal: 366 * 12,   // a 2034 licence must still be generated in 2026
+  // `renewal` covers RECURRING renewals (inferKindFromText maps /renew|
+  // registration/), so widening it expanded a yearly registration renewal into
+  // twelve rows. A one-off renewal is emitted as `expiration` instead — see
+  // seriesFromDateRules — which is where the long horizon belongs: a 2034
+  // licence must still be generated when the user is looking at 2026.
+  renewal: 366,
   income: 366,
   expiration: 366 * 12,
   maintenance: 366,

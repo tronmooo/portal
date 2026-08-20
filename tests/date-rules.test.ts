@@ -728,3 +728,83 @@ describe("a liability written before the write-path fix still shows", () => {
     expect(payment?.recurrenceEnd).toBe("2029-09-01");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. Third review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a value must BE a date on the read path too", () => {
+  it("does not derive a rule from a sentence that mentions a date", () => {
+    const rules = rulesFromDocuments([{
+      id: "d1", name: "Warranty", type: "warranty", linkedProfiles: [],
+      extractedData: { expirationTerms: "Expires 30 days after 6/4/2029" },
+    }]);
+    expect(rules).toEqual([]);
+  });
+
+  it("does not turn a timestamp into an important date", () => {
+    const rules = rulesFromProfiles([{
+      id: "p1", name: "Jane", type: "person",
+      fields: { expirationDate: "2026-08-20T14:32:11.000Z" },
+    }]);
+    expect(rules).toEqual([]);
+  });
+
+  it("still reads a bare date in any printed form", () => {
+    for (const raw of ["07/18/2034", "7/18/2034", "July 18, 2034", "18 Jul 2034", "2034-07-18"]) {
+      const [rule] = rulesFromDocuments([{
+        id: "d1", name: "License", type: "drivers_license", linkedProfiles: [],
+        extractedData: { expiration_date: raw },
+      }]);
+      expect(rule?.date, raw).toBe("2034-07-18");
+    }
+  });
+});
+
+describe("one record, one expiration", () => {
+  it("collapses a generic and a qualified spelling on the same day", () => {
+    // A licence carrying BOTH `expirationDate` and `licenseExpiration` has one
+    // expiration; the qualified name is the more informative and survives.
+    const rules = rulesFromDocuments([{
+      id: "d1", name: "License", type: "drivers_license", linkedProfiles: [],
+      extractedData: { expirationDate: "2034-07-18", licenseExpiration: "2034-07-18" },
+    }]);
+    expect(rules).toHaveLength(1);
+    expect(rules[0].sourceField).toBe("licenseExpiration");
+  });
+
+  it("still keeps two genuinely different policies on the same day", () => {
+    const rules = rulesFromProfiles([{
+      id: "car-1", name: "Honda", type: "vehicle",
+      fields: { autoInsuranceExpiration: "2027-03-01", homeInsuranceExpiration: "2027-03-01" },
+    }]);
+    expect(rules).toHaveLength(2);
+  });
+});
+
+describe("a recurring renewal does not become twelve renewals", () => {
+  it("keeps a yearly registration renewal to one occurrence a year", () => {
+    const series = seriesFromAll({
+      events: [{
+        id: "e1", title: "Car Registration Renewal", date: "2026-10-10",
+        recurrence: "yearly", linkedProfiles: ["p1"],
+      }],
+    });
+    expect(series[0].kind).toBe("renewal");
+    const occ = buildCalendarOccurrences(series, { todayISO: TODAY });
+    // One year of horizon, so at most two anniversaries of the same day.
+    expect(occ.length).toBeLessThanOrEqual(2);
+  });
+
+  it("still reaches a one-off renewal years away", () => {
+    const [rule] = rulesFromProfiles([{
+      id: "car-1", name: "Honda", type: "vehicle", fields: { registrationRenewal: "2031-10-10" },
+    }]);
+    expect(rule.ruleType).toBe("renewal");
+    expect(rule.occurrenceType).toBe("one_time");
+    const [series] = seriesFromDateRules([rule]);
+    // Carries the expiration kind, and with it the horizon a distant date needs.
+    expect(series.kind).toBe("expiration");
+    expect(buildCalendarOccurrences([series], { todayISO: TODAY }).map(o => o.date)).toEqual(["2031-10-10"]);
+  });
+});

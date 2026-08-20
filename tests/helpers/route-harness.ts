@@ -230,16 +230,28 @@ export function makeFakeStorage(db: FakeDb) {
       const { rulesFromAll, seriesFromDateRules } = await import("../../shared/date-rules");
       const { generateSeriesOccurrences } = await import("../../shared/calendar-occurrences");
       const todayISO = new Date().toLocaleDateString("en-CA");
+      const { seriesFromEvents } = await import("../../shared/calendar-adapters");
+      const rulesForShadowing = rulesFromAll({ profiles: db.profiles, documents: db.documents });
+      // Same suppression both storages apply: a standalone event an older
+      // extraction wrote beside a document's own date is a copy of it.
+      const shadowEventIds = new Set(
+        seriesFromEvents(db.events as any[], {
+          ruledDocumentDates: new Set(
+            rulesForShadowing.filter(r => r.sourceEntityType === "document")
+              .map(r => `${r.sourceEntityId}@${r.date}`),
+          ),
+        }).filter(x => x.shadow).map(x => x.source.id),
+      );
       const items: any[] = [];
       for (const ev of db.events) {
+        if (shadowEventIds.has(ev.id)) continue;
         const d = String(ev.date || "").slice(0, 10);
         if (d >= startDate && d <= endDate) {
           items.push({ id: `event-${ev.id}-${d}`, type: "event", title: ev.title, date: d,
             linkedProfiles: ev.linkedProfiles || [], sourceId: ev.id, meta: { tags: ev.tags } });
         }
       }
-      const rules = rulesFromAll({ profiles: db.profiles, documents: db.documents });
-      for (const ser of seriesFromDateRules(rules)) {
+      for (const ser of seriesFromDateRules(rulesForShadowing)) {
         const { daysBetweenISO } = await import("../../shared/date-rules");
         for (const occ of generateSeriesOccurrences(ser, {
           todayISO,

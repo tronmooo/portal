@@ -5,6 +5,7 @@ import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields } from "@shared/date-rules";
+import { seriesFromEvents } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -1312,7 +1313,24 @@ export class MemStorage implements IStorage {
     // state (rd:done/rd:skip/rd:paused/rd:archived tags — see
     // shared/recurring-dates) applies here exactly like the Supabase timeline.
     const rdTodayISO = new Date().toLocaleDateString("en-CA");
+    // Legacy standalone events an older extraction wrote beside a document's
+    // own date are SHADOWS of it — the same suppression SupabaseStorage
+    // applies. Without it this storage renders one real date twice, and a test
+    // here would pass while production showed a duplicate (or the reverse).
+    const rulesForShadowing = rulesFromAll({
+      profiles: Array.from(this.profiles.values()),
+      documents: Array.from(this.documents.values()),
+    });
+    const shadowEventIds = new Set(
+      seriesFromEvents(Array.from(this.events.values()) as any[], {
+        ruledDocumentDates: new Set(
+          rulesForShadowing.filter(r => r.sourceEntityType === "document")
+            .map(r => `${r.sourceEntityId}@${r.date}`),
+        ),
+      }).filter(x => x.shadow).map(x => x.source.id),
+    );
     for (const ev of this.events.values()) {
+      if (shadowEventIds.has(ev.id)) continue;
       const color = ev.color || EVENT_CATEGORY_COLORS[ev.category] || "#4F98A3";
       const rdMeta = parseRecurringMeta(ev.tags);
       if (rdMeta.archived) continue;

@@ -302,3 +302,46 @@ describe("GET /api/date-rules does not double-count a legacy copy", () => {
     expect(onThatDay[0].sourceEntityType).toBe("document");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("shadowing a legacy copy does not sweep away a real event", () => {
+  it("keeps an extraction event for a date no rule covers", async () => {
+    const { api } = await boot({
+      documents: [{
+        id: "doc-1", name: "Sample Driver License", type: "drivers_license",
+        extractedData: { expiration_date: "2034-07-18" }, linkedProfiles: ["jane-1"], tags: [],
+      }],
+      events: [
+        // A copy of the expiration — same document, SAME DAY. A shadow.
+        { id: "ev-copy", title: "⚠️ Expiration Date", date: "2034-07-18", recurrence: "none",
+          linkedProfiles: ["jane-1"], linkedDocuments: ["doc-1"], tags: ["document-extraction"] },
+        // A real date the extractor found on the same document that no rule
+        // covers — routes.ts deliberately still creates these.
+        { id: "ev-real", title: "House Viewing", date: `${YEAR}-09-02`, recurrence: "none",
+          linkedProfiles: ["jane-1"], linkedDocuments: ["doc-1"], tags: ["document-extraction"] },
+      ],
+    });
+    const titles = (await api("GET", `/api/calendar/timeline?${RANGE}`)).data.map((i: any) => i.title);
+    expect(titles).toContain("House Viewing");
+    expect(titles).toContain("Sample Driver License — Expiration");
+    expect(titles).not.toContain("⚠️ Expiration Date");
+  });
+});
+
+describe("a nested record's dates stay in scope with its owner", () => {
+  it("keeps a vehicle's warranty when filtering by the person it belongs to", async () => {
+    // The virtual-event ladder this replaced scoped on (profile, parent); the
+    // replacement matched the child id alone, so a subscription or vehicle
+    // nested under a person lost its dates the moment that person was selected.
+    const { api } = await boot({
+      profiles: [
+        { id: "jane-1", name: "Jane Doe", type: "self", fields: {}, tags: [], documents: [] },
+        { id: "car-1", name: "Honda", type: "vehicle", parentProfileId: "jane-1",
+          fields: { warrantyExpiration: `${YEAR + 2}-05-01` }, tags: [], documents: [] },
+      ],
+    });
+    const scoped = await api("GET", `/api/calendar/timeline?${RANGE}&profileIds=jane-1`);
+    expect(scoped.data.map((i: any) => i.title)).toContain("Honda — Warranty Expiration");
+  });
+});

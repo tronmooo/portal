@@ -3627,7 +3627,12 @@ export class SupabaseStorage implements IStorage {
     //   • a typed-in birthday event for a profile that already carries the
     //     date is a SHADOW of it and is suppressed here, so the same birthday
     //     can never render twice.
-    const scopedProfiles = profiles.filter(p => !filterActive || matchesProfile([p.id]));
+    // Scope on the profile AND ITS PARENT, exactly as the virtual-event ladder
+    // this replaced did. A subscription, vehicle or asset nested under a person
+    // belongs to that person, so filtering by them must keep its renewal,
+    // service and warranty dates — matching on the child id alone dropped them.
+    const scopedProfiles = profiles.filter(p =>
+      !filterActive || matchesProfile([p.id, ...(p.parentProfileId ? [p.parentProfileId] : [])]));
     // Every profile- and document-carried date, from the ONE Date Rule engine
     // (shared/date-rules) the Recurring & Important Dates screen and the
     // Upcoming feed also read. This block used to cover birthdays and
@@ -3648,11 +3653,12 @@ export class SupabaseStorage implements IStorage {
     );
     // Legacy extraction-written events for a document whose dates are now
     // derived are shadows of it, matched by link rather than by title.
-    const ruledDocumentIds = new Set(
-      profileDateSeries.filter(x => x.source.system === "document").map(x => x.source.id),
+    const ruledDocumentDates = new Set(
+      profileDateSeries.filter(x => x.source.system === "document")
+        .map(x => `${x.source.id}@${x.baseDate}`),
     );
     const shadowEventIds = new Set(
-      seriesFromEvents(allEvents as any[], { knownBirthdayProfiles, knownAnniversaryProfiles, ruledDocumentIds })
+      seriesFromEvents(allEvents as any[], { knownBirthdayProfiles, knownAnniversaryProfiles, ruledDocumentDates })
         .filter(x => x.shadow)
         .map(x => x.source.id),
     );

@@ -9558,27 +9558,39 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Anything that fails one of them stays an ordinary calendar event.
         const label = parseBirthdayLabel(input.title);
         const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
-        const yearIsPast = /^\d{4}-/.test(iso) && Number(iso.slice(0, 4)) < new Date().getFullYear();
-        if (label && yearIsPast) {
+        const year = /^\d{4}-/.test(iso) ? Number(iso.slice(0, 4)) : NaN;
+        const thisYear = new Date().getFullYear();
+        if (label && year < thisYear) {
           const profs = await storage.getProfiles();
           const target = (input.forProfile && matchProfileByName(profs, input.forProfile))
             || (label.name.length >= 2 ? matchProfileByName(profs, label.name) : null);
           if (target) {
             const field = label.kind === "birthday" ? "dateOfBirth" : "anniversary";
             const existing: Record<string, any> = (target as any).fields || {};
-            await storage.updateProfile(target.id, {
-              fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
-            } as any);
-            const updatedProfile = await storage.getProfile(target.id);
-            logger.info("ai", `"${input.title}" is ${target.name}'s ${field} — saved to the profile; the yearly occurrence is derived from it`);
-            return {
-              result: {
-                savedTo: "profile", profileId: target.id, profileName: target.name,
-                field, value: iso, recurrence: "yearly",
-                note: "Saved to the profile that owns this date; the calendar derives it.",
-              },
-              actions: [{ type: "update", category: "profile", data: updatedProfile }],
-            };
+            const held = existing[field] ?? existing[label.kind === "birthday" ? "birthday" : "anniversaryDate"];
+            // Replacing a date already on the record needs more than "the year
+            // is past". "Joe's Birthday" on 2025-02-11 is LAST YEAR'S
+            // OCCURRENCE, and taking it as his date of birth would replace 1990
+            // with 2025 and break every age the app computes. A date of birth
+            // is years old, so a recent year is never a correction — it is an
+            // occurrence, and an occurrence is an ordinary calendar event.
+            const wouldReplaceWithAnOccurrence =
+              !!held && !looselyEqual(held, iso) && year > thisYear - 5;
+            if (!wouldReplaceWithAnOccurrence) {
+              await storage.updateProfile(target.id, {
+                fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
+              } as any);
+              const updatedProfile = await storage.getProfile(target.id);
+              logger.info("ai", `"${input.title}" is ${target.name}'s ${field} — saved to the profile; the yearly occurrence is derived from it`);
+              return {
+                result: {
+                  savedTo: "profile", profileId: target.id, profileName: target.name,
+                  field, value: iso, recurrence: "yearly",
+                  note: "Saved to the profile that owns this date; the calendar derives it.",
+                },
+                actions: [{ type: "update", category: "profile", data: updatedProfile }],
+              };
+            }
           }
         }
       }
