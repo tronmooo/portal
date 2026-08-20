@@ -24,6 +24,8 @@ import express from "express";
 import { createServer, type Server } from "http";
 import { AddressInfo } from "net";
 
+import { mergeFieldWrite, fieldIdentity } from "../shared/profile-field-identity";
+
 const { stubState, stubStorage, aiTasks } = vi.hoisted(() => {
   const state = {
     profiles: new Map<string, any>(),
@@ -39,16 +41,25 @@ const { stubState, stubStorage, aiTasks } = vi.hoisted(() => {
     async getProfiles() { return [...state.profiles.values()]; },
     async getProfilesLite() { return [...state.profiles.values()]; },
     async getAssetPartyLinks() { return []; },
-    // Mirrors the Supabase merge semantics (mergeAndApplyDeletes): incoming
-    // null/undefined is a deletion intent; other keys overwrite.
+    // Mirrors the real SupabaseStorage.updateProfile merge, including the
+    // universal identity-aware write (mergeFieldWrite): incoming null/undefined
+    // is a deletion intent, and every other key SUPERSEDES the other spellings
+    // of the same field. Kept faithful on purpose — a stub that merges by exact
+    // key would pass this suite while production diverged, which is precisely
+    // how the "fields did not persist" bug reached a user.
     async updateProfile(id: string, patch: any) {
       const cur = state.profiles.get(id);
       if (!cur) return undefined;
-      const fields: Record<string, any> = { ...(cur.fields || {}) };
+      const incoming: Record<string, any> = {};
+      const deletions: string[] = [];
       for (const [k, v] of Object.entries(patch.fields || {})) {
-        if (v === null || v === undefined) delete fields[k];
-        else fields[k] = v;
+        if (v === null || v === undefined) deletions.push(k);
+        else incoming[k] = v;
       }
+      const write = mergeFieldWrite(cur.fields || {}, incoming);
+      const fields: Record<string, any> = { ...write.fields };
+      for (const k of write.superseded) delete fields[k];
+      for (const k of deletions) delete fields[k];
       const updated = { ...cur, ...patch, fields };
       state.profiles.set(id, updated);
       return updated;
@@ -440,5 +451,132 @@ describe("POST /api/chat/confirm-extraction", () => {
     // Still exactly one expense — the confirm did not mint a twin.
     expect(stubState.expenses).toHaveLength(1);
     expect(data.saved.join("; ")).toContain("skipped duplicate");
+  });
+});
+
+// ─── The 2026-08-20 report, driven through the real route ────────────────────
+//
+// "Saved with warnings — Some pieces didn't save: fields did not persist to
+//  Jane Doe: address, issuing State", on a save that had in fact worked.
+// A license card names one field under two spellings; writing the second
+// nulled the first, and the exact-key verification called that a failure.
+// This drives the actual HTTP endpoint, not the merge helpers.
+
+describe("POST /api/chat/confirm-extraction — driver license (2026-08-20)", () => {
+  let server: Server;
+  let base: string;
+
+  const personProfile = () => ({
+    id: "profile-jane",
+    name: "Jane Doe",
+    type: "person",
+    fields: { name: "Jane Doe" },
+    tags: [], notes: "",
+  });
+
+  const licenseDoc = () => ({
+    id: "doc-license",
+    name: "Sample Driver License (Testing)",
+    type: "drivers_license",
+    mimeType: "image/png",
+    extractedData: {},
+    linkedProfiles: [],
+    tags: [],
+  });
+
+  // Exactly the checklist from the screenshot: every row ticked, including
+  // BOTH spellings the extractor produced for address and for state.
+  const CONFIRMED = [
+    { key: "city", value: "Readwood Harbor" },
+    { key: "dateOfBirth", value: "1992-04-11" },
+    { key: "expirationDate", value: "2030-03-21" },
+    { key: "issueDate", value: "2024-03-21" },
+    { key: "issuingState", value: "EX" },
+    { key: "lastName", value: "Doe" },
+    { key: "licenseClass", value: "C" },
+    { key: "licenseNumber", value: "TEST-DL-4829-XJ1" },
+    { key: "state", value: "EX" },
+    { key: "streetAddress", value: "742 Pixel Loop, Unit 9" },
+    { key: "address", value: "742 Pixel Loop, Unit 9" },
+    { key: "zipCode", value: "90012" },
+  ];
+
+  beforeEach(async () => {
+    stubState.profiles.clear();
+    stubState.documents.clear();
+    stubState.expenses.length = 0;
+    aiTasks.length = 0;
+    stubState.profiles.set("profile-jane", personProfile());
+    stubState.documents.set("doc-license", licenseDoc());
+
+    const app = express();
+    app.use(express.json());
+    server = createServer(app);
+    await registerRoutes(server, app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    vi.unstubAllEnvs();
+  });
+
+  const confirm = async () =>
+    fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-license",
+        targetProfileId: "profile-jane",
+        confirmedFields: CONFIRMED,
+        createCalendarEvents: [],
+        trackerEntries: [],
+      }),
+    });
+
+  it("confirms clean — no warning toast, no named failures", async () => {
+    const res = await confirm();
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    // success:false + failures[] is exactly what rendered "Saved with warnings".
+    expect(data.failures).toEqual([]);
+    expect(data.success).toBe(true);
+  });
+
+  it("the address and the state are on the profile, stored once each", async () => {
+    await confirm();
+    const after = stubState.profiles.get("profile-jane").fields;
+
+    const live = Object.entries(after).filter(([k, v]) => !k.startsWith("_") && v !== null);
+    const byIdentity = (id: string) => live.filter(([k]) => fieldIdentity(k) === id);
+
+    expect(byIdentity("address")).toHaveLength(1);
+    expect(byIdentity("address")[0][1]).toBe("742 Pixel Loop, Unit 9");
+    expect(byIdentity("licenseState")).toHaveLength(1);
+    expect(byIdentity("licenseState")[0][1]).toBe("EX");
+    expect(byIdentity("birthday")).toHaveLength(1);
+    expect(byIdentity("license")[0][1]).toBe("TEST-DL-4829-XJ1");
+  });
+
+  it("confirming the same card twice changes nothing and still reports clean", async () => {
+    await confirm();
+    const first = JSON.stringify(stubState.profiles.get("profile-jane").fields);
+    const res = await confirm();
+    const data = await res.json();
+    expect(data.failures).toEqual([]);
+    expect(JSON.stringify(stubState.profiles.get("profile-jane").fields)).toBe(first);
+  });
+
+  it("deleting the document takes the license data back off the profile", async () => {
+    await confirm();
+    const del = await fetch(`${base}/api/documents/doc-license`, { method: "DELETE" });
+    expect(del.status).toBe(200);
+
+    const after = stubState.profiles.get("profile-jane").fields;
+    const live = Object.entries(after).filter(([k, v]) => !k.startsWith("_") && v !== null);
+    // The person survives; everything the license contributed is gone —
+    // including the spellings the write superseded on the way in.
+    expect(live).toEqual([["name", "Jane Doe"]]);
   });
 });
