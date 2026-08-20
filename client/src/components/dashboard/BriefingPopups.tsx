@@ -609,6 +609,17 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
   const recordHref = (row: any): string =>
     String(row?.href || "").replace(/^#/, "") || `/documents/${row?.documentId}`;
 
+  /**
+   * What a row IS, for per-row state.
+   *
+   * One record can now carry several expirations — a person with a passport and
+   * a licence, a vehicle with insurance and registration. Keying snooze,
+   * dismiss and the renew editor on the record id made them act on all of them
+   * at once: dismissing one hid the rest, and opening the date editor opened
+   * every row's.
+   */
+  const rowKey = (row: any): string => String(row?.ruleId || row?.documentId || "");
+
   const renew = useMutation({
     mutationFn: async (vars: { row: any; newDate: string }) => {
       const full = docById.get(vars.row.documentId);
@@ -630,7 +641,9 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
     toast({ title: "Alert dismissed", description: "Hidden from expiration alerts for 30 days." });
   };
 
-  const visible = (docs || []).filter((d: any) => !snoozeMap[d.documentId]);
+  // Per-rule, with the record id still honoured so snoozes taken before rows
+  // became per-rule keep working.
+  const visible = (docs || []).filter((d: any) => !snoozeMap[d.ruleId] && !snoozeMap[d.documentId]);
   const bands: Array<{ key: string; label: string; tone: "neg" | "warn" | "muted"; rows: any[] }> = [
     { key: "expired", label: "Expired", tone: "neg", rows: visible.filter((d: any) => d.daysUntil < 0) },
     { key: "soon", label: "Expiring soon · next 30 days", tone: "warn", rows: visible.filter((d: any) => d.daysUntil >= 0 && d.daysUntil <= 30) },
@@ -670,7 +683,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
             <span>Exact date</span><span className="text-foreground">{fmtDate(d.expirationDate)}</span>
             <span>Days remaining</span><span className="text-foreground tabular-nums">{d.daysUntil >= 0 ? d.daysUntil : `${Math.abs(d.daysUntil)} past`}</span>
           </div>
-          {renewId === d.documentId ? (
+          {renewId === rowKey(d) ? (
             <div className="flex items-center gap-1.5 pt-1">
               <input type="date" value={renewDate} onChange={e => setRenewDate(e.target.value)}
                 className="h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`doc-renew-date-${d.documentId}`} />
@@ -690,9 +703,9 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
                   offered for a row a document actually owns. A profile-carried
                   expiration is edited on the profile, which Edit opens. */}
               {d.sourceEntityType !== "profile" && (
-                <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(d.documentId); setRenewDate(""); }} testId={`doc-renew-${d.documentId}`} />
+                <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(rowKey(d)); setRenewDate(""); }} testId={`doc-renew-${d.documentId}`} />
               )}
-              <ActionBtn label="Dismiss 30d" icon={BellOff} onClick={() => dismiss(d.documentId)} testId={`doc-dismiss-${d.documentId}`} />
+              <ActionBtn label="Dismiss 30d" icon={BellOff} onClick={() => dismiss(rowKey(d))} testId={`doc-dismiss-${d.documentId}`} />
             </div>
           )}
         </div>

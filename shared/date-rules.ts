@@ -504,7 +504,13 @@ export function dateRuleId(
   sourceField: string,
   ruleType: DateRuleType,
 ): string {
-  return `${sourceEntityType}:${sourceEntityId}:${normalizeFieldKey(sourceField)}:${ruleType}`;
+  // `sourceField` may be a dotted PATH. Two fields with the same name in
+  // different nested groups — `identity.expirationDate` and
+  // `insurance.expirationDate` — are two different dates, and keying on the
+  // leaf name alone collided them: the second existed on no surface at all.
+  // A top-level field's path is its own name, so those ids are unchanged.
+  const path = String(sourceField ?? "").split(".").map(normalizeFieldKey).filter(Boolean).join(".");
+  return `${sourceEntityType}:${sourceEntityId}:${path}:${ruleType}`;
 }
 
 export interface ScanContext {
@@ -561,7 +567,7 @@ export function scanEntityDates(
       const cls = classifyDateField(key, `${ctx.contextKey ?? ""} ${path}`);
       if (!cls.actionable) continue;
 
-      const id = dateRuleId(ctx.entityType, ctx.entityId, key, cls.ruleType);
+      const id = dateRuleId(ctx.entityType, ctx.entityId, here, cls.ruleType);
       // Two spellings of ONE fact collapse; two different facts do not.
       //
       // A profile carrying both `dateOfBirth` and `birthday` (extraction writes
@@ -573,7 +579,7 @@ export function scanEntityDates(
       // ABOUT once the date-words are stripped, so `expiration_date`,
       // `expirationDate` and `expiry` agree while `autoInsuranceExpiration`
       // and `homeInsuranceExpiration` stay two different policies.
-      const valueKey = `${cls.ruleType}:${dateFieldQualifier(key)}:${clip(iso)}`;
+      const valueKey = `${cls.ruleType}:${path}${dateFieldQualifier(key)}:${clip(iso)}`;
       // A person has ONE birthday and ONE anniversary however many spellings
       // carry it, so those two still collapse on type even when the values
       // disagree — otherwise a stale `birthday` beside a corrected

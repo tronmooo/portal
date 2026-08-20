@@ -408,3 +408,13 @@ describe("an event created for an uncovered date survives the shadow pass", () =
     expect(titles).toContain("Policy — Renewal");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("browsing back to an older month", () => {
+  it("still shows the birthday there", async () => {
+    const { api } = await boot({ profiles: [{ ...JANE, fields: { dateOfBirth: "1994-07-10" } }] });
+    const older = await api("GET", `/api/calendar/timeline?start=${YEAR - 2}-01-01&end=${YEAR - 2}-12-31`);
+    expect(older.data.map((i: any) => i.date)).toContain(`${YEAR - 2}-07-10`);
+  });
+});

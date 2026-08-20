@@ -2418,10 +2418,18 @@ ${JSON.stringify(ctx, null, 2)}`;
       // The document always keeps ALL data as the source of truth.
 
       // Step 0: ALWAYS save all confirmed fields to the document's extractedData (source of truth)
+      //
+      // What Step 2 needs to know: which fields actually LANDED, and what kind
+      // of document this is. Both are known here, so they are recorded rather
+      // than re-fetched — that second `getDocument` downloaded the file binary
+      // again just to read a type and a name.
+      let docContextForDates = "";
+      const persistedFieldKeys = new Set<string>();
       if (confirmedFields && confirmedFields.length > 0) {
         try {
           const doc = await storage.getDocument(extractionId);
           if (doc) {
+            docContextForDates = `${doc.type ?? ""} ${doc.name ?? ""}`;
             const updatedData: Record<string, any> = { ...(doc.extractedData || {}) };
             for (const field of confirmedFields) {
               updatedData[field.key] = unwrap(field.value);
@@ -2431,8 +2439,9 @@ ${JSON.stringify(ctx, null, 2)}`;
             // licence prints "07/18/2034"; stored verbatim it was a string the
             // calendar, Upcoming and Important Dates could all see and none
             // could understand. See shared/date-rules.
-            const normalizedDoc = normalizeEntityDateFields(updatedData, { contextKey: `${doc.type ?? ""} ${doc.name ?? ""}` });
+            const normalizedDoc = normalizeEntityDateFields(updatedData, { contextKey: docContextForDates });
             await storage.updateDocument(extractionId, { extractedData: normalizedDoc.fields });
+            for (const field of confirmedFields) persistedFieldKeys.add(normalizeFieldKey(field.key));
             saved.push(`Saved ${confirmedFields.length} fields to document`);
           }
         } catch (e: any) {
@@ -2665,19 +2674,17 @@ ${JSON.stringify(ctx, null, 2)}`;
       // printed on an invitation) has no source field to be derived from, so
       // it still becomes a real event — that is the only case left.
       if (createCalendarEvents && createCalendarEvents.length > 0) {
-        const docForCtx = await storage.getDocument(extractionId).catch(() => null);
-        const docCtx = `${(docForCtx as any)?.type ?? ""} ${(docForCtx as any)?.name ?? ""}`;
-        // A date is only DERIVED if its field was actually saved. `createCalendarEvents`
-        // arrives independently of `confirmedFields`, so a date the user ticked
-        // for the calendar alone has no field behind it — skipping it there
-        // dropped the date entirely while the response still said success.
-        const savedFieldKeys = new Set(
-          (confirmedFields || []).map((f: any) => normalizeFieldKey(f?.key)).filter(Boolean),
-        );
+        // A date is only DERIVED if its field actually PERSISTED.
+        //
+        // `createCalendarEvents` arrives independently of `confirmedFields`, so
+        // a date ticked for the calendar alone has no field behind it — and if
+        // Step 0's write threw, neither does one that was ticked. Suppressing
+        // the event in either case loses the date entirely while the response
+        // still reports success, so the set below is the fields that landed.
         for (const event of createCalendarEvents) {
           try {
-            const covered = savedFieldKeys.has(normalizeFieldKey(event.field))
-              && classifyDateField(event.field, docCtx).actionable;
+            const covered = persistedFieldKeys.has(normalizeFieldKey(event.field))
+              && classifyDateField(event.field, docContextForDates).actionable;
             if (covered) {
               log.info(`[confirm-extraction] "${event.field}" is owned by its record — derived as a Date Rule, no standalone event`);
               continue;

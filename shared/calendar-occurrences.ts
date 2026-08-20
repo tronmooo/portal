@@ -734,13 +734,23 @@ function statusFor(
  * Every other kind keeps its base date verbatim: a subscription that genuinely
  * starts next March must not be dragged into the past.
  */
-function annualAnchoredBase(series: CalendarSeries, todayISO: string): string {
+function annualAnchoredBase(series: CalendarSeries, todayISO: string, windowStart?: string): string {
   const base = String(series.baseDate || "").slice(0, 10);
   if (!SINGLETON_KINDS.has(series.kind)) return base;
   if ((series.recurrence || "") !== "yearly") return base;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return base;
   const baseYear = Number(base.slice(0, 4));
-  const anchorYear = Number(todayISO.slice(0, 4)) - 1;
+  // Anchor to the year before today, or to the year the CALLER'S WINDOW starts
+  // in when that is earlier. Hardcoding `todayYear - 1` meant a birthday could
+  // never be generated for a month further back than last year, so browsing the
+  // calendar to March 2024 showed nothing — a regression the per-year ladder
+  // that used to cover [startYear, endYear] had been hiding.
+  const windowYear = windowStart && /^\d{4}-/.test(windowStart)
+    ? Number(windowStart.slice(0, 4)) : NaN;
+  const anchorYear = Math.min(
+    Number(todayISO.slice(0, 4)) - 1,
+    Number.isFinite(windowYear) ? windowYear : Infinity,
+  );
   if (!Number.isFinite(baseYear) || !Number.isFinite(anchorYear)) return base;
   const baseDay = base.slice(8, 10);
   // Re-anchor to the year before today so this year's date is still in range.
@@ -791,7 +801,7 @@ export function generateSeriesOccurrences(
   const identityKey = seriesIdentityKey(series);
   const moved = series.movedDates || {};
 
-  const dates = expandRecurrenceDates(annualAnchoredBase(series, today), series.recurrence || "none", {
+  const dates = expandRecurrenceDates(annualAnchoredBase(series, today, windowStart), series.recurrence || "none", {
     recurrenceEnd: series.recurrenceEnd,
     windowStart,
     windowEnd,

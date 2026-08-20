@@ -498,7 +498,11 @@ export function buildExecutiveSections(
     const bestByDoc = new Map<string, { doc: any; du: number }>();
     for (const d of input.documents || []) {
       const id = d?.documentId || d?.id;
-      if (!id || snoozed.has(id)) continue;
+      if (!id) continue;
+      // Snoozing is per RULE now that a record can carry several. Testing the
+      // record id alone meant dismissing a passport also hid the licence.
+      // The record id is still honoured so snoozes made before this keep working.
+      if (snoozed.has(d?.ruleId) || snoozed.has(id)) continue;
       // Group by the RULE, not by the record it hangs off. `documentId` is the
       // source entity now, so a person carrying both a passport and a licence
       // expiring inside the window collapsed to whichever was nearer and the

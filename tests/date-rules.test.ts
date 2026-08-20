@@ -949,3 +949,45 @@ describe("the countdown borrows correctly across a short month", () => {
     expect(calendarDelta("2026-01-31", "2026-02-28")).toMatchObject({ months: 1, days: 0 });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 16. Sixth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("the same field name in two groups is two fields", () => {
+  it("keeps both nested expirations", () => {
+    // Keying the rule id on the leaf name alone collided these, and the second
+    // existed on no surface at all.
+    const rules = rulesFromProfiles([{
+      id: "p1", name: "Jane", type: "person",
+      fields: {
+        identity: { expirationDate: "2030-01-01" },
+        insurance: { expirationDate: "2027-05-05" },
+      },
+    }]);
+    expect(rules.map(r => r.date).sort()).toEqual(["2027-05-05", "2030-01-01"]);
+    expect(new Set(rules.map(r => r.id)).size).toBe(2);
+  });
+
+  it("leaves a top-level field's id unchanged", () => {
+    const [rule] = rulesFromDocuments([{
+      id: "d1", name: "License", type: "drivers_license", linkedProfiles: [],
+      extractedData: { expiration_date: "2034-07-18" },
+    }]);
+    expect(rule.id).toBe("document:d1:expirationdate:expiration");
+  });
+});
+
+describe("a birthday shows in a month the user browses back to", () => {
+  it("generates occurrences before last year when the window asks for them", () => {
+    const [rule] = rulesFromProfiles([{ id: "p1", name: "Jane", type: "person", fields: { dateOfBirth: "1994-07-10" } }]);
+    const [series] = seriesFromDateRules([rule]);
+    // Anchoring to `todayYear - 1` regardless of the window meant browsing to
+    // March 2024 returned nothing at all.
+    const dates = generateSeriesOccurrences(series, {
+      todayISO: TODAY, horizonDays: 366, lookbackDays: 365 * 3,
+    }).map(o => o.date);
+    expect(dates).toContain("2024-07-10");
+    expect(dates).toContain("2025-07-10");
+  });
+});
