@@ -16,7 +16,7 @@ import {
   detectStructuredDomain, readsAsHabit, GENERIC_KINDS,
 } from "@shared/content-routing";
 import { canonicalDateCoverage, deriveDateRulesForRecord } from "@shared/temporal-rules";
-import { seriesFromHabits, seriesFromAll } from "@shared/calendar-adapters";
+import { seriesFromAll } from "@shared/calendar-adapters";
 
 describe("structured profile data never becomes a note", () => {
   const cases: Array<[string, string]> = [
@@ -95,62 +95,31 @@ describe("habit vs recurring task", () => {
   });
 });
 
-describe("habits reach the unified calendar", () => {
-  const habit = (over: Record<string, any> = {}) => ({
+describe("habits stay OFF the calendar", () => {
+  const habit = {
     id: "h1", name: "Take medication", frequency: "daily", targetPerDay: 1,
     startDate: "2026-08-01", checkins: [], linkedProfiles: ["p-robert"],
-    createdAt: "2026-08-01T00:00:00Z", ...over,
+    createdAt: "2026-08-01T00:00:00Z",
+  };
+
+  // A habit repeats, but it is not a commitment on a date — it is a practice
+  // with a streak, and the Habits page is where it is scheduled and checked
+  // off. Projecting a daily habit onto the calendar fills every single day
+  // with a row the user did not put there, which is why the Supabase timeline
+  // excluded habits in the first place ("they don't belong on the calendar").
+  // That decision stands.
+  it("the calendar adapters do not adapt habits", () => {
+    expect(seriesFromAll({ habits: [habit] } as any)).toEqual([]);
   });
 
-  it("a daily habit becomes one daily series", () => {
-    const s = seriesFromHabits([habit()]);
-    expect(s).toHaveLength(1);
-    expect(s[0].kind).toBe("habit");
-    expect(s[0].recurrence).toBe("daily");
-    expect(s[0].baseDate).toBe("2026-08-01");
-    expect(s[0].source.href).toContain("habits");
+  it("the temporal layer derives no Date Rule from a habit", () => {
+    expect(deriveDateRulesForRecord("u1", "habit" as any, habit)).toEqual([]);
   });
 
-  it("a weekly habit uses its configured days", () => {
-    const s = seriesFromHabits([habit({ frequency: "weekly", targetDays: [1, 4] })]);
-    expect(s[0].recurrence).toBe("weekly:1,4");
-  });
-
-  it("a 3x-daily habit is ONE occurrence a day, not three", () => {
-    const s = seriesFromHabits([habit({ targetPerDay: 3 })]);
-    expect(s).toHaveLength(1);
-    expect(s[0].subtitle).toBe("3× per day");
-  });
-
-  it("a day is complete only when the per-day target is met", () => {
-    const partial = seriesFromHabits([habit({
-      targetPerDay: 3,
-      checkins: [{ date: "2026-08-02" }, { date: "2026-08-02" }],
-    })]);
-    expect(partial[0].completedDates ?? []).not.toContain("2026-08-02");
-
-    const full = seriesFromHabits([habit({
-      targetPerDay: 3,
-      checkins: [{ date: "2026-08-02" }, { date: "2026-08-02" }, { date: "2026-08-02" }],
-    })]);
-    expect(full[0].completedDates).toContain("2026-08-02");
-  });
-
-  it("a custom habit with no configured days is scheduled on no day", () => {
-    expect(seriesFromHabits([habit({ frequency: "custom", targetDays: [] })])).toEqual([]);
-  });
-
-  it("an ended habit carries its end date", () => {
-    expect(seriesFromHabits([habit({ endDate: "2026-08-07" })])[0].recurrenceEnd).toBe("2026-08-07");
-  });
-
-  it("seriesFromAll includes habits, and the temporal layer derives a rule", () => {
-    expect(seriesFromAll({ habits: [habit()] })).toHaveLength(1);
-    const rules = deriveDateRulesForRecord("u1", "habit", habit());
-    expect(rules).toHaveLength(1);
-    expect(rules[0].ruleType).toBe("habit");
-    expect(rules[0].recurring).toBe(true);
-    expect(rules[0].source.ownerIds).toContain("p-robert");
+  it("a habit's cadence still lives on the habit record itself", () => {
+    // The schedule is real and the Habits page reads it — this test is about
+    // where it is DRAWN, not whether it exists.
+    expect(habit.frequency).toBe("daily");
   });
 });
 

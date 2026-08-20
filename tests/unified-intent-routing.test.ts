@@ -350,7 +350,7 @@ describe("10. temporal coverage audit — no dated write escapes the calendar", 
   const DATE_PARAM = /(date|due|expir|renew|when|schedule|recurrence|anniversar|birthday|at)$/i;
 
   /** Systems shared/calendar-adapters turns into CalendarSeries. */
-  const COVERED_SYSTEMS = new Set(["task", "event", "profile", "document", "obligation", "liability", "habit"]);
+  const COVERED_SYSTEMS = new Set(["task", "event", "profile", "document", "obligation", "liability"]);
 
   /**
    * Tools whose date is deliberately NOT a calendar date. Each entry is a
@@ -407,13 +407,19 @@ describe("10. temporal coverage audit — no dated write escapes the calendar", 
   };
 
   /**
-   * KNOWN PARALLEL PATHS, reported rather than silently tolerated.
+   * DELIBERATELY NOT ON THE CALENDAR, and listed so the audit stays honest.
    *
-   * Habits USED to live here: seriesFromAll did not adapt them, so a daily
-   * habit was invisible to the Calendar. `seriesFromHabits` closed that, and
-   * "habit" is now a covered system above — this set is what remains.
+   * Habits repeat, but a habit is a practice with a streak rather than a
+   * commitment on a date, and it is scheduled and checked off on the Habits
+   * page. Drawing a daily habit on the calendar would put a row on every
+   * single day. This is a product decision, not a gap — the routing layer
+   * still recognises habit intent and creates habits; they simply do not
+   * project occurrences.
    */
-  const KNOWN_PARALLEL = new Set(["schedule_medication_refills"]);
+  const KNOWN_PARALLEL = new Set([
+    "create_habit", "update_habit", "delete_habit", "restore_habit",
+    "schedule_medication_refills",
+  ]);
 
   it("every dated write tool lands in an adapter-covered system", async () => {
     const { TOOL_DEFINITIONS, READ_ONLY_TOOLS } = await import("../server/ai-engine");

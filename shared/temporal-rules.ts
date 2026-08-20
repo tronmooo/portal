@@ -219,7 +219,6 @@ export function deriveDateRulesForRecord(
       : system === "document" ? { documents: [record] }
       : system === "obligation" ? { obligations: [record] }
       : system === "liability" ? { profiles: [record] }
-      : system === "habit" ? { habits: [record] }
       : {};
   return deriveDateRules(userId, inputs).filter((r) => r.source.id === String(record.id ?? ""));
 }

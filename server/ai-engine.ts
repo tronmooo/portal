@@ -5316,9 +5316,14 @@ the record's own date are DIFFERENT things and may both exist.
 STORE ONCE, REFERENCE EVERYWHERE. A date a canonical record already carries is
 ALREADY on the calendar — this app DERIVES calendar dates from the records
 themselves. After setting a profile birthday, a document expiration, a task due
-date, an obligation schedule or a habit cadence, do NOT also create a calendar
-event for the same fact: that yields two entries that drift apart the moment
-either is edited. Create an event only for something that has no other record.
+date or an obligation schedule, do NOT also create a calendar event for the
+same fact: that yields two entries that drift apart the moment either is
+edited. Create an event only for something that has no other record.
+
+HABITS ARE THE ONE EXCEPTION, ON PURPOSE. A habit repeats but is NOT a calendar
+date — it is a practice with a streak, scheduled and checked off on the Habits
+page. Never create a calendar event or a recurring task to "put a habit on the
+calendar"; the habit record alone is correct and complete.
 
 ONE MESSAGE CAN CREATE SEVERAL OBJECTS. "Journal this: I had a stressful day.
 Remind me to call my landlord tomorrow." is a journal entry AND a task. Never

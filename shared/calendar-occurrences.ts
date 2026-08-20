@@ -898,10 +898,6 @@ export function sourceHref(
   // document; that is the record you edit to change the date.
   if (system === "document" && recordId) return `#/documents/${recordId}`;
   if (system === "task" && recordId) return `#/tasks?focus=${recordId}`;
-  // A habit is edited on the Habits page, not on the person it belongs to —
-  // same rule as documents and tasks. Without this, every habit occurrence on
-  // the calendar navigated to its owner's profile instead of the habit.
-  if (system === "habit" && recordId) return `#/habits?focus=${recordId}`;
   if (profileId) return `#/profiles/${profileId}`;
   switch (system) {
     case "profile": return recordId ? `#/profiles/${recordId}` : "#/profiles";
