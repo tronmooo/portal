@@ -1,9 +1,16 @@
-// ── Recurring Dates ──────────────────────────────────────────────────────────
+// ── Recurring & Important Dates ──────────────────────────────────────────────
 //
 // Two concepts, two views, never mixed:
 //
-//   RULES     — one compact card per recurring source. "Netflix, $9.99,
-//               monthly on day 2." You own three subscriptions.
+//   RULES     — one compact card per source, in two groups:
+//                 • RECURRING       "Netflix, $9.99, monthly on day 2."
+//                 • IMPORTANT DATES "Driver's License, expires in 7 years,
+//                                    10 months."
+//               They share a screen and NOT a model: an expiration is
+//               `isImportantDate`, never `isRecurringRule`, so nothing
+//               downstream ever generates a yearly licence renewal that does
+//               not exist. Splitting them visually is what let the screen
+//               finally show important one-offs without lying about them.
 //   UPCOMING  — the generated dates those rules produce, grouped by day.
 //               Hundreds of them, which is why they are never counted as
 //               though they were things you own.
@@ -26,7 +33,7 @@ import {
   type CalendarCategory,
 } from "@shared/calendar-categories";
 import {
-  KIND_LABELS, relativeDayLabel, isRecurringRule,
+  KIND_LABELS, relativeDayLabel, isRecurringRule, isImportantDate,
   type CalendarOccurrence, type CalendarSeries,
 } from "@shared/calendar-occurrences";
 import { humanRecurrenceLabel } from "@shared/recurring-dates";
@@ -100,10 +107,10 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
   const [category, setCategory] = useState<CalendarCategory>("all");
   const [detail, setDetail] = useState<CalendarOccurrence | null>(null);
 
-  // recurringOnly: this screen manages REPEATING RULES. One-off dates —
-  // document expirations, a house viewing, a soccer game — stay on the
-  // calendar grid where they belong, instead of being listed here under a
-  // "Does not repeat" caption.
+  // recurringOnly: this screen manages REPEATING RULES plus IMPORTANT ONE-OFF
+  // DATES (expirations, renewals). Ordinary one-offs — a house viewing, a
+  // soccer game — stay on the calendar grid where they belong, instead of
+  // being listed here under a "Does not repeat" caption.
   const cal = useCalendarOccurrences({ filterIds, filterMode, recurringOnly: true });
   const today = cal.todayISO;
 
@@ -153,15 +160,30 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
       : [...chips, ...categoryChips(counts).filter((c) => c.id === category)];
   }, [counts, category]);
 
+  /**
+   * Recurring rules and important dates, as two groups in one list.
+   *
+   * Sorted differently on purpose: a recurrence is a thing you own, so it reads
+   * alphabetically; an important date is a deadline, so the nearest one comes
+   * first — that ordering is the whole reason the section exists.
+   */
+  const ruleGroups = useMemo(() => {
+    const recurring = visibleRules.filter(isRecurringRule)
+      .sort((a, b) => a.title.localeCompare(b.title));
+    const important = visibleRules.filter(isImportantDate)
+      .sort((a, b) => a.baseDate.localeCompare(b.baseDate) || a.title.localeCompare(b.title));
+    return [
+      { id: "recurring", label: "Recurring", items: recurring },
+      { id: "important", label: "Important dates", items: important },
+    ].filter((g) => g.items.length > 0);
+  }, [visibleRules]);
+
   // Upcoming view: future dates in the active category, grouped by day.
   const grouped = useMemo(() => {
-    // RECURRING ONLY — both views.
-    //
-    // A previous pass let one-off dates into this Upcoming list, reasoning that
-    // "dates" is broader than "rules". That was wrong: the whole SCREEN is
-    // Recurring Dates, and a driver's-licence expiry is not a recurring date on
-    // any view of it. One-off dates live on the Calendar tab. `cal.series` is
-    // already gated to genuine repeat patterns by `recurringOnly` above.
+    // The same set the Rules view manages — recurrence rules and important
+    // one-off dates — so the two views of this screen can never disagree about
+    // what it contains. Ordinary one-offs (a house viewing) are still excluded
+    // by `recurringOnly` above; they live on the Calendar tab.
     const inCategory = new Set(
       cal.series
         .filter((s) => seriesInCategory(s, category, { todayISO: today, nextDate: nextDateFor(s) }))
@@ -311,19 +333,30 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
         visibleRules.length === 0 ? (
           <EmptyState category={category} onAdd={onAddRecurring} />
         ) : (
-          <div className="space-y-1.5" data-testid="rules-list">
-            {visibleRules.map((s) => (
-              <RecurringRuleCard
-                key={s.id}
-                series={s}
-                next={scheduleByRule.get(s.id)?.next ?? null}
-                upcomingCount={scheduleByRule.get(s.id)?.upcoming ?? 0}
-                ownerName={s.source.profileId ? cal.profileName(s.source.profileId) : undefined}
-                todayISO={today}
-                onOpen={() => openDetailFor(s)}
-                onAction={(a) => void runAction(s, a)}
-                linkedNote={linkedNoteFor(s)}
-              />
+          <div className="space-y-3" data-testid="rules-list">
+            {ruleGroups.map((group) => (
+              <div key={group.id} className="space-y-1.5">
+                {/* The heading only appears when BOTH groups have something —
+                    a single group needs no label to be understood. */}
+                {ruleGroups.length > 1 && (
+                  <p className="micro-label text-muted-foreground px-1" data-testid={`rules-heading-${group.id}`}>
+                    {group.label} <span className="tabular-nums opacity-70">{group.items.length}</span>
+                  </p>
+                )}
+                {group.items.map((s) => (
+                  <RecurringRuleCard
+                    key={s.id}
+                    series={s}
+                    next={scheduleByRule.get(s.id)?.next ?? null}
+                    upcomingCount={scheduleByRule.get(s.id)?.upcoming ?? 0}
+                    ownerName={s.source.profileId ? cal.profileName(s.source.profileId) : undefined}
+                    todayISO={today}
+                    onOpen={() => openDetailFor(s)}
+                    onAction={(a) => void runAction(s, a)}
+                    linkedNote={linkedNoteFor(s)}
+                  />
+                ))}
+              </div>
             ))}
           </div>
         )
@@ -397,12 +430,13 @@ function EmptyState({ category, onAdd, upcoming }: {
       <Bell className="h-6 w-6 mx-auto text-muted-foreground/50 mb-2" />
       <p className="text-sm font-medium">
         {category === "all"
-          ? upcoming ? "Nothing scheduled ahead" : "No recurring dates yet"
+          ? upcoming ? "Nothing scheduled ahead" : "No recurring or important dates yet"
           : `No ${label.toLowerCase()}`}
       </p>
       <p className="text-xs text-muted-foreground mt-0.5 max-w-xs mx-auto">
-        Birthdays, bills, subscriptions, liabilities and tasks all appear here — each one
-        once, with its own schedule.
+        Birthdays, bills, subscriptions, liabilities and tasks appear here with their
+        schedule; licences, passports, registrations and leases appear with how long
+        they have left. Each one once.
       </p>
       {onAdd && category === "all" && (
         <Button size="sm" className="mt-3 h-8 text-xs" onClick={onAdd} data-testid="btn-add-recurring-empty">

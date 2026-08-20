@@ -91,6 +91,7 @@ export default defineConfig({
       'tests/timezone-dst.test.ts',
       'tests/calendar-occurrences.test.ts',
       'tests/calendar-adapters.test.ts',
+      'tests/date-rules.test.ts',
       'tests/calendar-capabilities.test.ts',
       'tests/calendar-categories.test.ts',
       'tests/recurring-dates-page.test.tsx',

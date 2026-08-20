@@ -303,7 +303,13 @@ function inferSubtype(key: string, ctx: string): string | undefined {
   if (/lease|tenanc/.test(both)) return "lease";
   if (/member/.test(both)) return "membership";
   if (/subscription/.test(both)) return "subscription";
-  if (/certification|certificate|license|licence|permit/.test(both)) return "certification";
+  // A bare "license" is deliberately left UNKNOWN. It could be a driver's
+  // licence, a professional one, or a software one, and guessing wrong splits
+  // one real date into two: `dedupeRules` treats an unknown subtype as
+  // compatible with any specific one, so `licenseExpiration` on a person merges
+  // with the uploaded licence that knows what it is. Only the words that
+  // genuinely mean a credential renewal claim the subtype.
+  if (/certification|certificate|professional licen[sc]e|permit/.test(both)) return "certification";
   if (/mortgage|loan|credit/.test(both)) return "loan";
   if (/prescription|medication|refill|rx\b/.test(both)) return "medication";
   if (/contract|agreement/.test(both)) return "contract";

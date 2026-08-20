@@ -269,6 +269,34 @@ export function onlyRecurringRules(list: readonly CalendarSeries[]): CalendarSer
   return (list || []).filter(isRecurringRule);
 }
 
+/**
+ * Is this an IMPORTANT FUTURE DATE — a one-off the user needs to see coming?
+ *
+ * The counterpart to `isRecurringRule`, and the reason the recurring screen can
+ * finally show a driver's licence without lying about it. A licence expiring on
+ * 18 July 2034 is not a yearly event and must never be modelled as one; it is a
+ * single date with a countdown attached. Both belong on the same screen —
+ * "Recurring & Important Dates" — and neither is allowed to corrupt the other's
+ * semantics to get there.
+ *
+ * A plain one-off ("House Viewing", "Soccer Game") is NOT important: it is an
+ * appointment on the grid, not something to track the distance to.
+ */
+const IMPORTANT_ONE_TIME_KINDS = new Set<OccurrenceKind>([
+  "expiration", "renewal", "document",
+]);
+
+export function isImportantDate(series: CalendarSeries): boolean {
+  if (!series) return false;
+  if (isRecurringRule(series)) return false;
+  return IMPORTANT_ONE_TIME_KINDS.has(series.kind);
+}
+
+/** Recurring rules plus important one-off dates — what the screen manages. */
+export function onlyRulesAndImportantDates(list: readonly CalendarSeries[]): CalendarSeries[] {
+  return (list || []).filter((s) => isRecurringRule(s) || isImportantDate(s));
+}
+
 // ─── Rule validity ───────────────────────────────────────────────────────────
 
 export type RuleValidity =

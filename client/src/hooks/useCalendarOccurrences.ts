@@ -13,7 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { seriesFromAll, filterSeriesByProfiles } from "@shared/calendar-adapters";
 import { scopedKey } from "@shared/query-keys";
-import { onlyRecurringRules } from "@shared/calendar-occurrences";
+import { onlyRulesAndImportantDates } from "@shared/calendar-occurrences";
 import {
   buildCalendarOccurrences,
   dedupeSeries,
@@ -152,7 +152,12 @@ export function useCalendarOccurrences(
   const survivingSeries = useMemo(() => deduped.map((d) => d.series), [deduped]);
   /** The subset the RULES list manages. */
   const ruleSeries = useMemo(
-    () => (recurringOnly ? onlyRecurringRules(survivingSeries) : survivingSeries),
+    // "Recurring only" now means "rules AND important one-off dates" — a
+    // driver's licence expiration is not a recurrence, but it IS something the
+    // Recurring & Important Dates screen manages. It keeps its one-time
+    // semantics all the way through (`isImportantDate`, never `isRecurringRule`),
+    // so nothing downstream treats it as repeating.
+    () => (recurringOnly ? onlyRulesAndImportantDates(survivingSeries) : survivingSeries),
     [survivingSeries, recurringOnly],
   );
 

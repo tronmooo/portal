@@ -25,13 +25,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import {
-  KIND_LABELS, relativeDayLabel, ruleValidity,
+  KIND_LABELS, relativeDayLabel, ruleValidity, isImportantDate,
   type CalendarOccurrence, type CalendarSeries, type OccurrenceKind,
 } from "@shared/calendar-occurrences";
 import {
   capabilitiesFor, actionLabelFor, hasPrimaryAction, type CalendarAction,
 } from "@shared/calendar-capabilities";
 import { humanRecurrenceLabel } from "@shared/recurring-dates";
+import { countdownLabel, type DateRuleType } from "@shared/date-rules";
 import { formatMoney } from "@/lib/format";
 
 export const RULE_ICONS: Record<OccurrenceKind, any> = {
@@ -104,7 +105,13 @@ export function RecurringRuleCard({
   const hsl = RULE_HSL[series.kind] ?? RULE_HSL.custom;
   const caps = capabilitiesFor(series);
   const showPrimary = hasPrimaryAction(series) && !!next;
-  const overdue = !!next && next.effectiveDate < todayISO;
+  // An important one-off (a licence, a passport, a lease end) reads as a
+  // countdown rather than as a schedule — see isImportantDate.
+  const important = isImportantDate(series);
+  const countdownType: DateRuleType = series.kind === "renewal" ? "renewal" : "expiration";
+  const overdue = important
+    ? series.baseDate < todayISO
+    : !!next && next.effectiveDate < todayISO;
   // A live rule with no next date is paused, finished, or broken — say which
   // rather than the bare "No upcoming date" the old card showed.
   const validity = ruleValidity(series, !!next, todayISO);
@@ -137,7 +144,9 @@ export function RecurringRuleCard({
           <span className="block text-[11px] text-muted-foreground truncate leading-tight">
             {series.recurrence && series.recurrence !== "none"
               ? humanRecurrenceLabel(series.recurrence, series.baseDate)
-              : "Does not repeat"}
+              : important
+                ? "One-time — important date"
+                : "Does not repeat"}
           </span>
           <span
             className={`block text-[11px] font-medium tabular-nums truncate leading-tight ${
@@ -146,18 +155,28 @@ export function RecurringRuleCard({
             style={overdue || validity.state !== "ok" ? undefined : { color: `hsl(${hsl})` }}
             data-testid={`rule-next-${series.id}`}
           >
-            {next
+            {important
+              // The whole point of an important date: how long is left. Always
+              // computed from the stored date against today, never stored —
+              // "Expires in 7 years, 10 months" today is "…9 months" next
+              // month without anything being rewritten.
+              ? `${fmtDate(series.baseDate)} · ${countdownLabel(series.baseDate, todayISO, countdownType)}`
+              : next
               ? `Next: ${fmtDate(next.effectiveDate)} · ${relativeDayLabel(next.effectiveDate, todayISO)}`
               : validity.state === "paused" ? "Paused — resume to schedule dates"
                 : validity.state === "ended" ? validity.message
                   : validity.state === "invalid" ? validity.message
                     : "No upcoming date"}
           </span>
-          {/* End condition + how many dates are generated, per spec. */}
-          <span className="block text-[11px] text-muted-foreground truncate leading-tight">
-            {series.recurrenceEnd ? `Ends ${fmtDate(series.recurrenceEnd)}` : "No end date"}
-            {upcomingCount > 0 ? ` · ${upcomingCount} upcoming` : ""}
-          </span>
+          {/* End condition + how many dates are generated, per spec. An
+              important one-off has neither: it is a single date, and saying
+              "No end date · 1 upcoming" about a licence would be noise. */}
+          {!important && (
+            <span className="block text-[11px] text-muted-foreground truncate leading-tight">
+              {series.recurrenceEnd ? `Ends ${fmtDate(series.recurrenceEnd)}` : "No end date"}
+              {upcomingCount > 0 ? ` · ${upcomingCount} upcoming` : ""}
+            </span>
+          )}
           {linkedNote && (
             <span className="block text-[11px] text-muted-foreground/80 truncate leading-tight">
               {linkedNote}
