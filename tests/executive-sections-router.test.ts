@@ -544,3 +544,40 @@ describe("health, activity and insights", () => {
     expect(isBirthdayText("Team offsite")).toBe(false);
   });
 });
+
+describe("one date, one section", () => {
+  const today = "2026-08-20";
+  const birthday = {
+    id: "rule:profile:p1:dateofbirth:birthday-2026-08-23", type: "event",
+    title: "Jane Doe's Birthday", date: "2026-08-23", allDay: true,
+    linkedProfiles: ["p1"], sourceId: "p1",
+    meta: { kind: "birthday", ruleId: "profile:p1:dateofbirth:birthday", recurrence: "yearly" },
+  };
+
+  it("claims the same key in every section that could hold it", () => {
+    // Sections claim a row so it appears in exactly one of them. When only ONE
+    // of them switched to the rule id, a rule-derived birthday claimed two
+    // different keys and rendered in two sections instead of none.
+    const sections = buildExecutiveSections({
+      today, now: new Date(`${today}T09:00:00`), events: [birthday],
+    } as any);
+    const holding = sections.filter((s: any) =>
+      s.items.some((i: any) => /Jane Doe's Birthday/.test(i.title)));
+    expect(holding).toHaveLength(1);
+  });
+
+  it("keeps two different dates on ONE record as two rows", () => {
+    const licence = {
+      id: "rule:profile:p1:passportexpiration:expiration-2026-08-24", type: "event",
+      title: "Jane Doe — Passport Expiration", date: "2026-08-24", allDay: true,
+      linkedProfiles: ["p1"], sourceId: "p1",
+      meta: { kind: "expiration", ruleId: "profile:p1:passportexpiration:expiration" },
+    };
+    const sections = buildExecutiveSections({
+      today, now: new Date(`${today}T09:00:00`), events: [birthday, licence],
+    } as any);
+    const titles = sections.flatMap((s: any) => s.items.map((i: any) => i.title));
+    expect(titles).toContain("Jane Doe's Birthday");
+    expect(titles).toContain("Jane Doe — Passport Expiration");
+  });
+});

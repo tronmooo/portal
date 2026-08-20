@@ -1504,3 +1504,33 @@ describe("a range with a bare far end is still a range", () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 28. Seventeenth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a dash is a separator, not a range", () => {
+  it("reads a date whose separator happens to be a dash", () => {
+    // The range guard fired on this and left the date on no surface at all —
+    // the exact class of bug this module exists to remove.
+    expect(bareDateOf("07-18-2034")).toBe("2034-07-18");
+    const { fields } = normalizeEntityDateFields({ expirationDate: "07-18-2034" });
+    expect(fields.expirationDate).toBe("2034-07-18");
+    const [rule] = rulesFromDocuments([{
+      id: "d1", name: "License", type: "drivers_license", linkedProfiles: [],
+      extractedData: { expiration_date: "07-18-2034" },
+    }]);
+    expect(rule.date).toBe("2034-07-18");
+  });
+
+  it("still refuses an actual range written with dashes", () => {
+    expect(bareDateOf("01/01/2026 - 12/31/2026")).toBeNull();
+    expect(bareDateOf("1/1/2026 - 12/31")).toBeNull();
+  });
+});
+
+describe("a professional licence names itself", () => {
+  it("files under certification, not generic document expiry", () => {
+    expect(classifyDateField("professionalLicenseExpiration").ruleSubtype).toBe("certification");
+  });
+});

@@ -253,6 +253,19 @@ function relTime(iso: string | null | undefined): string {
 
 // ── The router ───────────────────────────────────────────────────────────────
 
+/**
+ * The identity a calendar item claims, so it appears in exactly ONE section.
+ *
+ * Date-Rule items all carry the source ENTITY as their sourceId, so a person
+ * with a birthday and a licence expiration emitted two items claiming
+ * `event:<profileId>` and all but the first were dropped everywhere. The rule
+ * is the distinct key — but EVERY section has to use it, or the same date
+ * claims two keys and renders in two sections instead of none.
+ */
+function eventClaimKey(e: any): string {
+  return e?.meta?.ruleId ? `rule:${e.meta.ruleId}` : `event:${e?.sourceId || e?.id}`;
+}
+
 export function buildExecutiveSections(
   input: ExecSectionInputs,
   config?: Partial<AttentionConfig>,
@@ -426,7 +439,7 @@ export function buildExecutiveSections(
     if (du == null || du < 0 || du > 14) continue;
     if (!isHealthText(`${e.title || ""} ${e.category || ""}`)) continue;
     cand.health.push({
-      key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
+      key: `event:${e.id}`, sourceKey: eventClaimKey(e), kind: "event",
       title: e.title || "Appointment",
       reason: [du === 0 ? "Today" : dayLabel(du), timeLabel(e.time)].filter(Boolean).join(" · "),
       tier: du === 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
@@ -456,11 +469,7 @@ export function buildExecutiveSections(
     // birthday has `sourceId` of `profile:<id>:birthday` — not an event id —
     // so offering Done on one would PATCH /api/events/profile:… and 404.
     const canMarkDone = parseRecurringMeta(e.meta?.tags).isRecurringDate;
-    // Claimed on the RULE when the item has one. Date-Rule timeline items all
-    // carry the source ENTITY as their sourceId, so a person with a birthday
-    // and a licence expiration emitted two items claiming `event:<profileId>`
-    // — and all but the first were dropped from every section.
-    const claimKey = e.meta?.ruleId ? `rule:${e.meta.ruleId}` : `event:${e.sourceId || e.id}`;
+    const claimKey = eventClaimKey(e);
     cand.importantDates.push({
       key: `event:${e.id}`, sourceKey: claimKey, kind: "event",
       title: e.title || "Occasion",
@@ -562,7 +571,7 @@ export function buildExecutiveSections(
     if (String(e.date || "").slice(0, 10) !== today) continue;
     const past = !!e.time && String(e.time).slice(0, 5) < nowClock;
     cand.today.push({
-      key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
+      key: `event:${e.id}`, sourceKey: eventClaimKey(e), kind: "event",
       title: e.title || "Event",
       reason: e.allDay || !e.time ? "All day" : `${timeLabel(e.time)}${past ? " · passed" : ""}`,
       tier: past ? "soon" : "immediate",
@@ -586,7 +595,7 @@ export function buildExecutiveSections(
     const du = daysBetween(today, e.date);
     if (du == null || du < 1 || du > 7) continue;
     cand.upcoming.push({
-      key: `event:${e.id}`, sourceKey: `event:${e.sourceId || e.id}`, kind: "event",
+      key: `event:${e.id}`, sourceKey: eventClaimKey(e), kind: "event",
       title: e.title || "Event",
       reason: [dayLabel(du), timeLabel(e.time)].filter(Boolean).join(" · "),
       tier: "soon", daysUntil: du, score: 0, href: "/calendar",

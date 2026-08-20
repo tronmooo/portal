@@ -391,9 +391,9 @@ function inferSubtype(key: string, ctx: string): string | undefined {
   // worse than not naming it. `dedupeRules` requires subtypes to AGREE, so an
   // unnamed one stays its own rule rather than merging into — and possibly
   // erasing — a named one. Only words that genuinely mean a credential claim
-  // the subtype. (`both` is a normalized key with separators stripped, so a
-  // pattern here must never contain a space.)
-  if (/certification|certificate|professionallicen[sc]e|permit/.test(both)) return "certification";
+  // the subtype. (`both` is word-SPACED — see the note in `inferSubtype` — so a
+  // multi-word phrase matches and `\b` on an abbreviation means something.)
+  if (/certification|certificate|professional licen[sc]e|permit/.test(both)) return "certification";
   if (/mortgage|loan|credit/.test(both)) return "loan";
   if (/prescription|medication|refill|rx\b/.test(both)) return "medication";
   if (/contract|agreement/.test(both)) return "contract";
@@ -548,12 +548,18 @@ export function bareDateOf(value: unknown): string | null {
   // irreversibly, which is the exact harm this function exists to prevent.
   // (Un-spaced, `normalizeDateString`'s mid-string search even picked the wrong
   // end.) Two date-looking tokens means this value is not a day.
-  if ((t.match(DATEISH_TOKEN) || []).length > 1) return null;
-  // …and a range whose far end has no year is still a range.
-  // "1/1/2026 to 12/31" carries one full date, so the token count above lets it
-  // through, and the value was then rewritten to "2026-01-01" — losing the rest
-  // of it, in every storage write path.
-  if (/\d\s*(?:-|–|—|to|through|thru|till|until)\s*\d/i.test(t)) return null;
+  const tokens = t.match(DATEISH_TOKEN) || [];
+  if (tokens.length > 1) return null;
+  // …and a range whose far end has no year is still a range: "1/1/2026 to
+  // 12/31" carries one full date, so the count above lets it through, and the
+  // value was then rewritten to its first day in every storage write path.
+  //
+  // The guard must not fire on a date that IS the whole string, though —
+  // "07-18-2034" is one date whose separator happens to be a dash, and
+  // rejecting it left that date on no surface at all, which is the exact class
+  // of bug this module exists to remove.
+  const isWholeString = tokens.length === 1 && tokens[0].trim() === t;
+  if (!isWholeString && /\d\s*(?:-|–|—|to|through|thru|till|until)\s*\d/i.test(t)) return null;
   // Any word that is not a month name means this is prose.
   const withoutMonths = t.replace(/[A-Za-z]{3,9}\.?(?=\s|,|$)/g, (w) => (MONTH_WORD.test(w) ? "" : w));
   if (/[A-Za-z]{3,}/.test(withoutMonths)) return null;
