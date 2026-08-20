@@ -48,7 +48,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
-import { seriesFromEvents } from "../shared/calendar-adapters";
+import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "../shared/date-rules";
 import { deleteProfileFields } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
@@ -3417,8 +3417,12 @@ export class SupabaseStorage implements IStorage {
     const items: CalendarTimelineItem[] = [];
     // Fetch all data in parallel for speed
     // (Habits are intentionally excluded — they don't belong on the calendar.)
-    const [allEvents, allTasks, allObligations, profiles] = await Promise.all([
+    const [allEvents, allTasks, allObligations, profiles, allIncomes] = await Promise.all([
       this.getEvents(), this.getTasks(), this.getObligations(), this.getProfiles(),
+      // Recurring income. Without this a paycheck showed on the Recurring &
+      // Important screen (which builds its own series client-side) and never on
+      // the Calendar tab, which reads this method.
+      this.getIncomes().catch(() => [] as any[]),
     ]);
     // Profile filtering (calendar isolation):
     // When a profile filter is active, an item shows if it is linked to one of
@@ -3493,11 +3497,34 @@ export class SupabaseStorage implements IStorage {
       profileDateSeries.filter(x => x.source.system === "document")
         .map(x => `${x.source.id}@${x.baseDate}`),
     );
+    const ruledProfileDates = new Set(
+      profileDateSeries.filter(x => x.source.system === "profile")
+        .map(x => `${x.source.id}@${x.baseDate}`),
+    );
     const shadowEventIds = new Set(
-      seriesFromEvents(allEvents as any[], { knownBirthdayProfiles, knownAnniversaryProfiles, ruledDocumentDates })
+      seriesFromEvents(allEvents as any[], { knownBirthdayProfiles, knownAnniversaryProfiles, ruledDocumentDates, ruledProfileDates })
         .filter(x => x.shadow)
         .map(x => x.source.id),
     );
+    for (const ser of seriesFromIncomes(
+      (allIncomes as any[]).filter(i => matchesProfile(i?.linkedProfiles)),
+    )) {
+      for (const occ of generateSeriesOccurrences(ser, {
+        todayISO: rdTodayISO0,
+        horizonDays: Math.max(366, daysBetweenISO(rdTodayISO0, endDate) + 1),
+        lookbackDays: Math.max(0, daysBetweenISO(startDate, rdTodayISO0) + 1),
+        cap: 400,
+      })) {
+        if (occ.date < startDate || occ.date > endDate) continue;
+        items.push({
+          id: `${ser.id}-${occ.date}`, type: "event", title: ser.title, date: occ.date,
+          allDay: true, color: "#4FA37A", category: "finance",
+          linkedProfiles: ser.source.ownerIds || [], sourceId: ser.source.id,
+          meta: { kind: "income", amount: occ.amount, recurrence: ser.recurrence, href: ser.source.href },
+        } as any);
+      }
+    }
+
     const RULE_KIND_COLOR: Record<string, string> = {
       birthday: "#A78BFA", anniversary: "#F472B6", expiration: "#E0803C",
       renewal: "#E0A63C", appointment: "#5FB98A", maintenance: "#4F98A3",

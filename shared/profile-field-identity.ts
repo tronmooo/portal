@@ -174,6 +174,24 @@ export function deleteProfileFields(
 
     if (!isGroup && exact.has(key)) { removed.push(key); continue; }
 
+    // An exact path may point into ANY nested object, not just one of the
+    // whitelisted groups — `registration.expirationDate` is a real shape the
+    // scanner emits, and matching only the whitelist made "remove this date"
+    // answer 200 and change nothing.
+    if (!isGroup && value && typeof value === "object" && !Array.isArray(value)) {
+      const inner = value as Record<string, any>;
+      const hits = Object.keys(inner).filter((nk) => exact.has(`${key}.${nk}`));
+      if (hits.length > 0) {
+        const kept: Record<string, any> = {};
+        for (const [nk, nv] of Object.entries(inner)) {
+          if (hits.includes(nk)) removed.push(`${key}.${nk}`);
+          else kept[nk] = nv;
+        }
+        if (Object.keys(kept).length > 0) out[key] = kept;
+        continue;
+      }
+    }
+
     if (isGroup) {
       const kept: Record<string, any> = {};
       for (const [nk, nv] of Object.entries(value as Record<string, any>)) {

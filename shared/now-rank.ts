@@ -169,7 +169,10 @@ export function computeNowItems(input: NowInputs): NowItem[] {
     const name = d.documentName || d.name || "Document";
     const critical = CRITICAL_DOC.test(`${name} ${d.documentType || ""} ${d.fieldName || ""}`);
     out.push({
-      key: `doc:${id}:${d.fieldName || ""}`, sourceId: id, kind: "document",
+      // Keyed on the RULE, as every other consumer of this list now is: the
+      // leaf field name collides for two same-named dates in different groups
+      // on one record.
+      key: `doc:${d.ruleId || `${id}:${d.fieldName || ""}`}`, sourceId: id, kind: "document",
       title: name,
       detail: `expires ${dayLabel(du)}`,
       // An expiration can be carried by a PROFILE (a passport typed onto a

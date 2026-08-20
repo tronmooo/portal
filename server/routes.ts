@@ -2425,6 +2425,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // again just to read a type and a name.
       let docContextForDates = "";
       const persistedFieldValues = new Map<string, any>();
+      const profileSavedKeys = new Set<string>();
       if (confirmedFields && confirmedFields.length > 0) {
         try {
           const doc = await storage.getDocument(extractionId);
@@ -2658,6 +2659,11 @@ ${JSON.stringify(ctx, null, 2)}`;
               if (savedKeys.length > 0) {
                 saved.push(`Saved ${savedKeys.length} field${savedKeys.length === 1 ? "" : "s"} to ${profile.name}`);
               }
+              // What Step 2 needs: the fields that reached the PROFILE. A
+              // document does not derive a birthday, so suppressing that
+              // event on "a profile id existed" alone lost the date whenever
+              // the profile write failed.
+              for (const k of savedKeys) profileSavedKeys.add(normalizeFieldKey(k));
               log.info(`[confirm-extraction] Routed ${savedKeys.length}/${confirmedKeys.length} fields to profile ${profile.name}${unsavedKeys.length > 0 ? ` (FAILED: ${unsavedKeys.join(", ")})` : ""}`);
 
               // Link the document to the profile
@@ -2718,7 +2724,7 @@ ${JSON.stringify(ctx, null, 2)}`;
             // nowhere, so suppressing the event left the date on no surface
             // while the response reported success.
             const derivedByTheDocument = cls.ruleType !== "birthday" && cls.ruleType !== "anniversary";
-            const derivedByTheProfile = !!resolvedProfileId
+            const derivedByTheProfile = profileSavedKeys.has(key)
               && (cls.ruleType === "birthday" || cls.ruleType === "anniversary");
             const covered = persistedFieldValues.has(key)
               && !!bareDateOf(persistedFieldValues.get(key))

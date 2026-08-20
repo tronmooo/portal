@@ -162,12 +162,25 @@ export function seriesFromEvents(
      * writes) is not swept away with it.
      */
     ruledDocumentDates?: ReadonlySet<string>;
+    /**
+     * `profileId@YYYY-MM-DD` for every date a PROFILE already puts on the
+     * calendar as a Date Rule.
+     *
+     * Accounts still hold the `auto-generated` event rows the retired
+     * `autoGenerateProfileEvents` wrote for a lease end, a warranty, a service
+     * date. Those dates are derived from the profile now, so the row beside
+     * them is a copy — and the old title fingerprint that used to hide it no
+     * longer matches ("🏠 Home — Lease End" vs "Home — Lease Expiration").
+     * Matching on owner and day instead means no migration and no stale twin.
+     */
+    ruledProfileDates?: ReadonlySet<string>;
   } = {},
 ): CalendarSeries[] {
   const out: CalendarSeries[] = [];
   const knownBirthdays = opts.knownBirthdayProfiles ?? new Set<string>();
   const knownAnniversaries = opts.knownAnniversaryProfiles ?? new Set<string>();
   const ruledDocDates = opts.ruledDocumentDates ?? new Set<string>();
+  const ruledProfileDates = opts.ruledProfileDates ?? new Set<string>();
 
   for (const e of events || []) {
     if (!e?.id || !isISO(e.date)) continue;
@@ -197,10 +210,15 @@ export function seriesFromEvents(
       !tagList.includes("date-rule-uncovered") &&
       (Array.isArray(e.linkedDocuments) ? e.linkedDocuments : [])
         .some((id: any) => ruledDocDates.has(`${String(id)}@${clip(e.date)}`));
+    const autoFromProfile =
+      tagList.includes("auto-generated") &&
+      (Array.isArray(e.linkedProfiles) ? e.linkedProfiles : [])
+        .some((pid: any) => ruledProfileDates.has(`${String(pid)}@${clip(e.date)}`));
     const shadow =
       (kind === "birthday" && !!profileId && knownBirthdays.has(profileId)) ||
       (kind === "anniversary" && !!profileId && knownAnniversaries.has(profileId)) ||
-      autoFromDocument;
+      autoFromDocument ||
+      autoFromProfile;
 
     out.push({
       id: `event:${e.id}`,
@@ -655,10 +673,14 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
     dateRules.filter((r) => r.sourceEntityType === "document")
       .map((r) => `${r.sourceEntityId}@${r.date}`),
   );
+  const ruledProfileDates = new Set(
+    dateRules.filter((r) => r.sourceEntityType === "profile")
+      .map((r) => `${r.sourceEntityId}@${r.date}`),
+  );
   return [
     ...ruleSeries,
     ...seriesFromLiabilityProfiles(input.profiles || []),
-    ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles, ruledDocumentDates }),
+    ...seriesFromEvents(input.events || [], { knownBirthdayProfiles, knownAnniversaryProfiles, ruledDocumentDates, ruledProfileDates }),
     ...seriesFromObligations(input.obligations || []),
     ...seriesFromTasks(input.tasks || []),
     ...seriesFromIncomes(input.incomes || []),

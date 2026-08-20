@@ -1407,3 +1407,59 @@ describe("the countdown reads the rule, not a lossy round-trip", () => {
     expect(countdownLabel(series.baseDate, TODAY, series.ruleType as any)).toMatch(/^Started /);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 26. Fifteenth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a day that does not exist is not a date", () => {
+  it("rejects June 31 rather than storing it", () => {
+    expect(bareDateOf("6/31/2026")).toBeNull();
+    const { fields } = normalizeEntityDateFields({ expirationDate: "6/31/2026" });
+    expect(fields.expirationDate).toBe("6/31/2026");
+  });
+
+  it("still reads the day before it", () => {
+    expect(bareDateOf("6/30/2026")).toBe("2026-06-30");
+  });
+});
+
+describe("the events an older version auto-generated", () => {
+  it("do not render beside the date they were copied from", () => {
+    // Their titles no longer match the derived one ("🏠 Home — Lease End" vs
+    // "Home — Lease Expiration"), so the old title fingerprint cannot hide
+    // them. Owner and day can.
+    const profile = { id: "home-1", name: "Home", type: "property", fields: { leaseEnd: "2027-12-31" } };
+    const legacy = {
+      id: "ev-auto", title: "🏠 Home — Lease End", date: "2027-12-31",
+      recurrence: "none", linkedProfiles: ["home-1"], tags: ["auto-generated"],
+    };
+    const all = seriesFromAll({ profiles: [profile], events: [legacy] });
+    expect(all.find(s => s.source.id === "ev-auto")!.shadow).toBe(true);
+    expect(dedupeSeries(all)).toHaveLength(1);
+  });
+
+  it("leave an auto-generated event on a DIFFERENT day alone", () => {
+    const profile = { id: "home-1", name: "Home", type: "property", fields: { leaseEnd: "2027-12-31" } };
+    const other = {
+      id: "ev-auto2", title: "🏠 Home — Inspection", date: "2027-06-01",
+      recurrence: "none", linkedProfiles: ["home-1"], tags: ["auto-generated"],
+    };
+    const all = seriesFromAll({ profiles: [profile], events: [other] });
+    expect(all.find(s => s.source.id === "ev-auto2")!.shadow).toBe(false);
+  });
+});
+
+describe("removing a date from a group the whitelist has never heard of", () => {
+  it("actually removes it", () => {
+    // The scanner emits `registration.expirationDate`; matching only the
+    // known-group list made "remove this date" answer 200 and change nothing.
+    const { fields: after, removed } = deleteProfileFields(
+      { registration: { expirationDate: "2027-03-01", plate: "8ABC123" } },
+      null,
+      ["registration.expirationDate"],
+    );
+    expect(removed).toEqual(["registration.expirationDate"]);
+    expect(after.registration).toEqual({ plate: "8ABC123" });
+  });
+});

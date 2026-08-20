@@ -677,9 +677,18 @@ export function dedupeSeries(list: readonly CalendarSeries[]): DedupedSeries[] {
       held.duplicateIds.push(s.id);
     }
   }
+  // A SHADOW that ends up alone in its group is still a shadow.
+  //
+  // Losing deduplication is only a punishment when there is something to lose
+  // to, and identities do not always match: a legacy "🏠 Home — Lease End" event
+  // and the derived "Home — Lease Expiration" it copies have different titles,
+  // so they land in different groups and both survived. A shadow is by
+  // definition a duplicate of a record another system owns — the adapters only
+  // set it when they have identified that record — so it never renders.
+  const groups = [...byIdentity.values()].filter((g) => !g.series.shadow);
   // Second pass for payments whose identities anchor differently (an
   // obligation on its liability, a hand-made event on nothing at all).
-  return mergeEquivalentPayments([...byIdentity.values()]);
+  return mergeEquivalentPayments(groups);
 }
 
 // ─── Occurrences ─────────────────────────────────────────────────────────────

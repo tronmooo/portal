@@ -540,7 +540,11 @@ export function bareDateOf(value: unknown): string | null {
   const withoutMonths = t.replace(/[A-Za-z]{3,9}\.?(?=\s|,|$)/g, (w) => (MONTH_WORD.test(w) ? "" : w));
   if (/[A-Za-z]{3,}/.test(withoutMonths)) return null;
   if (t.split(/\s+/).filter(Boolean).length > 3) return null;   // a phrase
-  return normalizeDateString(t);
+  // …and a day that does not exist is not a date either. `normalizeDateString`
+  // accepts day 1-31 for any month, so "6/31/2026" became "2026-06-31" and the
+  // write path stored it — irreversibly.
+  const parsed = normalizeDateString(t);
+  return parsed && isRealDay(parsed) ? parsed : null;
 }
 
 

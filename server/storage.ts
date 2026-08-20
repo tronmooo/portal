@@ -5,7 +5,7 @@ import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "@shared/date-rules";
-import { seriesFromEvents } from "@shared/calendar-adapters";
+import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -1336,6 +1336,10 @@ export class MemStorage implements IStorage {
           rulesForShadowing.filter(r => r.sourceEntityType === "document")
             .map(r => `${r.sourceEntityId}@${r.date}`),
         ),
+        ruledProfileDates: new Set(
+          rulesForShadowing.filter(r => r.sourceEntityType === "profile")
+            .map(r => `${r.sourceEntityId}@${r.date}`),
+        ),
       }).filter(x => x.shadow).map(x => x.source.id),
     );
     for (const ev of this.events.values()) {
@@ -1487,6 +1491,25 @@ export class MemStorage implements IStorage {
     // expiration existed on the profile and on no calendar; parity between the
     // two storages is the only way a test here means anything in production.
     {
+      // Recurring income, same as the Supabase timeline — a paycheck belongs on
+      // the Calendar tab and not only on the Recurring screen.
+      for (const ser of seriesFromIncomes(Array.from(this.incomes.values()))) {
+        for (const occ of generateSeriesOccurrences(ser, {
+          todayISO: rdTodayISO,
+          horizonDays: Math.max(366, daysBetweenISO(rdTodayISO, endDate) + 1),
+          lookbackDays: Math.max(0, daysBetweenISO(startDate, rdTodayISO) + 1),
+          cap: 400,
+        })) {
+          if (occ.date < startDate || occ.date > endDate) continue;
+          items.push({
+            id: `${ser.id}-${occ.date}`, type: "event", title: ser.title, date: occ.date,
+            allDay: true, color: "#4FA37A", category: "finance",
+            linkedProfiles: ser.source.ownerIds || [], sourceId: ser.source.id,
+            meta: { kind: "income", amount: occ.amount, recurrence: ser.recurrence, href: ser.source.href },
+          } as any);
+        }
+      }
+
       const ruleSeries = seriesFromDateRules(rulesFromAll({
         profiles: Array.from(this.profiles.values()),
         documents: Array.from(this.documents.values()),
