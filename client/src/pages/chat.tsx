@@ -3482,13 +3482,17 @@ export default function ChatPage() {
     // storm saturated the serverless backend (each request pays auth +
     // Supabase round-trips) and was the single biggest reason chat saves and
     // the pages right after them felt slow.
+    //
+    // ONE PASS, NO TIMER. This used to fire a second invalidation on a
+    // 1.2-second delay because the server bumped its cross-instance data
+    // version asynchronously on response 'finish' — an instant refetch could
+    // beat the bump and cache pre-write data. The chat handler now AWAITS that
+    // bump before it responds (server/routes.ts, `chatVersionBumped`), so by
+    // the time this runs the write is already visible and every stale
+    // version-stamped key is unaddressable. An arbitrary delay standing in for
+    // a happens-before guarantee is exactly the thing that made chat writes
+    // feel like they needed a refresh.
     queryClient.invalidateQueries({ predicate: isData });
-    // Pass 2 — the chat handler finalizes its cross-instance cache-version bump
-    // right as the response is sent, so an instant refetch can race it and read
-    // pre-write data. A short, light follow-up over only the VISIBLE queries
-    // guarantees the current view settles on fresh data without a manual
-    // refresh — without firing a second full background storm.
-    setTimeout(() => queryClient.invalidateQueries({ predicate: isData, refetchType: "active" }), 1200);
   }, [queryClient]);
 
   // Stable (useCallback) so memoized MessageRows keep their shallow-equal props.

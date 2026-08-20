@@ -201,6 +201,10 @@ export default defineConfig({
       'tests/entity-resolution.test.ts',
       'tests/ai-mark-done-routing.test.ts',
       'tests/entity-resolution-contract.test.ts',
+      // Unified intent routing (Note / Journal / Task) + the temporal layer.
+      'tests/content-routing.test.ts',
+      'tests/temporal-rules.test.ts',
+      'tests/unified-intent-routing.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

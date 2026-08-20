@@ -80,6 +80,10 @@ import { storage } from "./storage";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildNotifications } from "./notification-service";
+import {
+  createNote, updateNote, deleteNote, listNotes,
+  upsertJournalEntry, syncDateRulesForEntity,
+} from "./content-service";
 
 // ────────────────────────────────────────────────────────────────────
 // syncLiabilityObligation
@@ -1087,7 +1091,13 @@ export async function registerRoutes(
         // (the version scheme guarantees a mid-handler GET that caches
         // pre-write data becomes unaddressable once the finish bump lands).
         if (req.path === "/chat") {
-          res.once("finish", () => { if ((res as any).locals?.chatMutated) bumpVersion(); });
+          res.once("finish", () => {
+            // The chat handler awaits its own bump before responding (see
+            // `chatVersionBumped`), which is what lets the client invalidate
+            // exactly once. This hook is the fallback for a turn that mutated
+            // but bailed out before reaching that code.
+            if ((res as any).locals?.chatMutated && !(res as any).locals?.chatVersionBumped) bumpVersion();
+          });
         } else {
           // Pre-handler bump covers fast writes; the finish bump covers long
           // writes whose DB writes land DURING the handler, so a GET racing
@@ -1318,6 +1328,25 @@ export async function registerRoutes(
       // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale
       // cache — scoped to the mutating user, and only when something mutated.
       if (turnMutated) bustUserCaches(userId);
+      // AND BUMP THE DATA VERSION *BEFORE* THE RESPONSE IS SENT.
+      //
+      // The version bump used to run on res 'finish', asynchronously, so the
+      // client's invalidate-and-refetch could win the race and cache pre-write
+      // data. The client's workaround was a second invalidation on a 1.2-second
+      // timer — an arbitrary delay standing in for a happens-before guarantee.
+      // Awaiting the bump here IS that guarantee: by the time the response
+      // leaves, every version-stamped cache key is already unaddressable, so
+      // one invalidation on receipt is sufficient and the timer is gone.
+      if (turnMutated) {
+        try {
+          versionMemo.delete(userId);
+          const v = await Promise.resolve((storage as any).bumpDataVersion?.());
+          if (v) versionMemo.set(userId, { v: Number(v), at: Date.now() });
+        } catch { /* the next GET resolves the version from the DB */ }
+        // Tell the middleware's finish hook the bump already happened, so a
+        // mutating turn does not pay for it twice.
+        res.locals.chatVersionBumped = true;
+      }
       // Hoist a dashboard-scope directive (from set_dashboard_scope) to the top
       // level so the chat client can apply the profile filter without digging
       // through the results array. The engine can't touch the browser filter
@@ -4993,6 +5022,71 @@ Rules:
     }
     res.json(task);
   }));
+  // ---- Notes ----
+  //
+  // MANUAL CREATION USES THE SAME SERVICE AS AI CHAT. Both doors call
+  // server/content-service, so dedup, profile linking and the "notes own no
+  // Date Rule" rule behave identically whether a note came from the composer,
+  // from chat, or from a future import.
+  app.get("/api/notes", asyncHandler(async (req, res) => {
+    const profileId = typeof req.query.profileId === "string" ? req.query.profileId : undefined;
+    const query = typeof req.query.q === "string" ? req.query.q : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    res.json(await listNotes(storage, { profileId, query, limit }));
+  }));
+  app.post("/api/notes", asyncHandler(async (req, res) => {
+    if (!req.body?.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
+      return res.status(400).json({ error: "Note content is required" });
+    }
+    const content = sanitize(req.body.content);
+    const title = req.body.title ? sanitize(String(req.body.title)) : undefined;
+    // Honour the active-profile scope header the same way every other create
+    // does, so a note made while a profile is selected belongs to that profile.
+    const scoped: Record<string, any> = {};
+    applyActiveProfileScope(req, scoped);
+    const profileId = req.body.profileId
+      || (Array.isArray(scoped.linkedProfiles) ? scoped.linkedProfiles[0] : undefined)
+      || null;
+    const result = await createNote(storage, {
+      content, title, profileId,
+      tags: Array.isArray(req.body.tags) ? req.body.tags.map(String) : [],
+      source: "manual",
+    });
+    const uid_n1 = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`artifacts:${uid_n1}`); bustCache(`stats:${uid_n1}`); bustCache(`enhanced:`);
+    res.status(result.deduped ? 200 : 201).json({ ...result.note, deduped: result.deduped });
+  }));
+  app.patch("/api/notes/:id", asyncHandler(async (req, res) => {
+    const changes: Record<string, any> = {};
+    if (typeof req.body?.title === "string") changes.title = sanitize(req.body.title);
+    if (typeof req.body?.content === "string") changes.content = sanitize(req.body.content);
+    if (typeof req.body?.append === "string") changes.append = sanitize(req.body.append);
+    if (Array.isArray(req.body?.tags)) changes.tags = req.body.tags.map(String);
+    const updated = await updateNote(storage, req.params.id, changes);
+    if (!updated) return res.status(404).json({ error: "Note not found" });
+    const uid_n2 = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`artifacts:${uid_n2}`); bustCache(`stats:${uid_n2}`); bustCache(`enhanced:`);
+    res.json(updated);
+  }));
+  app.delete("/api/notes/:id", asyncHandler(async (req, res) => {
+    const ok = await deleteNote(storage, req.params.id);
+    if (!ok) return res.status(404).json({ error: "Note not found" });
+    const uid_n3 = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`artifacts:${uid_n3}`); bustCache(`stats:${uid_n3}`); bustCache(`enhanced:`);
+    // Notes own no Date Rule, so nothing leaves the calendar with them.
+    res.json({ success: true, dateRuleImpact: "none" });
+  }));
+
+  // ---- Date Rules (derived) ----
+  //
+  // Read-only by design: a Date Rule is DERIVED from its canonical record
+  // (shared/temporal-rules), so there is nothing here to POST. This endpoint
+  // answers "what dates does this record put on my calendar, right now".
+  app.get("/api/date-rules/:system/:id", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    res.json(await syncDateRulesForEntity(storage, uid, req.params.system, req.params.id));
+  }));
+
   app.post("/api/tasks", asyncHandler(async (req, res) => {
     if (!req.body.title || typeof req.body.title !== "string" || !req.body.title.trim()) {
       return res.status(400).json({ error: "Task title required" });
@@ -5006,7 +5100,15 @@ Rules:
     const newTask = await storage.createTask(parsed.data);
     const uid_t1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t1}`); bustCache(`notifications:${uid_t1}`);
-    res.status(201).json(taskSanitized ? { ...newTask, warning: SANITIZE_NOTICE } : newTask);
+    // TEMPORAL LAYER — the same step the chat path runs. A manually-created
+    // task with a due date or a recurrence must reach the Calendar, Upcoming
+    // and Recurring & Important Dates exactly as an AI-created one does.
+    const rules_t1 = await syncDateRulesForEntity(storage, uid_t1, "task", newTask.id).catch(() => null);
+    res.status(201).json({
+      ...newTask,
+      ...(taskSanitized ? { warning: SANITIZE_NOTICE } : {}),
+      ...(rules_t1 ? { dateRules: rules_t1.rules } : {}),
+    });
   }));
   app.patch("/api/tasks/:id", asyncHandler(async (req, res) => {
     // CLEARING the clock time. `dueTime` is validated as HH:MM, so "" and null
@@ -5036,7 +5138,11 @@ Rules:
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_t2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t2}`); bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t2}`); bustCache(`notifications:${uid_t2}`);
-    res.json(updated);
+    // Re-derive after the edit: moving a due date moves the occurrence, and
+    // clearing one removes it. Both fall out of the record automatically —
+    // this reports the result so the caller never has to guess.
+    const rules_t2 = await syncDateRulesForEntity(storage, uid_t2, "task", updated.id).catch(() => null);
+    res.json({ ...updated, ...(rules_t2 ? { dateRules: rules_t2.rules } : {}) });
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
@@ -6790,15 +6896,32 @@ Rules:
     if (!req.body.mood) req.body.mood = detectMoodFromText(req.body.content);
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    let newEntry = await storage.createJournalEntry(parsed.data);
-    // Apply linkedProfiles if provided (not part of insert schema)
-    if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0) {
-      const updated = await storage.updateJournalEntry(newEntry.id, { linkedProfiles: req.body.linkedProfiles } as any);
-      if (updated) newEntry = updated as any;
+    // SAME SERVICE AS CHAT. `entryDate` (or the legacy `date`) is the day the
+    // experience happened; a second write for a day that already has an entry
+    // appends, because journal_entries is UNIQUE on (user_id, date) and
+    // "add this to today's journal" should append anyway.
+    const entryDate = String(req.body.entryDate || parsed.data.date || getUserToday(getTimezone(req))).slice(0, 10);
+    const linkedProfileId = Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0
+      ? String(req.body.linkedProfiles[0]) : null;
+    const { entry: newEntry, appended } = await upsertJournalEntry(storage, {
+      content: parsed.data.content || "",
+      mood: parsed.data.mood,
+      entryDate,
+      profileId: linkedProfileId,
+      energy: parsed.data.energy,
+      gratitude: parsed.data.gratitude,
+      highlights: parsed.data.highlights,
+    });
+    // Additional owners beyond the first (the service links only the primary).
+    if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 1) {
+      const merged = Array.from(new Set([...(((newEntry as any).linkedProfiles) || []), ...req.body.linkedProfiles.map(String)]));
+      await storage.updateJournalEntry(newEntry.id, { linkedProfiles: merged } as any);
     }
     const uid_j1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_j1}`);
-    res.status(201).json(newEntry);
+    // A journal entry's date is not a calendar commitment — it never creates a
+    // Date Rule. Stated in the response so no caller has to infer it.
+    res.status(appended ? 200 : 201).json({ ...newEntry, appended, dateRules: [] });
   }));
   app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
     {

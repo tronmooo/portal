@@ -3,6 +3,12 @@ import { getAnthropicClient } from "./anthropic-client";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { storage } from "./storage";
+import {
+  createNote, updateNote, deleteNote, listNotes,
+  upsertJournalEntry, syncDateRulesForEntity,
+} from "./content-service";
+import { findActionableTime } from "@shared/temporal-rules";
+import { classifyContent, routeContent, checkContentRouting, type ContentClassification } from "@shared/content-routing";
 import type { ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate } from "@shared/nutrition-shaped";
@@ -52,6 +58,7 @@ import {
   findDuplicateCreateInTurn,
   duplicateCreateViolation,
   recordTurnCreate,
+  toolOperation,
   toolTargetLabel,
   type RoutingViolation,
   type TurnCreate,
@@ -3761,7 +3768,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Journal ---
   {
     name: "journal_entry",
-    description: "Create a journal entry OR a QUICK NOTE for the user or a specific profile. This is the ONLY tool for notes — the dashboard's 'Quick Notes' section is backed by journal entries. Use it whenever the user says 'quick note', 'note', 'jot down', 'note to self', 'make a note that…', 'add a journal entry', 'write that X happened', 'journal entry for Joe', or shares a reflection. DO NOT create a document for a note — a note is NOT a document (documents are files/records like a passport or license). mood is optional — infer it from context (sore/tired → 'bad', motivated/energetic → 'great', neutral/normal → 'neutral'). Defaults to 'neutral' if unknown.\n\nDO NOT use this for a mood RATING or check-in such as 'my mood is 7/10', 'feeling a 6 out of 10', 'mood is good today', or 'I feel great' — that is quantitative mood tracking. Use log_tracker_entry with trackerName 'Mood' instead (it matches the user's existing Mood tracker or creates one). Only use journal_entry for mood when the user is clearly writing a diary-style narrative, not logging a score.",
+    description: "Create a JOURNAL ENTRY — experience, reflection, feelings, memories, narrative, or what happened during a day. Use it for 'add a journal entry', 'journal this', 'write in my diary', 'today was …', 'I've been thinking about …', or any diary-style reflection.\n\nDO NOT USE THIS FOR A NOTE. A note is reference information the user wants back later (a gate code, a preference, a fact about a person, an idea) and has its own tool: create_note. If the user says the word 'note' — 'make a note', 'note for Jane', 'jane doe note: …', 'jot this down' — call create_note, NEVER this tool. Filing a requested note as a journal entry is a routing error the server blocks.\n\nmood is optional — infer it from context (sore/tired → 'bad', motivated/energetic → 'great', neutral/normal → 'neutral'). Defaults to 'neutral' if unknown.\n\nDO NOT use this for a mood RATING or check-in such as 'my mood is 7/10', 'feeling a 6 out of 10', 'mood is good today', or 'I feel great' — that is quantitative mood tracking. Use log_tracker_entry with trackerName 'Mood' instead (it matches the user's existing Mood tracker or creates one). Only use journal_entry for mood when the user is clearly writing a diary-style narrative, not logging a score.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3771,8 +3778,95 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         gratitude: { type: "array", items: { type: "string" }, description: "Things grateful for" },
         highlights: { type: "array", items: { type: "string" }, description: "Day highlights" },
         forProfile: { type: "string", description: "Set to the EXACT profile name when the journal entry is for someone else (e.g. 'Joe', 'Mom'). Creates a separate entry linked to that profile." },
+        entryDate: { type: "string", description: "YYYY-MM-DD — WHEN THE EXPERIENCE HAPPENED, not when it is being written. Set this whenever the user backdates the entry ('journal entry for yesterday', 'journal this from last Friday'). Resolve the relative day against today's date given in your context. Defaults to today. NOTE: this date does NOT put anything on the calendar — a journal entry records the past, it is not an upcoming commitment." },
       },
       required: [],
+    },
+  },
+
+  // --- Notes ---
+  // A NOTE IS ITS OWN CONTENT TYPE (user report 2026-08-20). Notes are stored
+  // as artifact rows of type "note" — the app's existing first-class,
+  // profile-linked, searchable content record — so this adds no parallel
+  // system. What it adds is the canonical VERB set the router can route to.
+  {
+    name: "create_note",
+    description: "Create a NOTE — information worth remembering or referencing later. Facts, reference information, ideas, observations, instructions, preferences, things to remember, information about a person. A note does NOT mean something needs to happen.\n\nUSE THIS whenever the user says 'note', 'make a note', 'note for <person>', 'note that …', '<name> note: …', 'jot this down', 'save a note', 'remember that <concrete fact about a person or thing>'.\n\nExamples: 'Remember that Robert's apartment gate code is 4821' · 'Make a note for Sarah that she prefers morning appointments' · 'Save a note that the Honda makes a clicking sound when turning left' · 'Note for Mike: his dog's food is in the garage'.\n\nDO NOT use journal_entry for these — a journal entry is an experience or reflection, a note is reference information. DO NOT use create_document — a note is not a file. If the note text also contains an actionable future date (an appointment, a deadline), still create the NOTE the user asked for, then additionally create the task/event; never replace the note.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        content: { type: "string", description: "The note body — the information to remember, as a full sentence." },
+        title: { type: "string", description: "Short title (max ~60 chars). Omit and one is derived from the content." },
+        forProfile: { type: "string", description: "EXACT profile name the note belongs to ('Robert', 'Jane Doe', 'Max'). Omit for the user's own note." },
+        tags: { type: "array", items: { type: "string" }, description: "Optional tags." },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    name: "update_note",
+    description: "Update an existing NOTE's title, content or tags. Identify it by its current title or a distinctive phrase from its content. Use for 'update my note about the gate code', 'change the note for Robert to say …'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Title or distinctive text of the EXISTING note to update." },
+        content: { type: "string", description: "New body text. Replaces the existing content." },
+        append: { type: "string", description: "Text to ADD to the end of the existing note instead of replacing it." },
+        newTitle: { type: "string", description: "New title." },
+        tags: { type: "array", items: { type: "string" } },
+        forProfile: { type: "string", description: "Narrow the search to this profile's notes." },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "delete_note",
+    description: "Delete a NOTE by title or distinctive content. Deleting a note has no calendar or date-rule consequences — notes do not own dates.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: { type: "string", description: "Title or distinctive text of the note to delete." },
+        forProfile: { type: "string", description: "Narrow the search to this profile's notes." },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "search_notes",
+    description: "Search the user's NOTES by text and/or profile. Use before answering 'what was Robert's gate code', 'what notes do I have about the car'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Text to match against note titles and bodies. Omit to list all notes." },
+        forProfile: { type: "string", description: "Only notes belonging to this profile." },
+        limit: { type: "number", description: "Max results. Default 20." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "append_journal_entry",
+    description: "APPEND text to an existing journal entry for a given date instead of creating a new one. Use for 'add this to today's journal', 'add to yesterday's entry'. If no entry exists for that date, one is created.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        content: { type: "string", description: "Text to append." },
+        entryDate: { type: "string", description: "YYYY-MM-DD of the entry to append to. Defaults to today." },
+        forProfile: { type: "string", description: "EXACT profile name the entry belongs to." },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    name: "sync_date_rules_for_entity",
+    description: "Re-derive and report the Date Rules (calendar dates) a canonical record owns — its due date, recurrence, birthday, expiration or payment schedule. Use it to VERIFY that something you just created or edited will appear on the Calendar, Upcoming and Recurring & Important Dates. Notes and journal entries correctly return no rules.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        system: { type: "string", enum: ["task", "event", "profile", "document", "obligation", "note", "journal"], description: "Which canonical system stores the record." },
+        id: { type: "string", description: "The record's id." },
+      },
+      required: ["system", "id"],
     },
   },
 
@@ -5155,14 +5249,69 @@ When the user states a numeric measurement about a person OR pet ("Rex weighs 51
 - CATEGORY CLARIFICATION LOOP: when a log_tracker_entry result carries a categoryNote, the item landed in the Custom category because the server doesn't recognize it. Confirm the log as normal, then ask the user in ONE short sentence what kind of thing it is (medication? exercise? food? finance?). When they answer — now or in a later message ("Xanax is a medication") — call update_tracker(trackerName, changes:{category:"<their answer>"}). The server remembers the mapping permanently, so never ask about the same item twice. Also pass your own best-guess category on log_tracker_entry for unusual items so this rarely triggers.
 - delete entire tracker: delete_tracker(name)
 
+━━━ NOTE vs JOURNAL vs TASK — THE ROUTING DECISION ━━━
+These are THREE DIFFERENT OBJECTS with three different tools. Decide which one
+the user means BEFORE choosing a tool.
+
+  NOTE (create_note) — information worth remembering or referencing later:
+    facts, reference info, ideas, observations, instructions, preferences,
+    things about a person. A note does NOT mean something needs to happen.
+    "Remember that Robert's gate code is 4821" · "Make a note for Sarah that
+    she prefers morning appointments" · "The Honda makes a clicking sound"
+
+  JOURNAL ENTRY (journal_entry) — experience, reflection, feelings, memories,
+    narrative, what happened during a day.
+    "Today was exhausting" · "Robert and I had Italian food tonight and had a
+    really good conversation" · "I've been thinking about where my life is going"
+
+  TASK (create_task) — something that needs to be done, completed, handled,
+    followed up on, called, purchased, submitted or scheduled.
+    "Call Progressive" · "Robert needs to renew his license" · "Remind me to …"
+
+THE THREE TESTS, in order:
+  1. Is the primary purpose to REMEMBER INFORMATION?      → NOTE
+  2. Is it to preserve an EXPERIENCE or REFLECTION?       → JOURNAL ENTRY
+  3. Is there something that NEEDS TO BE DONE?            → TASK
+
+EXPLICIT INTENT ALWAYS WINS. If the user names the object — "create a note",
+"journal this", "add a task", "jane doe note: …" — use THAT tool, even when the
+text also resembles another type. The server enforces this and will refuse a
+tool that writes a different kind than the one the user named.
+  "Create a note that I need to call Progressive tomorrow" → create_note.
+  It may ALSO deserve a task; create the task IN ADDITION, never instead.
+
+STRUCTURED OBJECTS COME FIRST. Before any of the three, check whether a typed
+record already owns the information — a profile date of birth, a document
+expiration, an expense, a liability payment schedule. "My birthday is July 10,
+1994" is update_profile, not a note. "I spent $38 at Costco" is create_expense.
+A task about a structured record ("renew my registration before Oct 10") and
+the record's own date are DIFFERENT things and may both exist.
+
+ONE MESSAGE CAN CREATE SEVERAL OBJECTS. "Journal this: I had a stressful day.
+Remind me to call my landlord tomorrow." is a journal entry AND a task. Never
+force a multi-part message into one object.
+
+━━━ NOTE CRUD ━━━
+- create: create_note(content, title?, forProfile?, tags?)
+- update: update_note(title, content?|append?, newTitle?, forProfile?)
+- delete: delete_note(title, forProfile?)
+- search: search_notes(query?, forProfile?)
+Notes never own a calendar date. If a note's text carries an actionable future
+date, create the task/event separately — do NOT drop the note.
+
 ━━━ JOURNAL CRUD ━━━
-- create: journal_entry(mood, content, forProfile?)
+- create: journal_entry(mood, content, forProfile?, entryDate?)
+- append: append_journal_entry(content, entryDate?, forProfile?)
 - update today's: update_journal(date:"today's date", changes)
 - delete: delete_journal(date)
+entryDate is WHEN THE EXPERIENCE HAPPENED, YYYY-MM-DD. "Journal entry for
+yesterday" / "journal this from last Friday" → resolve the relative day against
+today's date and pass it. The entry date does NOT go on the calendar and creates
+no Date Rule — a journal entry records the past, it is not a commitment.
 CRITICAL: "Add a journal entry for X saying Y" → ALWAYS journal_entry(content:Y, forProfile:X). NEVER create_task for journal entries.
 NEVER say "X already has a journal entry" unless the Journal Entries context above explicitly shows an entry "for:X". If the context shows no entry for X, just call journal_entry — do NOT assume one exists.
-"X felt Y" / "X was feeling Y" / "note that X felt Y" → journal_entry. Infer mood: sore/tired/rough=bad, happy/good=good, motivated/energized=great, neutral/normal=okay.
-If journal_entry succeeds, say "Journal entry saved for [name]."
+"X felt Y" / "X was feeling Y" → journal_entry. Infer mood: sore/tired/rough=bad, happy/good=good, motivated/energized=great, neutral/normal=okay.
+If journal_entry succeeds, say "Journal entry saved for [name]." If create_note succeeds, say "Note saved for [name]." — say the object you actually created.
 NEVER substitute a create_task when the user explicitly asks for a journal entry.
 
 ━━━ ARTIFACT CRUD ━━━
@@ -5411,7 +5560,7 @@ CRITICAL ROUTING RULES (NEVER VIOLATE):
 - EXPLICIT "save to my info" — when the user says "save this to my info", "add this to my info tab", "put this in my info", "keep this in my profile", or similar → ALWAYS update_profile with a fields entry on the referenced profile (default to self/Me when unspecified). NEVER use save_memory for these; the Info tab reads profile fields.
 - "X's birthday is Y" → ALWAYS do BOTH: (1) update_profile with name: "X" and changes: { fields: { birthday: "Y" } } — if the profile doesn't exist, it will be auto-created. (2) create_event with title: "🎂 X's Birthday", date: Y (with correct year), recurrence: "yearly". Do NOT ask for confirmation. Just do it.
 - save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event. If a fact is a concrete attribute of a person (a size, measurement, number, physical trait, contact detail), it is profile-level data → use update_profile, not save_memory.
-- "save a note that X" / "remember that X" for a HOUSEHOLD/OBJECT fact (a door code, wifi password, locker combo, where something is stored) → save_memory, NOT journal_entry. Journal entries are dated diary text; codes and reference facts must be retrievable later via recall_memory.
+- "save a note that X" / "remember that X" for a HOUSEHOLD/OBJECT fact (a door code, wifi password, locker combo, where something is stored) → create_note, NOT journal_entry and NOT save_memory. Journal entries are dated diary text; a code or reference fact is a NOTE, and when it belongs to a person or thing pass forProfile so it lands on that profile. save_memory stays for ABSTRACT preferences that belong to no profile ("I prefer window seats").
 - QUOTED CONTENT BOUNDARIES (CRITICAL for multi-action messages): when an instruction embeds quoted text ('add a journal entry saying "..."', 'create a note that says "..."'), the quoted content ENDS at the closing quotation mark. Everything AFTER the closing quote is a NEW instruction you must still execute — never absorb trailing commands into the journal/note content, and never stop processing the message after the quoted item. Re-scan the whole message and execute EVERY requested action.
 - save_memory should ONLY be used for abstract preferences, facts, or context that doesn't fit any structured data type AND is not an attribute of a specific profile (e.g., "Remember that I prefer window seats", "I'm vegetarian", "I like to be reminded gently").
 
@@ -6005,8 +6154,29 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
       }
       break;
     }
-    case "journal_entry": {
+    case "journal_entry":
+    case "append_journal_entry": {
       if (!normalized.content?.trim() && !normalized.mood) errors.push("Journal entry needs content or mood");
+      // The entry date is WHEN THE EXPERIENCE HAPPENED. An unparseable one is
+      // dropped rather than guessed — a backdated entry filed under the wrong
+      // day is worse than one filed under today.
+      if (normalized.entryDate && !/^\d{4}-\d{2}-\d{2}$/.test(String(normalized.entryDate).slice(0, 10))) {
+        warnings.push(`Entry date "${normalized.entryDate}" is not YYYY-MM-DD — using today`);
+        normalized.entryDate = undefined;
+      } else if (normalized.entryDate) {
+        normalized.entryDate = String(normalized.entryDate).slice(0, 10);
+      }
+      break;
+    }
+    case "create_note": {
+      if (!normalized.content?.trim()) errors.push("Note content is required");
+      else normalized.content = normalized.content.trim();
+      if (normalized.title) normalized.title = String(normalized.title).trim().slice(0, 120);
+      break;
+    }
+    case "update_note":
+    case "delete_note": {
+      if (!normalized.title?.trim()) errors.push("Which note? Give its title or a distinctive phrase from it.");
       break;
     }
     case "create_budget": {
@@ -10241,104 +10411,142 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       };
     }
 
-    case "journal_entry": {
-      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-      // Bug fix (AI e2e): the journal_entries table has a UNIQUE
-      // constraint on (user_id, date) — meaning only ONE entry per user
-      // per day, regardless of which profile it's for. Previously, if a
-      // self entry already existed and the AI tried to log a journal
-      // entry for Bob, the insert blew up with
-      // "duplicate key value violates unique constraint
-      // journal_entries_unique_day".
-      //
-      // We honor the constraint by ALWAYS finding today's entry (if any)
-      // and appending to it, tagging the appended content with the
-      // target profile name when forProfile is set. The entry's
-      // linkedProfiles also gets unioned so the entry surfaces under
-      // every profile's journal view.
-      const allJournalEntries = await storage.getJournalEntries();
-      let existingToday: any = allJournalEntries.find(j => j.date === todayDate) || null;
-      // Look up target profile early so we can use its name + id below.
+    // -- NOTES -------------------------------------------------------------
+    //
+    // A note is reference information. It is NOT a journal entry, and asking
+    // for one no longer lands in the journal (user report 2026-08-20, "jane doe
+    // note: ..." -> "Journal entry saved for Jane Doe"). Storage is an artifact
+    // row of type "note"; the canonical verbs live in server/content-service so
+    // manual creation goes through exactly the same path.
+    case "create_note": {
+      const noteProfile = await resolveNoteProfile(input.forProfile, input.content || "");
+      const created = await createNote(storage, {
+        content: input.content,
+        title: input.title,
+        profileId: noteProfile?.id ?? null,
+        tags: input.tags || [],
+        source: "chat",
+      });
+      if (created.deduped) {
+        return { ...created.note, deduped: true, message: "That note already exists — I didn't create a duplicate." };
+      }
+      // TEMPORAL LAYER. A note never owns a Date Rule, but a note whose text
+      // carries an actionable date should say so, so the model can offer the
+      // task/event ALONGSIDE the note the user asked for — never instead of it.
+      return {
+        ...created.note,
+        forProfile: noteProfile?.name,
+        dateRules: [],
+        dateRuleNote: "Notes do not own Date Rules — nothing was added to the calendar.",
+        ...(created.actionableTime
+          ? {
+              actionableTime: created.actionableTime,
+              suggestion: `This note mentions ${created.actionableTime.cue} on/around "${created.actionableTime.dateText}". The NOTE has been saved as requested. Ask the user (or, if they clearly asked for both, create) a task or event for that date — do NOT replace the note.`,
+            }
+          : {}),
+      };
+    }
+
+    case "update_note": {
+      const noteProfile = await resolveNoteProfile(input.forProfile, input.title || "");
+      const candidates = await listNotes(storage, { profileId: noteProfile?.id ?? null });
+      const hit = safeMatchEntity(candidates as any[], input.title || "", (n: any) => `${n.title} ${n.content}`);
+      if (!hit.match) return { error: hit.error || `No note found matching "${input.title}"`, candidates: hit.candidates };
+      const updated = await updateNote(storage, hit.match.id, {
+        title: input.newTitle,
+        content: input.content,
+        append: input.append,
+        tags: input.tags,
+      });
+      return updated || { error: "Note could not be updated" };
+    }
+
+    case "delete_note": {
+      const noteProfile = await resolveNoteProfile(input.forProfile, input.title || "");
+      const candidates = await listNotes(storage, { profileId: noteProfile?.id ?? null });
+      const hit = safeMatchEntity(candidates as any[], input.title || "", (n: any) => `${n.title} ${n.content}`);
+      if (!hit.match) return { error: hit.error || `No note found matching "${input.title}"`, candidates: hit.candidates };
+      const ok = await deleteNote(storage, hit.match.id);
+      return { success: ok, id: hit.match.id, title: hit.match.title, dateRuleImpact: "none — notes do not own Date Rules" };
+    }
+
+    case "search_notes": {
+      const noteProfile = await resolveNoteProfile(input.forProfile, input.query || "");
+      const found = await listNotes(storage, {
+        profileId: noteProfile?.id ?? null,
+        query: input.query,
+        limit: Math.max(1, Math.min(100, Number(input.limit) || 20)),
+      });
+      return found.map((n: any) => ({
+        id: n.id, title: n.title, content: n.content,
+        linkedProfiles: n.linkedProfiles || [], createdAt: n.createdAt, updatedAt: n.updatedAt,
+      }));
+    }
+
+    // -- TEMPORAL LAYER ------------------------------------------------------
+    case "sync_date_rules_for_entity": {
+      return syncDateRulesForEntity(storage, userId || "_global", String(input.system || ""), String(input.id || ""));
+    }
+
+    // -- JOURNAL -------------------------------------------------------------
+    //
+    // `entryDate` is WHEN THE EXPERIENCE HAPPENED. "Journal entry for
+    // yesterday" files under yesterday. It is deliberately NOT a calendar date:
+    // promoting entry dates to the calendar would put every diary entry the
+    // user has ever written onto their schedule.
+    case "journal_entry":
+    case "append_journal_entry": {
+      const journalTz = (storage as any)._timezone || "America/Los_Angeles";
+      const todayDate = new Date().toLocaleDateString("en-CA", { timeZone: journalTz });
+      const entryDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.entryDate || "").slice(0, 10))
+        ? String(input.entryDate).slice(0, 10)
+        : todayDate;
+
       let targetProfile: any = null;
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
         targetProfile = matchProfileByName(profiles, input.forProfile);
       }
 
-      let entry: any;
-      if (existingToday) {
-        // APPEND to existing entry instead of blocking on unique
-        // constraint. When forProfile is set, prefix the new content
-        // with the target profile's name so the appended snippet is
-        // attributable in the UI.
-        const newContent = input.content || "";
-        const profileLabel = targetProfile?.name ? `[${targetProfile.name}] ` : "";
-        const appendedContent = existingToday.content
-          ? existingToday.content + "\n\n" + profileLabel + newContent
-          : profileLabel + newContent;
-        // Union linkedProfiles so the entry shows under every relevant
-        // profile's journal view.
-        const mergedLinked = Array.from(new Set([
-          ...(existingToday.linkedProfiles || []),
-          ...(targetProfile ? [targetProfile.id] : []),
-        ]));
-        entry = await storage.updateJournalEntry(existingToday.id, {
-          content: appendedContent,
-          mood: input.mood || existingToday.mood,
-          energy: input.energy ?? existingToday.energy,
-          gratitude: input.gratitude || existingToday.gratitude,
-          highlights: input.highlights || existingToday.highlights,
-          linkedProfiles: mergedLinked,
-        } as any);
-        if (!entry) entry = existingToday;
-      } else {
-        // P0.3a: validate with the shared insert schema before writing. Mood is
-        // coerced to "neutral" when off-vocabulary so a bad mood label never
-        // costs the user their journal content.
-        const JOURNAL_MOODS = ["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"];
-        const journalPayload = validateAiPayload(insertJournalEntrySchema, {
-          mood: JOURNAL_MOODS.includes(input.mood) ? input.mood : "neutral",
-          content: input.content || "",
-          energy: input.energy,
-          gratitude: input.gratitude,
-          highlights: input.highlights,
-          tags: [],
-        }, "journal entry");
-        if (!journalPayload.ok) return { error: journalPayload.error };
-        entry = await storage.createJournalEntry(journalPayload.data);
-      }
+      const { entry, appended } = await upsertJournalEntry(storage, {
+        content: input.content || "",
+        mood: input.mood,
+        entryDate,
+        profileId: targetProfile?.id ?? null,
+        profileLabel: targetProfile?.name ?? null,
+        energy: input.energy,
+        gratitude: input.gratitude,
+        highlights: input.highlights,
+      });
 
-      // Direct profile linking for forProfile (when we created a new entry).
-      if (targetProfile && !existingToday) {
-        await storage.updateJournalEntry(entry.id, { linkedProfiles: [targetProfile.id] } as any);
-        await storage.linkProfileTo(targetProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
-      }
-      // For the append path, linkedProfiles is already merged above.
-      // Also write the junction-table link so /profile views surface it.
-      if (targetProfile && existingToday) {
-        await storage.linkProfileTo(targetProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
-      }
-
-      // BUG FIX (multi-person journals): when a self entry is created
-      // FIRST without forProfile, it starts with empty linkedProfiles.
-      // Then when subsequent forProfile=Bob appends merge in, the union
-      // becomes [Bob] only — dropping Self from the entry's profile list.
-      // Fix: if linkedProfiles ends up empty, stamp Self so the entry
-      // still surfaces under the Self journal view.
+      // A self entry created without forProfile starts with no owner. Stamp the
+      // self profile so it still surfaces under the user's own journal view.
+      let finalEntry: any = entry;
       if (!targetProfile) {
         const profiles = await storage.getProfiles();
-        const selfProfile = profiles.find(p => p.type === "self");
-        if (selfProfile) {
-          const current = (entry as any).linkedProfiles || [];
-          if (!current.includes(selfProfile.id)) {
-            const merged = Array.from(new Set([...current, selfProfile.id]));
-            await storage.updateJournalEntry(entry.id, { linkedProfiles: merged } as any);
-            await storage.linkProfileTo(selfProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Self profile linking failed:", e?.message); });
-          }
+        const selfProfile = profiles.find((p: any) => p.type === "self");
+        if (selfProfile && !((entry as any)?.linkedProfiles || []).includes(selfProfile.id)) {
+          const merged = Array.from(new Set([...((entry as any)?.linkedProfiles || []), selfProfile.id]));
+          const patched = await storage.updateJournalEntry(entry.id, { linkedProfiles: merged } as any);
+          if (patched) finalEntry = patched;
+          await storage.linkProfileTo(selfProfile.id, "journal", entry.id).catch((e: any) => { console.warn("[AI] Self profile linking failed:", e?.message); });
         }
       }
 
-      return entry;
+      const actionable = findActionableTime(input.content || "");
+      return {
+        ...finalEntry,
+        appended,
+        entryDate,
+        dateRules: [],
+        dateRuleNote: "A journal entry's date records when the experience happened — it is not a calendar commitment and creates no Date Rule.",
+        ...(actionable.actionable
+          ? {
+              actionableTime: { dateText: actionable.dateText, cue: actionable.cue },
+              suggestion: `The entry mentions ${actionable.cue} on/around "${actionable.dateText}". If that is a real commitment, create a task or event for it as well — the journal entry itself stays as written.`,
+            }
+          : {}),
+      };
     }
 
     case "create_artifact": {
@@ -12852,6 +13060,64 @@ async function resolveForProfile(forProfile: string | undefined, text: string): 
   return all[0];
 }
 
+/**
+ * WHO does this note belong to?
+ *
+ * Notes are per-person just like tasks and journal entries, so the profile is
+ * resolved the same way — the explicit `forProfile` the model supplied first,
+ * then the shared name resolver over the note's own text. Returns undefined
+ * for the user's own notes, which is the correct answer and NOT a reason to
+ * fall back to the primary profile: a note about Robert filed under Sarah is
+ * the profile-leak the isolation rules exist to prevent.
+ */
+/**
+ * The router's read of one message, phrased for the model.
+ *
+ * Explicit reads are stated as instructions (the server enforces them anyway,
+ * so telling the model up front saves a blocked round-trip). Inferred reads are
+ * stated as suggestions. A message the router could not read produces nothing
+ * at all — a bad hint is worse than no hint.
+ */
+export function buildContentRoutingDirective(userMessage: string): string | null {
+  const plan = routeContent(userMessage);
+  const named = plan.actions.filter((a) => a.explicit);
+  const inferred = plan.actions.filter((a) => !a.explicit && a.confidence >= 0.8 && a.kind !== "unknown");
+
+  const lines: string[] = [];
+  if (named.length > 0) {
+    const kinds = Array.from(new Set(named.map((a) => a.kind)));
+    lines.push(
+      `[ROUTER] The user explicitly named ${kinds.length === 1 ? "this object" : "these objects"}: ${kinds.join(", ").toUpperCase()}. ` +
+      `Use the matching tool (note → create_note, journal → journal_entry, task → create_task). ` +
+      `Explicit intent is never overridden — a tool that writes a different kind will be refused.`,
+    );
+  }
+  if (inferred.length > 0) {
+    const parts = inferred.map((a) => `"${a.clause.slice(0, 60)}" reads as a ${a.kind.toUpperCase()} (${a.reason})`);
+    lines.push(`[ROUTER] Inferred, for your judgement: ${parts.join("; ")}.`);
+  }
+  const structured = plan.actions.filter((a) => a.kind === "structured");
+  if (structured.length > 0) {
+    lines.push(
+      `[ROUTER] This message carries information a STRUCTURED record already owns (${structured.map((a) => a.structuredDomain).join(", ")}). ` +
+      `Update that record — do not bury it in a note.`,
+    );
+  }
+  const owners = Array.from(new Set(plan.actions.map((a) => a.profileHint).filter(Boolean)));
+  if (owners.length > 0) {
+    lines.push(`[ROUTER] Named person(s): ${owners.join(", ")}. Pass forProfile — do NOT default to the primary profile.`);
+  }
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
+async function resolveNoteProfile(forProfile: string | undefined, text: string): Promise<{ id: string; name: string } | null> {
+  const name = await resolveForProfile(forProfile, text);
+  if (!name) return null;
+  const profiles = await storage.getProfiles();
+  const match = matchProfileByName(profiles, name);
+  return match ? { id: match.id, name: match.name } : null;
+}
+
 async function autoLinkToProfiles(entityType: string, entityId: string, text: string, explicitProfileName?: string): Promise<void> {
   // DISABLED: The user has explicitly requested NO AI auto-linking.
   // All profile linking must be done manually by the user.
@@ -14406,11 +14672,22 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // Append the current user message. If the last carried-forward turn is
     // also a user turn (e.g. history ended on a user message with no
     // assistant reply persisted yet), merge so we don't break alternation.
+    // ── SEMANTIC ROUTER DIRECTIVE ─────────────────────────────────────────
+    // The deterministic Note/Journal/Task read of THIS message, handed to the
+    // model as part of the user turn (not the system prompt — that block is
+    // prompt-cached and must stay byte-identical across turns).
+    //
+    // It is a directive when the user NAMED the object and a hint otherwise, so
+    // an inferred read informs the model without overriding its judgement on a
+    // message the router only half understood.
+    const contentDirective = buildContentRoutingDirective(userMessage);
+    const userTurnText = contentDirective ? `${userMessage}\n\n${contentDirective}` : userMessage;
+
     const lastCarried = messages[messages.length - 1];
     if (lastCarried && lastCarried.role === "user") {
-      lastCarried.content = `${lastCarried.content}\n---\n${userMessage}`;
+      lastCarried.content = `${lastCarried.content}\n---\n${userTurnText}`;
     } else {
-      messages.push({ role: "user", content: userMessage });
+      messages.push({ role: "user", content: userTurnText });
     }
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
@@ -14613,6 +14890,24 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // name this turn is fan-out, not work.
             const dupCreate = findDuplicateCreateInTurn(toolUse.name, input, turnCreates);
             if (dupCreate) return duplicateCreateViolation(toolUse.name, label, dupCreate);
+            // NOTE vs JOURNAL vs TASK (user report 2026-08-20). The generic
+            // intent gate above cannot catch "jane doe note: …" — the message
+            // carries no create VERB, so the parsed operation is unknown and
+            // the intent is not actionable. The content router reads the named
+            // OBJECT instead, which is the thing the user was explicit about.
+            const contentViolation = checkContentRouting(toolUse.name, userMessage);
+            if (contentViolation) {
+              return {
+                mismatchType: "entity_mismatch",
+                tool: toolUse.name,
+                expectedEntity: (contentViolation.requestedKind === "task" ? "task" : contentViolation.requestedKind === "journal" ? "journal" : "note") as any,
+                actualEntity: (contentViolation.toolKind === "task" ? "task" : contentViolation.toolKind === "journal" ? "journal" : "note") as any,
+                expectedOperation: "create",
+                actualOperation: toolOperation(toolUse.name),
+                modelDirective: contentViolation.modelDirective,
+                userMessage: contentViolation.userMessage,
+              } satisfies RoutingViolation;
+            }
             return checkToolAgainstIntent(toolUse.name, turnPlan);
           })();
           if (routingViolation) {
@@ -15322,6 +15617,10 @@ export const READ_ONLY_TOOLS = new Set<string>([
   "find_orphans", "validate_profile_isolation", "find_duplicates",
   "validate_dashboard_counts", "explain_dashboard_item", "refresh_dashboard",
   "get_missed_doses", "get_dose_history",
+  // Notes lookup, and the temporal re-derivation. `sync_date_rules_for_entity`
+  // writes nothing — Date Rules are derived from the canonical record, so
+  // "syncing" is a read that reports what the record now projects.
+  "search_notes", "sync_date_rules_for_entity",
   // Connected bank data (Stripe Financial Connections). These four are pure
   // reads over the authenticated user's own financial_* rows.
   // `refresh_financial_data` is deliberately NOT here — it is an action that
@@ -15436,8 +15735,14 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   delete_obligation: "delete_entity",
   // Journal
   journal_entry: "journal_entry",
+  append_journal_entry: "journal_entry",
   update_journal: "update_entity",
   delete_journal: "delete_entity",
+  // Notes. Stored as artifacts, so the undoable action card is the artifact
+  // one — the chat UI already knows how to undo that.
+  create_note: "create_artifact",
+  update_note: "update_entity",
+  delete_note: "delete_entity",
   // Goals
   create_goal: "create_goal",
   update_goal: "update_entity",
