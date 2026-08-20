@@ -33,7 +33,7 @@ import {
   dedupeRules,
 } from "../shared/date-rules";
 import { seriesFromAll } from "../shared/calendar-adapters";
-import { resolveLiabilityDueDate } from "../shared/liability-schedule";
+import { resolveLiabilityDueDate, resolveLiabilityEndDate } from "../shared/liability-schedule";
 import {
   buildCalendarOccurrences,
   isRecurringRule,
@@ -1168,5 +1168,24 @@ describe("a corrected spelling wins over a stale one", () => {
     }]);
     expect(rules.filter(r => r.ruleType === "birthday")).toHaveLength(1);
     expect(rules[0].date).toBe("1994-07-11");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 21. Tenth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a liability's end date, like its due date", () => {
+  it("takes the first spelling that parses, not the first that exists", () => {
+    // `??` does not skip "", so a blank payoffDate short-circuited past a real
+    // endDate and the series ran on past payoff with no end at all.
+    expect(resolveLiabilityEndDate({ payoffDate: "", endDate: "2029-09-01" })).toBe("2029-09-01");
+    const series = seriesFromAll({
+      profiles: [{
+        id: "l1", name: "Car Loan", type: "liability", parentProfileId: "p1",
+        fields: { nextDueDate: "2026-09-01", monthlyPayment: 415, payoffDate: "", endDate: "2029-09-01" },
+      }],
+    });
+    expect(series.find(s => s.source.system === "liability")?.recurrenceEnd).toBe("2029-09-01");
   });
 });

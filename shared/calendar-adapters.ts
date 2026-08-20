@@ -28,7 +28,7 @@ import { resolveBillingModel, resolveOccurrenceAmount } from "./liability-billin
 import { groupMaterializedSeries } from "./series-detect";
 import { rulesFromAll, seriesFromDateRules } from "./date-rules";
 import { normalizeDateString } from "./extraction-normalize";
-import { resolveLiabilityDueDate } from "./liability-schedule";
+import { resolveLiabilityDueDate, resolveLiabilityEndDate } from "./liability-schedule";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
@@ -418,9 +418,7 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
     const due = resolveLiabilityDueDate(f);
     if (!isISO(due)) continue;
     const amount = Number(f.monthlyPayment ?? f.monthly_payment ?? f.amount);
-    const end = normalizeDateString(
-      f.payoffDate ?? f.payoff_date ?? f.endDate ?? f.end_date ?? f.recurrenceEnd,
-    );
+    const end = resolveLiabilityEndDate(f);
     const kind = kindForLiabilityProfile(p);
     // Per-occurrence state lives in `fields.occurrences`, keyed by canonical
     // date. Reading it here is what puts THIS month's variable amount on the

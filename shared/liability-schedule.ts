@@ -134,6 +134,26 @@ export function resolveLiabilityDueDate(f: Record<string, any> | null | undefine
   return null;
 }
 
+/**
+ * THE date a liability's payments stop, or null.
+ *
+ * Same trap as `resolveLiabilityDueDate`, same fix: coalescing the spelling
+ * chain with `??` first meant a blank `payoffDate` — which `??` does not skip —
+ * short-circuited past a real `endDate`, and the series then had no end at all
+ * and generated payments past payoff.
+ */
+export function resolveLiabilityEndDate(f: Record<string, any> | null | undefined): string | null {
+  const fields = f || {};
+  for (const v of [
+    fields.payoffDate, fields.payoff_date,
+    fields.endDate, fields.end_date, fields.recurrenceEnd,
+  ]) {
+    const iso = normalizeDateString(v);
+    if (iso) return iso;
+  }
+  return null;
+}
+
 export function deriveScheduleFields(
   fields: Record<string, any> | null | undefined,
   typeKey: string | null | undefined,

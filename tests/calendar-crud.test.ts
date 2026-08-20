@@ -182,8 +182,12 @@ describe("each action hits the right API", () => {
 describe("destructive actions never destroy the wrong record", () => {
   it("removing a birthday clears the DATE, never the person", async () => {
     await run(SERIES.birthday, "deleteSeries");
+    // Via `fieldsToDelete`, the app's universal delete: it matches on field
+    // IDENTITY across the top level and every nested group, so it reaches a
+    // date wherever it is stored. A `fields` patch for a nested group would
+    // REPLACE that group and take every sibling field with it.
     expect(requests).toEqual([{
-      method: "PATCH", url: "/api/profiles/joe", body: { fields: { birthday: null } },
+      method: "PATCH", url: "/api/profiles/joe", body: { fieldsToDelete: ["birthday"] },
     }]);
     // Emphatically not a DELETE on the profile.
     expect(requests.some((r) => r.method === "DELETE")).toBe(false);
@@ -191,7 +195,19 @@ describe("destructive actions never destroy the wrong record", () => {
 
   it("clears the anniversary field for an anniversary", async () => {
     await run({ ...SERIES.birthday, kind: "anniversary" }, "deleteSeries");
-    expect(requests[0].body).toEqual({ fields: { anniversary: null } });
+    expect(requests[0].body).toEqual({ fieldsToDelete: ["anniversary"] });
+  });
+
+  it("clears the field the date actually came from, not a guessed one", async () => {
+    // A profile-sourced series used to only ever be a birthday. It can now be
+    // any date a person carries, and guessing wiped their date of birth while
+    // leaving the date they asked to remove.
+    await run(
+      { ...SERIES.birthday, kind: "expiration", recurrence: "none",
+        source: { ...SERIES.birthday.source, field: "identity.passportExpiration" } } as any,
+      "deleteSeries",
+    );
+    expect(requests[0].body).toEqual({ fieldsToDelete: ["passportExpiration"] });
   });
 
   it("stopping a liability pauses the schedule, never deletes the debt", async () => {

@@ -84,7 +84,11 @@ export async function applyCalendarAction(input: ApplyActionInput): Promise<void
       // must survive. For a one-off date it really is a delete.
       const isOneOff = !series.recurrence || series.recurrence === "none";
       if (action === "deleteOccurrence" && isOneOff) {
-        await deleteSourceRecord(system, id);
+        // The series, not just the id: without it the profile branch falls back
+        // to "birthday", so deleting a one-off licence expiration wiped the
+        // person's date of birth and left the expiration — the same bug the
+        // deleteSeries path was changed to fix.
+        await deleteSourceRecord(system, id, series);
         break;
       }
       const mode = action === "complete" ? "done" : "skip";
@@ -255,17 +259,36 @@ async function deleteSourceRecord(
       // carries — a licence, a passport, a warranty. Guessing "birthday" for
       // all of them wiped the person's date of birth and left the expiration
       // exactly where it was.
-      const field = series?.source?.field
+      //
+      // Deletion goes through `fieldsToDelete`, which is the app's universal
+      // delete: it matches on field IDENTITY across the top level and every
+      // nested group (shared/profile-field-identity), so it reaches a nested
+      // date without a dotted path. Sending a `fields` patch for a nested group
+      // instead would REPLACE that group — taking every sibling with it.
+      const path = series?.source?.field
         || (series?.kind === "anniversary" ? "anniversary" : "birthday");
-      if (field.includes(".")) {
-        // A nested group: send the group with that one key cleared.
-        const [group, ...rest] = field.split(".");
-        await apiRequest("PATCH", `/api/profiles/${id}`, {
-          fieldsToDelete: [field], fields: { [group]: { [rest.join(".")]: null } },
-        });
-        return;
+      const leaf = path.split(".").pop() || path;
+      await apiRequest("PATCH", `/api/profiles/${id}`, { fieldsToDelete: [leaf] });
+      return;
+    }
+    case "document": {
+      // Clear the date, not the document. The document is the file; its
+      // expiration is one field of what was read out of it, and removing that
+      // date from the calendar must not destroy the record it came from.
+      const field = series?.source?.field;
+      if (!field) throw new Error("This date has no field to clear.");
+      const doc = await apiRequest("GET", `/api/documents/${id}`).then((r) => r.json());
+      const extractedData = { ...(doc?.extractedData || {}) };
+      const path = field.split(".").filter(Boolean);
+      let cursor: any = extractedData;
+      for (let i = 0; i < path.length - 1; i++) {
+        const next = cursor?.[path[i]];
+        if (!next || typeof next !== "object") { cursor = null; break; }
+        cursor[path[i]] = { ...next };
+        cursor = cursor[path[i]];
       }
-      await apiRequest("PATCH", `/api/profiles/${id}`, { fields: { [field]: null } });
+      if (cursor) delete cursor[path[path.length - 1]];
+      await apiRequest("PATCH", `/api/documents/${id}`, { extractedData });
       return;
     }
     case "liability":
