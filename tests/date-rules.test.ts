@@ -39,6 +39,7 @@ import {
   isRecurringRule,
   isImportantDate,
   onlyRulesAndImportantDates,
+  dedupeSeries,
   generateSeriesOccurrences,
 } from "../shared/calendar-occurrences";
 import { aggregateUpcomingDates } from "../shared/upcoming-dates";
@@ -756,12 +757,17 @@ describe("a value must BE a date on the read path too", () => {
     expect(rules).toEqual([]);
   });
 
-  it("does not turn a timestamp into an important date", () => {
-    const rules = rulesFromProfiles([{
+  it("reads the DAY an ISO timestamp names, without rewriting the value", () => {
+    // Rejecting a timestamp outright on the read path meant a date stored this
+    // way produced no rule anywhere. The stored value keeps its clock; the rule
+    // names the day it falls on.
+    const [rule] = rulesFromProfiles([{
       id: "p1", name: "Jane", type: "person",
-      fields: { expirationDate: "2026-08-20T14:32:11.000Z" },
+      fields: { expirationDate: "2027-01-01T00:00:00Z" },
     }]);
-    expect(rules).toEqual([]);
+    expect(rule.date).toBe("2027-01-01");
+    const { fields } = normalizeEntityDateFields({ expirationDate: "2027-01-01T00:00:00Z" });
+    expect(fields.expirationDate).toBe("2027-01-01T00:00:00Z");
   });
 
   it("still reads a bare date in any printed form", () => {
@@ -1089,5 +1095,34 @@ describe("important dates that do not share a kind with expirations", () => {
       tasks: [{ id: "t1", title: "Buy milk", dueDate: "2026-09-10", linkedProfiles: ["p1"] }],
     });
     expect(onlyRulesAndImportantDates(series)).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 19. Eighth review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("two dates that share a subtype keep separate names", () => {
+  it("keeps a flood policy and a home policy apart, all the way to the calendar", () => {
+    // Both infer the "insurance" subtype, so both were titled
+    // "Home — Insurance Expiration" — and identical titles collapsed to one
+    // series downstream, so the flood policy vanished from every surface.
+    const profile = {
+      id: "home-1", name: "Home", type: "property",
+      fields: { homeInsuranceExpiration: "2027-03-01", floodInsuranceExpiration: "2028-04-02" },
+    };
+    const rules = rulesFromProfiles([profile]);
+    expect(new Set(rules.map(r => r.label)).size).toBe(2);
+    const survivors = dedupeSeries(seriesFromAll({ profiles: [profile] })).map(d => d.series);
+    expect(survivors).toHaveLength(2);
+  });
+});
+
+describe("the countdown says what the date actually does", () => {
+  it("does not tell you a car service expires", () => {
+    expect(countdownLabel("2026-09-01", TODAY, "maintenance")).toBe("Due in 12 days");
+    expect(countdownLabel("2026-09-01", TODAY, "deadline")).toBe("Due in 12 days");
+    expect(countdownLabel("2026-09-01", TODAY, "renewal")).toBe("Renews in 12 days");
+    expect(countdownLabel("2026-09-01", TODAY, "expiration")).toBe("Expires in 12 days");
   });
 });

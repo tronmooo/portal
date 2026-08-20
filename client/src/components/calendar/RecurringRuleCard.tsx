@@ -32,7 +32,7 @@ import {
   capabilitiesFor, actionLabelFor, hasPrimaryAction, type CalendarAction,
 } from "@shared/calendar-capabilities";
 import { humanRecurrenceLabel } from "@shared/recurring-dates";
-import { countdownLabel, type DateRuleType } from "@shared/date-rules";
+import { countdownLabel, RULE_TYPE_FOR_KIND, type DateRuleType } from "@shared/date-rules";
 import { formatMoney } from "@/lib/format";
 
 export const RULE_ICONS: Record<OccurrenceKind, any> = {
@@ -108,7 +108,9 @@ export function RecurringRuleCard({
   // An important one-off (a licence, a passport, a lease end) reads as a
   // countdown rather than as a schedule — see isImportantDate.
   const important = isImportantDate(series);
-  const countdownType: DateRuleType = series.kind === "renewal" ? "renewal" : "expiration";
+  // What this date DOES, so the countdown says it. Hardcoding "expiration"
+  // told the user their car service and their court date expired.
+  const countdownType: DateRuleType = RULE_TYPE_FOR_KIND[series.kind] ?? "expiration";
   const overdue = important
     ? series.baseDate < todayISO
     : !!next && next.effectiveDate < todayISO;

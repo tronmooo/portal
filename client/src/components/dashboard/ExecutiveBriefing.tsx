@@ -720,7 +720,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
   // Documents
   const visibleDocs = allExpiringDocs
-    .filter((d: any) => !snoozedDocumentIds.includes(d.documentId))
+    // Dismissal is per RULE now that one record can carry several expirations.
+    // Filtering on the record id alone left a dismissed row in this card and in
+    // the count below while the popup and the executive section hid it.
+    .filter((d: any) => !snoozedDocumentIds.includes(d.ruleId) && !snoozedDocumentIds.includes(d.documentId))
     .filter((d: any) => typeof d.daysUntil === "number")
     .sort((a: any, b: any) => a.daysUntil - b.daysUntil);
   const docsSoonCount = visibleDocs.filter((d: any) => d.daysUntil <= 30).length;

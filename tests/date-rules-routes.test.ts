@@ -442,3 +442,28 @@ describe("a value the date engine cannot read is not silently dropped", () => {
     expect(db.documents[0].extractedData.coverageDates).toBe("01/01/2026 - 12/31/2026");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("confirming a field the profile already holds is not a failure", () => {
+  it("reports the write it made when both spellings are already there", async () => {
+    // When the profile already carries dateOfBirth AND birthday, the twin sweep
+    // retires both in turn — and counting only survivors then reported
+    // "Routed 0/2 fields" for a write that succeeded.
+    const { api } = await boot({
+      profiles: [{
+        id: "jane-1", name: "Jane Doe", type: "person",
+        fields: { dateOfBirth: "1994-07-10", birthday: "1994-07-10" }, tags: [], documents: [],
+      }],
+      documents: [{ id: "doc-1", name: "License", type: "drivers_license", extractedData: {}, linkedProfiles: ["jane-1"], tags: [] }],
+    });
+    const r = await api("POST", "/api/chat/confirm-extraction", {
+      extractionId: "doc-1",
+      targetProfileId: "jane-1",
+      confirmedFields: [{ key: "dateOfBirth", value: "07/11/1994" }],
+    });
+    expect(r.data.success).toBe(true);
+    expect(r.data.failures).toEqual([]);
+    expect(r.data.saved.join(" ")).toMatch(/Saved 1 field to Jane Doe/);
+  });
+});

@@ -2631,10 +2631,19 @@ ${JSON.stringify(ctx, null, 2)}`;
                 const survivor = retiredTwins.get(k);
                 return !(survivor && looselyEqual(afterFields[survivor], incoming[k]));
               });
-              // Count the fields the user will SEE, not the alias spellings
-              // written alongside them — "Saved 2 fields" for one confirmed
-              // date of birth is its own small lie.
-              const savedKeys = confirmedKeys.filter((k) => !unsavedKeys.includes(k) && !retiredTwins.has(k));
+              // Count the fields the user will SEE — one per FIELD, not one per
+              // spelling. "Saved 2 fields" for one confirmed date of birth is
+              // its own small lie; and dropping every retired spelling counted
+              // ZERO when the profile already held both, so a successful write
+              // reported "Routed 0/2 fields".
+              const seenIdentities = new Set<string>();
+              const savedKeys = confirmedKeys.filter((k) => {
+                if (unsavedKeys.includes(k)) return false;
+                const identity = fieldIdentity(k);
+                if (seenIdentities.has(identity)) return false;
+                seenIdentities.add(identity);
+                return true;
+              });
               if (unsavedKeys.length > 0) {
                 failures.push(`fields did not persist to ${profile.name}: ${unsavedKeys.join(", ")}`);
               }

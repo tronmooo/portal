@@ -372,6 +372,9 @@ const VERB: Partial<Record<DateRuleType, [string, string]>> = {
   cancellation: ["Cancels", "Cancelled"],
   end: ["Ends", "Ended"],
   start: ["Starts", "Started"],
+  maintenance: ["Due", "Was due"],
+  payment: ["Due", "Was due"],
+  appointment: ["In", "Was"],
   birthday: ["In", "Was"],
   anniversary: ["In", "Was"],
 };
@@ -483,6 +486,12 @@ export function bareDateOf(value: unknown): string | null {
   const t = String(value ?? "").trim();
   if (!t) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  // A full ISO timestamp IS a day — the day it names. Rejecting it outright
+  // meant a date stored as "2027-01-01T00:00:00Z" produced no rule anywhere,
+  // where the adapter this replaced read it fine. (The WRITE path still leaves
+  // such a value alone: truncating it there would throw away the clock.)
+  const stamp = t.match(/^(\d{4}-\d{2}-\d{2})T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?$/);
+  if (stamp) return stamp[1];
   if (/\d{1,2}:\d{2}/.test(t)) return null;                    // carries a time
   // A RANGE is not a date. "01/01/2026 - 12/31/2026" is a coverage period, and
   // collapsing it to one end destroyed the other — in every storage write path,
@@ -649,7 +658,7 @@ function buildRule(a: ScanContext & {
     rawValue: a.raw,
     profileId: a.profileId,
     ownerIds: uniq(a.ownerIds || []),
-    label: ruleLabel(a.namePrefix ?? a.entityLabel, cls),
+    label: ruleLabel(a.namePrefix ?? a.entityLabel, cls, a.field),
     subtitle: a.entityLabel,
     date: clip(a.iso),
     recurrence: cls.recurrence,
@@ -730,17 +739,35 @@ export function ruleSubtypeLabel(sub: string | undefined): string | undefined {
   return sub ? SUBTYPE_LABEL[sub] : undefined;
 }
 
-function ruleLabel(name: string, cls: FieldClassification): string {
+/** "homeInsuranceExpiration" → "Home Insurance"; "expiration_date" → "". */
+function fieldPhrase(fieldKey: unknown): string {
+  return String(fieldKey ?? "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .split(/\s+/)
+    .filter((w) => w && !/^(date|expiration|expires|expiry|expire|valid|until|thru|through|renewal|renews|renew|due|next|on|of)$/i.test(w))
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function ruleLabel(name: string, cls: FieldClassification, fieldKey?: unknown): string {
   const n = String(name || "").trim() || "Untitled";
   if (cls.ruleType === "birthday") return `${n}'s Birthday`;
   if (cls.ruleType === "anniversary") return `${n} — Anniversary`;
   // A licence expiration typed onto a person reads "Jane — Driver's License
   // Expiration", not the useless "Jane — Expiration". When the source record
   // IS the licence, its own name already says so and the subtype is dropped.
+  //
+  // The FIELD's own words win over the subtype when they say more. A property
+  // carrying `homeInsuranceExpiration` and `floodInsuranceExpiration` infers
+  // the same "insurance" subtype for both, and two identical titles collapsed
+  // to one series downstream — the flood policy vanished from every surface.
+  const phrase = fieldPhrase(fieldKey);
   const sub = SUBTYPE_LABEL[cls.ruleSubtype || ""];
   const already = SUBTYPE_KEYWORD[cls.ruleSubtype || ""];
-  const qualifier = sub && !(already && already.test(n))
-    ? `${sub} ${TYPE_LABEL[cls.ruleType]}`
+  const namer = phrase && phrase.split(/\s+/).length > 1 ? phrase : (sub || phrase);
+  const qualifier = namer && !(already && already.test(n) && namer === sub)
+    ? `${namer} ${TYPE_LABEL[cls.ruleType]}`
     : TYPE_LABEL[cls.ruleType];
   return `${n} — ${qualifier}`;
 }
@@ -1038,7 +1065,7 @@ export function rulesFromSeries(series: readonly CalendarSeries[]): DateRule[] {
   return out;
 }
 
-const RULE_TYPE_FOR_KIND: Partial<Record<OccurrenceKind, DateRuleType>> = {
+export const RULE_TYPE_FOR_KIND: Partial<Record<OccurrenceKind, DateRuleType>> = {
   birthday: "birthday",
   anniversary: "anniversary",
   expiration: "expiration",
@@ -1168,6 +1195,10 @@ export function normalizeEntityDateFields<T extends Record<string, any>>(
       // A bare date is a short token with no prose around it. Anything else —
       // a sentence, a range, a timestamp with a clock — is left exactly as the
       // user wrote it, and the rule engine reads it as-is.
+      // A value carrying a clock keeps it: `bareDateOf` will happily name the
+      // DAY an ISO timestamp falls on, which is what the read path wants and
+      // the opposite of what the write path may do to the stored value.
+      if (/\d{1,2}:\d{2}/.test(trimmed)) continue;
       const bare = bareDateOf(trimmed);
       if (!bare) continue;
       // Only rewrite fields whose NAME says they hold a date. A free-text note
