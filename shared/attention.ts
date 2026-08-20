@@ -217,6 +217,18 @@ export function computeAttention(
     claimed.add(item.sourceKey);
     built.push(item);
   };
+  /**
+   * Mark a key as spoken for without emitting a row.
+   *
+   * Rows are identified per DATE now — one record can carry a passport and a
+   * licence — but the notifications pass at the bottom only knows entity ids
+   * (`${entityType}:${entityId}`). Claiming the row's own key alone left the
+   * record unclaimed, so notification-service's "Expiring soon" alert for the
+   * same licence came back as a second Immediate Attention row.
+   */
+  const alsoClaim = (key: string | null | undefined) => {
+    if (key) claimed.add(key);
+  };
 
   // ── Tasks ──────────────────────────────────────────────────────────────────
   if (cfg.includeTasks) {
@@ -322,6 +334,10 @@ export function computeAttention(
         href: String(doc?.href || "").replace(/^#/, "") || `/documents/${id}`,
         action: { kind: "open", label: "Review" },
       });
+      // …and the RECORD, so the notifications pass does not raise the same
+      // expiration again under the entity's own key.
+      alsoClaim(`document:${id}`);
+      if (doc?.relatedProfileId) alsoClaim(`profile:${doc.relatedProfileId}`);
     }
   }
 
@@ -466,9 +482,11 @@ export function computeAttention(
   // ── Notifications, LAST ────────────────────────────────────────────────────
   // Everything above has already claimed its key, so a notification derived
   // from one of those records is dropped here. What survives is what has no
-  // other representation on this surface: custom/AI-raised items, profile-field
-  // expirations (notification-service scans profile.fields, nothing else does),
-  // and streak milestones.
+  // other representation on this surface: custom/AI-raised items and streak
+  // milestones. (Profile-field expirations used to belong on that list, back
+  // when notification-service was the only thing that scanned profile.fields.
+  // The Date Rule engine scans them now, so those rows claim their record above
+  // and this pass correctly skips them.)
   {
     const dismissed = new Set(input.dismissedNotificationIds || []);
     for (const n of input.notifications || []) {

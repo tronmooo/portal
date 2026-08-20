@@ -677,7 +677,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
     const type = d.documentType || full?.type;
     const fieldLabel = String(d.fieldName || "expiration").replace(/[_-]+/g, " ");
     return (
-      <ExpandCard key={`${d.documentId}-${d.fieldName}`} urgentBorder={urgent} testId={`doc-card-${d.documentId}`}
+      <ExpandCard key={rowKey(d)} urgentBorder={urgent} testId={`doc-card-${rowKey(d)}`}
         summary={
           <div>
             <div className="flex items-baseline gap-2">
@@ -705,9 +705,9 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
           {renewId === rowKey(d) ? (
             <div className="flex items-center gap-1.5 pt-1">
               <input type="date" value={renewDate} onChange={e => setRenewDate(e.target.value)}
-                className="h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`doc-renew-date-${d.documentId}`} />
+                className="h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`doc-renew-date-${rowKey(d)}`} />
               <ActionBtn label="Save new date" icon={Check} disabled={renew.isPending || !renewDate}
-                onClick={() => renew.mutate({ row: d, newDate: renewDate })} testId={`doc-renew-save-${d.documentId}`} />
+                onClick={() => renew.mutate({ row: d, newDate: renewDate })} testId={`doc-renew-save-${rowKey(d)}`} />
               <ActionBtn label="Cancel" onClick={() => setRenewId(null)} />
             </div>
           ) : (
@@ -716,15 +716,15 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
                   carried by a PROFILE (a passport typed onto a person), and
                   `/documents/<profileId>` is not a page. The row carries the
                   link to its own record. */}
-              <ActionBtn label="View" icon={FileText} onClick={() => { onClose(); navigate(recordHref(d)); }} testId={`doc-view-${d.documentId}`} />
-              <ActionBtn label="Edit" icon={Pencil} onClick={() => { onClose(); navigate(recordHref(d)); }} testId={`doc-edit-${d.documentId}`} />
+              <ActionBtn label="View" icon={FileText} onClick={() => { onClose(); navigate(recordHref(d)); }} testId={`doc-view-${rowKey(d)}`} />
+              <ActionBtn label="Edit" icon={Pencil} onClick={() => { onClose(); navigate(recordHref(d)); }} testId={`doc-edit-${rowKey(d)}`} />
               {/* "Renewed" PATCHes the DOCUMENT's extractedData, so it is only
                   offered for a row a document actually owns. A profile-carried
                   expiration is edited on the profile, which Edit opens. */}
               {d.sourceEntityType !== "profile" && (
-                <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(rowKey(d)); setRenewDate(""); }} testId={`doc-renew-${d.documentId}`} />
+                <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(rowKey(d)); setRenewDate(""); }} testId={`doc-renew-${rowKey(d)}`} />
               )}
-              <ActionBtn label="Dismiss 30d" icon={BellOff} onClick={() => dismiss(rowKey(d))} testId={`doc-dismiss-${d.documentId}`} />
+              <ActionBtn label="Dismiss 30d" icon={BellOff} onClick={() => dismiss(rowKey(d))} testId={`doc-dismiss-${rowKey(d)}`} />
             </div>
           )}
         </div>
