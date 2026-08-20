@@ -33,6 +33,40 @@ function activeProfileHeader(): Record<string, string> {
   }
 }
 
+/* ─── Read-your-writes token ──────────────────────────────────────────────
+   The server stamps its per-user response-cache keys with a data VERSION, and
+   each serverless instance memoizes that version for ~2s. So a refetch fired
+   right after a write could land on an instance whose memo was still pre-write,
+   be served the pre-write cached response, and have React Query store it as
+   FRESH for a full staleTime — the "AI said it saved, the page doesn't show it
+   until I refresh" bug.
+
+   A mutating response now hands back the post-write version; we send it on
+   every subsequent request so any instance computes the post-write key
+   regardless of its own memo. Monotonic (a stale response can never walk it
+   backwards) and deliberately in-memory only: persisting it would let a version
+   outlive its session and pin the cache key forever. */
+let lastKnownDataVersion = 0;
+
+/** Record a data version returned by a mutating response. Highest wins. */
+export function noteDataVersion(version: unknown): void {
+  const v = Number(version);
+  if (Number.isFinite(v) && v > lastKnownDataVersion) lastKnownDataVersion = v;
+}
+
+export function getKnownDataVersion(): number {
+  return lastKnownDataVersion;
+}
+
+/** Reset on sign-out / account switch — one user's version must not key another's reads. */
+export function clearDataVersion(): void {
+  lastKnownDataVersion = 0;
+}
+
+function dataVersionHeader(): Record<string, string> {
+  return lastKnownDataVersion > 0 ? { "X-Data-Version": String(lastKnownDataVersion) } : {};
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -81,7 +115,7 @@ export async function apiRequest(
     const isDocFileFetch = /\/api\/documents\/[^/]+\/file/.test(url);
     const headers: Record<string, string> = isDocFileFetch
       ? {}
-      : { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader() };
+      : { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader(), ...dataVersionHeader() };
     if (data) headers["Content-Type"] = "application/json";
     const res = await fetch(`${API_BASE}${url}`, {
       method,
@@ -90,6 +124,24 @@ export async function apiRequest(
       signal: controller.signal,
     });
     await throwIfResNotOk(res);
+    // Every write in the app goes through this one function, so this is the
+    // single place that can make ALL of them behave like the chat path:
+    //   · learn the post-write data version, so the refetch this write triggers
+    //     cannot be served pre-write data by another server instance;
+    //   · apply the written row to every cached list that shows it, so the
+    //     change appears everywhere immediately instead of after a round trip.
+    // Both are best-effort by construction: a response we do not recognise is
+    // left completely alone.
+    if (method.toUpperCase() !== "GET") {
+      noteDataVersion(res.headers.get("X-Data-Version"));
+      try {
+        const { applyRestWrite } = await import("./write-sync");
+        // Read the body from a CLONE: callers still need the original stream.
+        let body: unknown = null;
+        try { body = await res.clone().json(); } catch { /* not JSON — deletes often aren't */ }
+        applyRestWrite(method, url, body);
+      } catch { /* cache sync must never fail a write */ }
+    }
     return res;
   } catch (err: any) {
     if (err.name === 'AbortError') throw new Error('Request timed out. Please try again.');
@@ -120,7 +172,7 @@ export const getQueryFn: <T>(options: {
     let res: Response;
     try {
       res = await window.fetch(`${API_BASE}${url}`, {
-        headers: { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader() },
+        headers: { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader(), ...dataVersionHeader() },
         signal: ctrl.signal,
       });
     } finally {
@@ -141,7 +193,17 @@ export const getQueryFn: <T>(options: {
     }
 
     await throwIfResNotOk(res);
-    return await res.json();
+    noteDataVersion(res.headers.get("X-Data-Version"));
+    const payload = await res.json();
+    // A response that predates a delete — already in flight when the row was
+    // removed, or served from a server cache that had not been busted yet —
+    // would otherwise put the deleted row back on screen. See write-sync.
+    try {
+      const { filterTombstoned } = await import("./write-sync");
+      return filterTombstoned(payload);
+    } catch {
+      return payload;
+    }
   };
 
 /**
@@ -485,6 +547,8 @@ export function clearAllClientCaches(): void {
   try {
     queryClient.clear();
   } catch { /* ignore */ }
+  clearDataVersion();
+  void import("./write-sync").then((m) => m.clearAllTombstones()).catch(() => { /* ignore */ });
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch { /* private mode — ignore */ }
@@ -507,6 +571,7 @@ export function clearAllClientCaches(): void {
 // caller can immediately seed the new user's filter without a race.
 export function resetQueryCacheForUserSwitch(): void {
   try { queryClient.clear(); } catch { /* ignore */ }
+  clearDataVersion();
   try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
 }
 

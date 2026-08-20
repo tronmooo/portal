@@ -38,6 +38,7 @@ export type IntentEntity =
   | "profile"
   | "document"
   | "journal"
+  | "note"
   | "memory"
   | "artifact"
   | "unknown";
@@ -215,6 +216,11 @@ const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number }> 
   { entity: "income", re: /\bincomes?\b|\bpaychecks?\b|\bgot\s+paid\b/, weight: 0.85 },
   { entity: "document", re: /\bdocuments?\b|\bfiles?\b|\breceipts?\b/, weight: 0.85 },
   { entity: "journal", re: /\bjournals?\b|\bdiary\b/, weight: 0.9 },
+  // NOTES ARE THEIR OWN ENTITY (user report 2026-08-20). "jane doe note: …"
+  // used to reach no note rule at all, so the router fell through to journal
+  // and the chat answered "Journal entry saved for Jane Doe" to a message that
+  // said the word NOTE. See shared/content-routing for the full semantics.
+  { entity: "note", re: /\bnotes?\b|\bjot\s+(?:this|that|it)?\s*down\b/, weight: 0.92 },
   { entity: "memory", re: /\bremember\s+that\b|\bmemor(?:y|ies)\b/, weight: 0.85 },
   { entity: "artifact", re: /\bartifacts?\b|\bchecklists?\b/, weight: 0.85 },
   { entity: "profile", re: /\bprofiles?\b/, weight: 0.9 },
@@ -395,9 +401,26 @@ export function splitIntentClauses(message: string): string[] {
     String.raw`(?:[.;!?\n]+|,\s*(?:and\s+|then\s+|also\s+)?(?=(?:${WRITE_VERB})\b)|\s+(?:and|then|also|plus)\s+(?=(?:${WRITE_VERB})\b))`,
     "i",
   );
-  return raw
+  // A PERIOD IS NOT ALWAYS A SENTENCE END.
+  //
+  // "Robert's email is robert@example.com" split into "…robert@example" and
+  // "com", so the email pattern never matched and a plain profile field was
+  // classified as something else entirely. The same bite applies to "$2,400.50"
+  // and to "Dr. Kim". Mask the periods that belong to a token, split, then put
+  // them back — the splitter's own rules are unchanged, it just stops seeing
+  // punctuation that was never a boundary.
+  const DOT = "\u0000DOT\u0000";
+  const masked = raw
+    // emails and domains: any dot flanked by word characters with no space
+    .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, (m) => m.replace(/\./g, DOT))
+    // decimals: 2,400.50 / 3.5
+    .replace(/\d\.\d/g, (m) => m.replace(".", DOT))
+    // common titles and abbreviations that end in a period
+    .replace(/\b(?:mr|mrs|ms|dr|prof|sr|jr|st|ave|apt|no|vs|etc|approx|dept)\./gi, (m) => m.replace(".", DOT));
+
+  return masked
     .split(connective)
-    .map((s) => s.trim())
+    .map((s) => s.split(DOT).join(".").trim())
     .filter((s) => s.length > 0);
 }
 

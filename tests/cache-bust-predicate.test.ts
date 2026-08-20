@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import fs from "fs";
+import path from "path";
 import { shouldBustCaches } from "../server/routes";
 
 // Fix (2026-07-17): read-only POST generators/analyzers must NOT bust the
@@ -50,5 +52,28 @@ describe("shouldBustCaches — idempotent reads never bust", () => {
     expect(shouldBustCaches("GET", "/api/dashboard-enhanced")).toBe(false);
     expect(shouldBustCaches("HEAD", "/api/profiles")).toBe(false);
     expect(shouldBustCaches("OPTIONS", "/api/expenses")).toBe(false);
+  });
+});
+
+// The AI change manifest names domains the cache bus must be able to expand.
+// Two were added with it (artifacts, memories) because chat can create both and
+// neither had a domain — those writes had to fall back to the nuclear refresh.
+describe("cache bus domain coverage", () => {
+  const src = fs.readFileSync(
+    path.resolve(__dirname, "../client/src/lib/cache-bus.ts"),
+    "utf8",
+  );
+
+  it("knows how to expand the artifacts and memories domains", () => {
+    expect(src).toMatch(/^\s{2}artifacts:\s*\[/m);
+    expect(src).toMatch(/^\s{2}memories:\s*\[/m);
+    expect(src).toContain('["/api/artifacts"]');
+    expect(src).toContain('["/api/memories"]');
+  });
+
+  it("takes its Domain union from the shared vocabulary the server also uses", () => {
+    // If these drift apart the server can name a domain the client silently
+    // ignores — an invalidation that refreshes nothing.
+    expect(src).toContain('from "@shared/entity-domains"');
   });
 });

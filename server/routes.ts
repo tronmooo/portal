@@ -31,7 +31,7 @@ import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
 import { seriesFromAll } from "@shared/calendar-adapters";
-import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields } from "@shared/profile-field-identity";
+import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -82,6 +82,10 @@ import { storage } from "./storage";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildNotifications } from "./notification-service";
+import {
+  createNote, updateNote, deleteNote, listNotes,
+  upsertJournalEntry, syncDateRulesForEntity,
+} from "./content-service";
 
 // ────────────────────────────────────────────────────────────────────
 // syncLiabilityObligation
@@ -455,6 +459,58 @@ async function currentDataVersion(uid: string): Promise<number> {
   versionMemo.set(uid, { v: Number(v) || 0, at: Date.now() });
   return Number(v) || 0;
 }
+/**
+ * Bump the user's data version and WAIT for it.
+ *
+ * The fire-and-forget bump (used by the write middleware, where a pre-handler
+ * bump already covers the request) is not enough for AI chat: the chat reply is
+ * the client's cue to refetch, so if the bump is still in flight when the reply
+ * lands, the refetch computes the PRE-write cache key and is served pre-write
+ * data — which React Query then stores as fresh for a full staleTime. That is
+ * the "AI said it saved it, the page doesn't show it until I refresh" bug.
+ * Awaiting this before sending the reply makes the response a read-your-writes
+ * barrier.
+ *
+ * Returns the new version so it can be handed to the client as a token (see
+ * DATA_VERSION_HEADER below); undefined if the storage can't report one, in
+ * which case callers fall back to today's behavior.
+ */
+export async function bumpDataVersionNow(uid: string): Promise<number | undefined> {
+  versionMemo.delete(uid);
+  try {
+    const raw = await (storage as any).bumpDataVersion?.();
+    const v = Number(raw);
+    if (Number.isFinite(v) && v > 0) {
+      versionMemo.set(uid, { v, at: Date.now() });
+      return v;
+    }
+  } catch { /* the next GET resolves the version from the DB */ }
+  return undefined;
+}
+
+/**
+ * Read-your-writes token. A client that has just been told "saved" sends the
+ * data version it was given on every subsequent GET; this instance then uses
+ * max(its own memo, the client's token) to build the cache key.
+ *
+ * Awaiting the bump (above) alone does NOT close the window: the response cache
+ * is per-instance and each instance memoizes the version for VERSION_MEMO_MS,
+ * so a GET landing on a DIFFERENT warm instance within ~2s still computes the
+ * pre-write key. The token makes that instance compute the post-write key
+ * regardless of what its own memo says.
+ */
+export const DATA_VERSION_HEADER = "x-data-version";
+// A client token can only ever move the key FORWARD, and only within a sane
+// distance of the version we know about — so a buggy or hostile value costs
+// that one user some cache misses and nothing else. Keys are per-user, so no
+// other account can be affected.
+const MAX_VERSION_LOOKAHEAD = 1000;
+export function resolveDataVersion(memoVersion: number, headerValue: unknown): number {
+  const raw = Number(Array.isArray(headerValue) ? headerValue[0] : headerValue);
+  if (!Number.isFinite(raw) || raw <= memoVersion) return memoVersion;
+  return Math.min(Math.floor(raw), memoVersion + MAX_VERSION_LOOKAHEAD);
+}
+
 function cacheUserKey(req: { userId?: string }): string {
   if (!req.userId) return `nouser-${Math.random().toString(36).slice(2)}`;
   const v = (req as any).__dataVersion;
@@ -682,6 +738,90 @@ export function shouldBustCaches(method: string, path: string): boolean {
 // the GET could return stale cache before 'finish' cleared it. Now we ALSO bust
 // caches synchronously BEFORE handing control to the route for chat/upload paths
 // that mutate data via internal AI tool calls (not just direct REST writes).
+// ── Read-your-writes barrier for the AI-adjacent write routes ──────────────
+// Like /api/chat (which does this inline), these endpoints write via internal
+// AI tool calls and their RESPONSE is what tells the client to refetch. The
+// generic write middleware bumps the data version pre-handler (before the
+// writes land) and again on 'finish' (after the response is on the wire), so
+// neither bump is ordered against the client's refetch — it could be served a
+// pre-write cache entry and store it as fresh for a full staleTime.
+//
+// This wraps res.json so a successful response is not sent until the version
+// bump has completed, and carries the new version back as the client's
+// read-your-writes token.
+const AI_WRITE_BARRIER_PATHS = new Set([
+  "/api/upload",
+  "/api/upload/batch",
+  "/api/chat/confirm-extraction",
+  "/api/smart-fill/render",
+]);
+
+/**
+ * Read-your-writes barrier for EVERY write, not just the AI ones.
+ *
+ * The response to a write is what tells the client to refetch. If the data
+ * version has not been bumped by the time that response is on the wire, the
+ * refetch computes the PRE-write cache key, and any instance holding an entry
+ * under that key answers with pre-write data — the deleted row comes back, the
+ * new row is missing, and React Query stores that answer as fresh for a full
+ * staleTime. Chat has been ordered correctly for a while; ordinary writes made
+ * from the interface — every add, edit and delete — were not, which is why they
+ * still lagged and why a delete took time to propagate across screens.
+ *
+ * The bump is not extra work: the write middleware already issued one on
+ * 'finish'. This moves it before the response and awaits it, and hands the new
+ * version back as `X-Data-Version` so other instances (whose own memo may still
+ * be pre-write for up to VERSION_MEMO_MS) compute the post-write key too.
+ *
+ * A header rather than a body field, deliberately: it works for every route
+ * regardless of what shape its response has, including deletes that return no
+ * JSON at all.
+ */
+function writeBarrierMiddleware(req: any, res: any, next: any) {
+  const method = String(req.method || "").toUpperCase();
+  const isWrite = method !== "GET" && method !== "HEAD" && method !== "OPTIONS";
+  const isAiWrite = method === "POST" && AI_WRITE_BARRIER_PATHS.has(req.path);
+  if (!isWrite && !isAiWrite) return next();
+  // Read-only POST generators must not pay for a barrier they do not need.
+  if (isReadOnlyPost(req)) return next();
+  const uid = (req as AuthenticatedRequest).userId;
+  if (!uid) return next();
+  // /api/chat runs the barrier inline (it must land before the SSE `final`
+  // frame, which never goes through res.json).
+  if (req.path === "/api/chat") return next();
+
+  let barrierDone = false;
+  const settle = (send: () => void, body: any) => {
+    if (barrierDone || res.statusCode >= 400) { send(); return; }
+    barrierDone = true;
+    bustUserCaches(uid);
+    Promise.resolve(bumpDataVersionNow(uid))
+      .then((v) => {
+        if (v === undefined) return;
+        try { res.setHeader(DATA_VERSION_HEADER, String(v)); } catch { /* headers already sent */ }
+        // The AI write routes also carry it in the body, which their clients
+        // already read; keep that contract.
+        if (isAiWrite && body && typeof body === "object" && !Array.isArray(body)) {
+          try { (body as any).dataVersion = v; } catch { /* frozen body */ }
+        }
+      })
+      .catch(() => { /* fall through: the client keeps its old behavior */ })
+      .finally(send);
+  };
+
+  const sendJson = res.json.bind(res);
+  res.json = (body: any) => {
+    settle(() => sendJson(body), body);
+    return res;
+  };
+  const sendStatus = res.sendStatus.bind(res);
+  res.sendStatus = (code: number) => {
+    settle(() => sendStatus(code), null);
+    return res;
+  };
+  next();
+}
+
 function cacheBustMiddleware(req: any, res: any, next: any) {
   // Read-only POST generators/analyzers never write data — skip the bust so an
   // AI summary or receipt scan can't cold-start every other user-scoped cache.
@@ -892,6 +1032,7 @@ export async function registerRoutes(
 
   // Clear server cache on any mutation so changes are reflected immediately
   app.use(cacheBustMiddleware);
+  app.use(writeBarrierMiddleware);
 
   // PERF observability (2026-07-08): log any API request that takes >1s so
   // slow endpoints are visible in production logs (Vercel function logs)
@@ -920,7 +1061,15 @@ export async function registerRoutes(
       res.setHeader("Access-Control-Allow-Origin", origin);
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id");
+    // X-Timezone / X-Active-Profile / X-Data-Version are sent by the web client
+    // on every request (see client/src/lib/queryClient.ts); the Capacitor shell
+    // talks to this API cross-origin, so they must be allowed through preflight
+    // or those requests fail before the handler ever runs.
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-User-Id, X-Timezone, X-Active-Profile-Ids, X-Data-Version");
+    // The client READS X-Data-Version off write responses to build its
+    // read-your-writes token; without this it is invisible to cross-origin
+    // callers (the Capacitor shell) and those writes silently lose the barrier.
+    res.setHeader("Access-Control-Expose-Headers", "X-Data-Version, X-Total-Count");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
@@ -1054,8 +1203,13 @@ export async function registerRoutes(
     if (req.method !== "GET") return next();
     const uid = (req as AuthenticatedRequest).userId;
     if (!uid) return next();
+    // max(this instance's memo, the client's read-your-writes token) — see
+    // resolveDataVersion. A client that was just told "saved" carries the
+    // post-write version, so it can never be served this instance's pre-write
+    // cache entry even while the 2s memo is still stale.
+    const token = req.headers[DATA_VERSION_HEADER];
     currentDataVersion(uid)
-      .then((v) => { (req as any).__dataVersion = v; next(); })
+      .then((v) => { (req as any).__dataVersion = resolveDataVersion(v, token); next(); })
       .catch(() => next());
   });
 
@@ -1080,12 +1234,10 @@ export async function registerRoutes(
       // cacheBustMiddleware deliberately skips). The version bump below is B's
       // own responsibility (cacheBustMiddleware never bumps the version).
       if (uid !== "anon") {
-        const bumpVersion = () => {
-          versionMemo.delete(uid);
-          Promise.resolve((storage as any).bumpDataVersion?.())
-            .then((v: number) => { if (v) versionMemo.set(uid, { v, at: Date.now() }); })
-            .catch(() => { /* next GET resolves the version from the DB */ });
-        };
+        // Fire-and-forget here: a pre-handler bump already covers this
+        // request, so nothing is waiting on the result. AI chat needs the
+        // awaited form instead — see bumpDataVersionNow's doc comment.
+        const bumpVersion = () => { void bumpDataVersionNow(uid); };
         // PERF (2026-08-17): a chat turn only invalidates when it actually
         // MUTATED something. The unconditional bump made every "open my
         // license" globally cold-start all version-stamped caches (bootstrap/
@@ -1096,13 +1248,22 @@ export async function registerRoutes(
         // (the version scheme guarantees a mid-handler GET that caches
         // pre-write data becomes unaddressable once the finish bump lands).
         if (req.path === "/chat") {
-          res.once("finish", () => { if ((res as any).locals?.chatMutated) bumpVersion(); });
+          res.once("finish", () => {
+            // The chat handler awaits its own bump before responding (see
+            // `chatVersionBumped`), which is what lets the client invalidate
+            // exactly once. This hook is the fallback for a turn that mutated
+            // but bailed out before reaching that code.
+            if ((res as any).locals?.chatMutated && !(res as any).locals?.chatVersionBumped) bumpVersion();
+          });
         } else {
           // Pre-handler bump covers fast writes; the finish bump covers long
           // writes whose DB writes land DURING the handler, so a GET racing
           // mid-handler can't leave stale version-stamped data behind.
+          // Pre-handler bump covers fast writes. The post-write bump that used
+          // to run on 'finish' now runs BEFORE the response, awaited, in
+          // writeBarrierMiddleware — a bump after the response is on the wire
+          // is too late to help the refetch that response triggers.
           bumpVersion();
-          res.once("finish", bumpVersion);
         }
       }
     }
@@ -1320,13 +1481,44 @@ export async function registerRoutes(
       // permanently cold for anyone using chat. The cacheBust and
       // version-bump middlewares read this flag on 'finish'.
       const READ_ONLY_ACTION_TYPES = new Set(["retrieve", "navigate", "set_dashboard_scope"]);
-      const turnMutated = actions.some(a => a?.type && !READ_ONLY_ACTION_TYPES.has(String(a.type)));
+      // The engine's own change manifest is the authoritative signal — it is
+      // built from what the TOOLS actually wrote. The action-type check stays
+      // as a union term: previously it was the ONLY term, so a write whose tool
+      // had no action-type mapping busted nothing at all, server-side, and the
+      // stale response cache outlived the write.
+      const mutations: any[] = Array.isArray((result as any)?.mutations) ? (result as any).mutations : [];
+      const turnMutated = mutations.length > 0
+        || actions.some(a => a?.type && !READ_ONLY_ACTION_TYPES.has(String(a.type)));
       res.locals.chatMutated = turnMutated;
       // Bug fix: chat may have created/updated profiles, trackers, expenses etc. via
       // internal AI tool calls. Bust the response cache BEFORE sending the response so
       // the client's onSuccess invalidate-and-refetch sees fresh DB state, not stale
       // cache — scoped to the mutating user, and only when something mutated.
-      if (turnMutated) bustUserCaches(userId);
+      let tBump = 0;
+      if (turnMutated) {
+        bustUserCaches(userId);
+        // Read-your-writes barrier: the reply is what tells the client to
+        // refetch, so the version bump must be DONE before the reply is on the
+        // wire. Handing the new version back lets the client stamp its refetches
+        // with it (DATA_VERSION_HEADER), which closes the same window on other
+        // warm instances too. Best-effort: an unavailable counter leaves
+        // dataVersion undefined and the client behaves as it did before.
+        const tBumpStart = Date.now();
+        const v = await bumpDataVersionNow(userId);
+        tBump = Date.now() - tBumpStart;
+        if (v !== undefined) (result as any).dataVersion = v;
+        // The finish-hook in the write middleware bumps again unless it
+        // is told the barrier above already did it — see chatVersionBumped.
+        res.locals.chatVersionBumped = true;
+      }
+      // Stage timings for the whole pipeline (engine + cache barrier), so the
+      // remaining latency can be measured per stage instead of guessed at.
+      try {
+        (result as any).meta = {
+          ...((result as any).meta || {}),
+          timings: { ...(((result as any).meta || {}).timings || {}), engineMs: tEngine, bumpMs: tBump },
+        };
+      } catch { /* telemetry must never break a reply */ }
       // Hoist a dashboard-scope directive (from set_dashboard_scope) to the top
       // level so the chat client can apply the profile filter without digging
       // through the results array. The engine can't touch the browser filter
@@ -1458,7 +1650,7 @@ export async function registerRoutes(
       }
 
       // Production latency accounting — one line per turn in the function logs.
-      console.log(`[chat-timing] engine=${tEngine}ms classifierWait=${tClassifierWait}ms capture=${tCapture}ms total=${Date.now() - tTurnStart}ms cold=${coldTurn} routed=${routed}`);
+      console.log(`[chat-timing] engine=${tEngine}ms classifierWait=${tClassifierWait}ms capture=${tCapture}ms bump=${tBump}ms mutations=${mutations.length} total=${Date.now() - tTurnStart}ms cold=${coldTurn} routed=${routed}`);
 
       if (sse) {
         // Streaming finalization: the `final` frame carries the EXACT object
@@ -2546,59 +2738,23 @@ ${JSON.stringify(ctx, null, 2)}`;
               // Fold alias spellings to the canonical key (currentMileage →
               // mileage, value → currentValue…) so a receipt's key naming
               // can't mint a second copy of a field the profile already has.
-              const incoming = canonicalizeProfileFields(profileFields, existingFields).fields;
+              const canonical = canonicalizeProfileFields(profileFields, existingFields).fields;
 
-              // The user confirmed each of these values, so a confirmed value
-              // REPLACES every other spelling of the same field — top-level
-              // twins and copies inside nested groups alike. Without this
-              // sweep the profile ends up showing "Mileage 80000" AND
-              // "Current Mileage 69063" as two separate rows. A twin at the
-              // top level is set to null (the storage merge layer treats null
-              // as a deletion intent); a modified nested group is rewritten
-              // wholesale. Replaced odometer readings are kept in
-              // _mileageHistory rather than lost.
-              const merged: Record<string, any> = { ...existingFields };
-              const replacedMileage: Array<{ from: string; value: any }> = [];
-              // Keys this sweep deliberately retires because a SIBLING spelling
-              // of the same field is taking the value. They are not failures.
-              const retiredTwins = new Map<string, string>(); // retired key → survivor
-              for (const [key, value] of Object.entries(incoming)) {
-                if (key.startsWith("_")) { merged[key] = value; continue; }
-                const identity = fieldIdentity(key);
-                for (const existingKey of Object.keys(merged)) {
-                  if (existingKey === key || existingKey.startsWith("_")) continue;
-                  if ((PROFILE_FIELD_GROUPS as readonly string[]).includes(existingKey)) continue;
-                  if (fieldIdentity(existingKey) !== identity) continue;
-                  if (identity === "mileage" && merged[existingKey] != null && !looselyEqual(merged[existingKey], value)) {
-                    replacedMileage.push({ from: existingKey, value: merged[existingKey] });
-                  }
-                  merged[existingKey] = null;
-                  retiredTwins.set(existingKey, key);
-                }
-                for (const group of PROFILE_FIELD_GROUPS) {
-                  const nested = merged[group];
-                  if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
-                  const twins = Object.keys(nested).filter((nk) => fieldIdentity(nk) === identity);
-                  if (twins.length === 0) continue;
-                  const cleaned: Record<string, any> = { ...nested };
-                  for (const nk of twins) {
-                    if (identity === "mileage" && cleaned[nk] != null && !looselyEqual(cleaned[nk], value)) {
-                      replacedMileage.push({ from: `${group}.${nk}`, value: cleaned[nk] });
-                    }
-                    delete cleaned[nk];
-                  }
-                  merged[group] = cleaned;
-                }
-                if (identity === "mileage" && merged[key] != null && !looselyEqual(merged[key], value)) {
-                  replacedMileage.push({ from: key, value: merged[key] });
-                }
-                merged[key] = value;
-              }
-              if (replacedMileage.length > 0) {
+              // Merge onto the profile. The confirmed value replaces every
+              // other spelling of the same field, EXCEPT a spelling this same
+              // payload is also writing — a license card sends "address" and
+              // "streetAddress" (and "State" and "issuing State") for one
+              // field each, and the sweep used to null the first of the pair
+              // right after writing it. Replaced odometer readings are kept in
+              // _mileageHistory rather than lost. See mergeFieldWrite.
+              const mergeResult = mergeFieldWrite(existingFields, canonical);
+              const merged: Record<string, any> = mergeResult.fields;
+              const incoming = mergeResult.written;
+              if (mergeResult.replacedMileage.length > 0) {
                 const history = Array.isArray(existingFields._mileageHistory) ? existingFields._mileageHistory : [];
                 merged._mileageHistory = [
                   ...history,
-                  ...replacedMileage.map((m) => ({ value: m.value, from: m.from, replacedAt: new Date().toISOString() })),
+                  ...mergeResult.replacedMileage.map((m) => ({ value: m.value, from: m.from, replacedAt: new Date().toISOString() })),
                 ];
               }
 
@@ -2624,27 +2780,15 @@ ${JSON.stringify(ctx, null, 2)}`;
               const after = await storage.getProfile(resolvedProfileId);
               const afterFields: Record<string, any> = (after as any)?.fields || {};
               const confirmedKeys = Object.keys(incoming).filter((k) => !k.startsWith("_"));
-              // A key the sweep above retired in favour of a sibling spelling
-              // did exactly what it was meant to do.
-              //
-              // Reported 2026-08-20: extracting a date of birth answered
-              // "Confirmed: … — but 1 step(s) failed: fields did not persist to
-              // Jane Doe: dateOfBirth", with success:false. Nothing had gone
-              // wrong. The routing writes BOTH `dateOfBirth` and `birthday` for
-              // one confirmed DOB; the twin sweep then nulls one so the profile
-              // does not show the same date twice; and this check, reading the
-              // pre-sweep key list, called the intended null a lost write.
-              // Verify the VALUE landed under whichever spelling survived.
-              const unsavedKeys = confirmedKeys.filter((k) => {
-                if (looselyEqual(afterFields[k], incoming[k])) return false;
-                const survivor = retiredTwins.get(k);
-                return !(survivor && looselyEqual(afterFields[survivor], incoming[k]));
-              });
+              // Verify on IDENTITY, not on the literal key: a value written as
+              // `streetAddress` has landed when the profile holds it under
+              // `address` (or inside `personal.address`). The old exact-key
+              // check reported a perfectly good save as
+              // "fields did not persist to <name>: address, issuing State".
+              const unsavedKeys = confirmedKeys.filter((k) => !fieldValuePersisted(afterFields, k, incoming[k]));
               // Count the fields the user will SEE — one per FIELD, not one per
-              // spelling. "Saved 2 fields" for one confirmed date of birth is
-              // its own small lie; and dropping every retired spelling counted
-              // ZERO when the profile already held both, so a successful write
-              // reported "Routed 0/2 fields".
+              // spelling. A licence sends "address" and "streetAddress" for one
+              // field, and "Saved 2 fields" for one address is its own small lie.
               const seenIdentities = new Set<string>();
               const savedKeys = confirmedKeys.filter((k) => {
                 if (unsavedKeys.includes(k)) return false;
@@ -2744,6 +2888,15 @@ ${JSON.stringify(ctx, null, 2)}`;
             // "Jun 4, 2029" normalize correctly instead of being dropped.
             const dateStr = normalizeDateString(event.date);
             if (!dateStr) continue;
+            // (The `canonicalDateCoverage` gate that used to sit here has been
+            // folded into the `covered` test above. Both answered "would the
+            // record already put this date on the calendar?", and running two
+            // of them meant the weaker one could veto a date the stronger one
+            // had deliberately allowed: it asked only whether a profile or
+            // document EXISTS, where the check above asks whether the field
+            // actually persisted and whether a rule can be derived from the
+            // value that landed. A date ticked for the calendar alone was
+            // dropped by the second gate and reported as saved.)
             await storage.createEvent({
               title: event.title || `📅 ${event.field}`,
               date: dateStr,
@@ -5146,6 +5299,71 @@ Rules:
     }
     res.json(task);
   }));
+  // ---- Notes ----
+  //
+  // MANUAL CREATION USES THE SAME SERVICE AS AI CHAT. Both doors call
+  // server/content-service, so dedup, profile linking and the "notes own no
+  // Date Rule" rule behave identically whether a note came from the composer,
+  // from chat, or from a future import.
+  app.get("/api/notes", asyncHandler(async (req, res) => {
+    const profileId = typeof req.query.profileId === "string" ? req.query.profileId : undefined;
+    const query = typeof req.query.q === "string" ? req.query.q : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : undefined;
+    res.json(await listNotes(storage, { profileId, query, limit }));
+  }));
+  app.post("/api/notes", asyncHandler(async (req, res) => {
+    if (!req.body?.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
+      return res.status(400).json({ error: "Note content is required" });
+    }
+    const content = sanitize(req.body.content);
+    const title = req.body.title ? sanitize(String(req.body.title)) : undefined;
+    // Honour the active-profile scope header the same way every other create
+    // does, so a note made while a profile is selected belongs to that profile.
+    const scoped: Record<string, any> = {};
+    applyActiveProfileScope(req, scoped);
+    const profileId = req.body.profileId
+      || (Array.isArray(scoped.linkedProfiles) ? scoped.linkedProfiles[0] : undefined)
+      || null;
+    const result = await createNote(storage, {
+      content, title, profileId,
+      tags: Array.isArray(req.body.tags) ? req.body.tags.map(String) : [],
+      source: "manual",
+    });
+    const uid_n1 = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`artifacts:${uid_n1}`); bustCache(`stats:${uid_n1}`); bustCache(`enhanced:`);
+    res.status(result.deduped ? 200 : 201).json({ ...result.note, deduped: result.deduped });
+  }));
+  app.patch("/api/notes/:id", asyncHandler(async (req, res) => {
+    const changes: Record<string, any> = {};
+    if (typeof req.body?.title === "string") changes.title = sanitize(req.body.title);
+    if (typeof req.body?.content === "string") changes.content = sanitize(req.body.content);
+    if (typeof req.body?.append === "string") changes.append = sanitize(req.body.append);
+    if (Array.isArray(req.body?.tags)) changes.tags = req.body.tags.map(String);
+    const updated = await updateNote(storage, req.params.id, changes);
+    if (!updated) return res.status(404).json({ error: "Note not found" });
+    const uid_n2 = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`artifacts:${uid_n2}`); bustCache(`stats:${uid_n2}`); bustCache(`enhanced:`);
+    res.json(updated);
+  }));
+  app.delete("/api/notes/:id", asyncHandler(async (req, res) => {
+    const ok = await deleteNote(storage, req.params.id);
+    if (!ok) return res.status(404).json({ error: "Note not found" });
+    const uid_n3 = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`artifacts:${uid_n3}`); bustCache(`stats:${uid_n3}`); bustCache(`enhanced:`);
+    // Notes own no Date Rule, so nothing leaves the calendar with them.
+    res.json({ success: true, dateRuleImpact: "none" });
+  }));
+
+  // ---- Date Rules (derived) ----
+  //
+  // Read-only by design: a Date Rule is DERIVED from its canonical record
+  // (shared/temporal-rules), so there is nothing here to POST. This endpoint
+  // answers "what dates does this record put on my calendar, right now".
+  app.get("/api/date-rules/:system/:id", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    res.json(await syncDateRulesForEntity(storage, uid, req.params.system, req.params.id));
+  }));
+
   app.post("/api/tasks", asyncHandler(async (req, res) => {
     if (!req.body.title || typeof req.body.title !== "string" || !req.body.title.trim()) {
       return res.status(400).json({ error: "Task title required" });
@@ -5159,7 +5377,15 @@ Rules:
     const newTask = await storage.createTask(parsed.data);
     const uid_t1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t1}`); bustCache(`notifications:${uid_t1}`);
-    res.status(201).json(taskSanitized ? { ...newTask, warning: SANITIZE_NOTICE } : newTask);
+    // TEMPORAL LAYER — the same step the chat path runs. A manually-created
+    // task with a due date or a recurrence must reach the Calendar, Upcoming
+    // and Recurring & Important Dates exactly as an AI-created one does.
+    const rules_t1 = await syncDateRulesForEntity(storage, uid_t1, "task", newTask.id).catch(() => null);
+    res.status(201).json({
+      ...newTask,
+      ...(taskSanitized ? { warning: SANITIZE_NOTICE } : {}),
+      ...(rules_t1 ? { dateRules: rules_t1.rules } : {}),
+    });
   }));
   app.patch("/api/tasks/:id", asyncHandler(async (req, res) => {
     // CLEARING the clock time. `dueTime` is validated as HH:MM, so "" and null
@@ -5189,7 +5415,11 @@ Rules:
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_t2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t2}`); bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t2}`); bustCache(`notifications:${uid_t2}`);
-    res.json(updated);
+    // Re-derive after the edit: moving a due date moves the occurrence, and
+    // clearing one removes it. Both fall out of the record automatically —
+    // this reports the result so the caller never has to guess.
+    const rules_t2 = await syncDateRulesForEntity(storage, uid_t2, "task", updated.id).catch(() => null);
+    res.json({ ...updated, ...(rules_t2 ? { dateRules: rules_t2.rules } : {}) });
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
@@ -5995,14 +6225,13 @@ Rules:
         const sources = p.fields?._docFields;
         const recorded = (sources && typeof sources === "object") ? sources[docIdToDelete] : undefined;
         if (!recorded || typeof recorded !== "object") continue;
-        const nextFields: Record<string, any> = { ...p.fields };
-        const removedKeys: string[] = [];
-        for (const [k, savedVal] of Object.entries(recorded)) {
-          if (k in nextFields && looselyEqual(nextFields[k], savedVal)) {
-            delete nextFields[k];
-            removedKeys.push(k);
-          }
-        }
+        // Match the recorded field on IDENTITY, not on the literal key it was
+        // saved under — see removeDocumentContributedFields.
+        const cascade = removeDocumentContributedFields(p.fields as Record<string, any>, recorded);
+        const nextFields = cascade.fields;
+        // Top-level keys need an explicit null so the storage merge removes
+        // them; nested groups are already rewritten without their entry.
+        const removedKeys = cascade.removed.filter((path) => !path.includes("."));
         const nextSources: Record<string, any> = { ...sources };
         delete nextSources[docIdToDelete];
         // Null markers = deletion intents for the storage merge layer.
@@ -6011,8 +6240,8 @@ Rules:
         if (Object.keys(nextSources).length > 0) patch._docFields = nextSources;
         else { delete patch._docFields; patch._docFields = null; }
         await storage.updateProfile(p.id, { fields: patch } as any);
-        if (removedKeys.length > 0) {
-          log.info(`[doc-delete-cascade] ${docIdToDelete} → removed ${removedKeys.length} field(s) from ${p.name}: ${removedKeys.join(", ")}`);
+        if (cascade.removed.length > 0) {
+          log.info(`[doc-delete-cascade] ${docIdToDelete} → removed ${cascade.removed.length} field(s) from ${p.name}: ${cascade.removed.join(", ")}`);
         }
       }
     } catch (cascadeErr: any) {
@@ -7051,15 +7280,32 @@ Rules:
     if (!req.body.mood) req.body.mood = detectMoodFromText(req.body.content);
     const parsed = insertJournalEntrySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    let newEntry = await storage.createJournalEntry(parsed.data);
-    // Apply linkedProfiles if provided (not part of insert schema)
-    if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0) {
-      const updated = await storage.updateJournalEntry(newEntry.id, { linkedProfiles: req.body.linkedProfiles } as any);
-      if (updated) newEntry = updated as any;
+    // SAME SERVICE AS CHAT. `entryDate` (or the legacy `date`) is the day the
+    // experience happened; a second write for a day that already has an entry
+    // appends, because journal_entries is UNIQUE on (user_id, date) and
+    // "add this to today's journal" should append anyway.
+    const entryDate = String(req.body.entryDate || parsed.data.date || getUserToday(getTimezone(req))).slice(0, 10);
+    const linkedProfileId = Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0
+      ? String(req.body.linkedProfiles[0]) : null;
+    const { entry: newEntry, appended } = await upsertJournalEntry(storage, {
+      content: parsed.data.content || "",
+      mood: parsed.data.mood,
+      entryDate,
+      profileId: linkedProfileId,
+      energy: parsed.data.energy,
+      gratitude: parsed.data.gratitude,
+      highlights: parsed.data.highlights,
+    });
+    // Additional owners beyond the first (the service links only the primary).
+    if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 1) {
+      const merged = Array.from(new Set([...(((newEntry as any).linkedProfiles) || []), ...req.body.linkedProfiles.map(String)]));
+      await storage.updateJournalEntry(newEntry.id, { linkedProfiles: merged } as any);
     }
     const uid_j1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_j1}`);
-    res.status(201).json(newEntry);
+    // A journal entry's date is not a calendar commitment — it never creates a
+    // Date Rule. Stated in the response so no caller has to infer it.
+    res.status(appended ? 200 : 201).json({ ...newEntry, appended, dateRules: [] });
   }));
   app.patch("/api/journal/:id", asyncHandler(async (req, res) => {
     {

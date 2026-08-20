@@ -50,7 +50,7 @@ import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "../shared/date-rules";
-import { deleteProfileFields } from "../shared/profile-field-identity";
+import { deleteProfileFields, mergeFieldWrite } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
@@ -1735,19 +1735,46 @@ export class SupabaseStorage implements IStorage {
     // looked undeletable. `deleteProfileFields` sweeps the top level AND every
     // nested group, comparing normalized identities, so one spelling cannot
     // hide behind another.
-    // ── The last write path ────────────────────────────────────────────────
+    // UNIVERSAL WRITE (2026-08-20). A write says what the field IS now, so it
+    // SUPERSEDES every other spelling of that field — matched on identity, at
+    // the top level and inside every nested group.
     //
-    // Normalizing dates in the routes and the AI tools covers every caller
-    // that exists TODAY. Doing it here as well covers every caller, full stop
-    // — a script, a migration, a tool added next month. A date is stored in
-    // one form because the storage layer will not accept another, so the
-    // question "can an actionable date be saved without its rule following?"
-    // has a structural answer rather than an inventory of call sites.
-    // See shared/date-rules.
-    const incomingFields = data.fields && typeof data.fields === "object"
+    // The exact-key merge this replaced is why editing "Address" on a profile
+    // whose value lives in `personal.address` (or under `streetAddress`) added
+    // a second row instead of changing the one on screen, and why an AI
+    // update_profile writing a different spelling piled up a twin. Only the
+    // confirm-extraction route did the supersede, inline — every other door
+    // into a profile skipped it. It lives here now so all of them get it.
+    //
+    // …and the same argument applies to DATES. Normalizing them in the routes
+    // and the AI tools covers every caller that exists today; doing it here
+    // covers every caller full stop — a script, a migration, a tool added next
+    // month. A date is stored in one form because the storage layer will not
+    // take another, so "can an actionable date be saved without its rule
+    // following?" has a structural answer rather than an inventory of call
+    // sites. See shared/date-rules.
+    //
+    // Deletion intents (null / undefined values) are pulled out FIRST: those
+    // keys are being removed, not written, and must not sweep their own twins.
+    const normalizedIncoming = data.fields && typeof data.fields === "object"
       ? normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? existing.type ?? "") }).fields
       : data.fields;
-    const mergedFields = mergeAndApplyDeletes(existing.fields || {}, incomingFields, null);
+    const incomingFields: Record<string, any> = {};
+    const deletionIntents: string[] = [];
+    for (const [k, v] of Object.entries(normalizedIncoming || {})) {
+      if (v === null || v === undefined) deletionIntents.push(k);
+      else incomingFields[k] = v;
+    }
+    const write = mergeFieldWrite(existing.fields || {}, incomingFields);
+    // Superseded twins come back as null markers — drop exactly those, so a
+    // null a caller legitimately stored on some other field survives untouched.
+    const supersededOut: Record<string, any> = { ...write.fields };
+    for (const k of write.superseded) delete supersededOut[k];
+    const mergedFields = mergeAndApplyDeletes(
+      supersededOut,
+      Object.fromEntries(deletionIntents.map((k) => [k, null])) as any,
+      null,
+    );
     const deletion = deleteProfileFields(
       mergedFields as Record<string, any>,
       data.fieldsToDelete,
