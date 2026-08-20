@@ -5,7 +5,8 @@ import { getUserToday } from "@shared/timezone";
 import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
-import { invalidateDomain } from "@/lib/cache-bus";
+import { applyChatMutations } from "@/lib/chat-sync";
+import { perfMark, perfMeasure, logServerTimings } from "@/lib/perf-marks";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
 import { isInternalDirective } from "@shared/ai-message-kinds";
@@ -97,7 +98,7 @@ import {
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
-import type { ChatMessage, ParsedAction, Profile } from "@shared/schema";
+import type { ChatMessage, ChatMutation, ParsedAction, Profile } from "@shared/schema";
 // Type-only import — erased at compile time, does NOT pull recharts into the bundle.
 import type { ChartSpec2 } from "@/components/ChatChartRenderer";
 // ChartCard lazy-loads the recharts body itself, so importing it here stays light.
@@ -3135,6 +3136,19 @@ export default function ChatPage() {
       // untouched. On a mid-flight stream failure it rejects and the existing
       // failed/retry affordance in onError takes over.
       beginLiveStream();
+      // Stage 1 of the mutation-to-render instrumentation (see lib/perf-marks.ts
+      // and lib/chat-sync.ts for the rest): send → first frame → final →
+      // cache-applied. `window.__portolPerf()` prints the whole pipeline, so
+      // "where did the time actually go" is answered from measurements rather
+      // than by guessing between the AI, the database and the UI.
+      perfMark("chat:send");
+      let firstFrameSeen = false;
+      const markFirstFrame = () => {
+        if (firstFrameSeen) return;
+        firstFrameSeen = true;
+        perfMark("chat:first-frame");
+        perfMeasure("chat:time-to-first-frame", "chat:send");
+      };
       return await streamChat(
         {
           message,
@@ -3145,8 +3159,9 @@ export default function ChatPage() {
           sourceMessageId: userMsgId,
         },
         {
-          onRound: () => { liveResetPendingRef.current = true; },
+          onRound: () => { markFirstFrame(); liveResetPendingRef.current = true; },
           onAssistantDelta: (text) => {
+            markFirstFrame();
             const cur = liveStreamRef.current;
             if (!cur) return;
             if (liveResetPendingRef.current) { cur.text = ""; liveResetPendingRef.current = false; }
@@ -3173,6 +3188,9 @@ export default function ChatPage() {
       );
     },
     onSuccess: (data) => {
+      perfMark("chat:final");
+      perfMeasure("chat:round-trip", "chat:send");
+      logServerTimings(data);
       const assistantMsg: any = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -3202,7 +3220,7 @@ export default function ChatPage() {
           }
         } catch { /* filter store not ready — non-fatal */ }
       }
-      invalidateAll();
+      syncFromResponse(data);
     },
     onError: (err: Error, { userMsgId }) => {
       // A dropped connection ("Load failed" / timeout) does NOT mean nothing
@@ -3224,7 +3242,9 @@ export default function ChatPage() {
           timestamp: new Date().toISOString(),
         },
       ]);
-      invalidateAll();
+      // The socket died mid-turn, so there is no manifest — but writes may
+      // well have landed server-side. Refresh everything.
+      syncFromResponse();
     },
     // Release the synchronous send lock once the round-trip resolves (success
     // or error), so the next message can be sent. The live-stream scratch is
@@ -3295,7 +3315,7 @@ export default function ChatPage() {
         return [];
       });
       setSelectedProfileId("none");
-      invalidateAll();
+      syncFromResponse(data as any);
     },
     onError: (err: Error) => {
       const isConnectionDrop =
@@ -3343,7 +3363,7 @@ export default function ChatPage() {
         timestamp: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
-      invalidateAll();
+      syncFromResponse(data as any);
     },
     onError: (err: Error) => {
       setMessages((prev) => [
@@ -3429,7 +3449,7 @@ export default function ChatPage() {
       }
 
       setBatchProcessedCount(0);
-      invalidateAll();
+      syncFromResponse(data as any);
     },
     onError: (err: Error) => {
       const isConnectionDrop =
@@ -3464,36 +3484,27 @@ export default function ChatPage() {
     },
   });
 
-  const invalidateAll = useCallback(() => {
-    // After a chat write the server has already busted its response cache, so
-    // every data query must be marked stale — not a hand-maintained subset —
-    // or a logged entry won't appear until the user manually refreshes.
-    const isData = (q: any) => {
-      const k = String(q.queryKey?.[0] || "");
-      return k.startsWith("/api/") && !k.includes("/file");
-    };
-    // Pass 1 — refetch what's ON SCREEN now (refetchType "active", the
-    // default); everything else is only marked stale. The global
-    // refetchOnMount:true then refreshes any stale query in the background
-    // the moment the user navigates to its page, so the data is fresh either
-    // way. PERF (2026-07-08): this used refetchType:"all", which re-fired
-    // every cached query slot — dozens of dashboard/calendar/profile/tracker
-    // variants accumulated over the session — after EVERY chat command. That
-    // storm saturated the serverless backend (each request pays auth +
-    // Supabase round-trips) and was the single biggest reason chat saves and
-    // the pages right after them felt slow.
-    //
-    // ONE PASS, NO TIMER. This used to fire a second invalidation on a
-    // 1.2-second delay because the server bumped its cross-instance data
-    // version asynchronously on response 'finish' — an instant refetch could
-    // beat the bump and cache pre-write data. The chat handler now AWAITS that
-    // bump before it responds (server/routes.ts, `chatVersionBumped`), so by
-    // the time this runs the write is already visible and every stale
-    // version-stamped key is unaddressable. An arbitrary delay standing in for
-    // a happens-before guarantee is exactly the thing that made chat writes
-    // feel like they needed a refresh.
-    queryClient.invalidateQueries({ predicate: isData });
-  }, [queryClient]);
+  // Apply what a turn actually changed.
+  //
+  // This used to be `invalidateAll()`: a blanket invalidation of every /api/*
+  // query, plus a second pass 1200ms later to out-wait the server's cache
+  // version bump. Both were symptoms of the same gap — the client had no idea
+  // WHAT had changed, so it re-asked for everything and hoped the answer was
+  // post-write. It often wasn't, which is why an AI-created item routinely
+  // needed a manual refresh to appear.
+  //
+  // Now the response carries a change manifest and a data version:
+  // applyChatMutations writes the returned rows straight into the cached lists
+  // (instant, no network) and invalidates only the affected domains through the
+  // cache bus (which also reaches other tabs). The 1200ms second pass is gone —
+  // the server no longer answers until its version bump has landed, and every
+  // request from here carries that version as a read-your-writes token.
+  //
+  // A response with no manifest (upload / batch / confirm-extraction, or an
+  // older server) falls back to the full invalidation, so nothing is missed.
+  const syncFromResponse = useCallback((data?: { mutations?: ChatMutation[]; dataVersion?: number } | null) => {
+    void applyChatMutations(data?.mutations, data?.dataVersion);
+  }, []);
 
   // Stable (useCallback) so memoized MessageRows keep their shallow-equal props.
   const handleConfirmExtraction = useCallback(async (data: {
@@ -3515,7 +3526,7 @@ export default function ChatPage() {
       // knows something fell off.
       const savedSomething = Array.isArray(result.saved) && result.saved.length > 0;
       if (result.success || savedSomething) {
-        invalidateAll();
+        syncFromResponse(result);
         if (result.success) {
           toast({ title: "Extraction confirmed", description: "Data has been saved." });
         } else {
@@ -3545,7 +3556,7 @@ export default function ChatPage() {
       toast({ title: "Extraction failed", description: "Something went wrong — please try again.", variant: "destructive" });
       return false;
     }
-  }, [invalidateAll, toast, setMessages]);
+  }, [syncFromResponse, toast, setMessages]);
 
   const handleSkipExtraction = useCallback((extractionId: string) => {
     setMessages((prev) =>

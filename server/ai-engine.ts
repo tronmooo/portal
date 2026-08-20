@@ -9,7 +9,7 @@ import {
 } from "./content-service";
 import { findActionableTime } from "@shared/temporal-rules";
 import { classifyContent, routeContent, checkContentRouting, isStructured, type ContentClassification } from "@shared/content-routing";
-import type { ParsedAction, RecurrencePattern } from "@shared/schema";
+import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate } from "@shared/nutrition-shaped";
 import {
@@ -32,11 +32,12 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
-import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
+import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { domainsForActionTypes } from "@shared/entity-domains";
 import { findOccurrenceForPeriod, normalizeBillingModel } from "@shared/liability-billing";
 import {
   accountViews, findAccount, isAccountProfile, normalizeAccountKind,
@@ -13712,6 +13713,19 @@ export type ChatStreamEvent =
       operation?: OperationOutcome;
     };
 
+/**
+ * Manifest of last resort: name the domains a turn's ACTION types imply.
+ *
+ * Used when a write happened outside the tool loop (bulk executor, recovery
+ * paths, deterministic fast paths), where there is no verified row to patch
+ * into the cache but the client still has to be told what to refresh.
+ */
+function synthesizeMutations(actions: ParsedAction[]): ChatMutation[] | undefined {
+  const domains = domainsForActionTypes(actions.map((a) => a?.type));
+  if (domains.length === 0) return undefined;
+  return [{ op: "update", entityType: null, domains, tool: "action-types" }];
+}
+
 export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[]; debug?: boolean; onEvent?: (ev: ChatStreamEvent) => void; turnId?: string; sourceMessageId?: string }): Promise<{
   reply: string;
   actions: ParsedAction[];
@@ -13723,13 +13737,24 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   report?: ReportSpec;
   artifact?: any;
   operations?: OperationOutcome[];
+  /** What this turn CHANGED, in the client's cache vocabulary. The client
+   *  patches the returned rows into its cached lists and invalidates the named
+   *  domains, so an AI write is visible everywhere without a refetch race or a
+   *  manual refresh. See shared/schema.ts ChatMutation. */
+  mutations?: ChatMutation[];
   /** Turn identity. Every action/operation in this response carries the same
    *  turnId, so the client can render ONLY this turn's cards under this
    *  turn's reply (spec items 7 + 8). */
   turnId?: string;
   sourceMessageId?: string;
   /** Routing observability: which path/model served this reply (front door only). */
-  meta?: { route: string; model: string; attempts?: Array<{ model: string; error?: string }> };
+  meta?: {
+    route?: string;
+    model?: string;
+    attempts?: Array<{ model: string; error?: string }>;
+    /** Per-stage pipeline timings (ms) — see PERF notes in processMessage. */
+    timings?: { aiMs: number; tools: Array<{ tool: string; execMs: number; verifyMs: number }> };
+  };
 }> {
   // ── TURN IDENTITY (spec item 7) ───────────────────────────────────────────
   // One id for this user message and everything it produces. The client sends
@@ -13737,6 +13762,10 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   // so a retried/duplicated client id can never merge two turns' actions.
   const turnId = options?.turnId || randomUUID();
   const sourceMessageId = options?.sourceMessageId;
+  // Stage-0 of the mutation-to-render instrumentation: everything the engine
+  // spends before the response leaves this function. routes.ts adds the cache
+  // bust / version bump it spends after.
+  const turnStartedAt = Date.now();
 
   // ── PRE-EXECUTION INTENT OBJECT (spec item 9) ─────────────────────────────
   // Structured entity/operation/target/fields parsed from THIS message, before
@@ -14288,10 +14317,19 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     if (fp.matched) {
       // Pass lazy document previews through — they used to be dropped here,
       // which forced the doc branch to inline base64 into the reply text path.
+      // The fast paths write straight through storage rather than through the
+      // tool loop, so there is no verified row to hand the client — but the
+      // action types are enough to name the domains that changed. Without this
+      // every "mood good" fell back to invalidating the client's ENTIRE cache.
+      const fpDomains = domainsForActionTypes(fp.actions.map((a) => a?.type));
       return {
         reply: fp.reply, actions: fp.actions, results: fp.results,
+        ...(fpDomains.length > 0
+          ? { mutations: [{ op: "update" as const, entityType: null, domains: fpDomains, tool: "fast-path" }] }
+          : {}),
         ...(fp.documentPreview ? { documentPreview: fp.documentPreview } : {}),
         ...(fp.documentPreviews?.length ? { documentPreviews: fp.documentPreviews } : {}),
+        meta: { timings: { aiMs: Date.now() - turnStartedAt, tools: [] } },
       };
     }
   } catch { /* fall through to AI */ }
@@ -14733,6 +14771,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     }
     const allActions: ParsedAction[] = [];
     const allResults: any[] = [];
+    // What this turn CHANGED in the database, in the client's own vocabulary.
+    // The chat reply used to be the only signal that anything had happened, so
+    // the client answered every turn by invalidating all of /api/* and waiting
+    // for the network — which is why an AI-created row was routinely missing
+    // from its page until a manual refresh. See shared/schema.ts ChatMutation.
+    const turnMutations: ChatMutation[] = [];
+    // Per-stage timings (ms) for the tools this turn ran, so "the AI is slow"
+    // can be attributed to tool execution vs. post-write verification instead
+    // of guessed at. Surfaced on meta.timings.
+    const toolTimings: Array<{ tool: string; execMs: number; verifyMs: number }> = [];
     // Per-operation outcome report (success AND failure) so the client can
     // render an honest per-action checklist — same shape as the bulk path.
     const allOperations: OperationOutcome[] = [];
@@ -15024,7 +15072,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const beforeRows = READ_ONLY_TOOLS.has(toolUse.name)
             ? null
             : await captureBeforeRows(toolUse.name, turnVerifyCtx);
+          const tExecStart = Date.now();
           const rawResult = await executeTool(toolUse.name, inputWithCtx, userId);
+          const execMs = Date.now() - tExecStart;
 
           // Invalidate context cache after any write operation
           const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
@@ -15040,9 +15090,23 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // Raw result is spread into the envelope so every downstream reader
           // (entityId extraction, undo cards, chart/table plumbing) is
           // untouched. Read-only tools and {error} results pass through raw.
+          const tVerifyStart = Date.now();
           const result = (rawResult && !rawResult.error && !READ_ONLY_TOOLS.has(toolUse.name))
             ? await finalizeToolResult(toolUse.name, actionType, inputWithCtx, rawResult, turnVerifyCtx)
             : rawResult;
+          if (!READ_ONLY_TOOLS.has(toolUse.name)) {
+            toolTimings.push({ tool: toolUse.name, execMs, verifyMs: Date.now() - tVerifyStart });
+            // Manifest entry for the client's cache patch + targeted
+            // invalidation. A write we can't describe precisely still reports
+            // "everything changed" — the client's fallback is the blanket
+            // invalidation it used to do for every turn — so no write can go
+            // unnoticed by the UI.
+            const mutation = buildChatMutation(toolUse.name, result, rawResult)
+              ?? (rawResult && !rawResult.error
+                ? { op: "update" as const, entityType: null, domains: ["everything"], tool: toolUse.name }
+                : null);
+            if (mutation) turnMutations.push(mutation);
+          }
           // A tool that DEDUPED did not create anything — it found the record
           // already there and merged into it. Two things must not happen for
           // one of these:
@@ -15635,8 +15699,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       report: richReport,
       artifact: artifact || undefined,
       operations: allOperations.length > 0 ? allOperations : undefined,
+      // Precise manifest when the tool loop produced one. Otherwise fall back to
+      // what the action types imply — the bulk executor and the recovery paths
+      // write outside the loop, and a write with no manifest at all would leave
+      // the client showing stale data until something else refreshed it.
+      mutations: turnMutations.length > 0
+        ? turnMutations
+        : synthesizeMutations(allActions),
       turnId,
       sourceMessageId,
+      meta: { timings: { aiMs: Date.now() - turnStartedAt, tools: toolTimings } },
     };
   } catch (err: any) {
     console.error("AI engine error:", err.message);

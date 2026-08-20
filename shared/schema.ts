@@ -79,6 +79,38 @@ export interface ParsedAction {
 // CHAT
 // ============================================================
 
+/**
+ * One database change made by a chat turn, described so the client can show it
+ * WITHOUT waiting for a refetch.
+ *
+ * Before this existed the AI reply said "Added it" and the client's only
+ * response was to invalidate every /api/* query and wait — so navigating to the
+ * page that lists the new row raced the refetch and, more often than not, the
+ * row wasn't there until a manual refresh. The manifest closes that gap: the
+ * row it carries is written straight into the matching cached lists, and the
+ * domains it names drive the background reconcile.
+ *
+ * `entityType: null` with `domains: ["everything"]` is the deliberate fallback
+ * for a write whose shape we can't name (bulk plans, link/unlink, undo) — the
+ * client degrades to the old blanket invalidation rather than missing the write.
+ */
+export interface ChatMutation {
+  op: "create" | "update" | "delete";
+  /** Entity vocabulary from shared/entity-domains.ts; null when unmapped. */
+  entityType: string | null;
+  /** Cache domains this write ripples into (shared/entity-domains.ts Domain). */
+  domains: string[];
+  /** Primary key of the affected row, when the tool reported one. */
+  id?: string;
+  /** List endpoint whose cached rows can be patched in place; null if none. */
+  endpoint?: string | null;
+  /** The row as written, for create/update. Omitted for deletes (id suffices). */
+  row?: Record<string, any>;
+  /** Tool that produced this change — diagnostics only. */
+  tool?: string;
+}
+
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";

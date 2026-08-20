@@ -100,6 +100,7 @@ export default defineConfig({
       'tests/date-year-integrity.test.ts',
       'tests/profile-field-identity.test.ts',
       'tests/profile-field-crud-contract.test.ts',
+      'tests/profile-field-write-identity.test.ts',
       'tests/crud-coverage.test.ts',
       'tests/touch-crud-reachable.test.ts',
       'tests/source-type-stability.test.ts',
@@ -206,6 +207,13 @@ export default defineConfig({
       'tests/temporal-rules.test.ts',
       'tests/unified-intent-routing.test.ts',
       'tests/domain-routing.test.ts',
+      // AI write → UI synchronization: the manifest that tells the client what
+      // a chat turn changed, and the read-your-writes barrier that stops a
+      // post-write refetch being served pre-write cache.
+      'tests/entity-domain-coverage.test.ts',
+      'tests/chat-sync.test.ts',
+      'tests/chat-read-your-writes.test.ts',
+      'tests/write-sync.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
