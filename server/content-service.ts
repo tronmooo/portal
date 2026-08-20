@@ -112,11 +112,24 @@ export async function createNote(storage: IStorage, input: NoteInput): Promise<N
     source: input.source || "chat",
   } as any);
 
+  // ── WRITE VERIFICATION ───────────────────────────────────────────────────
+  //
+  // QA 2026-08-20 BUG-2: chat said "Note saved" and the note was in no list and
+  // no search result. A create that returns a well-formed value without the
+  // database ever confirming the row is a silent data loss, and the assistant
+  // narrates it as a success because the value looks fine. Read the row back
+  // and THROW when it isn't there — the chat turn then reports a failure the
+  // user can act on, instead of a confirmation for data that does not exist.
+  const written = note?.id ? await storage.getArtifact(note.id).catch(() => undefined) : undefined;
+  if (!written || written.type !== NOTE_TYPE) {
+    throw new Error("The note could not be saved — the database did not confirm the write. Nothing was stored, please try again.");
+  }
+
   if (profileId) {
     // The junction row is what makes the note appear on the profile page.
     await storage.linkProfileTo(profileId, "artifact", note.id).catch(() => { /* non-fatal */ });
   }
-  return { note, deduped: false, ...actionableHint(content) };
+  return { note: written, deduped: false, ...actionableHint(content) };
 }
 
 function actionableHint(content: string): { actionableTime?: { dateText: string | null; cue: string | null } } {

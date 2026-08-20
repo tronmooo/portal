@@ -5360,8 +5360,18 @@ export class SupabaseStorage implements IStorage {
       created_at: now, updated_at: now,
     });
     if (error) throw error;
+    // Read the row back and REQUIRE it. `(await this.getArtifact(id))!` used to
+    // assert the row into existence: when the insert was accepted but the row
+    // was not readable (RLS, a rolled-back transaction, a replica that never
+    // received it), this returned undefined and every caller — chat included —
+    // reported a successful save for content that did not exist
+    // (QA 2026-08-20 BUG-2, "Note saved" then no search result).
+    const written = await this.getArtifact(id);
+    if (!written) {
+      throw new Error(`Failed to save ${data.type}: the database did not confirm the write.`);
+    }
     this.logActivity("artifact", `Created ${data.type}: ${data.title}`);
-    return (await this.getArtifact(id))!;
+    return written;
   }
 
   // Generate or revoke a public share token for an artifact.

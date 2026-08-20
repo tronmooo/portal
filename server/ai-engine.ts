@@ -69,6 +69,7 @@ import { checkClaims, honestFailureReply, groundedSummary, describeMismatch, str
 import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/recurrence";
+import { sameServiceName } from "@shared/service-name";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
@@ -3125,7 +3126,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Trackers ---
   {
     name: "log_tracker_entry",
-    description: "Log values to a tracker for ANY repeatable life event, activity, or personal metric the user reports — health, fitness, hygiene (showers, bathroom visits, brushing teeth), substances (cannabis, alcohol, nicotine, caffeine), chores (vacuuming, dishes, laundry), hobbies (reading, guitar, gaming), personal care, social activities, habits, metrics — if the user says they did/consumed/experienced it, it is loggable. There is NO fixed list of supported activities; NEVER refuse to log something as 'not tracked'. (NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries.) CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}). When ONE message contains BOTH a BP reading AND a heart rate ('124/78 with a resting heart rate of 59'), make TWO log_tracker_entry calls — one to 'Blood Pressure' {systolic,diastolic} AND one to 'Heart Rate' {bpm}. NEVER silently drop the heart rate.\n- Supplements / vitamins / medications → EACH item gets its OWN tracker named EXACTLY after the item: 'Multivitamin', 'Fish Oil', 'Vitamin D', 'Creatine', 'Amoxicillin', 'Lisinopril'. NEVER bucket different items into one generic 'Supplements' (or 'Vitamins'/'Medications') tracker. If the user logs several in one message (e.g. 'multivitamin, fish oil, and amoxicillin'), make a SEPARATE log_tracker_entry call for EACH, one per its own tracker. ALWAYS reuse an existing tracker whose name is that item (an existing 'Multivitamin' tracker → append the entry, do NOT create a new tracker). Use values:{dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency, taken:true} — include dosage+unit whenever the user states OR clearly implies one (do not invent a dosage that wasn't given). Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER} (or glasses). Put the numeric amount directly in the ounces field.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
+    description: "Log values to a tracker for ANY repeatable life event, activity, or personal metric the user reports — health, fitness, hygiene (showers, bathroom visits, brushing teeth), substances (cannabis, alcohol, nicotine, caffeine), chores (vacuuming, dishes, laundry), hobbies (reading, guitar, gaming), personal care, social activities, habits, metrics — if the user says they did/consumed/experienced it, it is loggable. There is NO fixed list of supported activities; NEVER refuse to log something as 'not tracked'. (NEVER money: anything spent/paid/bought such as repairs, maintenance costs, purchases, bills, or fees MUST use create_expense with forProfile set to the related asset/vehicle/person; the server rejects money-shaped tracker entries.) CRITICAL: trackerName MUST match the actual activity — use 'Basketball' for basketball (not 'Running'), 'Tennis' for tennis, 'Soccer' for soccer, 'Swimming' for swimming, etc. Each sport has its own tracker. Never log basketball into a Running tracker.\n\nDISTINCT METRICS — never merge these:\n- Heart rate / resting heart rate / pulse / BPM → its OWN tracker named 'Heart Rate' (values:{bpm:NUMBER}). NEVER put pulse/heart rate inside 'Blood Pressure' — that tracker is systolic/diastolic ONLY (values:{systolic, diastolic}). When ONE message contains BOTH a BP reading AND a heart rate ('124/78 with a resting heart rate of 59'), make TWO log_tracker_entry calls — one to 'Blood Pressure' {systolic,diastolic} AND one to 'Heart Rate' {bpm}. NEVER silently drop the heart rate.\n- Supplements / vitamins / medications → EACH item gets its OWN tracker named EXACTLY after the item: 'Multivitamin', 'Fish Oil', 'Vitamin D', 'Creatine', 'Amoxicillin', 'Lisinopril'. NEVER bucket different items into one generic 'Supplements' (or 'Vitamins'/'Medications') tracker. If the user logs several in one message (e.g. 'multivitamin, fish oil, and amoxicillin'), make a SEPARATE log_tracker_entry call for EACH, one per its own tracker. ALWAYS reuse an existing tracker whose name is that item (an existing 'Multivitamin' tracker → append the entry, do NOT create a new tracker). Use values:{dosage:NUMBER, unit:'mg'|'mcg'|'IU'|'capsule'|'tablet'|'softgel'|'scoop', time, frequency, taken:true} — include dosage+unit whenever the user states OR clearly implies one (do not invent a dosage that wasn't given). Do NOT log a supplement as a generic note or into an unrelated tracker.\n- Hydration/water → 'Hydration' tracker, values:{ounces:NUMBER}. Put the numeric amount directly in the ounces field. When the user counts CONTAINERS ('3 glasses', '2 bottles'), pass the count in its own field (values:{glasses:3}) and let the server convert it — never invent an ounces figure for a container count.\n\nIf no matching tracker exists, one will be auto-created with the correct name and fields.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -7380,6 +7381,46 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // otherwise the model replies "created" for a task that already existed.
       if (dupTask) return { ...dupTask, deduped: true, message: `A very similar task already exists ("${dupTask.title}") — I didn't create a duplicate.` };
 
+      // ── RESCHEDULE IN PLACE ──────────────────────────────────────────────
+      //
+      // QA 2026-08-20 BUG-1: seven open "Call the dentist" tasks. The dedup
+      // above deliberately lets a task through when the due dates differ, on
+      // the theory that a re-scheduled task is a new one. It is not — saying
+      // "remind me to call the dentist next Tuesday" again is the user MOVING
+      // that reminder, and every repeat of the phrase added another row.
+      //
+      // So: one open task with the same title (for the same owner) and a
+      // different due date is UPDATED, not duplicated. Guarded on there being
+      // exactly one such task, so an ambiguous set is never silently edited,
+      // and on the title matching by exact normalized identity — the fuzzy
+      // token rule is fine for suppressing a duplicate but too loose to move
+      // a date on someone's real reminder.
+      const reschedulable = input.dueDate
+        ? existingTasks.filter(t => {
+            if (t.status === "done") return false;
+            if (normalizeTitle(t.title) !== incomingNorm) return false;
+            const profileOk =
+              taskLinkedProfiles.length === 0 ||
+              (t.linkedProfiles?.length || 0) === 0 ||
+              t.linkedProfiles.some(p => taskLinkedProfiles.includes(p));
+            return profileOk;
+          })
+        : [];
+      if (reschedulable.length === 1) {
+        const target = reschedulable[0];
+        const moved = await storage.updateTask(target.id, {
+          dueDate: String(input.dueDate).slice(0, 10),
+          ...(normalizeClockTime(input.dueTime) ? { dueTime: normalizeClockTime(input.dueTime)! } : {}),
+        } as any);
+        const result = moved || target;
+        logger.info("ai", `Rescheduled existing task "${target.title}" to ${input.dueDate} instead of creating a duplicate`);
+        return {
+          ...result,
+          updatedExisting: true,
+          message: `"${target.title}" already existed — I moved it to ${String(input.dueDate).slice(0, 10)} instead of creating a second copy.`,
+        };
+      }
+
       // In-memory dedup lock (includes profile for cross-profile dedup safety)
       // Use the normalized title so trivial punctuation/casing differences
       // hit the same key within a short time window.
@@ -8585,10 +8626,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const selfP = profiles.find((p: any) => p.type === "self");
         if (selfP) parentProfileId = selfP.id;
       }
-      // Dedup by name + same parent
+      // Dedup by name + same parent.
+      //
+      // For a real DEBT the name is compared exactly: "Chase Freedom" and
+      // "Chase Freedom Unlimited" are two different cards, and merging them
+      // would destroy a balance. For a SERVICE (a subscription-flavoured
+      // liability) the identity is the brand, so "Spotify Premium" updates the
+      // existing "Spotify" instead of creating an indistinguishable twin
+      // (QA 2026-08-20 BUG-1: two Spotify liabilities, both $9.99/monthly).
       const nameLC = String(input.name || "").toLowerCase().trim();
+      const isDebtSubtype = ["credit_card", "mortgage", "auto_loan", "student_loan", "personal_loan", "heloc", "business_loan", "medical_debt", "tax_debt", "bnpl"].includes(String(input.subtype || ""));
+      const liabilityNameMatches = (p: any) =>
+        String(p.name || "").toLowerCase().trim() === nameLC ||
+        (!isDebtSubtype && !["credit_card", "mortgage", "auto_loan", "student_loan", "personal_loan", "heloc", "business_loan", "medical_debt", "tax_debt", "bnpl"].includes(String((p as any).type_key || "")) && sameServiceName(p.name, input.name));
       const existing = profiles.find((p: any) =>
-        p.name.toLowerCase() === nameLC &&
+        liabilityNameMatches(p) &&
         (p.type === "liability" || p.type === "loan") &&
         (parentProfileId ? p.parentProfileId === parentProfileId : true)
       );
@@ -8903,6 +8955,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             try { await directLinkToProfile("obligation", newOb.id, input.name); } catch {}
           }
         } catch (e: any) { logger.warn("ai", `auto-create liability obligation failed: ${e?.message}`); }
+      }
+      // Report what actually happened. Merging into an existing row and calling
+      // it a "create" is how the assistant ended up announcing a brand-new
+      // Spotify Premium that was really an edit to Spotify (QA BUG-1/BUG-3:
+      // the reply must describe the write, not the request).
+      if (existing) {
+        return {
+          result: { ...liability, updatedExisting: true, matchedName: existing.name },
+          message: `Updated the existing "${existing.name}" — no duplicate was created.`,
+          actions: [{ type: "update", category: "liability", data: liability }],
+        };
       }
       return { result: liability, actions: [{ type: "create", category: "liability", data: liability }] };
     }
@@ -10267,8 +10330,53 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const _DUP_FREQ_ALIASES: Record<string, string> = { "one-time": "once", "onetime": "once", "one time": "once", "annual": "yearly", "annually": "yearly", "bi-weekly": "biweekly", "bimonthly": "monthly" };
       const _rawFreqForDup = String(input.frequency || "monthly").toLowerCase().trim();
       const newFrequency = _DUP_FREQ_ALIASES[_rawFreqForDup] || _rawFreqForDup;
+      const sameOwner = (o: any) => {
+        if (!preResolvedTargetProfileId) return true;
+        const lp = (o as any).linkedProfiles || (o as any).linked_profiles || [];
+        return Array.isArray(lp) && lp.includes(preResolvedTargetProfileId);
+      };
+      // ── EDIT IN PLACE, never a second copy of the same bill ───────────────
+      //
+      // QA 2026-08-20 BUG-1. "It charges on the 15th" is a MODIFICATION of the
+      // Spotify bill the user already has. The duplicate check below requires
+      // amount AND frequency to match, so a turn that changes either one fell
+      // through to an INSERT — two $9.99 monthly Spotify bills the user cannot
+      // tell apart. A bill is identified by its service and its owner: same
+      // service + same owner + same cadence is the SAME bill, and a new amount
+      // or a new due date is an update to it.
+      //
+      // Only fires when exactly ONE existing bill matches — with two the
+      // correct target is genuinely ambiguous, and guessing would edit the
+      // wrong row (worse than a duplicate).
+      const sameBill = existingObs.filter(o =>
+        sameServiceName(o.name, input.name) &&
+        sameOwner(o) &&
+        (String((o as any).frequency || "").toLowerCase() === newFrequency));
+      if (sameBill.length === 1) {
+        const target = sameBill[0];
+        const patch: Record<string, any> = {};
+        if (newAmount > 0 && Math.abs((Number((target as any).amount) || 0) - newAmount) > 0.01) patch.amount = newAmount;
+        if (input.nextDueDate && String((target as any).nextDueDate || "").slice(0, 10) !== String(input.nextDueDate).slice(0, 10)) {
+          patch.nextDueDate = String(input.nextDueDate).slice(0, 10);
+        }
+        // Nothing to change — fall through to the duplicate check below, which
+        // reports "this already exists" rather than claiming an edit.
+        const updated = Object.keys(patch).length > 0
+          ? await storage.updateObligation(target.id, patch as any)
+          : null;
+        if (updated) {
+          logger.info("ai", `Updated existing obligation "${target.name}" in place instead of creating "${input.name}"`);
+          return {
+            ...updated,
+            updatedExisting: true,
+            matchedName: target.name,
+            message: `Updated the existing "${target.name}" bill — no duplicate was created.`,
+          };
+        }
+      }
+
       const dupOb = existingObs.find(o => {
-        if (o.name.toLowerCase() !== nameLC) return false;
+        if (o.name.toLowerCase() !== nameLC && !sameServiceName(o.name, input.name)) return false;
         // Profile scope check: when we resolved a target profile, the
         // existing obligation must be linked to it. Unscoped creates fall
         // through (we compare amount + frequency below).

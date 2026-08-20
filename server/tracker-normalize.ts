@@ -221,6 +221,80 @@ function isSleepTracker(tracker: Pick<Tracker, "fields" | "category" | "name">):
   return false;
 }
 
+// ── Hydration container units ───────────────────────────────────────
+// "3 glasses of water" is not a number the model gets to invent. One run
+// logged it as 72 oz (24 oz per glass), an earlier one as 24 oz (8 oz per
+// glass) — same words, two different records (QA 2026-08-20, BUG-6). The
+// conversion is a CONSTANT, and it is the same constant the estimation engine
+// already uses for containers (shared/estimation-engine CONTAINER_ML).
+const OUNCES_PER_CONTAINER: Record<string, number> = {
+  glass: 8, glasses: 8,
+  cup: 8, cups: 8,
+  mug: 12, mugs: 12,
+  can: 12, cans: 12,
+  bottle: 16.9, bottles: 16.9,
+};
+
+function isHydrationTracker(tracker: Pick<Tracker, "fields" | "category" | "name">): boolean {
+  const n = String(tracker.name || "").toLowerCase();
+  const c = String((tracker as any).category || "").toLowerCase();
+  return /\b(hydration|water)\b/.test(n) || /\b(hydration|water)\b/.test(c);
+}
+
+/**
+ * Force a hydration entry's ounces to match its container count.
+ *
+ * Reads the CONTAINER from the raw values (before field remapping, which can
+ * collapse a lone "glasses" onto the ounces field and store 3 oz) and writes
+ * the derived ounces into the normalized values. The container count is kept
+ * as its own field, so the entry still reads "3 glasses" — only the derived
+ * ounces are made deterministic.
+ */
+function normalizeHydrationContainers(
+  tracker: Pick<Tracker, "fields" | "category" | "name">,
+  rawValues: Record<string, any>,
+  values: Record<string, any>,
+  warnings: string[],
+): void {
+  if (!isHydrationTracker(tracker)) return;
+  // The field the ounces live in — named "ounces"/"oz" if the tracker has one,
+  // otherwise the primary numeric field.
+  const fields = tracker.fields || [];
+  const ounceField = fields.find(f => /^(ounces|oz|fl\s*oz|fluid\s*ounces)$/i.test(String(f.name)))?.name
+    ?? findPrimaryFieldName(tracker);
+  if (!ounceField) return;
+
+  let container: string | null = null;
+  let count: number | null = null;
+  for (const [k, v] of Object.entries(rawValues || {})) {
+    if (k.startsWith("_")) continue;
+    const key = String(k).toLowerCase();
+    const per = OUNCES_PER_CONTAINER[key];
+    if (per == null) continue;
+    const parsed = parseNumericWithUnit(v);
+    if (!parsed || parsed.value <= 0) continue;
+    container = key;
+    count = parsed.value;
+    break;
+  }
+  if (!container || count == null) return;
+  // A tracker whose headline field IS the container ("glasses") measures
+  // containers, not ounces — nothing to derive.
+  if (String(ounceField).toLowerCase() === container) return;
+
+  const expected = Math.round(count * OUNCES_PER_CONTAINER[container] * 100) / 100;
+  const current = parseNumericWithUnit(values[ounceField]);
+  // Keep what the user actually said alongside the derived amount.
+  if (values[container] == null) values[container] = count;
+  if (current && Math.abs(current.value - expected) < 0.51) return; // already consistent
+  if (current) {
+    warnings.push(`Corrected ${ounceField} ${current.value} → ${expected} (${count} × ${OUNCES_PER_CONTAINER[container]} oz per ${container.replace(/e?s$/, "")})`);
+  } else {
+    warnings.push(`Derived ${ounceField} ${expected} from ${count} ${container}`);
+  }
+  values[ounceField] = expected;
+}
+
 // ── Main normalizer ─────────────────────────────────────────────────
 // Takes raw {field: value} from chat or doc extraction and returns
 // {field: value} aligned with the tracker's schema and unit.
@@ -304,6 +378,9 @@ export function normalizeTrackerEntry(
     // Non-numeric: pass through as-is
     out[canonicalKey] = v;
   }
+
+  // ── Hydration: glasses/cups/bottles → a fixed number of ounces ─────
+  normalizeHydrationContainers(tracker, rawValues || {}, out, warnings);
 
   // ── Sleep duration synthesis ───────────────────────────────────────
   // "I slept from 11 PM to 5:30 AM" arrives as bedtime/waketime strings with

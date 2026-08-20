@@ -396,7 +396,13 @@ export function parseTurnIntent(message: string): ParsedIntent {
 export function splitIntentClauses(message: string): string[] {
   const raw = String(message ?? "").trim();
   if (!raw) return [];
-  const WRITE_VERB = String.raw`create|add|make|new|register|set\s+up|schedule|update|change|edit|modify|rename|delete|remove|log|track|remind\s+me|check\s+(?:in|off)|mark`;
+  // Filing verbs count as write verbs. Without "jot"/"note"/"write down" in
+  // this list, "remind me to call the dentist …, jot down that the client
+  // meeting went well" stayed ONE clause, the whole message read as a single
+  // explicit TASK, and the note the user asked for was refused by the
+  // content-routing gate and never written — a success message for data that
+  // did not exist (QA 2026-08-20, BUG-2).
+  const WRITE_VERB = String.raw`create|add|make|new|register|set\s+up|schedule|update|change|edit|modify|rename|delete|remove|log|track|remind\s+me|check\s+(?:in|off)|mark|jot(?:\s+down)?|note(?:\s+(?:that|down))?|write\s+down|save|journal`;
   const connective = new RegExp(
     String.raw`(?:[.;!?\n]+|,\s*(?:and\s+|then\s+|also\s+)?(?=(?:${WRITE_VERB})\b)|\s+(?:and|then|also|plus)\s+(?=(?:${WRITE_VERB})\b))`,
     "i",

@@ -217,6 +217,8 @@ export default defineConfig({
       'tests/chat-sync.test.ts',
       'tests/chat-read-your-writes.test.ts',
       'tests/write-sync.test.ts',
+      // QA 2026-08-20: duplicate-on-modify, the dropped note, glass→oz.
+      'tests/qa-duplication-data-loss.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

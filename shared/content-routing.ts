@@ -190,6 +190,31 @@ export function isBareFilingDirective(clause: string): boolean {
   return BARE_DIRECTIVE.test(c) || BARE_DIRECTIVE_VERBED.test(c);
 }
 
+/**
+ * EVERY object the user named anywhere in the text.
+ *
+ * `detectExplicitKind` reports only the earliest, which is the right answer for
+ * one clause but the wrong one for a whole message: "remind me to call the
+ * dentist … jot down that the meeting went well" names a task AND a note, and
+ * seeing only the task is what let the gate below refuse the note (QA
+ * 2026-08-20, BUG-2 — silent data loss). This is the clause splitter's
+ * backstop: if the split misses a boundary, the cue itself is still visible.
+ */
+export function namedKinds(text: string): Set<ContentKind> {
+  const c = lc(text);
+  const out = new Set<ContentKind>();
+  if (!c) return out;
+  const consider = (kind: ContentKind, res: RegExp[]) => {
+    if (res.some((re) => re.test(c))) out.add(kind);
+  };
+  consider("note", EXPLICIT_NOTE);
+  consider("journal", EXPLICIT_JOURNAL);
+  consider("task", EXPLICIT_TASK);
+  consider("habit", EXPLICIT_HABIT);
+  consider("event", EXPLICIT_EVENT);
+  return out;
+}
+
 /** Which object did the user NAME in this clause, if any? Earliest wins. */
 export function detectExplicitKind(clause: string): { kind: ContentKind; at: number } | null {
   const c = lc(clause);
@@ -668,6 +693,11 @@ export function checkContentRouting(toolName: string, message: string): ContentR
   const explicitKinds = new Set(
     plan.actions.filter((a) => a.explicit && GENERIC_KINDS.has(a.kind)).map((a) => a.kind),
   );
+  // Backstop for a clause boundary the splitter missed: the user naming THIS
+  // tool's kind anywhere in the message is consent for this tool, whatever the
+  // clause plan says. Refusing a write the user explicitly asked for loses the
+  // content outright, which is strictly worse than filing an extra object.
+  if (namedKinds(message).has(toolKind)) return null;
   if (explicitKinds.size === 0) return null;
   // Several objects were named — this tool serves one of them, or serves an
   // implicit clause we did not gate. Either way, not a routing error.
