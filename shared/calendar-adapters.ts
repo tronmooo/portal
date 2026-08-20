@@ -28,6 +28,7 @@ import { resolveBillingModel, resolveOccurrenceAmount } from "./liability-billin
 import { groupMaterializedSeries } from "./series-detect";
 import { rulesFromAll, seriesFromDateRules } from "./date-rules";
 import { normalizeDateString } from "./extraction-normalize";
+import { resolveLiabilityDueDate } from "./liability-schedule";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
@@ -409,15 +410,12 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
     // per-type virtual-event ladder. That ladder is gone (the Date Rule pass
     // replaces it), so this list has to carry the spelling or a liability whose
     // date lives under it would silently leave the calendar.
-    // Normalized on read, like every other date the rule engine touches. A row
-    // written before the write-path fix holds "07/18/2026", and `isISO` said no
-    // — so the liability's payments were absent from the calendar with nothing
-    // to explain it. The engine's promise is that historical rows light up on
-    // the first read; this is where that promise is kept for liabilities.
-    const due = normalizeDateString(
-      f.nextDueDate ?? f.next_due_date ?? f.dueDate ?? f.due_date
-      ?? f.nextPayment ?? f.next_payment ?? f.nextPaymentDate,
-    );
+    // The SAME resolver the schedule card uses (shared/liability-schedule), so
+    // the two surfaces cannot show one liability's payment on two different
+    // days — and normalized, so a row written before the write-path fix
+    // ("07/18/2026") lights up on the first read instead of failing the ISO
+    // test and vanishing with nothing to explain it.
+    const due = resolveLiabilityDueDate(f);
     if (!isISO(due)) continue;
     const amount = Number(f.monthlyPayment ?? f.monthly_payment ?? f.amount);
     const end = normalizeDateString(

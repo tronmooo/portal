@@ -33,6 +33,7 @@ import {
   dedupeRules,
 } from "../shared/date-rules";
 import { seriesFromAll } from "../shared/calendar-adapters";
+import { resolveLiabilityDueDate } from "../shared/liability-schedule";
 import {
   buildCalendarOccurrences,
   isRecurringRule,
@@ -989,5 +990,52 @@ describe("a birthday shows in a month the user browses back to", () => {
     }).map(o => o.date);
     expect(dates).toContain("2024-07-10");
     expect(dates).toContain("2025-07-10");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 17. Seventh review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a range is not a date", () => {
+  it("leaves a coverage period exactly as written", () => {
+    // Collapsing this to one end destroyed the other, in every storage write
+    // path — and un-spaced, the mid-string search even picked the wrong end.
+    const { fields } = normalizeEntityDateFields({
+      coverageDates: "01/01/2026 - 12/31/2026",
+      policyPeriodDate: "01/01/2026-12/31/2026",
+    });
+    expect(fields.coverageDates).toBe("01/01/2026 - 12/31/2026");
+    expect(fields.policyPeriodDate).toBe("01/01/2026-12/31/2026");
+  });
+
+  it("derives no rule from one either", () => {
+    const rules = rulesFromDocuments([{
+      id: "d1", name: "Policy", type: "insurance", linkedProfiles: [],
+      extractedData: { expirationDate: "01/01/2026 - 12/31/2026" },
+    }]);
+    expect(rules).toEqual([]);
+  });
+
+  it("still reads a single date with a month name", () => {
+    const { fields } = normalizeEntityDateFields({ expirationDate: "July 18, 2034" });
+    expect(fields.expirationDate).toBe("2034-07-18");
+  });
+});
+
+describe("one liability, one due date, both surfaces", () => {
+  it("honours the edited Next Due over the date written at creation", () => {
+    const fields = { nextPaymentDate: "2026-09-15", dueDate: "2026-06-01", nextDueDate: "2026-06-01" };
+    expect(resolveLiabilityDueDate(fields)).toBe("2026-09-15");
+    const series = seriesFromAll({
+      profiles: [{ id: "l1", name: "Car Loan", type: "liability", parentProfileId: "p1", fields: { ...fields, monthlyPayment: 415 } }],
+    });
+    expect(series.find(s => s.source.system === "liability")?.baseDate).toBe("2026-09-15");
+  });
+
+  it("falls back through every spelling, normalized", () => {
+    expect(resolveLiabilityDueDate({ nextDueDate: "07/18/2026" })).toBe("2026-07-18");
+    expect(resolveLiabilityDueDate({ due_date: "July 18, 2026" })).toBe("2026-07-18");
+    expect(resolveLiabilityDueDate({})).toBeNull();
   });
 });

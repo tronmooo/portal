@@ -476,11 +476,19 @@ const MONTH_WORD = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
  * date, irreversibly) and the read path (which would otherwise derive a rule
  * on the wrong day) ask this same question, so they cannot disagree about it.
  */
+const DATEISH_TOKEN = /\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[-/]\d{1,2}[-/]\d{4}|[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\.?,?\s+\d{4}/g;
+
 export function bareDateOf(value: unknown): string | null {
   const t = String(value ?? "").trim();
   if (!t) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
   if (/\d{1,2}:\d{2}/.test(t)) return null;                    // carries a time
+  // A RANGE is not a date. "01/01/2026 - 12/31/2026" is a coverage period, and
+  // collapsing it to one end destroyed the other — in every storage write path,
+  // irreversibly, which is the exact harm this function exists to prevent.
+  // (Un-spaced, `normalizeDateString`'s mid-string search even picked the wrong
+  // end.) Two date-looking tokens means this value is not a day.
+  if ((t.match(DATEISH_TOKEN) || []).length > 1) return null;
   // Any word that is not a month name means this is prose.
   const withoutMonths = t.replace(/[A-Za-z]{3,9}\.?(?=\s|,|$)/g, (w) => (MONTH_WORD.test(w) ? "" : w));
   if (/[A-Za-z]{3,}/.test(withoutMonths)) return null;

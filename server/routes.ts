@@ -5975,6 +5975,12 @@ Rules:
         const tags: string[] = Array.isArray(ev.tags) ? ev.tags : [];
         if (!linked.includes(docIdToDelete)) continue;
         if (!tags.includes("document-extraction")) continue;
+        // `date-rule-uncovered` events go too, deliberately. That tag exists to
+        // stop the DISPLAY-time shadow pass hiding a date nothing else carries;
+        // deletion is a different question, and this cascade's rule — the one
+        // it already applies to profile fields above — is that a document takes
+        // back exactly what it contributed. An auto-created event is
+        // contributed data. Leaving it would be the orphan the user reported.
         await storage.deleteEvent(ev.id);
         log.info(`[doc-delete-cascade] ${docIdToDelete} → removed derived event ${ev.id} "${ev.title}"`);
       }

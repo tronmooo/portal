@@ -104,6 +104,28 @@ import { addMonthsISO } from "./date-math";
  * revolving / one-time debts derive a monthly payment series from their
  * monthly payment, due day, and remaining term.
  */
+/**
+ * THE next-payment date on a liability's fields.
+ *
+ * Two readers used to answer this separately and could disagree about the same
+ * row: the schedule card put `nextPaymentDate` first, the calendar adapter put
+ * `nextDueDate` first, and neither normalized — so a legacy "07/18/2026" fell
+ * through to today on one surface and rendered correctly on the other.
+ *
+ * Precedence is most-deliberate first: `nextPaymentDate` and `nextPayment` are
+ * what the Payments tab writes when the user edits "Next Due", and that edit
+ * must not be shadowed by the `dueDate` written when the liability was created.
+ */
+export function resolveLiabilityDueDate(f: Record<string, any> | null | undefined): string | null {
+  const fields = f || {};
+  return normalizeDateString(
+    fields.nextPaymentDate ?? fields.nextPayment ?? fields.next_payment
+    ?? fields.nextDueDate ?? fields.next_due_date
+    ?? fields.dueDate ?? fields.due_date
+    ?? fields.firstPaymentDate,
+  );
+}
+
 export function deriveScheduleFields(
   fields: Record<string, any> | null | undefined,
   typeKey: string | null | undefined,
@@ -119,14 +141,7 @@ export function deriveScheduleFields(
   // it is a spelling the profile writer produces, and without it this falls
   // through to `todayISO` — putting a payment on the wrong day rather than
   // none at all, which is worse.
-  // Normalized, and in the SAME precedence the calendar adapter uses. Without
-  // normalization a legacy "07/18/2026" failed the ISO test below and fell
-  // through to today — so the calendar showed the payment on its real day and
-  // the schedule card showed it on this one.
-  let due = clip(normalizeDateString(
-    f.nextDueDate ?? f.next_due_date ?? f.dueDate ?? f.due_date
-    ?? f.nextPayment ?? f.next_payment ?? f.nextPaymentDate ?? f.firstPaymentDate,
-  ) ?? "");
+  let due = clip(resolveLiabilityDueDate(f) ?? "");
   if (!ISO_RE.test(due)) {
     const day = parseInt(String(f.dueDay ?? ""), 10);
     if (day >= 1 && day <= 31) {
