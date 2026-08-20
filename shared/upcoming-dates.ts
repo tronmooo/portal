@@ -629,7 +629,12 @@ function upcomingFromRules(rules: readonly DateRule[], profiles: any[]): Upcomin
       href: r.href || "#/calendar",
       relatedProfileId: r.profileId,
       relatedDocumentId: r.sourceEntityType === "document" ? r.sourceEntityId : undefined,
-      needsActionSoon: daysUntil <= 30,
+      // Only dates you must DO something about. Flagging every rule within 30
+      // days put birthdays and anniversaries into the dashboard's "needs action
+      // soon" count, which is meant to be the short list of things that will go
+      // wrong if ignored. `countdownEnabled` is exactly that set — expirations,
+      // renewals, due dates, deadlines.
+      needsActionSoon: r.countdownEnabled && daysUntil <= 30,
       icon: CATEGORY_ICONS[category],
     });
   }

@@ -499,14 +499,20 @@ export function buildExecutiveSections(
     for (const d of input.documents || []) {
       const id = d?.documentId || d?.id;
       if (!id || snoozed.has(id)) continue;
+      // Group by the RULE, not by the record it hangs off. `documentId` is the
+      // source entity now, so a person carrying both a passport and a licence
+      // expiring inside the window collapsed to whichever was nearer and the
+      // other never appeared.
+      const groupKey = d?.ruleId || id;
       const du = typeof d.daysUntil === "number" ? d.daysUntil : daysBetween(today, d.expirationDate);
       if (du == null || du > (config?.docsWithinDays ?? 30)) continue;
-      const prev = bestByDoc.get(id);
-      if (!prev || du < prev.du) bestByDoc.set(id, { doc: d, du });
+      const prev = bestByDoc.get(groupKey);
+      if (!prev || du < prev.du) bestByDoc.set(groupKey, { doc: d, du });
     }
-    for (const [id, { doc, du }] of bestByDoc) {
+    for (const [groupKey, { doc, du }] of bestByDoc) {
+      const id = doc?.documentId || doc?.id || groupKey;
       cand.documents.push({
-        key: `doc:${id}`, sourceKey: `document:${id}`, kind: "document",
+        key: `doc:${groupKey}`, sourceKey: `document:${groupKey}`, kind: "document",
         title: doc.documentName || doc.name || doc.fieldName || "Document",
         reason: du < 0 ? `Expired ${Math.abs(du)}d ago` : du === 0 ? "Expires today" : `Expires ${dayLabel(du)}`,
         tier: du <= 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",

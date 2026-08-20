@@ -27,6 +27,7 @@ import { canonicalObligationCategory } from "./category-canon";
 import { resolveBillingModel, resolveOccurrenceAmount } from "./liability-billing";
 import { groupMaterializedSeries } from "./series-detect";
 import { rulesFromAll, seriesFromDateRules } from "./date-rules";
+import { normalizeDateString } from "./extraction-normalize";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
@@ -398,11 +399,20 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
     // per-type virtual-event ladder. That ladder is gone (the Date Rule pass
     // replaces it), so this list has to carry the spelling or a liability whose
     // date lives under it would silently leave the calendar.
-    const due = f.nextDueDate ?? f.next_due_date ?? f.dueDate ?? f.due_date
-      ?? f.nextPayment ?? f.next_payment ?? f.nextPaymentDate;
+    // Normalized on read, like every other date the rule engine touches. A row
+    // written before the write-path fix holds "07/18/2026", and `isISO` said no
+    // — so the liability's payments were absent from the calendar with nothing
+    // to explain it. The engine's promise is that historical rows light up on
+    // the first read; this is where that promise is kept for liabilities.
+    const due = normalizeDateString(
+      f.nextDueDate ?? f.next_due_date ?? f.dueDate ?? f.due_date
+      ?? f.nextPayment ?? f.next_payment ?? f.nextPaymentDate,
+    );
     if (!isISO(due)) continue;
     const amount = Number(f.monthlyPayment ?? f.monthly_payment ?? f.amount);
-    const end = f.payoffDate ?? f.payoff_date ?? f.endDate ?? f.end_date ?? f.recurrenceEnd;
+    const end = normalizeDateString(
+      f.payoffDate ?? f.payoff_date ?? f.endDate ?? f.end_date ?? f.recurrenceEnd,
+    );
     const kind = kindForLiabilityProfile(p);
     // Per-occurrence state lives in `fields.occurrences`, keyed by canonical
     // date. Reading it here is what puts THIS month's variable amount on the

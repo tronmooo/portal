@@ -167,6 +167,28 @@ interface FieldMatcher {
  * This is the single fix for the three-vocabulary divergence: the matchers
  * below never have to enumerate spellings.
  */
+/**
+ * What a date field is ABOUT, with the date-words removed.
+ *
+ *   "expiration_date" | "expirationDate" | "expiry" | "validUntil" → ""
+ *   "autoInsuranceExpiration"                                      → "autoinsurance"
+ *   "homeInsuranceExpiration"                                      → "homeinsurance"
+ *
+ * Two spellings of one fact collapse to the same qualifier; two different facts
+ * keep different ones. Used to decide which dates on a single entity are the
+ * same date said twice.
+ */
+const DATE_WORDS = /(date|expiration|expires|expiry|expire|valid|until|thru|through|renewal|renews|renew|due|next|on|of)/g;
+
+export function dateFieldQualifier(key: unknown): string {
+  return String(key ?? "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .toLowerCase()
+    .replace(DATE_WORDS, "")
+    .replace(/\s+/g, "");
+}
+
 export function normalizeFieldKey(key: unknown): string {
   return String(key ?? "").replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
 }
@@ -484,8 +506,11 @@ export function scanEntityDates(
       // `autoInsuranceExpiration` and `registrationExpiration` is two dates,
       // and an earlier version of this key dropped the second because it
       // compared type alone: with the first present, the second produced no
-      // rule at all.
-      const valueKey = `${cls.ruleType}:${cls.ruleSubtype ?? ""}:${clip(iso)}`;
+      // rule at all. The qualifier is what the field name says the date is
+      // ABOUT once the date-words are stripped, so `expiration_date`,
+      // `expirationDate` and `expiry` agree while `autoInsuranceExpiration`
+      // and `homeInsuranceExpiration` stay two different policies.
+      const valueKey = `${cls.ruleType}:${dateFieldQualifier(key)}:${clip(iso)}`;
       // A person has ONE birthday and ONE anniversary however many spellings
       // carry it, so those two still collapse on type even when the values
       // disagree — otherwise a stale `birthday` beside a corrected
@@ -688,10 +713,14 @@ export function rulesFromDocuments(documents: readonly any[]): DateRule[] {
     // already owns it (extraction routes it there). Emitting it from the
     // document as well would be the second system this whole module exists to
     // remove, so the document contributes only dates the document itself owns.
-    delete (bag as any).dateOfBirth;
-    delete (bag as any).dob;
-    delete (bag as any).birthday;
-    delete (bag as any).date_of_birth;
+    //
+    // Classified, not listed: a list of four literal spellings let `birthDate`
+    // through, and a driver's licence then produced a yearly rule titled
+    // "Sample Driver License's Birthday".
+    for (const key of Object.keys(bag)) {
+      const t = classifyDateField(key, ctx.contextKey).ruleType;
+      if (t === "birthday" || t === "anniversary") delete bag[key];
+    }
     out.push(...scanEntityDates(bag, ctx));
   }
   return out;
@@ -747,8 +776,15 @@ export function dedupeRules(rules: readonly DateRule[]): DateRule[] {
       // "expiration" with no subtype while the uploaded licence says
       // "drivers_license", and those are one date. A passport and a licence
       // expiring on the same day carry different subtypes and stay two.
+      // …and only ACROSS systems. Two rules from the SAME kind of record are
+      // two records: "Rent" and "Car Payment" are both payments owned by the
+      // same person, and merging them on a shared due date made one of them
+      // disappear. What this pass exists for is one real-world date described
+      // by two DIFFERENT systems — a licence expiration held on the person and
+      // on the uploaded licence.
       const i = kept.findIndex((k) =>
-        !k.ruleSubtype || !r.ruleSubtype || k.ruleSubtype === r.ruleSubtype);
+        k.sourceEntityType !== r.sourceEntityType &&
+        (!k.ruleSubtype || !r.ruleSubtype || k.ruleSubtype === r.ruleSubtype));
       if (i < 0) { kept.push(r); continue; }
       if (rulePriority(r) > rulePriority(kept[i])) {
         // The survivor keeps whichever side actually knew what the thing was.
@@ -979,6 +1015,9 @@ export function isBareExpiryStatement(title: unknown): boolean {
  * value parses as a date, so a licence number or an address is never rewritten.
  * Returns the same object shape plus the list of keys that changed.
  */
+/** Month names, so "Jun 4, 2029" counts as a bare date and "after" does not. */
+const MONTH_WORD = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
+
 export function normalizeEntityDateFields<T extends Record<string, any>>(
   fields: T,
   ctx: { contextKey?: string; maxDepth?: number } = {},
@@ -1000,6 +1039,22 @@ export function normalizeEntityDateFields<T extends Record<string, any>>(
       if (typeof value !== "string") continue;
       const trimmed = value.trim();
       if (!trimmed || /^\d{4}-\d{2}-\d{2}$/.test(trimmed)) continue;
+      // The value must BE a date, not merely contain one.
+      //
+      // `normalizeDateString` searches anywhere in the string, and this used to
+      // overwrite the whole value with what it found — so
+      // "Expires 30 days after 6/4/2029" became "2029-06-04" and a
+      // "2026-08-20T14:32:11Z" timestamp lost its time. This runs in every
+      // storage write path, so that was irreversible: the sentence the user
+      // typed would be gone from the database with no way back.
+      //
+      // A bare date is a short token with no prose around it. Anything else —
+      // a sentence, a range, a timestamp with a clock — is left exactly as the
+      // user wrote it, and the rule engine reads it as-is.
+      if (/\d{1,2}:\d{2}/.test(trimmed)) continue;             // carries a time
+      if (/[A-Za-z]{3,}/.test(trimmed.replace(/[A-Za-z]{3,9}\.?(?=\s|,|$)/g, (w) =>
+        MONTH_WORD.test(w) ? "" : w))) continue;                // carries non-month words
+      if (trimmed.split(/\s+/).filter(Boolean).length > 3) continue;  // a phrase
       // Only rewrite fields whose NAME says they hold a date. A free-text note
       // that happens to contain "6/4/2029" keeps its wording.
       const cls = classifyDateField(key, ctx.contextKey);

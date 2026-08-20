@@ -49,6 +49,13 @@ const TODAY = "2026-08-20";
 /** The profile as it exists before anything is told to the app. */
 const bareProfile = () => ({ id: JANE, name: "Jane Doe", type: "person", fields: {} as any });
 
+/** The uninteresting half of a DateRule, so a test can state only what it means. */
+const RULE_STUB = {
+  ruleSubtype: undefined, occurrenceType: "one_time", sourceField: "date", sourcePath: "date",
+  rawValue: "", ownerIds: [], recurrence: "none", calendarVisible: true, upcomingVisible: true,
+  importantVisible: true, countdownEnabled: true, active: true,
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. Classification: what does this date mean?
 // ─────────────────────────────────────────────────────────────────────────────
@@ -620,5 +627,104 @@ describe("dates in the past are still dates", () => {
       todayISO: TODAY, horizonDays: 366, lookbackDays: 400,
     }).map(o => o.date);
     expect(dates).toContain("2026-02-11");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. Second review pass, pinned
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("normalization rewrites dates, not sentences", () => {
+  it("leaves prose that merely mentions a date exactly as written", () => {
+    // This runs in every storage write path, so overwriting the value with the
+    // date found inside it destroyed the user's words with no way back.
+    const { fields } = normalizeEntityDateFields({
+      warrantyNotes: "3 years from 6/4/2029 purchase",
+      expirationTerms: "Expires 30 days after 6/4/2029",
+      leaseEndNote: "ends the last Friday of June 2029",
+    });
+    expect(fields.warrantyNotes).toBe("3 years from 6/4/2029 purchase");
+    expect(fields.expirationTerms).toBe("Expires 30 days after 6/4/2029");
+    expect(fields.leaseEndNote).toBe("ends the last Friday of June 2029");
+  });
+
+  it("leaves a timestamp with a clock on it alone", () => {
+    const { fields } = normalizeEntityDateFields({ lastUpdated: "2026-08-20T14:32:11.000Z" });
+    expect(fields.lastUpdated).toBe("2026-08-20T14:32:11.000Z");
+  });
+
+  it("still rewrites a bare date in any printed form", () => {
+    const { fields } = normalizeEntityDateFields({
+      // Date-NAMED fields: a value on a field whose name says nothing about
+      // dates is never rewritten, whatever it looks like.
+      expirationDate: "07/18/2034", dueDate: "7/18/2034",
+      dateOfBirth: "July 18, 2034", renewalDate: "18 Jul 2034",
+    });
+    expect([fields.expirationDate, fields.dueDate, fields.dateOfBirth, fields.renewalDate]).toEqual(
+      ["2034-07-18", "2034-07-18", "2034-07-18", "2034-07-18"],
+    );
+  });
+});
+
+describe("two payments on one person on one day are two payments", () => {
+  it("does not merge Rent into Car Payment", () => {
+    const rules = dedupeRules([
+      { ...RULE_STUB, id: "a", sourceEntityType: "liability", sourceEntityId: "l1", label: "Rent", ruleType: "payment", date: "2026-09-01", profileId: "p1" },
+      { ...RULE_STUB, id: "b", sourceEntityType: "liability", sourceEntityId: "l2", label: "Car Payment", ruleType: "payment", date: "2026-09-01", profileId: "p1" },
+    ] as any);
+    expect(rules.map(r => r.label).sort()).toEqual(["Car Payment", "Rent"]);
+  });
+
+  it("still merges one licence held on the person AND on the document", () => {
+    const rules = dedupeRules([
+      { ...RULE_STUB, id: "a", sourceEntityType: "profile", sourceEntityId: "p1", label: "Jane — Expiration", ruleType: "expiration", date: "2034-07-18", profileId: "p1" },
+      { ...RULE_STUB, id: "b", sourceEntityType: "document", sourceEntityId: "d1", label: "License — Expiration", ruleType: "expiration", ruleSubtype: "drivers_license", date: "2034-07-18", profileId: "p1" },
+    ] as any);
+    expect(rules).toHaveLength(1);
+    expect(rules[0].sourceEntityType).toBe("document");
+  });
+});
+
+describe("two policies on one vehicle on one day are two policies", () => {
+  it("keeps auto and home insurance apart", () => {
+    const rules = rulesFromProfiles([{
+      id: "car-1", name: "Honda", type: "vehicle",
+      fields: { autoInsuranceExpiration: "2027-03-01", homeInsuranceExpiration: "2027-03-01" },
+    }]);
+    expect(rules).toHaveLength(2);
+  });
+
+  it("still collapses two spellings of one expiration", () => {
+    const rules = rulesFromDocuments([{
+      id: "d1", name: "License", type: "drivers_license", linkedProfiles: [],
+      extractedData: { expiration_date: "2034-07-18", expirationDate: "2034-07-18", expiry: "2034-07-18" },
+    }]);
+    expect(rules).toHaveLength(1);
+  });
+});
+
+describe("a document does not have a birthday", () => {
+  it("drops every spelling of a person's DOB found on a document", () => {
+    for (const key of ["dateOfBirth", "dob", "birthday", "birthDate", "birth_date", "DOB"]) {
+      const rules = rulesFromDocuments([{
+        id: "d1", name: "Sample Driver License", type: "drivers_license",
+        linkedProfiles: ["p1"], extractedData: { [key]: "1994-07-10" },
+      }]);
+      expect(rules.map(r => r.ruleType), key).not.toContain("birthday");
+    }
+  });
+});
+
+describe("a liability written before the write-path fix still shows", () => {
+  it("reads a printed due date off a legacy row", () => {
+    const series = seriesFromAll({
+      profiles: [{
+        id: "l1", name: "Car Loan", type: "liability", parentProfileId: "p1",
+        fields: { nextDueDate: "07/18/2026", monthlyPayment: 415, frequency: "monthly", payoffDate: "09/01/2029" },
+      }],
+    });
+    const payment = series.find(s => s.source.system === "liability");
+    expect(payment?.baseDate).toBe("2026-07-18");
+    expect(payment?.recurrenceEnd).toBe("2029-09-01");
   });
 });
