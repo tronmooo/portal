@@ -85,9 +85,14 @@ export const TOOL_INTENT_ENTITY: Record<string, IntentEntity> = {
   // Financial accounts are `type: "account"` profiles.
   create_account: "profile", update_account_balance: "profile",
 
-  // Goals / journal / memory / artifacts / documents
+  // Goals / notes / journal / memory / artifacts / documents
   create_goal: "goal", update_goal: "goal", delete_goal: "goal",
+  // NOTES. A note is an artifact row of type "note" at the storage layer, but
+  // it is its OWN intent: the whole point of the 2026-08-20 fix is that asking
+  // for a note can no longer be served by the journal tool.
+  create_note: "note", update_note: "note", delete_note: "note",
   journal_entry: "journal", update_journal: "journal", delete_journal: "journal",
+  append_journal_entry: "journal",
   save_memory: "memory", update_memory: "memory", delete_memory: "memory",
   create_artifact: "artifact", update_artifact: "artifact",
   delete_artifact: "artifact", duplicate_artifact: "artifact",
@@ -123,6 +128,13 @@ const COMPATIBLE: Array<Set<IntentEntity>> = [
   new Set<IntentEntity>(["expense", "income"]),
   new Set<IntentEntity>(["obligation", "liability", "expense"]),
   new Set<IntentEntity>(["tracker", "journal"]),
+  // A note and a stored memory are both "reference information the user wants
+  // back later" — routing between them is a judgement call the prompt makes,
+  // not a mistake this gate should refuse. NOTE AND JOURNAL ARE NOT LISTED
+  // TOGETHER ON PURPOSE: that confusion is the bug this system exists to fix,
+  // so a journal tool on an explicit note request is a hard block.
+  new Set<IntentEntity>(["note", "memory"]),
+  new Set<IntentEntity>(["note", "artifact"]),
   new Set<IntentEntity>(["goal", "habit", "tracker"]),
 ];
 
@@ -165,6 +177,7 @@ const CREATE_TOOL_FOR: Partial<Record<IntentEntity, string>> = {
   liability: "create_liability",
   goal: "create_goal",
   journal: "journal_entry",
+  note: "create_note",
   memory: "save_memory",
   artifact: "create_artifact",
   document: "create_document",

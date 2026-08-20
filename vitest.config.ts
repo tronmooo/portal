@@ -202,6 +202,11 @@ export default defineConfig({
       'tests/entity-resolution.test.ts',
       'tests/ai-mark-done-routing.test.ts',
       'tests/entity-resolution-contract.test.ts',
+      // Unified intent routing (Note / Journal / Task) + the temporal layer.
+      'tests/content-routing.test.ts',
+      'tests/temporal-rules.test.ts',
+      'tests/unified-intent-routing.test.ts',
+      'tests/domain-routing.test.ts',
       // AI write → UI synchronization: the manifest that tells the client what
       // a chat turn changed, and the read-your-writes barrier that stops a
       // post-write refetch being served pre-write cache.

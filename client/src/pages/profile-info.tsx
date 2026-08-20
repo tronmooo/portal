@@ -477,6 +477,7 @@ function SingleProfileInfo({ id }: { id: string }) {
 
       {/* Notes + Tags */}
       <NotesTags
+        profileId={profile.id}
         notes={profile.notes || ""}
         tags={profile.tags || []}
         onSaveNotes={(notes) => patch.mutate({ notes })}
@@ -673,7 +674,8 @@ function FieldCell({ label, value, editable, onSave, onRemove }: {
 }
 
 // ── Notes + tags editor ──────────────────────────────────────────────────────
-function NotesTags({ notes, tags, onSaveNotes, onSaveTags }: {
+function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
+  profileId: string;
   notes: string;
   tags: string[];
   onSaveNotes: (v: string) => void;
@@ -683,6 +685,22 @@ function NotesTags({ notes, tags, onSaveNotes, onSaveTags }: {
   const [draft, setDraft] = useState(notes);
   const [tagInput, setTagInput] = useState("");
   useEffect(() => { setDraft(notes); }, [notes]);
+
+  // SAVED NOTES — the canonical Note records for this profile, whether they
+  // were written here, typed into the composer, or created from chat
+  // ("note for Jane: …"). Before this the card showed only `profile.notes`,
+  // the free-text scratchpad, so a note created any other way had nowhere to
+  // appear and the card read "No notes." beside a note that plainly existed.
+  const { data: savedNotes = [] } = useQuery<any[]>({
+    queryKey: ["/api/notes", profileId],
+    queryFn: async () => (await apiRequest("GET", `/api/notes?profileId=${encodeURIComponent(profileId)}`)).json(),
+    enabled: !!profileId,
+    staleTime: 30_000,
+  });
+  const removeNote = useMutation({
+    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/notes/${id}`); },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/notes"] }),
+  });
 
   const addTag = () => {
     const t = tagInput.trim();
@@ -709,7 +727,28 @@ function NotesTags({ notes, tags, onSaveNotes, onSaveTags }: {
             </div>
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground whitespace-pre-wrap min-h-[1.5rem]">{notes || "No notes."}</p>
+          <p className="text-xs text-muted-foreground whitespace-pre-wrap min-h-[1.5rem]">
+            {notes || (savedNotes.length > 0 ? "" : "No notes.")}
+          </p>
+        )}
+        {savedNotes.length > 0 && (
+          <div className="mt-3 space-y-2 border-t pt-3">
+            {savedNotes.map((n: any) => (
+              <div key={n.id} className="group flex items-start justify-between gap-2" data-testid={`saved-note-${n.id}`}>
+                <div className="min-w-0">
+                  <p className="text-xs font-medium truncate">{n.title}</p>
+                  <p className="text-xs text-muted-foreground whitespace-pre-wrap">{n.content}</p>
+                </div>
+                <button
+                  onClick={() => removeNote.mutate(n.id)}
+                  className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
+                  aria-label={`Delete note ${n.title}`}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
         )}
       </Card>
 
