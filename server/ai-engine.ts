@@ -49,6 +49,8 @@ import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from 
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey, findIdentityMatches } from "@shared/tracker-identity";
 import { detectHabitMetric, UMBRELLA_TRACKER_NAMES } from "@shared/habit-metric";
 import { matchHabitByName } from "@shared/habit-match";
+import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompletionVeto } from "@shared/habit-completion-intent";
+import { completeHabitOccurrence, type HabitCompletionSource } from "./habit-completion";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
@@ -3650,7 +3652,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "checkin_habit",
-    description: "Record ONE completion of a habit. ONLY when the user EXPLICITLY references the habit: 'mark X done', 'mark off X', 'completed X habit', 'checked off X', 'I took my first dose', 'I did one of them'. A plain activity report ('I did X', 'I took a shower') is NOT a habit check-in — log it with log_tracker_entry instead. IMPORTANT: a habit can require SEVERAL completions a day (2× daily, 3× daily). One call records ONE occurrence and fills the next outstanding one — it does NOT finish the day. 'Mark my medication done' on a twice-daily habit leaves it at 1 of 2 (50%); the user saying 'again' or 'I took the second one' later records the second. Pass `count` ONLY when they explicitly said how many ('I took both doses' → 2, 'I did it twice today' → 2). The result reports completed/required/percent — quote those, never just 'done'. Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
+    description: "Record ONE completion of a habit. Use it when the user references the habit ('mark X done', 'mark off X', 'completed X habit', 'I took my first dose') AND when they simply REPORT DOING something that is already one of their habits ('I walked the dog' with a Walk the Dog habit → check it in, no permission needed; log_tracker_entry too when there is something to measure). A report of an activity that is NOT an existing habit is just a tracker log. Never infer a completion from a plan, a question, a negation, or someone else's action ('I might walk the dog later', 'did I walk the dog?', 'John walked the dog'). IMPORTANT: a habit can require SEVERAL completions a day (2× daily, 3× daily). One call records ONE occurrence and fills the next outstanding one — it does NOT finish the day. 'Mark my medication done' on a twice-daily habit leaves it at 1 of 2 (50%); the user saying 'again' or 'I took the second one' later records the second. Pass `count` ONLY when they explicitly said how many ('I took both doses' → 2, 'I did it twice today' → 2). The result reports completed/required/percent — quote those, never just 'done'. Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -5108,7 +5110,7 @@ BEHAVIOR:
 - Extract the due date AND the clock time when either is mentioned ("Friday at 10am" → dueDate + dueTime:"10:00").
 - BIAS TO ACTION: When the user asks to create, schedule, add, mark off, complete, or check in something, DO IT immediately. NEVER ask clarifying questions for simple CRUD. Just execute.
   - "Mark off my run" → checkin_habit(name: "Running" or "Morning Run" — find closest match) — DO NOT ask which one
-  - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" / "I went to X" → log_tracker_entry — these are ACTIVITY REPORTS, not habit check-ins. Habits only move on EXPLICIT language ("mark off", "check in", "my X habit").
+  - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" / "I went to X" → log_tracker_entry — these are ACTIVITY REPORTS. If a HABIT BY THAT NAME already exists (the user's habits are listed in your context), ALSO call checkin_habit for it in the same turn: a past-tense report of doing an existing habit completes today's occurrence. Never ask permission for that.
   - "schedule a doctor appointment" → create_task immediately
   - If ambiguous between 2 items with similar names, pick the closest match and do it. You can mention in your response what you picked.
   - NEVER present numbered options for simple check-ins, completions, or mark-offs. That is hostile UX.
@@ -5216,7 +5218,12 @@ When the user attaches a clock time or date to an action, pass it via the at par
 - Pass only the explicit facts; the server's estimation engine converts units and derives the rest (steps from distance via the user's own stride/history, pace from distance+duration, calories from weight+pace) with per-value confidence.
 - ESTIMATE HONESTY: the tool result's estimateNote lists derived/estimated values. Reply like "Logged a 1-mile walk — about 2,150 steps and ~20 minutes based on your walking history." NEVER present an estimated number as something the user said, and NEVER invent numbers not in the tool result.
 - Explicit user values are never overwritten by estimates: "1 mile and 2,400 steps" saves BOTH exactly as given.
-- ACTIVITY ≠ HABIT: "I did / I took / I smoked / I went / I played" are ACTIVITY REPORTS → log_tracker_entry, ALWAYS — even when a habit with a similar name exists (on any profile). NEVER call checkin_habit or create_habit for them, never ask "did you mean the habit?", and never derail the rest of the message over a habit. Habits move ONLY on explicit language: "mark off X", "check in X", "completed my X habit", "make this a habit", "every day", "remind me".
+- ACTIVITY REPORTS AND EXISTING HABITS: "I did / I took / I went / I played / I walked the dog" are ACTIVITY REPORTS → log_tracker_entry. Whether they ALSO move a habit depends on one thing — does a habit of that name already exist ON THE USER'S OWN PROFILE (they are listed in your context)?
+  · IT EXISTS → the report completes today's occurrence. Call checkin_habit TOO (same turn, both calls). "I walked the dog" with a "Walk the Dog" habit → log_tracker_entry AND checkin_habit. NEVER reply "say 'mark off my Walk the Dog habit' to count it" and NEVER ask "do you want me to mark it off?" — their sentence already said they did it. Requiring them to repeat it as a command is a bug. Report the new progress instead: "logged — Walk the Dog is 1 of 2 today".
+  · IT DOES NOT EXIST → log_tracker_entry only. Do NOT create a habit from an activity report (that still needs "make this a habit" / "every day" / "remind me").
+  · NEVER check in ANOTHER PROFILE'S habit from an unqualified report, and never derail the rest of the message over a habit.
+- DO NOT INFER A COMPLETION from a plan, a question, a negation, or someone else's action: "I might walk the dog later", "remind me to walk the dog", "did I walk the dog?", "I forgot to walk the dog", "John walked the dog" → NONE of these complete anything. Ask or answer instead. A vague activity that only partly matches a habit ("I walked for twenty minutes" vs a "Walk the Dog" habit) is a tracker log, not that habit.
+- ONE COMPLETION, ONE RECORD: checking a habit off — from chat, the Habits page, or by logging its linked tracker — all write the same occurrence. Repeating it does NOT stack: a second "I walked the dog" returns alreadyComplete. Say it was already recorded; never claim a second completion.
 - NEVER DROP DETAILS: every number, unit, duration, count, method, and timestamp the user states MUST appear in the entry ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM"). Losing a stated detail is a logging failure.
 - PROFILE OWNERSHIP: entries belong to the user (self) unless THIS message explicitly names someone else ("Rex threw up", "log water for Mom"). NEVER pick a profile from conversation history, from the active dashboard filter chatter, or from which profile happens to own a similar tracker/habit name.
 
@@ -8056,7 +8063,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, normalizedValues);
-        await annotateLinkedHabitProgress(entry, tracker.id);
+        await syncHabitsForTrackerLog(entry, tracker, {
+          userMessage: String((input as any).__userMessage || ""),
+          targetProfileId,
+          activityName: input.trackerName,
+        });
         // Only warn about fields we genuinely could NOT make first-class (long
         // free-form text). Fields we just auto-added (sugar, fiber, sodium, …)
         // DO show on the card/chart, so they must not trigger the scary
@@ -8181,7 +8192,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         } catch { /* non-fatal */ }
         const { values: nv } = normalizeTrackerEntry(conflictTracker as any, entryValues);
         const conflictEntry = await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
-        await annotateLinkedHabitProgress(conflictEntry, conflictTracker.id);
+        await syncHabitsForTrackerLog(conflictEntry, conflictTracker, {
+          userMessage: String((input as any).__userMessage || ""),
+          targetProfileId,
+          activityName: input.trackerName,
+        });
         return conflictEntry;
       }
 
@@ -8222,6 +8237,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Surface what was auto-created so callers (bulk path, chat UI) can
         // report "created a new X tracker" honestly.
         if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
+        // A habit for this activity may already exist with no tracker to point
+        // at — this is where it adopts the one we just made.
+        await syncHabitsForTrackerLog(entry, newTracker, {
+          userMessage: String((input as any).__userMessage || ""),
+          targetProfileId,
+          activityName: input.trackerName,
+        });
         // Unknown entity (classification ladder exhausted): tell the model to
         // ask ONE concise clarification. The user's answer arrives via
         // update_tracker(changes:{category}), which remembers the mapping.
@@ -10093,7 +10115,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Exercise tracker) and creating one only when none exists. A
       // completion-only habit ("make my bed") links to nothing. Logging to
       // the linked tracker then advances the habit's day progress
-      // (server/habit-tracker-sync.ts). NO calendar coupling anywhere in this
+      // (server/habit-completion.ts). NO calendar coupling anywhere in this
       // flow: the habit's schedule stays internal to the habit system.
       let linkedTrackerNote: { id: string; name: string; created: boolean } | null = null;
       try {
@@ -10167,19 +10189,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "checkin_habit": {
       const habits = await storage.getHabits();
-      // HABIT ≠ ACTIVITY LOG (user directive 2026-07-15): a habit is only
-      // checked in when the user EXPLICITLY says so ("mark off my run",
-      // "completed my water habit"). A plain activity report ("I went to the
-      // bathroom at 8:15 AM") must be a tracker entry — previously it matched
-      // ANOTHER PROFILE'S "Go to the bathroom 3x daily" habit and derailed
-      // the whole message into a clarifying question.
       const checkinMsg = String((input as any).__userMessage || "");
-      if (checkinMsg && !hasExplicitHabitCheckinIntent(checkinMsg)) {
-        return {
-          error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
-          code: "NOT_A_HABIT_CHECKIN",
-        };
-      }
       // Scope to the named profile, else to self-owned/unowned habits.
       // NEVER fall back to other profiles' habits — an unqualified message
       // can only ever move the user's own streaks.
@@ -10205,7 +10215,47 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // habit and "check off running" resolves "Run" — but ONLY within the
       // profile-scoped list. The old fall-back to the FULL habit list is gone:
       // it let unqualified messages check in other people's habits.
-      const habit = matchHabitByName(eligible, input.name || "");
+      let habit = matchHabitByName(eligible, input.name || "");
+
+      // ── DOES THE SENTENCE ALREADY SAY THEY DID IT? ──────────────────────
+      // (user directive 2026-08-20) "I walked the dog" with a Walk the Dog
+      // habit on the dashboard is a completion, not a request for permission
+      // to record one. The old rule refused anything without command language
+      // ("mark off…"), which is what left the dashboard reading 0 of 2 after
+      // the user had said they walked the dog.
+      //
+      // The relaxation is narrow on purpose — the 2026-07-15 regression it
+      // must not reintroduce is an activity report checking in SOMEONE ELSE'S
+      // habit. Three things hold here: the candidate list above is already
+      // scoped to the user (or the profile they named); the sentence has to
+      // read as a completion report (not a question, plan, reminder,
+      // negation, or another person's action); and the habit has to be named
+      // strongly enough in the message — see shared/habit-completion-intent.
+      let completionSource: HabitCompletionSource = "chat_explicit";
+      // A question, a denial, or a request to be reminded is never a
+      // completion — not even when it reads like a command. "Did I walk the
+      // dog?" opens with "did", which the command-word detector counts as
+      // "did…done" and would otherwise check the habit in for asking about it.
+      if (checkinMsg && isHardCompletionVeto(checkinMsg)) {
+        return {
+          error: `That message asks about, denies, or plans a habit — it does not report doing one. Do NOT check anything in. Answer the question (or create the reminder) instead.`,
+          code: "NOT_A_HABIT_CHECKIN",
+        };
+      }
+      if (checkinMsg && !hasExplicitHabitCheckinIntent(checkinMsg)) {
+        const inferred = matchHabitForCompletionReport(eligible, checkinMsg);
+        if (!inferred) {
+          return {
+            error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
+            code: "NOT_A_HABIT_CHECKIN",
+          };
+        }
+        // The message names the habit; trust it over the model's `name`
+        // argument, which is a paraphrase of the same sentence.
+        habit = inferred.habit;
+        completionSource = "chat_inferred";
+      }
+
       if (!habit) {
         // Same rule as complete_task, in reverse: never report absence until
         // every actionable type has been asked. An explicit "habit" in the
@@ -10260,42 +10310,53 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         ? Math.floor(Number((input as any).count))
         : spoken?.all ? before.remaining
         : spoken?.count ?? 1;
-      const toRecord = Math.max(0, Math.min(askedFor, before.remaining));
 
-      if (toRecord === 0) {
+      // ONE PIPELINE: the same call the Habits page and the tracker use. It
+      // clamps to the day's remaining occurrences (so a repeat is a no-op) and
+      // writes the habit's linked tracker record.
+      const done = await completeHabitOccurrence(storage, {
+        habitId: habit.id,
+        date: checkinDate,
+        count: askedFor,
+        source: completionSource,
+      });
+
+      if (done.recorded === 0) {
         return {
           alreadyComplete: true,
           habitId: habit.id,
           name: habit.name,
           date: checkinDate,
-          progress: before,
-          message: `"${habit.name}" is already complete for ${checkinDate} — ${before.completed} of ${before.required} done. Nothing recorded. Tell the user it was already finished; do NOT retry.`,
+          progress: done.progress,
+          message: `"${habit.name}" is already complete for ${checkinDate} — ${done.progress.completed} of ${done.progress.required} done. Nothing recorded (no duplicate was created). Tell the user it was already finished; do NOT retry.`,
         };
       }
 
-      const recorded: any[] = [];
-      for (let i = 0; i < toRecord; i++) {
-        const c = await storage.checkinHabit(habit.id, checkinDate);
-        if (c) recorded.push(c);
-      }
-      const after = habitDayProgress((await storage.getHabit(habit.id)) as any, checkinDate);
+      const after = done.progress;
+      const trackerNote = done.tracker
+        ? ` The linked "${done.tracker.name}" tracker was updated too${done.trackerEntries.length ? "" : " (already had the entry)"} — mention it.`
+        : "";
+      const inferredNote = completionSource === "chat_inferred"
+        ? ` The user's own words said they did it, so this was recorded without asking — do NOT ask whether to mark it off, just report that it is done.`
+        : "";
       return {
         id: habit.id,
         habitId: habit.id,
         name: habit.name,
         date: checkinDate,
-        checkins: recorded,
-        recorded: recorded.length,
+        source: completionSource,
+        recorded: done.recorded,
         // The numbers the reply must quote. A partial day is a real outcome —
         // saying "done" after one of two doses is the thing being fixed.
         completed: after.completed,
         required: after.required,
         percent: after.percent,
         progress: after,
-        currentStreak: (await storage.getHabit(habit.id))?.currentStreak ?? 0,
-        message: after.required > 1
-          ? `Recorded ${recorded.length} completion${recorded.length === 1 ? "" : "s"} of "${habit.name}" — ${after.completed} of ${after.required} done today (${after.percent}%). ${after.isComplete ? "That finishes the day." : `${after.remaining} still to go.`} Report the count and the percent, not just "done".`
-          : `Checked in "${habit.name}" for ${checkinDate}.`,
+        currentStreak: done.currentStreak,
+        tracker: done.tracker,
+        message: (after.required > 1
+          ? `Recorded ${done.recorded} completion${done.recorded === 1 ? "" : "s"} of "${habit.name}" — ${after.completed} of ${after.required} done today (${after.percent}%). ${after.isComplete ? "That finishes the day." : `${after.remaining} still to go.`} Report the count and the percent, not just "done".`
+          : `Checked in "${habit.name}" for ${checkinDate}.`) + trackerNote + inferredNote,
       };
     }
 
@@ -13233,29 +13294,95 @@ async function buildReportSpec(input: Record<string, any>): Promise<ReportSpec> 
 // ============================================================
 
 /**
- * Habit ↔ tracker link: the storage layer already advanced any habit linked to
- * this tracker when the entry landed (server/habit-tracker-sync.ts). This
- * annotates the tool RESULT with the habits' post-entry day progress so the
- * model's reply can say "that also puts your water habit at 2 of 4" instead of
- * silently moving a streak the user never hears about.
+ * Habit ↔ tracker reconciliation for a logged activity.
+ *
+ * Two jobs, in order:
+ *
+ * 1. ADOPT AN UNLINKED HABIT. The storage layer already advanced any habit
+ *    LINKED to this tracker (server/habit-completion.ts). But a habit created
+ *    before the link existed — or one the user made by hand — has no
+ *    linkedTrackerId, so logging the activity moved nothing. That is the
+ *    reported bug: with a "Walk the Dog" habit on the dashboard, "I just walked
+ *    the dog" wrote a tracker entry and left the habit at 0 of 2. When the
+ *    user's sentence reads as a completion report and a habit in THEIR scope is
+ *    named strongly enough by it, the habit is linked to this tracker (so it is
+ *    canonical from here on) and today's occurrence is completed.
+ *
+ * 2. REPORT IT. The result carries the habits' post-entry day progress so the
+ *    reply says "that also puts your water habit at 2 of 4" instead of silently
+ *    moving a streak the user never hears about — or, worse, asking them to
+ *    repeat themselves as a command.
  */
-async function annotateLinkedHabitProgress(entry: any, trackerId: string): Promise<void> {
+async function syncHabitsForTrackerLog(
+  entry: any,
+  tracker: { id: string; name: string },
+  ctx: { userMessage?: string; targetProfileId?: string; activityName?: string },
+): Promise<void> {
   if (!entry || typeof entry !== "object" || (entry as any).error) return;
   try {
-    const habits = await storage.getHabits();
-    const linked = habits.filter(h => (h as any).linkedTrackerId === trackerId);
-    if (linked.length === 0) return;
     const tz = aiUserTimezone();
     const when = entry.timestamp ? new Date(entry.timestamp) : new Date();
     const dateStr = toLocalDateStr(isNaN(when.getTime()) ? new Date() : when, tz);
+    const message = String(ctx.userMessage || "");
+
+    // ── 1. Adopt ─────────────────────────────────────────────────────────
+    if (message && classifyCompletionReport(message) !== "none") {
+      const allHabits = await storage.getHabits();
+      const allProfiles = await storage.getProfiles();
+      // Same ownership rule as checkin_habit: the user's own habits (or the
+      // profile this entry was logged for). Never another person's.
+      const scopeIds = ctx.targetProfileId ? [ctx.targetProfileId] : [...selfIdsFrom(allProfiles)];
+      const eligible = scopeIds.length > 0
+        ? allHabits.filter(h => passesProfileFilter(h.linkedProfiles, { selectedIds: scopeIds, allProfiles }))
+        : allHabits;
+      // Match against the sentence, and against the activity name as a
+      // fallback for a report worded differently than the habit. The fallback
+      // demands a FULL name match: a "Walking" tracker must not stand in for a
+      // "Walk the Dog" habit, or any recorded walk finishes the dog's.
+      const byName = ctx.activityName
+        ? matchHabitForCompletionReport(eligible, `${ctx.activityName} done`, "explicit")
+        : null;
+      const hit = matchHabitForCompletionReport(eligible, message)
+        || (byName?.match === "full" ? byName : null);
+      // A habit ALREADY linked to this tracker was advanced by the storage
+      // layer when the entry landed. Completing it again here would turn one
+      // walk into two — the duplicate the user explicitly ruled out.
+      const handledByStorage = !!hit && (hit.habit as any).linkedTrackerId === tracker.id;
+      if (hit && !handledByStorage && !(hit.habit as any).linkedTrackerId) {
+        await storage.updateHabit(hit.habit.id, { linkedTrackerId: tracker.id } as any);
+        logger.info("ai", `Linked existing habit "${hit.habit.name}" to tracker "${tracker.name}" from an activity report`);
+      }
+      if (hit && !handledByStorage) {
+        // The tracker entry already exists — this records the habit side only.
+        const res = await completeHabitOccurrence(storage, {
+          habitId: hit.habit.id,
+          date: dateStr,
+          source: "chat_inferred",
+          skipTrackerWrite: true,
+        });
+        if (res.ok) {
+          entry.habitCompletion = {
+            habitId: res.habitId, name: res.habitName,
+            recorded: res.recorded, completed: res.progress.completed,
+            required: res.progress.required, percent: res.progress.percent,
+          };
+        }
+      }
+    }
+
+    // ── 2. Report ────────────────────────────────────────────────────────
+    const habitsNow = await storage.getHabits();
+    const linked = habitsNow.filter(h => (h as any).linkedTrackerId === tracker.id);
+    if (linked.length === 0) return;
     const lines = linked.map(h => {
       const p = habitDayProgress(h as any, dateStr);
       return `"${h.name}" habit: ${p.label}${p.isComplete ? " — day complete" : ""}`;
     });
     entry.habitProgressNote =
       `This tracker is LINKED to a habit — the entry also advanced its progress for ${dateStr}: ${lines.join("; ")}. ` +
-      `Mention this to the user (e.g. "logged and your habit is now at ...").`;
-  } catch { /* annotation is best-effort */ }
+      `Tell the user the habit moved (e.g. "logged, and that puts your habit at 1 of 2 today"). ` +
+      `NEVER ask them to repeat it as "mark off my habit" — it is already recorded.`;
+  } catch { /* reconciliation is best-effort; the entry itself has landed */ }
 }
 
 async function autoUpdateGoalProgress(trackerId: string, values: Record<string, any>): Promise<void> {
@@ -14724,9 +14851,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     `Active Tasks: ${tasks.filter(t => t.status !== "done").slice(0, 15).map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
     `Recent Expenses (last 10): ${expenses.slice(-10).map(e => `$${e.amount} - ${e.description} (${e.date?.slice(0,10)})`).join("; ") || "none"}`,
     `Upcoming Events (next 10): ${events.filter(e => new Date(e.date) >= new Date()).slice(0, 10).map(e => `${e.title} on ${e.date}`).join("; ") || "none"}`,
-    `Habits (${habits.length}): ${habits.slice(0, 20).map(h => {
+    // Today's progress rides along so a report of doing one of these ("I
+    // walked the dog") can be checked in and quoted accurately — and so an
+    // already-finished habit is visibly already finished rather than being
+    // "completed" a second time.
+    `Habits (${habits.length}) [today's progress included — a past-tense report of doing one of these completes it; call checkin_habit, do not ask]: ${habits.slice(0, 20).map(h => {
       const hOwner = (h.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name || pid.slice(0,8)).join(",");
-      return `${h.name} (${h.frequency}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
+      const hp = habitDayProgress(h as any, getUserToday(aiUserTimezone()));
+      const today = hp.isScheduled ? `today ${hp.completed}/${hp.required}${hp.isComplete ? " DONE" : ""}` : "not scheduled today";
+      return `${h.name} (${h.frequency}, ${today}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
     }).join("; ") || "none"}`,
     `Obligations (${obligations.length}): ${obligations.filter((o: any) => o.status !== "cancelled").slice(0, 20).map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
     // Assets & vehicles with full field data

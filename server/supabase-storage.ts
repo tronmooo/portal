@@ -83,7 +83,7 @@ import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
-import { autoCheckinLinkedHabits } from "./habit-tracker-sync";
+import { autoCheckinLinkedHabits } from "./habit-completion";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
   type Profile, type InsertProfile,
@@ -2961,9 +2961,12 @@ export class SupabaseStorage implements IStorage {
     this.logActivity("tracker", `Logged ${tracker.name}`);
     // Habit ↔ tracker link: one activity record updates both. Advances any
     // habit linked to this tracker by one completion for the entry's day
-    // (best-effort — see server/habit-tracker-sync.ts). Skipped on the dedup
-    // early-return above: a retried HTTP request must not double-advance.
-    await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: ts, values, timezone: this._timezone });
+    // (best-effort — see server/habit-completion.ts). Skipped on the dedup
+    // early-return above (a retried HTTP request must not double-advance) and
+    // when this write IS the mirror of a habit check-in, which would loop.
+    if (!(data as any).__skipHabitSync) {
+      await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: ts, values, timezone: this._timezone });
+    }
     // Return the DATABASE's version of the row, not our intended one.
     return this.rowToTrackerEntry(inserted);
   }

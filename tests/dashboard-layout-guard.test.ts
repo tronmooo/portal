@@ -42,3 +42,46 @@ describe("dashboard layout single source of truth", () => {
     expect(findSection(DEFAULT_SECTION_DEFS, "nonexistent")).toBeUndefined();
   });
 });
+
+// ── Executive grid packs, with no dead space ─────────────────────────────────
+// User report 2026-08-20 (screenshot): large black gaps between Executive
+// cards, because the grid was `items-start` — every card shrank to its content
+// and the shorter of each pair left a void running down to the next row. The
+// three rules that fix it have to stay together; drop any one and the gaps
+// come back, so each is pinned here.
+describe("executive dashboard grid has no dead space", () => {
+  const execSrc = readFileSync("client/src/components/dashboard/ExecutiveBriefing.tsx", "utf8");
+  const cssSrc = readFileSync("client/src/index.css", "utf8");
+
+  it("the card grid stretches its rows instead of top-aligning them", () => {
+    const grid = execSrc.match(/className="exec-grid grid[^"]*"/);
+    expect(grid, "the exec card grid should carry the exec-grid class").toBeTruthy();
+    expect(grid![0], "items-start re-introduces the black gaps").not.toContain("items-start");
+  });
+
+  it("a card fills its cell and lays out as a column", () => {
+    // ExecCard's <section> — h-full is what makes the short card in a row grow
+    // to the row's height rather than leaving the rest of the cell empty.
+    expect(execSrc).toMatch(/bubble bubble-enter p-3\.5 sm:p-4 h-full flex flex-col/);
+  });
+
+  it("card content lives in a bounded, scrollable body", () => {
+    expect(execSrc).toContain('className="exec-card-body flex-1 min-h-0 flex flex-col"');
+    expect(cssSrc).toMatch(/\.exec-card-body\s*\{[^}]*max-height/);
+    expect(cssSrc).toMatch(/\.exec-card-body\s*\{[^}]*overflow-y:\s*auto/);
+  });
+
+  it("an odd trailing card spans the full width rather than leaving a blank cell", () => {
+    expect(cssSrc).toMatch(/\.exec-grid\s*>\s*\*:last-child:nth-child\(odd\)\s*\{\s*grid-column:\s*1\s*\/\s*-1/);
+  });
+
+  it("the packing rules are desktop-only — phones are a single column", () => {
+    const idx = cssSrc.indexOf(".exec-card-body");
+    const mediaOpen = cssSrc.lastIndexOf("@media (min-width: 768px)", idx);
+    expect(mediaOpen, "exec grid rules must sit inside a min-width media query").toBeGreaterThan(-1);
+  });
+
+  it("an empty card centres its message instead of hugging the top", () => {
+    expect(execSrc).toMatch(/function CardEmpty[\s\S]{0,320}flex-1 flex items-center justify-center/);
+  });
+});

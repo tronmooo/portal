@@ -7,7 +7,7 @@
 --     and any other rich fields. Tracker data is richer than the habit needs.
 --   · A measurable habit ("drink 64 oz water daily", "run 3 miles 3x/week")
 --     links to the tracker that measures it. Logging a tracker entry then
---     advances the habit's progress for that day (server/habit-tracker-sync.ts)
+--     advances the habit's progress for that day (server/habit-completion.ts)
 --     — one activity record updates both.
 --   · A completion-only habit ("make my bed every morning") links to nothing;
 --     there is no useful measurement beyond the check-in itself.

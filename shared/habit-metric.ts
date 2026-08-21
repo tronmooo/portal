@@ -28,6 +28,7 @@
 // Pinned by tests/habit-tracker-link.test.ts.
 
 import { classifyEntity, type TrackerCategory } from "./entity-classify";
+import { habitTokens } from "./habit-match";
 
 export interface HabitMetricField {
   name: string;
@@ -182,18 +183,33 @@ export function detectHabitMetric(
   const message = String(userMessage || "");
   if (!name.trim()) return null;
 
+  const noun = habitMetricNoun(name);
+
   // 1. Canonical map — try the habit name first, then the message. The habit
   // name is the model's own summary of the commitment, so it wins conflicts.
   for (const text of [name, message]) {
     if (!text) continue;
     for (const m of CANONICAL_METRICS) {
-      if (m.match.test(text)) {
-        return { candidates: [...m.candidates], category: m.category, fields: m.fields.map((f) => ({ ...f })), source: "canonical" };
-      }
+      if (!m.match.test(text)) continue;
+      // SPECIFICITY GUARD. The canonical metric for "walk" is Walking — right
+      // for "Walk 10,000 steps", wrong for "Walk the Dog", which is a
+      // particular walk. Linking the dog-walk habit to a generic Walking
+      // tracker means any recorded walk completes it, and "I walked for twenty
+      // minutes" then falsely finishes the dog's walk (user's own
+      // counter-example). When the habit's name carries a word the canonical
+      // one doesn't, the habit keeps its own tracker.
+      const specific = noun && habitTokens(noun).some(
+        (t) => !m.candidates.some((c) => habitTokens(c).includes(t)),
+      );
+      const candidates = specific ? [name.trim(), noun, ...m.candidates] : [...m.candidates];
+      return {
+        candidates,
+        category: m.category,
+        fields: m.fields.map((f) => ({ ...f })),
+        source: "canonical",
+      };
     }
   }
-
-  const noun = habitMetricNoun(name);
 
   // 2. Explicit quantity in either text: the user themselves stated a
   // measurement, so track the cleaned-up subject even if we don't know it.

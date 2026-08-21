@@ -932,6 +932,48 @@ button, a, [role="button"], .card-lift {
 }
 .bubble-row:active { transform: scale(0.99); }
 
+/* ============================================================
+   EXECUTIVE DASHBOARD GRID — packed, no dead space
+   ============================================================
+   User report 2026-08-20 (screenshot): "there's a lot of empty space in the
+   executive tab… every box should fill in the black stuff no matter how big
+   they each get, they should all stay the same size."
+
+   The grid used to be `items-start`, so every card shrank to its content and
+   the shorter of each pair left a black void running down to the next row.
+   Three rules fix that, and they have to work together:
+
+     1. rows STRETCH (the Tailwind default, now that items-start is gone) and
+        each card is h-full — both cards in a row are the same height and each
+        one fills its cell;
+     2. a card's body scrolls inside a bounded height, so the card with more
+        rows makes the row a little taller and then scrolls, instead of
+        stretching its neighbour into a mostly-empty box;
+     3. a trailing odd card spans both columns, so the last row is never half
+        empty.
+
+   Only from md up: the single-column phone layout has no pairing to balance,
+   and a nested scroll region there fights the page scroll. */
+@media (min-width: 768px) {
+  .exec-card-body {
+    /* Tall enough for ~6 rows plus a header block; past that the card scrolls
+       rather than dragging the whole row down with it. */
+    max-height: 22rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* A quiet scrollbar — the card is a surface, not a pane. */
+  .exec-card-body { scrollbar-width: thin; scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent; }
+  .exec-card-body::-webkit-scrollbar { width: 6px; }
+  .exec-card-body::-webkit-scrollbar-track { background: transparent; }
+  .exec-card-body::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.25); border-radius: 9999px; }
+  .exec-card-body:hover::-webkit-scrollbar-thumb { background: hsl(var(--muted-foreground) / 0.4); }
+
+  /* Odd card count → the last one takes the full width instead of leaving a
+     blank cell beside it. */
+  .exec-grid > *:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+
 /* Large icon medallion — the coloured circle behind a section's icon. */
 .medallion {
   display: inline-flex;

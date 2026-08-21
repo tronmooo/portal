@@ -158,7 +158,7 @@ export const ACTION_TYPE_DOMAINS: Record<string, Domain[]> = {
   create_liability: ["liabilities", "profiles", "obligations"],
   revalue_asset: ENTITY_DOMAINS.profile,
   create_tracker: ["trackers"],
-  // log_entry can advance a habit linked to the tracker (habit-tracker-sync).
+  // log_entry can advance a habit linked to the tracker (habit-completion).
   log_entry: ["trackers", "habits"],
   update_tracker_entry: ["trackers"],
   delete_tracker_entry: ["trackers"],

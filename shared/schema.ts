@@ -484,7 +484,7 @@ export interface Habit {
    * consistency (was the day's target met); its tracker records the richer
    * data (ounces, miles, duration, intensity). Logging an entry to the linked
    * tracker advances the habit's progress for that day (see
-   * server/habit-tracker-sync.ts). Absent for completion-only habits ("make my
+   * server/habit-completion.ts). Absent for completion-only habits ("make my
    * bed") — those measure nothing beyond the check-in itself. A habit's
    * schedule lives entirely in the habit system: neither the habit nor its
    * tracker ever creates calendar events or recurring calendar rules.

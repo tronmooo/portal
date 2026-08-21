@@ -7,6 +7,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { completeHabitOccurrence } from "./habit-completion";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { detectMoodFromText } from "@shared/mood-detect";
@@ -6517,13 +6518,38 @@ Rules:
   }));
   app.post("/api/habits/:id/checkin", asyncHandler(async (req, res) => {
     const { date, value, notes } = req.body;
-    const checkin = await storage.checkinHabit(req.params.id, date, value, notes);
-    if (!checkin) return res.status(404).json({ error: "Habit not found" });
-    // Return the full updated habit (with recalculated streak) instead of just the checkin
-    const updatedHabit = await storage.getHabit(req.params.id);
+    // ONE completion pipeline (user directive 2026-08-20): checking a habit off
+    // by hand goes through exactly what chat and the tracker go through, so it
+    // also writes the habit's linked tracker record and can't double-count a
+    // day that a chat message or a tracker log already completed.
+    const result = await completeHabitOccurrence(storage, {
+      habitId: req.params.id,
+      date, value, notes,
+      source: "habit_ui",
+      timezone: getTimezone(req),
+    });
+    if (!result.ok && result.reason === "not_found") return res.status(404).json({ error: "Habit not found" });
+    const updatedHabit = result.habit || await storage.getHabit(req.params.id);
+    if (!updatedHabit) return res.status(404).json({ error: "Habit not found" });
     const uid_h1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h1}`); bustCache(`stats:${uid_h1}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h1}`);
-    res.status(201).json(updatedHabit || checkin);
+    // The mirrored entry changes tracker reads too — without this the Trackers
+    // page serves a cached list that predates the check-in.
+    bustCache(`trackers:${uid_h1}`); bustCache(`trackers:`);
+    res.status(201).json({
+      ...updatedHabit,
+      // What actually happened, so the client can report it honestly rather
+      // than assuming every tap recorded something.
+      completion: {
+        recorded: result.recorded,
+        alreadyComplete: result.alreadyComplete,
+        notScheduled: result.reason === "not_scheduled",
+        date: result.date,
+        progress: result.progress,
+        tracker: result.tracker,
+        trackerEntryIds: result.trackerEntries.map(e => e.id),
+      },
+    });
   }));
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
     const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);

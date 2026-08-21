@@ -66,6 +66,12 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/activity"],
     ["/api/insights"],
     ["/api/ai-digest"],
+    // Completing a habit writes its linked tracker's record too (one
+    // completion, one pipeline — server/habit-completion.ts), so the Trackers
+    // page and every tracker-fed chart are stale the moment a habit is
+    // checked off. The reverse edge is in the trackers domain below; both
+    // directions are needed because either side can be the one that moves.
+    ["/api/trackers"],
   ],
   trackers: [
     ["/api/trackers"],
@@ -76,7 +82,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/activity"],
     ["/api/goals"], // goals can auto-update from tracker entries
     // Habit ↔ tracker link (2026-08-20): logging an entry to a tracker
-    // advances any habit linked to it (server/habit-tracker-sync.ts), so a
+    // advances any habit linked to it (server/habit-completion.ts), so a
     // manual log on the Trackers page must refresh the Habits ring too —
     // otherwise the habit shows pre-log progress until an unrelated refetch.
     ["/api/habits"],
@@ -278,7 +284,13 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
     case "tasks":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/tasks");
     case "habits":
-      return (q) => String(q.queryKey?.[0] || "").startsWith("/api/habits");
+      // Nested tracker keys (["/api/trackers", id]) too: a habit check-in
+      // mirrors into its linked tracker, and the tracker DETAIL query is what
+      // the Trackers page reads.
+      return (q) => {
+        const k0 = String(q.queryKey?.[0] || "");
+        return k0.startsWith("/api/habits") || k0.startsWith("/api/trackers");
+      };
     case "artifacts":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/artifacts");
     case "everything":
