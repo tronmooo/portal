@@ -12,6 +12,8 @@ export default defineConfig({
     environment: 'node',
     include: [
       'tests/conversation-context.test.ts',
+      'tests/habit-quantity.test.ts',
+      'tests/qa-habit-tracker-sync.test.ts',
       'tests/qa-conversational-corrections.test.ts',
       'tests/qa-note-not-artifact.test.ts',
       'tests/now-rank.test.ts',

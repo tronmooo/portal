@@ -194,28 +194,44 @@ export function readActivity(
     for (const e of t.entries || []) {
       if (!e?.timestamp || !isToday(e.timestamp)) continue;
       let counted = false;
-      // Server-computed values count too: a fitness entry can carry
-      // `computed.caloriesBurned` / `computed.durationMinutes` with nothing of
-      // the sort in `values`.
-      const computed = (e as any).computed || {};
-      const cb = Number(computed.caloriesBurned);
-      if (Number.isFinite(cb) && cb > 0) { burned += cb; sawBurn = true; }
-      const cd = Number(computed.durationMinutes);
-      if (Number.isFinite(cd) && cd > 0) { minutes += cd; sawMinutes = true; }
+      // ── ONE ENTRY, ONE MEASUREMENT PER DIMENSION (QA req 12) ────────────
+      // `values.duration` and `computed.durationMinutes` are two REPRESENTATIONS
+      // of the same 48-minute walk, not two walks. Adding both is what turned
+      // one 48-minute activity into 96 exercise minutes on the dashboard.
+      // The entry's own stated value is authoritative; `computed` fills in a
+      // dimension the entry did not state, and never adds to one it did.
+      // Sum this entry's dimensions first, then fall back.
+      let eMinutes = 0, eDistance = 0, eSteps = 0, eBurned = 0;
+      let eSawMinutes = false, eSawDistance = false, eSawSteps = false, eSawBurn = false;
       for (const [field, raw] of Object.entries(e.values || {})) {
         const n = Number(raw);
         if (!Number.isFinite(n) || n <= 0) continue;
         // Steps before distance: a "steps" field is not a distance even though
         // both describe how far you went.
-        if (STEPS_FIELD_RE.test(field)) { steps += n; sawSteps = true; counted = true; continue; }
-        if (DURATION_FIELD_RE.test(field)) { minutes += n; sawMinutes = true; counted = true; continue; }
+        if (STEPS_FIELD_RE.test(field)) { eSteps += n; eSawSteps = true; counted = true; continue; }
+        if (DURATION_FIELD_RE.test(field)) { eMinutes += n; eSawMinutes = true; counted = true; continue; }
         if (DISTANCE_FIELD_RE.test(field)) {
-          distance += n; sawDistance = true; counted = true;
+          eDistance += n; eSawDistance = true; counted = true;
           if (!distanceUnit) distanceUnit = unitOf(field) || "mi";
           continue;
         }
-        if (CALORIE_FIELD_RE.test(field)) { burned += n; sawBurn = true; counted = true; continue; }
+        if (CALORIE_FIELD_RE.test(field)) { eBurned += n; eSawBurn = true; counted = true; continue; }
       }
+      // Server-computed values fill the gaps: a fitness entry can carry
+      // `computed.caloriesBurned` / `computed.durationMinutes` with nothing of
+      // the sort in `values`.
+      const computed = (e as any).computed || {};
+      if (!eSawBurn) {
+        const cb = Number(computed.caloriesBurned);
+        if (Number.isFinite(cb) && cb > 0) { eBurned = cb; eSawBurn = true; }
+      }
+      if (!eSawMinutes) {
+        const cd = Number(computed.durationMinutes);
+        if (Number.isFinite(cd) && cd > 0) { eMinutes = cd; eSawMinutes = true; }
+      }
+      minutes += eMinutes; distance += eDistance; steps += eSteps; burned += eBurned;
+      sawMinutes ||= eSawMinutes; sawDistance ||= eSawDistance;
+      sawSteps ||= eSawSteps; sawBurn ||= eSawBurn;
       // An entry with no field we recognise is still a session — the user
       // logged something, and "—" would be a lie.
       sessions += counted || Object.keys(e.values || {}).length > 0 ? 1 : 0;

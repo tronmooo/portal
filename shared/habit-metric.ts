@@ -47,6 +47,19 @@ export interface HabitMetricSuggestion {
   fields: HabitMetricField[];
   /** What recognized the measurement (for logs/tests). */
   source: "canonical" | "quantity" | "classifier";
+  /**
+   * True when the habit names something MORE SPECIFIC than the canonical
+   * activity — "Walk the Dog" against the generic "Walking".
+   *
+   * `candidates` deliberately keeps the generic names as fallbacks so a new
+   * habit can still adopt an existing general tracker. But the REVERSE
+   * direction must not use them: a generic Walking log must never close the
+   * dog's walk (QA req 10). `canonical` names the generic entries so callers
+   * going tracker → habit can exclude them.
+   */
+  specific: boolean;
+  /** The canonical/generic candidate names, when any were appended. */
+  canonical: string[];
 }
 
 /** Canonical metric map: activity keyword → the tracker that measures it.
@@ -207,6 +220,8 @@ export function detectHabitMetric(
         category: m.category,
         fields: m.fields.map((f) => ({ ...f })),
         source: "canonical",
+        specific: !!specific,
+        canonical: specific ? [...m.candidates] : [],
       };
     }
   }
@@ -220,6 +235,8 @@ export function detectHabitMetric(
       category: cls.confidence !== "none" ? cls.category : "custom",
       fields: [{ name: "amount", type: "number", isPrimary: true }],
       source: "quantity",
+      specific: false,
+      canonical: [],
     };
   }
 
@@ -239,7 +256,7 @@ export function detectHabitMetric(
               { name: "duration", type: "number", unit: "min", isPrimary: true },
               { name: "intensity", type: "text" },
             ];
-      return { candidates: [noun], category: cls.category, fields, source: "classifier" };
+      return { candidates: [noun], category: cls.category, fields, source: "classifier", specific: false, canonical: [] };
     }
   }
 

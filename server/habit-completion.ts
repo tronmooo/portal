@@ -38,6 +38,10 @@ import type { Habit, HabitCheckin, TrackerEntry, Tracker } from "@shared/schema"
 import { habitDayProgress, type HabitDayProgress } from "@shared/habit-progress";
 import { isHabitDueOn } from "@shared/habit-schedule";
 import { toLocalDateStr, getUserToday, zonedTimeToUTC, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { parseHabitQuantityTarget, sumDayQuantity, quantityProgress, type QuantityProgress } from "@shared/habit-quantity";
+import { ensureHabitTracker } from "./habit-tracker-link";
+import { detectHabitMetric } from "@shared/habit-metric";
+import { findIdentityMatches } from "@shared/tracker-identity";
 
 /** Where a completion came from. Recorded for history/debugging; the resulting
  *  completion is identical whichever it is. */
@@ -57,7 +61,10 @@ export interface HabitCompletionStorage {
   checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined>;
   updateHabit(id: string, data: Partial<Habit>): Promise<Habit | undefined>;
   getTracker(id: string): Promise<Tracker | undefined>;
+  getTrackers(): Promise<Tracker[]>;
   updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined>;
+  createTracker(data: any): Promise<any>;
+  getProfiles(): Promise<any[]>;
   logEntry(data: any): Promise<TrackerEntry | undefined>;
 }
 
@@ -167,7 +174,29 @@ export async function completeHabitOccurrence(
   // completion never writes two records.
   const trackerEntries: TrackerEntry[] = [];
   let trackerInfo: { id: string; name: string } | null = null;
-  const linkedTrackerId = (fresh as any).linkedTrackerId as string | undefined;
+  let linkedTrackerId = (fresh as any).linkedTrackerId as string | undefined;
+
+  // ── LAZY LINK (QA req 9) ─────────────────────────────────────────────────
+  // Pressing a habit in the Habits tab must produce a tracker entry. It didn't,
+  // because the mirror below needs `linkedTrackerId` and habits created before
+  // the linking existed (or from any surface other than create_habit) had none
+  // — so the completion recorded and nothing reached the tracker.
+  //
+  // Resolve the tracker ONCE, on the first completion that needs it: reuse an
+  // existing tracker if there is one, otherwise create the canonical tracker
+  // and link it. Every later completion takes the `linkedTrackerId` path above,
+  // so this never creates a second tracker for the same habit — which is
+  // exactly what the report asked for ("do NOT create a new tracker every day").
+  if (!linkedTrackerId && !opts.skipTrackerWrite && recorded > 0) {
+    const link = await ensureHabitTracker(storage as any, {
+      id: fresh.id,
+      name: fresh.name,
+      linkedTrackerId: null,
+      linkedProfiles: (fresh as any).linkedProfiles || [],
+    });
+    if (link.tracker) linkedTrackerId = link.tracker.id;
+  }
+
   if (linkedTrackerId) {
     try {
       const tracker = await storage.getTracker(linkedTrackerId);
@@ -250,6 +279,35 @@ function primaryNumericValue(values: Record<string, any> | undefined): number | 
 }
 
 /**
+ * Does `tracker` carry the measurement `habit` is about?
+ *
+ * Deliberately conservative, and deliberately built on the SAME primitives the
+ * habit→tracker linking uses (shared/habit-metric candidates + the tracker
+ * identity rules), so the two directions agree about what "the Walking tracker
+ * measures the Walk 2 Miles habit" means. The specificity guard inside
+ * detectHabitMetric is what keeps "Walk the Dog" off a generic Walking tracker
+ * — a walk the user logged for themselves must not close the dog's walk.
+ */
+function habitMeasuredBy(
+  habit: { name?: string; linkedProfiles?: string[] | null },
+  tracker: { id: string; name?: string; linkedProfiles?: string[] | null },
+): boolean {
+  const metric = detectHabitMetric(habit?.name || "");
+  if (!metric) return false;
+  // Ownership first: a habit must never be advanced by another profile's
+  // tracker (the cross-contamination rule the rest of the app enforces).
+  const habitOwner = habit.linkedProfiles?.[0];
+  const trackerOwners = tracker.linkedProfiles || [];
+  if (habitOwner && trackerOwners.length > 0 && !trackerOwners.includes(habitOwner)) return false;
+  // Generic fallbacks are for the habit→tracker direction only. Going the
+  // other way they would let any Walking log close "Walk the Dog".
+  const pool = metric.specific
+    ? metric.candidates.filter((c) => !metric.canonical.includes(c))
+    : metric.candidates;
+  return pool.some((c) => findIdentityMatches([tracker as any], c).length > 0);
+}
+
+/**
  * Advance every habit linked to `trackerId` for the entry's day.
  *
  * Called from INSIDE both storages' logEntry, so it covers every write path —
@@ -271,17 +329,60 @@ export async function autoCheckinLinkedHabits(
     if ((opts.values as any)?.[HABIT_MIRROR_KEY]) return results;
 
     const habits = await storage.getHabits();
+    const tracker = await storage.getTracker(trackerId).catch(() => undefined);
+
+    // ── WHICH HABITS DOES THIS TRACKER ADVANCE? (QA req 10) ────────────────
+    // An EXPLICIT link is the contract, and the report is right that it should
+    // be one. But a habit and a tracker that plainly measure the same activity
+    // often exist without ever having been linked — "Walk 2 Miles — daily"
+    // beside a "Walking" tracker — and the user recording a 2.4-mile walk
+    // reasonably expects the habit to close.
+    //
+    // So: linked habits always; plus habits whose measurement this tracker
+    // carries, matched through the same identity rules used everywhere else.
+    // A name match also ESTABLISHES the link (below), so the relationship
+    // becomes explicit on first use rather than being re-guessed forever.
     const linked = habits.filter((h) => (h as any).linkedTrackerId === trackerId);
-    if (linked.length === 0) return results;
+    const unlinkedMatches = tracker
+      ? habits.filter(
+          (h) =>
+            !(h as any).linkedTrackerId &&
+            habitMeasuredBy(h as any, tracker as any),
+        )
+      : [];
+    for (const h of unlinkedMatches) {
+      // Make it explicit, once. Failure is fine — the completion below still
+      // runs; it just re-matches by name next time.
+      try { await storage.updateHabit(h.id, { linkedTrackerId: trackerId } as any); } catch { /* best effort */ }
+    }
+    const candidates = [...linked, ...unlinkedMatches];
+    if (candidates.length === 0) return results;
 
     const tz = opts.timezone || DEFAULT_TIMEZONE;
     const when = opts.timestamp ? new Date(opts.timestamp) : new Date();
     const date = isNaN(when.getTime()) ? toLocalDateStr(new Date(), tz) : toLocalDateStr(when, tz);
     const value = primaryNumericValue(opts.values);
 
-    for (const habit of linked) {
+    for (const habit of candidates) {
       try {
         if (!isHabitDueOn(habit as any, date)) continue;
+
+        // ── QUANTITATIVE HABITS (QA req 11) ────────────────────────────────
+        // "Walk 2 Miles" is not finished by the ACT of logging a walk, it is
+        // finished by two miles. Sum the day's measurements — additively, the
+        // way hydration already worked — and only complete once the target is
+        // met. 1.2 + 0.8 closes it; 1.2 alone does not.
+        const target = parseHabitQuantityTarget(habit.name);
+        if (target) {
+          const dayTotal = sumDayQuantity(
+            (tracker?.entries || []) as any,
+            target,
+            date,
+            (ts) => dayOf(ts, tz),
+          );
+          if (!quantityProgress(target, dayTotal).isComplete) continue;
+        }
+
         const res = await completeHabitOccurrence(storage, {
           habitId: habit.id,
           date,

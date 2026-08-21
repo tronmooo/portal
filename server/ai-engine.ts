@@ -60,6 +60,7 @@ import { detectHabitMetric, UMBRELLA_TRACKER_NAMES } from "@shared/habit-metric"
 import { matchHabitByName } from "@shared/habit-match";
 import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompletionVeto } from "@shared/habit-completion-intent";
 import { completeHabitOccurrence, type HabitCompletionSource } from "./habit-completion";
+import { ensureHabitTracker } from "./habit-tracker-link";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
@@ -10168,55 +10169,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       try {
         const hint = typeof (input as any).linkTracker === "string" ? (input as any).linkTracker.trim() : "";
         const modelSaysNone = /^(none|no|skip)$/i.test(hint);
-        const metric = modelSaysNone ? null : detectHabitMetric(input.name || "", habitMsg);
-        const candidates: string[] = modelSaysNone ? [] : Array.from(new Set([
-          ...(hint ? [hint] : []),
-          ...(metric ? metric.candidates : []),
-        ]));
-        if (candidates.length > 0) {
-          const allTrackers = await storage.getTrackers();
-          const allProfs = await storage.getProfiles();
-          const selfId = allProfs.find(p => p.type === "self")?.id;
-          const ownerId = targetProfileId || selfId;
-          // Per-person trackers: only reuse a tracker the habit's owner can
-          // log to — theirs or an unowned orphan. Never adopt another
-          // profile's tracker (cross-contamination).
-          const compatible = (t: any) => {
-            const owners: string[] = t.linkedProfiles || [];
-            return owners.length === 0 || (!!ownerId && owners.includes(ownerId));
-          };
-          let linkTracker: any = null;
-          for (const cand of candidates) {
-            const matches = findIdentityMatches(allTrackers, cand).filter(compatible);
-            if (matches.length > 0) { linkTracker = matches[0]; break; }
-          }
-          // Umbrella reuse: an existing general tracker for the same domain
-          // (Exercise absorbing a Running habit) is expanded, not shadowed.
-          if (!linkTracker && metric) {
-            const umbrellas = UMBRELLA_TRACKER_NAMES[metric.category] || [];
-            for (const u of umbrellas) {
-              const matches = findIdentityMatches(allTrackers, u).filter(compatible);
-              if (matches.length > 0) { linkTracker = matches[0]; break; }
-            }
-          }
-          let createdTracker = false;
-          if (!linkTracker) {
-            const trackerName = candidates[0];
-            const resolved = resolveTrackerCategory(trackerName, { supplied: metric?.category });
-            const fields = (metric?.fields || [{ name: "amount", type: "number" as const, isPrimary: true }])
-              .map(f => ({ name: f.name, type: f.type, ...(f.unit ? { unit: f.unit } : {}), ...(f.isPrimary ? { isPrimary: true } : {}) }));
-            linkTracker = await storage.createTracker({
-              name: trackerName,
-              category: resolved.category,
-              fields,
-              ...(ownerId ? { linkedProfiles: [ownerId] } : {}),
-            } as any);
-            createdTracker = true;
-          }
-          if (linkTracker?.id) {
-            await storage.updateHabit(habit.id, { linkedTrackerId: linkTracker.id } as any);
-            linkedTrackerNote = { id: linkTracker.id, name: linkTracker.name, created: createdTracker };
-            logger.info("ai", `Habit "${habitName}" linked to ${createdTracker ? "NEW" : "existing"} tracker "${linkTracker.name}" (${linkTracker.id})`);
+        if (!modelSaysNone) {
+          // ONE linking service, shared with the completion pipeline
+          // (server/habit-tracker-link.ts). It used to live only here, which is
+          // why a habit created any other way never got a tracker and pressing
+          // it in the Habits tab logged nothing (QA req 9).
+          const link = await ensureHabitTracker(storage as any, {
+            id: habit.id,
+            name: habit.name,
+            linkedTrackerId: null,
+            linkedProfiles: targetProfileId ? [targetProfileId] : (habit.linkedProfiles || []),
+          }, { userMessage: habitMsg, candidateHint: hint || undefined });
+          if (link.tracker) {
+            linkedTrackerNote = { id: link.tracker.id, name: link.tracker.name, created: link.created };
+            logger.info("ai", `Habit "${habitName}" linked to ${link.created ? "NEW" : "existing"} tracker "${link.tracker.name}" (${link.tracker.id})`);
           }
         }
       } catch (linkErr: any) {
