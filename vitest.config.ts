@@ -11,6 +11,8 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/qa-conversational-corrections.test.ts',
+      'tests/qa-note-not-artifact.test.ts',
       'tests/now-rank.test.ts',
       'tests/schema.test.ts',
       'tests/utils.test.ts',

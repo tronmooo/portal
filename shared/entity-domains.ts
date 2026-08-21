@@ -180,6 +180,11 @@ export const ACTION_TYPE_DOMAINS: Record<string, Domain[]> = {
   add_liability_payment: ["liabilities", "obligations", "expenses"],
   journal_entry: ["journal"],
   create_artifact: ["artifacts"],
+  // A note is an artifact row that ALSO hangs off a profile, so writing one
+  // has to refresh both surfaces — the artifacts list and the owner's Notes
+  // tab. Invalidating only "artifacts" is why a new note needed a manual
+  // refresh to appear on the person (QA req 13).
+  create_note: ["artifacts", "profiles"],
   save_memory: ["memories"],
   set_budget: ["budgets"],
   manage_document: ["documents"],

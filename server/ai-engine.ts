@@ -3889,7 +3889,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Artifacts ---
   {
     name: "create_artifact",
-    description: "Create a rich artifact — markdown doc, code snippet, chart, diagram, checklist, or note. Use this when the user asks for reports, analysis, code, visualizations, or structured content.",
+    description: "Create a rich standalone DOCUMENT — markdown doc, code snippet, chart, diagram, or checklist. Use this for reports, analysis, code, visualizations and structured documents the user wants to read as a document.\n\nNOT for notes ABOUT A PERSON OR THING. \"Make a note for Sarah that she prefers morning appointments\" is a profile note — call create_note, which files it under that person's Notes. Artifacts are never the fallback for structured application data: a note, journal entry, task, habit, event, tracker log, asset, expense, income or subscription each has its own tool, and the confirmation card the user sees is built from the tool you pick.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -5383,7 +5383,8 @@ If journal_entry succeeds, say "Journal entry saved for [name]." If create_note 
 NEVER substitute a create_task when the user explicitly asks for a journal entry.
 
 ━━━ ARTIFACT CRUD ━━━
-- create list/note/doc artifact: create_artifact; edit: update_artifact(title, changes)
+- create list/doc artifact: create_artifact; edit: update_artifact(title, changes)
+- A NOTE about a person or thing is NEVER an artifact: "make a note for Sarah…" → create_note(forProfile:"Sarah"). create_artifact is for documents the user reads as documents.
 - "pin my grocery list" → update_artifact(title, changes:{pinned:true}); unpin → pinned:false
 - "make a copy of X" → duplicate_artifact(title, newTitle?)
 - "check off milk on my grocery list" / "uncheck X" → toggle_artifact_item(title, itemText)
@@ -15366,7 +15367,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             if (READ_ONLY_TOOLS.has(toolUse.name)) return null;
             const input = (toolUse.input || {}) as Record<string, any>;
             const label = toolTargetLabel(input);
-            if (label && isStaleTurnReplay(input, userMessage, priorUserMessages)) {
+            if (label && isStaleTurnReplay(input, userMessage, priorUserMessages, toolUse.name)) {
               return staleReplayViolation(toolUse.name, label);
             }
             // One request creates ONE record: a second create of the same
@@ -16248,9 +16249,13 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   append_journal_entry: "journal_entry",
   update_journal: "update_entity",
   delete_journal: "delete_entity",
-  // Notes. Stored as artifacts, so the undoable action card is the artifact
-  // one — the chat UI already knows how to undo that.
-  create_note: "create_artifact",
+  // Notes. A note is STORED as an artifact row of type "note", but that is a
+  // storage detail — it is not what the user asked for and not what the card
+  // may say. Mapping create_note onto the artifact action made the confirmation
+  // read "Create Artifact / Open artifact" for a request that was explicitly a
+  // note, and sent the user to the artifacts list instead of the person's Notes
+  // tab (QA req 2: the card must represent the object actually created).
+  create_note: "create_note",
   update_note: "update_entity",
   delete_note: "delete_entity",
   // Goals

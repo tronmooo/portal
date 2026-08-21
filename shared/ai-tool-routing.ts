@@ -320,9 +320,23 @@ export function isStaleTurnReplay(
   toolInput: Record<string, any> | undefined | null,
   currentMessage: string,
   priorUserMessages: string[],
+  toolName?: string,
 ): boolean {
   const label = toolTargetLabel(toolInput);
   if (!label) return false;
+  // ── Replay protection guards CREATES, and only creates ──────────────────
+  // (QA req 7.) Idempotency exists to stop the SAME mutation running twice —
+  // two dentist appointments from one request. An update, a completion or a
+  // delete naming a record from an earlier turn is not that: it is the normal
+  // shape of a correction. "I moved it to September 10" names an appointment
+  // the user created two messages ago, and MUST name it — there is no other
+  // way to point at an existing record.
+  //
+  // Treating those as replay is what made the app refuse to fix its own data:
+  // the correction was blocked while the create it was correcting stood. A
+  // duplicated update is idempotent by definition (same field, same value);
+  // a duplicated create is the thing worth refusing.
+  if (toolName && toolOperation(toolName) !== "create") return false;
   if (hasBackReference(currentMessage)) return false;
 
   const labelTokens = tokenize(label);

@@ -632,6 +632,14 @@ export const CONTENT_TOOL_KIND: Record<string, DomainKind> = {
   create_event: "event",
   update_event: "event",
   delete_event: "event",
+  // Artifacts are documents. Listing them here is what lets the gate refuse
+  // create_artifact for a message that explicitly said "note" — without an
+  // entry the gate returned null and the artifact system quietly became the
+  // fallback home for structured data (QA req 2).
+  create_artifact: "document",
+  update_artifact: "document",
+  delete_artifact: "document",
+  duplicate_artifact: "document",
 };
 
 export interface ContentRoutingViolation {

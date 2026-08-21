@@ -509,13 +509,21 @@ export function isActionable(intent: ParsedIntent): boolean {
 const ANAPHORA: RegExp[] = [
   /\b(?:again|undo|redo|revert)\b/,
   // "do it", "make that", "add the same", "log those"
-  /\b(?:do|make|create|add|log|run|repeat|try)\s+(?:it|that|those|them|the\s+same)\b/,
-  // "delete that", "change it", "rename those"
-  /\b(?:delete|remove|change|update|edit|rename|fix|move|cancel|finish|complete)\s+(?:it|that|those|them|the\s+(?:last|previous|first|one))\b/,
+  /\b(?:do|make|create|add|log|run|repeat|try)(?:s|es|d|ed|ing)?\s+(?:it|that|those|them|the\s+same)\b/,
+  // "delete that", "change it", "rename those" — and every inflection of the
+  // verb. A correction is almost always PAST tense ("I moved it to the 10th",
+  // "actually I changed it"), and a present-tense-only list read those as new
+  // requests with no back-reference, which is what let replay protection
+  // block legitimate corrections (QA req 7).
+  /\b(?:delete|remove|change|update|edit|rename|fix|move|cancel|finish|complete|push|reschedule|correct|adjust|revalue|bump|shift)(?:s|es|d|ed|ing)?\s+(?:it|that|this|those|them|the\s+(?:last|previous|first|one))\b/,
   /\b(?:that|the)\s+one\b/,
-  /\b(?:i\s+)?just\s+(?:made|created|added|did|logged)\b/,
+  /\b(?:i\s+)?just\s+(?:made|created|added|did|logged|said)\b/,
   /\b(?:previous|earlier|last\s+one|same\s+(?:one|thing|as))\b/,
   /\byou\s+(?:just\s+)?(?:made|created|added|logged|said)\b/,
+  // Bare correction openers: "actually, it's worth $950", "actually I checked".
+  // The user is amending something already on the table.
+  /^\s*(?:actually|oh\s+wait|wait|scratch\s+that|correction|never\s+mind)\b/,
+  /\b(?:it'?s|its|thats|that'?s)\s+(?:actually|really|probably|now|closer\s+to)\b/,
 ];
 
 export function hasBackReference(message: string): boolean {

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useDeferredValue, useMemo, lazy, memo, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ACTION_LABELS, actionLabel, actionRoute } from "@/lib/action-cards";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
 import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
@@ -71,6 +72,7 @@ import {
   Sparkles,
   Bot,
   Paperclip,
+  StickyNote,
   FileText,
   FilePlus2,
   X,
@@ -371,6 +373,8 @@ function actionIcon(type: string) {
     case "create_obligation":
     case "pay_obligation":
       return <DollarSign className="h-3 w-3" />;
+    case "create_note":
+      return <StickyNote className="h-3 w-3" />;
     case "create_artifact":
       return <FileText className="h-3 w-3" />;
     default:
@@ -378,76 +382,6 @@ function actionIcon(type: string) {
   }
 }
 
-const ACTION_LABELS: Record<string, string> = {
-  create_task: "Create Task",
-  complete_task: "Complete Task",
-  delete_task: "Delete Task",
-  create_habit: "Create Habit",
-  checkin_habit: "Checkin Habit",
-  uncomplete_habit: "Undo Habit",
-  delete_habit: "Delete Habit",
-  create_goal: "Create Goal",
-  create_event: "Create Event",
-  complete_event: "Complete Event",
-  log_entry: "Log Entry",
-  create_tracker: "Create Tracker",
-  delete_tracker_entry: "Delete Entry",
-  update_tracker_entry: "Update Entry",
-  journal_entry: "Journal Entry",
-  log_expense: "Log Expense",
-  create_profile: "Create Profile",
-  update_profile: "Update Profile",
-  create_obligation: "Add Bill",
-  pay_obligation: "Pay Bill",
-  save_memory: "Remember",
-  retrieve: "Retrieve",
-  create_artifact: "Create Artifact",
-};
-
-function actionLabel(type: string, data?: any) {
-  // The card names the ENTITY that was written, not the table it lives in.
-  // Assets/vehicles/properties are profile rows, so create_profile(type:"asset")
-  // is "Create Asset" — the card and the assistant text must agree on what
-  // happened, and "Create Profile" for a truck reads like a different action.
-  if ((type === "create_profile" || type === "update_profile") && data?.type) {
-    const kind = String(data.type).toLowerCase();
-    const noun = kind === "vehicle" || kind === "property" || kind === "asset" || kind === "investment"
-      ? "Asset"
-      : kind === "person" ? "Person"
-      : kind === "pet" ? "Pet"
-      : kind === "subscription" ? "Subscription"
-      : null;
-    if (noun) return `${type.startsWith("create") ? "Create" : "Update"} ${noun}`;
-  }
-  return ACTION_LABELS[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-// Deep-link for a chat action card — tapping the card opens the page where
-// the entity lives (2026-07-15 user request: "when I press the profile it
-// should bring me to the profile — every chat command should do that").
-// Profile-row entities (people, pets, vehicles, assets, liabilities) go to
-// their detail page; tracker entries open their tracker on /trackers; list
-// entities land on their module page.
-function actionRoute(type: string, data: any): string | null {
-  const id = data?._entityId;
-  switch (type) {
-    case "create_profile": case "update_profile": case "create_liability": case "revalue_asset":
-      return id ? `/profiles/${id}` : "/profiles";
-    case "create_tracker":
-      return id ? `/trackers?tracker=${id}` : "/trackers";
-    case "log_entry": case "log_tracker_entry": case "add_tracker_entry": case "update_tracker_entry": case "delete_tracker_entry":
-      return data?._trackerId ? `/trackers?tracker=${data._trackerId}` : "/trackers";
-    case "create_task": case "complete_task": return "/tasks";
-    case "create_event": case "complete_event": return "/calendar";
-    case "log_expense": case "log_income": case "log_paycheck": case "set_budget": return "/finance";
-    case "create_obligation": case "pay_obligation": case "add_liability_payment": return "/obligations";
-    case "create_habit": case "checkin_habit": case "uncomplete_habit": case "delete_habit": return "/habits";
-    case "journal_entry": return "/journal";
-    case "create_goal": return "/goals";
-    case "save_memory": return null;
-    default: return null;
-  }
-}
 
 // ── "+ New" doc/sheet button in the chat composer ────────────────────────────
 // Lives next to the paperclip. Opens a small popover with two tiles; clicking
@@ -2461,7 +2395,7 @@ const MessageRow = memo(function MessageRow({
               'log_expense', 'create_task', 'create_event',
               'create_habit', 'checkin_habit', 'create_obligation',
               'create_goal', 'create_profile', 'update_profile',
-              'create_tracker', 'journal_entry', 'create_artifact',
+              'create_tracker', 'journal_entry', 'create_artifact', 'create_note',
               'complete_task', 'complete_event', 'pay_obligation',
               'delete_task', 'delete_habit', 'delete_tracker_entry',
               'update_tracker_entry', 'uncomplete_habit', 'save_memory',
@@ -2488,6 +2422,7 @@ const MessageRow = memo(function MessageRow({
                 create_profile: "profiles",
                 journal_entry: "journal",
                 create_artifact: "artifacts",
+                create_note: "artifacts",
                 create_tracker: "trackers",
                 log_entry: "tracker-entries",      // log_tracker_entry maps to log_entry
                 log_income: "incomes",             // DELETE /api/incomes/:id exists
