@@ -7,6 +7,15 @@ import {
   createNote, updateNote, deleteNote, listNotes,
   upsertJournalEntry, syncDateRulesForEntity,
 } from "./content-service";
+import {
+  emptyConversationContext,
+  rememberTurn,
+  renderConversationContext,
+  resolveConversationReference,
+  resolveSubjectProfile,
+  hasReferringExpression,
+  type ConversationContext,
+} from "@shared/conversation-context";
 import { findActionableTime } from "@shared/temporal-rules";
 import { classifyContent, routeContent, checkContentRouting, isStructured, type ContentClassification } from "@shared/content-routing";
 import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/schema";
@@ -64,6 +73,7 @@ import {
   recordTurnCreate,
   toolOperation,
   toolTargetLabel,
+  TOOL_INTENT_ENTITY,
   type RoutingViolation,
   type TurnCreate,
 } from "@shared/ai-tool-routing";
@@ -979,6 +989,40 @@ function logAction(action: string, type: string, entityName: string, entityId?: 
 export function getActionLog(count = 10, userId?: string): ActionLogEntry[] {
   const key = userId || '_global';
   return (actionLogMap.get(key) || []).slice(-count);
+}
+
+// ============================================================
+// CONVERSATION CONTEXT — what "she", "it" and "the appointment" point at
+// ============================================================
+//
+// Short-term structured state per user, so a reference in the current message
+// binds to a CANONICAL ID rather than to a name the model re-derives. See
+// shared/conversation-context.ts for the reasoning; this is just the store.
+//
+// In-memory and per-process, like the dedup lock and the action log above. A
+// lost context degrades to asking a clarifying question, which is the old
+// behaviour — never to acting on the wrong record.
+
+const conversationContexts = new Map<string, ConversationContext>();
+
+function getConversationContext(userId?: string): ConversationContext {
+  const key = userId || "_global";
+  return conversationContexts.get(key) || emptyConversationContext();
+}
+
+function saveConversationContext(userId: string | undefined, ctx: ConversationContext) {
+  const key = userId || "_global";
+  conversationContexts.set(key, ctx);
+  // Bounded: a process serving many users must not accumulate contexts forever.
+  if (conversationContexts.size > 500) {
+    const oldest = conversationContexts.keys().next().value;
+    if (oldest !== undefined) conversationContexts.delete(oldest);
+  }
+}
+
+/** Test seam: forget a user's conversational state. */
+export function resetConversationContext(userId?: string) {
+  conversationContexts.delete(userId || "_global");
 }
 
 // ============================================================
@@ -5104,6 +5148,7 @@ BEHAVIOR:
   * BEFORE saying "I don't have that saved", you MUST call recall_memory with a focused query (e.g. "vin", "license plate", "policy number"). recall_memory searches EVERY profile field, every document's extracted data, memories, and captures, and already bridges these label synonyms. Only answer "not saved" if recall_memory ALSO comes back empty.
   * DOCUMENT-SPECIFIC FIELD QUESTIONS — RETRIEVAL ORDER (CRITICAL): when the user names a document type ("driver's license number", "passport expiration", "registration expiry", "insurance policy number"), the answer MUST come from a document of THAT type. Order: (1) the "DOCUMENT FIELD LOOKUP" block at the top of EXISTING DATA, when present — it already ran the type-scoped structured-field search, trust it over everything else; (2) that document's own extracted fields via retrieve_document; (3) recall_memory / search_documents as the LAST resort. Field labels COLLIDE across document types: a vehicle registration's "License Number" is the license PLATE — NOT a driver's license number — and a registration's "Expiration Date" is the registration's, not the license's. NEVER answer with a same-named field from the wrong document type; if the right document/field isn't stored, say exactly that instead.
   * FOLLOW-UPS KEEP THE SUBJECT: when the user corrects you ("that's my license plate — I want my driver's license number") or sends a short follow-up ("so what is it?"), resolve what they mean from the conversation history. NEVER reply "What specific information are you referring to?" when the history already names the subject — re-run the lookup for the corrected subject and answer.
+- NEVER CONTRADICT YOUR OWN SUCCESSFUL ACTION. Once a tool call resolves a record and succeeds, the reply REPORTS that outcome. Do not re-read the user's message afterwards and ask what they meant: creating the reminder and then asking "remind you two days before what?" tells the user the app is broken even though the data is correct. If you resolved the reference well enough to act, you resolved it well enough to say what you did. Ask a clarifying question ONLY when you took no action.
 - ANSWER THE CURRENT MESSAGE ONLY (NEVER VIOLATE — the server blocks stale calls): every tool call you make must serve the request in the user's LATEST message. Earlier messages in this conversation were already handled in their own turns and their actions are already saved and already shown to the user. Do NOT re-run them. If the last message is "Create an asset for my Dodge Ram", the ONLY writes for this turn are about the Dodge Ram — not the habit, the reminder, or the event from earlier messages. Conversation history is for RESOLVING REFERENCES ("do it again", "change that", "delete the one I just made", "the license I mentioned"), never a backlog to work through.
 - NEVER ASSUME PAST ACTIONS STILL EXIST: If the CURRENT message asks for something that conversation history says you already created but the data snapshot doesn't list, it was DELETED — call the tool again for it. The dedup check inside the tool prevents real duplicates. This applies only to what the current message asks for; it is not permission to replay earlier requests.
 - For conversational messages with no actions needed, just respond naturally without calling any tools.
@@ -5225,7 +5270,8 @@ When the user attaches a clock time or date to an action, pass it via the at par
 - DO NOT INFER A COMPLETION from a plan, a question, a negation, or someone else's action: "I might walk the dog later", "remind me to walk the dog", "did I walk the dog?", "I forgot to walk the dog", "John walked the dog" → NONE of these complete anything. Ask or answer instead. A vague activity that only partly matches a habit ("I walked for twenty minutes" vs a "Walk the Dog" habit) is a tracker log, not that habit.
 - ONE COMPLETION, ONE RECORD: checking a habit off — from chat, the Habits page, or by logging its linked tracker — all write the same occurrence. Repeating it does NOT stack: a second "I walked the dog" returns alreadyComplete. Say it was already recorded; never claim a second completion.
 - NEVER DROP DETAILS: every number, unit, duration, count, method, and timestamp the user states MUST appear in the entry ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM"). Losing a stated detail is a logging failure.
-- PROFILE OWNERSHIP: entries belong to the user (self) unless THIS message explicitly names someone else ("Rex threw up", "log water for Mom"). NEVER pick a profile from conversation history, from the active dashboard filter chatter, or from which profile happens to own a similar tracker/habit name.
+- PROFILE OWNERSHIP: entries belong to the user (self) unless THIS message REFERS TO someone else. A message refers to someone when it names them ("Rex threw up", "log water for Mom") OR when it points at them with a third-person pronoun — "she", "he", "they", "her", "his". A pronoun is an explicit reference, not a guess: after "Sarah takes a multivitamin every morning", "She already took it today" is about SARAH, and the CONVERSATION CONTEXT block above gives you her profileId. Use it.
+  What is still forbidden is adopting a profile when the current message refers to NOBODY. "I ran 3 miles" is the user's own run even if the last five messages were about Sarah. Never take a profile from the active dashboard filter chatter, and never from which profile happens to own a similar-sounding tracker or habit.
 
 ━━━ TRACKER CRUD ━━━
 - create tracker: create_tracker(name, category, fields, forProfile?)
@@ -14173,6 +14219,17 @@ export async function processMessage(userMessage: string, conversationHistory?: 
     .filter((m) => m?.role === "user" && typeof m.content === "string")
     .map((m) => m.content);
 
+  // ── CONVERSATIONAL STATE (QA reqs 4, 5, 14, 15) ──────────────────────────
+  // What this conversation has already touched, with canonical ids. Read once
+  // here, folded with THIS turn's writes at the end. A fresh conversation (no
+  // prior user messages) starts clean so an id can never leak between threads.
+  const convoContext: ConversationContext = priorUserMessages.length === 0
+    ? emptyConversationContext()
+    : getConversationContext(userId);
+  /** Records this turn touched — folded into the context when the turn ends. */
+  const turnEntities: Array<{ id: string; type: any; name: string; profileId?: string | null; operation: any }> = [];
+  const turnProfiles: Array<{ id: string; name: string }> = [];
+
   // Streaming progress emitter — no-op unless the caller opted into SSE
   // (routes.ts /api/chat?stream=1). A throwing listener must never break the
   // turn, so every emission is wrapped. Fast paths (doc-open, bulk) don't
@@ -15003,7 +15060,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // into the system prompt — defense-in-depth against prompt-injection vectors
   // hiding in profile names, memory keys/values, tracker names, etc. Stripping
   // happens at the top level so per-row mistakes elsewhere can't leak through.
-  const safeContext = sanitize(`${scopeNote}\n\n${context}`).replace(/```/g, "'''");
+  // CONVERSATION CONTEXT (QA reqs 4, 5, 15). The records this conversation has
+  // touched, with their canonical ids, so "she", "it", "the appointment" and
+  // "two days before" resolve to a ROW rather than to a guess. Placed with the
+  // scope note, above the data snapshot, because it governs how the message is
+  // read rather than what exists.
+  const convoBlock = renderConversationContext(convoContext);
+  const safeContext = sanitize(
+    [scopeNote, convoBlock, context].filter(Boolean).join("\n\n"),
+  ).replace(/```/g, "'''");
   const systemPrompt = buildSystemPrompt(safeContext, selfProfileId, (storage as any)._timezone);
 
   // ─── Model selection: Sonnet 4.5 ALWAYS ───
@@ -15460,7 +15525,26 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // Round-5 fabrication guard: thread the original user message so
           // create_profile (and any other guarded tool) can compare requested
           // fields against what the user actually said.
-          const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+          const inputWithCtx: Record<string, any> = { ...validation.normalized, __userMessage: userMessage };
+          // ── ANAPHORIC OWNER (QA reqs 4, 8, 14) ──────────────────────────
+          // "She already took it today" names its subject as surely as "Sarah
+          // took her vitamin" does. When the model left forProfile empty and
+          // the message points at someone with a third-person pronoun, fill in
+          // the profile the CONVERSATION resolved — never the selected profile
+          // and never a name lookup. Resolution is deliberately one-way: it
+          // only ever ADDS an owner the model omitted, so an owner the model
+          // did state (or a message that refers to nobody) is untouched.
+          if (!READ_ONLY_TOOLS.has(toolUse.name) && !inputWithCtx.forProfile) {
+            try {
+              if (hasReferringExpression(userMessage)) {
+                const subject = resolveSubjectProfile(convoContext, userMessage);
+                if (subject?.name) {
+                  inputWithCtx.forProfile = subject.name;
+                  logger.info("ai", `[turn ${turnId.slice(0, 8)}] ${toolUse.name}: owner resolved from conversation → ${subject.name} (via ${subject.via})`);
+                }
+              }
+            } catch { /* resolution is best-effort; the write still runs */ }
+          }
           // Pre-write snapshot for update/delete tools (one list read) — gives
           // the action ledger a `before` for reapply/recreate undo plans.
           const beforeRows = READ_ONLY_TOOLS.has(toolUse.name)
@@ -15578,6 +15662,31 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             };
             allActions.push(actionForStream);
             allResults.push(result);
+            // ── Remember what this turn touched (QA reqs 4, 5, 15) ─────────
+            // The canonical id straight off the mutation result, so the next
+            // message's "it" / "she" / "the appointment" binds to THIS row.
+            try {
+              if (entityId) {
+                turnEntities.push({
+                  id: entityId,
+                  type: TOOL_INTENT_ENTITY[toolUse.name] ?? "unknown",
+                  name: String(
+                    (result as any)?.name || (result as any)?.title
+                      || toolTargetLabel(inp) || "",
+                  ),
+                  profileId: ownerInfo?.id
+                    ?? (Array.isArray((result as any)?.linkedProfiles) ? (result as any).linkedProfiles[0] : null)
+                    ?? (result as any)?.profileId
+                    ?? null,
+                  operation: toolOperation(toolUse.name),
+                });
+              }
+              // A person/pet profile the turn resolved becomes the conversation
+              // subject, so a later "she" has someone to bind to.
+              if (ownerInfo && !ownerInfo.isSelf && ownerInfo.id && ownerInfo.name) {
+                turnProfiles.push({ id: ownerInfo.id, name: ownerInfo.name });
+              }
+            } catch { /* remembering must never break the turn */ }
             // Remember what this turn has created, under the name the tool was
             // ASKED for — a later call spelling it differently ("my MacBook
             // Pro m4") keys to the same thing and gets refused.
@@ -16080,6 +16189,18 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     } catch (e: any) {
       // Validation must never cost the user their reply.
       logger.warn("ai", `[claim-check] skipped: ${e?.message || e}`);
+    }
+
+    // ── Fold this turn into the conversational state (QA reqs 4, 5, 15) ────
+    // Done last, so the context reflects what actually persisted rather than
+    // what the model intended. Never allowed to cost the user their reply.
+    try {
+      saveConversationContext(
+        userId,
+        rememberTurn(convoContext, { entities: turnEntities, profiles: turnProfiles }),
+      );
+    } catch (e: any) {
+      logger.warn("ai", `[conversation-context] not updated: ${e?.message || e}`);
     }
 
     return {
