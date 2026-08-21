@@ -23,6 +23,7 @@ import {
   classifyCompletionReport,
   matchHabitForCompletionReport,
   hasThirdPersonSubject,
+  isHardCompletionVeto,
 } from "@shared/habit-completion-intent";
 import { habitDayProgress } from "@shared/habit-progress";
 import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
@@ -66,6 +67,31 @@ describe("classifyCompletionReport — what counts as 'I did it'", () => {
       "Create a habit to walk the dog every day",
     ]) {
       expect(classifyCompletionReport(msg), msg).toBe("none");
+    }
+  });
+
+  it("treats a polite command as an instruction, not a question", () => {
+    // "Can you mark off my run?" is how people actually ask. Refusing it as a
+    // question would be the old bug wearing different clothes.
+    for (const msg of [
+      "Can you mark off my run?",
+      "Could you check in my meditation?",
+      "please mark off my walk",
+      "mark off my run?",
+    ]) {
+      expect(isHardCompletionVeto(msg), msg).toBe(false);
+    }
+  });
+
+  it("still vetoes a real question, a denial, and a reminder request", () => {
+    for (const msg of [
+      "Did I walk the dog?",
+      "Have I done my habits today?",
+      "I didn't walk the dog",
+      "don't mark it off",
+      "remind me to walk the dog",
+    ]) {
+      expect(isHardCompletionVeto(msg), msg).toBe(true);
     }
   });
 

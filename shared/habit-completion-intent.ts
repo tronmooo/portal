@@ -65,11 +65,18 @@ const FUTURE_OR_HYPOTHETICAL =
   /\b(will|won't|gonna|going\s+to|about\s+to|plan(ning)?\s+to|need\s+to|have\s+to|has\s+to|should|shall|might|maybe|may\s+be|could|would|want\s+to|wanna|later|tonight\s+i|tomorrow|next\s+week|soon|intend)\b/i;
 
 const NEGATION =
-  /\b(didn'?t|did\s+not|haven'?t|have\s+not|hasn'?t|never|no\s+longer|not\s+yet|forgot\s+to|failed\s+to|skipped|missed|couldn'?t|could\s+not|won'?t)\b/i;
+  /\b(didn'?t|did\s+not|don'?t|do\s+not|doesn'?t|haven'?t|have\s+not|hasn'?t|never|no\s+longer|not\s+yet|forgot\s+to|failed\s+to|skipped|missed|couldn'?t|could\s+not|won'?t)\b/i;
 
 /** Asking about it, not reporting it. */
 const INTERROGATIVE =
   /^\s*(did|do|does|have|has|had|am|is|are|was|were|will|would|should|could|can|what|when|where|why|how|who|which)\b/i;
+
+/**
+ * A polite imperative, not a question. "Can you mark off my run?" opens with
+ * "can" and ends in "?", so the interrogative test alone would refuse the most
+ * ordinary way people ask for something to be done.
+ */
+const POLITE_COMMAND = /^\s*(can|could|would|will)\s+(you|u)\b|\bplease\b/i;
 
 const REQUEST_OR_REMINDER =
   /\b(remind\s+me|reminder|set\s+up|schedule|add\s+a|create\s+a|make\s+a|start\s+a|new\s+habit|track\s+my)\b/i;
@@ -133,7 +140,16 @@ function hasPastTenseVerb(message: string): boolean {
 export function isHardCompletionVeto(message: string): boolean {
   const m = String(message || "").trim();
   if (!m) return false;
-  return INTERROGATIVE.test(m) || m.includes("?") || NEGATION.test(m) || REQUEST_OR_REMINDER.test(m);
+  if (NEGATION.test(m)) return true;
+  if (REQUEST_OR_REMINDER.test(m)) return true;
+  // "Can you mark it off?" is an instruction wearing a question mark. Only a
+  // real question — one that isn't a polite request — vetoes.
+  if (POLITE_COMMAND.test(m)) return false;
+  if (INTERROGATIVE.test(m)) return true;
+  // A trailing "?" on something that otherwise says "done" ("mark off my run?")
+  // is hesitancy, not an enquiry.
+  if (m.includes("?") && !COMPLETION_MARKER.test(m)) return true;
+  return false;
 }
 
 /**
