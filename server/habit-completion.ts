@@ -93,8 +93,10 @@ export interface HabitCompletionResult {
   progress: HabitDayProgress;
   habit?: Habit;
   currentStreak: number;
-  /** The linked tracker, when there is one. */
-  tracker?: { id: string; name: string } | null;
+  /** The linked tracker, when there is one. `name` is null on the
+   *  tracker-sourced path, which deliberately skips reading the tracker (the
+   *  caller already has it) — see the note in completeHabitOccurrence. */
+  tracker?: { id: string; name: string | null } | null;
   /** Mirror entries this call wrote (empty when nothing was needed). */
   trackerEntries: TrackerEntry[];
 }
@@ -166,48 +168,53 @@ export async function completeHabitOccurrence(
   // bounded by how many mirror entries the day already has, so the same
   // completion never writes two records.
   const trackerEntries: TrackerEntry[] = [];
-  let trackerInfo: { id: string; name: string } | null = null;
+  let trackerInfo: { id: string; name: string | null } | null = null;
   const linkedTrackerId = (fresh as any).linkedTrackerId as string | undefined;
   if (linkedTrackerId) {
-    try {
+    // Reading the tracker pulls its whole entry history, so only do it when a
+    // mirror entry might actually be written. The tracker-sourced path — the
+    // hot one, since it runs on EVERY tracker entry — skips the read entirely
+    // and reports the id alone; its caller already has the tracker in hand.
+    const mayWrite = !opts.skipTrackerWrite && recorded > 0;
+    if (!mayWrite) {
+      trackerInfo = { id: linkedTrackerId, name: null };
+    } else try {
       const tracker = await storage.getTracker(linkedTrackerId);
       if (tracker) {
         trackerInfo = { id: tracker.id, name: tracker.name };
-        if (!opts.skipTrackerWrite && recorded > 0) {
-          const already = countMirrorEntries(tracker, habit.id, date, tz);
-          const needed = Math.max(0, Math.min(recorded, after.completed - already));
-          if (needed > 0) {
-            // A bare check-in carries no measurement, so it records the fact:
-            // one completion. Give the tracker a `completions` field the first
-            // time, so the entry is a first-class, chartable row rather than an
-            // unknown value silently dropped from the card.
-            const hasSuppliedValues = !!opts.values && Object.keys(opts.values).length > 0;
-            if (!hasSuppliedValues && !(tracker.fields || []).some(f => f.name === "completions")) {
-              try {
-                await storage.updateTracker(tracker.id, {
-                  fields: [...(tracker.fields || []), { name: "completions", type: "number", unit: "×", isPrimary: (tracker.fields || []).length === 0 }],
-                } as any);
-              } catch { /* non-fatal: the entry still writes */ }
-            }
-            const timestamp = date === getUserToday(tz)
-              ? new Date().toISOString()
-              : zonedTimeToUTC(date, 12, 0, tz).toISOString();
-            for (let i = 0; i < needed; i++) {
-              const entry = await storage.logEntry({
-                trackerId: tracker.id,
-                values: {
-                  ...(hasSuppliedValues ? opts.values : { completions: 1 }),
-                  [HABIT_MIRROR_KEY]: habit.id,
-                },
-                notes: opts.notes || `${habit.name} — habit check-in`,
-                ...(habit.linkedProfiles?.[0] ? { profileId: habit.linkedProfiles[0], forProfile: habit.linkedProfiles[0] } : {}),
-                timestamp,
-                // Recursion stop: this write must not come back around and
-                // check the habit in again.
-                __skipHabitSync: true,
-              });
-              if (entry) trackerEntries.push(entry);
-            }
+        const already = countMirrorEntries(tracker, habit.id, date, tz);
+        const needed = Math.max(0, Math.min(recorded, after.completed - already));
+        if (needed > 0) {
+          // A bare check-in carries no measurement, so it records the fact:
+          // one completion. Give the tracker a `completions` field the first
+          // time, so the entry is a first-class, chartable row rather than an
+          // unknown value silently dropped from the card.
+          const hasSuppliedValues = !!opts.values && Object.keys(opts.values).length > 0;
+          if (!hasSuppliedValues && !(tracker.fields || []).some(f => f.name === "completions")) {
+            try {
+              await storage.updateTracker(tracker.id, {
+                fields: [...(tracker.fields || []), { name: "completions", type: "number", unit: "×", isPrimary: (tracker.fields || []).length === 0 }],
+              } as any);
+            } catch { /* non-fatal: the entry still writes */ }
+          }
+          const timestamp = date === getUserToday(tz)
+            ? new Date().toISOString()
+            : zonedTimeToUTC(date, 12, 0, tz).toISOString();
+          for (let i = 0; i < needed; i++) {
+            const entry = await storage.logEntry({
+              trackerId: tracker.id,
+              values: {
+                ...(hasSuppliedValues ? opts.values : { completions: 1 }),
+                [HABIT_MIRROR_KEY]: habit.id,
+              },
+              notes: opts.notes || `${habit.name} — habit check-in`,
+              ...(habit.linkedProfiles?.[0] ? { profileId: habit.linkedProfiles[0], forProfile: habit.linkedProfiles[0] } : {}),
+              timestamp,
+              // Recursion stop: this write must not come back around and
+              // check the habit in again.
+              __skipHabitSync: true,
+            });
+            if (entry) trackerEntries.push(entry);
           }
         }
       }
