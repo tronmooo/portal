@@ -72,6 +72,10 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     // checked off. The reverse edge is in the trackers domain below; both
     // directions are needed because either side can be the one that moves.
     ["/api/trackers"],
+    // A profile's detail payload embeds its habits (relatedHabits) and its
+    // activity timeline, so a check-in made anywhere else leaves the person's
+    // page showing the pre-check-in count until something unrelated refetches.
+    ["/api/profiles"],
   ],
   trackers: [
     ["/api/trackers"],
@@ -284,12 +288,12 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
     case "tasks":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/tasks");
     case "habits":
-      // Nested tracker keys (["/api/trackers", id]) too: a habit check-in
-      // mirrors into its linked tracker, and the tracker DETAIL query is what
-      // the Trackers page reads.
+      // Nested keys too: a habit check-in mirrors into its linked tracker (the
+      // Trackers page reads ["/api/trackers", id]) and shows up on the owner's
+      // profile detail (["/api/profiles", id, "detail"]).
       return (q) => {
         const k0 = String(q.queryKey?.[0] || "");
-        return k0.startsWith("/api/habits") || k0.startsWith("/api/trackers");
+        return k0.startsWith("/api/habits") || k0.startsWith("/api/trackers") || k0.startsWith("/api/profiles");
       };
     case "artifacts":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/artifacts");
