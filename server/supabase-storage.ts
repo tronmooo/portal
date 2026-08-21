@@ -1025,6 +1025,10 @@ export class SupabaseStorage implements IStorage {
       id: r.id, title: r.title, description: r.description || undefined,
       status: r.status, priority: r.priority, dueDate: r.due_date || undefined,
       dueTime: r.due_time || undefined,
+      // The event this reminder exists for, so moving the event can move it
+      // (server/update-with-dependents.ts).
+      reminderForEventId: r.reminder_for_event_id || null,
+      reminderOffsetMinutes: r.reminder_offset_minutes ?? null,
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [], createdAt: r.created_at,
       updatedAt: r.updated_at || r.created_at,
     };
@@ -3097,6 +3101,8 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, title: data.title, description: data.description || null,
       status: (data as any).status || "todo", priority: data.priority || "medium", due_date: data.dueDate || null,
       due_time: data.dueTime || null,
+      reminder_for_event_id: (data as any).reminderForEventId || null,
+      reminder_offset_minutes: (data as any).reminderOffsetMinutes ?? null,
       linked_profiles: [], tags: data.tags || [],
       source: (data as any).source || "manual", created_at: now,
     });
@@ -3125,6 +3131,8 @@ export class SupabaseStorage implements IStorage {
       title: merged.title, description: merged.description || null, status: merged.status,
       priority: merged.priority, due_date: merged.dueDate || null,
       due_time: merged.dueTime || null,
+      reminder_for_event_id: (merged as any).reminderForEventId || null,
+      reminder_offset_minutes: (merged as any).reminderOffsetMinutes ?? null,
       tags: merged.tags,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;

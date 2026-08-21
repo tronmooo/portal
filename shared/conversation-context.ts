@@ -215,6 +215,40 @@ const DEPENDENT_TIME_REF =
 /** Entity types a dependent-time reference can attach to. */
 const DATED_TYPES: IntentEntity[] = ["event", "task"];
 
+const OFFSET_WORDS: Record<string, number> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5,
+  six: 6, seven: 7, ten: 10, fifteen: 15, twenty: 20, thirty: 30,
+};
+
+const OFFSET_UNIT_MINUTES: Record<string, number> = {
+  minute: 1, minutes: 1, min: 1, mins: 1,
+  hour: 60, hours: 60, hr: 60, hrs: 60,
+  day: 1440, days: 1440,
+  week: 10080, weeks: 10080,
+};
+
+/**
+ * How far BEFORE the referenced thing a dependent-time phrase points, in
+ * minutes. "Two days before" → 2880. Returns null when the phrase names no
+ * offset, and only ever reports a BEFORE offset — "the day after" is a
+ * different relationship and is deliberately not collapsed into a negative.
+ */
+export function parseDependentOffsetMinutes(message: string): number | null {
+  const m = lc(message);
+  if (!m) return null;
+  const hit = m.match(
+    /\b(\d+|a|an|one|two|three|four|five|six|seven|ten|fifteen|twenty|thirty)\s+(minutes?|mins?|hours?|hrs?|days?|weeks?)\s+(?:before|ahead|prior|early|earlier)\b/,
+  );
+  if (hit) {
+    const n = /^\d+$/.test(hit[1]) ? Number(hit[1]) : OFFSET_WORDS[hit[1]];
+    const unit = OFFSET_UNIT_MINUTES[hit[2]];
+    if (Number.isFinite(n) && n > 0 && unit) return n * unit;
+  }
+  // "the day before" / "the night before" with no count.
+  if (/\b(?:the\s+)?(?:day|night|evening)\s+before\b/.test(m)) return 1440;
+  return null;
+}
+
 /**
  * Nouns that name an entity TYPE when preceded by a definite article — "the
  * appointment", "the habit", "the car". These narrow a reference to one type

@@ -14,6 +14,7 @@ import {
   resolveConversationReference,
   resolveSubjectProfile,
   hasReferringExpression,
+  parseDependentOffsetMinutes,
   type ConversationContext,
 } from "@shared/conversation-context";
 import { findActionableTime } from "@shared/temporal-rules";
@@ -61,6 +62,7 @@ import { matchHabitByName } from "@shared/habit-match";
 import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompletionVeto } from "@shared/habit-completion-intent";
 import { completeHabitOccurrence, type HabitCompletionSource } from "./habit-completion";
 import { ensureHabitTracker } from "./habit-tracker-link";
+import { updateEventWithDependents } from "./update-with-dependents";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
@@ -10017,7 +10019,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const events = await storage.getEvents();
       const ueResult = safeMatchEntity(events, input.title || "", e => e.title);
       if (!ueResult.match) return { error: ueResult.error || "Event not found", candidates: ueResult.candidates };
-      return storage.updateEvent(ueResult.match.id, input.changes);
+      // Moving an appointment moves the reminders that exist BECAUSE of it —
+      // validate the whole mutation, write the event, then its dependents, and
+      // never commit dependents when the event itself did not land (QA req 6).
+      const dep = await updateEventWithDependents(storage as any, ueResult.match.id, input.changes || {});
+      if (!dep.ok) return { error: dep.error || "Event update failed" };
+      return {
+        ...(dep.event as any),
+        ...(dep.dependents.length > 0
+          ? {
+              movedReminders: dep.dependents.map((d) => ({
+                title: d.title, from: d.from.dueDate, to: d.to.dueDate,
+              })),
+              dependentNote: `Moved ${dep.dependents.length} dependent reminder${dep.dependents.length === 1 ? "" : "s"} with the event. Mention this to the user.`,
+            }
+          : {}),
+      };
     }
 
     case "create_habit": {
@@ -15500,6 +15517,24 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // and never a name lookup. Resolution is deliberately one-way: it
           // only ever ADDS an owner the model omitted, so an owner the model
           // did state (or a message that refers to nobody) is untouched.
+          // ── DEPENDENT REMINDER EDGE (QA req 6) ─────────────────────────
+          // "Remind me two days before" creates a task whose whole reason to
+          // exist is the event the conversation just established. Record that
+          // as a fact on the row, so moving the event later moves the reminder
+          // with it instead of leaving the two to drift apart.
+          if (toolUse.name === "create_task" && !inputWithCtx.reminderForEventId) {
+            try {
+              const offset = parseDependentOffsetMinutes(userMessage);
+              if (offset != null) {
+                const anchor = resolveConversationReference(convoContext, userMessage, { type: "event" });
+                if (anchor) {
+                  inputWithCtx.reminderForEventId = anchor.id;
+                  inputWithCtx.reminderOffsetMinutes = offset;
+                  logger.info("ai", `[turn ${turnId.slice(0, 8)}] reminder bound to event ${anchor.id} (-${offset}m)`);
+                }
+              }
+            } catch { /* the task still saves, just unlinked */ }
+          }
           if (!READ_ONLY_TOOLS.has(toolUse.name) && !inputWithCtx.forProfile) {
             try {
               if (hasReferringExpression(userMessage)) {

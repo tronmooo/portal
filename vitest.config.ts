@@ -14,6 +14,7 @@ export default defineConfig({
       'tests/conversation-context.test.ts',
       'tests/habit-quantity.test.ts',
       'tests/qa-habit-tracker-sync.test.ts',
+      'tests/qa-atomic-dependents.test.ts',
       'tests/qa-conversational-corrections.test.ts',
       'tests/qa-note-not-artifact.test.ts',
       'tests/now-rank.test.ts',

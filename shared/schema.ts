@@ -867,6 +867,22 @@ export interface Task {
   createdAt: string;
   /** Last write time — for a done task this is when it was completed. */
   updatedAt?: string;
+  /**
+   * The EVENT this task is a reminder for, when it is one.
+   *
+   * "Sarah has a dentist appointment on September 8" / "Remind me two days
+   * before" produces a task whose whole reason to exist is that appointment.
+   * Without this edge the two records were strangers: moving the appointment
+   * to the 10th left the reminder on the 6th, and — worse — a turn that moved
+   * the reminder while the appointment update failed left the data corrupted
+   * with nothing able to notice (QA req 6).
+   *
+   * `reminderOffsetMinutes` is how far BEFORE the event the reminder sits
+   * (positive = before), so moving the event recomputes the reminder instead
+   * of guessing at a delta.
+   */
+  reminderForEventId?: string | null;
+  reminderOffsetMinutes?: number | null;
 }
 
 /** HH:MM, 24-hour. Rejects "9am", "25:00" and other things that aren't a time. */
@@ -881,6 +897,9 @@ export const insertTaskSchema = z.object({
   dueTime: z.string().regex(CLOCK_TIME_RE, "Use HH:MM (24-hour)").optional(),
   tags: z.array(z.string()).optional().default([]),
   linkedProfiles: z.array(z.string()).optional().default([]),
+  // Nullable so a PATCH can detach a reminder from its event.
+  reminderForEventId: z.string().nullable().optional(),
+  reminderOffsetMinutes: z.number().int().nullable().optional(),
 });
 
 export type InsertTask = z.input<typeof insertTaskSchema>;
