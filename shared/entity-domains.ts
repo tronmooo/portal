@@ -172,8 +172,13 @@ export const ACTION_TYPE_DOMAINS: Record<string, Domain[]> = {
   complete_event: ["events"],
   create_goal: ["goals"],
   create_habit: ["habits", "trackers"],
-  checkin_habit: ["habits"],
-  uncomplete_habit: ["habits"],
+  // Completing a habit mirrors into its linked tracker — and creates and links
+  // that tracker on the first completion when there wasn't one
+  // (server/habit-tracker-link.ts). Both surfaces change, so both refresh
+  // (QA req 13); invalidating only "habits" left the tracker entry invisible
+  // until something else happened to refetch.
+  checkin_habit: ["habits", "trackers"],
+  uncomplete_habit: ["habits", "trackers"],
   delete_habit: ["habits"],
   create_obligation: ["obligations", "liabilities"],
   pay_obligation: ["obligations", "liabilities", "expenses"],
