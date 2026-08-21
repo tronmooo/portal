@@ -30,7 +30,7 @@
 //
 // Pure, no I/O. Pinned by tests/habit-completion-intent.test.ts.
 
-import { habitTokens, type HabitLike } from "./habit-match";
+import { habitTokens, normalizeHabitText, type HabitLike } from "./habit-match";
 
 /**
  * How strongly the message asserts a completion.
@@ -196,6 +196,11 @@ export function matchHabitForCompletionReport<T extends HabitLike>(
   habits: T[],
   message: string,
   confidenceOverride?: CompletionConfidence,
+  opts?: {
+    /** Tie-break among habits that share a NAME: prefer one this returns true
+     *  for (the caller uses "today isn't finished yet"). */
+    prefer?: (habit: T) => boolean;
+  },
 ): CompletionMatch<T> | null {
   const confidence = confidenceOverride ?? classifyCompletionReport(message);
   if (confidence === "none" || !habits.length) return null;
@@ -218,15 +223,28 @@ export function matchHabitForCompletionReport<T extends HabitLike>(
   // "I walked the dog" names both a "Walk" habit and a "Walk the Dog" habit,
   // and the second is what the sentence is about.
   //
-  // A genuine TIE declines. "Got my walk done" with both a Morning Walk and an
-  // Evening Walk habit names neither in particular (their distinguishing words
-  // are time-of-day filler, so both reduce to "walk"), and picking one would
-  // record a completion the user never reported. This is the "only ask when
-  // there is real ambiguity" case — and it is real.
+  // A tie between DIFFERENT habits declines. "Got my walk done" with both a
+  // Morning Walk and an Evening Walk habit names neither in particular (their
+  // distinguishing words are time-of-day filler, so both reduce to "walk"),
+  // and picking one would record a completion the user never reported. This is
+  // the "only ask when there is real ambiguity" case — and it is real.
+  //
+  // A tie between habits with the SAME NAME is not ambiguous to the user, only
+  // to the database: duplicates accumulate (two rows both called "Walk the
+  // Dog"), and declining there would refuse the completion for a distinction
+  // nobody can see. Pick one, preferring an unfinished one so repeated reports
+  // fill them in turn.
   const full = scored.filter((s) => s.full);
   if (full.length > 0) {
     const ranked = [...full].sort((a, b) => b.nameTokens.length - a.nameTokens.length);
-    if (ranked.length > 1 && ranked[0].nameTokens.length === ranked[1].nameTokens.length) return null;
+    const topSize = ranked[0].nameTokens.length;
+    const tied = ranked.filter((s) => s.nameTokens.length === topSize);
+    if (tied.length > 1) {
+      const names = new Set(tied.map((s) => normalizeHabitText(s.habit.name)));
+      if (names.size > 1) return null;
+      const preferred = opts?.prefer ? tied.find((s) => opts.prefer!(s.habit)) : undefined;
+      return { habit: (preferred ?? tied[0]).habit, confidence, match: "full" };
+    }
     return { habit: ranked[0].habit, confidence, match: "full" };
   }
 

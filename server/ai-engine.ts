@@ -10243,7 +10243,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         };
       }
       if (checkinMsg && !hasExplicitHabitCheckinIntent(checkinMsg)) {
-        const inferred = matchHabitForCompletionReport(eligible, checkinMsg);
+        const inferDate = input.date || getUserToday(aiUserTimezone());
+        const inferred = matchHabitForCompletionReport(eligible, checkinMsg, undefined, {
+          // Duplicate rows with the same name are common in real data; send the
+          // report to one that still has an occurrence left today.
+          prefer: (h) => !habitDayProgress(h as any, inferDate).isComplete,
+        });
         if (!inferred) {
           return {
             error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
@@ -13339,10 +13344,11 @@ async function syncHabitsForTrackerLog(
       // fallback for a report worded differently than the habit. The fallback
       // demands a FULL name match: a "Walking" tracker must not stand in for a
       // "Walk the Dog" habit, or any recorded walk finishes the dog's.
+      const prefer = { prefer: (h: any) => !habitDayProgress(h, dateStr).isComplete };
       const byName = ctx.activityName
-        ? matchHabitForCompletionReport(eligible, `${ctx.activityName} done`, "explicit")
+        ? matchHabitForCompletionReport(eligible, `${ctx.activityName} done`, "explicit", prefer)
         : null;
-      const hit = matchHabitForCompletionReport(eligible, message)
+      const hit = matchHabitForCompletionReport(eligible, message, undefined, prefer)
         || (byName?.match === "full" ? byName : null);
       // A habit ALREADY linked to this tracker was advanced by the storage
       // layer when the entry landed. Completing it again here would turn one

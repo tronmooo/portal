@@ -127,9 +127,23 @@ describe("matchHabitForCompletionReport — which habit, if any", () => {
     expect(hit?.match).toBe("unique-partial");
   });
 
-  it("declines when two habits are equally plausible", () => {
+  it("declines when two DIFFERENT habits are equally plausible", () => {
     const ambiguous = [{ id: "a", name: "Morning Walk" }, { id: "b", name: "Evening Walk" }];
     expect(matchHabitForCompletionReport(ambiguous, "got my walk done")).toBeNull();
+  });
+
+  it("still completes when the tie is between duplicate rows of the SAME habit", () => {
+    // Real data (this user's account) has two rows both called "Walk the Dog".
+    // That is invisible to them, so refusing on ambiguity would just look like
+    // the feature not working.
+    const dupes = [{ id: "a", name: "Walk the Dog" }, { id: "b", name: "Walk the Dog" }];
+    const hit = matchHabitForCompletionReport(dupes, "I walked the dog");
+    expect(hit).not.toBeNull();
+    // A `prefer` predicate picks the row that still has an occurrence left.
+    const preferred = matchHabitForCompletionReport(dupes, "I walked the dog", undefined, {
+      prefer: (h) => h.id === "b",
+    });
+    expect(preferred?.habit.id).toBe("b");
   });
 
   it("never matches a message that isn't a completion at all", () => {
