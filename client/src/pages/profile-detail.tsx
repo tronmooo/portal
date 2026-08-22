@@ -1,7 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField } from "@/lib/field-display";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, parseLocalDate } from "@/lib/format";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
 // ValueRollupCard / MaintenanceCard below still exist and are still used for
@@ -1436,7 +1436,7 @@ function MaintenanceCard({
   const directRepairs = useMemo(() => {
     return (profile.relatedExpenses || []).filter((e: any) => {
       if (!e.date) return false;
-      const ts = new Date(e.date).getTime();
+      const ts = parseLocalDate(e.date)?.getTime() ?? NaN;
       if (ts < past90 || ts > now) return false;
       const cat = (e.category || "").toLowerCase();
       const desc = (e.description || "").toLowerCase();
@@ -1458,7 +1458,7 @@ function MaintenanceCard({
       const cpExpenses: any[] = cp.relatedExpenses || [];
       for (const e of cpExpenses) {
         if (!e.date) continue;
-        const ts = new Date(e.date).getTime();
+        const ts = parseLocalDate(e.date)?.getTime() ?? NaN;
         if (ts < past90 || ts > now) continue;
         const cat = (e.category || "").toLowerCase();
         const desc = (e.description || "").toLowerCase();
@@ -1685,7 +1685,7 @@ function MaintenanceCard({
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-muted-foreground">
-                            {new Date(e.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                            {parseLocalDate(e.date)?.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                           </span>
                           {childName && (
                             <span className="text-[11px] text-muted-foreground">· {childName}</span>
@@ -4828,14 +4828,15 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const thisMonth = expenses
     .filter(e => {
-      const d = new Date(e.date);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` === currentMonthKey;
+      const d = parseLocalDate(e.date);
+      return !!d && `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` === currentMonthKey;
     })
     .reduce((sum, e) => sum + (e.amount || 0), 0);
 
   const expensesByMonth: Record<string, number> = {};
   for (const exp of expenses) {
-    const d = new Date(exp.date);
+    const d = parseLocalDate(exp.date);
+    if (!d) continue;
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     expensesByMonth[key] = (expensesByMonth[key] || 0) + (exp.amount || 0);
   }
@@ -5304,7 +5305,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                             <p className="text-sm font-medium truncate">{expense.description}</p>
                             <div className="flex items-center gap-1.5 mt-0.5">
                               <span className="text-xs text-muted-foreground">
-                                {new Date(expense.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                                {parseLocalDate(expense.date)?.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
                               </span>
                               {expense.category && (
                                 <Badge variant="secondary" className="text-xs px-1.5 py-0">{expense.category}</Badge>
@@ -9428,7 +9429,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
             <div key={r.id} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
               <div className="min-w-0 flex-1">
                 <span className="text-xs">{r.description || "Redemption"}</span>
-                <span className="text-xs text-muted-foreground ml-2">{r.date ? new Date(r.date).toLocaleDateString() : ""}</span>
+                <span className="text-xs text-muted-foreground ml-2">{r.date ? parseLocalDate(r.date)?.toLocaleDateString() : ""}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium tabular-nums">{r.amount ? formatCurrency(Number(r.amount)) : "—"}</span>
@@ -11505,7 +11506,7 @@ function CostOfOwnershipCard({ profile }: { profile: any }) {
   const twelveMonthsAgo = new Date(now); twelveMonthsAgo.setMonth(now.getMonth() - 12);
 
   const trailing12 = expenses.filter(e => {
-    const d = e?.date ? new Date(e.date) : null;
+    const d = e?.date ? parseLocalDate(e.date) : null;
     return d && d >= twelveMonthsAgo && d <= now;
   });
   const trailing12Total = trailing12.reduce((s, e) => s + (Number(e.amount) || 0), 0);
@@ -12378,7 +12379,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
                 <div key={exp.id} className="group flex items-center justify-between py-1.5 border-b border-border/30 last:border-0" data-testid={`payment-row-${exp.id}`}>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium truncate">{exp.description || "Payment"}</p>
-                    <p className="text-xs text-muted-foreground tabular-nums">{new Date(exp.date).toLocaleDateString()}</p>
+                    <p className="text-xs text-muted-foreground tabular-nums">{parseLocalDate(exp.date)?.toLocaleDateString()}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold tabular-nums">${(exp.amount || 0).toFixed(2)}</span>
@@ -12452,11 +12453,11 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
   const currentYear = now.getFullYear();
 
   const thisMonthTotal = expenses
-    .filter(e => { const d = new Date(e.date); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` === currentMonthKey; })
+    .filter(e => { const d = parseLocalDate(e.date); return !!d && `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` === currentMonthKey; })
     .reduce((sum, e) => sum + (e.amount || 0), 0);
 
   const thisYearTotal = expenses
-    .filter(e => new Date(e.date).getFullYear() === currentYear)
+    .filter(e => parseLocalDate(e.date)?.getFullYear() === currentYear)
     .reduce((sum, e) => sum + (e.amount || 0), 0);
 
   const startDate = f.startDate ? new Date(f.startDate) : null;
@@ -12471,7 +12472,8 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
   // Monthly totals for cost trend
   const monthlyTotals: Record<string, number> = {};
   for (const exp of expenses) {
-    const d = new Date(exp.date);
+    const d = parseLocalDate(exp.date);
+    if (!d) continue;
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     monthlyTotals[key] = (monthlyTotals[key] || 0) + (exp.amount || 0);
   }
@@ -13898,7 +13900,7 @@ export default function ProfileDetailPage() {
                               {item.subtitle && <p className="text-xs text-muted-foreground">{item.subtitle}</p>}
                             </div>
                             <span className="text-xs text-muted-foreground shrink-0">
-                              {item.date ? new Date(item.date).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : ''}
+                              {item.date ? parseLocalDate(item.date)?.toLocaleDateString('en-US', {month:'short', day:'numeric'}) : ''}
                             </span>
                           </div>
                         ))}
