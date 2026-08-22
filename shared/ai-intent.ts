@@ -401,27 +401,57 @@ export function splitIntentClauses(message: string): string[] {
     String.raw`(?:[.;!?\n]+|,\s*(?:and\s+|then\s+|also\s+)?(?=(?:${WRITE_VERB})\b)|\s+(?:and|then|also|plus)\s+(?=(?:${WRITE_VERB})\b))`,
     "i",
   );
-  // A PERIOD IS NOT ALWAYS A SENTENCE END.
-  //
-  // "Robert's email is robert@example.com" split into "…robert@example" and
-  // "com", so the email pattern never matched and a plain profile field was
-  // classified as something else entirely. The same bite applies to "$2,400.50"
-  // and to "Dr. Kim". Mask the periods that belong to a token, split, then put
-  // them back — the splitter's own rules are unchanged, it just stops seeing
-  // punctuation that was never a boundary.
-  const DOT = "\u0000DOT\u0000";
-  const masked = raw
+  return maskDots(raw)
+    .split(connective)
+    .map((s) => unmaskDots(s).trim())
+    .filter((s) => s.length > 0);
+}
+
+// A PERIOD IS NOT ALWAYS A SENTENCE END.
+//
+// "Robert's email is robert@example.com" split into "…robert@example" and
+// "com", so the email pattern never matched and a plain profile field was
+// classified as something else entirely. The same bite applies to "$2,400.50"
+// and to "Dr. Kim". Mask the periods that belong to a token, split, then put
+// them back — the splitter's own rules are unchanged, it just stops seeing
+// punctuation that was never a boundary.
+const DOT = "\u0000DOT\u0000";
+function maskDots(raw: string): string {
+  return raw
     // emails and domains: any dot flanked by word characters with no space
     .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, (m) => m.replace(/\./g, DOT))
     // decimals: 2,400.50 / 3.5
     .replace(/\d\.\d/g, (m) => m.replace(".", DOT))
     // common titles and abbreviations that end in a period
     .replace(/\b(?:mr|mrs|ms|dr|prof|sr|jr|st|ave|apt|no|vs|etc|approx|dept)\./gi, (m) => m.replace(".", DOT));
+}
+function unmaskDots(s: string): string {
+  return s.split(DOT).join(".");
+}
 
-  return masked
-    .split(connective)
-    .map((s) => s.split(DOT).join(".").trim())
-    .filter((s) => s.length > 0);
+/**
+ * Does the message contain a comma/connective-joined segment the parser could
+ * not read? Used only to decide `exhaustive` — never to gate a tool directly.
+ *
+ * The write-verb splitter above deliberately keeps "mac and cheese" whole, but
+ * that conservatism has a dark side: "I walked the dog, spent $38 on gas, and
+ * John's new email is …" never splits (no segment starts with a write verb),
+ * parses as ONE expense intent, and was declared exhaustive — so the gate
+ * blocked the habit check-in and the profile update as "wrong entity" and two
+ * thirds of the message was dropped (QA run 002, B1). Splitting on EVERY
+ * boundary here and asking whether each piece produced a confident intent
+ * turns that case into exhaustive: false, where the gate correctly stands
+ * down. A false negative (gate silent on a message it might have policed) is
+ * acceptable; silently dropping a user's actions is not.
+ */
+function hasUnreadSegment(raw: string): boolean {
+  const generic = /(?:[.;!?\n]+|,\s*(?:and\s+|then\s+|also\s+)?|\s+(?:and|then|also|plus)\s+)/i;
+  const parts = maskDots(String(raw ?? ""))
+    .split(generic)
+    .map((s) => unmaskDots(s).trim())
+    .filter((s) => s.length > 2);
+  if (parts.length <= 1) return false;
+  return parts.some((p) => !isActionable(parseTurnIntent(p)));
 }
 
 /**
@@ -457,13 +487,18 @@ export function parseTurnPlan(message: string): TurnIntentPlan {
   const clauses = splitIntentClauses(raw);
 
   if (clauses.length <= 1) {
-    return { message: raw, intents: [whole], exhaustive: isActionable(whole) };
+    // One clause by the write-verb splitter, but possibly several requests the
+    // parser can't read ("I walked the dog, spent $38, and John's new email
+    // is…"). exhaustive on the strength of one recognised clause is what let
+    // the gate drop the other two (QA run 002, B1).
+    return { message: raw, intents: [whole], exhaustive: isActionable(whole) && !hasUnreadSegment(raw) };
   }
 
   const writeClauses = clauses.filter((c) => WRITE_SHAPED.test(c));
   const perClause = writeClauses.map((c) => parseTurnIntent(c));
   const actionable = perClause.filter(isActionable);
-  const exhaustive = writeClauses.length > 0 && actionable.length === writeClauses.length;
+  const exhaustive =
+    writeClauses.length > 0 && actionable.length === writeClauses.length && !hasUnreadSegment(raw);
 
   if (actionable.length === 0) {
     return { message: raw, intents: [whole], exhaustive: isActionable(whole) && writeClauses.length <= 1 };

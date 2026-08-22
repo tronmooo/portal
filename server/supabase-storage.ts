@@ -4861,6 +4861,26 @@ export class SupabaseStorage implements IStorage {
     const p = await this.getProfile(obligationId);
     if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return undefined;
     const today = date || getUserToday(this._timezone);
+    const f: any = p.fields || {};
+    // The payment settles the CURRENTLY-DUE period, even when paid late:
+    // paying on the 22nd settles the occurrence that was due on the 15th.
+    // Filing it only under the payment date left that period "overdue"
+    // forever while the due date moved on (QA run 002, B3).
+    const occDate = String(f.dueDate ?? f.nextDueDate ?? today).slice(0, 10) || today;
+    const occs: Record<string, any> =
+      f.occurrences && typeof f.occurrences === "object" ? { ...f.occurrences } : {};
+    const prior = occs[occDate];
+    if (prior?.status === "paid") {
+      // Idempotent: a repeated "mark it paid" (a model retry, or a user who
+      // was wrongly told the save failed and told to try again) must not
+      // post a second payment or advance the series another cycle.
+      return {
+        id: prior.paymentId || randomUUID(),
+        amount: prior.paidAmount ?? amount,
+        date: f.lastPaidDate || today,
+        method, confirmationNumber,
+      };
+    }
     // Log the payment against the liability (single source of truth). Recurring
     // bills carry no permanent balance, so the whole amount is principal.
     const payment: any = await this.createLiabilityPayment({
@@ -4874,11 +4894,17 @@ export class SupabaseStorage implements IStorage {
       sourceAccount: method || null,
       notes: confirmationNumber ? `Confirmation ${confirmationNumber}` : null,
     } as any);
-    // Advance the next due date by one cycle and mark upcoming.
-    const f: any = p.fields || {};
+    // Stamp the settled occurrence paid (same shape as payOccurrence), then
+    // advance the next due date by one cycle and mark upcoming.
+    occs[occDate] = {
+      ...(prior || {}),
+      status: "paid", paymentId: payment?.id, amount,
+      actualAmount: amount, paidAmount: amount,
+      postedAt: new Date().toISOString(),
+    };
     const nextDue = advanceLiabilityDueDate(f, today);
     await this.updateProfile(obligationId, {
-      fields: { dueDate: nextDue, nextDueDate: nextDue, lastPaidDate: today, status: "upcoming" },
+      fields: { occurrences: occs, dueDate: nextDue, nextDueDate: nextDue, lastPaidDate: today, status: "upcoming" },
     } as any);
     this.logActivity("obligation", `Paid ${p.name}: $${amount}`);
     return { id: payment?.id || randomUUID(), amount, date: today, method, confirmationNumber };

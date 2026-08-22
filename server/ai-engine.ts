@@ -9813,7 +9813,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
         const year = /^\d{4}-/.test(iso) ? Number(iso.slice(0, 4)) : NaN;
         const thisYear = new Date().getFullYear();
-        if (label && year < thisYear) {
+        // Condition 3 has a fourth face: "Add Sarah's birthday as May 8" names
+        // NO year at all. Date resolution anchors it to the upcoming May 8, so
+        // the year is >= thisYear and the old `year < thisYear` gate fell
+        // through to an ordinary calendar event — the birthday never became
+        // profile data (QA run 002, B4). When the user stated no year and the
+        // profile holds no birthday yet, the month/day IS the fact being
+        // stored; write it to the profile and let the calendar derive the
+        // yearly rule as usual. A real DOB on the profile is still never
+        // overwritten by an occurrence.
+        const userStatedYear = /\b(?:19|20)\d{2}\b/.test(String((input as any).__userMessage || ""));
+        if (label && Number.isFinite(year)) {
           const allProfs = await storage.getProfiles();
           // Only records that HAVE a birthday. `matchProfileByName` searches
           // every profile, so "Sam's Birthday" could land on a vehicle called
@@ -9843,7 +9853,8 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             // ordinary calendar event.
             const looksLikeAnOccurrence = year > thisYear - 5;
             const alreadyRight = !!held && looselyEqual(held, iso);
-            if (alreadyRight || !looksLikeAnOccurrence) {
+            const yearUnknown = !userStatedYear && year >= thisYear && !held;
+            if (alreadyRight || !looksLikeAnOccurrence || yearUnknown) {
               await storage.updateProfile(target.id, {
                 fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
               } as any);
@@ -10548,7 +10559,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (forMonth || dueDate || sourceAccount) {
         // Pay a SPECIFIC occurrence (generated on the fly — no occurrence table).
         const sched = await (storage as any).getLiabilitySchedule(ob.id, 24);
-        if (!sched) return storage.payObligation(ob.id, statedAmount ?? ob.amount, input.method, input.confirmationNumber);
+        if (!sched) {
+          const paid = await storage.payObligation(ob.id, statedAmount ?? ob.amount, input.method, input.confirmationNumber);
+          return { ...(paid || {}), _verify: { type: "obligation", id: ob.id } };
+        }
         const occs: any[] = sched.occurrences || [];
         const open = occs.filter(o => o.status !== "paid" && o.status !== "skipped");
         let target: any; let label: string;
@@ -10578,7 +10592,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           ...(sourceAccount ? { paidFrom: sourceAccount.name } : {}),
         };
       }
-      return storage.payObligation(ob.id, statedAmount ?? ob.amount, input.method, input.confirmationNumber);
+      // The payment row's id is NOT an obligations-table id: without the
+      // _verify hint, read-back verification scanned getObligations() for it,
+      // found nothing, and reported a SAVED payment as "Nothing was saved" —
+      // inviting the user to pay twice (QA run 002, B2).
+      const paid = await storage.payObligation(ob.id, statedAmount ?? ob.amount, input.method, input.confirmationNumber);
+      return { ...(paid || {}), _verify: { type: "obligation", id: ob.id } };
     }
 
     // ── Variable / usage-based liabilities ──────────────────────────────────
@@ -15477,11 +15496,18 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // A stale replay belongs to an older turn, and a blocked duplicate
             // create is already represented by the first create's card — both
             // stay out of the user's per-operation checklist entirely. Genuine
-            // routing mismatches DO surface, in plain language.
-            if (routingViolation.userMessage) {
+            // routing mismatches DO surface, in plain language — but only once
+            // per dropped action: the model retries a blocked action with a
+            // sibling tool across rounds, and pushing a row per attempt
+            // printed every failure twice (QA run 002, B10).
+            const blockedLabel = opRawLabel(toolUse);
+            const alreadyListed = allOperations.some(
+              (op) => op.status === "failed" && op.raw === blockedLabel && op.error === routingViolation.userMessage,
+            );
+            if (routingViolation.userMessage && !alreadyListed) {
               allOperations.push({
                 index: allOperations.length,
-                raw: opRawLabel(toolUse),
+                raw: blockedLabel,
                 tool: toolUse.name,
                 status: "failed",
                 error: routingViolation.userMessage,

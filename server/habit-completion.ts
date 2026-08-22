@@ -192,7 +192,10 @@ export async function resolveTrackerForHabit(
     const match = findIdentityMatches(allTrackers, cand).filter(compatible)[0];
     if (match) return { id: match.id, name: match.name, created: false };
   }
-  if (metric) {
+  // Umbrella adoption is for the GENERIC activity ("Running" folds into an
+  // existing "Exercise" tracker). A specific habit ("Walk the Dog") must not
+  // adopt an umbrella either — any workout logged there would complete it.
+  if (metric && !metric.specific) {
     for (const umbrella of UMBRELLA_TRACKER_NAMES[metric.category] || []) {
       const match = findIdentityMatches(allTrackers, umbrella).filter(compatible)[0];
       if (match) return { id: match.id, name: match.name, created: false };

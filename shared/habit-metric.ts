@@ -47,6 +47,10 @@ export interface HabitMetricSuggestion {
   fields: HabitMetricField[];
   /** What recognized the measurement (for logs/tests). */
   source: "canonical" | "quantity" | "classifier";
+  /** The habit is a PARTICULAR instance of the activity ("Walk the Dog", not
+   * "Walking"). Such a habit must keep its own tracker — never adopt a
+   * generic or umbrella one, where any recorded session would complete it. */
+  specific?: boolean;
 }
 
 /** Canonical metric map: activity keyword → the tracker that measures it.
@@ -138,7 +142,7 @@ const QUANTITY_RE =
 /** Frequency/verb noise that must not survive into a tracker name:
  * "Drink 64 oz of water daily" → "Water". */
 const NAME_NOISE_RE =
-  /\b(drink|drinks|drinking|eat|eating|take|takes|taking|do|does|doing|go|goes|going|practice|practicing|practise|every|each|per|daily|weekly|nightly|morning|evening|night|day|days|week|weeks|time|times|a|an|the|my|of|for|at|to|x\d+|\d+x)\b/gi;
+  /\b(drink|drinks|drinking|eat|eating|take|takes|taking|do|does|doing|go|goes|going|practice|practicing|practise|every|each|per|daily|weekly|nightly|morning|evening|night|day|days|week|weeks|time|times|more|less|extra|some|a|an|the|my|of|for|at|to|x\d+|\d+x)\b/gi;
 
 /** Reduce a habit name to the THING being measured, for use as a tracker name.
  * Strips quantities, units, verbs and frequency words, then title-cases. */
@@ -201,12 +205,18 @@ export function detectHabitMetric(
       const specific = noun && habitTokens(noun).some(
         (t) => !m.candidates.some((c) => habitTokens(c).includes(t)),
       );
-      const candidates = specific ? [name.trim(), noun, ...m.candidates] : [...m.candidates];
+      // A specific habit offers ONLY its own names. Appending the canonical
+      // candidates here meant "Walk the Dog" (no tracker of its own yet) fell
+      // through to a generic "Walking" tracker after all — and the link was
+      // then persisted onto the habit, exactly what this guard forbids
+      // (QA run 002, B1: the check-in mis-targeted the Walking tracker).
+      const candidates = specific ? [name.trim(), noun] : [...m.candidates];
       return {
         candidates,
         category: m.category,
         fields: m.fields.map((f) => ({ ...f })),
         source: "canonical",
+        ...(specific ? { specific: true } : {}),
       };
     }
   }

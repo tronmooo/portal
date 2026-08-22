@@ -1803,6 +1803,12 @@ export class MemStorage implements IStorage {
   async payObligation(obligationId: string, amount: number, method?: string, confirmationNumber?: string): Promise<ObligationPayment | undefined> {
     const ob = this.obligations.get(obligationId);
     if (!ob) return undefined;
+    // Idempotent: a same-day repeat of the same payment (model retry, or a
+    // user wrongly told the save failed) must not post twice or advance the
+    // due date a second cycle (QA run 002, B2/B3).
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const dup = ob.payments.find((pm) => pm.amount === amount && String(pm.date).slice(0, 10) === todayStr);
+    if (dup) return dup;
     const payment: ObligationPayment = { id: randomUUID(), amount, date: new Date().toISOString(), method, confirmationNumber };
     ob.payments.push(payment);
     // Advance next due date
