@@ -92,8 +92,9 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     enabled: open,
   });
   const profileName = (id: string) => allProfiles.find((p: any) => p.id === id)?.name || "Someone";
-  // Force refetch when popup opens — prevents stale cache after AI chat mutations
-  useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/tasks"] }); } }, [open]);
+  // No open-time force refetch: every door's task write (chat manifest,
+  // REST X-Write-Mutations) now invalidates the tasks domain through the
+  // cache bus, so the list here is already fresh when the popup opens.
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   // PERF: isPending (not isLoading) so placeholderData keepPreviousData keeps prior list visible on filter switch.
   const { data: tasksRaw = [], isPending } = useQuery<any[]>({
@@ -1148,8 +1149,9 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   const [newHabitName, setNewHabitName] = useState('');
   const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'year'>('today');
   const [timeFilter, setTimeFilter] = useState<'all' | 'morning' | 'afternoon' | 'evening' | 'night'>('all');
-  // Force refetch when popup opens — prevents stale cache after AI chat mutations
-  useEffect(() => { if (open) { queryClient.invalidateQueries({ queryKey: ["/api/habits"] }); } }, [open]);
+  // No open-time force refetch: habit and tracker writes from every door
+  // invalidate the habits domain through the cache bus (tracker entries carry
+  // the habits domain because of the auto-checkin), so this list is fresh.
 
   // BUG (user report: "Add Habit does nothing"): the habit was created WITHOUT
   // linkedProfiles, so under an active profile filter the new habit was

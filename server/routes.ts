@@ -92,6 +92,7 @@ import {
   WRITE_MUTATIONS_HEADER,
 } from "./mutation-outcome";
 import { createExpenseRecord } from "./actions/expense-service";
+import { prepareTrackerEntryValues, logPreparedEntry } from "./actions/tracker-entry-service";
 import { inferExpenseCategory } from "@shared/expense-canon";
 
 // ────────────────────────────────────────────────────────────────────
@@ -4990,104 +4991,49 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     if (!values || typeof values !== "object") {
       return res.status(400).json({ error: "Values required" });
     }
-    // BUG-T02/T03/T04: Coerce values against the tracker's field schema BEFORE
-    // running the meaningful-value / numeric checks. The AI engine (and any chat
-    // path) was logging strings like "Chicken Sandwich" or "running" into
-    // numeric fields; those values would be stored as strings and then crash
-    // any chart/aggregation that called toFixed() on them.
-    {
-      const tracker = await storage.getTracker(req.params.id);
-      if (tracker && Array.isArray(tracker.fields)) {
-        const numericFieldNames = new Set(
-          tracker.fields
-            .filter((f: any) => f && (f.type === "number" || f.type === "integer" || f.type === "decimal"))
-            .map((f: any) => f.name)
-        );
-        for (const k of Object.keys(values)) {
-          if (k === "_notes" || k === "notes" || k === "timestamp") continue;
-          if (!numericFieldNames.has(k)) continue;
-          const raw = (values as any)[k];
-          if (raw == null || raw === "") continue;
-          if (typeof raw === "number") {
-            if (!isFinite(raw)) {
-              return res.status(400).json({ error: `"${k}" must be a number (got ${raw}).` });
-            }
-            continue;
-          }
-          // Strings: try to coerce, but reject if the string isn't numeric.
-          const s = String(raw).trim();
-          // Strip currency, units like "lbs", "mi", but reject if no digit at all.
-          const stripped = s.replace(/[$,\s]/g, "").replace(/[a-zA-Z\/%]+$/g, "");
-          const n = parseFloat(stripped);
-          if (!isFinite(n) || stripped === "" || !/\d/.test(stripped)) {
-            return res.status(400).json({
-              error: `"${k}" expects a number. Received "${s}" — use a numeric value (e.g. 12.5).`,
-              field: k,
-              received: s,
-            });
-          }
-          (values as any)[k] = n;
-        }
-      }
+    const tracker = await storage.getTracker(req.params.id);
+    if (!tracker) return res.status(404).json({ error: "Tracker not found" });
+    // Canonical pipeline (server/actions/tracker-entry-service.ts): the value
+    // guards this handler used to carry inline (BUG-T02/T03/T04 coercion,
+    // empty-entry, signs, sanity bounds) now live in
+    // shared/tracker-entry-guards.ts and run for EVERY door, plus the
+    // normalization chat entries always had — a UI-logged "99°F" stores as 99
+    // exactly like a chat-logged one. The write stage adds the duplicate
+    // window (short here: double-submit protection only), the habit
+    // auto-checkin (structural, in storage), and linked-goal progress —
+    // which manual entries previously never advanced.
+    const prepared = await prepareTrackerEntryValues(storage, tracker as any, values);
+    if (prepared.error) {
+      return res.status(400).json({
+        error: prepared.error,
+        ...(prepared.field ? { field: prepared.field } : {}),
+        ...(prepared.received ? { received: prepared.received } : {}),
+      });
     }
-    // Reject entries where all meaningful values are empty/null/undefined
-    const meaningfulKeys = Object.keys(values).filter(k => k !== '_notes' && k !== 'notes' && k !== 'timestamp');
-    const hasAtLeastOneValue = meaningfulKeys.some(k => {
-      const v = values[k];
-      return v !== null && v !== undefined && v !== '' && !(typeof v === 'number' && isNaN(v));
+    let entryRow: any = null;
+    const mctx = beginMutationContext(storage, "rest");
+    const outcome = await runMutation(mctx, {
+      tool: "log_tracker_entry",
+      input: { trackerId: req.params.id, values: prepared.values },
+      execute: async () => {
+        entryRow = await logPreparedEntry(storage, tracker as any, {
+          values: prepared.values,
+          profileId: typeof req.body.profileId === "string" ? req.body.profileId : undefined,
+          timestamp: typeof req.body.timestamp === "string" ? req.body.timestamp : undefined,
+          notes: typeof req.body.notes === "string" ? req.body.notes : undefined,
+          mood: req.body.mood,
+          tags: Array.isArray(req.body.tags) ? req.body.tags : undefined,
+        }, { dedupWindowMs: 15_000 });
+        return entryRow;
+      },
     });
-    if (meaningfulKeys.length > 0 && !hasAtLeastOneValue) {
-      return res.status(400).json({ error: "At least one value is required. Cannot log an empty entry." });
+    if (!outcome.ok) {
+      const status = outcome.error === "Tracker not found" ? 404
+        : /validation|must be|required/i.test(outcome.error || "") ? 400 : 500;
+      return res.status(status).json({ error: outcome.error });
     }
-    // Only reject negative values for fields that can't be negative (calories, weight, distance)
-    // Allow negatives for: temperature, elevation, profit/loss, position change
-    const nonNegativeFields = new Set(['calories', 'weight', 'distance', 'duration', 'steps', 'heartRate', 'bpm', 'systolic', 'diastolic']);
-    for (const [k, v] of Object.entries(values)) {
-      if (typeof v === 'number' && v < 0 && nonNegativeFields.has(k)) {
-        return res.status(400).json({ error: `${k} cannot be negative` });
-      }
-    }
-    if (Object.values(values).some((v: any) => typeof v === "number" && isNaN(v))) {
-      return res.status(400).json({ error: "All values must be valid numbers" });
-    }
-    // Sanity bounds — reject obviously impossible values
-    const numericVals = Object.entries(values).filter(([, v]) => typeof v === 'number') as [string, number][];
-    for (const [key, val] of numericVals) {
-      if (key === '_notes') continue;
-      // Weight (human): max 1000 lbs
-      if (key === 'weight' && val > 1000) return res.status(400).json({ error: `Weight ${val} lbs is unrealistic. Max: 1000 lbs.` });
-      // Weight (pet): max 500 lbs — check if the tracker is linked to a pet profile
-      if (key === 'weight' && val > 500 && req.body.trackerId) {
-        const tracker = await storage.getTracker(req.params.id);
-        if (tracker) {
-          const profiles = await storage.getProfiles();
-          const isPetTracker = (tracker.linkedProfiles || []).some(pid => {
-            const p = profiles.find(pr => pr.id === pid);
-            return p?.type === 'pet';
-          });
-          if (isPetTracker) {
-            return res.status(400).json({ error: `Pet weight ${val} lbs is unrealistic. Max: 500 lbs.` });
-          }
-        }
-      }
-      // Blood pressure systolic: max 300
-      if ((key === 'systolic' || key === 'sbp') && val > 300) return res.status(400).json({ error: `Systolic ${val} is unrealistic. Max: 300.` });
-      // Blood pressure diastolic: max 200
-      if ((key === 'diastolic' || key === 'dbp') && val > 200) return res.status(400).json({ error: `Diastolic ${val} is unrealistic. Max: 200.` });
-      // Heart rate: max 250
-      if ((key === 'heartRate' || key === 'bpm' || key === 'pulse') && val > 250) return res.status(400).json({ error: `Heart rate ${val} is unrealistic. Max: 250.` });
-      // Sleep hours: max 24
-      if (key === 'hours' && val > 24) return res.status(400).json({ error: `Sleep ${val} hours is impossible. Max: 24.` });
-      // Calories: max 20000
-      if (key === 'calories' && val > 20000) return res.status(400).json({ error: `${val} calories is unrealistic. Max: 20,000.` });
-      // Generic upper bound: no single numeric value over 100,000
-      if (val > 100000) return res.status(400).json({ error: `Value ${val} for "${key}" exceeds maximum (100,000).` });
-    }
-    const parsed = insertTrackerEntrySchema.safeParse({ ...req.body, trackerId: req.params.id });
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    const entry = await storage.logEntry(parsed.data);
-    if (!entry) return res.status(404).json({ error: "Tracker not found" });
-    res.status(201).json(entry);
+    noteWriteMutations(res, outcome.mutations);
+    res.status(outcome.deduped ? 200 : 201).json(entryRow);
   }));
   app.patch("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     const { values, notes, mood, tags, timestamp, valuesToDelete } = req.body || {};

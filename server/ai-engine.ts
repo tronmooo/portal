@@ -34,6 +34,7 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { createExpenseRecord } from "./actions/expense-service";
+import { prepareTrackerEntryValues, logPreparedEntry } from "./actions/tracker-entry-service";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
@@ -7979,29 +7980,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }
         } catch { /* never block a log on dose inference */ }
 
-        // Dedup: check if nearly identical entry was logged in the last 2 minutes
-        const twoMinAgo = Date.now() - 120000;
-        const recentDup = tracker.entries.find((e: any) => {
-          if (new Date(e.timestamp).getTime() < twoMinAgo) return false;
-          const existingNums = Object.entries(e.values).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
-          const newNums = Object.entries(entryValues).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
-          if (existingNums.length === 0 || newNums.length === 0) return false;
-          return newNums.every(([k, v]) => e.values[k] === v);
-        });
-        if (recentDup) {
-          logger.info("ai", `Skipped duplicate ${tracker.name} entry (matches ${recentDup.id.slice(0,8)})`);
-          return recentDup;
-        }
-        // Normalize the AI-supplied values to the tracker's schema:
-        //  - rename unknown fields via alias/single-numeric fallback
-        //  - strip unit suffixes ("99°F" → 99)
-        //  - convert to tracker's canonical unit when possible
-        // This keeps chat-logged entries identical in shape to
-        // document-extracted ones, so the tracker card can always read
-        // the same field.
-        const { values: normalizedValues, warnings: normWarnings } = normalizeTrackerEntry(tracker, entryValues);
-        if (normWarnings.length > 0) {
-          logger.info("ai", `normalize ${tracker.name}: ${normWarnings.join("; ")}`);
+        // Shared value stage (server/actions/tracker-entry-service.ts):
+        // guards — numeric coercion, empty-entry, sign and sanity bounds,
+        // previously REST-only, so chat could log a 5,000-lb weigh-in — then
+        // normalization to the tracker's schema. Keeps chat-logged entries
+        // identical in shape to UI- and document-logged ones.
+        const prepared = await prepareTrackerEntryValues(storage, tracker, entryValues);
+        if (prepared.error) return { error: prepared.error };
+        const normalizedValues = prepared.values;
+        if (prepared.warnings.length > 0) {
+          logger.info("ai", `normalize ${tracker.name}: ${prepared.warnings.join("; ")}`);
         }
         // Re-detect unknown fields AFTER normalization so we only warn
         // about ones we genuinely couldn't map.
@@ -8066,10 +8054,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }
         }
 
-        const entry = await storage.logEntry({ trackerId: tracker.id, values: normalizedValues, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        // Write stage (shared with every door): duplicate window → shared
+        // insert schema → storage.logEntry (habit auto-checkin fires
+        // structurally inside storage) → linked-goal progress.
+        const entry = await logPreparedEntry(storage, tracker, {
+          values: normalizedValues,
+          profileId: targetProfileId,
+          timestamp: input.at || undefined,
+        });
+        if (entry && (entry as any).error) return entry;
+        if (entry && (entry as any).deduped) {
+          logger.info("ai", `Skipped duplicate ${tracker.name} entry`);
+          return entry;
+        }
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
-        await autoUpdateGoalProgress(tracker.id, normalizedValues);
         await syncHabitsForTrackerLog(entry, tracker, {
           userMessage: String((input as any).__userMessage || ""),
           targetProfileId,
@@ -8197,8 +8196,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             } as any);
           }
         } catch { /* non-fatal */ }
-        const { values: nv } = normalizeTrackerEntry(conflictTracker as any, entryValues);
-        const conflictEntry = await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        const conflictPrep = await prepareTrackerEntryValues(storage, conflictTracker as any, entryValues);
+        if (conflictPrep.error) return { error: conflictPrep.error };
+        const conflictEntry = await logPreparedEntry(storage, conflictTracker as any, {
+          values: conflictPrep.values, profileId: targetProfileId, timestamp: input.at || undefined,
+        });
+        if (conflictEntry && (conflictEntry as any).error) return conflictEntry;
         await syncHabitsForTrackerLog(conflictEntry, conflictTracker, {
           userMessage: String((input as any).__userMessage || ""),
           targetProfileId,
@@ -8236,11 +8239,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           ...autoTrackerPayload.data,
           ...(newTrackerLinkedProfiles ? { linkedProfiles: newTrackerLinkedProfiles } : {}),
         } as any);
-        // Even for brand-new trackers, run values through the normalizer
-        // so unit suffixes get stripped (e.g. "99°F" → 99) before the
-        // first entry is written.
-        const { values: nv } = normalizeTrackerEntry(newTracker as any, entryValues);
-        const entry = await storage.logEntry({ trackerId: newTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        // Even for brand-new trackers, run values through the shared stage so
+        // guards apply and unit suffixes get stripped ("99°F" → 99) before
+        // the first entry is written.
+        const newPrep = await prepareTrackerEntryValues(storage, newTracker as any, entryValues);
+        if (newPrep.error) return { error: newPrep.error };
+        const entry = await logPreparedEntry(storage, newTracker as any, {
+          values: newPrep.values, profileId: targetProfileId, timestamp: input.at || undefined,
+        });
+        if (entry && (entry as any).error) return entry;
         // Surface what was auto-created so callers (bulk path, chat UI) can
         // report "created a new X tracker" honestly.
         if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
@@ -8282,8 +8289,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
                 (!!targetProfileId && t.linkedProfiles.includes(targetProfileId))));
             if (existing) {
               logger.info("ai", `Auto-create raced on "${trackerDisplayName}" — reusing existing tracker ${existing.id} instead of duplicating`);
-              const { values: nv } = normalizeTrackerEntry(existing as any, entryValues);
-              return await storage.logEntry({ trackerId: existing.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+              const racePrep = await prepareTrackerEntryValues(storage, existing as any, entryValues);
+              if (racePrep.error) return { error: racePrep.error };
+              return await logPreparedEntry(storage, existing as any, {
+                values: racePrep.values, profileId: targetProfileId, timestamp: input.at || undefined,
+              });
             }
           } catch (retryErr: any) {
             logger.warn("ai", `Race-recovery for "${trackerDisplayName}" failed: ${retryErr?.message || retryErr}`);
@@ -13277,41 +13287,8 @@ async function syncHabitsForTrackerLog(
   } catch { /* reconciliation is best-effort; the entry itself has landed */ }
 }
 
-async function autoUpdateGoalProgress(trackerId: string, values: Record<string, any>): Promise<void> {
-  try {
-    const goals = await storage.getGoals();
-    const linkedGoals = goals.filter(g => g.trackerId === trackerId && g.status === 'active');
-    for (const goal of linkedGoals) {
-      // Determine the increment from the entry values
-      let increment = 0;
-      // For distance goals (running, cycling): use distance field
-      if (values.distance && typeof values.distance === 'number') {
-        increment = values.distance;
-      } else if (values.value && typeof values.value === 'number') {
-        increment = values.value;
-      } else {
-        // Use the first numeric value
-        const numVals = Object.entries(values)
-          .filter(([k, v]) => typeof v === 'number' && !k.startsWith('_'))
-          .map(([, v]) => v as number);
-        if (numVals.length > 0) increment = numVals[0];
-      }
-      if (increment > 0) {
-        const newCurrent = (goal.current || 0) + increment;
-        const cappedCurrent = Math.min(newCurrent, goal.target);
-        const update: Record<string, any> = { current: cappedCurrent };
-        // Auto-complete the goal when target is reached
-        if (newCurrent >= goal.target) {
-          update.status = "completed";
-        }
-        await storage.updateGoal(goal.id, update);
-        logger.info("goal", `Auto-updated "${goal.title}": ${goal.current} → ${cappedCurrent} ${goal.unit}${newCurrent >= goal.target ? ' (COMPLETED!)' : ''}`);
-      }
-    }
-  } catch (e) {
-    console.error('[goal] autoUpdateGoalProgress failed:', e);
-  }
-}
+// autoUpdateGoalProgress moved to server/actions/tracker-entry-service.ts so
+// EVERY door's tracker entry advances its linked goal, not just chat's.
 
 // ============================================================
 // AUTO-LINKING — scan created entities for profile name matches

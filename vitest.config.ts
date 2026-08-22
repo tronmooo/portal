@@ -121,6 +121,7 @@ export default defineConfig({
       'tests/ai-envelope.test.ts',
       'tests/door-parity-notes.test.ts',
       'tests/door-parity-expenses.test.ts',
+      'tests/door-parity-tracker-entries.test.ts',
       'tests/bulk-actions.test.ts',
       'tests/ai-system-tools.test.ts',
       'tests/merge-profiles.test.ts',

@@ -28,6 +28,7 @@ export interface FakeDb {
   tasks: any[];
   events: any[];
   documents: any[];
+  trackers: any[];
   /** Call counter for the binary-materializing read, so a test can prove the
    *  metadata route never touches it. */
   getDocumentCalls: number;
@@ -136,6 +137,32 @@ export function makeFakeStorage(db: FakeDb) {
       const before = db.tasks.length;
       db.tasks = db.tasks.filter(t => t.id !== rid);
       return db.tasks.length < before;
+    },
+
+    // Trackers: needed since the canonical tracker-entry service validates
+    // trackerId with the shared insert schema — the catch-all `[]` answer used
+    // to let a fast-path mood log "succeed" against a tracker that was never
+    // created (an array is truthy), which hid exactly the class of phantom
+    // write the schema now rejects.
+    getTrackers: async () => db.trackers,
+    getTracker: async (rid: string) => db.trackers.find(t => t.id === rid),
+    createTracker: async (data: any) => {
+      const row = { id: id("trk"), entries: [], linkedProfiles: [], fields: [], ...data };
+      db.trackers.push(row);
+      return row;
+    },
+    updateTracker: async (rid: string, patch: any) => {
+      const row = db.trackers.find(t => t.id === rid);
+      if (!row) return undefined;
+      Object.assign(row, patch);
+      return row;
+    },
+    logEntry: async (data: any) => {
+      const tracker = db.trackers.find(t => t.id === data.trackerId);
+      if (!tracker) return undefined;
+      const entry = { id: id("te"), values: data.values, timestamp: data.timestamp || new Date().toISOString() };
+      tracker.entries.push(entry);
+      return entry;
     },
 
     getEvents: async () => db.events,
@@ -292,7 +319,7 @@ export interface Harness {
 export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness> {
   const db: FakeDb = {
     profiles: [], expenses: [], incomes: [], obligations: [],
-    tasks: [], events: [], documents: [], getDocumentCalls: 0,
+    tasks: [], events: [], documents: [], trackers: [], getDocumentCalls: 0,
     bumpDataVersionCalls: 0, ...seed,
   };
   const storage = makeFakeStorage(db);
