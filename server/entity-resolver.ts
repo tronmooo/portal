@@ -145,3 +145,48 @@ export function crossKindHint(res: ResolutionResult, attempted: ActionableKind):
   const c = others[0];
   return `No ${attempted} named "${res.queryName}" exists, but a ${c.kind} named "${c.name}" does.`;
 }
+
+// ─── Profile name resolution (THE single implementation) ────────────────────
+// Moved here from server/ai-engine.ts so canonical action services
+// (server/actions/*) can resolve profile references without importing the
+// engine. Six divergent copies of "which profile did they mean?" existed
+// across the codebase; they are being folded into this one.
+//
+// Resolution rules (in order):
+//   1. Exact case-insensitive name match (always unambiguous if found)
+//   2. Word-boundary match in either direction ("Roy" matches "Roy Smith",
+//      never "Royale"); if multiple, ambiguous — unless ONE candidate's name
+//      is materially more specific (>= 2 chars longer than the next best).
+export type ProfileResolution<T extends { name: string }> =
+  | { kind: "found"; profile: T }
+  | { kind: "ambiguous"; matches: T[] }
+  | { kind: "none" };
+
+export function resolveProfileByName<T extends { name: string }>(
+  profiles: T[],
+  rawName: any,
+): ProfileResolution<T> {
+  const name = String(rawName ?? "").toLowerCase().trim();
+  if (!name) return { kind: "none" };
+  const exact = profiles.find(p => p.name.toLowerCase() === name);
+  if (exact) return { kind: "found", profile: exact };
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const nameRe = new RegExp(`(^|\\b)${escapedName}(\\b|$)`);
+  const matches: T[] = [];
+  for (const p of profiles) {
+    const pn = p.name.toLowerCase();
+    if (nameRe.test(pn)) { matches.push(p); continue; }
+    const pnEsc = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(^|\\b)${pnEsc}(\\b|$)`).test(name)) matches.push(p);
+  }
+  if (matches.length === 0) return { kind: "none" };
+  if (matches.length === 1) return { kind: "found", profile: matches[0] };
+  // Multiple matches — only collapse to "found" when ONE is materially more
+  // specific (its name is >= 2 chars longer than the next best). Otherwise
+  // expose the ambiguity so the caller can ask.
+  matches.sort((a, b) => b.name.length - a.name.length);
+  if (matches[0].name.length - matches[1].name.length >= 2) {
+    return { kind: "found", profile: matches[0] };
+  }
+  return { kind: "ambiguous", matches };
+}

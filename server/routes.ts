@@ -93,6 +93,7 @@ import {
 } from "./mutation-outcome";
 import { createExpenseRecord } from "./actions/expense-service";
 import { prepareTrackerEntryValues, logPreparedEntry } from "./actions/tracker-entry-service";
+import { createEventRecord } from "./actions/event-service";
 import { inferExpenseCategory } from "@shared/expense-canon";
 
 // ────────────────────────────────────────────────────────────────────
@@ -5926,10 +5927,29 @@ Rules:
     res.json(event);
   }));
   app.post("/api/events", asyncHandler(async (req, res) => {
-    const parsed = insertEventSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    const newEvent = await storage.createEvent(parsed.data);
-    res.status(201).json(newEvent);
+    // Profile isolation: an event created while a single profile is in scope
+    // belongs to that profile, same as every other create.
+    applyActiveProfileScope(req, req.body);
+    // Canonical pipeline (server/actions/event-service.ts) wrapped in the
+    // door-agnostic contract: this door now gets the duplicate guard and
+    // category canon chat always had, plus read-back verification, an undo
+    // ledger row (source "rest"), and a change manifest.
+    let eventRow: any = null;
+    const mctx = beginMutationContext(storage, "rest");
+    const outcome = await runMutation(mctx, {
+      tool: "create_event",
+      input: { title: req.body.title, date: req.body.date, category: req.body.category },
+      execute: async () => {
+        eventRow = await createEventRecord(storage, { ...req.body, source: req.body.source || "manual" });
+        return eventRow;
+      },
+    });
+    if (!outcome.ok) {
+      const status = /required|valid/i.test(outcome.error || "") ? 400 : 500;
+      return res.status(status).json({ error: outcome.error });
+    }
+    noteWriteMutations(res, outcome.mutations);
+    res.status(outcome.deduped ? 200 : 201).json(eventRow);
   }));
   app.patch("/api/events/:id", asyncHandler(async (req, res) => {
     {

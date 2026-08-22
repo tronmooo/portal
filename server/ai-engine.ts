@@ -35,6 +35,8 @@ import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { createExpenseRecord } from "./actions/expense-service";
 import { prepareTrackerEntryValues, logPreparedEntry } from "./actions/tracker-entry-service";
+import { createEventRecord } from "./actions/event-service";
+import { resolveProfileByName } from "./entity-resolver";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
@@ -6363,39 +6365,10 @@ function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: 
  *      the rest (>=2 chars more specific), in which case we treat the
  *      most-specific one as the resolution.
  */
-export type ProfileResolution<T extends { name: string }> =
-  | { kind: "found"; profile: T }
-  | { kind: "ambiguous"; matches: T[] }
-  | { kind: "none" };
-
-export function resolveProfileByName<T extends { name: string }>(
-  profiles: T[],
-  rawName: any,
-): ProfileResolution<T> {
-  const name = safeLC(rawName).trim();
-  if (!name) return { kind: "none" };
-  const exact = profiles.find(p => p.name.toLowerCase() === name);
-  if (exact) return { kind: "found", profile: exact };
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const nameRe = new RegExp(`(^|\\b)${escapedName}(\\b|$)`);
-  const matches: T[] = [];
-  for (const p of profiles) {
-    const pn = p.name.toLowerCase();
-    if (nameRe.test(pn)) { matches.push(p); continue; }
-    const pnEsc = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (new RegExp(`(^|\\b)${pnEsc}(\\b|$)`).test(name)) matches.push(p);
-  }
-  if (matches.length === 0) return { kind: "none" };
-  if (matches.length === 1) return { kind: "found", profile: matches[0] };
-  // Multiple matches — only collapse to "found" when ONE is materially more
-  // specific (its name is ≥ 2 chars longer than the next best). Otherwise
-  // expose the ambiguity so the AI can ask.
-  matches.sort((a, b) => b.name.length - a.name.length);
-  if (matches[0].name.length - matches[1].name.length >= 2) {
-    return { kind: "found", profile: matches[0] };
-  }
-  return { kind: "ambiguous", matches };
-}
+// The implementation moved to server/entity-resolver.ts — the single home for
+// name resolution — so canonical action services can use it without importing
+// this engine. Re-exported here for existing importers (tests included).
+export { resolveProfileByName, type ProfileResolution } from "./entity-resolver";
 
 
 // Exported for QA tests — lets a script invoke any AI tool handler
@@ -9744,16 +9717,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Dedup lock: skipped duplicate event "${input.title}" on ${input.date}`);
         return { error: "Duplicate event detected — skipped" };
       }
-      // Dedup: skip if a very similar event exists on the same date
-      const allEvents = await storage.getEvents();
-      const dupEvent = allEvents.find(e =>
-        e.title.toLowerCase() === safeLC(input.title) &&
-        e.date === input.date
-      );
-      if (dupEvent) {
-        logger.info("ai", `Skipped duplicate event: "${dupEvent.title}" on ${dupEvent.date}`);
-        return dupEvent;
-      }
       // Resolve target profile BEFORE creating the event
       let eventLinkedProfiles: string[] = [];
       if (input.forProfile) {
@@ -9793,58 +9756,33 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }
         }
       }
-      // P0.3a: validate with the shared insert schema before writing. The model
-      // occasionally invents category labels ("medical", "appointment") — map
-      // the known alias and bucket the rest into "other" rather than failing
-      // the whole event over a cosmetic field.
-      const EVENT_CATEGORIES = ["personal", "work", "health", "finance", "family", "social", "travel", "education", "other"];
-      let evtCategory = input.category === "medical" ? "health" : (input.category || "personal");
-      if (!EVENT_CATEGORIES.includes(evtCategory)) evtCategory = "other";
-      // Weekday-set recurrence ("weekly:1,3,5"): canonicalize the token, and
-      // pull the START DATE onto the first day that is actually in the set.
-      // Expansion always emits the base date, so a Mon/Wed/Fri series started
-      // on a Sunday would show one stray Sunday occurrence forever.
-      let evtRecurrence = String(input.recurrence || "none").trim().toLowerCase();
-      let evtDate = input.date;
-      const evtDaySet = weekdaySetFor(evtRecurrence);
-      if (evtDaySet) {
-        evtRecurrence = weekdaySetToRecurrence(Array.from(evtDaySet));
-        const startD = new Date(`${String(evtDate).slice(0, 10)}T00:00:00`);
-        if (!isNaN(startD.getTime())) {
-          let guard = 7;
-          while (!evtDaySet.has(startD.getDay()) && guard-- > 0) startD.setDate(startD.getDate() + 1);
-          evtDate = startD.toLocaleDateString("en-CA");
-        }
+      // Text-mention fallback: no explicit target, but the title/description
+      // names a known profile ("dinner with Robert") — hand the NAME to the
+      // service, which resolves it with the canonical word-boundary resolver
+      // and never guesses on ambiguity.
+      let evtForProfileName: string | undefined = input.forProfile;
+      if (eventLinkedProfiles.length === 0 && !evtForProfileName) {
+        evtForProfileName = await resolveForProfile(undefined, `${input.title || ""} ${input.description || ""}`);
       }
-      const eventPayload = validateAiPayload(insertEventSchema, {
-        title: input.title.trim(),
-        date: evtDate,
+      // Canonical pipeline (server/actions/event-service.ts): duplicate guard
+      // (same title + same date, every door), category canon, weekday-set
+      // recurrence canonicalization, shared insert schema, junction linking.
+      const newEvent = await createEventRecord(storage, {
+        title: input.title,
+        date: input.date,
         time: input.time,
         endTime: input.endTime,
         allDay: input.allDay || false,
         location: input.location,
         description: input.description,
-        recurrence: evtRecurrence,
-        ...(input.recurrenceEnd ? { recurrenceEnd: String(input.recurrenceEnd).slice(0, 10) } : {}),
-        category: evtCategory,
+        recurrence: input.recurrence,
+        recurrenceEnd: input.recurrenceEnd,
+        category: input.category,
         source: "chat",
         linkedProfiles: eventLinkedProfiles,
-        linkedDocuments: [],
-        tags: [],
-      }, "event");
-      if (!eventPayload.ok) return { error: eventPayload.error };
-      const newEvent = await storage.createEvent(eventPayload.data);
-      markCreation(dedupUser, evtDedupKey);
-      // Only auto-link if we didn't already resolve a profile pre-creation
-      if (eventLinkedProfiles.length > 0) {
-        for (const pid of eventLinkedProfiles) {
-          await storage.linkProfileTo(pid, "event", newEvent.id).catch((e: any) => { console.warn("[AI] Event linking failed:", e?.message); });
-        }
-      } else {
-        const evtForProfile = await resolveForProfile(input.forProfile, `${input.title || ""} ${input.description || ""}`);
-        const evtLinked = await directLinkToProfile("event", newEvent.id, evtForProfile);
-        if (!evtLinked) await autoLinkToProfiles("event", newEvent.id, `${input.title || ""} ${input.description || ""}`, input.forProfile);
-      }
+        forProfile: evtForProfileName,
+      });
+      if (!(newEvent as any).error && !(newEvent as any).deduped) markCreation(dedupUser, evtDedupKey);
       return newEvent;
     }
 

@@ -48,6 +48,7 @@ import { insertExpenseSchema } from "@shared/schema";
 import { validateTransactionAmount } from "@shared/quick-add";
 import { resolveExpenseCategory } from "@shared/expense-canon";
 import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { resolveProfileByName as canonicalResolveProfile } from "../entity-resolver";
 
 export interface CreateExpenseArgs {
   description?: string;
@@ -106,18 +107,13 @@ function lock(user: string, key: string): void {
 
 const RECURRING_RE = /(\/mo\b|\/yr\b|\bper month\b|\bper year\b|\bevery month\b|\beach month\b|\bevery year\b|\bmonthly\b|\byearly\b)/i;
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-/** Exact-then-word-boundary profile resolution: "Roy" matches "Roy" and
- *  "Roy Smith", never "Royale". Returns null rather than guessing. */
+/** THE profile resolver (server/entity-resolver.ts), adapted to attribution:
+ *  a "found" match attributes; "ambiguous" and "none" attribute nothing —
+ *  never guess an owner. */
 function resolveProfileByName(profiles: Array<{ id: string; name: string; type?: string }>, name: string, opts: { nonSelfOnly?: boolean } = {}): { id: string; name: string; type?: string } | null {
-  const search = name.toLowerCase().trim();
-  if (!search) return null;
   const pool = opts.nonSelfOnly ? profiles.filter((p) => p.type !== "self") : profiles;
-  const exact = pool.find((p) => p.name.toLowerCase() === search);
-  if (exact) return exact;
-  const wordRe = new RegExp(`(^|\\b)${escapeRe(search)}(\\b|$)`);
-  return pool.find((p) => wordRe.test(p.name.toLowerCase())) ?? null;
+  const resolved = canonicalResolveProfile(pool, name);
+  return resolved.kind === "found" ? resolved.profile : null;
 }
 
 export async function createExpenseRecord(
