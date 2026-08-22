@@ -36,6 +36,7 @@ import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordAc
 import { createExpenseRecord } from "./actions/expense-service";
 import { prepareTrackerEntryValues, logPreparedEntry } from "./actions/tracker-entry-service";
 import { createEventRecord } from "./actions/event-service";
+import { setProfileFact } from "./actions/profile-fact-service";
 import { resolveProfileByName } from "./entity-resolver";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
@@ -9615,28 +9616,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           // the honest answer.
           const target = input.forProfile ? matchProfileByName(profs, input.forProfile) : null;
           if (target) {
-            // Name the field for what it holds, so the rule engine can classify
-            // it and the profile reads sensibly: "Driver's License Expiration".
-            const cls = classifyDateField("expiration_date", `${subject} ${target.type ?? ""}`);
-            const prefix = cls.ruleSubtype
-              ? cls.ruleSubtype.replace(/_(\w)/g, (_m, c) => c.toUpperCase())
-              : "";
-            const field = prefix ? `${prefix}Expiration` : "expirationDate";
-            const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
-            const existing: Record<string, any> = (target as any).fields || {};
-            // Merge onto the profile's existing fields, as every other
-            // updateProfile caller does. Passing the single canonicalized field
-            // alone replaces `fields` wholesale in the in-memory storage.
-            await storage.updateProfile(target.id, {
-              fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
-            } as any);
+            // Canonical fact write (server/actions/profile-fact-service.ts):
+            // field naming, canon merge, and the derived rule are the
+            // service's job — the same code extraction and REST run.
+            const fact = await setProfileFact(storage, {
+              profileId: target.id,
+              kind: "expiration",
+              subject: `${subject} ${target.type ?? ""}`,
+              value: input.date,
+              userId: userId || "_global",
+            });
+            if (fact.error) return fact;
             const updatedProfile = await storage.getProfile(target.id);
-            logger.info("ai", `"${evtTitle}" is an expiration — saved to ${target.name}.${field}; the important date is derived from it`);
+            logger.info("ai", `"${evtTitle}" is an expiration — saved to ${target.name}.${fact.field}; the important date is derived from it`);
             return {
               result: {
                 savedTo: "profile", profileId: target.id, profileName: target.name,
-                field, value: iso, occurrenceType: "one_time",
-                note: "Saved to the record that owns this date; the calendar and Important Dates derive it.",
+                field: fact.field, value: fact.value, occurrenceType: "one_time",
+                note: fact.note,
               },
               actions: [{ type: "update", category: "profile", data: updatedProfile }],
             };
@@ -9692,9 +9689,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             const looksLikeAnOccurrence = year > thisYear - 5;
             const alreadyRight = !!held && looselyEqual(held, iso);
             if (alreadyRight || !looksLikeAnOccurrence) {
-              await storage.updateProfile(target.id, {
-                fields: { ...existing, ...canonicalizeProfileFields({ [field]: iso }, existing).fields },
-              } as any);
+              // Canonical fact write — the same service every door uses.
+              const fact = await setProfileFact(storage, {
+                profileId: target.id,
+                kind: label.kind === "birthday" ? "birthday" : "anniversary",
+                value: iso,
+                userId: userId || "_global",
+              });
+              if (fact.error) return fact;
               const updatedProfile = await storage.getProfile(target.id);
               logger.info("ai", `"${input.title}" is ${target.name}'s ${field} — saved to the profile; the yearly occurrence is derived from it`);
               return {

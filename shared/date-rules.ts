@@ -84,7 +84,19 @@ export type DateRuleType =
   | "end"
   | "cancellation"
   | "maintenance"
-  | "informational";
+  | "informational"
+  // Members merged from shared/temporal-rules.ts (2026-08-22): the app
+  // carried TWO DateRuleType unions with disjoint members and consumers —
+  // classification (this file) and derived-rule behavior (temporal-rules)
+  // each had their own. This union is now THE vocabulary; temporal-rules
+  // re-exports it. Rules are derived, never stored, so no persisted strings
+  // depend on the merge.
+  | "task_due"
+  | "recurring_task"
+  | "subscription"
+  | "liability"
+  | "habit"
+  | "follow_up";
 
 /** One-off important date vs a genuinely repeating rule. */
 export type OccurrenceType = "one_time" | "recurring";
@@ -809,6 +821,13 @@ const TYPE_LABEL: Record<DateRuleType, string> = {
   cancellation: "Cancellation",
   maintenance: "Service",
   informational: "Date",
+  // Merged from temporal-rules (see the union above).
+  task_due: "Due",
+  recurring_task: "Recurring task",
+  subscription: "Subscription",
+  liability: "Payment",
+  habit: "Habit",
+  follow_up: "Follow-up",
 };
 
 export function ruleTypeLabel(t: DateRuleType): string {
@@ -1152,6 +1171,14 @@ const KIND_FOR_RULE: Record<DateRuleType, OccurrenceKind> = {
   cancellation: "expiration",
   maintenance: "maintenance",
   informational: "custom",
+  // Merged from temporal-rules (see the union above); each maps onto the
+  // OccurrenceKind the calendar already draws for that behaviour.
+  task_due: "task",
+  recurring_task: "task",
+  subscription: "subscription",
+  liability: "bill",
+  habit: "habit",
+  follow_up: "task",
 };
 
 /**

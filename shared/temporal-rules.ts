@@ -37,25 +37,16 @@ import { classifyDateField } from "./date-rules";
 // ─── Rule vocabulary ─────────────────────────────────────────────────────────
 
 /**
- * What KIND of temporal behaviour a rule expresses. Deliberately open-ended:
- * the spec asks for the list to stay extensible, and every entry here maps onto
- * an `OccurrenceKind` the calendar already knows how to draw.
+ * What KIND of temporal behaviour a rule expresses.
+ *
+ * ONE vocabulary now: this module used to export its own union with members
+ * disjoint from shared/date-rules.ts's — two files, one name, different
+ * answers to "what kinds of date rules exist". The canonical union lives in
+ * date-rules.ts (extended with this module's members); this re-export keeps
+ * existing importers working.
  */
-export type DateRuleType =
-  | "task_due"
-  | "recurring_task"
-  | "birthday"
-  | "anniversary"
-  | "expiration"
-  | "renewal"
-  | "appointment"
-  | "event"
-  | "payment"
-  | "subscription"
-  | "liability"
-  | "habit"
-  | "deadline"
-  | "follow_up";
+export type { DateRuleType } from "./date-rules";
+import type { DateRuleType } from "./date-rules";
 
 /** Which canonical system owns the record a rule was derived from. */
 export type RuleSourceSystem =
@@ -145,6 +136,14 @@ const RULE_TYPE_BY_KIND: Partial<Record<OccurrenceKind, DateRuleType>> = {
   appointment: "appointment",
   habit: "habit",
   document: "expiration",
+  // A licence/warranty/lease expiration carried on a PROFILE reaches the
+  // calendar as kind "expiration" (the date-rule engine's own kind); before
+  // the vocabulary merge this map had no entry for it, so a profile-carried
+  // expiration was mislabeled as a generic "event" rule while the identical
+  // date on a DOCUMENT was labeled "expiration" — the two-vocabulary drift
+  // this module's union merge exists to end.
+  expiration: "expiration",
+  income: "income",
   event: "event",
   custom: "event",
 };
