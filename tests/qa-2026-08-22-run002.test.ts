@@ -13,6 +13,8 @@
 //        profile never got a BIRTHDAY field
 //   B5   duplicate Hydration trackers split the day's water log, so the
 //        Wellness ring never moved
+//   B9   recur:yearly / ranchor:1 / migrated:reminder rendered as tag chips
+//   B12  person cards on the Everyone grid bounced back to the grid
 //   B13  a just-created expense rendered "19h ago" in Recent Activity
 import { describe, it, expect } from "vitest";
 import { parseTurnPlan } from "@shared/ai-intent";
@@ -23,6 +25,8 @@ import { MemStorage, requestStorageContext } from "../server/storage";
 import { executeTool } from "../server/ai-engine";
 import { finalizeToolResult, buildTurnVerifyContext } from "../server/ai-envelope";
 import { readDailyTotal } from "../client/src/lib/wellness-metrics";
+import { visibleTaskTags } from "@shared/hidden-task-tags";
+import { reconcileInfoRoute } from "../client/src/components/hub/hub-routes";
 import type { Tracker } from "@shared/schema";
 
 const run = <T>(storage: MemStorage, fn: () => Promise<T>) => requestStorageContext.run(storage, fn);
@@ -217,6 +221,52 @@ describe("B5 — readDailyTotal sums across duplicate trackers", () => {
       t({ id: "h-owned", name: "Hydration", entries: [{ id: "e2", timestamp: now, values: { ounces: 32 } }] as any }),
     ];
     expect(readDailyTotal(trackers, [/hydration|water/], { unit: "oz" }).value).toBe(32);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// B9 — system-encoded task tags are machine state, not chips. The Tasks page
+// printed recur:yearly · ranchor:1 · migrated:reminder · runtil:2027-08-03 as
+// visible badges.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("B9 — internal task tags never render", () => {
+  it("hides every leaked tag from the report, keeps the user's own", () => {
+    expect(visibleTaskTags([
+      "recur:yearly", "ranchor:1", "migrated:reminder", "runtil:2027-08-03",
+      "rcount:3", "rdone:1", "rpaused", "prio:high", "st:1:buy milk", "allday",
+      "groceries", "family",
+    ])).toEqual(["groceries", "family"]);
+  });
+
+  it("tolerates missing tags", () => {
+    expect(visibleTaskTags(undefined)).toEqual([]);
+    expect(visibleTaskTags(null)).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// B12 — under "Everyone", tapping a person card (or opening a deep link)
+// bounced straight back to the people grid: the scope reconciler rewrote
+// every /profiles/<id>/info to infoTabRoute([]) === "/profiles". A pure
+// NAVIGATION to a person who is in scope must stand; a SCOPE change away from
+// them still reconciles (the 2026-07-25 invariant).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("B12 — person cards open under Everyone", () => {
+  it("a navigation to an in-scope person stands", () => {
+    expect(reconcileInfoRoute("/profiles/alice-id/info", [], { scopeChanged: false })).toBeNull();
+    expect(reconcileInfoRoute("/profiles/alice-id/info", ["alice-id", "bob-id"], { scopeChanged: false })).toBeNull();
+  });
+
+  it("a scope change away from the person still reconciles", () => {
+    expect(reconcileInfoRoute("/profiles/alice-id/info", [], { scopeChanged: true })).toBe("/profiles");
+    expect(reconcileInfoRoute("/profiles/alice-id/info", [])).toBe("/profiles");
+  });
+
+  it("an OUT-of-scope person reconciles even on pure navigation", () => {
+    expect(reconcileInfoRoute("/profiles/alice-id/info", ["bob-id"], { scopeChanged: false }))
+      .toBe("/profiles/bob-id/info");
   });
 });
 

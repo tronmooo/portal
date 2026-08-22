@@ -102,8 +102,21 @@ export function isInfoLocation(location: string): boolean {
  * every switch to Everyone from an Info page (QA report 2026-08-05).
  *
  * Returns null for any non-Info location, so callers can apply it blindly.
+ *
+ * `scopeChanged` (default true) says WHY we're reconciling. The rewrite above
+ * exists for scope-follows-URL staleness: the scope moved and the location
+ * still names the old person. When only the LOCATION changed — the user
+ * clicked a person card on the Everyone grid, or opened a deep link — the URL
+ * is their explicit intent, and a person who is in scope must open. Without
+ * that distinction, every card on the Everyone people grid bounced straight
+ * back to the grid (QA run 002, B12). A person OUTSIDE the scope reconciles
+ * either way.
  */
-export function reconcileInfoRoute(location: string, selectedIds: string[] = []): string | null {
+export function reconcileInfoRoute(
+  location: string,
+  selectedIds: string[] = [],
+  opts: { scopeChanged?: boolean } = {},
+): string | null {
   if (!isInfoLocation(location)) return null;
   const { path } = splitLocation(location);
   // /profiles is correct under EVERY scope: it renders the people in scope, and
@@ -113,6 +126,9 @@ export function reconcileInfoRoute(location: string, selectedIds: string[] = [])
   // default scope is a single profile (initDefaultProfileFilter seeds Self), so
   // that would be nearly always.
   if (path === "/profiles") return null;
+  const person = path.match(/^\/profiles\/([^/]+)\/info$/)?.[1];
+  const inScope = !!person && (selectedIds.length === 0 || selectedIds.includes(person));
+  if (inScope && opts.scopeChanged === false) return null;
   const target = infoTabRoute(selectedIds);
   if (target === path) return null;
   return target;

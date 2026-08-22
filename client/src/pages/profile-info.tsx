@@ -691,7 +691,7 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
   // ("note for Jane: …"). Before this the card showed only `profile.notes`,
   // the free-text scratchpad, so a note created any other way had nowhere to
   // appear and the card read "No notes." beside a note that plainly existed.
-  const { data: savedNotes = [] } = useQuery<any[]>({
+  const { data: savedNotes = [], isSuccess: savedNotesLoaded } = useQuery<any[]>({
     queryKey: ["/api/notes", profileId],
     queryFn: async () => (await apiRequest("GET", `/api/notes?profileId=${encodeURIComponent(profileId)}`)).json(),
     enabled: !!profileId,
@@ -728,7 +728,11 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
           </div>
         ) : (
           <p className="text-xs text-muted-foreground whitespace-pre-wrap min-h-[1.5rem]">
-            {notes || (savedNotes.length > 0 ? "" : "No notes.")}
+            {/* "No notes." only once the notes query has actually resolved:
+                asserting it over a cold/refetching slot told the user their
+                existing notes were wiped for the seconds after a chat write
+                (QA run 002, B8). */}
+            {notes || (savedNotes.length > 0 || !savedNotesLoaded ? "" : "No notes.")}
           </p>
         )}
         {savedNotes.length > 0 && (

@@ -16,6 +16,7 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { formatStoredDate, farFutureWarning } from "@/lib/dates";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { visibleTaskTags } from "@shared/hidden-task-tags";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -449,8 +450,10 @@ function TaskItem({
                   {formatStoredDate(task.dueDate) || task.dueDate}
                 </span>
               )}
-              {/* BUG-TSK-002: tags must wrap and never truncate */}
-              {task.tags?.map(tag => (
+              {/* BUG-TSK-002: tags must wrap and never truncate.
+                  System-encoded tags (recur:, ranchor:, migrated:, …) are
+                  machine state, not chips — QA run 002, B9. */}
+              {visibleTaskTags(task.tags).map(tag => (
                 <Badge
                   key={tag}
                   variant="outline"

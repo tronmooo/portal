@@ -215,6 +215,10 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   artifacts: [
     ["/api/artifacts"],
     ["/api/chat-artifacts"],
+    // Notes ARE artifact rows (content-service listNotes filters type=note),
+    // but the profile Notes card queries them via /api/notes — without this
+    // key a chat-created note never refreshed the card (QA run 002, B8).
+    ["/api/notes"],
     ["/api/dashboard-enhanced"],
     ["/api/activity"],
   ],
@@ -296,7 +300,10 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
         return k0.startsWith("/api/habits") || k0.startsWith("/api/trackers") || k0.startsWith("/api/profiles");
       };
     case "artifacts":
-      return (q) => String(q.queryKey?.[0] || "").startsWith("/api/artifacts");
+      return (q) => {
+        const k = String(q.queryKey?.[0] || "");
+        return k.startsWith("/api/artifacts") || k.startsWith("/api/notes");
+      };
     case "everything":
       // Invalidate every /api/* query the app has — used by AI chat
       // because Claude can mutate literally any domain in one turn.

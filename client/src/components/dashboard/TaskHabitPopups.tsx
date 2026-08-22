@@ -9,6 +9,7 @@ import { useLocation } from "wouter";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
+import { visibleTaskTags } from "@shared/hidden-task-tags";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import { normalizeFilter } from "@/lib/filter-utils";
@@ -411,9 +412,9 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   const removeSubtask = (t: any, raw: string) =>
     updateMutation.mutate({ id: t.id, patch: { tags: (t.tags || []).filter((x: string) => x !== raw) } });
 
-  // User-facing free tags (everything that isn't a system-encoded tag).
-  const SYS_TAG_RE = /^(recur:|runtil:|rcount:|rdone:|rpaused$|prio:|cat:|time:|remind:|est:|st:|reminder$|allday$)/;
-  const freeTagsOf = (t: any) => (t.tags || []).filter((x: string) => !SYS_TAG_RE.test(x));
+  // User-facing free tags — ONE shared definition of "system-encoded", so this
+  // list can't drift from the tags the recurrence engine writes again (B9).
+  const freeTagsOf = (t: any) => visibleTaskTags(t.tags);
 
   // ── Recurring lifecycle ──
   const completeTask = (t: any) => {

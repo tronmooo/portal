@@ -7,7 +7,7 @@
 //
 // Tabs NAVIGATE between existing routes (see hub-routes.ts) — the shell holds
 // no page state, and removing it reverts the app to the pre-hub behavior.
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 // hashNavigate (NOT wouter navigate) — tab routes carry queries ("/linked?tab=assets")
@@ -32,8 +32,15 @@ export function HubShell() {
   // re-aggregated. Correct the URL instead of rendering a stale scope. Replace,
   // don't push, so Back doesn't bounce between the two.
   const selectedKey = [...scope.selectedIds].join(",");
+  // Distinguish WHY this effect ran: a scope change reconciles a now-stale
+  // person URL, but a pure navigation (a tapped person card, a deep link) is
+  // the user's explicit intent and an in-scope person must open (QA run 002,
+  // B12 — every card on the Everyone grid bounced back to the grid).
+  const prevSelectedKeyRef = useRef(selectedKey);
   useEffect(() => {
-    const target = reconcileInfoRoute(location, [...scope.selectedIds]);
+    const scopeChanged = prevSelectedKeyRef.current !== selectedKey;
+    prevSelectedKeyRef.current = selectedKey;
+    const target = reconcileInfoRoute(location, [...scope.selectedIds], { scopeChanged });
     if (target) hashReplace(target);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location, selectedKey]);

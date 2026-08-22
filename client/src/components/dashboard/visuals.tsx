@@ -55,7 +55,7 @@ export function CountUp({ value, className, style, duration = 650 }: {
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (prefersReducedMotion()) { setShown(value); return; }
+    if (prefersReducedMotion() || typeof requestAnimationFrame !== "function") { setShown(value); return; }
     const from = fromRef.current;
     const delta = value - from;
     if (delta === 0) return;
@@ -75,7 +75,17 @@ export function CountUp({ value, className, style, duration = 650 }: {
       else fromRef.current = value;
     };
     rafRef.current = requestAnimationFrame(tick);
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    // CONVERGENCE FLOOR. The rAF chain is the only thing that moves `shown`,
+    // and it can die mid-flight — cancelled by a rapid value change during a
+    // filter switch, or starved when the tab/webview throttles frames. The
+    // Tasks summary cards then sat on the previous person's numbers beside a
+    // correct list until a reload (QA run 002, B7). A timer snaps the counter
+    // to its target if the animation hasn't landed by then.
+    const settle = setTimeout(() => { setShown(value); fromRef.current = value; }, duration + 150);
+    return () => {
+      clearTimeout(settle);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
   }, [value, duration]);
 
   useEffect(() => { fromRef.current = shown; }, [shown]);
