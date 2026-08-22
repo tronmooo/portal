@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { looksLikeNonPersonName } from "@shared/entity-naming";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
@@ -167,9 +168,17 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
       return ["person", "self", "pet"].some(t => normalizeFilter(t) === normalizeFilter(p.type));
     });
 
+    // QA 2026-08-22: the household's person filter also listed "my 2025 Do…"
+    // and "my MacBoo…" — devices and documents that were stored with type
+    // `person`. The type alone can't be trusted for rows already in the
+    // database, so drop the ones whose NAME reads as an object. `self` is
+    // never hidden: it is the account holder however it happens to be named.
+    const peopleOnly = typeFiltered.filter(p =>
+      normalizeFilter(p.type) === normalizeFilter("self") || !looksLikeNonPersonName(p.name));
+
     // Deduplicate by name+type — keep the one with the most linked data
     const deduped = new Map<string, any>();
-    for (const p of typeFiltered) {
+    for (const p of peopleOnly) {
       const key = `${p.type}::${p.name}`;
       const existing = deduped.get(key);
       if (!existing) {

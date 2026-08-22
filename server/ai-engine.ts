@@ -47,7 +47,8 @@ import { createHash, randomUUID } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
-import { matchHabitByName } from "@shared/habit-match";
+import { matchHabitByName, matchHabitByNameDetailed } from "@shared/habit-match";
+import { resolveCreateOwnerIds } from "@shared/active-scope";
 import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompletionVeto } from "@shared/habit-completion-intent";
 import { resolveReferent, buildReferentDirective, type ReferentCandidate } from "@shared/referent-resolution";
 import { completeHabitOccurrence, resolveTrackerForHabit, type HabitCompletionSource } from "./habit-completion";
@@ -89,7 +90,7 @@ import {
   summarizeEnrichment,
   type Enrichment,
 } from "@shared/estimation-engine";
-import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossessive, detectPossessiveOwner } from "@shared/entity-naming";
+import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossessive, detectPossessiveOwner, looksLikeNonPersonName } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -163,6 +164,37 @@ const REDACTED = "[REDACTED]";
  */
 function aiUserTimezone(): string {
   try { return (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { return DEFAULT_TIMEZONE; }
+}
+
+/**
+ * THE ACTIVE PROFILE SCOPE FOR THIS TURN — the chip the user can see.
+ *
+ * QA 2026-08-22: with the dashboard scoped to Sarah Miller, "Add a dentist
+ * appointment for Friday at 3 PM" created the event with NO owner, which every
+ * reader treats as the primary user's. From Sarah Miller's filter the calendar,
+ * agenda and search all showed nothing — indistinguishable from data loss.
+ *
+ * REST writes have applied this invariant since 2026-07-29 (see
+ * shared/active-scope.ts): a record created while exactly one profile is in
+ * scope belongs to that profile, and an explicitly named owner always wins.
+ * Chat was the surface that still relied on the model being told the rule in
+ * its prompt. It now runs through the same resolver, server-side.
+ *
+ * Set per turn by processMessage onto the REQUEST-SCOPED storage instance (the
+ * same place `_timezone` lives) rather than a module variable, so two turns
+ * running in one process can never read each other's scope. Empty for any
+ * other caller, which leaves ownership exactly as it was.
+ */
+function aiActiveScopeIds(): string[] {
+  try {
+    const raw = (storage as any)._activeProfileIds;
+    return Array.isArray(raw) ? raw.filter((id: any) => typeof id === "string" && id.length > 0) : [];
+  } catch { return []; }
+}
+
+/** Owner ids a chat-created record should carry: what was resolved, else the active scope. */
+function ownerIdsWithActiveScope(explicit: string[]): string[] {
+  return resolveCreateOwnerIds(explicit, aiActiveScopeIds());
 }
 
 /**
@@ -5115,6 +5147,7 @@ BEHAVIOR:
   - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" / "I went to X" → log_tracker_entry — these are ACTIVITY REPORTS. If a HABIT BY THAT NAME already exists (the user's habits are listed in your context), ALSO call checkin_habit for it in the same turn: a past-tense report of doing an existing habit completes today's occurrence. Never ask permission for that.
   - "schedule a doctor appointment" → create_task immediately
   - If ambiguous between 2 items with similar names, pick the closest match and do it. You can mention in your response what you picked.
+  - …but a NEAR-MISS IS NOT A MATCH. "Walk 2 Miles" and "Walk the Dog" are two different habits that share a word; so are "Morning Run" and "Run to the Store". The server refuses a check-in on that kind of guess and returns HABIT_MATCH_AMBIGUOUS with NOTHING recorded. When you get it, ask which one they meant and say plainly that nothing was checked off — never write a reply that reads as a question while claiming, or implying, that a record already moved.
   - NEVER present numbered options for simple check-ins, completions, or mark-offs. That is hostile UX.
   - The ONLY time you should ask is if the user's message is genuinely unclear about WHAT action they want (not which entity).
 - VAGUE READS ASK, THEY DON'T DUMP: the bias-to-action rule above is for WRITES. A READ question that is missing the subject or timeframe needed to answer precisely — "how much have I spent" (on what? since when?), "when is my next thing", "what's going on" — gets ONE short clarifying question ("Over what period — this week, this month?" / "Next event, task, or bill?"), NOT a dump of every number you can find. Answer vague reads directly only when a single obvious interpretation exists (e.g. "what's due today"). Nonsense input (random punctuation, keyboard mashing) also gets a short "what would you like to know?" — never a data dump.
@@ -6658,6 +6691,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // compares names for equality. "my"/"our" is the speaker's word, never
       // part of what the thing is called. Runs before dedup so the second
       // write collapses into the first instead of creating a twin.
+      // A DEVICE IS NOT A PERSON (QA 2026-08-22, data quality): the person
+      // filter listed "my 2025 Do…" and "my MacBoo…" beside the household.
+      // Both were typed `person` — the determiner-stripped twin described in
+      // shared/entity-naming.ts. Read the name BEFORE the determiner is
+      // stripped ("my" is half the evidence) and retype the record instead of
+      // letting another object into the people list.
+      if (input.name && looksLikeNonPersonName(input.name)) {
+        const declared = String(input.type || "").toLowerCase();
+        if (!declared || declared === "person" || declared === "pet") {
+          const nameLC = String(input.name).toLowerCase();
+          const retyped = /(^|\s)((19|20)\d{2}|car|truck|suv|sedan|van|motorcycle|scooter|boat|trailer|rv|atv)(\s|$)/.test(nameLC)
+            ? "vehicle"
+            : "asset";
+          logger.info("ai", `create_profile: "${input.name}" reads as an object, not a person — typed as ${retyped}`);
+          input.type = retyped;
+        }
+      }
       if (input.name) {
         const deDetermined = stripLeadingDeterminer(input.name);
         if (deDetermined !== input.name) {
@@ -7357,6 +7407,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           || profiles.find(p => p.name.toLowerCase().includes(safeLC(taskForProfile).trim()));
         if (target) taskLinkedProfiles.push(target.id);
       }
+      // Unowned task → the profile the user is currently working in (same rule
+      // as create_event and the REST routes; see shared/active-scope.ts).
+      taskLinkedProfiles = ownerIdsWithActiveScope(taskLinkedProfiles);
 
       // Dedup: skip if a very similar active task exists FOR THE SAME PROFILE.
       // Normalize: lowercase, strip punctuation, collapse whitespace, drop
@@ -9629,6 +9682,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }
         }
       }
+      // Unowned expense → the profile the user is currently working in (the
+      // 2026-07-29 REST invariant, now applied to chat too; see
+      // shared/active-scope.ts). Both resolvers above still win outright.
+      expenseLinkedProfiles = ownerIdsWithActiveScope(expenseLinkedProfiles);
       // Default the expense date to today in the user's timezone, not
       // hard-coded LA time. The chat route stores the user's IANA tz on
       // `storage._timezone` from the `x-timezone` request header before
@@ -9941,6 +9998,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           evtDate = startD.toLocaleDateString("en-CA");
         }
       }
+      // The active profile scope owns an otherwise-unowned event (QA
+      // 2026-08-22): scoped to Sarah Miller, "add a dentist appointment"
+      // belongs to Sarah Miller, not to whoever is logged in. A resolved owner
+      // above (named person, medical profile) is never overridden.
+      eventLinkedProfiles = ownerIdsWithActiveScope(eventLinkedProfiles);
       const eventPayload = validateAiPayload(insertEventSchema, {
         title: input.title.trim(),
         date: evtDate,
@@ -10000,6 +10062,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const targetP = matchProfileByName(allProfiles, input.forProfile);
         if (targetP) targetProfileId = targetP.id;
       }
+      // Unowned habit → the profile the user is currently working in (same
+      // rule as create_event / create_task; see shared/active-scope.ts).
+      targetProfileId = targetProfileId ?? ownerIdsWithActiveScope([])[0];
       const dupHabit = existingHabits.find(h => {
         if (h.name.toLowerCase() !== (input.name || "").toLowerCase()) return false;
         // If forProfile is set, check if this habit is linked to the same profile
@@ -10188,7 +10253,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // habit and "check off running" resolves "Run" — but ONLY within the
       // profile-scoped list. The old fall-back to the FULL habit list is gone:
       // it let unqualified messages check in other people's habits.
-      let habit = matchHabitByName(eligible, input.name || "");
+      const nameMatch = matchHabitByNameDetailed(eligible, input.name || "");
+      let habit = nameMatch?.habit;
+      // How sure are we that this is the habit the user named? A shared word is
+      // not an identification — see the weak-match guard below.
+      let matchConfidence = nameMatch?.confidence;
+      const matchAlternatives = nameMatch?.alternatives ?? [];
 
       // ── DOES THE SENTENCE ALREADY SAY THEY DID IT? ──────────────────────
       // (user directive 2026-08-20) "I walked the dog" with a Walk the Dog
@@ -10231,6 +10301,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // The message names the habit; trust it over the model's `name`
         // argument, which is a paraphrase of the same sentence.
         habit = inferred.habit;
+        // The sentence itself named this habit strongly enough for the
+        // completion-intent matcher — that is an identification, not a guess.
+        matchConfidence = "strong";
         completionSource = "chat_inferred";
       }
 
@@ -10262,6 +10335,53 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           error: `No habit named "${input.name || "unknown"}" on ${input.forProfile ? `${input.forProfile}'s` : "the user's"} profile, and nothing else by that name either. Do NOT create a habit and do NOT check in another profile's habit — if the user reported doing something, log it with log_tracker_entry instead.`,
           code: "HABIT_NOT_FOUND",
           checkedKinds: resolved.searched,
+        };
+      }
+
+      // ── NEVER CHECK IN A HABIT ON A GUESS ──────────────────────────────
+      //
+      // QA 2026-08-22, high severity: "Mark walk 2 miles as done for today"
+      // marked "Walk the Dog" 1 of 2 — a different habit that merely starts
+      // with the same verb — while the reply the user read was still asking
+      // "did you mean Walk the Dog?". The write had already happened, so a
+      // real streak moved behind an unanswered question.
+      //
+      // A weak match shares a word and disagrees on the rest. It is a
+      // candidate to ASK about, never a record to move: return the candidates
+      // and say plainly that nothing was written. Exact and strong matches
+      // (the same name, one name inside the other, or every spoken word
+      // accounted for) proceed as before.
+      if (matchConfidence === "weak") {
+        const requested = String(input.name || "").trim();
+        // The named habit may exist verbatim OUTSIDE the profile scope — that
+        // is how a weak in-scope match gets reached at all. Say whose it is
+        // rather than moving the nearest habit that is in reach.
+        const allHabits = await storage.getHabits();
+        const globalMatch = matchHabitByNameDetailed(allHabits, requested);
+        const outOfScope = globalMatch
+          && globalMatch.confidence === "exact"
+          && !eligible.some(h => h.id === globalMatch.habit.id)
+          ? globalMatch.habit
+          : undefined;
+        let ownerNote = "";
+        if (outOfScope) {
+          const owners = ((outOfScope as any).linkedProfiles || []) as string[];
+          const allProfs = await storage.getProfiles();
+          const ownerNames = owners
+            .map(id => allProfs.find((p: any) => p.id === id)?.name)
+            .filter(Boolean) as string[];
+          ownerNote = ownerNames.length > 0
+            ? ` "${outOfScope.name}" DOES exist, on ${ownerNames.join(" and ")}'s profile — to check that one in, call checkin_habit again with forProfile: "${ownerNames[0]}".`
+            : ` "${outOfScope.name}" DOES exist, but on another profile — ask the user whose it is.`;
+        }
+        const candidates = [habit, ...matchAlternatives].slice(0, 5);
+        logger.info("ai", `checkin_habit: refused weak match "${requested}" → "${habit.name}" (nothing recorded)`);
+        return {
+          error: `"${requested}" does not match any habit on ${input.forProfile ? `${input.forProfile}'s` : "the user's"} profile closely enough to act on. NOTHING WAS RECORDED — no habit was touched.${ownerNote} Ask the user which habit they meant (closest by name: ${candidates.map(h => `"${h.name}"`).join(", ")}) and wait for their answer before calling checkin_habit again. Do NOT claim anything was checked off.`,
+          code: "HABIT_MATCH_AMBIGUOUS",
+          requested,
+          recorded: 0,
+          candidates: candidates.map(h => ({ id: h.id, name: h.name })),
         };
       }
 
@@ -11456,8 +11576,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
         if (selfProf) { const sh = habits.filter(h => (h.linkedProfiles||[]).includes(selfProf.id)); if (sh.length > 0) eligible = sh; }
       }
-      const habit = matchHabitByName(eligible, input.name || "") ?? matchHabitByName(habits, input.name || "");
-      if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
+      // Same weak-match rule as checkin_habit: undoing the wrong habit's
+      // completion is a destructive guess. Take an exact/strong match in scope,
+      // then an exact/strong match anywhere; a shared word is not enough.
+      const uncMatch = matchHabitByNameDetailed(eligible, input.name || "")
+        ?? matchHabitByNameDetailed(habits, input.name || "");
+      const habit = uncMatch && uncMatch.confidence !== "weak" ? uncMatch.habit : undefined;
+      if (!habit) {
+        if (uncMatch) {
+          const near = [uncMatch.habit, ...uncMatch.alternatives].slice(0, 5);
+          return {
+            error: `"${input.name || "unknown"}" doesn't clearly name one habit — NOTHING WAS CHANGED. Ask which one they meant (closest: ${near.map(h => `"${h.name}"`).join(", ")}) before undoing anything.`,
+            code: "HABIT_MATCH_AMBIGUOUS",
+            candidates: near.map(h => ({ id: h.id, name: h.name })),
+          };
+        }
+        return { error: "Habit not found: " + (input.name || "unknown") };
+      }
       const targetDate = input.date || getUserToday(aiUserTimezone());
       const fullHabit = await storage.getHabit(habit.id);
       if (!fullHabit) return { error: "Habit not found: " + (input.name || "unknown") };
@@ -14176,6 +14311,12 @@ export async function processMessage(userMessage: string, conversationHistory?: 
   // so a retried/duplicated client id can never merge two turns' actions.
   const turnId = options?.turnId || randomUUID();
   const sourceMessageId = options?.sourceMessageId;
+  // The scope chip the user is looking at, for the whole turn — every create
+  // this turn defaults its owner to it (see ownerIdsWithActiveScope).
+  try {
+    (storage as any)._activeProfileIds = (options?.profileFilterIds || [])
+      .filter((id: any) => typeof id === "string" && id.length > 0);
+  } catch { /* no DB env (pure unit tests) — ownership is unchanged */ }
   // Stage-0 of the mutation-to-render instrumentation: everything the engine
   // spends before the response leaves this function. routes.ts adds the cache
   // bust / version bump it spends after.

@@ -72,22 +72,47 @@ export function habitTokens(text: string): string[] {
 }
 
 /**
- * Find the habit that best matches a free-text query. Returns undefined when no
- * habit shares any meaningful token with the query.
+ * How well a query identified the habit it matched.
  *
- * Ladder: exact name → unique bidirectional substring → stem-aware token overlap.
+ *   exact  — the normalized names are identical.
+ *   strong — one name contains the other, or every meaningful word of one side
+ *            is present on the other ("stretched this morning" → "Stretch Every
+ *            Morning").
+ *   weak   — the two merely SHARE a word ("walk 2 miles" → "Walk the Dog").
+ *
+ * QA 2026-08-22 (high severity): "Mark walk 2 miles as done" checked in "Walk
+ * the Dog" — a different habit that happens to start with the same verb — while
+ * the assistant's reply read as an unanswered question. A weak match is a
+ * guess, and a guess must never move someone's streak. Write paths require
+ * `exact`/`strong` and ask when the answer is `weak`; read paths may still take
+ * the best candidate.
+ */
+export type HabitMatchConfidence = "exact" | "strong" | "weak";
+
+export interface HabitMatchResult<T extends HabitLike> {
+  habit: T;
+  confidence: HabitMatchConfidence;
+  /** Other habits that matched at the same (weak) level — candidates to ask about. */
+  alternatives: T[];
+}
+
+/**
+ * Find the habit that best matches a free-text query, WITH the confidence of
+ * the match. Returns undefined when no habit shares any meaningful token.
+ *
+ * Ladder: exact name → bidirectional substring → stem-aware token overlap.
  * On ties, the shortest (most specific) habit name wins.
  */
-export function matchHabitByName<T extends HabitLike>(
+export function matchHabitByNameDetailed<T extends HabitLike>(
   habits: T[],
   query: string,
-): T | undefined {
+): HabitMatchResult<T> | undefined {
   const q = normalizeHabitText(query);
   if (!q || habits.length === 0) return undefined;
 
   // 1. Exact normalized match.
   const exact = habits.find(h => normalizeHabitText(h.name) === q);
-  if (exact) return exact;
+  if (exact) return { habit: exact, confidence: "exact", alternatives: [] };
 
   // 2. Bidirectional substring — query inside name OR name inside query. This
   //    covers "take my lisinopril" (name ⊂ query) and "lisin" (query ⊂ name).
@@ -95,13 +120,16 @@ export function matchHabitByName<T extends HabitLike>(
     const n = normalizeHabitText(h.name);
     return n.length > 0 && (n.includes(q) || q.includes(n));
   });
-  if (subs.length === 1) return subs[0];
+  if (subs.length === 1) return { habit: subs[0], confidence: "strong", alternatives: [] };
 
   // 3. Stem-aware token overlap. Score every habit by how many of its name
   //    tokens the query covers; prefer full coverage and shorter names.
-  const qTokens = new Set(habitTokens(q));
+  const qTokenList = habitTokens(q);
+  const qTokens = new Set(qTokenList);
   let best: T | undefined;
   let bestScore = 0;
+  let bestConfidence: HabitMatchConfidence = "weak";
+  const scored: Array<{ habit: T; confidence: HabitMatchConfidence }> = [];
   if (qTokens.size > 0) {
     for (const h of habits) {
       const nTokens = habitTokens(h.name);
@@ -110,17 +138,42 @@ export function matchHabitByName<T extends HabitLike>(
       for (const t of nTokens) if (qTokens.has(t)) overlap++;
       if (overlap === 0) continue;
       const coverage = overlap / nTokens.length; // 1.0 = every name word matched
+      // How much of what the USER said this habit accounts for. "walk 2 miles"
+      // against "Walk the Dog" covers one of two spoken words — the other word
+      // ("miles") says the user meant a different habit.
+      const queryCoverage = overlap / qTokens.size;
+      const confidence: HabitMatchConfidence =
+        coverage === 1 || queryCoverage === 1 ? "strong" : "weak";
+      scored.push({ habit: h, confidence });
       const score = overlap * 10 + coverage * 6 - nTokens.length * 0.1;
-      if (score > bestScore) { bestScore = score; best = h; }
+      if (score > bestScore) { bestScore = score; best = h; bestConfidence = confidence; }
     }
   }
-  if (best) return best;
+  if (best) {
+    return {
+      habit: best,
+      confidence: bestConfidence,
+      alternatives: scored.filter(s => s.habit !== best).map(s => s.habit),
+    };
+  }
 
   // 4. Fall back to the shortest substring candidate when multiple matched.
   if (subs.length > 0) {
-    return [...subs].sort(
+    const ranked = [...subs].sort(
       (a, b) => normalizeHabitText(a.name).length - normalizeHabitText(b.name).length,
-    )[0];
+    );
+    return { habit: ranked[0], confidence: "strong", alternatives: ranked.slice(1) };
   }
   return undefined;
+}
+
+/**
+ * Best-match lookup, confidence discarded. Read paths only — anything that
+ * WRITES should use `matchHabitByNameDetailed` and refuse a `weak` match.
+ */
+export function matchHabitByName<T extends HabitLike>(
+  habits: T[],
+  query: string,
+): T | undefined {
+  return matchHabitByNameDetailed(habits, query)?.habit;
 }

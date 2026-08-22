@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { matchHabitByName, habitTokens, normalizeHabitText } from "../shared/habit-match";
+import { matchHabitByName, matchHabitByNameDetailed, habitTokens, normalizeHabitText } from "../shared/habit-match";
 
 // Regression for the reported bug: the user has a habit named "POOP" and typed
 // "I pooped today, mark off habit" in the AI chat. The model extracted the verb
@@ -75,5 +75,52 @@ describe("normalizeHabitText", () => {
   it("lowercases, splits camelCase, and strips punctuation", () => {
     expect(normalizeHabitText("Take-Lisinopril!")).toBe("take lisinopril");
     expect(normalizeHabitText("TakeCreatine")).toBe("take creatine");
+  });
+});
+
+// QA 2026-08-22 (high severity): "Mark walk 2 miles as done" checked in "Walk
+// the Dog". The two habits share one word and disagree on the rest — that is a
+// candidate to ask about, never a record to move. Write paths refuse a `weak`
+// verdict; the ladder above must keep calling the real matches `exact`/`strong`.
+describe("matchHabitByNameDetailed — confidence", () => {
+  const WALKERS = [
+    { id: "dog", name: "Walk the Dog" },
+    { id: "miles", name: "Walk 2 Miles" },
+    { id: "vit", name: "Multivitamin" },
+  ];
+
+  it("calls a shared-verb near-miss weak", () => {
+    const m = matchHabitByNameDetailed([WALKERS[0], WALKERS[2]], "Walk 2 Miles");
+    expect(m?.habit.id).toBe("dog");
+    expect(m?.confidence).toBe("weak");
+  });
+
+  it("prefers the exact habit when it exists", () => {
+    const m = matchHabitByNameDetailed(WALKERS, "Walk 2 Miles");
+    expect(m?.habit.id).toBe("miles");
+    expect(m?.confidence).toBe("exact");
+  });
+
+  it("keeps the phrasings the matcher exists for at strong or better", () => {
+    const cases: Array<[string, string]> = [
+      ["pooped", "2"], ["I pooped today mark off habit", "2"], ["poop", "2"],
+      ["lisinopril", "4"], ["take my lisinopril", "4"],
+      ["did I take creatine today", "3"],
+      ["stretching", "1"], ["stretched this morning", "1"],
+    ];
+    for (const [query, id] of cases) {
+      const m = matchHabitByNameDetailed(HABITS, query);
+      expect(m?.habit.id, query).toBe(id);
+      expect(m?.confidence, query).not.toBe("weak");
+    }
+  });
+
+  it("offers the other near-misses as alternatives to ask about", () => {
+    const m = matchHabitByNameDetailed(
+      [{ id: "a", name: "Walk the Dog" }, { id: "b", name: "Walk to Work" }],
+      "Walk 2 Miles",
+    );
+    expect(m?.confidence).toBe("weak");
+    expect([m!.habit.id, ...m!.alternatives.map(h => h.id)].sort()).toEqual(["a", "b"]);
   });
 });

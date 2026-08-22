@@ -162,3 +162,59 @@ export function detectPossessiveOwner(name: string): { name: string; owner: stri
   if (remaining.length < 2) return null;
   return { name: remaining, owner: token };
 }
+
+// ── Is this actually a PERSON? ────────────────────────────────────────────────
+//
+// QA 2026-08-22 (data quality): the calendar's "Filter by person" panel listed
+// "my 2025 Do…" and "my MacBoo…" — both stored with type `person` — beside the
+// real household members. They are the twins described above: a device or a
+// document that a create landed on the person type, then kept the speaker's
+// determiner so the name-equality dedup never collapsed them.
+//
+// `looksLikeNonPersonName` names that shape, once, for both ends of the
+// problem: creates refuse to type such a name as a person, and the person
+// filter hides the rows already in the database.
+//
+// Deliberately conservative — it must never hide a real household member. Only
+// two signals count, and both are things a person's name never contains:
+//   1. a first-person determiner ("my MacBook Pro", "our Honda"), and
+//   2. a leading model year ("2025 Dodge Ram"),
+// plus an explicit vocabulary of devices, vehicles and document types.
+
+const NON_PERSON_WORDS = [
+  // devices / electronics
+  "macbook", "iphone", "ipad", "laptop", "desktop", "computer", "monitor",
+  "printer", "airpods", "tablet", "playstation", "xbox", "nintendo", "kindle",
+  "television", "router", "phone",
+  // vehicles
+  "car", "truck", "suv", "sedan", "motorcycle", "scooter", "boat", "trailer",
+  // documents / paperwork
+  "receipt", "invoice", "statement", "policy", "warranty", "contract", "lease",
+  "registration", "license", "licence", "passport", "certificate", "deed",
+];
+// Deliberately absent: words that are also people's names or nicknames — Bill,
+// Van, Will, Rich, Grant, Mercedes. A filter that hides a household member is
+// a worse bug than the clutter it was added to remove.
+
+const NON_PERSON_RE = new RegExp(`(^|\\s)(${NON_PERSON_WORDS.join("|")})(s)?(\\s|$)`, "i");
+
+/**
+ * True when a name reads as an object or a document rather than a person.
+ * Used to keep such records out of the person filter and out of the `person`
+ * profile type. Pinned by tests/entity-naming.test.ts.
+ */
+export function looksLikeNonPersonName(name: unknown): boolean {
+  const raw = String(name ?? "").trim();
+  if (!raw) return false;
+  const hadDeterminer = /^(?:my|our)['’ʼ]?\s+/i.test(raw);
+  const bare = stripLeadingDeterminer(raw);
+  // "2025 Dodge Ram", "1998 Ford F150" — a person's name never opens with a
+  // model year. A bare year on its own is not enough (nor is it a name).
+  if (/^(19|20)\d{2}\s+\S/.test(bare)) return true;
+  if (NON_PERSON_RE.test(bare)) return true;
+  // "my <anything>" is the speaker describing a thing they own. A person is
+  // introduced by name, never as "my Sarah" — but "My Nguyen" is a real
+  // surname, so require more than one remaining word.
+  if (hadDeterminer && bare.split(/\s+/).length >= 2) return true;
+  return false;
+}

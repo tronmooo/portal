@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   stripTrackerOwnerSuffix, stripOwnerPossessivePrefix,
-  extractOwnerPossessive, detectPossessiveOwner,
+  extractOwnerPossessive, detectPossessiveOwner, looksLikeNonPersonName,
 } from "../shared/entity-naming";
 import { MemStorage } from "../server/storage";
 
@@ -166,5 +166,36 @@ describe("detectPossessiveOwner", () => {
   it("does not fire when nothing is left after the possessive", () => {
     expect(detectPossessiveOwner("Bob's")).toBeNull();
     expect(detectPossessiveOwner("Bob's a")).toBeNull();
+  });
+});
+
+// QA 2026-08-22 (data quality): the calendar's "Filter by person" panel listed
+// "my 2025 Do…" and "my MacBoo…" — a truck and a laptop stored with type
+// `person` — beside the real household. The predicate must catch those without
+// ever hiding someone's actual name.
+describe("looksLikeNonPersonName", () => {
+  it("flags devices, vehicles and documents", () => {
+    for (const name of [
+      "my MacBook Pro m4", "my 2025 Dodge Ram", "2019 Honda Civic",
+      "my iPhone 16", "Car Insurance Policy", "my truck",
+      "Passport", "2024 tax return", "Costco receipt", "my lease",
+    ]) {
+      expect(looksLikeNonPersonName(name), name).toBe(true);
+    }
+  });
+
+  it("never flags a person", () => {
+    for (const name of [
+      "Sarah Miller", "Bob QA", "Jane QA", "John Hancock", "Test Child QA",
+      "Poop", "Dr. Alice Chen", "Mary-Jane O'Brien", "My Nguyen",
+      "Levi Strauss", "Bill Murray", "Grandma",
+    ]) {
+      expect(looksLikeNonPersonName(name), name).toBe(false);
+    }
+  });
+
+  it("is empty-safe", () => {
+    expect(looksLikeNonPersonName("")).toBe(false);
+    expect(looksLikeNonPersonName(undefined)).toBe(false);
   });
 });

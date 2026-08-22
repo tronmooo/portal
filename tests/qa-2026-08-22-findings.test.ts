@@ -278,3 +278,156 @@ describe("document ownership is resolved before the document is created", () => 
     expect(doc.linkedProfiles).toEqual([self.id]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// QA 2026-08-22, chat-command accuracy audit (portol.me)
+//
+//   TEST 02  a check-in for "Walk 2 Miles" moved "Walk the Dog" — the reply
+//            was still ASKING which one the user meant
+//   TEST 01  an event created while the view was scoped to Sarah Miller was
+//            filed under the logged-in account
+//   NOTE     the person filter listed devices and documents beside the family
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("a habit check-in never lands on a guess", () => {
+  it("refuses to check in a habit that only shares a word with the one named", async () => {
+    const storage = new MemStorage();
+    const self = await run(storage, () => storage.createProfile({ type: "self", name: "Poop" } as any));
+    const dog = await run(storage, () => storage.createHabit({
+      name: "Walk the Dog", frequency: "daily", targetPerDay: 2,
+      linkedProfiles: [self.id],
+    } as any));
+
+    const res: any = await run(storage, () => executeTool("checkin_habit", {
+      name: "Walk 2 Miles",
+      __userMessage: "Mark walk 2 miles as done for today",
+    }, "user-qa-habit-1"));
+
+    // The reply the user reads is a question — so nothing may have moved.
+    expect(res.code).toBe("HABIT_MATCH_AMBIGUOUS");
+    expect(String(res.error)).toContain("NOTHING WAS RECORDED");
+    expect(res.candidates?.[0]?.name).toBe("Walk the Dog");
+    const after = await run(storage, () => storage.getHabit(dog.id));
+    expect(((after as any)?.checkins || []).length).toBe(0);
+  });
+
+  it("checks in the habit the user actually named, when it exists", async () => {
+    const storage = new MemStorage();
+    const self = await run(storage, () => storage.createProfile({ type: "self", name: "Poop" } as any));
+    await run(storage, () => storage.createHabit({
+      name: "Walk the Dog", frequency: "daily", targetPerDay: 2, linkedProfiles: [self.id],
+    } as any));
+    const walk = await run(storage, () => storage.createHabit({
+      name: "Walk 2 Miles", frequency: "daily", targetPerDay: 1, linkedProfiles: [self.id],
+    } as any));
+
+    const res: any = await run(storage, () => executeTool("checkin_habit", {
+      name: "Walk 2 Miles",
+      __userMessage: "Mark walk 2 miles as done for today",
+    }, "user-qa-habit-2"));
+
+    expect(res.error).toBeUndefined();
+    expect(res.habitId).toBe(walk.id);
+    expect(res.recorded).toBe(1);
+  });
+
+  it("still resolves the phrasings the fuzzy matcher exists for", async () => {
+    const storage = new MemStorage();
+    const self = await run(storage, () => storage.createProfile({ type: "self", name: "Poop" } as any));
+    const poop = await run(storage, () => storage.createHabit({
+      name: "POOP", frequency: "daily", targetPerDay: 1, linkedProfiles: [self.id],
+    } as any));
+    const res: any = await run(storage, () => executeTool("checkin_habit", {
+      name: "pooped", __userMessage: "I pooped today, mark off habit",
+    }, "user-qa-habit-3"));
+    expect(res.error).toBeUndefined();
+    expect(res.habitId).toBe(poop.id);
+  });
+});
+
+describe("chat creates belong to the profile the user is viewing", () => {
+  it("files a new event under the single profile in the active scope", async () => {
+    const storage = new MemStorage();
+    await run(storage, () => storage.createProfile({ type: "self", name: "Poop" } as any));
+    const sarah = await run(storage, () => storage.createProfile({ type: "person", name: "Sarah Miller" } as any));
+    (storage as any)._activeProfileIds = [sarah.id];
+
+    const evt: any = await run(storage, () => executeTool("create_event", {
+      title: "Dentist Appointment", date: "2026-08-28", time: "15:00", category: "health",
+      __userMessage: "Add a dentist appointment for Friday at 3 PM",
+    }, "user-qa-event-1"));
+
+    expect(evt.error).toBeUndefined();
+    expect(evt.linkedProfiles).toEqual([sarah.id]);
+  });
+
+  it("never overrides an owner the user named", async () => {
+    const storage = new MemStorage();
+    const sarah = await run(storage, () => storage.createProfile({ type: "person", name: "Sarah Miller" } as any));
+    const bob = await run(storage, () => storage.createProfile({ type: "person", name: "Bob QA" } as any));
+    (storage as any)._activeProfileIds = [sarah.id];
+
+    const evt: any = await run(storage, () => executeTool("create_event", {
+      title: "Soccer practice", date: "2026-08-28", forProfile: "Bob QA",
+      __userMessage: "add Bob's soccer practice Friday",
+    }, "user-qa-event-2"));
+    expect(evt.linkedProfiles).toEqual([bob.id]);
+  });
+
+  it("leaves ownership alone when the view is 'Everyone' (no single owner)", async () => {
+    const storage = new MemStorage();
+    const sarah = await run(storage, () => storage.createProfile({ type: "person", name: "Sarah Miller" } as any));
+    const bob = await run(storage, () => storage.createProfile({ type: "person", name: "Bob QA" } as any));
+    (storage as any)._activeProfileIds = [sarah.id, bob.id];
+
+    const evt: any = await run(storage, () => executeTool("create_event", {
+      title: "Block party", date: "2026-08-29", __userMessage: "add a block party Saturday",
+    }, "user-qa-event-3"));
+    expect(evt.linkedProfiles || []).toEqual([]);
+  });
+
+  it("applies the same rule to tasks and habits", async () => {
+    const storage = new MemStorage();
+    const sarah = await run(storage, () => storage.createProfile({ type: "person", name: "Sarah Miller" } as any));
+    (storage as any)._activeProfileIds = [sarah.id];
+
+    const task: any = await run(storage, () => executeTool("create_task", {
+      title: "Renew library card", __userMessage: "add a task to renew the library card",
+    }, "user-qa-scope-task"));
+    expect(task.linkedProfiles).toEqual([sarah.id]);
+
+    const habit: any = await run(storage, () => executeTool("create_habit", {
+      name: "Evening Walk", frequency: "daily",
+      __userMessage: "make an evening walk a daily habit",
+    }, "user-qa-scope-habit"));
+    expect(habit.linkedProfiles).toEqual([sarah.id]);
+  });
+});
+
+describe("a device is not a person", () => {
+  it("types an object-shaped name as an object, not a household member", async () => {
+    const storage = new MemStorage();
+    const laptop: any = await run(storage, () => executeTool("create_profile", {
+      name: "my MacBook Pro m4", type: "person",
+      __userMessage: "create a profile for my MacBook Pro m4",
+    }, "user-qa-profile-1"));
+    expect(laptop.error).toBeUndefined();
+    expect(laptop.type).toBe("asset");
+
+    const truck: any = await run(storage, () => executeTool("create_profile", {
+      name: "my 2025 Dodge Ram", type: "person",
+      __userMessage: "create a profile for my 2025 Dodge Ram",
+    }, "user-qa-profile-2"));
+    expect(truck.type).toBe("vehicle");
+  });
+
+  it("leaves real people alone", async () => {
+    const storage = new MemStorage();
+    for (const name of ["Sarah Miller", "Bob QA", "John Hancock", "Test Child QA"]) {
+      const p: any = await run(storage, () => executeTool("create_profile", {
+        name, type: "person", __userMessage: `add ${name} to the household`,
+      }, `user-qa-person-${name}`));
+      expect(p.type, name).toBe("person");
+    }
+  });
+});

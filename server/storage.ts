@@ -1250,7 +1250,10 @@ export class MemStorage implements IStorage {
   async getTasks() { return Array.from(this.tasks.values()); }
   async getTask(id: string) { return this.tasks.get(id); }
   async createTask(data: InsertTask): Promise<Task> {
-    const task: Task = { id: randomUUID(), ...data, status: "todo", priority: data.priority || "medium", linkedProfiles: [], tags: data.tags || [], createdAt: new Date().toISOString() };
+    // Owner comes from the payload, as it does for every other create (and as
+    // SupabaseStorage does). Hardcoding [] here made the in-memory double
+    // silently drop task ownership, hiding attribution bugs from tests.
+    const task: Task = { id: randomUUID(), ...data, status: "todo", priority: data.priority || "medium", linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], createdAt: new Date().toISOString() };
     this.tasks.set(task.id, task);
     this.logActivity("task", `Created task: ${task.title}`);
     return task;
