@@ -636,6 +636,12 @@ const USER_CACHE_PREFIXES = [
   // 2s version memo expires — the "it took a while for the deletion to show
   // up" window. Same-instance busting closes it immediately.
   "caltimeline:",
+  // Same gap as caltimeline above: these three are cached by their GET routes
+  // but were missing here, so only the per-route inline busts (now removed)
+  // covered them — and only on their own routes. Listed so every write closes
+  // their 2s memo window too. (aisummary:/profile_ai_ are deliberately absent:
+  // long-TTL AI summaries that must survive ordinary writes.)
+  "paychecks:", "incomes:", "profiles-lite:",
 ];
 
 // Scoped cache-bust: drop only the MUTATING user's cached responses instead of
@@ -1218,7 +1224,7 @@ export async function registerRoutes(
   app.use("/api", (req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
       const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
-      // Skip rate limit for chat and upload (they have their own stricter limits)
+        // Skip rate limit for chat and upload (they have their own stricter limits)
       if (!req.path.startsWith("/chat") && !req.path.startsWith("/upload")) {
         if (rateLimit(`write:${uid}`, 60)) {
           return res.status(429).json({ error: "Too many requests. Please slow down." });
@@ -3994,7 +4000,6 @@ ${JSON.stringify(ctx, null, 2)}`;
   }));
 
   app.post("/api/profiles", asyncHandler(async (req, res) => {
-    const uid_p1 = cacheUserKey(req as AuthenticatedRequest);
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
       return res.status(400).json({ error: "Profile name is required" });
     }
@@ -4083,7 +4088,6 @@ ${JSON.stringify(ctx, null, 2)}`;
     }
 
     const created = await storage.createProfile(parsed.data);
-    bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p1}:`);
 
     // Auto-ownership now lives in a single place: storage.createProfile resolves
     // the owning party from the parent chain (resolveAutoOwner) and links it at
@@ -4259,7 +4263,6 @@ ${JSON.stringify(ctx, null, 2)}`;
 
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    bustCache(`profiles:${uid_p2}`); bustCache(`stats:${uid_p2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);
     // Invalidate the cached AI summary so it regenerates on next read. Stored
     // as a preference (profile_ai_<id>) with a 2h TTL — without this, edits to
     // fields like mileage / currentValue won't be reflected in the AI summary
@@ -4270,11 +4273,9 @@ ${JSON.stringify(ctx, null, 2)}`;
     res.json(updated);
   }));
   app.delete("/api/profiles/:id", asyncHandler(async (req, res) => {
-    const uid_p3 = cacheUserKey(req as AuthenticatedRequest);
     const existing = await storage.getProfile(req.params.id);
     if (!existing) return res.status(404).json({ error: "Profile not found" });
     const ok = await storage.deleteProfile(req.params.id);
-    bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
     if (!ok) {
       // Cascade had partial failures or the final row delete failed.
       // Surface as 500 so the client can show a real error instead of a
@@ -4305,8 +4306,6 @@ ${JSON.stringify(ctx, null, 2)}`;
           await storage.propagateDocumentToAncestors(entityId, req.params.id);
         } catch { /* non-critical */ }
       }
-      const uid_pl1 = cacheUserKey(req as AuthenticatedRequest);
-      bustCache(`profiles:${uid_pl1}`); bustCache(`profile-detail:${uid_pl1}:`); bustCache(`enhanced:`); bustCache(`stats:${uid_pl1}`); bustCache(`${entityType}s:${uid_pl1}`);
       res.json({ ok: true });
     } catch (err: any) {
       console.error("[profile-link]", err?.message || err);
@@ -4317,8 +4316,6 @@ ${JSON.stringify(ctx, null, 2)}`;
   app.post("/api/profiles/:id/unlink", asyncHandler(async (req, res) => {
     const { entityType, entityId } = req.body;
     await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
-    const uid_pl2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`profiles:${uid_pl2}`); bustCache(`profile-detail:${uid_pl2}:`); bustCache(`enhanced:`); bustCache(`stats:${uid_pl2}`); bustCache(`${entityType}s:${uid_pl2}`);
     res.json({ ok: true });
   }));
 
@@ -4369,8 +4366,6 @@ ${JSON.stringify(ctx, null, 2)}`;
     // Add a cache-buster so an immediate replace shows the new image right away.
     const avatarUrl = `${pub.publicUrl}?t=${Date.now()}`;
     const updated = await storage.updateProfile(req.params.id, { avatar: avatarUrl });
-    const uid_pp = photoUserId;
-    bustCache(`profiles:${uid_pp}`); bustCache(`profile-detail:${uid_pp}:`);
     res.json({ avatar: avatarUrl, profile: updated });
   }));
 
@@ -4380,7 +4375,6 @@ ${JSON.stringify(ctx, null, 2)}`;
     const uid = (req as AuthenticatedRequest).userId;
     if (!uid) return res.status(401).json({ error: "Unauthorized" });
     const updated = await storage.updateProfile(req.params.id, { avatar: null as any });
-    bustCache(`profiles:${uid}`); bustCache(`profile-detail:${uid}:`);
     res.json({ ok: true, profile: updated });
   }));
 
@@ -4949,8 +4943,6 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // Bug fix: trackers list cache had a 5-min TTL but no busting on create —
     // newly added trackers wouldn't appear on dashboard / linked page until
     // the cache expired.
-    const uid_tr1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:${uid_tr1}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr1}`); bustCache(`enhanced:`);
     res.status(201).json(created);
   }));
   app.patch("/api/trackers/:id", asyncHandler(async (req, res) => {
@@ -4970,8 +4962,6 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // Bug fix: same as POST — patches were silently invisible until cache
     // expired (e.g. renaming a tracker would still show the old name on the
     // dashboard for up to 5 minutes).
-    const uid_tr2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:${uid_tr2}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.post("/api/trackers/:id/entries", asyncHandler(async (req, res) => {
@@ -5076,8 +5066,6 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const entry = await storage.logEntry(parsed.data);
     if (!entry) return res.status(404).json({ error: "Tracker not found" });
-    const uid_te1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:`); bustCache(`stats:${uid_te1}`); bustCache(`enhanced:`);
     res.status(201).json(entry);
   }));
   app.patch("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
@@ -5105,15 +5093,11 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     }
     const updated = await storage.updateTrackerEntry(req.params.id, req.params.entryId, patch);
     if (!updated) return res.status(404).json({ error: "Entry not found" });
-    const uid_tep = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:`); bustCache(`stats:${uid_tep}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     const deleted = await storage.deleteTrackerEntry(req.params.id, req.params.entryId);
     if (!deleted) return res.status(404).json({ error: "Entry not found" });
-    const uid_te2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:`); bustCache(`stats:${uid_te2}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
   // Convenience endpoint: delete tracker entry by entry ID only (for chat undo)
@@ -5149,8 +5133,6 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
       if (entry) {
         const updated = await storage.updateTrackerEntry(t.id, req.params.entryId, patch);
         if (!updated) return res.status(404).json({ error: "Entry not found" });
-        const uid_tep2 = cacheUserKey(req as AuthenticatedRequest);
-        bustCache(`trackers:`); bustCache(`stats:${uid_tep2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_tep2}:`);
         return res.json(updated);
       }
     }
@@ -5163,8 +5145,6 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
       if (entry) {
         const deleted = await storage.deleteTrackerEntry(t.id, req.params.entryId);
         if (deleted) {
-          const uid_te3 = cacheUserKey(req as AuthenticatedRequest);
-          bustCache(`trackers:`); bustCache(`stats:${uid_te3}`); bustCache(`enhanced:`);
           return res.json({ success: true });
         }
       }
@@ -5177,8 +5157,6 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     await storage.deleteTracker(req.params.id);
     // Bug fix: deleted trackers stayed visible for up to 5 minutes because
     // the trackers list cache wasn't busted.
-    const uid_tr3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:${uid_tr3}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr3}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
 
@@ -5259,8 +5237,6 @@ Rules:
     const entry = await storage.logEntry(parsed.data);
     if (!entry) return res.status(500).json({ error: "Failed to log entry" });
 
-    const uid_se = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:`); bustCache(`stats:${uid_se}`); bustCache(`enhanced:`);
     res.status(201).json({
       entry,
       tracker: { id: tracker.id, name: tracker.name },
@@ -5330,8 +5306,6 @@ Rules:
       tags: Array.isArray(req.body.tags) ? req.body.tags.map(String) : [],
       source: "manual",
     });
-    const uid_n1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_n1}`); bustCache(`stats:${uid_n1}`); bustCache(`enhanced:`);
     res.status(result.deduped ? 200 : 201).json({ ...result.note, deduped: result.deduped });
   }));
   app.patch("/api/notes/:id", asyncHandler(async (req, res) => {
@@ -5342,15 +5316,11 @@ Rules:
     if (Array.isArray(req.body?.tags)) changes.tags = req.body.tags.map(String);
     const updated = await updateNote(storage, req.params.id, changes);
     if (!updated) return res.status(404).json({ error: "Note not found" });
-    const uid_n2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_n2}`); bustCache(`stats:${uid_n2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.delete("/api/notes/:id", asyncHandler(async (req, res) => {
     const ok = await deleteNote(storage, req.params.id);
     if (!ok) return res.status(404).json({ error: "Note not found" });
-    const uid_n3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_n3}`); bustCache(`stats:${uid_n3}`); bustCache(`enhanced:`);
     // Notes own no Date Rule, so nothing leaves the calendar with them.
     res.json({ success: true, dateRuleImpact: "none" });
   }));
@@ -5376,11 +5346,10 @@ Rules:
     const parsed = insertTaskSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newTask = await storage.createTask(parsed.data);
-    const uid_t1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t1}`); bustCache(`notifications:${uid_t1}`);
     // TEMPORAL LAYER — the same step the chat path runs. A manually-created
     // task with a due date or a recurrence must reach the Calendar, Upcoming
     // and Recurring & Important Dates exactly as an AI-created one does.
+    const uid_t1 = cacheUserKey(req as AuthenticatedRequest);
     const rules_t1 = await syncDateRulesForEntity(storage, uid_t1, "task", newTask.id).catch(() => null);
     res.status(201).json({
       ...newTask,
@@ -5414,26 +5383,21 @@ Rules:
     if (clearDueTime) req.body.dueTime = undefined;
     const updated = await storage.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_t2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`tasks:${uid_t2}`); bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t2}`); bustCache(`notifications:${uid_t2}`);
     // Re-derive after the edit: moving a due date moves the occurrence, and
     // clearing one removes it. Both fall out of the record automatically —
     // this reports the result so the caller never has to guess.
+    const uid_t2 = cacheUserKey(req as AuthenticatedRequest);
     const rules_t2 = await syncDateRulesForEntity(storage, uid_t2, "task", updated.id).catch(() => null);
     res.json({ ...updated, ...(rules_t2 ? { dateRules: rules_t2.rules } : {}) });
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteTask(req.params.id);
-    const uid_t3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`tasks:${uid_t3}`); bustCache(`stats:${uid_t3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t3}`); bustCache(`notifications:${uid_t3}`);
     res.json({ success: true });
   }));
   app.patch("/api/tasks/:id/restore", asyncHandler(async (req, res) => {
     const ok = await storage.restoreTask(req.params.id);
     if (!ok) return res.status(404).json({ error: "Task not found" });
-    const uid_t4 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`tasks:${uid_t4}`); bustCache(`stats:${uid_t4}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t4}`); bustCache(`notifications:${uid_t4}`);
     const task = await storage.getTask(req.params.id);
     res.json(task || { id: req.params.id, restored: true });
   }));
@@ -5730,8 +5694,6 @@ Rules:
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newExpense = await storage.createExpense(parsed.data);
-    const uid_e1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`); bustCache(`enhanced:`);
     // Tell the caller when their text was altered — never change it silently.
     res.status(201).json(expenseSanitized ? { ...newExpense, warning: SANITIZE_NOTICE } : newExpense);
   }));
@@ -5750,15 +5712,11 @@ Rules:
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
     const updated = await storage.updateExpense(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_e2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`expenses:${uid_e2}`); bustCache(`stats:${uid_e2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteExpense(req.params.id);
-    const uid_e3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
 
@@ -5804,18 +5762,14 @@ Rules:
       return res.status(400).json({ error: "expected_date must be a valid date" });
     }
     const created = await storage.createPaycheck({ source: source.trim(), amount: numAmount, expected_date, notes });
-    const uid_pc1 = cacheUserKey(req as AuthenticatedRequest);
     // Bug fix: paychecks list cache had a 3-min TTL but no busting on create —
     // newly added paychecks wouldn't appear on the Finance page until expiry.
-    bustCache(`paychecks:${uid_pc1}`); bustCache(`stats:${uid_pc1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc1}`);
     res.json(created);
   }));
 
   app.patch("/api/paychecks/:id/confirm", asyncHandler(async (req, res) => {
     const { actual_amount } = req.body;
     const updated = await storage.confirmPaycheck(req.params.id, actual_amount);
-    const uid_pc2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`paychecks:${uid_pc2}`); bustCache(`stats:${uid_pc2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc2}`);
     res.json(updated);
   }));
 
@@ -5826,8 +5780,6 @@ Rules:
     // handler must not pretend to — it reports success either way rather than
     // inventing a 404 it has no evidence for.
     await storage.deletePaycheck(req.params.id);
-    const uid_pc3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`paychecks:${uid_pc3}`); bustCache(`stats:${uid_pc3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc3}`);
     res.json({ success: true });
   }));
 
@@ -5856,15 +5808,11 @@ Rules:
     const { entries } = req.body;
     if (!Array.isArray(entries)) return res.status(400).json({ error: "entries array required" });
     const created = await storage.createLoanSchedule(entries);
-    const uid_ln1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`stats:${uid_ln1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_ln1}`); bustCache(`profile-detail:${uid_ln1}:`);
     res.json(created);
   }));
 
   app.patch("/api/loans/payment/:id/mark", asyncHandler(async (req, res) => {
     const updated = await storage.markLoanPayment(req.params.id);
-    const uid_ln2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`stats:${uid_ln2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_ln2}`); bustCache(`profile-detail:${uid_ln2}:`);
     res.json(updated);
   }));
 
@@ -5940,8 +5888,6 @@ Rules:
     const parsed = insertEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newEvent = await storage.createEvent(parsed.data);
-    const uid_ev1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`events:${uid_ev1}`); bustCache(`stats:${uid_ev1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev1}`);
     res.status(201).json(newEvent);
   }));
   app.patch("/api/events/:id", asyncHandler(async (req, res) => {
@@ -5956,16 +5902,12 @@ Rules:
     }
     const updated = await storage.updateEvent(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_ev2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`events:${uid_ev2}`); bustCache(`stats:${uid_ev2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev2}`);
     res.json(updated);
   }));
   app.delete("/api/events/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getEvent(req.params.id);
     if (!existing) return res.status(404).json({ error: "Event not found" });
     await storage.deleteEvent(req.params.id);
-    const uid_ev3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`events:${uid_ev3}`); bustCache(`stats:${uid_ev3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev3}`);
     res.json({ success: true });
   }));
 
@@ -6175,8 +6117,6 @@ Rules:
       }
 
       const doc = await storage.createDocument(req.body);
-      const uid_d1 = cacheUserKey(req as AuthenticatedRequest);
-      bustCache(`documents:${uid_d1}`); bustCache(`stats:${uid_d1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d1}:`); bustCache(`notifications:${uid_d1}`);
       res.status(201).json(doc);
     } catch (err: any) {
       console.error("[documents]", err?.message || err);
@@ -6205,11 +6145,8 @@ Rules:
     }
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_d2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d2}:`); bustCache(`notifications:${uid_d2}`);
     // A document's dates are calendar items, so an edit to them is a calendar
     // change too.
-    bustCache(`caltimeline:${uid_d2}`); bustCache(`activity:${uid_d2}`);
     res.json(updated);
   }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
@@ -6289,13 +6226,10 @@ Rules:
       console.error(`[doc-delete-cascade] event cleanup failed for ${docIdToDelete}: ${evErr?.message || evErr}`);
     }
     await storage.deleteDocument(docIdToDelete);
-    const uid_d3 = cacheUserKey(req as AuthenticatedRequest);
     // A document carries dates, so deleting one changes the calendar, the
     // upcoming feed and the Important Dates list — not just the document list.
     // Omitting the calendar bust here is why a deleted licence's expiration
     // outlived it on screen.
-    bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
-    bustCache(`profiles:${uid_d3}`); bustCache(`events:${uid_d3}`); bustCache(`caltimeline:${uid_d3}`); bustCache(`activity:${uid_d3}`);
     res.json({ success: true });
   }));
   // ---- Re-extract: re-read a stored document and recover missed fields ----
@@ -6306,8 +6240,6 @@ Rules:
     if (!doc) return res.status(404).json({ error: "Not found" });
     const result = await reextractDocument(req.params.id);
     if (!result.ok) return res.status(422).json({ error: result.message });
-    const uidR = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`documents:${uidR}`); bustCache(`stats:${uidR}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uidR}:`);
     res.json(result);
   }));
 
@@ -6327,8 +6259,6 @@ Rules:
         results.push({ id: (d as any).id, name: (d as any).name, ok: false, addedKeys: [], message: e?.message || "failed" });
       }
     }
-    const uidR = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`documents:${uidR}`); bustCache(`stats:${uidR}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uidR}:`);
     res.json({ documentsProcessed: docs.length, totalNewFields, results });
   }));
 
@@ -6512,8 +6442,6 @@ Rules:
       const updated = await storage.updateHabit(newHabit.id, { linkedProfiles: req.body.linkedProfiles });
       if (updated) newHabit = updated;
     }
-    const uid_h3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h3}`);
     res.status(201).json(newHabit);
   }));
   app.post("/api/habits/:id/checkin", asyncHandler(async (req, res) => {
@@ -6531,11 +6459,8 @@ Rules:
     if (!result.ok && result.reason === "not_found") return res.status(404).json({ error: "Habit not found" });
     const updatedHabit = result.habit || await storage.getHabit(req.params.id);
     if (!updatedHabit) return res.status(404).json({ error: "Habit not found" });
-    const uid_h1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`habits:${uid_h1}`); bustCache(`stats:${uid_h1}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h1}`);
     // The mirrored entry changes tracker reads too — without this the Trackers
     // page serves a cached list that predates the check-in.
-    bustCache(`trackers:${uid_h1}`); bustCache(`trackers:`);
     res.status(201).json({
       ...updatedHabit,
       // What actually happened, so the client can report it honestly rather
@@ -6554,8 +6479,6 @@ Rules:
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
     const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);
     if (!ok) return res.status(404).json({ error: "Checkin not found" });
-    const uid_h2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h2}`);
     res.json({ success: true });
   }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
@@ -6567,8 +6490,6 @@ Rules:
       }
       const result = await storage.updateHabit(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Habit not found" });
-      const uid_h4 = cacheUserKey(req as AuthenticatedRequest);
-      bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`); bustCache(`enhanced:`);
       res.json(result);
     } catch (e: any) { console.error("[habits]", e?.message || e); res.status(500).json({ error: "Failed to update habit" }); }
   }));
@@ -6576,17 +6497,13 @@ Rules:
     const existing = await storage.getHabit(req.params.id);
     if (!existing) return res.status(404).json({ error: "Habit not found" });
     await storage.deleteHabit(req.params.id);
-    const uid_h5 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`habits:${uid_h5}`); bustCache(`stats:${uid_h5}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
   app.patch("/api/habits/:id/restore", asyncHandler(async (req, res) => {
     const ok = await storage.restoreHabit(req.params.id);
     if (!ok) return res.status(404).json({ error: "Habit not found" });
-    const uid_h6 = cacheUserKey(req as AuthenticatedRequest);
     // Bug fix: missing `enhanced:` bust meant a restored habit could remain
     // missing from the dashboard until the 15-second cache expired.
-    bustCache(`habits:${uid_h6}`); bustCache(`stats:${uid_h6}`); bustCache(`enhanced:`);
     const habit = await storage.getHabit(req.params.id);
     res.json(habit || { id: req.params.id, restored: true });
   }));
@@ -6652,7 +6569,6 @@ Rules:
       const cutoff = Date.now() - 30000;
       for (const [k, v] of recentObligationCreates) if (v.at < cutoff) recentObligationCreates.delete(k);
     }
-    bustCache(`obligations:${uid_o1}`); bustCache(`stats:${uid_o1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o1}`); bustCache(`calendar:${uid_o1}`); bustCache(`notifications:${uid_o1}`);
     res.status(201).json(created);
   }));
 
@@ -6706,7 +6622,6 @@ Rules:
         log.warn("[obligation PATCH] materialize failed", e?.message || e);
       }
     }
-    bustCache(`obligations:${uid_o2}`); bustCache(`stats:${uid_o2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o2}`); bustCache(`calendar:${uid_o2}`); bustCache(`notifications:${uid_o2}`);
     res.json(updated);
   }));
   // In-memory dedupe to absorb rapid double/triple-click of the "Mark Paid"
@@ -6744,7 +6659,6 @@ Rules:
     }
     const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
     if (!payment) return res.status(404).json({ error: "Obligation not found" });
-    bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
     res.status(201).json(payment);
   }));
 
@@ -6779,7 +6693,6 @@ Rules:
     }
     // Also clear the dedupe entry so the user can immediately re-pay.
     recentPayments.delete(`${uid}:${req.params.id}`);
-    bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`); bustCache(`notifications:${uid}`);
     res.json({ success: true, deletedPaymentId: latest.id });
   }));
 
@@ -6787,8 +6700,6 @@ Rules:
     const existing = await storage.getObligation(req.params.id);
     if (!existing) return res.status(404).json({ error: "Obligation not found" });
     await storage.deleteObligation(req.params.id);
-    const uid_o4 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`obligations:${uid_o4}`); bustCache(`stats:${uid_o4}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o4}`); bustCache(`calendar:${uid_o4}`); bustCache(`notifications:${uid_o4}`);
     res.json({ success: true });
   }));
 
@@ -6797,13 +6708,6 @@ Rules:
   // some occurrences marked done, some skipped, some rescheduled, etc.
   // These power the new dashboard "Due today / Overdue / Upcoming" cards
   // and the calendar chips.
-  // Bust every finance/calendar surface after a bill or occurrence changes, so
-  // dashboard, cash flow, budget, notifications and the calendar all resync.
-  const bustBillCaches = (uid: string) => {
-    bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`enhanced:`);
-    bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`);
-    bustCache(`notifications:${uid}`); bustCache(`profile-detail:${uid}:`);
-  };
   // Split a synthetic occurrenceId "<liabilityId>:<YYYY-MM-DD>" (UUIDs/dates
   // carry no colon, so the single colon is unambiguous).
   const parseOccId = (occId: string): { liabilityId: string; date: string } | null => {
@@ -6871,7 +6775,6 @@ Rules:
     else if (status === "skipped") result = await (storage as any).skipOccurrence(parsed.liabilityId, parsed.date);
     else result = await (storage as any).getLiabilitySchedule(parsed.liabilityId); // pending/late = no-op read
     if (!result) return res.status(404).json({ error: "Bill not found" });
-    bustBillCaches(uid);
     res.json(result);
   }));
 
@@ -6883,7 +6786,6 @@ Rules:
     if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
     const result = await (storage as any).rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
     if (!result) return res.status(404).json({ error: "Bill not found" });
-    bustBillCaches(uid);
     res.json(result);
   }));
 
@@ -6902,7 +6804,6 @@ Rules:
     if (amount !== undefined && (typeof amount !== "number" || amount < 0)) return res.status(400).json({ error: "amount must be a non-negative number" });
     const result = await (storage as any).payOccurrence(req.params.id, req.params.date, { amount, method, paymentDate, accountId });
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
-    bustBillCaches(uid);
     res.json(result);
   }));
 
@@ -6911,7 +6812,6 @@ Rules:
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const result = await (storage as any).skipOccurrence(req.params.id, req.params.date);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
-    bustBillCaches(uid);
     res.json(result);
   }));
 
@@ -6941,7 +6841,6 @@ Rules:
       result = await (storage as any).setOccurrenceActual(req.params.id, req.params.date, n);
     }
     if (!result) return res.status(404).json({ error: "Recurring liability not found (or nothing to change)" });
-    bustBillCaches(uid);
     res.json(result);
   }));
 
@@ -6959,7 +6858,6 @@ Rules:
       amount: n, kind, label, date, notes, source: "user",
     });
     if (!result) return res.status(404).json({ error: "Liability not found" });
-    bustBillCaches(uid);
     res.json(result);
   }));
 
@@ -6968,7 +6866,6 @@ Rules:
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const result = await (storage as any).removeOccurrenceCharge(req.params.id, req.params.date, req.params.chargeId);
     if (!result) return res.status(404).json({ error: "Liability not found" });
-    bustBillCaches(uid);
     res.json(result);
   }));
 
@@ -6978,7 +6875,6 @@ Rules:
     if (until !== undefined && until !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(until))) return res.status(400).json({ error: "until must be YYYY-MM-DD" });
     const result = await (storage as any).pauseLiability(req.params.id, until || undefined);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
-    bustBillCaches(uid);
     res.json(result);
   }));
 
@@ -6986,7 +6882,6 @@ Rules:
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const result = await (storage as any).resumeLiability(req.params.id);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
-    bustBillCaches(uid);
     res.json(result);
   }));
 
@@ -7014,7 +6909,6 @@ Rules:
       name, accountKind, institution, balance, availableBalance, creditLimit,
       accountNumberLast4, balanceAsOf, currency, notes, ownerProfileId,
     });
-    bustBillCaches(uid);
     res.status(201).json(created);
   }));
 
@@ -7022,7 +6916,6 @@ Rules:
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const updated = await (storage as any).updateAccount(req.params.id, req.body || {});
     if (!updated) return res.status(404).json({ error: "Account not found" });
-    bustBillCaches(uid);
     res.json(updated);
   }));
 
@@ -7035,7 +6928,6 @@ Rules:
     if (!existing || !isAccountProfile(existing)) return res.status(404).json({ error: "Account not found" });
     const ok = await storage.deleteProfile(req.params.id);
     if (!ok) return res.status(404).json({ error: "Account not found" });
-    bustBillCaches(uid);
     res.json({ success: true });
   }));
 
@@ -7053,7 +6945,6 @@ Rules:
       newBalance, delta, date, reason, source: "user",
     });
     if (!updated) return res.status(404).json({ error: "Account not found" });
-    bustBillCaches(uid);
     res.json(updated);
   }));
 
@@ -7080,8 +6971,6 @@ Rules:
     const parsed = insertArtifactSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const created = await storage.createArtifact(parsed.data);
-    const uid_a1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_a1}`); bustCache(`stats:${uid_a1}`); bustCache(`enhanced:`);
     res.status(201).json(created);
   }));
   app.patch("/api/artifacts/:id", asyncHandler(async (req, res) => {
@@ -7110,23 +6999,17 @@ Rules:
     if (req.body.description !== undefined && typeof req.body.description === "string") req.body.description = sanitize(req.body.description);
     const updated = await storage.updateArtifact(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_a2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_a2}`); bustCache(`stats:${uid_a2}`); bustCache(`enhanced:`);
     res.json(updated);
   }));
   app.post("/api/artifacts/:id/toggle/:itemId", asyncHandler(async (req, res) => {
     const result = await storage.toggleChecklistItem(req.params.id, req.params.itemId);
     if (!result) return res.status(404).json({ error: "Not found" });
-    const uid_a3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_a3}`); bustCache(`stats:${uid_a3}`); bustCache(`enhanced:`);
     res.json(result);
   }));
   app.delete("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getArtifact(req.params.id);
     if (!existing) return res.status(404).json({ error: "Artifact not found" });
     await storage.deleteArtifact(req.params.id);
-    const uid_a4 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_a4}`); bustCache(`stats:${uid_a4}`); bustCache(`enhanced:`);
     res.json({ success: true });
   }));
 
@@ -7152,8 +7035,6 @@ Rules:
       sheetData: src.sheetData,
       source: src.source,
     } as any);
-    const uid_adup = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_adup}`); bustCache(`stats:${uid_adup}`); bustCache(`enhanced:`);
     res.status(201).json(created);
   }));
 
@@ -7176,8 +7057,6 @@ Rules:
         await storage.updateArtifact(req.params.id, { shareToken: token });
       }
     }
-    const uid_sh = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_sh}`);
     res.json({ token, path: `/share/${token}` });
   }));
   app.delete("/api/artifacts/:id/share", asyncHandler(async (req, res) => {
@@ -7186,8 +7065,6 @@ Rules:
     if (typeof storage.setArtifactShareToken === "function") {
       await storage.setArtifactShareToken(req.params.id, null);
     }
-    const uid_sh2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_sh2}`);
     res.json({ success: true });
   }));
 
@@ -7327,8 +7204,6 @@ Rules:
       const merged = Array.from(new Set([...(((newEntry as any).linkedProfiles) || []), ...req.body.linkedProfiles.map(String)]));
       await storage.updateJournalEntry(newEntry.id, { linkedProfiles: merged } as any);
     }
-    const uid_j1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`stats:${uid_j1}`);
     // A journal entry's date is not a calendar commitment — it never creates a
     // Date Rule. Stated in the response so no caller has to infer it.
     res.status(appended ? 200 : 201).json({ ...newEntry, appended, dateRules: [] });
@@ -7349,8 +7224,6 @@ Rules:
     }
     const updated = await storage.updateJournalEntry(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    const uid_j2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`stats:${uid_j2}`);
     res.json(updated);
   }));
   app.delete("/api/journal/:id", asyncHandler(async (req, res) => {
@@ -7359,8 +7232,6 @@ Rules:
     // existed when we used getJournalEntries() to pre-check existence.
     const removed = await storage.deleteJournalEntry(req.params.id);
     if (!removed) return res.status(404).json({ error: "Journal entry not found" });
-    const uid_j3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`stats:${uid_j3}`);
     res.json({ success: true });
   }));
 
@@ -8695,21 +8566,7 @@ No emojis. No prose outside the JSON.`,
     res.json(incomes);
   }));
 
-  // Helper: bust every cache key derived from income (cashflow / dashboard /
-  // stats / enhanced). Without this, adding a paycheck wouldn't move the
-  // "Income this month" or "Net cashflow" numbers until the 5-min server
-  // cache expired, which made the dashboard look broken.
-  const bustIncomeCaches = (uid: string) => {
-    bustCache(`incomes:${uid}`);
-    bustCache(`cashflow:${uid}`);
-    bustCache(`stats:${uid}`);
-    bustCache(`enhanced:`);
-    bustCache(`enhanced:${uid}`);
-    bustCache(`profile-detail:${uid}:`);
-  };
-
   app.post("/api/incomes", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
     // Bug fix: this route used to call storage.createIncome(req.body) with no
     // validation at all. A POST { amount: "abc" } would NaN out every monthly
     // income computation. Validate amount + description + sanitize inputs.
@@ -8731,12 +8588,10 @@ No emojis. No prose outside the JSON.`,
     req.body.description = sanitize(req.body.description);
     applyActiveProfileScope(req, req.body);
     const income = await storage.createIncome(req.body);
-    bustIncomeCaches(uid);
     res.status(201).json(income);
   }));
 
   app.patch("/api/incomes/:id", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
     if (!req.body || typeof req.body !== "object") {
       return res.status(400).json({ error: "Request body must be a JSON object" });
     }
@@ -8754,14 +8609,11 @@ No emojis. No prose outside the JSON.`,
     }
     const income = await storage.updateIncome(req.params.id, req.body);
     if (!income) return res.status(404).json({ error: "Not found" });
-    bustIncomeCaches(uid);
     res.json(income);
   }));
 
   app.delete("/api/incomes/:id", asyncHandler(async (req, res) => {
-    const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
     const ok = await storage.deleteIncome(req.params.id);
-    bustIncomeCaches(uid);
     // Was `res.json({ success: ok })` — HTTP 200 carrying `success: false`.
     // The client checks the HTTP status, so a delete that removed nothing read
     // as a delete that worked: the toast said "Deleted", the refetch brought
