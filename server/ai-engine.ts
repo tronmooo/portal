@@ -49,6 +49,7 @@ import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from 
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
 import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompletionVeto } from "@shared/habit-completion-intent";
+import { resolveReferent, buildReferentDirective, type ReferentCandidate } from "@shared/referent-resolution";
 import { completeHabitOccurrence, resolveTrackerForHabit, type HabitCompletionSource } from "./habit-completion";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
@@ -4700,14 +4701,16 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Income logging ---
   {
     name: "log_income",
-    description: "Log an income entry. Use when user says 'I got paid $X', 'received $X from freelance', 'paycheck of $X', or mentions any incoming money.",
+    description: "Log an income entry — one-off OR recurring. Use when the user says 'I got paid $X', 'received $X from freelance', 'paycheck of $X', or describes money coming IN on a schedule ('Sarah earns $750 every Friday', '$4,000 salary twice a month').\n\nRECURRING INCOME IS SUPPORTED: set `frequency` whenever the user states a cadence. 'every Friday' → frequency:'weekly'. 'twice a month' / 'every other week' → 'biweekly'. 'monthly' → 'monthly'. NEVER tell the user that recurring income is unsupported or that they must log each payday by hand — that is false. Omit frequency ONLY for a single payment that already happened.\n\nALWAYS set forProfile when the money belongs to a specific person ('Sarah earns…' → forProfile:'Sarah Miller'), or it lands on the wrong person's finances.",
     input_schema: {
       type: "object" as const,
       properties: {
-        amount: { type: "number", description: "Income amount in dollars" },
+        amount: { type: "number", description: "Income amount in dollars, per payment (not the annual total)." },
         source: { type: "string", description: "Income source (employer, client, freelance, etc.)" },
-        date: { type: "string", description: "Date received (YYYY-MM-DD). Defaults to today." },
+        date: { type: "string", description: "Date received, or the first/next payment date for recurring income (YYYY-MM-DD). Defaults to today." },
         category: { type: "string", description: "Category: salary, freelance, investment, gift, refund, other" },
+        frequency: { type: "string", enum: ["once", "weekly", "biweekly", "monthly", "quarterly", "yearly"], description: "How often this income arrives. 'every Friday' → weekly; 'every other week' → biweekly; 'monthly'/'every month' → monthly. Defaults to 'once' (a single payment). Set it whenever the user states a cadence — recurring income is fully supported." },
+        forProfile: { type: "string", description: "Name of the person this income belongs to (e.g. 'Sarah Miller'). ALWAYS set it when the user names whose money it is; without it the income is filed under the account owner and is invisible on that person's Finance screen." },
         notes: { type: "string", description: "Optional notes" },
       },
       required: ["amount", "source"],
@@ -5508,6 +5511,7 @@ DATA CLASSIFICATION RULES (NEVER VIOLATE):
 - MEDICATION DOSES: "I took my Lisinopril" / "gave Max his pill" → log_medication_dose. "I skipped/forgot tonight's dose" → skip_medication_dose (missed:true when forgotten). "what doses did I miss this week" / "how's my adherence" → get_missed_doses. "show my dose history" / "when did I last take it" → get_dose_history. These need a medication TRACKER; if none exists, say so and offer to create one. If the user has several medications and didn't name one, the tool will ask — relay its question.
 - WATER INTAKE / HYDRATION: "drank 8 glasses of water" / "8oz water" is an ACTIVITY REPORT → log_tracker_entry to the Hydration/Water tracker (reuse it if it exists; it is auto-created otherwise). If a water habit is LINKED to that tracker, the log advances the habit's progress automatically — never also call checkin_habit for the same drink. A water HABIT ("drink 64 oz daily", "make drinking water a habit") is created only on explicit habit language, and gets its tracker linked by the server.
 - HABITS vs TRACKERS: a HABIT records consistency — a recurring behaviour with a per-day COUNT (dailyTarget 1-10, streaks, optional scheduled time). A TRACKER records the measurement — richer data over time (a running tracker holds distance, duration, pace, intensity; the habit only cares whether today's goal was satisfied). "Take medication" = habit. "Blood pressure 120/80" = tracker. "Weight 180 lbs" = tracker, and needs NO habit. Habits are NOT binary — never describe them as a single yes/no check-off. Measurable habits are LINKED to their tracker (server-managed); completion-only habits ("make my bed") have no tracker and must not get one.
+- RECURRING INCOME IS SUPPORTED. "Sarah earns $750 every Friday" → log_income(amount:750, source:"Freelance", frequency:"weekly", forProfile:"Sarah Miller"). Cadence goes in the frequency argument (weekly / biweekly / monthly / quarterly / yearly). NEVER say the app cannot do recurring income, and never ask the user to log each payday by hand — both are false. Whose money it is goes in forProfile, always, or it lands on the account owner and is missing from that person's Finance screen.
 - LOANS/BILLS: When a user mentions rent, bills, or debts, use create_obligation. Do NOT create a "loan" profile for recurring bills. Loans are only for actual loan instruments (mortgage, car loan, student loan) with APR, term, and principal.
 
 LIABILITIES — FIRST-CLASS DEBT INSTRUMENTS (CRITICAL — read carefully):
@@ -5709,6 +5713,11 @@ DATA ISOLATION RULES:
 2. If the user says "Craig Isolation Test's blood pressure", forProfile MUST be "Craig Isolation Test" — NOT just "Craig".
 3. NEVER use a partial name that could match multiple profiles. Use the FULL profile name.
 4. If unsure which profile the user means, ASK instead of guessing.
+4-PRONOUNS. READING THE CONVERSATION IS NOT GUESSING — this is the exception to rule 4, and it wins. A pronoun ("she", "her", "he", "his", "they", "it", "that") refers to whoever or whatever the user named in a RECENT TURN. Resolve it from the conversation and ACT.
+  · "Sarah earns $750 every Friday." → "This Friday she's only getting $500." — "she" is Sarah. Update Sarah's income. NEVER reply "who is 'she'?".
+  · "Add Netflix for $15/month." → "It comes out on the 22nd." — "it" is Netflix. Set Netflix's due day.
+  · "Sarah's email is x@y.com" → "Change her email to z@y.com" — "her" is Sarah. Update Sarah's profile.
+  When the referent is resolvable, a clarifying question is a FAILURE: it makes the user repeat what they just said. Ask ONLY when the recent turns name two or more equally plausible candidates, or none at all. A [REFERENT] line on the user's message states the resolved answer — when it is present, treat it as settled and never ask.
 4a. AMBIGUITY DETECTION — ZERO SILENT GUESSING: Before you pass a value to forProfile, scan the data snapshot. If TWO OR MORE profiles match the user's referent by name OR by core noun (e.g. user says "the computer" and you see "Dell Laptop" and "MacBook Pro" both classified as computers, or two profiles whose names both contain "computer"), you MUST NOT pick one. Instead, reply with a clarifying question listing the candidates (e.g. "I see two computers: A) Dell Laptop ($1,200 under House) and B) MacBook Pro ($2,500 under House). Which one did you mean?") and make NO tool call. Wait for the user's next message. The same rule applies when the user says "the car", "my dog", "the credit card", etc. and multiple profiles fit. Picking one silently is a critical data-isolation failure.
 5. Data for Person A must NEVER appear under Person B, Pet C, or Vehicle D.
 6. When creating trackers, tasks, expenses, events, goals, or habits for a specific entity, the forProfile field is MANDATORY.
@@ -10947,15 +10956,30 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         extractedData: docExtracted,
       }, "document");
       if (!createDocPayload.ok) return { error: createDocPayload.error };
+      // OWNERSHIP BEFORE CREATE (user report 2026-08-22: "Passport document
+      // ownership is corrupted: it lists both Poop and Sarah").
+      //
+      // This used to create the document with no owner and link the named
+      // profile afterwards. Storage fills an EMPTY owner list with the self
+      // profile, so the sequence produced two owners — the account owner from
+      // the fallback, plus the person the document actually belongs to. The
+      // document then showed up on the wrong person's screens and its
+      // expiration counted against the wrong dashboard. Resolving the owner
+      // first means the fallback never fires, which is the same order
+      // create_habit and create_obligation already use.
+      let docProfileId: string | undefined;
+      if (input.forProfile) {
+        const profile = matchProfileByName(await storage.getProfiles(), input.forProfile);
+        if (profile) docProfileId = profile.id;
+      }
       const doc = await storage.createDocument({
         ...createDocPayload.data,
         ...(docExpiry ? { expirationDate: docExpiry } : {}),
+        ...(docProfileId ? { linkedProfiles: [docProfileId] } : {}),
         size: input.content?.length || 0,
       });
-      if (input.forProfile) {
-        const profiles = await storage.getProfiles();
-        const profile = matchProfileByName(profiles, input.forProfile);
-        if (profile) await storage.linkProfileTo(profile.id, "document", doc.id);
+      if (docProfileId) {
+        await storage.linkProfileTo(docProfileId, "document", doc.id).catch(() => { /* junction link is best-effort */ });
       }
       return doc;
     }
@@ -12341,18 +12365,51 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     // --- Income logging ---
     case "log_income": {
       if (!input.amount || !input.source) return { error: "amount and source are required" };
-      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const todayDate = getUserToday(aiUserTimezone());
+      // RECURRING INCOME (user report 2026-08-22: "recurring freelance income is
+      // unsupported; only one $750 income entry was created"). The income record
+      // has carried a `frequency` column all along and createIncome honours it —
+      // this tool just hardcoded "once", so the assistant truthfully told the
+      // user the app could not do it. It can.
+      const ALLOWED_FREQ = ["once", "weekly", "biweekly", "monthly", "quarterly", "yearly"];
+      const incomeFrequency = ALLOWED_FREQ.includes(String(input.frequency || "").toLowerCase())
+        ? String(input.frequency).toLowerCase()
+        : "once";
+      // OWNERSHIP: income for a named person must land on THAT person, or it is
+      // invisible on their Finance screen and inflates the account owner's.
+      let incomeProfileId: string | undefined;
+      if (input.forProfile) {
+        const targetP = matchProfileByName(await storage.getProfiles(), input.forProfile);
+        if (targetP) incomeProfileId = targetP.id;
+      }
       // P0.3a: validate with the shared insert schema before writing.
       const incomePayload = validateAiPayload(insertIncomeSchema, {
         description: input.source,
         amount: typeof input.amount === "number" ? input.amount : parseFloat(input.amount),
         category: input.category || "salary",
-        frequency: "once",
+        frequency: incomeFrequency,
         date: input.date || todayDate,
+        ...(incomeProfileId ? { linkedProfiles: [incomeProfileId] } : {}),
       }, "income");
       if (!incomePayload.ok) return { error: incomePayload.error };
       const created = await storage.createIncome(incomePayload.data);
-      return { success: true, income: created, message: `Logged $${input.amount} income from ${input.source}` };
+      if (incomeProfileId) {
+        await storage.linkProfileTo(incomeProfileId, "income", created.id).catch(() => { /* non-fatal */ });
+      }
+      const everyLabel: Record<string, string> = {
+        weekly: "every week", biweekly: "every other week", monthly: "every month",
+        quarterly: "every quarter", yearly: "every year",
+      };
+      const recurLabel = everyLabel[incomeFrequency];
+      return {
+        success: true,
+        income: created,
+        frequency: incomeFrequency,
+        forProfile: input.forProfile,
+        message: recurLabel
+          ? `Logged $${input.amount} from ${input.source}${input.forProfile ? ` for ${input.forProfile}` : ""} — recurring ${recurLabel}. Say it is recurring in your reply; do NOT tell the user recurring income is unsupported or that they must log each payment by hand.`
+          : `Logged $${input.amount} income from ${input.source}${input.forProfile ? ` for ${input.forProfile}` : ""}`,
+      };
     }
 
     case "update_income": {
@@ -15124,7 +15181,34 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // an inferred read informs the model without overriding its judgement on a
     // message the router only half understood.
     const contentDirective = buildContentRoutingDirective(userMessage);
-    const userTurnText = contentDirective ? `${userMessage}\n\n${contentDirective}` : userMessage;
+
+    // ── WHO IS "SHE"? ────────────────────────────────────────────────────
+    // Resolved deterministically from the conversation, for the same reason
+    // the content route is: the profile rules below are emphatic that picking
+    // an unnamed profile is a data-isolation failure, so left to itself the
+    // model asks "who is 'she'?" one message after the user said "Sarah earns
+    // $750 every Friday". The user DID name them — one turn ago.
+    const referentCandidates: ReferentCandidate[] = [
+      // People and pets answer "she"/"he"/"they".
+      ...(profiles || [])
+        .filter((p: any) => p?.name && ["person", "self", "pet"].includes(String(p.type)))
+        .map((p: any) => ({
+          name: String(p.name),
+          kind: "person" as const,
+          // "Sarah" should match a profile stored as "Sarah Miller".
+          aliases: String(p.name).split(/\s+/).filter((w: string) => w.length >= 3),
+        })),
+      // Bills and subscriptions answer "it" — "it comes out on the 22nd".
+      ...(obligations || [])
+        .filter((o: any) => o?.name)
+        .map((o: any) => ({ name: String(o.name), kind: "thing" as const })),
+    ];
+    const referentDirective = buildReferentDirective(
+      resolveReferent(userMessage, conversationHistory || [], referentCandidates),
+    );
+
+    const directives = [contentDirective, referentDirective].filter(Boolean).join("\n\n");
+    const userTurnText = directives ? `${userMessage}\n\n${directives}` : userMessage;
 
     const lastCarried = messages[messages.length - 1];
     if (lastCarried && lastCarried.role === "user") {

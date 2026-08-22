@@ -212,6 +212,98 @@ export function isZonelessDateTime(input: string): boolean {
  *
  * Returns an Invalid Date for junk, so callers keep using `isNaN(d.getTime())`.
  */
+const MONTH_NUMBERS: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11,
+  dec: 12, december: 12,
+};
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * A natural-language calendar date ("September 1", "Sept 1 2026", "9/1/2026",
+ * "1 September") as YYYY-MM-DD, plus any time of day the string carried.
+ * Returns null when the string is not a plain calendar date — relative words
+ * ("tomorrow", "next Friday") are somebody else's job.
+ *
+ * A MISSING YEAR resolves against today rather than defaulting to whatever
+ * `new Date("September 1")` decides — which is the year 2001, because a bare
+ * month/day is parsed as a two-digit year. A date more than 60 days behind
+ * today rolls forward a year ("January 3" asked on December 28 means the
+ * January that is coming), while a recent past date stays put so backdating
+ * ("log it for August 15") still works.
+ */
+export function parseNaturalCalendarDate(
+  raw: string,
+  timezone: string = DEFAULT_TIMEZONE,
+): { date: string; hours?: number; minutes?: number } | null {
+  let s = String(raw || "").trim().toLowerCase();
+  if (!s) return null;
+  // Leading prepositions: "by September 1", "due on 9/1", "starting March 3".
+  s = s.replace(/^(?:by|on|due(?:\s+on)?|before|until|till|after|starting(?:\s+on)?|from|beginning)\s+/i, "").trim();
+  // "the 1st of September" → "1 september"
+  s = s.replace(/^the\s+/, "").replace(/\s+of\s+/, " ").trim();
+
+  // An optional trailing time: "at 9", "at 9:30 pm", "9pm".
+  let hours: number | undefined;
+  let minutes: number | undefined;
+  const timeMatch = s.match(/[\s,]+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (timeMatch && (timeMatch[3] || timeMatch[2])) {
+    const h = Number(timeMatch[1]);
+    const m = timeMatch[2] ? Number(timeMatch[2]) : 0;
+    const mer = timeMatch[3]?.toLowerCase();
+    if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+      hours = mer === "pm" ? (h % 12) + 12 : mer === "am" ? h % 12 : h;
+      minutes = m;
+      s = s.slice(0, timeMatch.index).trim();
+    }
+  }
+  s = s.replace(/[,]+$/, "").trim();
+
+  const monthNames = Object.keys(MONTH_NUMBERS).join("|");
+  let month: number | undefined;
+  let day: number | undefined;
+  let year: number | undefined;
+
+  // "September 1", "Sept. 1, 2026"
+  let m = s.match(new RegExp(`^(${monthNames})\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:[,]?\\s*(\\d{4}))?$`));
+  if (m) { month = MONTH_NUMBERS[m[1]]; day = Number(m[2]); year = m[3] ? Number(m[3]) : undefined; }
+
+  // "1 September", "1st Sept 2026"
+  if (month === undefined) {
+    m = s.match(new RegExp(`^(\\d{1,2})(?:st|nd|rd|th)?\\s+(${monthNames})\\.?(?:[,]?\\s*(\\d{4}))?$`));
+    if (m) { day = Number(m[1]); month = MONTH_NUMBERS[m[2]]; year = m[3] ? Number(m[3]) : undefined; }
+  }
+
+  // "9/1/2026", "9-1", "09/01/26" — US month-first, matching how the rest of
+  // the app writes dates back to the user.
+  if (month === undefined) {
+    m = s.match(/^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$/);
+    if (m) {
+      month = Number(m[1]); day = Number(m[2]);
+      if (m[3]) year = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+    }
+  }
+
+  if (month === undefined || day === undefined) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+  const today = getUserToday(timezone);
+  if (year === undefined) {
+    year = Number(today.slice(0, 4));
+    const candidate = `${year}-${pad2(month)}-${pad2(day)}`;
+    const daysBehind = (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${candidate}T00:00:00Z`)) / 86400000;
+    if (daysBehind > 60) year += 1;
+  }
+
+  const date = `${year}-${pad2(month)}-${pad2(day)}`;
+  // Reject impossible days ("February 30") rather than letting them roll over.
+  const probe = new Date(`${date}T00:00:00Z`);
+  if (isNaN(probe.getTime()) || probe.getUTCDate() !== day || probe.getUTCMonth() + 1 !== month) return null;
+  return { date, hours, minutes };
+}
+
 export function parseUserDateTime(input: string | Date | number, timezone: string = DEFAULT_TIMEZONE): Date {
   if (input instanceof Date) return input;
   if (typeof input === "number") return new Date(input);
@@ -223,6 +315,23 @@ export function parseUserDateTime(input: string | Date | number, timezone: strin
     const [datePart, timePart] = s.replace(" ", "T").split("T");
     const [hh, mm] = timePart.split(":").map(Number);
     return zonedTimeToUTC(datePart, hh || 0, mm || 0, timezone);
+  }
+  // NATURAL-LANGUAGE CALENDAR DATES (user report 2026-08-22: "passport renewal
+  // task used August 31 instead of September 1").
+  //
+  // Everything that was not ISO used to fall through to `new Date(s)`, and
+  // `new Date("September 1, 2026")` is UTC MIDNIGHT — which is 5pm on August
+  // 31st in America/Los_Angeles, so every such date landed a day early for any
+  // negative-offset user. The ISO branch above has anchored at noon for
+  // exactly this reason since it was written; the spoken form never did.
+  const natural = parseNaturalCalendarDate(s, timezone);
+  if (natural) {
+    return zonedTimeToUTC(
+      natural.date,
+      natural.hours ?? 12,
+      natural.minutes ?? 0,
+      timezone,
+    );
   }
   return new Date(s);
 }

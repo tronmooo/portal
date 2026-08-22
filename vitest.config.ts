@@ -167,6 +167,7 @@ export default defineConfig({
       'tests/habit-occurrences.test.ts',
       'tests/habit-tracker-link.test.ts',
       'tests/habit-completion-pipeline.test.ts',
+      'tests/qa-2026-08-22-findings.test.ts',
       'tests/document-open-hook.dom.test.tsx',
       // Production audit 2026-07-29 regressions.
       'tests/anthropic-budget.test.ts',
