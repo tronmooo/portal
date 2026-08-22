@@ -346,6 +346,9 @@ export interface TurnCreate {
   entity: IntentEntity;
   /** Determiner-free, punctuation-free, lowercased name. */
   key: string;
+  /** Owner scope key ("" = the user's own record). Bob's and Robert's
+   *  same-named records are different records. */
+  owner: string;
 }
 
 /**
@@ -361,6 +364,46 @@ export function createNameKey(label: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+/**
+ * WHOSE record this call is about. Two people can own records with the same
+ * name — Bob has a Running tracker, Robert has a Running tracker, and neither
+ * is a duplicate of the other. The owner scope is part of the identity, so a
+ * second create under a DIFFERENT owner is never fan-out.
+ *
+ * Empty string = the user's own (unscoped) record.
+ */
+export function ownerScopeKey(input: Record<string, any> | undefined | null): string {
+  if (!input || typeof input !== "object") return "";
+  for (const key of ["forProfile", "profileName", "ownerName", "owner", "forPerson"]) {
+    const v = (input as any)[key];
+    if (typeof v === "string" && v.trim()) return createNameKey(v);
+  }
+  return "";
+}
+
+/**
+ * Tools whose name matches /^(log_|add_|journal_entry|...)/ — so `toolOperation`
+ * calls them creates — but which APPEND AN ENTRY to an existing parent record
+ * rather than creating a record of their own.
+ *
+ * These are exempt from the one-record-per-turn guard. Two entries on one
+ * tracker in a single turn is the normal case, not fan-out: "Bob and I both
+ * went running" is two runs on the Running tracker, and "124/78, then 130/80
+ * an hour later" is two blood-pressure readings. Refusing the second one loses
+ * the user's data and there is nothing wrong to protect them from.
+ */
+const ENTRY_APPEND_TOOLS = new Set([
+  "log_tracker_entry",
+  "log_medication_dose",
+  "skip_medication_dose",
+  "log_income",
+  "log_expected_paycheck",
+  "add_liability_payment",
+  "add_liability_charge",
+  "journal_entry",
+  "append_journal_entry",
+]);
 
 /**
  * Has this turn already created this exact thing?
@@ -380,21 +423,26 @@ export function findDuplicateCreateInTurn(
   priorCreates: TurnCreate[],
 ): TurnCreate | null {
   if (toolOperation(toolName) !== "create") return null;
+  if (ENTRY_APPEND_TOOLS.has(toolName)) return null;
   const entity = TOOL_INTENT_ENTITY[toolName];
   if (!entity) return null;
   const key = createNameKey(toolTargetLabel(input));
   if (!key) return null;
+  const owner = ownerScopeKey(input);
   return (
-    priorCreates.find((c) => c.key === key && areEntitiesCompatible(c.entity, entity)) ?? null
+    priorCreates.find(
+      (c) => c.key === key && c.owner === owner && areEntitiesCompatible(c.entity, entity),
+    ) ?? null
   );
 }
 
 export function recordTurnCreate(toolName: string, input: Record<string, any> | undefined | null): TurnCreate | null {
   if (toolOperation(toolName) !== "create") return null;
+  if (ENTRY_APPEND_TOOLS.has(toolName)) return null;
   const entity = TOOL_INTENT_ENTITY[toolName];
   const key = createNameKey(toolTargetLabel(input));
   if (!entity || !key) return null;
-  return { tool: toolName, entity, key };
+  return { tool: toolName, entity, key, owner: ownerScopeKey(input) };
 }
 
 export function duplicateCreateViolation(toolName: string, label: string, prior: TurnCreate): RoutingViolation {
@@ -407,9 +455,11 @@ export function duplicateCreateViolation(toolName: string, label: string, prior:
     expectedOperation: "create",
     actualOperation: "create",
     modelDirective:
-      `Blocked: you already created "${label}" in this turn with ${prior.tool}. ` +
+      `Blocked: you already created "${label}" in this turn with ${prior.tool}, for the same owner. ` +
       `One request creates ONE record — do not create it a second time under a different type or spelling. ` +
-      `If you need to add details to it, call the matching update tool instead.`,
+      `If you need to add details to it, call the matching update tool instead. ` +
+      `(This is scoped to one owner: the same name for a DIFFERENT person is a different record and is allowed, ` +
+      `so set forProfile and call again rather than telling the user to resend.)`,
     // Silent: the first create's card already tells the user it exists.
     userMessage: "",
   };
