@@ -38,6 +38,9 @@ import type { Habit, HabitCheckin, TrackerEntry, Tracker } from "@shared/schema"
 import { habitDayProgress, type HabitDayProgress } from "@shared/habit-progress";
 import { isHabitDueOn } from "@shared/habit-schedule";
 import { toLocalDateStr, getUserToday, zonedTimeToUTC, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { detectHabitMetric, UMBRELLA_TRACKER_NAMES } from "@shared/habit-metric";
+import { findIdentityMatches } from "@shared/tracker-identity";
+import { resolveTrackerCategory } from "@shared/entity-classify";
 
 /** Where a completion came from. Recorded for history/debugging; the resulting
  *  completion is identical whichever it is. */
@@ -57,8 +60,11 @@ export interface HabitCompletionStorage {
   checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined>;
   updateHabit(id: string, data: Partial<Habit>): Promise<Habit | undefined>;
   getTracker(id: string): Promise<Tracker | undefined>;
+  getTrackers(): Promise<Tracker[]>;
+  createTracker(data: any): Promise<Tracker>;
   updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined>;
   logEntry(data: any): Promise<TrackerEntry | undefined>;
+  getProfiles(): Promise<Array<{ id: string; type?: string }>>;
 }
 
 export interface CompleteHabitOptions {
@@ -76,6 +82,13 @@ export interface CompleteHabitOptions {
   notes?: string;
   /** The caller already wrote the tracker entry (source: "tracker"). */
   skipTrackerWrite?: boolean;
+  /**
+   * Give the habit a tracker if it doesn't have one, so the completion always
+   * lands somewhere trackable (user directive: "manual habit completion =
+   * habit completion + tracker entry"). Default true; pass false to complete
+   * the habit alone.
+   */
+  ensureTracker?: boolean;
   timezone?: string;
 }
 
@@ -117,6 +130,85 @@ function countMirrorEntries(tracker: Tracker | undefined, habitId: string, date:
   return (tracker.entries || []).filter(
     (e) => (e.values as any)?.[HABIT_MIRROR_KEY] === habitId && dayOf(e.timestamp, tz) === date,
   ).length;
+}
+
+/**
+ * Find (or make) the tracker that should hold this habit's records.
+ *
+ * ONE resolver, shared by habit creation and habit completion, so the two can
+ * never disagree about which tracker a habit belongs to. The ladder:
+ *
+ *   1. a hint (the model's `linkTracker` argument) or the habit's metric
+ *      candidates, identity-matched against EXISTING trackers — "Water"
+ *      reconnects to an existing Hydration tracker rather than duplicating it;
+ *   2. an umbrella tracker for the same domain (an existing Exercise tracker
+ *      absorbs a running habit instead of being shadowed by a new one);
+ *   3. a new tracker, named for the metric — or, when the habit measures
+ *      nothing nameable, for the habit itself.
+ *
+ * Only ever reuses a tracker the habit's owner can log to (theirs, or an
+ * unowned orphan); adopting another profile's tracker would cross-contaminate
+ * their data.
+ *
+ * `fallbackToHabitName` is the difference between the two callers, and it
+ * encodes a distinction the user drew across two messages. At habit CREATION
+ * it is false: "make my bed every morning" measures nothing, and manufacturing
+ * a tracker for it is the "pointless tracker" they ruled out. At habit
+ * COMPLETION it is true: they have now actually done the thing, and "manual
+ * habit completion = habit completion + tracker entry", so the completion gets
+ * a home even for a habit whose name suggests no metric.
+ */
+export async function resolveTrackerForHabit(
+  storage: HabitCompletionStorage,
+  habit: { id: string; name: string; linkedProfiles?: string[] | null },
+  opts: {
+    hint?: string;
+    userMessage?: string;
+    ownerProfileId?: string;
+    fallbackToHabitName?: boolean;
+  } = {},
+): Promise<{ id: string; name: string; created: boolean } | null> {
+  const hint = String(opts.hint || "").trim();
+  if (/^(none|no|skip)$/i.test(hint)) return null;
+
+  const metric = detectHabitMetric(habit.name, opts.userMessage);
+  const candidates = Array.from(new Set([
+    ...(hint ? [hint] : []),
+    ...(metric ? metric.candidates : []),
+    ...(opts.fallbackToHabitName ? [habit.name] : []),
+  ].filter(Boolean)));
+  if (candidates.length === 0) return null;
+
+  const [allTrackers, profiles] = await Promise.all([storage.getTrackers(), storage.getProfiles()]);
+  const ownerId = opts.ownerProfileId
+    || habit.linkedProfiles?.[0]
+    || profiles.find((p) => p.type === "self")?.id;
+  const compatible = (t: Tracker) => {
+    const owners = t.linkedProfiles || [];
+    return owners.length === 0 || (!!ownerId && owners.includes(ownerId));
+  };
+
+  for (const cand of candidates) {
+    const match = findIdentityMatches(allTrackers, cand).filter(compatible)[0];
+    if (match) return { id: match.id, name: match.name, created: false };
+  }
+  if (metric) {
+    for (const umbrella of UMBRELLA_TRACKER_NAMES[metric.category] || []) {
+      const match = findIdentityMatches(allTrackers, umbrella).filter(compatible)[0];
+      if (match) return { id: match.id, name: match.name, created: false };
+    }
+  }
+
+  const name = candidates[0];
+  const category = resolveTrackerCategory(name, { supplied: metric?.category }).category;
+  // A habit with no metric still needs somewhere to put "it happened".
+  const fields = (metric?.fields || [{ name: "completions", type: "number" as const, unit: "×", isPrimary: true }])
+    .map((f) => ({ name: f.name, type: f.type, ...(f.unit ? { unit: f.unit } : {}), ...(f.isPrimary ? { isPrimary: true } : {}) }));
+  const created = await storage.createTracker({
+    name, category, fields,
+    ...(ownerId ? { linkedProfiles: [ownerId] } : {}),
+  });
+  return { id: created.id, name: created.name, created: true };
 }
 
 /**
@@ -169,7 +261,22 @@ export async function completeHabitOccurrence(
   // completion never writes two records.
   const trackerEntries: TrackerEntry[] = [];
   let trackerInfo: { id: string; name: string | null } | null = null;
-  const linkedTrackerId = (fresh as any).linkedTrackerId as string | undefined;
+  let linkedTrackerId = (fresh as any).linkedTrackerId as string | undefined;
+
+  // No tracker yet? Give it one, so a completion always leaves a record on the
+  // tracker side too ("manual habit completion = habit completion + tracker
+  // entry"). Reuses a compatible existing tracker before creating anything —
+  // the same resolver habit creation uses, so the two cannot disagree.
+  if (!linkedTrackerId && !opts.skipTrackerWrite && recorded > 0 && opts.ensureTracker !== false) {
+    try {
+      const resolved = await resolveTrackerForHabit(storage, fresh, { fallbackToHabitName: true });
+      if (resolved) {
+        await storage.updateHabit(fresh.id, { linkedTrackerId: resolved.id } as any);
+        linkedTrackerId = resolved.id;
+      }
+    } catch { /* the habit is completed either way */ }
+  }
+
   if (linkedTrackerId) {
     // Reading the tracker pulls its whole entry history, so only do it when a
     // mirror entry might actually be written. The tracker-sourced path — the

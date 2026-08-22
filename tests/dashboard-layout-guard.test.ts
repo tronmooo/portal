@@ -65,10 +65,21 @@ describe("executive dashboard grid has no dead space", () => {
     expect(execSrc).toMatch(/bubble bubble-enter p-3\.5 sm:p-4 h-full flex flex-col/);
   });
 
-  it("card content lives in a bounded, scrollable body", () => {
+  it("card content fills the cell WITHOUT becoming a scroll container", () => {
     expect(execSrc).toContain('className="exec-card-body flex-1 min-h-0 flex flex-col"');
-    expect(cssSrc).toMatch(/\.exec-card-body\s*\{[^}]*max-height/);
-    expect(cssSrc).toMatch(/\.exec-card-body\s*\{[^}]*overflow-y:\s*auto/);
+    // Reported 2026-08-20, right after the first fix: the Executive tab "keeps
+    // getting stuck / frozen" while scrolling. Bounding each card body with
+    // max-height + overflow-y + overscroll-behavior: contain sent the wheel to
+    // the card under the pointer and stopped it chaining to the page — and the
+    // cards cover most of the viewport, so the page barely scrolled anywhere.
+    // Card content is capped by the ExpandableRows "View all (N)" expanders
+    // instead; a scroll region inside these cards must not come back.
+    const rules = cssSrc.match(/\.exec-card-body\s*\{[^}]*\}/g) || [];
+    for (const rule of rules) {
+      expect(rule, "exec-card-body must not scroll").not.toMatch(/overflow-y:\s*(auto|scroll)/);
+      expect(rule, "exec-card-body must not be height-bounded").not.toMatch(/max-height/);
+      expect(rule, "overscroll-behavior traps the page scroll").not.toMatch(/overscroll-behavior/);
+    }
   });
 
   it("an odd trailing card spans the full width rather than leaving a blank cell", () => {
@@ -76,7 +87,7 @@ describe("executive dashboard grid has no dead space", () => {
   });
 
   it("the packing rules are desktop-only — phones are a single column", () => {
-    const idx = cssSrc.indexOf(".exec-card-body");
+    const idx = cssSrc.indexOf(".exec-grid > *:last-child");
     const mediaOpen = cssSrc.lastIndexOf("@media (min-width: 768px)", idx);
     expect(mediaOpen, "exec grid rules must sit inside a min-width media query").toBeGreaterThan(-1);
   });

@@ -383,6 +383,62 @@ describe("completeHabitOccurrence — one pipeline, every source", () => {
     expect(res.progress.completed).toBe(2);
   });
 
+  it("a manual completion of an UNLINKED habit creates a tracker and logs to it", async () => {
+    // User directive 2026-08-20: "If you're inside the Habits tab and manually
+    // press/check Walk the Dog, that action itself should create a tracker
+    // entry too. Manual habit completion = habit completion + tracker entry."
+    const h = await makeHabit({ name: "Brush Teeth" });
+    expect((h as any).linkedTrackerId).toBeFalsy();
+    expect(await run(storage, () => storage.getTrackers())).toHaveLength(0);
+
+    const res = await run(storage, () => completeHabitOccurrence(storage, { habitId: h.id, source: "habit_ui" }));
+    expect(res.recorded).toBe(1);
+    expect(res.tracker).toBeTruthy();
+    expect(res.trackerEntries).toHaveLength(1);
+
+    // The tracker now exists, is linked to the habit, and holds the entry.
+    const trackers = await run(storage, () => storage.getTrackers());
+    expect(trackers).toHaveLength(1);
+    expect(trackers[0].entries).toHaveLength(1);
+    const stored = await run(storage, () => storage.getHabit(h.id));
+    expect((stored as any).linkedTrackerId).toBe(trackers[0].id);
+  });
+
+  it("a manual completion APPENDS to a compatible existing tracker rather than making a second one", async () => {
+    const existing = await run(storage, () => storage.createTracker({
+      name: "Hydration", category: "health",
+      fields: [{ name: "ounces", type: "number", unit: "oz", isPrimary: true }],
+    } as any));
+    const h = await makeHabit({ name: "Drink Water" });
+
+    const res = await run(storage, () => completeHabitOccurrence(storage, { habitId: h.id, source: "habit_ui" }));
+    expect(res.tracker?.id).toBe(existing.id);
+    expect(await run(storage, () => storage.getTrackers())).toHaveLength(1);
+    expect((await run(storage, () => storage.getTracker(existing.id)))?.entries).toHaveLength(1);
+  });
+
+  it("repeated manual completions never double up the tracker entry", async () => {
+    const h = await makeHabit({ name: "Brush Teeth", targetPerDay: 2 });
+    await run(storage, () => completeHabitOccurrence(storage, { habitId: h.id, source: "habit_ui" }));
+    await run(storage, () => completeHabitOccurrence(storage, { habitId: h.id, source: "habit_ui" }));
+    const third = await run(storage, () => completeHabitOccurrence(storage, { habitId: h.id, source: "habit_ui" }));
+    expect(third.recorded).toBe(0);
+
+    const trackers = await run(storage, () => storage.getTrackers());
+    expect(trackers).toHaveLength(1);
+    // Two completions, two entries — the third attempt wrote nothing.
+    expect(trackers[0].entries).toHaveLength(2);
+  });
+
+  it("ensureTracker:false completes the habit alone", async () => {
+    const h = await makeHabit({ name: "Make My Bed" });
+    const res = await run(storage, () => completeHabitOccurrence(storage, {
+      habitId: h.id, source: "api", ensureTracker: false,
+    }));
+    expect(res.recorded).toBe(1);
+    expect(await run(storage, () => storage.getTrackers())).toHaveLength(0);
+  });
+
   it("a tracker-sourced completion writes no mirror entry (the entry IS the record)", async () => {
     const tracker = await run(storage, () => storage.createTracker({
       name: "Stretching", category: "fitness", fields: [{ name: "minutes", type: "number" }],

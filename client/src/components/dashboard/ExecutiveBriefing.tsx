@@ -172,10 +172,12 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
 }) {
   // h-full + flex column is what makes a card FILL its grid row instead of
   // hugging its content and leaving the rest of the cell black (user report
-  // 2026-08-20: "there's a lot of empty space in the executive tab"). The body
-  // scrolls inside a bounded height, so a card with more rows than its
-  // neighbour grows the row a little and then scrolls — it never balloons the
-  // grid or forces its row-mate into a different size.
+  // 2026-08-20: "there's a lot of empty space in the executive tab").
+  //
+  // The body is a plain flex region — NOT a scroll container. Bounding it with
+  // max-height + overflow-y broke page scrolling on this tab (the wheel went
+  // to the card under the pointer instead of the page), so content bounding
+  // lives in the ExpandableRows caps below instead. See index.css.
   return (
     <section
       className={`bubble bubble-enter p-3.5 sm:p-4 h-full flex flex-col ${className}`}
