@@ -46,7 +46,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
   return _sharedClient;
 }
 import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
-import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
+import { addMonthsClamped, addMonthsISO, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "../shared/date-rules";
@@ -110,7 +110,7 @@ import {
   type AssetPartyLink, type InsertAssetPartyLink,
   type OwnershipHistoryEntry,
   type AiActionLog, type InsertAiActionLog,
-  MOOD_SCORES,
+  MOOD_SCORES, isBillExpense,
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
@@ -1036,6 +1036,7 @@ export class SupabaseStorage implements IStorage {
       vendor: r.vendor || undefined, isRecurring: r.is_recurring || undefined,
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [],
       date: r.date, createdAt: r.created_at,
+      source: r.source || undefined,
     };
   }
 
@@ -4861,6 +4862,25 @@ export class SupabaseStorage implements IStorage {
     const p = await this.getProfile(obligationId);
     if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return undefined;
     const today = date || getUserToday(this._timezone);
+    // "Pay this bill" with no month named still pays a REAL billing period —
+    // the oldest one still open. Writing only a payment row (what this used to
+    // do) left every occurrence unpaid: the bill kept showing as due on the
+    // calendar, the Payments tab, and the liability header, so the user paid it
+    // a second time and the history ended up with two charges for one month.
+    // Delegating means one code path stamps the occurrence, books the expense,
+    // and advances the series — see payOccurrence.
+    const open = await this._oldestOpenOccurrence(obligationId);
+    if (open) {
+      await this.payOccurrence(obligationId, open, {
+        amount, method, paymentDate: today,
+      });
+      const paid = (await this._liabilityPayments(obligationId))
+        .filter((r: any) => String(r.paymentDate || "").slice(0, 10) === today);
+      return {
+        id: paid[paid.length - 1]?.id || randomUUID(),
+        amount, date: today, method, confirmationNumber,
+      };
+    }
     // Log the payment against the liability (single source of truth). Recurring
     // bills carry no permanent balance, so the whole amount is principal.
     const payment: any = await this.createLiabilityPayment({
@@ -4882,6 +4902,29 @@ export class SupabaseStorage implements IStorage {
     } as any);
     this.logActivity("obligation", `Paid ${p.name}: $${amount}`);
     return { id: payment?.id || randomUUID(), amount, date: today, method, confirmationNumber };
+  }
+
+  /**
+   * The canonical date of the oldest occurrence that is neither paid nor
+   * skipped — the period a bare "mark it paid" is actually settling. Looks back
+   * two months so a missed occurrence gets paid before the upcoming one, and
+   * forward a year so a bill paid ahead of its first due date still lands on a
+   * real period instead of nowhere.
+   */
+  private async _oldestOpenOccurrence(id: string): Promise<string | null> {
+    const p = await this.getProfile(id);
+    if (!p) return null;
+    const todayISO = getUserToday(this._timezone);
+    const sf = deriveScheduleFields(p.fields || {}, (p as any).type_key ?? (p as any).typeKey, todayISO);
+    const payments = await this._liabilityPayments(id);
+    const occ = generateSchedule({ id: p.id, fields: sf }, payments, {
+      todayISO,
+      windowStart: addMonthsISO(todayISO, -2),
+      windowEnd: addMonthsISO(todayISO, 12),
+      billingModel: resolveBillingModel(p as any),
+    });
+    const open = occ.find((o) => o.status !== "paid" && o.status !== "skipped");
+    return open ? open.date : null;
   }
 
   async deleteObligation(id: string): Promise<boolean> {
@@ -5052,6 +5095,66 @@ export class SupabaseStorage implements IStorage {
     return result;
   }
 
+  /**
+   * Book the expense for a paid billing period, and return its id.
+   *
+   * The expense carries `source: "bill"` — the marker that keeps it out of the
+   * dashboard's monthly-spend rollup, which already counts every recurring bill
+   * through `monthlyObligationTotal`. Without that marker a paid bill would be
+   * subtracted from cash flow twice: once as a forecast commitment and again as
+   * a real expense.
+   *
+   * Idempotent per occurrence: an occurrence that already booked an expense
+   * (paid, undone, paid again) updates that row instead of adding a second one.
+   */
+  private async _bookBillExpense(
+    p: any, occDate: string, amount: number, payDate: string, paymentId?: string,
+  ): Promise<string | null> {
+    if (!(amount > 0)) return null;
+    try {
+      const f: any = p.fields || {};
+      const existingId = this._occurrenceOverride(p, occDate)?.expenseId;
+      const period = occDate.slice(0, 7);
+      const row = {
+        amount,
+        category: String(f.category || "bills"),
+        description: `${p.name} — ${period}`,
+        vendor: p.name,
+        is_recurring: true,
+        date: payDate,
+        source: "bill",
+        updated_at: new Date().toISOString(),
+      };
+      if (existingId) {
+        const { data } = await this.supabase.from("expenses")
+          .update(row).eq("id", existingId).eq("user_id", this.userId).select("id");
+        if (Array.isArray(data) && data.length > 0) return existingId;
+        // Row is gone (deleted by hand) — fall through and book a fresh one.
+      }
+      const id = randomUUID();
+      const { error } = await this.supabase.from("expenses").insert({
+        ...row, id, user_id: this.userId,
+        linked_profiles: [], tags: ["bill", paymentId ? `payment:${paymentId}` : `bill:${p.id}`],
+        created_at: new Date().toISOString(),
+      });
+      if (error) throw error;
+      // Owners come from the bill itself, so the expense lands in the same
+      // scope the bill is filed under rather than defaulting to Self.
+      const owners = p.parentProfileId ? [p.parentProfileId] : [];
+      if (owners.length > 0) {
+        const self = await this.getSelfProfile();
+        try {
+          await setOwners(this.supabase, this.userId, "expense", id, owners, self?.id || owners[0], { defaultToSelf: false });
+        } catch { /* the expense still exists; ownership is best-effort */ }
+      }
+      return id;
+    } catch (e: any) {
+      // A bill must still register as paid even if the expense write fails.
+      console.error(`[payOccurrence] expense write failed for ${p.id?.slice?.(0, 8)} ${occDate}: ${e?.message || e}`);
+      return null;
+    }
+  }
+
   /** Mark one occurrence paid: writes a payment row + stamps the override. */
   async payOccurrence(
     id: string,
@@ -5062,7 +5165,15 @@ export class SupabaseStorage implements IStorage {
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const f: any = p.fields || {};
     const occDate = String(date).slice(0, 10);
-    const payDate = opts.paymentDate || occDate;
+    // WHEN THE MONEY MOVED, not when the bill was due. Defaulting to the due
+    // date stamped a payment in the FUTURE whenever someone paid a bill early
+    // ("I paid my September 15 bill today") — the payment then sat outside the
+    // current month, `lastPaidDate` pointed at a date that had not happened
+    // yet, and the expense it produces landed in the wrong month. A past or
+    // due-today occurrence keeps the occurrence date (back-filling history),
+    // an early payment records today.
+    const todayForPay = getUserToday(this._timezone);
+    const payDate = opts.paymentDate || (occDate > todayForPay ? todayForPay : occDate);
     // The amount owed for THIS period, resolved through the billing model —
     // base + this period's charges, or the posted actual if the bill landed.
     // A usage-based bill paid without an explicit amount must settle its real
@@ -5080,6 +5191,11 @@ export class SupabaseStorage implements IStorage {
       paymentType: "standard",
       sourceAccount: account?.name || opts.method || null,
     } as any);
+    // A paid bill IS money spent, so it also books an expense — otherwise the
+    // Expenses list showed everything the user bought EXCEPT the bills they
+    // actually paid. Keyed to the occurrence (one expense per billing period)
+    // so paying, undoing and re-paying can never leave two rows behind.
+    const expenseId = await this._bookBillExpense(p, occDate, amount, payDate, payment?.id);
     // Stamp the override AND, if this was the current due date, advance the series.
     // `actualAmount` is set here because a paid bill IS a posted bill: this is
     // the moment the period stops being a forecast and becomes history.
@@ -5089,6 +5205,7 @@ export class SupabaseStorage implements IStorage {
       status: "paid", paymentId: payment?.id, amount,
       actualAmount: amount, paidAmount: amount,
       postedAt: new Date().toISOString(),
+      ...(expenseId ? { expenseId } : {}),
       ...(account ? { accountId: account.id } : {}),
     };
     const patch: any = { occurrences: occ };
@@ -6596,7 +6713,13 @@ export class SupabaseStorage implements IStorage {
       healthSnapshot.push({ trackerId: t.id, name: t.name, category: t.category, unit: primaryField.unit || t.unit || '', latestValue: latest, average: Math.round(avg * 10) / 10, trend: trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat', trendValue: Math.round(Math.abs(trend) * 10) / 10, entryCount: recent.length, lastEntry: recent[recent.length - 1]?.timestamp, dailyTotal });
     }
 
-    const monthlyExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === userYearMonth);
+    // A paid bill books an expense (so it shows up on the Expenses list) but is
+    // ALREADY counted here through `monthlyObligationTotal`, which monthlyizes
+    // every active bill. Counting both would subtract the same phone bill from
+    // cash flow twice, so the spend rollups take everything EXCEPT bill-sourced
+    // expenses; the bills arrive via the obligation total instead.
+    const monthlyExpenses = allExpenses.filter(e =>
+      (e.date || '').slice(0, 7) === userYearMonth && !isBillExpense(e));
     const spendByCategory: Record<string, number> = {};
     for (const e of monthlyExpenses) spendByCategory[e.category] = (spendByCategory[e.category] || 0) + e.amount;
     const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
@@ -6607,7 +6730,8 @@ export class SupabaseStorage implements IStorage {
     const prevYear = prevMonthIndex < 0 ? parseInt(yStr, 10) - 1 : parseInt(yStr, 10);
     const prevMonth = ((prevMonthIndex % 12) + 12) % 12;
     const lastMonthYM = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}`;
-    const lastMonthExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === lastMonthYM);
+    const lastMonthExpenses = allExpenses.filter(e =>
+      (e.date || '').slice(0, 7) === lastMonthYM && !isBillExpense(e));
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
     const upcomingBills = allObligations.filter(o => { if (o.status === "paused" || o.status === "cancelled") return false; const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {
@@ -7564,7 +7688,42 @@ export class SupabaseStorage implements IStorage {
     const { data, error } = await this.supabase.from("liability_payments")
       .delete().eq("id", id).eq("user_id", this.userId).select();
     if (error) throw error;
-    return Array.isArray(data) && data.length > 0;
+    const deleted = Array.isArray(data) && data.length > 0;
+    // Undoing a payment has to undo everything that payment created. Deleting
+    // the row alone left `occurrences[date].status = "paid"` behind, so "undo
+    // that payment" removed the history and the bill still read as paid — and
+    // the expense it booked stayed on the Expenses list forever.
+    if (deleted) await this._clearOccurrenceForPayment(data[0]?.liability_profile_id, id);
+    return deleted;
+  }
+
+  /** Strip the paid override (and its booked expense) that pointed at a payment. */
+  private async _clearOccurrenceForPayment(liabilityId: string | null | undefined, paymentId: string): Promise<void> {
+    if (!liabilityId) return;
+    try {
+      const p = await this.getProfile(liabilityId);
+      const f: any = p?.fields || {};
+      const occ = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : null;
+      if (!occ) return;
+      const hit = Object.keys(occ).find((d) => occ[d]?.paymentId === paymentId);
+      if (!hit) return;
+      // Everything payOccurrence stamped comes off — `amount` included, since
+      // it was overwritten with the paid figure and undoing should hand the
+      // period back to the definition's amount.
+      const { paymentId: _p, status, expenseId, amount, paidAmount, actualAmount, postedAt, accountId, ...rest } = occ[hit] || {};
+      if (expenseId) {
+        await this.supabase.from("expenses")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("id", expenseId).eq("user_id", this.userId);
+      }
+      // Keep any override the user set by hand (a moved date, a note, a custom
+      // amount); only the paid-ness is reversed. An override with nothing left
+      // in it is dropped so the occurrence reads as a plain scheduled bill.
+      if (Object.keys(rest).length > 0) occ[hit] = rest; else delete occ[hit];
+      await this.updateProfile(liabilityId, { fields: { occurrences: occ } } as any);
+    } catch (e: any) {
+      console.error(`[deleteLiabilityPayment] occurrence cleanup failed for ${paymentId.slice(0, 8)}: ${e?.message || e}`);
+    }
   }
 
   // ============================================================

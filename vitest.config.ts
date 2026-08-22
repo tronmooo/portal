@@ -220,6 +220,10 @@ export default defineConfig({
       'tests/chat-sync.test.ts',
       'tests/chat-read-your-writes.test.ts',
       'tests/write-sync.test.ts',
+
+      // Paying a bill has to settle a real billing period (and book the
+      // expense), not just append a payment row the schedule can't see.
+      'tests/bill-paid-settles-occurrence.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

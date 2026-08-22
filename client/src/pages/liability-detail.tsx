@@ -3572,6 +3572,13 @@ interface ActivityEntry {
   title: string;
   description?: string;
   timestamp: string; // ISO
+  /** Day-precision entry (a payment date) — render the date without a clock. */
+  dayOnly?: boolean;
+}
+
+/** Local YYYY-MM-DD. `toISOString().slice(0,10)` is UTC and shifts the day. */
+function localYMD(d: Date): string {
+  return d.toLocaleDateString("en-CA");
 }
 
 function ActivityTimelineCard({
@@ -3605,12 +3612,19 @@ function ActivityTimelineCard({
     for (const p of payments) {
       const ts = p.paymentDate || p.createdAt;
       if (!ts) continue;
+      // A payment date is a DAY ("2026-08-22"), and `new Date` reads a bare
+      // day as UTC midnight — which west of Greenwich renders as the evening
+      // BEFORE ("Aug 21, 05:00 PM" for a payment made on the 22nd, filed under
+      // "Today"). parseLocalDate anchors the day at local midnight instead.
+      const at = parseLocalDate(ts);
+      if (!at) continue;
       out.push({
         id: `pay-${p.id}`,
         type: "payment",
         title: `Payment ${fmtUSD(Number(p.amount) || 0)}`,
         description: `${fmtUSD(Number(p.principalPortion) || 0)} principal · ${fmtUSD(Number(p.interestPortion) || 0)} interest${p.notes ? ` · ${p.notes}` : ""}`,
-        timestamp: new Date(ts).toISOString(),
+        timestamp: at.toISOString(),
+        dayOnly: String(ts).length === 10,
       });
     }
 
@@ -3686,8 +3700,8 @@ function ActivityTimelineCard({
 
   // Group by Today / Yesterday / This Week / Earlier
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
-  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  const todayStr = localYMD(now);
+  const yesterday = localYMD(new Date(now.getTime() - 86400000));
   const weekAgo = new Date(now.getTime() - 7 * 86400000).getTime();
   const groups: { label: string; items: ActivityEntry[] }[] = [
     { label: "Today", items: [] },
@@ -3696,7 +3710,7 @@ function ActivityTimelineCard({
     { label: "Earlier", items: [] },
   ];
   for (const e of entries.slice(0, 100)) {
-    const d = e.timestamp.slice(0, 10);
+    const d = localYMD(new Date(e.timestamp));
     const t = new Date(e.timestamp).getTime();
     if (d === todayStr) groups[0].items.push(e);
     else if (d === yesterday) groups[1].items.push(e);
@@ -3766,8 +3780,9 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
           {new Date(entry.timestamp).toLocaleDateString(undefined, {
             month: "short",
             day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
+            // A payment is recorded on a DAY, not at a time. Showing the clock
+            // for one prints a midnight that never meant anything.
+            ...(entry.dayOnly ? { year: "numeric" as const } : { hour: "2-digit" as const, minute: "2-digit" as const }),
           })}
         </p>
       </div>

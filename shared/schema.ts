@@ -901,6 +901,19 @@ export interface Expense {
   tags: string[];
   date: string;
   createdAt: string;
+  /** Where the row came from. `"bill"` = booked by paying a bill occurrence. */
+  source?: string;
+}
+
+/**
+ * True for an expense a paid bill booked (server/supabase-storage payOccurrence).
+ *
+ * These rows exist so the Expenses list shows the bills the user actually paid,
+ * but every rollup that ALSO counts recurring bills as a monthlyized commitment
+ * (cash flow, monthly spend) has to leave them out or the same bill lands twice.
+ */
+export function isBillExpense(e: { source?: string | null } | null | undefined): boolean {
+  return (e?.source ?? "") === "bill";
 }
 
 export const insertExpenseSchema = z.object({
