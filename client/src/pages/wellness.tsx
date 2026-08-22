@@ -27,6 +27,7 @@ import { getCanonicalGroup } from "@/lib/tracker-health";
 import { readField } from "@/lib/profile-fields";
 import { buildWellnessCards } from "@/lib/wellness-dynamic";
 import { computeKeyFindings } from "@shared/tracker-insights";
+import { habitDayProgress } from "@shared/habit-progress";
 import {
   WellnessOverview,
   type WellnessMed, type WellnessSupp, type WellnessAppt,
@@ -110,7 +111,11 @@ export default function WellnessPage() {
       const h = (habits || []).find((x: any) => x.id === id);
       const existing = (h?.checkins || []).find((c: any) => c.date === today);
       if (next) {
-        if (!existing) await apiRequest("POST", `/api/habits/${id}/checkin`, { date: today });
+        // Post until the day's target is met — `if (!existing)` capped a
+        // 2-a-day habit at one check-in from this page.
+        if (!h || !habitDayProgress(h, today).isComplete) {
+          await apiRequest("POST", `/api/habits/${id}/checkin`, { date: today });
+        }
       } else if (existing) {
         // Idempotent untoggle: a 404 means the check-in is already gone (the
         // rendered state was stale — e.g. a slow refetch after a previous
@@ -242,11 +247,13 @@ export default function WellnessPage() {
     ? Math.max(...stats.streaks.map((s: any) => Number(s.days) || 0))
     : (stats?.journalStreak ?? null);
 
-  // Habits (today's completion via checkins).
+  // Habits (today's completion). habitDayProgress is the one shared predicate:
+  // a 2-a-day habit with 1 check-in is partial, not done — counting it done
+  // here made this page read "2/6" while Habits read "1/6" (QA B11).
   const activeHabits = (habits || []).filter((h: any) => !h.archivedAt);
   const habitCards = activeHabits.map((h: any) => ({
     id: h.id, name: h.name,
-    done: (h.checkins || []).some((c: any) => c.date === today),
+    done: habitDayProgress(h, today).isComplete,
   }));
   const habitsCompleted = habitCards.filter((h) => h.done).length;
   // Missed habits = active habits not yet checked in today.

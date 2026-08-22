@@ -33,6 +33,7 @@ import {
   HeartPulse, Home, Film, CreditCard, Package, PiggyBank,
 } from "lucide-react";
 import { toMonthlyAmount } from "@shared/obligation-windows";
+import { parseLocalDate } from "@/lib/format";
 import { dayLabel } from "@shared/now-rank";
 import type { MoneyBill } from "@/components/finance/MoneyOverview";
 
@@ -309,7 +310,7 @@ export function SpendPopup({
                 <li key={e.id} className="flex items-baseline justify-between gap-2 py-1.5 text-xs">
                   <div className="min-w-0">
                     <p className="truncate font-medium">{e.description || e.vendor || e.category || "Expense"}</p>
-                    <p className="text-[11px] text-muted-foreground capitalize">{[e.category, e.date ? new Date(e.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null].filter(Boolean).join(" · ")}</p>
+                    <p className="text-[11px] text-muted-foreground capitalize">{[e.category, e.date ? parseLocalDate(e.date)?.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null].filter(Boolean).join(" · ")}</p>
                   </div>
                   <span className="tabular-nums font-semibold shrink-0">−${fmt(Number(e.amount) || 0)}</span>
                 </li>

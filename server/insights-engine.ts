@@ -5,6 +5,7 @@ import type {
 } from "@shared/schema";
 import { MOOD_SCORES } from "@shared/schema";
 import { getUserToday, addDays as tzAddDays, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { habitDayProgress } from "@shared/habit-progress";
 import {
   currentMonthYM,
   previousMonthYM,
@@ -156,7 +157,9 @@ function analyzeSpending(expenses: Expense[], now: Date, insights: Insight[], ti
 
 function analyzeStreaks(habits: Habit[], todayStr: string, insights: Insight[]) {
   for (const habit of habits) {
-    const checkedInToday = habit.checkins?.some(c => c.date === todayStr);
+    // Complete, not merely touched: a 2-a-day habit at 1 of 2 still risks
+    // its streak (streaks count complete days — shared/streak.ts).
+    const checkedInToday = habitDayProgress(habit as any, todayStr).isComplete;
 
     // Streak at risk
     if (!checkedInToday && habit.currentStreak >= 3) {

@@ -8,7 +8,7 @@ import { passesProfileFilter } from "@shared/profile-filter";
 import { matchesExpenseSearch, sortExpenses, type ExpenseSort } from "@shared/expense-view";
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
-import { formatMoney, formatListDate } from "@/lib/format";
+import { formatMoney, formatListDate, parseLocalDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -1663,7 +1663,7 @@ export default function FinancePage() {
         ) : (
           <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
             {/* Newest first by date (was alphabetical by description). */}
-            {incomes.slice().sort((a: any, b: any) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime() || (b.description || '').localeCompare(a.description || '')).map((inc: any) => (
+            {incomes.slice().sort((a: any, b: any) => (b.date || '').localeCompare(a.date || '') || (b.description || '').localeCompare(a.description || '')).map((inc: any) => (
               <ExpandableRow
                 key={inc.id}
                 testId={`income-${inc.id}`}
@@ -1673,7 +1673,7 @@ export default function FinancePage() {
                       <p className="text-xs font-medium truncate">{inc.description}</p>
                       <p className="text-[11px] text-muted-foreground capitalize">
                         {inc.frequency || 'monthly'}
-                        {inc.date ? ` · ${new Date(inc.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                        {inc.date ? ` · ${formatListDate(inc.date)}` : ''}
                       </p>
                     </div>
                     <span className="text-xs font-bold tabular-nums">{formatMoney(Number(inc.amount || 0))}</span>
@@ -1684,7 +1684,7 @@ export default function FinancePage() {
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <Badge variant="secondary" className="capitalize">{inc.category || 'income'}</Badge>
                       <span className="text-muted-foreground capitalize">{inc.frequency || 'monthly'}</span>
-                      {inc.date && <span className="text-muted-foreground">{new Date(inc.date).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}</span>}
+                      {inc.date && <span className="text-muted-foreground">{parseLocalDate(inc.date)?.toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}</span>}
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={stopProp(() => setEditingIncome(inc))} data-testid={`btn-edit-income-${inc.id}`}><Pencil className="h-3 w-3" /> Edit</Button>

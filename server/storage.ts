@@ -2091,10 +2091,12 @@ export class MemStorage implements IStorage {
             description: `Completed: ${t.title}`,
             timestamp: t.updatedAt || t.createdAt,
           })),
+        // createdAt first — `date` is a bare YYYY-MM-DD, which read as UTC
+        // midnight makes a just-created expense render "19h ago" (QA B13).
         ...expenses.slice(-3).map(e => ({
           type: 'expense',
           description: `$${e.amount} — ${e.description}`,
-          timestamp: e.date || e.createdAt,
+          timestamp: e.createdAt || e.date,
         })),
       ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),
       totalHabits: habits.length,

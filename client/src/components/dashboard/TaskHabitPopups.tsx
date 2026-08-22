@@ -1215,12 +1215,15 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   // done, instead of waiting on the server roundtrip.
   const recomputeStatsHabitRate = (habitsList: any[]) => {
     if (!habitsList || habitsList.length === 0) return;
-    const total = habitsList.filter((h: any) => !h.archivedAt).length;
+    const active = habitsList.filter((h: any) => !h.archivedAt);
+    const total = active.length;
     if (total === 0) return;
-    const completed = habitsList.filter((h: any) =>
-      !h.archivedAt && (h.checkins || []).some((c: any) => c.date === today)
-    ).length;
-    const pct = Math.round((completed / total) * 100);
+    // Occurrence-aware, matching the server: a 2-a-day habit at 1 of 2 is
+    // half done, not done (QA B11 — views disagreed on "done today").
+    const rollup = habitsDayRollup(active, today);
+    const pct = rollup.required > 0
+      ? rollup.percent
+      : Math.round((active.filter((h: any) => habitDayProgress(h, today).isComplete).length / total) * 100);
     const statsKey = ["/api/stats", filterMode, ...filterIds];
     queryClient.setQueryData<any>(statsKey, (old: any) => {
       if (!old) return old;
@@ -1242,9 +1245,14 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
           ? {
               ...h,
               checkins: [...(h.checkins || []), { date: today, id: 'tmp-' + Date.now() }],
-              currentStreak: (h.checkins || []).some((c: any) => c.date === today)
-                ? h.currentStreak
-                : Number(h.currentStreak || 0) + 1,
+              // Streak counts COMPLETE days: bump only when this check-in is
+              // the one that meets the day's target (streak.ts semantics).
+              currentStreak: (() => {
+                const p = habitDayProgress(h, today);
+                return !p.isComplete && p.completed + 1 >= (p.required || 1)
+                  ? Number(h.currentStreak || 0) + 1
+                  : h.currentStreak;
+              })(),
             }
           : h)
       );
@@ -1286,7 +1294,9 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
           ? {
               ...h,
               checkins: (h.checkins || []).filter((c: any) => c.date !== today),
-              currentStreak: (h.checkins || []).some((c: any) => c.date === today)
+              // Un-checking clears the day, so walk the streak back only if
+              // the day had actually been complete (not merely partial).
+              currentStreak: habitDayProgress(h, today).isComplete
                 ? Math.max(0, Number(h.currentStreak || 0) - 1)
                 : h.currentStreak,
             }

@@ -3895,7 +3895,7 @@ function ProductivityHubTab({
             <div className="space-y-2">
               {habits.map((h: any) => {
                 const checkins = Array.isArray(h.checkins) ? h.checkins : [];
-                const doneToday = checkins.some((c: any) => c.date === todayISO);
+                const doneToday = habitDayProgress(h, todayISO).isComplete;
                 const streak = Number(h.currentStreak) || 0;
                 return (
                   <Card key={h.id} data-testid={`hub-habit-${h.id}`}>
@@ -4088,7 +4088,7 @@ const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }:
     <div className="space-y-2">
       {habits.map((h: any) => {
         const checkins = Array.isArray(h.checkins) ? h.checkins : [];
-        const doneToday = checkins.some((c: any) => c.date === today);
+        const doneToday = habitDayProgress(h, today).isComplete;
         const streak = Number(h.currentStreak) || 0;
         return (
           <Card key={h.id} data-testid={`profile-habit-${h.id}`}>

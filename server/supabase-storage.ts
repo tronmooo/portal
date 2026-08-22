@@ -6391,10 +6391,12 @@ export class SupabaseStorage implements IStorage {
             timestamp: t.updatedAt || t.createdAt,
           })),
         // Expenses are ordered date DESC — take the head, not the tail.
+        // createdAt first: `date` is a bare YYYY-MM-DD, and a date-only value
+        // read as UTC midnight renders a fresh expense as "19h ago" (QA B13).
         ...expenses.slice(0, 3).map(e => ({
           type: 'expense',
           description: `$${e.amount} — ${e.description}`,
-          timestamp: e.date || e.createdAt,
+          timestamp: e.createdAt || e.date,
         })),
       ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),
       totalHabits: habits.length,

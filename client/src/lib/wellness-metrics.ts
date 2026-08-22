@@ -243,20 +243,36 @@ export function readDailyTotal(
 ): WellnessMetric {
   const base = readMetric(trackers, patterns, opts);
   if (!base.trackerId || !Array.isArray(trackers)) return base;
-  const match = trackers.find((t) => t.id === base.trackerId)!;
-  const field = base.primaryField || primaryFieldOf(match);
   const now = opts.now || new Date();
   const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
   const isToday = (ts: string) => {
     const t = new Date(ts);
     return t.getFullYear() === y && t.getMonth() === m && t.getDate() === d;
   };
-  const todays = (match.entries || [])
-    .filter((e) => isToday(e.timestamp))
-    .map((e) => Number(e.values?.[field]))
-    .filter((n) => Number.isFinite(n));
-  if (todays.length === 0) return base;
-  return { ...base, value: todays.reduce((s, n) => s + n, 0) };
+  // Sum today's entries across EVERY matching tracker, not just the first.
+  // Duplicate trackers split the day's log between them — chat writes to the
+  // profile-owned "Hydration" while the ring read only the first name match,
+  // so logged water never reached the daily total (QA B5).
+  const matches = trackers.filter((t) => {
+    const hay = `${t.name || ""} ${t.category || ""}`.toLowerCase();
+    return patterns.some((p) => p.test(hay));
+  });
+  let sum = 0;
+  let logged = 0;
+  for (const t of matches) {
+    const field =
+      opts.field ||
+      (t.id === base.trackerId && base.primaryField) ||
+      primaryFieldOf(t);
+    const todays = (t.entries || [])
+      .filter((e) => isToday(e.timestamp))
+      .map((e) => Number(e.values?.[field]))
+      .filter((n) => Number.isFinite(n));
+    logged += todays.length;
+    sum += todays.reduce((s, n) => s + n, 0);
+  }
+  if (logged === 0) return base;
+  return { ...base, value: sum };
 }
 
 // ── Named vitals bundle ──────────────────────────────────────────────────────
