@@ -38,6 +38,7 @@ import { prepareTrackerEntryValues, logPreparedEntry } from "./actions/tracker-e
 import { createEventRecord } from "./actions/event-service";
 import { setProfileFact } from "./actions/profile-fact-service";
 import { beginMutationContext, runMutation } from "./mutation-outcome";
+import { READ_ONLY_TOOLS } from "@shared/ai-tool-classification";
 import { resolveProfileByName } from "./entity-resolver";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
@@ -15319,9 +15320,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const rawResult = await executeTool(toolUse.name, inputWithCtx, userId);
           const execMs = Date.now() - tExecStart;
 
-          // Invalidate context cache after any write operation
-          const readOnlyToolNames = ["search", "get_summary", "get_profile_data", "recall_memory", "recall_actions", "get_goal_progress", "get_related", "navigate", "set_dashboard_scope", "open_document", "retrieve_document", "get_asset_rollup", "search_documents", "get_entity_history", "find_orphans", "validate_profile_isolation", "find_duplicates", "validate_dashboard_counts", "explain_dashboard_item"];
-          if (!readOnlyToolNames.includes(toolUse.name)) {
+          // Invalidate context cache after any write operation. One
+          // classification (shared/ai-tool-classification.ts) — this used to
+          // be a hand-synced subset that had drifted from READ_ONLY_TOOLS.
+          if (!READ_ONLY_TOOLS.has(toolUse.name)) {
             invalidateContextCache(userId);
           }
 
@@ -15960,36 +15962,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 }
 
 // Read-only tools — deliberately surface as the generic "retrieve" action.
-// Kept in lockstep with the readOnlyToolNames lists in processMessage; the
-// tests/ai-tool-registry.test.ts guard fails if any WRITE tool is missing from
-// TOOL_ACTION_MAP below (i.e. would fall through to "retrieve").
-export const READ_ONLY_TOOLS = new Set<string>([
-  "search", "get_summary", "get_profile_data", "recall_actions", "get_goal_progress",
-  "get_related", "get_relationships", "get_liability_summary", "get_cashflow",
-  "get_budget_summary", "query_net_worth_history", "get_loan_schedule", "query_calendar",
-  "query_expenses", "query_tasks", "spending_analytics", "get_asset_rollup",
-  "search_documents", "retrieve_document", "open_document", "navigate", "set_dashboard_scope",
-  "generate_chart", "generate_table", "generate_report", "refresh_ai_summary",
-  "get_entity_history",
-  // System diagnostics (Batch 4) — find/validate/explain are pure reads;
-  // refresh_dashboard mutates only server caches (no user data), so it is
-  // deliberately here too: no envelope, no undo-ledger row to trip "undo that".
-  "find_orphans", "validate_profile_isolation", "find_duplicates",
-  "validate_dashboard_counts", "explain_dashboard_item", "refresh_dashboard",
-  "get_missed_doses", "get_dose_history",
-  // Notes lookup, and the temporal re-derivation. `sync_date_rules_for_entity`
-  // writes nothing — Date Rules are derived from the canonical record, so
-  // "syncing" is a read that reports what the record now projects.
-  "search_notes", "sync_date_rules_for_entity",
-  // Connected bank data (Stripe Financial Connections). These four are pure
-  // reads over the authenticated user's own financial_* rows.
-  // `refresh_financial_data` is deliberately NOT here — it is an action that
-  // calls out to the institution, so it carries a typed action below.
-  "get_financial_summary", "search_financial_transactions",
-  "get_spending_breakdown", "get_account_balances",
-  // Manual accounts — a pure read over the user's own account profiles.
-  "get_accounts",
-]);
+// THE classification now lives in shared/ai-tool-classification.ts (four
+// hand-synced copies used to exist); re-exported here for existing importers.
+// tests/ai-tool-registry.test.ts still guards that every WRITE tool carries a
+// typed action in TOOL_ACTION_MAP below.
+export { READ_ONLY_TOOLS };
 
 // Every WRITE tool → a typed ParsedAction so the chat UI shows it as a real
 // action (creates/logs are undoable; the generic buckets at least label the

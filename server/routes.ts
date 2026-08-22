@@ -94,6 +94,7 @@ import {
 import { createExpenseRecord } from "./actions/expense-service";
 import { prepareTrackerEntryValues, logPreparedEntry } from "./actions/tracker-entry-service";
 import { createEventRecord } from "./actions/event-service";
+import { READ_ONLY_ACTION_TYPES } from "@shared/ai-tool-classification";
 import { inferExpenseCategory } from "@shared/expense-canon";
 
 // ────────────────────────────────────────────────────────────────────
@@ -1503,7 +1504,7 @@ export async function registerRoutes(
       // caches or bump the data version — that's what kept the dashboard
       // permanently cold for anyone using chat. The cacheBust and
       // version-bump middlewares read this flag on 'finish'.
-      const READ_ONLY_ACTION_TYPES = new Set(["retrieve", "navigate", "set_dashboard_scope"]);
+      // One classification — shared/ai-tool-classification.ts.
       // The engine's own change manifest is the authoritative signal — it is
       // built from what the TOOLS actually wrote. The action-type check stays
       // as a union term: previously it was the ONLY term, so a write whose tool
@@ -7286,20 +7287,19 @@ Rules:
     const entryDate = String(req.body.entryDate || parsed.data.date || getUserToday(getTimezone(req))).slice(0, 10);
     const linkedProfileId = Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0
       ? String(req.body.linkedProfiles[0]) : null;
+    // ALL owners go through the service in one write — the second
+    // updateJournalEntry this route used to issue for owners beyond the
+    // first is folded into upsertJournalEntry.
     const { entry: newEntry, appended } = await upsertJournalEntry(storage, {
       content: parsed.data.content || "",
       mood: parsed.data.mood,
       entryDate,
       profileId: linkedProfileId,
+      linkedProfiles: Array.isArray(req.body.linkedProfiles) ? req.body.linkedProfiles.map(String) : [],
       energy: parsed.data.energy,
       gratitude: parsed.data.gratitude,
       highlights: parsed.data.highlights,
     });
-    // Additional owners beyond the first (the service links only the primary).
-    if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 1) {
-      const merged = Array.from(new Set([...(((newEntry as any).linkedProfiles) || []), ...req.body.linkedProfiles.map(String)]));
-      await storage.updateJournalEntry(newEntry.id, { linkedProfiles: merged } as any);
-    }
     // A journal entry's date is not a calendar commitment — it never creates a
     // Date Rule. Stated in the response so no caller has to infer it.
     res.status(appended ? 200 : 201).json({ ...newEntry, appended, dateRules: [] });

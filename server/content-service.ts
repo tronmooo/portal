@@ -159,6 +159,11 @@ export interface JournalInput {
   /** The day the EXPERIENCE happened, YYYY-MM-DD. Not a calendar commitment. */
   entryDate: string;
   profileId?: string | null;
+  /** Every owner beyond the primary — linked in the SAME write. The REST
+   *  route used to patch these in with a second updateJournalEntry after the
+   *  service returned, so a crash between the writes stranded a half-scoped
+   *  entry and the two paths disagreed about who links owners. */
+  linkedProfiles?: string[];
   /** Display name used to attribute an appended snippet. */
   profileLabel?: string | null;
   energy?: number;
@@ -199,6 +204,7 @@ export async function upsertJournalEntry(
     const linked = Array.from(new Set([
       ...(existing.linkedProfiles || []),
       ...(input.profileId ? [input.profileId] : []),
+      ...(input.linkedProfiles || []).map(String),
     ]));
     const updated = await storage.updateJournalEntry(existing.id, {
       content: merged,
@@ -223,11 +229,19 @@ export async function upsertJournalEntry(
     gratitude: input.gratitude,
     highlights: input.highlights,
   } as any);
-  if (input.profileId) {
-    await storage.updateJournalEntry(created.id, { linkedProfiles: [input.profileId] } as any);
-    await storage.linkProfileTo(input.profileId, "journal", created.id).catch(() => { /* non-fatal */ });
+  const owners = Array.from(new Set([
+    ...(input.profileId ? [input.profileId] : []),
+    ...(input.linkedProfiles || []).map(String),
+  ]));
+  let entry = created;
+  if (owners.length > 0) {
+    const linkedEntry = await storage.updateJournalEntry(created.id, { linkedProfiles: owners } as any);
+    if (linkedEntry) entry = linkedEntry;
+    for (const pid of owners) {
+      await storage.linkProfileTo(pid, "journal", created.id).catch(() => { /* non-fatal */ });
+    }
   }
-  return { entry: created, appended: false };
+  return { entry, appended: false };
 }
 
 // ─── Temporal synchronisation ────────────────────────────────────────────────
