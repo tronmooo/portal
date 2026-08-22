@@ -87,6 +87,10 @@ import {
   createNote, updateNote, deleteNote, listNotes,
   upsertJournalEntry, syncDateRulesForEntity,
 } from "./content-service";
+import {
+  beginMutationContext, runMutation, mutationsHeaderValue, noteWriteMutations,
+  WRITE_MUTATIONS_HEADER,
+} from "./mutation-outcome";
 
 // ────────────────────────────────────────────────────────────────────
 // syncLiabilityObligation
@@ -801,6 +805,14 @@ function writeBarrierMiddleware(req: any, res: any, next: any) {
   const settle = (send: () => void, body: any) => {
     if (barrierDone || res.statusCode >= 400) { send(); return; }
     barrierDone = true;
+    // Handlers that ran their write through runMutation (server/
+    // mutation-outcome.ts) recorded an authoritative change manifest; carry it
+    // to the client so write-sync patches caches from server truth instead of
+    // inferring from the request shape.
+    try {
+      const manifest = mutationsHeaderValue(res.locals?.writeMutations);
+      if (manifest) res.setHeader(WRITE_MUTATIONS_HEADER, manifest);
+    } catch { /* the manifest is an optimization — never block the response */ }
     bustUserCaches(uid);
     Promise.resolve(bumpDataVersionNow(uid))
       .then((v) => {
@@ -5301,12 +5313,30 @@ Rules:
     const profileId = req.body.profileId
       || (Array.isArray(scoped.linkedProfiles) ? scoped.linkedProfiles[0] : undefined)
       || null;
-    const result = await createNote(storage, {
-      content, title, profileId,
-      tags: Array.isArray(req.body.tags) ? req.body.tags.map(String) : [],
-      source: "manual",
+    // runMutation is the same post-write contract the chat door runs: the
+    // note gets read-back verification, an undo-ledger row (source "rest"),
+    // and a change manifest carried to the client on X-Write-Mutations. The
+    // response body keeps its exact pre-existing shape.
+    let noteRow: any = null;
+    let wasDeduped = false;
+    const mctx = beginMutationContext(storage, "rest");
+    const outcome = await runMutation(mctx, {
+      tool: "create_note",
+      input: { content, title, profileId },
+      execute: async () => {
+        const result = await createNote(storage, {
+          content, title, profileId,
+          tags: Array.isArray(req.body.tags) ? req.body.tags.map(String) : [],
+          source: "manual",
+        });
+        noteRow = result.note;
+        wasDeduped = !!result.deduped;
+        return { ...result.note, ...(wasDeduped ? { deduped: true } : {}) };
+      },
     });
-    res.status(result.deduped ? 200 : 201).json({ ...result.note, deduped: result.deduped });
+    if (!outcome.ok) return res.status(500).json({ error: outcome.error });
+    noteWriteMutations(res, outcome.mutations);
+    res.status(wasDeduped ? 200 : 201).json({ ...noteRow, deduped: wasDeduped });
   }));
   app.patch("/api/notes/:id", asyncHandler(async (req, res) => {
     const changes: Record<string, any> = {};
@@ -5314,13 +5344,38 @@ Rules:
     if (typeof req.body?.content === "string") changes.content = sanitize(req.body.content);
     if (typeof req.body?.append === "string") changes.append = sanitize(req.body.append);
     if (Array.isArray(req.body?.tags)) changes.tags = req.body.tags.map(String);
-    const updated = await updateNote(storage, req.params.id, changes);
-    if (!updated) return res.status(404).json({ error: "Note not found" });
-    res.json(updated);
+    let updatedRow: any = null;
+    const mctx = beginMutationContext(storage, "rest");
+    const outcome = await runMutation(mctx, {
+      tool: "update_note",
+      input: { id: req.params.id, ...changes },
+      execute: async () => {
+        updatedRow = await updateNote(storage, req.params.id, changes);
+        return updatedRow || { error: "Note not found" };
+      },
+    });
+    if (!outcome.ok) {
+      const status = outcome.error === "Note not found" ? 404 : 500;
+      return res.status(status).json({ error: outcome.error });
+    }
+    noteWriteMutations(res, outcome.mutations);
+    res.json(updatedRow);
   }));
   app.delete("/api/notes/:id", asyncHandler(async (req, res) => {
-    const ok = await deleteNote(storage, req.params.id);
-    if (!ok) return res.status(404).json({ error: "Note not found" });
+    const mctx = beginMutationContext(storage, "rest");
+    const outcome = await runMutation(mctx, {
+      tool: "delete_note",
+      input: { id: req.params.id },
+      execute: async () => {
+        const ok = await deleteNote(storage, req.params.id);
+        return ok ? { id: req.params.id } : { error: "Note not found" };
+      },
+    });
+    if (!outcome.ok) {
+      const status = outcome.error === "Note not found" ? 404 : 500;
+      return res.status(status).json({ error: outcome.error });
+    }
+    noteWriteMutations(res, outcome.mutations);
     // Notes own no Date Rule, so nothing leaves the calendar with them.
     res.json({ success: true, dateRuleImpact: "none" });
   }));

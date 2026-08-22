@@ -119,6 +119,7 @@ export default defineConfig({
       'tests/query-key-hygiene.test.ts',
       'tests/ai-tool-registry.test.ts',
       'tests/ai-envelope.test.ts',
+      'tests/door-parity-notes.test.ts',
       'tests/bulk-actions.test.ts',
       'tests/ai-system-tools.test.ts',
       'tests/merge-profiles.test.ts',

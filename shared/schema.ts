@@ -108,6 +108,12 @@ export interface ChatMutation {
   row?: Record<string, any>;
   /** Tool that produced this change — diagnostics only. */
   tool?: string;
+  /** Door the write came through (chat/rest/extraction/fast_path/bulk) —
+   *  diagnostics only; see server/mutation-outcome.ts MutationDoor. */
+  door?: string;
+  /** True for a change that was an implied consequence of the primary write
+   *  (a tracker entry auto-completing its linked habit), not the ask itself. */
+  implied?: boolean;
 }
 
 

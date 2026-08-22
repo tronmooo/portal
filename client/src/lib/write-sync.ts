@@ -19,8 +19,10 @@
 //   · it stays out of the way of call sites that already do their own
 //     optimistic work, so nothing is inserted twice.
 import type { ChatMutation } from "@shared/schema";
+import type { Domain } from "@shared/entity-domains";
 import { queryClient } from "./queryClient";
-import { applyRowPatches, isRowList } from "./cache-patch";
+import { applyRowPatches, isRowList, toDomains } from "./cache-patch";
+import { invalidateDomains } from "./cache-bus";
 
 /** `/api/tasks/abc123` → { collection: "/api/tasks", id: "abc123" }. */
 export function parseWriteTarget(url: string): { collection: string; id?: string } | null {
@@ -115,12 +117,64 @@ function removeEverywhere(collection: string, id: string): void {
 }
 
 /**
+ * Apply the server's own change manifest for a REST write.
+ *
+ * A route whose write ran through runMutation (server/mutation-outcome.ts)
+ * declares exactly what changed on the X-Write-Mutations response header:
+ * op, entity type, id, patchable endpoint, and cache domains. That beats the
+ * URL inference below on every axis — it knows about implied writes, it names
+ * the real entity (a "note" is an artifact row), and its domains drive the
+ * same background reconcile the chat path gets. Header mutations carry no row
+ * (headers must stay small); the response body IS the row where one exists,
+ * paired back up here by id.
+ */
+function applyServerMutations(mutations: ChatMutation[], body: unknown): void {
+  const bodyRow =
+    body && typeof body === "object" && !Array.isArray(body) && typeof (body as any).id === "string"
+      ? (body as Record<string, any>)
+      : null;
+  const enriched = mutations.map((m) => {
+    if (m.op !== "delete" && !m.row && bodyRow && m.id === bodyRow.id) return { ...m, row: bodyRow };
+    return m;
+  });
+  for (const m of enriched) {
+    if (!m.id) continue;
+    if (m.op === "delete") tombstone(m.id);
+    else clearTombstone(m.id);
+  }
+  // Same double-insert guard as the inference path: a call site managing its
+  // own optimistic row reconciles in its onSuccess; inserting the server row
+  // beside it would show the item twice.
+  const patchable = enriched.filter(
+    (m) => !(m.op === "create" && m.endpoint && hasPendingOptimisticRow(m.endpoint)),
+  );
+  applyRowPatches(patchable);
+  // Background reconcile over the declared domains (cross-tab included) —
+  // the exact treatment a chat turn's manifest gets in chat-sync.ts.
+  const domains = new Set<Domain>(["dashboard"]);
+  for (const m of enriched) for (const d of toDomains(m.domains)) domains.add(d);
+  void invalidateDomains(...domains);
+}
+
+/**
  * Apply a successful REST write to the cache.
  *
- * `body` is the parsed response, when it was JSON. Returns the change it made,
- * for diagnostics.
+ * `body` is the parsed response, when it was JSON. `serverMutations` is the
+ * parsed X-Write-Mutations header when the route declared one — applied in
+ * ADDITION to the URL inference: the inference patches the collection the
+ * request addressed, the manifest covers the entity's canonical endpoint,
+ * implied changes, and domain invalidation. Returns the change it made, for
+ * diagnostics.
  */
-export function applyRestWrite(method: string, url: string, body: unknown): ChatMutation | null {
+export function applyRestWrite(
+  method: string,
+  url: string,
+  body: unknown,
+  serverMutations?: ChatMutation[] | null,
+): ChatMutation | null {
+  if (Array.isArray(serverMutations) && serverMutations.length > 0) {
+    try { applyServerMutations(serverMutations, body); } catch { /* best-effort */ }
+  }
   const verb = method.toUpperCase();
   if (verb === "GET" || verb === "HEAD" || verb === "OPTIONS") return null;
   const target = parseWriteTarget(url);

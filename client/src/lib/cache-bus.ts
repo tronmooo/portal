@@ -214,6 +214,10 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   ],
   artifacts: [
     ["/api/artifacts"],
+    // Notes are artifact rows served from their own endpoint; without this a
+    // precisely-manifested note write (entityType "artifact") would never
+    // refresh the notes lists, which key on ["/api/notes", profileId].
+    ["/api/notes"],
     ["/api/chat-artifacts"],
     ["/api/dashboard-enhanced"],
     ["/api/activity"],

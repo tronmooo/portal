@@ -153,6 +153,11 @@ const TOOL_ENTITY: Record<string, string> = {
   save_memory: "memory", update_memory: "memory", delete_memory: "memory",
   create_artifact: "artifact", update_artifact: "artifact", delete_artifact: "artifact",
   duplicate_artifact: "artifact", toggle_artifact_item: "artifact",
+  // Notes ARE artifact rows (type "note", server/content-service.ts). Absent
+  // from this map they got no read-back verification and a null-entity
+  // manifest, so every chat note degraded to the blanket "everything"
+  // invalidation.
+  create_note: "artifact", update_note: "artifact", delete_note: "artifact",
   // create_reminder / update_reminder / delete_reminder are gone (reminders
   // were retired 2026-08-09). The executor translates those legacy names into
   // the task tools, and the envelope sees the task call, so they need no

@@ -139,7 +139,12 @@ export async function apiRequest(
         // Read the body from a CLONE: callers still need the original stream.
         let body: unknown = null;
         try { body = await res.clone().json(); } catch { /* not JSON — deletes often aren't */ }
-        applyRestWrite(method, url, body);
+        // Routes that ran their write through the door-agnostic mutation
+        // contract declare exactly what changed on this header; write-sync
+        // prefers that over inferring from the URL shape.
+        let serverMutations: unknown = null;
+        try { serverMutations = JSON.parse(res.headers.get("X-Write-Mutations") || "null"); } catch { /* absent/garbled — inference covers it */ }
+        applyRestWrite(method, url, body, Array.isArray(serverMutations) ? serverMutations : null);
       } catch { /* cache sync must never fail a write */ }
     }
     return res;
