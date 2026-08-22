@@ -33,6 +33,7 @@ import {
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
+import { createExpenseRecord } from "./actions/expense-service";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
@@ -2339,14 +2340,8 @@ Return ONLY the JSON object, nothing else.`;
     if (numAmount && isFinite(numAmount) && numAmount > 0 && classification.destinations.expense !== true) {
       try {
         const docType = (parsed.documentType || "receipt").toLowerCase();
-        const category = canonicalExpenseCategory(["vehicle", "registration", "citation", "parking", "toll", "dmv"].some(t => docType.includes(t)) ? "vehicle"
-          : ["medical", "prescription", "lab", "health", "doctor", "hospital"].some(t => docType.includes(t)) ? "health"
-          : ["utility", "bill", "electric", "water", "gas"].some(t => docType.includes(t)) ? "utilities"
-          : ["insurance"].some(t => docType.includes(t)) ? "insurance"
-          : ["bank", "loan", "statement"].some(t => docType.includes(t)) ? "general"
-          : "general");
         const desc = parsed.label || parsed.summary || fileName;
-        const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate;
         // OWNERSHIP MODEL (shared/cost-of-ownership.ts): the expense belongs
         // to the ASSET only — one row, one link. Owner-scoped views derive it
         // via ownedAssetIds, so it counts toward the owner exactly once.
@@ -2354,19 +2349,23 @@ Return ONLY the JSON object, nothing else.`;
         const profiles = await storage.getProfiles();
         const selfProfile = profiles.find(p => p.type === 'self');
         const expenseLinks = (existingProfileId ? [existingProfileId] : (selfProfile ? [selfProfile.id] : [])) as string[];
-        // P0.3a: validate through the same zod schema the REST route uses.
-        const expensePayload = validateAiPayload(insertExpenseSchema, {
-          amount: numAmount,
-          category,
+        // Canonical pipeline (server/actions/expense-service.ts): shared
+        // category canon (label text first, then the docType hint), the same
+        // duplicate window every door has — a re-uploaded receipt no longer
+        // mints a second expense — and the same insert schema.
+        const expense = await createExpenseRecord(storage, {
           description: String(desc),
-          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          amount: numAmount,
+          date: typeof expenseDate === 'string' ? expenseDate : undefined,
           tags: ["from-document"],
           linkedProfiles: expenseLinks,
-        }, "expense");
-        if (!expensePayload.ok) {
-          console.error("Auto-expense from document skipped:", expensePayload.error);
+          docType,
+        }, { lockUser: "doc-upload" });
+        if (expense.error) {
+          console.error("Auto-expense from document skipped:", expense.error);
+        } else if (expense.deduped) {
+          savedItems.push(`$${numAmount} expense already recorded — skipped duplicate`);
         } else {
-          const expense = await storage.createExpense(expensePayload.data);
           // No ancestor propagation: multi-linking the same expense to Honda
           // AND Me is how costs get double-attributed. Ancestor visibility is
           // DERIVED (ownedAssetIds widening) from the single asset link.
@@ -9504,159 +9503,25 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "create_expense": {
       logger.info("ai", `create_expense input: desc="${input.description}" forProfile="${input.forProfile}" amount=${input.amount}`);
-      // BUG-J: a one-shot expense is the wrong home for a recurring charge. If the
-      // phrasing signals recurrence ("$20/mo for parking", "monthly"), bounce back
-      // and tell the model to use create_obligation instead.
-      // FIX (2026-07): this used to test the ENTIRE user message (__userMessage),
-      // so a multi-action message that mentioned a recurring item ANYWHERE — e.g.
-      // "add a $47.82 grocery expense … and a phone bill every month" — poisoned
-      // EVERY expense in the batch (grocery + Apple TV rejected because the phone
-      // bill said "every month"). Scope the recurrence check to THIS expense's own
-      // description/vendor so one recurring item can't block unrelated one-time spends.
-      const expDesc = `${String(input.description || "")} ${String(input.vendor || "")}`;
-      if (/(\/mo\b|\/yr\b|\bper month\b|\bper year\b|\bevery month\b|\beach month\b|\bevery year\b|\bmonthly\b|\byearly\b)/i.test(expDesc)) {
-        return { error: "This sounds recurring — use create_obligation instead, or rephrase as a one-time spend." };
-      }
-      // Validate amount — reject invalid/zero amounts instead of silently logging $0
-      const parsedAmount = typeof input.amount === 'number' && isFinite(input.amount) ? input.amount : parseFloat(input.amount);
-      if (!parsedAmount || parsedAmount <= 0) {
-        return { error: `Invalid expense amount: ${input.amount}. Please provide a positive number.` };
-      }
-      if (parsedAmount > 1000000) {
-        return { error: `Amount $${parsedAmount.toLocaleString()} seems unusually high. Please confirm the amount.` };
-      }
-      // In-memory dedup lock — catches concurrent requests before DB persistence
-      const expDedupKey = `expense:${safeLC(input.description)}:${parsedAmount}:${input.date || ""}:${safeLC(input.forProfile || "")}`;
-      if (isDuplicateCreation(dedupUser, expDedupKey)) {
-        logger.info("ai", `Dedup lock: skipped duplicate expense $${parsedAmount} ${input.description}`);
-        return { error: "Duplicate expense detected — skipped" };
-      }
-      // Dedup: check if same amount + similar description was created in last 2 minutes
-      const allExpenses = await storage.getExpenses();
-      const twoMinAgoExp = Date.now() - 120000;
-      const dupExpense = allExpenses.find(e => {
-        if (new Date(e.createdAt).getTime() < twoMinAgoExp) return false;
-        return e.amount === parsedAmount &&
-          e.description.toLowerCase().includes((input.description || "").toLowerCase().slice(0, 20));
-      });
-      if (dupExpense) {
-        logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
-        return { ...dupExpense, deduped: true, message: `An identical expense from the last few minutes already exists ($${dupExpense.amount} ${dupExpense.description}) — I didn't log it twice.` };
-      }
-      // Server-side category inference fallback when AI sends 'general'
-      let inferredCategory = input.category || "general";
-      if (inferredCategory === "general") {
-        const desc = (input.description || "").toLowerCase();
-        const vendor = (input.vendor || "").toLowerCase();
-        const combined = `${desc} ${vendor}`;
-        if (/vet|pet food|dog food|cat food|grooming|flea|treats|chewy/.test(combined)) inferredCategory = "pet";
-        else if (/groceries|restaurant|food|coffee|lunch|dinner|breakfast|pizza|burger|sandwich|sushi|taco|donut|latte|starbucks|mcdonald|chipotle|uber eats|doordash/.test(combined)) inferredCategory = "food";
-        else if (/uber|lyft|gas|fuel|parking|toll|transit|bus|train|flight|airline/.test(combined)) inferredCategory = "transport";
-        else if (/oil change|tire|car wash|mechanic|auto|vehicle|detailing/.test(combined)) inferredCategory = "vehicle";
-        else if (/doctor|pharmacy|cvs|walgreens|gym|dentist|hospital|medical|prescription|copay/.test(combined)) inferredCategory = "health";
-        else if (/netflix|spotify|hulu|disney|apple music|youtube|subscription/.test(combined)) inferredCategory = "subscription";
-        else if (/rent|mortgage|hoa/.test(combined)) inferredCategory = "housing";
-        else if (/electric|water|internet|phone|cable|utility|att|verizon|comcast/.test(combined)) inferredCategory = "utilities";
-        else if (/amazon|walmart|target|clothes|shoes|electronics|bestbuy|apple store/.test(combined)) inferredCategory = "shopping";
-        else if (/movie|game|concert|ticket|bar|drinks|bowling|arcade/.test(combined)) inferredCategory = "entertainment";
-        else if (/school|tuition|textbook|course|udemy/.test(combined)) inferredCategory = "education";
-        else if (/insurance|geico|allstate|progressive|state farm/.test(combined)) inferredCategory = "insurance";
-        // Bug #43: if text inference still came up empty but we have a forProfile,
-        // use the profile's TYPE as a strong hint (pet → pet, vehicle → vehicle, etc.).
-        if (inferredCategory === "general" && input.forProfile) {
-          try {
-            const profilesForCat = await storage.getProfiles();
-            const lc = safeLC(input.forProfile).trim();
-            const profMatch = profilesForCat.find(p => p.name.toLowerCase() === lc)
-              || profilesForCat.find(p => p.name.toLowerCase().includes(lc));
-            if (profMatch) {
-              const typeMap: Record<string, string> = {
-                pet: "pet",
-                vehicle: "vehicle",
-                medical: "health",
-                subscription: "subscription",
-                property: "housing",
-                insurance: "insurance",
-              };
-              const fromType = typeMap[(profMatch.type || "").toLowerCase()];
-              if (fromType) inferredCategory = fromType;
-            }
-          } catch { /* non-fatal */ }
-        }
-      }
-      // Resolve the target profile BEFORE creating the expense so
-      // linkedProfiles is set correctly. Match priority:
-      //   1. exact (case-insensitive) name match
-      //   2. word-boundary match (the requested name appears as a whole
-      //      word inside the profile name) — "Bob" matches "Bob Smith"
-      //      but NOT "Bobcat" or "Roboto".
-      // The previous code did a naive `.includes(searchName)`, so a chat
-      // like "add expense for Roy" silently linked to a profile named
-      // "Royale" or "royalty rewards".
-      let expenseLinkedProfiles: string[] = [];
-      if (input.forProfile) {
-        const profiles = await storage.getProfiles();
-        const search = safeLC(input.forProfile).trim();
-        const wordRe = new RegExp(`(^|\\b)${search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\b|$)`);
-        const target = profiles.find(p => p.name.toLowerCase() === search)
-          || profiles.find(p => wordRe.test(p.name.toLowerCase()));
-        if (target) expenseLinkedProfiles.push(target.id);
-      }
-      // ATTRIBUTION SAFETY NET (2026-07, user report: "grocery expense for
-      // Robert" landed on self). In a dense multi-action message the model
-      // sometimes drops forProfile yet still tells the user it attributed the
-      // spend. Recover it: find this expense's amount in the raw message and,
-      // if a "for <Name>" phrase sits right after it AND resolves to an existing
-      // NON-self profile, attribute to that profile. Requiring an existing
-      // profile match keeps this from ever inventing an owner.
-      if (expenseLinkedProfiles.length === 0) {
-        const rawMsg = String((input as any).__userMessage || "");
-        const amtStr = String(parsedAmount).replace(/\.0+$/, "");
-        const idx = rawMsg.indexOf(amtStr);
-        if (idx >= 0) {
-          const window = rawMsg.slice(idx, idx + 70);
-          const m = window.match(/\bfor\s+([A-Z][a-zA-Z'’.-]+(?:\s+[A-Z][a-zA-Z'’.-]+)?)/);
-          if (m) {
-            const cand = m[1].trim().toLowerCase();
-            const profiles2 = await storage.getProfiles();
-            const candRe = new RegExp(`(^|\\b)${cand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\b|$)`);
-            const target2 = profiles2.find(p => p.type !== "self" && p.name.toLowerCase() === cand)
-              || profiles2.find(p => p.type !== "self" && candRe.test(p.name.toLowerCase()));
-            if (target2) {
-              expenseLinkedProfiles.push(target2.id);
-              logger.info("ai", `Attribution safety net: recovered forProfile "${target2.name}" for $${parsedAmount} expense from message context`);
-            }
-          }
-        }
-      }
-      // Default the expense date to today in the user's timezone, not
-      // hard-coded LA time. The chat route stores the user's IANA tz on
-      // `storage._timezone` from the `x-timezone` request header before
-      // calling into the AI engine; falling back to LA preserves the old
-      // behavior if for some reason the header was missing.
-      const userTz = (storage as any)._timezone || 'America/Los_Angeles';
-      // P0.3a: validate with the shared insert schema before writing.
-      const expensePayload = validateAiPayload(insertExpenseSchema, {
-        amount: parsedAmount,
-        category: inferredCategory,
-        description: input.description || "Expense",
-        date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: userTz }),
+      // Canonical pipeline (server/actions/expense-service.ts): recurrence
+      // guard, amount bounds, dedup lock + 2-minute window, category canon,
+      // exact-then-word-boundary profile attribution with the "for <Name>"
+      // safety net, tz-aware date default, shared insert schema. The rules
+      // used to live inline here and diverged from the REST/document doors.
+      return createExpenseRecord(storage, {
+        description: input.description,
+        amount: input.amount,
+        category: input.category,
         vendor: input.vendor,
+        date: input.date,
         tags: input.tags || [],
-        linkedProfiles: expenseLinkedProfiles,
-      }, "expense");
-      if (!expensePayload.ok) return { error: expensePayload.error };
-      const newExpense = await storage.createExpense(expensePayload.data);
-      markCreation(dedupUser, expDedupKey);
-      // If we already linked above, just ensure junction table is set. Otherwise auto-link.
-      if (expenseLinkedProfiles.length > 0) {
-        for (const pid of expenseLinkedProfiles) {
-          await storage.linkProfileTo(pid, "expense", newExpense.id).catch((e: any) => { console.warn("[AI] Profile linking failed:", e?.message); });
-        }
-      } else {
-        await autoLinkToProfiles("expense", newExpense.id, `${input.description || ""} ${input.vendor || ""}`, input.forProfile);
-      }
-      return newExpense;
+        forProfile: input.forProfile,
+        userMessage: String((input as any).__userMessage || ""),
+      }, {
+        lockUser: dedupUser,
+        rejectRecurring: true,
+        timezone: (storage as any)._timezone,
+      });
     }
 
     case "delete_expense": {
@@ -16431,12 +16296,19 @@ async function fallbackParse(message: string): Promise<{ reply: string; actions:
     const amount = amountMatch ? parseFloat(amountMatch[1]) : 0;
     const desc = message.replace(/\$[\d.]+/, "").replace(/spent|bought|on/gi, "").trim();
     if (amount > 0) {
-      const expense = await storage.createExpense({ amount, category: "general", description: desc || "Expense", tags: [], source: "chat" } as any);
-      // Auto-link to self profile so it shows in Finance tab
-      await autoLinkToProfiles("expense", expense.id, desc || "Expense");
-      actions.push({ type: "log_expense", category: "finance", data: { amount, description: desc, _entityId: expense.id } });
-      results.push(expense);
-      reply = `Logged expense: $${amount} — ${desc || "Expense"}`;
+      // Canonical pipeline — the fast path now gets the same dedup window,
+      // category inference and schema validation as every other door.
+      const expense = await createExpenseRecord(storage, {
+        description: desc || "Expense",
+        amount,
+      }, { lockUser: "fast-path", timezone: (storage as any)._timezone });
+      if (!expense.error) {
+        actions.push({ type: "log_expense", category: "finance", data: { amount, description: desc, _entityId: expense.id } });
+        results.push(expense);
+        reply = expense.deduped
+          ? `That $${amount} expense was already logged — I didn't add it twice.`
+          : `Logged expense: $${amount} — ${desc || "Expense"}`;
+      }
     }
   } else if (lower.startsWith("remind") || lower.startsWith("todo") || lower.startsWith("task")) {
     const title = message.replace(/^(remind me to|remind|todo|task)\s*/i, "").trim();

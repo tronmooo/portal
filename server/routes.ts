@@ -91,6 +91,8 @@ import {
   beginMutationContext, runMutation, mutationsHeaderValue, noteWriteMutations,
   WRITE_MUTATIONS_HEADER,
 } from "./mutation-outcome";
+import { createExpenseRecord } from "./actions/expense-service";
+import { inferExpenseCategory } from "@shared/expense-canon";
 
 // ────────────────────────────────────────────────────────────────────
 // syncLiabilityObligation
@@ -3060,21 +3062,6 @@ ${JSON.stringify(ctx, null, 2)}`;
       if (req.body.createExpense) {
         try {
           const exp = req.body.createExpense;
-          const amt = parseFloat(exp.amount);
-          if (!isFinite(amt) || amt <= 0) {
-            throw new Error("Expense amount must be a positive number");
-          }
-          // Dedupe: one document must never yield two expenses. If an expense
-          // with the same date and amount already exists (e.g. auto-created at
-          // upload time, or the confirmation was replayed), skip creating a twin.
-          const priorExpenses = await storage.getExpenses();
-          const duplicate = (priorExpenses || []).find((e: any) =>
-            e.date === (exp.date || e.date) && Math.abs(Number(e.amount) - amt) < 0.005
-          );
-          if (duplicate) {
-            saved.push(`Expense $${amt.toFixed(2)} already exists (${duplicate.description}) — skipped duplicate`);
-            try { await storage.linkProfileTo(duplicate.id, "document", extractionId); } catch {}
-          } else {
           // OWNERSHIP MODEL (shared/cost-of-ownership.ts): the expense belongs
           // to the ASSET — one row, one link. The owner sees it through the
           // ownedAssetIds widening on /api/expenses and the dashboard, so it
@@ -3085,20 +3072,42 @@ ${JSON.stringify(ctx, null, 2)}`;
             const selfForExpense = (await storage.getProfiles()).find((p: any) => p.type === 'self');
             if (selfForExpense) expenseLinks = [selfForExpense.id];
           }
-          const expense = await storage.createExpense({
-            description: exp.description,
-            amount: amt,
-            // One vocabulary: "transportation"/"auto"/"car" all fold to their
-            // canonical bucket so the dashboard never splits one category.
-            category: canonicalExpenseCategory(exp.category || 'general'),
-            vendor: exp.vendor,
-            date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
-            tags: [],
-            linkedProfiles: expenseLinks,
+          // Canonical pipeline, wrapped in the door-agnostic contract: the
+          // extraction door dedupes by date+amount (one document must never
+          // yield two expenses — auto-created at upload, or a replayed
+          // confirmation) and now also gets read-back verification, an undo
+          // ledger row (source "extraction"), and a change manifest.
+          const mctxExp = beginMutationContext(storage, "extraction");
+          const expOutcome = await runMutation(mctxExp, {
+            tool: "create_expense",
+            input: { description: exp.description, amount: exp.amount, category: exp.category, date: exp.date },
+            execute: () => createExpenseRecord(storage, {
+              description: exp.description,
+              amount: exp.amount,
+              category: exp.category,
+              vendor: exp.vendor,
+              date: exp.date,
+              tags: [],
+              linkedProfiles: expenseLinks,
+            }, {
+              lockUser: (req as AuthenticatedRequest).userId || "extraction",
+              dedupByDateAmount: true,
+              dedupWindowMs: 0,
+            }),
           });
-          saved.push(`Created expense: $${amt.toFixed(2)} ${exp.description}`);
-          // Link document to expense
-          try { await storage.linkProfileTo(expense.id, "document", extractionId); } catch {}
+          if (!expOutcome.ok) {
+            throw new Error(expOutcome.error || "expense creation failed");
+          }
+          const expenseId = expOutcome.entity?.id;
+          if (expOutcome.deduped) {
+            saved.push(`Expense already exists — skipped duplicate`);
+          } else {
+            saved.push(`Created expense: $${Number(exp.amount).toFixed(2)} ${exp.description}`);
+          }
+          noteWriteMutations(res, expOutcome.mutations);
+          // Link document to the (possibly pre-existing) expense
+          if (expenseId) {
+            try { await storage.linkProfileTo(expenseId, "document", extractionId); } catch {}
           }
         } catch (eErr: any) {
           console.error("Failed to create expense from extraction:", eErr?.message);
@@ -5720,37 +5729,68 @@ Rules:
     req.body.description = sanitize(req.body.description);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
 
-    // Wave 1 #1 — AI categorize when caller didn't provide a meaningful category.
-    // Only fires for missing / "other" / "general" so we don't override deliberate picks.
-    if (!req.body.category || req.body.category === "other" || req.body.category === "general") {
-      try {
-        const decision = await aiPickIndex({
-          task: "expense-create-category",
-          question: "Which expense category does this transaction belong to?",
-          context: `Description: "${req.body.description}"${req.body.vendor ? `\nVendor: "${req.body.vendor}"` : ""}\nAmount: $${req.body.amount}`,
-          options: [...EXPENSE_CATEGORIES],
-          timeoutMs: 3000,
-          minConfidence: 0.55,
-          fallback: () => -1,
-        });
-        if (decision.value.index >= 0) {
-          req.body.category = EXPENSE_CATEGORIES[decision.value.index];
-        }
-      } catch (e: any) {
-        console.error(`[expense-create] AI categorize failed silently: ${e?.message || e}`);
-      }
-    }
-
     // Profile isolation (QA 2026-07-29 PROP-005): an expense created while a
     // single profile is in scope belongs to that profile, whether or not the
     // form remembered to say so.
     applyActiveProfileScope(req, req.body);
 
-    const parsed = insertExpenseSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    const newExpense = await storage.createExpense(parsed.data);
+    // Canonical pipeline (server/actions/expense-service.ts) wrapped in the
+    // door-agnostic post-write contract: this door now gets the same category
+    // canon and duplicate guard as chat (its window here is short — enough to
+    // absorb a double-submit, never a deliberate re-entry), plus read-back
+    // verification, an undo-ledger row (source "rest"), and a change manifest
+    // on X-Write-Mutations. The AI categorizer is injected: it only runs when
+    // keyword/profile inference found nothing.
+    let expenseRow: any = null;
+    let expenseDeduped = false;
+    const mctx = beginMutationContext(storage, "rest");
+    const outcome = await runMutation(mctx, {
+      tool: "create_expense",
+      input: {
+        description: req.body.description, amount: req.body.amount,
+        category: req.body.category, vendor: req.body.vendor, date: req.body.date,
+      },
+      execute: async () => {
+        const result = await createExpenseRecord(storage, {
+          description: req.body.description,
+          amount: req.body.amount,
+          category: req.body.category,
+          vendor: req.body.vendor,
+          date: req.body.date,
+          tags: Array.isArray(req.body.tags) ? req.body.tags : [],
+          linkedProfiles: Array.isArray(req.body.linkedProfiles) ? req.body.linkedProfiles : [],
+        }, {
+          lockUser: (req as AuthenticatedRequest).userId || "rest",
+          dedupWindowMs: 15_000,
+          timezone: String(req.headers["x-timezone"] || "") || undefined,
+          aiCategorize: async ({ description, vendor, amount }) => {
+            const decision = await aiPickIndex({
+              task: "expense-create-category",
+              question: "Which expense category does this transaction belong to?",
+              context: `Description: "${description}"${vendor ? `\nVendor: "${vendor}"` : ""}\nAmount: $${amount}`,
+              options: [...EXPENSE_CATEGORIES],
+              timeoutMs: 3000,
+              minConfidence: 0.55,
+              fallback: () => -1,
+            });
+            return decision.value.index >= 0 ? EXPENSE_CATEGORIES[decision.value.index] : null;
+          },
+        });
+        expenseRow = result.error ? null : result;
+        expenseDeduped = !!result.deduped;
+        return result;
+      },
+    });
+    if (!outcome.ok) {
+      const status = /duplicate/i.test(outcome.error || "") ? 409
+        : /amount|validation|invalid/i.test(outcome.error || "") ? 400 : 500;
+      return res.status(status).json({ error: outcome.error });
+    }
+    noteWriteMutations(res, outcome.mutations);
     // Tell the caller when their text was altered — never change it silently.
-    res.status(201).json(expenseSanitized ? { ...newExpense, warning: SANITIZE_NOTICE } : newExpense);
+    res.status(expenseDeduped ? 200 : 201).json(
+      expenseSanitized ? { ...expenseRow, warning: SANITIZE_NOTICE } : expenseRow,
+    );
   }));
   app.patch("/api/expenses/:id", asyncHandler(async (req, res) => {
     {
@@ -7740,29 +7780,10 @@ Rules:
       const ALLOWED_CATEGORIES = [...EXPENSE_CATEGORIES];
 
       // Deterministic fallback (used if AI is unavailable / times out).
-      const CATEGORY_KEYWORDS: Record<string, string[]> = {
-        "food": ["grocery", "restaurant", "uber eats", "doordash", "grubhub", "mcdonald", "starbucks", "coffee", "cafe", "pizza", "chipotle", "subway", "diner", "bakery", "food", "whole foods", "trader joe"],
-        "transport": ["uber", "lyft", "gas", "fuel", "parking", "toll", "transit", "metro", "bus", "train"],
-        "travel": ["airline", "flight", "hotel", "airbnb", "booking.com", "expedia"],
-        "shopping": ["amazon", "walmart", "target", "costco", "best buy", "ebay", "shop", "store", "mall", "retail"],
-        "entertainment": ["netflix", "spotify", "hulu", "disney", "movie", "theater", "concert", "game", "steam"],
-        "health": ["pharmacy", "cvs", "walgreens", "doctor", "hospital", "medical", "dental", "gym", "fitness"],
-        "utilities": ["electric", "water", "internet", "phone", "mobile", "comcast", "verizon", "att", "xfinity"],
-        "housing": ["rent", "mortgage", "hoa"],
-        "insurance": ["insurance", "geico", "progressive", "allstate", "state farm"],
-        "subscription": ["subscription", "membership", "annual fee", "monthly fee"],
-        "vehicle": ["auto", "mechanic", "oil change", "tire", "car wash", "dmv"],
-        "pet": ["petco", "petsmart", "vet", "chewy"],
-        "education": ["tuition", "udemy", "coursera", "school", "university", "books"],
-      };
-
-      const keywordCategory = (desc: string): string => {
-        const lower = desc.toLowerCase();
-        for (const [cat, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-          if (keywords.some(k => lower.includes(k))) return canonicalExpenseCategory(cat);
-        }
-        return "general";
-      };
+      // One category vocabulary for every door — this importer's local
+      // keyword table was merged into shared/expense-canon.ts.
+      const keywordCategory = (desc: string): string =>
+        inferExpenseCategory({ description: desc }) ?? "general";
 
       // Parse a CSV row respecting quoted fields
       const parseRow = (line: string): string[] => {
