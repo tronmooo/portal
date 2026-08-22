@@ -45,6 +45,8 @@ export interface CreateEventArgs {
   recurrenceEnd?: string;
   category?: string;
   tags?: string[];
+  /** Source documents (extraction door). */
+  linkedDocuments?: string[];
   /** Explicit profile ids to link. */
   linkedProfiles?: string[];
   /** A profile NAME to resolve when no explicit ids were given. */
@@ -110,7 +112,7 @@ export async function createEventRecord(
     category: canonicalEventCategory(args.category),
     source: args.source || "manual",
     linkedProfiles,
-    linkedDocuments: [],
+    linkedDocuments: args.linkedDocuments || [],
     tags: args.tags || [],
   });
   if (!parsed.success) {

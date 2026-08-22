@@ -37,6 +37,7 @@ import { createExpenseRecord } from "./actions/expense-service";
 import { prepareTrackerEntryValues, logPreparedEntry } from "./actions/tracker-entry-service";
 import { createEventRecord } from "./actions/event-service";
 import { setProfileFact } from "./actions/profile-fact-service";
+import { beginMutationContext, runMutation } from "./mutation-outcome";
 import { resolveProfileByName } from "./entity-resolver";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
@@ -13755,7 +13756,7 @@ async function runBulkLogPath(
   chatModel: string,
   ctx: { trackerNames: string[]; profileNames: string[]; habitNames: string[] },
   turn?: { turnId: string; sourceMessageId?: string },
-): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[]; turnId?: string; sourceMessageId?: string } | null> {
+): Promise<{ reply: string; actions: ParsedAction[]; results: any[]; operations: OperationOutcome[]; mutations?: ChatMutation[]; turnId?: string; sourceMessageId?: string } | null> {
   const heuristicCount = countActionClauses(userMessage);
   const tz = (storage as any)._timezone || DEFAULT_TIMEZONE;
   const extractionSystem = buildExtractionSystemPrompt({
@@ -13810,7 +13811,14 @@ async function runBulkLogPath(
   // 75s everywhere: the platform ceiling is 300s (vercel.json maxDuration),
   // so the old 40s Vercel special-case (from the 60s-cap era) is gone.
   const EXEC_BUDGET_MS = 75_000;
-  const turnVerifyCtx = buildTurnVerifyContext(storage);
+  // Door-agnostic contract (server/mutation-outcome.ts): this path used to
+  // re-implement the loop's validate→execute→envelope→ledger composition
+  // inline and returned no manifest at all, so every bulk turn degraded the
+  // client to a blanket invalidation. runMutation gives each operation the
+  // same pipeline with the ledger row naming this door ("bulk"), and the
+  // manifest rides back on the turn like any other.
+  const bulkMctx = beginMutationContext(storage, "bulk");
+  const bulkMutations: ChatMutation[] = [];
   const actions: ParsedAction[] = [];
   const results: any[] = [];
   const operations: OperationOutcome[] = [];
@@ -13833,18 +13841,20 @@ async function runBulkLogPath(
         continue;
       }
       const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
-      const beforeRows = await captureBeforeRows(op.tool, turnVerifyCtx);
-      const rawResult = await executeTool(op.tool, inputWithCtx, userId);
-      invalidateContextCache(userId);
       const actionType = mapToolToActionType(op.tool);
-      const result = (rawResult && !rawResult.error)
-        ? await finalizeToolResult(op.tool, actionType, inputWithCtx, rawResult, turnVerifyCtx)
-        : rawResult;
-      if (!result || result.error) {
-        outcome.error = result?.error || "Action failed — data was not saved";
+      const mo = await runMutation(bulkMctx, {
+        tool: op.tool,
+        actionType,
+        input: inputWithCtx,
+        execute: () => executeTool(op.tool, inputWithCtx, userId),
+      });
+      invalidateContextCache(userId);
+      const result = mo.envelope;
+      if (!mo.ok) {
+        outcome.error = mo.error || "Action failed — data was not saved";
         continue;
       }
-      await recordActionLog(turnVerifyCtx, op.tool, actionType, inputWithCtx, result, beforeRows);
+      if (mo.mutations.length > 0) bulkMutations.push(...mo.mutations);
       const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
       // The storage layer's short-window duplicate guard returns the EXISTING
       // entry for identical values — flag reuse honestly instead of counting
@@ -13871,7 +13881,11 @@ async function runBulkLogPath(
 
   logger.info("ai", `Bulk path: ${operations.filter(o => o.status === "ok").length}/${operations.length} ops ok (${Date.now() - startedAt}ms, model ${chatModel})`);
   if (turn) for (const op of operations) { op.turnId = turn.turnId; op.sourceMessageId = turn.sourceMessageId; }
-  return { reply: buildBulkReply(operations, createdTrackers), actions, results, operations, turnId: turn?.turnId, sourceMessageId: turn?.sourceMessageId };
+  return {
+    reply: buildBulkReply(operations, createdTrackers), actions, results, operations,
+    mutations: bulkMutations.length > 0 ? bulkMutations : undefined,
+    turnId: turn?.turnId, sourceMessageId: turn?.sourceMessageId,
+  };
 }
 
 // ============================================================

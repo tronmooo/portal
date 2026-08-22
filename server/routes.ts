@@ -2794,7 +2794,23 @@ ${JSON.stringify(ctx, null, 2)}`;
                 ),
               };
 
-              await storage.updateProfile(resolvedProfileId, { fields: merged });
+              // Door-agnostic contract around the write: the extraction door
+              // now produces an undo-ledger row (source "extraction") and a
+              // change manifest, like every other door. The field-identity
+              // verification below stays — it is finer-grained than the
+              // envelope's read-back.
+              const mctxProf = beginMutationContext(storage, "extraction");
+              const profOutcome = await runMutation(mctxProf, {
+                tool: "update_profile",
+                input: { profileId: resolvedProfileId, fields: Object.keys(incoming).filter((k) => !k.startsWith("_")) },
+                execute: async () => {
+                  await storage.updateProfile(resolvedProfileId, { fields: merged });
+                  const written = await storage.getProfile(resolvedProfileId);
+                  return written ? { ...written } : { error: "Profile not found after write" };
+                },
+              });
+              if (!profOutcome.ok) throw new Error(profOutcome.error || "profile write failed");
+              noteWriteMutations(res, profOutcome.mutations);
 
               // Verify the write actually landed before claiming success —
               // re-read the profile and check every confirmed field. Any field
@@ -2920,30 +2936,39 @@ ${JSON.stringify(ctx, null, 2)}`;
             // actually persisted and whether a rule can be derived from the
             // value that landed. A date ticked for the calendar alone was
             // dropped by the second gate and reported as saved.)
-            await storage.createEvent({
-              title: event.title || `📅 ${event.field}`,
-              date: dateStr,
-              time: undefined,
-              endTime: undefined,
-              description: `Auto-created from document extraction (${event.field})`,
-              location: undefined,
-              allDay: true,
-              category: event.category || "other",
-              recurrence: "none",
-              recurrenceEnd: undefined,
-              color: undefined,
-              linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
-              linkedDocuments: [extractionId],
-              // `date-rule-uncovered` says: this event is NOT a copy of a date
-              // the record owns — it is the only home the date has. The shadow
-              // pass (shared/calendar-adapters) suppresses extraction events
-              // that duplicate a derived rule, matching on document and day,
-              // and without this marker an uncovered date landing on the same
-              // day as a derived one would be suppressed with them.
-              tags: ["document-extraction", "date-rule-uncovered"],
-              source: "chat",
+            // Canonical pipeline (server/actions/event-service.ts) in the
+            // door-agnostic contract: the extraction door gets the same
+            // title+date duplicate guard as every other door (a replayed
+            // confirmation can't mint twins), plus the undo ledger and the
+            // change manifest.
+            const mctxEvt = beginMutationContext(storage, "extraction");
+            const evtOutcome = await runMutation(mctxEvt, {
+              tool: "create_event",
+              input: { title: event.title || event.field, date: dateStr },
+              execute: () => createEventRecord(storage, {
+                title: event.title || `📅 ${event.field}`,
+                date: dateStr,
+                description: `Auto-created from document extraction (${event.field})`,
+                allDay: true,
+                category: event.category || "other",
+                recurrence: "none",
+                linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+                linkedDocuments: [extractionId],
+                // `date-rule-uncovered` says: this event is NOT a copy of a
+                // date the record owns — it is the only home the date has. The
+                // shadow pass (shared/calendar-adapters) suppresses extraction
+                // events that duplicate a derived rule, matching on document
+                // and day, and without this marker an uncovered date landing
+                // on the same day as a derived one would be suppressed too.
+                tags: ["document-extraction", "date-rule-uncovered"],
+                source: "chat",
+              }),
             });
-            saved.push(`Created event: ${event.title || event.field}`);
+            if (!evtOutcome.ok) throw new Error(evtOutcome.error || "event creation failed");
+            noteWriteMutations(res, evtOutcome.mutations);
+            saved.push(evtOutcome.deduped
+              ? `Event already exists: ${event.title || event.field} — skipped duplicate`
+              : `Created event: ${event.title || event.field}`);
           } catch (evErr: any) {
             console.error("Failed to create calendar event from extraction:", evErr.message);
             failures.push(`calendar event "${event.title || event.field}": ${evErr?.message || "unknown error"}`);
@@ -3037,22 +3062,32 @@ ${JSON.stringify(ctx, null, 2)}`;
                 } catch { /* non-critical */ }
               }
             }
-            // Log the entry with proper values object — run through the
-            // shared normalizer so document-extracted entries land in the
-            // exact same shape as chat-logged entries (same field names,
-            // same units, no "99°F" raw strings).
+            // Canonical value pipeline (server/actions/tracker-entry-service):
+            // the same guards + normalization + duplicate window + implied
+            // writes (habit auto-checkin, linked-goal progress) as chat and
+            // the UI, wrapped in the door-agnostic contract for undo/manifest.
             const rawValues = entry.values && typeof entry.values === "object" ? entry.values : { value: entry.values || 0 };
-            const { values: entryValues, warnings: normWarnings } = normalizeTrackerEntry(tracker as any, rawValues);
-            if (normWarnings.length > 0) {
-              console.log(`[extraction normalize] ${tracker.name}: ${normWarnings.join("; ")}`);
+            const prepared = await prepareTrackerEntryValues(storage, tracker as any, rawValues);
+            if (prepared.error) throw new Error(prepared.error);
+            if (prepared.warnings.length > 0) {
+              console.log(`[extraction normalize] ${tracker.name}: ${prepared.warnings.join("; ")}`);
             }
-            await storage.logEntry({
-              trackerId: tracker.id,
-              values: entryValues,
-              notes: `From document extraction`,
-              profileId: resolvedProfileId,
+            const entryValues = prepared.values;
+            const mctxTe = beginMutationContext(storage, "extraction");
+            const teOutcome = await runMutation(mctxTe, {
+              tool: "log_tracker_entry",
+              input: { trackerId: tracker.id, values: entryValues },
+              execute: () => logPreparedEntry(storage, tracker as any, {
+                values: entryValues,
+                notes: "From document extraction",
+                profileId: resolvedProfileId,
+              }),
             });
-            saved.push(`Logged ${humanName}: ${Object.entries(entryValues).map(([k, v]) => `${k}=${v}`).join(", ")}`);
+            if (!teOutcome.ok) throw new Error(teOutcome.error || "tracker entry failed");
+            noteWriteMutations(res, teOutcome.mutations);
+            saved.push(teOutcome.deduped
+              ? `${humanName} reading already logged — skipped duplicate`
+              : `Logged ${humanName}: ${Object.entries(entryValues).map(([k, v]) => `${k}=${v}`).join(", ")}`);
           } catch (tErr: any) {
             console.error("Failed to log tracker entry from extraction:", tErr.message);
             failures.push(`tracker entry "${entry.trackerName}": ${tErr?.message || "unknown error"}`);
