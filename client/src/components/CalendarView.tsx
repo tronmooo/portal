@@ -55,6 +55,7 @@ import type {
 } from "@shared/schema";
 import { EVENT_CATEGORY_COLORS } from "@shared/schema";
 import { isInScope, selfIdsFrom } from "@shared/scope";
+import { setFilterEveryone } from "@/lib/profileFilter";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
@@ -1296,6 +1297,98 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     [viewYear, viewMonth]
   );
 
+  // ── "Nothing scheduled" must never mean "hidden by the profile filter" ────
+  //
+  // QA 2026-08-22: an appointment created from chat ("Add a dentist
+  // appointment for Friday at 3 PM") saved correctly, was visible in Calendar
+  // Manager → Events, and yet the month grid and the day panel showed nothing
+  // for that date — reported as a rendering bug. It was not: the calendar was
+  // scoped to another person's profile, the event belongs to Self, and both
+  // surfaces said only "Nothing scheduled · 0 items". The chat assistant is
+  // deliberately UNSCOPED (see chat.tsx — attribution comes from what the user
+  // writes), so a record created while a filter is active routinely lands
+  // outside the active view. An empty state that can't tell "you own nothing
+  // that day" apart from "the filter hid it" turns that into a phantom bug
+  // report every time.
+  //
+  // So: when a profile filter is active AND the scoped day/month came back
+  // empty, fetch the SAME window unscoped and say exactly how many items the
+  // filter is hiding, with one click to clear it. The unscoped query uses the
+  // canonical everyone-mode key, so it is usually already in cache (the
+  // dashboard bootstrap seeds it) and it never runs while unfiltered.
+  const scopeActive = effectiveFilterMode === "selected" && effectiveFilterIds.length > 0;
+  const scopeLabel = useMemo(() => {
+    if (!scopeActive) return "";
+    const names = effectiveFilterIds
+      .map(id => filterProfiles.find(p => p.id === id)?.name)
+      .filter(Boolean) as string[];
+    if (names.length === 0) return "";
+    if (names.length === 1) return names[0];
+    if (names.length === 2) return `${names[0]} and ${names[1]}`;
+    return `${names[0]} +${names.length - 1} more`;
+  }, [scopeActive, effectiveFilterIds, filterProfiles]);
+
+  const scopedDayIsEmpty = (itemsByDate[selectedDate] || []).length === 0;
+  const scopedMonthIsEmpty = Object.values(itemsByDate).every(arr => arr.length === 0);
+  const { data: unscopedItems = [] } = useQuery<CalendarTimelineItem[]>({
+    queryKey: ["/api/calendar/timeline", startDate, endDate, "everyone"],
+    queryFn: () =>
+      apiRequest("GET", `/api/calendar/timeline?start=${startDate}&end=${endDate}`).then(r => r.json()),
+    enabled: scopeActive && (scopedDayIsEmpty || scopedMonthIsEmpty),
+    staleTime: 60_000,
+  });
+
+  /** How many items the profile filter is hiding on `date` (0 when unfiltered). */
+  const hiddenOnDate = useMemo(() => {
+    const map: Record<string, number> = {};
+    if (!scopeActive) return map;
+    for (const item of unscopedItems) {
+      if (filterType !== "all" && normalizeFilter(item.type) !== normalizeFilter(filterType)) continue;
+      const dateKey = item.date?.slice(0, 10);
+      if (!dateKey) continue;
+      map[dateKey] = (map[dateKey] || 0) + 1;
+    }
+    for (const [dateKey, shown] of Object.entries(itemsByDate)) {
+      if (map[dateKey] !== undefined) map[dateKey] = Math.max(0, map[dateKey] - shown.length);
+    }
+    return map;
+  }, [scopeActive, unscopedItems, itemsByDate, filterType]);
+
+  const hiddenSelectedDay = hiddenOnDate[selectedDate] || 0;
+  const hiddenThisMonth = useMemo(
+    () => days.reduce((n, d) => n + (d.isCurrentMonth ? (hiddenOnDate[d.date] || 0) : 0), 0),
+    [days, hiddenOnDate],
+  );
+
+  /** Clear the profile filter — both the app-wide scope and this view's own select. */
+  const showEveryone = () => {
+    setProfileFilter("all");
+    setFilterEveryone();
+  };
+
+  /** Scope-aware empty-state footer: what the filter is hiding, and how to undo it. */
+  const scopeEmptyNote = (hidden: number, testId: string) => {
+    if (!scopeActive || !scopeLabel) return null;
+    return (
+      <div className="mt-2" data-testid={testId}>
+        <p className="text-[11px] text-muted-foreground/80">
+          {hidden > 0
+            ? `${hidden} item${hidden === 1 ? "" : "s"} hidden by the ${scopeLabel} filter.`
+            : `Showing ${scopeLabel} only — anything owned by someone else is hidden.`}
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 text-xs mt-1.5"
+          onClick={showEveryone}
+          data-testid="btn-clear-profile-filter"
+        >
+          <Users className="h-3 w-3 mr-1" /> Show everyone
+        </Button>
+      </div>
+    );
+  };
+
   const goToday = () => {
     setViewMonth(today.getMonth());
     setViewYear(today.getFullYear());
@@ -1394,10 +1487,13 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       {filteredAgenda.length === 0 ? (
         <div className="p-6 text-center" data-testid="section-day-agenda-empty">
           <CalendarIcon className="h-6 w-6 text-muted-foreground/30 mx-auto mb-1.5" />
-          <p className="text-xs text-muted-foreground">Nothing scheduled</p>
+          <p className="text-xs text-muted-foreground">
+            {scopeActive && scopeLabel ? `Nothing scheduled for ${scopeLabel}` : "Nothing scheduled"}
+          </p>
           <p className="text-[11px] text-muted-foreground/70 mt-0.5">
             Liabilities, tasks, reminders, events &amp; recurring items for this day show up here.
           </p>
+          {scopeEmptyNote(hiddenSelectedDay, "day-agenda-scope-note")}
         </div>
       ) : (
         <div className="px-2 py-2">
@@ -1674,8 +1770,11 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       {!timelineLoading && Object.values(itemsByDate).every(arr => arr.length === 0) && (
         <div className="rounded-lg border border-dashed border-border/50 p-6 text-center mt-4">
           <CalendarIcon className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground mb-1">No events this month</p>
+          <p className="text-sm text-muted-foreground mb-1">
+            {scopeActive && scopeLabel ? `No events this month for ${scopeLabel}` : "No events this month"}
+          </p>
           <p className="text-xs text-muted-foreground/70">Tell the AI: "Doctor appointment Friday at 2pm" or "Rex vet checkup next week"</p>
+          {scopeEmptyNote(hiddenThisMonth, "month-empty-scope-note")}
         </div>
       )}
       </div>{/* /left column */}

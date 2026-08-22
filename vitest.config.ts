@@ -219,6 +219,9 @@ export default defineConfig({
       'tests/chat-sync.test.ts',
       'tests/chat-read-your-writes.test.ts',
       'tests/write-sync.test.ts',
+      // "Nothing scheduled" must never be able to mean "hidden by the active
+      // profile filter" (QA 2026-08-22 phantom month-view bug).
+      'tests/calendar-scope-empty-state.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
