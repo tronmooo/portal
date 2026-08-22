@@ -1,7 +1,10 @@
 # Portol — Stabilization Architecture & Consistency Framework
 
 **Status:** Authoritative contract for all future changes
-**Companion docs:** `REGRESSION_TESTS.md`, `audit/stabilization-findings.md`
+**Companion docs:** `REGRESSION_TESTS.md`, `audit/stabilization-findings.md`,
+`docs/orchestration-layer.md` (canonical action services — every WRITE, from
+every door, goes through `server/actions/*` and the `runMutation` contract;
+read that document before adding or changing any write path)
 **Last updated:** 2026-05-28
 
 This document defines the canonical state model for Portol. Every page, component, server route, and mutation must obey these rules. The regression suite (`tests/smoke/contracts/`) enforces them. Violations are bugs.
