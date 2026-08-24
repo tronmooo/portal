@@ -41,6 +41,12 @@ export type IntentEntity =
   | "note"
   | "memory"
   | "artifact"
+  // Parity capabilities that had no intent vocabulary of their own, so every
+  // tool serving them ran ungated: a budget tool could answer an expense
+  // request and nothing would notice.
+  | "budget"
+  | "notification"
+  | "domain"
   | "unknown";
 
 export type IntentOperation =
@@ -153,7 +159,7 @@ const EXISTING_REFERENCE =
 // the gate stayed out of the one message whose destination the user had named
 // out loud — so a narrative could still be answered with a tracker entry.
 const CREATE_VERBS =
-  /\b(create|creating|add|adding|make|making|new|start|starting|set\s+up|setting\s+up|register|log|logging|track|record|open|journal|jot)\b/;
+  /\b(create|creating|add|adding|make|making|new|start|starting|set\s+up|setting\s+up|register|log|logging|track|record|open|journal|jot|remind)\b/;
 
 /** Question shapes. A question is a READ even when it contains a write verb. */
 const QUESTION_LEAD =
@@ -223,6 +229,8 @@ const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number; we
   { entity: "task", re: /\btasks?\b|\bto-?dos?\b|\bchores?\b/, weight: 0.95 },
   { entity: "goal", re: /\bgoals?\b|\bprojects?\b|\btargets?\b/, weight: 0.9 },
   { entity: "tracker", re: /\btrackers?\b/, weight: 0.95 },
+  // Before the expense rules: a budget is a CAP on spending, not spending.
+  { entity: "budget", re: /\bbudgets?\b|\bbudgeting\b/, weight: 0.92 },
   { entity: "expense", re: /\bexpenses?\b|\bspent\b|\bspending\b|\bpurchases?\b/, weight: 0.85 },
   { entity: "income", re: /\bincomes?\b|\bpaychecks?\b|\bgot\s+paid\b|\bearned\b/, weight: 0.85 },
   // Money moved, direction unstated — see the `weak` note above.
@@ -237,6 +245,11 @@ const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number; we
   { entity: "memory", re: /\bremember\s+that\b|\bmemor(?:y|ies)\b/, weight: 0.85 },
   { entity: "artifact", re: /\bartifacts?\b|\bchecklists?\b/, weight: 0.85 },
   { entity: "profile", re: /\bprofiles?\b/, weight: 0.9 },
+  // "Remind me" is a TASK and its rule sits above this one, so a reminder
+  // request still routes to a task. This fires on the notification vocabulary
+  // itself — the bell, its entries, and its mute preferences.
+  { entity: "notification", re: /\bnotifications?\b|\bnotify\b|\balerts?\b/, weight: 0.88 },
+  { entity: "domain", re: /\b(?:custom\s+)?domains?\b/, weight: 0.85 },
 ];
 
 /**

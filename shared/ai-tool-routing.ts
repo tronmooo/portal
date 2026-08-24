@@ -100,10 +100,64 @@ export const TOOL_INTENT_ENTITY: Record<string, IntentEntity> = {
   toggle_artifact_item: "artifact",
   create_document: "document", upload_document: "document",
   manage_document: "document", link_document: "document",
+
+  // Budgets. A budget is a CAP on spending, not spending — a budget request
+  // served by create_expense would record money the user never spent.
+  create_budget: "budget", update_budget: "budget", delete_budget: "budget",
+  set_budget: "budget", copy_budgets_previous_month: "budget",
+
+  // Notifications (the bell, its entries, its mute preferences).
+  create_notification: "notification", dismiss_notifications: "notification",
+  mark_notifications_read: "notification",
+  set_notification_preferences: "notification",
+
+  // User-defined domains and their entries.
+  create_domain: "domain", update_domain: "domain", delete_domain: "domain",
 };
+
+/**
+ * Write tools that are DELIBERATELY ungated, each with the reason.
+ *
+ * An unmapped tool passes the gate untouched, so "no mapping" and "no gate"
+ * look identical from the outside — which is how twenty-seven tools came to be
+ * ungated without anyone deciding they should be. Every one of these writes
+ * across entities or above them, so there is no single entity to check an
+ * intent against. Anything NOT listed here and NOT in TOOL_INTENT_ENTITY fails
+ * the parity test: a new write tool has to be routed or excused on purpose.
+ */
+export const UNGATED_WRITE_TOOLS: Record<string, string> = {
+  link_entities: "links two records of any two types — no single entity to check",
+  repair_relations: "data-health repair across whatever is orphaned",
+  execute_bulk_action: "executes a previewed plan that already named its own targets",
+  undo_last_action: "reverses whatever the last verified receipt was",
+  sync_calendar: "pulls an external calendar; writes no canonical record of its own",
+  configure_dashboard_sections: "arranges the dashboard; touches no user data",
+};
+
+/**
+ * Tools that READ, but whose names the prefix rules below would call writes.
+ *
+ * `toolOperation` falls through to "update" for anything it does not
+ * recognise, so every one of these was classified as a write. It cost nothing
+ * while they were unmapped — an unmapped tool is never gated — but it made the
+ * fallthrough load-bearing, and the first of these to gain an entity mapping
+ * would have started being gated as an update it never performs.
+ */
+const READ_ONLY_TOOLS = new Set([
+  "navigate",
+  "open_document",
+  "retrieve_document",
+  "generate_chart",
+  "generate_table",
+  "generate_report",
+  "spending_analytics",
+  "refresh_dashboard",
+  "refresh_ai_summary",
+]);
 
 /** What a tool DOES, in intent terms. */
 export function toolOperation(toolName: string): IntentOperation {
+  if (READ_ONLY_TOOLS.has(toolName)) return "read";
   if (/^(delete_|remove_|unlink_)/.test(toolName)) return "delete";
   if (/^(create_|log_|add_|journal_entry$|save_memory$|upload_|duplicate_)/.test(toolName)) return "create";
   if (/^(complete_|checkin_|uncomplete_|toggle_|pay_|mark_)/.test(toolName)) return "complete";
@@ -168,6 +222,9 @@ const CREATE_TOOL_FOR: Partial<Record<IntentEntity, string>> = {
   memory: "save_memory",
   artifact: "create_artifact",
   document: "create_document",
+  budget: "create_budget",
+  notification: "create_notification",
+  domain: "create_domain",
 };
 
 /**

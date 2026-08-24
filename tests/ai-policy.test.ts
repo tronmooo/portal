@@ -16,7 +16,13 @@
 
 import { describe, it, expect } from "vitest";
 import { parseTurnPlan, detectEntity } from "@shared/ai-intent";
-import { checkToolAgainstIntent } from "@shared/ai-tool-routing";
+import {
+  checkToolAgainstIntent,
+  toolOperation,
+  TOOL_INTENT_ENTITY,
+  UNGATED_WRITE_TOOLS,
+} from "@shared/ai-tool-routing";
+import { PARITY_MATRIX } from "@shared/ai-parity-matrix";
 import {
   isWriteAuthorized,
   explainAuthorization,
@@ -169,6 +175,74 @@ describe("same-storage entities stay interchangeable", () => {
   it("never gates an unclassified intent", () => {
     expect(isWriteAuthorized("unknown", "expense")).toBe(true);
     expect(isWriteAuthorized("expense", "unknown")).toBe(true);
+  });
+});
+
+// ── Ontology coverage ───────────────────────────────────────────────────────
+//
+// An unmapped tool passes the gate untouched, so "no mapping" and "no gate"
+// look identical from outside — which is how twenty-seven parity tools came to
+// run ungated without anyone deciding they should. A new write tool now has to
+// be routed to an entity or excused on purpose.
+
+describe("every parity write tool is routed or excused", () => {
+  const parityTools = [...new Set(PARITY_MATRIX.flatMap((r) => r.aiTools))].sort();
+
+  it("leaves no write tool silently ungated", () => {
+    const orphans = parityTools.filter(
+      (t) =>
+        toolOperation(t) !== "read" &&
+        !TOOL_INTENT_ENTITY[t] &&
+        !(t in UNGATED_WRITE_TOOLS),
+    );
+    expect(orphans, `route these in TOOL_INTENT_ENTITY or excuse them in UNGATED_WRITE_TOOLS: ${orphans.join(", ")}`).toEqual([]);
+  });
+
+  it("gives every excused tool a reason", () => {
+    for (const [tool, reason] of Object.entries(UNGATED_WRITE_TOOLS)) {
+      expect(reason, tool).toBeTruthy();
+    }
+  });
+
+  it("does not excuse a tool that is also routed", () => {
+    for (const tool of Object.keys(UNGATED_WRITE_TOOLS)) {
+      expect(TOOL_INTENT_ENTITY[tool], `${tool} is both routed and excused`).toBeUndefined();
+    }
+  });
+
+  // The name-prefix rules fall through to "update", so a read tool whose name
+  // starts with none of the known prefixes was classified as a write.
+  it("classifies report and navigation tools as reads", () => {
+    for (const tool of ["generate_chart", "generate_report", "generate_table",
+                        "spending_analytics", "navigate", "open_document",
+                        "retrieve_document", "refresh_dashboard"]) {
+      expect(toolOperation(tool), tool).toBe("read");
+    }
+  });
+});
+
+describe("the newly-named entities gate their own requests", () => {
+  it("keeps a budget apart from spending", () => {
+    const msg = "Set a $400 monthly budget for groceries";
+    expect(allows(msg, "set_budget")).toBe(true);
+    expect(allows(msg, "create_expense")).toBe(false);
+  });
+
+  it("keeps notifications apart from tasks", () => {
+    expect(allows("Create a notification for the rent", "create_notification")).toBe(true);
+    expect(allows("Create a notification for the rent", "create_task")).toBe(false);
+  });
+
+  // "Remind me to X" stays a task — reminders were retired in favour of timed
+  // tasks, and the task rule sits above the notification rule for that reason.
+  it("still routes a reminder to a task", () => {
+    expect(allows("Remind me to call Mom tomorrow", "create_task")).toBe(true);
+    expect(allows("Remind me to call Mom tomorrow", "create_notification")).toBe(false);
+  });
+
+  it("routes a custom domain request to the domain tools", () => {
+    expect(allows("Create a custom domain for my guitars", "create_domain")).toBe(true);
+    expect(allows("Create a custom domain for my guitars", "create_tracker")).toBe(false);
   });
 });
 
