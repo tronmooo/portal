@@ -50,6 +50,7 @@ import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@sha
 import { matchHabitByName } from "@shared/habit-match";
 import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompletionVeto } from "@shared/habit-completion-intent";
 import { resolveReferent, buildReferentDirective, type ReferentCandidate } from "@shared/referent-resolution";
+import { readDistribution, buildDistributionDirective } from "@shared/distribution";
 import { completeHabitOccurrence, resolveTrackerForHabit, type HabitCompletionSource } from "./habit-completion";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
@@ -993,6 +994,14 @@ function isDuplicateCreation(userId: string, key: string, windowMs = 30000): boo
   const ts = userMap.get(key);
   if (!ts) return false;
   return Date.now() - ts < windowMs;
+}
+
+// Ownership is part of a record's identity: "Sarah and I each spent $12 on
+// lunch" is two expenses, not one plus a duplicate. Two records only count as
+// the same for dedup when their owner sets are the same — an empty set (an
+// orphan, which the app treats as Self's) only matches another empty set.
+function sameOwnerSet(a?: string[] | null, b?: string[] | null): boolean {
+  return [...(a || [])].sort().join(",") === [...(b || [])].sort().join(",");
 }
 
 function markCreation(userId: string, key: string) {
@@ -5420,6 +5429,12 @@ This applies at ANY scale: a 20-sentence "here's my day" recap is 20 operations 
 PROFILE CONTEXT INHERITANCE: If the user sets a profile context ("Joe completed..., his task..., his habit..."),
 apply forProfile:"Joe" to ALL subsequent actions in the same message until profile changes.
 
+DISTRIBUTION WORDS — each / both / all / together / total / respectively decide how ONE stated quantity is assigned across SEVERAL subjects:
+· "Sarah and I both ran 2 miles" / "we each drank 32 oz" → the value applies PER PERSON: one write per person, same value, each with its own forProfile (omit forProfile for the user themself). Same value + different owner is TWO records, never a duplicate.
+· "Together we drove 400 miles" / "we spent $60 in total" / "between us" → the value is a SHARED TOTAL. NEVER log the full amount once per person — that double-counts it. Use the stated split if given; otherwise record it once for the user and say it was shared, or ask one short question if the split matters.
+· "Bob and Jane ran 2 and 3 miles respectively" → pair values to names IN ORDER: Bob=2, Jane=3. One write per pairing.
+· A [DISTRIBUTION] line on the user's message states the resolved reading — when present, treat it as settled.
+
 MULTI-ACTION EXPENSE PRESERVATION (CRITICAL): When a message mixes an expense with other actions (e.g. "spent $40 at the vet for Max AND schedule a checkup next week"), you MUST emit a SEPARATE create_expense tool call for the money portion — never merge it into the event/task/note. The amount, vendor, and description from the expense clause must be preserved verbatim in create_expense; do not replace the expense with a generic task or summary. If you cannot tell which clause is the expense, emit create_expense with the most specific dollar amount + description from the message and ask a clarifying question only AFTER the expense is saved.
 
 EXPENSE-FOR-AN-ASSET (CRITICAL — save first, never invent a name): When the user logs a spend for a named asset/vehicle/person ("$50 gas for my Ford F150"), you MUST call create_expense and persist it. Set forProfile to what the user said; the server links to the closest existing profile automatically. NEVER refuse or defer the save to ask which asset they meant — always save it (linked to the closest match), and only THEN, if truly ambiguous, add one short clarifying sentence. NEVER invent or alter the asset's make/model/year: if their profile is "Ford F150 2025" do NOT say "Ford F250" or any name they didn't use. Only claim you logged an expense when you actually called create_expense and it succeeded — never describe a save you didn't perform.
@@ -7382,15 +7397,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const incomingTokens = tokenSet(input.title || "");
       const existingTasks = await storage.getTasks();
       // Round-5 dedup hardening: also catch same-title duplicate when due dates
-      // overlap (or one side is missing) and treat "no profile" as wildcard.
+      // overlap (or one side is missing). Owner-scoped since 2026-08-24 — see
+      // the profile-match rule below.
       const dupTask = existingTasks.find(t => {
         if (t.status === "done") return false;
-        // Profile match: if neither side specifies a profile, consider matched.
-        // If only the incoming task has no profile, treat as wildcard.
+        // Profile match: ownership is part of the task's identity. An unowned
+        // task belongs to Self, so it only duplicates another unowned task;
+        // an owned task only duplicates a task sharing an owner. The old
+        // "no profile on either side = wildcard" rule made "add a task for
+        // Sarah to call the dentist" collapse into Self's existing
+        // "Call the dentist" — two people, two tasks.
         const profileOk =
-          taskLinkedProfiles.length === 0 ||
-          (t.linkedProfiles?.length || 0) === 0 ||
-          t.linkedProfiles.some(p => taskLinkedProfiles.includes(p));
+          taskLinkedProfiles.length === 0
+            ? (t.linkedProfiles?.length || 0) === 0
+            : (t.linkedProfiles || []).some(p => taskLinkedProfiles.includes(p));
         if (!profileOk) return false;
         const tNorm = normalizeTitle(t.title);
         const sameTitle = tNorm === incomingNorm ||
@@ -7989,8 +8009,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const recentDup = tracker.entries.find((e: any) => {
           if (new Date(e.timestamp).getTime() < twoMinAgo) return false;
           if ((e.profileId || null) !== (targetProfileId || null)) return false;
-          const existingNums = Object.entries(e.values).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
-          const newNums = Object.entries(entryValues).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
+          // Compare EXPLICIT numbers only. Enrichment fills estimated fields
+          // (steps, duration, calories) before this check runs, and estimates
+          // shift as history accrues — so a same-person repeat of "ran 2
+          // miles" carried different estimated steps and slipped past a
+          // whole-values comparison. Estimates are provenance, not identity.
+          const estimatedKeys = new Set([
+            ...Object.keys((entryValues as any)._enrichment?.estimated || {}),
+            ...Object.keys((e.values as any)?._enrichment?.estimated || {}),
+          ]);
+          const isExplicitNum = ([k, v]: [string, any]) =>
+            typeof v === 'number' && k !== '_notes' && !estimatedKeys.has(k);
+          const existingNums = Object.entries(e.values).filter(isExplicitNum);
+          const newNums = Object.entries(entryValues).filter(isExplicitNum);
           if (existingNums.length === 0 || newNums.length === 0) return false;
           return newNums.every(([k, v]) => e.values[k] === v);
         });
@@ -9536,18 +9567,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Dedup lock: skipped duplicate expense $${parsedAmount} ${input.description}`);
         return { error: "Duplicate expense detected — skipped" };
       }
-      // Dedup: check if same amount + similar description was created in last 2 minutes
-      const allExpenses = await storage.getExpenses();
-      const twoMinAgoExp = Date.now() - 120000;
-      const dupExpense = allExpenses.find(e => {
-        if (new Date(e.createdAt).getTime() < twoMinAgoExp) return false;
-        return e.amount === parsedAmount &&
-          e.description.toLowerCase().includes((input.description || "").toLowerCase().slice(0, 20));
-      });
-      if (dupExpense) {
-        logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
-        return { ...dupExpense, deduped: true, message: `An identical expense from the last few minutes already exists ($${dupExpense.amount} ${dupExpense.description}) — I didn't log it twice.` };
-      }
       // Server-side category inference fallback when AI sends 'general'
       let inferredCategory = input.category || "general";
       if (inferredCategory === "general") {
@@ -9633,6 +9652,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             }
           }
         }
+      }
+      // Dedup: check if same amount + similar description was created in the
+      // last 2 minutes FOR THE SAME OWNER. This runs after profile resolution
+      // on purpose: "Sarah and I each spent $12 on lunch" is two expenses with
+      // different linkedProfiles, and the second must not be swallowed as a
+      // duplicate of the first (same bug class as the tracker-entry fix —
+      // the dedup key was value-only, ignoring ownership).
+      const allExpenses = await storage.getExpenses();
+      const twoMinAgoExp = Date.now() - 120000;
+      const dupExpense = allExpenses.find(e => {
+        if (new Date(e.createdAt).getTime() < twoMinAgoExp) return false;
+        if (!sameOwnerSet(e.linkedProfiles, expenseLinkedProfiles)) return false;
+        return e.amount === parsedAmount &&
+          e.description.toLowerCase().includes((input.description || "").toLowerCase().slice(0, 20));
+      });
+      if (dupExpense) {
+        logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
+        return { ...dupExpense, deduped: true, message: `An identical expense from the last few minutes already exists ($${dupExpense.amount} ${dupExpense.description}) — I didn't log it twice.` };
       }
       // Default the expense date to today in the user's timezone, not
       // hard-coded LA time. The chat route stores the user's IANA tz on
@@ -9874,16 +9911,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         logger.info("ai", `Dedup lock: skipped duplicate event "${input.title}" on ${input.date}`);
         return { error: "Duplicate event detected — skipped" };
       }
-      // Dedup: skip if a very similar event exists on the same date
-      const allEvents = await storage.getEvents();
-      const dupEvent = allEvents.find(e =>
-        e.title.toLowerCase() === safeLC(input.title) &&
-        e.date === input.date
-      );
-      if (dupEvent) {
-        logger.info("ai", `Skipped duplicate event: "${dupEvent.title}" on ${dupEvent.date}`);
-        return dupEvent;
-      }
       // Resolve target profile BEFORE creating the event
       let eventLinkedProfiles: string[] = [];
       if (input.forProfile) {
@@ -9922,6 +9949,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             if (!input.category || input.category === "personal") input.category = "health";
           }
         }
+      }
+      // Dedup: skip if the SAME PERSON already has this event on this date.
+      // Runs after profile resolution (including the medical-profile
+      // inference) on purpose: "Sarah's and Bob's dentist appointments are
+      // both Tuesday" is two events with different linkedProfiles, and the
+      // title+date key alone would swallow the second one (same bug class as
+      // the tracker-entry and expense fixes — dedup ignored ownership).
+      const allEvents = await storage.getEvents();
+      const dupEvent = allEvents.find(e =>
+        e.title.toLowerCase() === safeLC(input.title) &&
+        e.date === input.date &&
+        sameOwnerSet(e.linkedProfiles, eventLinkedProfiles)
+      );
+      if (dupEvent) {
+        logger.info("ai", `Skipped duplicate event: "${dupEvent.title}" on ${dupEvent.date}`);
+        return dupEvent;
       }
       // P0.3a: validate with the shared insert schema before writing. The model
       // occasionally invents category labels ("medical", "appointment") — map
@@ -15212,7 +15255,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       resolveReferent(userMessage, conversationHistory || [], referentCandidates),
     );
 
-    const directives = [contentDirective, referentDirective].filter(Boolean).join("\n\n");
+    // ── WHO GETS HOW MUCH? ───────────────────────────────────────────────
+    // each / both / together / respectively resolved deterministically, so
+    // "Sarah and I each ran 3 miles" reliably becomes two writes and
+    // "together we drove 400 miles" never becomes 400 miles per person.
+    const distributionDirective = buildDistributionDirective(readDistribution(userMessage));
+
+    const directives = [contentDirective, referentDirective, distributionDirective].filter(Boolean).join("\n\n");
     const userTurnText = directives ? `${userMessage}\n\n${directives}` : userMessage;
 
     const lastCarried = messages[messages.length - 1];
