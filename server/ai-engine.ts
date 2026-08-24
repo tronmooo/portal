@@ -7981,9 +7981,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         } catch { /* never block a log on dose inference */ }
 
         // Dedup: check if nearly identical entry was logged in the last 2 minutes
+        // by the SAME person. Two people reporting the same activity in one
+        // message ("Sarah and I both ran two miles") produce identical numbers,
+        // and those are two runs, not one logged twice — collapsing them loses
+        // one person's data.
         const twoMinAgo = Date.now() - 120000;
         const recentDup = tracker.entries.find((e: any) => {
           if (new Date(e.timestamp).getTime() < twoMinAgo) return false;
+          if ((e.profileId || null) !== (targetProfileId || null)) return false;
           const existingNums = Object.entries(e.values).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           const newNums = Object.entries(entryValues).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           if (existingNums.length === 0 || newNums.length === 0) return false;
