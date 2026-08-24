@@ -2655,13 +2655,34 @@ export class SupabaseStorage implements IStorage {
     const existing = await this.getTrackers();
     const requestedProfiles = (data as any).linkedProfiles || [];
     const wantedKey = trackerIdentityKey(data.name);
+    // Resolve the owner FIRST: an unspecified owner means the self profile, not
+    // "any owner". Matching any owner is what let one person's log land on
+    // another person's tracker.
+    const selfForDedup = requestedProfiles.length === 0 ? await this.getSelfProfile() : null;
+    const ownerForDedup: string[] = requestedProfiles.length > 0
+      ? requestedProfiles
+      : (selfForDedup ? [selfForDedup.id] : []);
+    // Owner names, for recognising a LEGACY "<Name> - <Owner>" row as the same
+    // tracker. New rows are never named that way, but rows created before
+    // migrations/20260824_tracker_owner_scoped_names.sql are — and a deployment
+    // whose database predates that migration still makes them. Without this,
+    // asking for "Calories" for Bob when "Calories - Bob" already exists would
+    // hand Bob a second tracker.
+    const ownerNamesForDedup = (await Promise.all(
+      ownerForDedup.map(async (pid) => {
+        try { return (await this.getProfile(pid))?.name; } catch { return undefined; }
+      }),
+    )).filter(Boolean) as string[];
     const dup = existing.find(t => {
-      if (!wantedKey || trackerIdentityKey(t.name) !== wantedKey) return false;
-      // If no profile specified, any match is a dup
-      if (requestedProfiles.length === 0) return true;
-      // If profile specified, only match if the existing tracker has the same profile
+      const bare = ownerNamesForDedup.length
+        ? stripTrackerOwnerSuffix(t.name, ownerNamesForDedup)
+        : t.name;
+      if (!wantedKey || trackerIdentityKey(bare) !== wantedKey) return false;
       const existingLp = t.linkedProfiles || [];
-      return requestedProfiles.some((pid: string) => existingLp.includes(pid));
+      // An unowned (orphan) tracker is adoptable by whoever logs to it next.
+      if (existingLp.length === 0) return true;
+      if (ownerForDedup.length === 0) return false;
+      return ownerForDedup.some((pid: string) => existingLp.includes(pid));
     });
     if (dup) return dup;
 
@@ -2674,48 +2695,19 @@ export class SupabaseStorage implements IStorage {
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
 
-    // NAME DISAMBIGUATION (BUG-20260709-tracker-dupkey): the `trackers` table has
-    // a UNIQUE (user_id, name) index (idx_trackers_name_user WHERE deleted_at IS
-    // NULL). Trackers are keyed by name PER USER, not per profile — so inserting
-    // a tracker whose bare name is already used by ANOTHER profile fails with a
-    // Postgres duplicate-key error (23505). That is exactly what broke logging
-    // "Bill ran 2 miles" / "Bill ate a chicken sandwich": a "Running"/"Calories"
-    // tracker already existed for the Self profile, and createTracker inserted
-    // the bare name instead of a per-profile one. The dedup above already reused
-    // a same-name tracker that belongs to the SAME profile; reaching here means
-    // the name collides with a DIFFERENT profile's tracker. Match the app's
-    // existing convention ("Calories - Bob") by suffixing the target profile's
-    // name, then a numeric counter, until the name is free for this user.
-    const takenNames = new Set(existing.map(t => t.name.toLowerCase()));
-    let finalName = data.name;
-    if (takenNames.has(finalName.toLowerCase())) {
-      let profileSuffix = "";
-      const targetPid = requestedProfiles[0] || linkedProfiles[0];
-      if (targetPid) {
-        try {
-          const p = await this.getProfile(targetPid);
-          if (p?.name) profileSuffix = ` - ${p.name}`;
-        } catch { /* fall through to numeric suffix */ }
-      }
-      const suffixedName = `${data.name}${profileSuffix}`;
-      // If the per-profile tracker already exists for THIS profile (e.g. the AI
-      // passed the bare "Calories" for Bob but "Calories - Bob" already exists),
-      // reuse it instead of spawning "Calories - Bob 2" — the dedup at the top
-      // only compared the bare name, so it missed the suffixed form.
-      if (profileSuffix && targetPid) {
-        const existingForProfile = existing.find(t =>
-          t.name.toLowerCase() === suffixedName.toLowerCase() &&
-          (t.linkedProfiles || []).includes(targetPid));
-        if (existingForProfile) return existingForProfile;
-      }
-      let candidate = suffixedName;
-      let n = 2;
-      while (takenNames.has(candidate.toLowerCase())) {
-        candidate = `${data.name}${profileSuffix} ${n++}`;
-        if (n > 100) { candidate = `${data.name} ${id.slice(0, 4)}`; break; }
-      }
-      finalName = candidate;
-    }
+    // NAME: the tracker keeps the name it was asked for. Trackers are unique on
+    // (user_id, owner_profile_id, lower(name)) — migrations/20260824_tracker_
+    // owner_scoped_names.sql — so identity is OWNER + NAME, not account + name.
+    // Bob's Running and Sarah's Running are two rows both honestly called
+    // "Running", and the dedup above already reused this owner's own tracker if
+    // they had one.
+    //
+    // This is where the old "Calories - Bob" suffix came from: under the former
+    // UNIQUE (user_id, name) index a second profile's tracker was literally
+    // un-insertable, so the name was mangled to make room and the read path
+    // stripped the mangling back off for display. With the index cut at the
+    // right grain, there is nothing to work around.
+    const finalName = data.name;
     // UNIVERSAL ENGINE: never reject a tracker over field shape. Coerce every
     // field to the canonical {name, type} so an AI-supplied field with an odd
     // type ("time", "string", missing) can't fail the insert. Unknown types
@@ -2780,10 +2772,13 @@ export class SupabaseStorage implements IStorage {
         return lp.some((pid: string) => wanted.has(pid));
       });
       if (reusable) return reusable; // race winner already created it → idempotent no-op
-      // Genuine cross-profile name collision (or a soft-deleted row the pre-check
-      // missed): suffix ONCE to make forward progress without a raw 23505.
-      finalName = `${finalName} ${id.slice(0, 4)}`;
-      insertErr = (await insertWithName(finalName)).error;
+      // Not a race we can reuse: under the owner-scoped index a 23505 means THIS
+      // owner already holds this name, and the only rows that fit are ones the
+      // pre-check couldn't see (a soft-deleted row, a replica lag read). Suffix
+      // ONCE with a short id — never the owner's name, which is what produced
+      // "Calories - Bob" — so the write makes progress instead of raising a raw
+      // duplicate-key error at the user.
+      insertErr = (await insertWithName(`${finalName} ${id.slice(0, 4)}`)).error;
     }
     if (insertErr) throw insertErr;
     bustInsightsCacheFor(this.userId); // [P0] tracker set changed → recompute insights

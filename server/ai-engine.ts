@@ -8177,10 +8177,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // throughout my entire app"): a person/pet's tracker was force-suffixed
       // "<Name> - <Profile>" whenever a same-name tracker existed on another
       // profile (e.g. the self user also had "Calories"), so Craig's trackers all
-      // showed up as "Calories - Craig" / "Running - Craig". The trackers table
-      // has NO unique(name) constraint (only habits do — see supabase-migration
-      // .sql), and createTracker dedups per-profile, so same-named trackers across
-      // profiles coexist cleanly with no "(2)" fallback. Drop the suffix entirely.
+      // showed up as "Calories - Craig" / "Running - Craig".
+      //
+      // That suffix kept coming back because this layer dropping it wasn't
+      // enough: the trackers table was UNIQUE on (user_id, name), so the storage
+      // layer had to re-add a suffix to insert the row at all. As of
+      // migrations/20260824_tracker_owner_scoped_names.sql the index is
+      // (user_id, owner_profile_id, lower(name)) — tracker identity is OWNER +
+      // NAME — so same-named trackers across profiles coexist for real, at the
+      // storage layer and not just in the display name.
       const trackerDisplayName = input.trackerName || "Custom";
       // Duplicate guard for the SAME owner: if an exact-name tracker is already
       // owned by the target (or is an unowned orphan), adopt it instead of making
