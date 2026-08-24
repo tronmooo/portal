@@ -148,8 +148,12 @@ const UPDATE_VERBS =
 const EXISTING_REFERENCE =
   /\b(existing|already\s+(?:have|added|created|got)|i\s+(?:just|already)\s+(?:made|created|added)|that\s+i\s+(?:have|own|added|created))\b/;
 
+// "Journal this" and "jot this down" are create verbs, not commentary. Without
+// them the operation parsed as "unknown", the intent was not actionable, and
+// the gate stayed out of the one message whose destination the user had named
+// out loud — so a narrative could still be answered with a tracker entry.
 const CREATE_VERBS =
-  /\b(create|creating|add|adding|make|making|new|start|starting|set\s+up|setting\s+up|register|log|logging|track|record|open)\b/;
+  /\b(create|creating|add|adding|make|making|new|start|starting|set\s+up|setting\s+up|register|log|logging|track|record|open|journal|jot)\b/;
 
 /** Question shapes. A question is a READ even when it contains a write verb. */
 const QUESTION_LEAD =
@@ -199,7 +203,14 @@ export function detectOperation(message: string): IntentOperation {
 // Ordered: the FIRST matching rule wins, so more specific nouns are listed
 // before the generic ones they'd otherwise be swallowed by.
 
-const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number }> = [
+// A `weak` rule is evidence of an entity but not of WHICH one when a stronger
+// noun is also present. "$500" says money changed hands; it does not say in
+// which direction. Weak rules are consulted only when no strong rule matched
+// anywhere in the message, so "Log $500 of income" is income even though the
+// dollar sign comes first — under the old position-only ordering it parsed as
+// an EXPENSE, which the symmetric expense/income compatibility set quietly
+// absorbed. Cash direction is not a tie to break by character offset.
+const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number; weak?: boolean }> = [
   { entity: "habit", re: /\bhabits?\b|\broutines?\b|\bstreaks?\b/, weight: 0.98 },
   { entity: "liability", re: /\bliabilit(?:y|ies)\b|\bdebts?\b|\bloans?\b|\bmortgages?\b|\bcredit\s+cards?\b/, weight: 0.9 },
   { entity: "obligation", re: /\b(?:recurring\s+)?bills?\b|\bsubscriptions?\b|\bobligations?\b/, weight: 0.9 },
@@ -212,8 +223,10 @@ const ENTITY_RULES: Array<{ entity: IntentEntity; re: RegExp; weight: number }> 
   { entity: "task", re: /\btasks?\b|\bto-?dos?\b|\bchores?\b/, weight: 0.95 },
   { entity: "goal", re: /\bgoals?\b|\bprojects?\b|\btargets?\b/, weight: 0.9 },
   { entity: "tracker", re: /\btrackers?\b/, weight: 0.95 },
-  { entity: "expense", re: /\bexpenses?\b|\bspent\b|\bpurchases?\b|\$\s?\d/, weight: 0.85 },
-  { entity: "income", re: /\bincomes?\b|\bpaychecks?\b|\bgot\s+paid\b/, weight: 0.85 },
+  { entity: "expense", re: /\bexpenses?\b|\bspent\b|\bspending\b|\bpurchases?\b/, weight: 0.85 },
+  { entity: "income", re: /\bincomes?\b|\bpaychecks?\b|\bgot\s+paid\b|\bearned\b/, weight: 0.85 },
+  // Money moved, direction unstated — see the `weak` note above.
+  { entity: "expense", re: /\$\s?\d/, weight: 0.85, weak: true },
   { entity: "document", re: /\bdocuments?\b|\bfiles?\b|\breceipts?\b/, weight: 0.85 },
   { entity: "journal", re: /\bjournals?\b|\bdiary\b/, weight: 0.9 },
   // NOTES ARE THEIR OWN ENTITY (user report 2026-08-20). "jane doe note: …"
@@ -238,16 +251,20 @@ export function detectEntity(message: string): { entity: IntentEntity; confidenc
   const m = lc(message);
   if (!m) return { entity: "unknown", confidence: 0 };
 
-  let best: { entity: IntentEntity; confidence: number; at: number } | null = null;
-  for (const rule of ENTITY_RULES) {
-    const at = m.search(rule.re);
-    if (at === -1) continue;
-    // Earliest explicit noun wins; ties break toward the higher-weight rule.
-    if (!best || at < best.at || (at === best.at && rule.weight > best.confidence)) {
-      best = { entity: rule.entity, confidence: rule.weight, at };
+  // Strong rules first; weak ones only if no strong rule matched at all.
+  for (const pass of [false, true]) {
+    let best: { entity: IntentEntity; confidence: number; at: number } | null = null;
+    for (const rule of ENTITY_RULES) {
+      if ((rule.weak === true) !== pass) continue;
+      const at = m.search(rule.re);
+      if (at === -1) continue;
+      // Earliest explicit noun wins; ties break toward the higher-weight rule.
+      if (!best || at < best.at || (at === best.at && rule.weight > best.confidence)) {
+        best = { entity: rule.entity, confidence: rule.weight, at };
+      }
     }
+    if (best) return { entity: best.entity, confidence: best.confidence };
   }
-  if (best) return { entity: best.entity, confidence: best.confidence };
 
   // No entity NOUN — fall back to a physical-object read, at lower confidence.
   if (ASSET_NOUNS.test(m)) return { entity: "asset", confidence: 0.6 };

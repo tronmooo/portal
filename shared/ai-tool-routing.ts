@@ -29,6 +29,7 @@ import {
   hasExplicitUpdateIntent,
   isActionable,
 } from "./ai-intent";
+import { isWriteAuthorized } from "./ai-policy";
 
 /** Which entity a tool writes to, in INTENT terms (not storage terms). */
 export const TOOL_INTENT_ENTITY: Record<string, IntentEntity> = {
@@ -111,37 +112,23 @@ export function toolOperation(toolName: string): IntentOperation {
 }
 
 /**
- * Entities that mean the same thing at the storage layer, so a tool on one is
- * never a routing error for the other.
+ * Is a tool that writes `wrote` serving a user who asked for `asked`?
  *
- * - asset/profile: assets, vehicles and properties ARE profile rows.
- * - task/event: the two dated-item shapes. The app routes between them by what
- *   the thing IS — something you do vs something that happens — not by whether
- *   a clock time was given, since a task carries one. That routing is the
- *   system prompt's job, not this gate's.
- * - expense/income and obligation/liability: adjacent money shapes with
- *   documented cross-routing rules in the prompt.
+ * DIRECTIONAL. This used to be a symmetric membership test over blanket sets,
+ * which meant "log $20 for lunch" could be served by log_income and "journal
+ * this" by log_tracker_entry — the two entities were in one set, so the gate
+ * could not tell a legitimate refinement from a semantic mistake. Every
+ * allowance now points one way and carries a reason; see shared/ai-policy.ts.
+ *
+ * `message` feeds the conditional allowances. Callers without a message get
+ * the unconditional answer.
  */
-const COMPATIBLE: Array<Set<IntentEntity>> = [
-  new Set<IntentEntity>(["asset", "profile"]),
-  new Set<IntentEntity>(["task", "event"]),
-  new Set<IntentEntity>(["expense", "income"]),
-  new Set<IntentEntity>(["obligation", "liability", "expense"]),
-  new Set<IntentEntity>(["tracker", "journal"]),
-  // A note and a stored memory are both "reference information the user wants
-  // back later" — routing between them is a judgement call the prompt makes,
-  // not a mistake this gate should refuse. NOTE AND JOURNAL ARE NOT LISTED
-  // TOGETHER ON PURPOSE: that confusion is the bug this system exists to fix,
-  // so a journal tool on an explicit note request is a hard block.
-  new Set<IntentEntity>(["note", "memory"]),
-  new Set<IntentEntity>(["note", "artifact"]),
-  new Set<IntentEntity>(["goal", "habit", "tracker"]),
-];
-
-export function areEntitiesCompatible(a: IntentEntity, b: IntentEntity): boolean {
-  if (a === b) return true;
-  if (a === "unknown" || b === "unknown") return true;
-  return COMPATIBLE.some((set) => set.has(a) && set.has(b));
+export function areEntitiesCompatible(
+  asked: IntentEntity,
+  wrote: IntentEntity,
+  message?: string,
+): boolean {
+  return isWriteAuthorized(asked, wrote, message);
 }
 
 export type RoutingMismatch =
@@ -220,7 +207,9 @@ export function checkToolAgainstIntent(
   // Only when NO request in the message is about a compatible entity — AND we
   // parsed the whole message. A message with a clause we could not classify
   // may be asking for exactly what this tool does.
-  const sameEntity = all.filter((i) => areEntitiesCompatible(i.entity, actualEntity));
+  const sameEntity = all.filter((i) =>
+    areEntitiesCompatible(i.entity, actualEntity, normalized.message),
+  );
   if (sameEntity.length === 0 && normalized.exhaustive) {
     const intent = all[0];
     const want = CREATE_TOOL_FOR[intent.entity];
@@ -417,6 +406,19 @@ const ENTRY_APPEND_TOOLS = new Set([
  * Rex" (two creates, two names) is untouched. Only a second create of the
  * SAME name on a compatible entity is refused.
  */
+/**
+ * Would two creates land on the same record?
+ *
+ * Unlike the routing gate, this compares two TOOL entities rather than an
+ * intent and a tool, so neither side is "what the user asked for" and there is
+ * no direction to respect. A one-way allowance still means the two shapes can
+ * be the same record — "Water" created as a habit and then as a tracker is one
+ * request answered twice — so either direction counts here.
+ */
+function sameRecordShape(a: IntentEntity, b: IntentEntity): boolean {
+  return isWriteAuthorized(a, b) || isWriteAuthorized(b, a);
+}
+
 export function findDuplicateCreateInTurn(
   toolName: string,
   input: Record<string, any> | undefined | null,
@@ -431,7 +433,7 @@ export function findDuplicateCreateInTurn(
   const owner = ownerScopeKey(input);
   return (
     priorCreates.find(
-      (c) => c.key === key && c.owner === owner && areEntitiesCompatible(c.entity, entity),
+      (c) => c.key === key && c.owner === owner && sameRecordShape(c.entity, entity),
     ) ?? null
   );
 }
