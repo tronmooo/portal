@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { queryClient } from "../client/src/lib/queryClient";
 import {
   applyRestWrite, parseWriteTarget, tombstone, clearTombstone, isTombstoned,
-  filterTombstoned, clearAllTombstones,
+  filterTombstoned, clearAllTombstones, applyWriteManifest,
 } from "../client/src/lib/write-sync";
 
 const SELF = "self-1";
@@ -159,14 +159,13 @@ describe("applyWriteManifest — the server says what changed", () => {
     // payment. The balance it paid down lives on a profile row, which the
     // response never mentioned, so the card, the profile totals and net worth
     // all kept the pre-payment number until a refetch came back.
-    const { applyWriteManifest } = await import("../client/src/lib/write-sync");
     queryClient.setQueryData(["/api/profiles"], [
       ...PROFILES,
       { id: "liab-1", type: "liability", name: "Car loan", fields: { currentBalance: 1000 } },
     ]);
     queryClient.setQueryData(["/api/liabilities/liab-1/payments"], []);
 
-    const handled = await applyWriteManifest({
+    const handled = applyWriteManifest({
       domains: ["liabilities", "profiles"],
       changes: [
         { op: "create", endpoint: "/api/liabilities/liab-1/payments", id: "pay-1", row: { id: "pay-1", amount: 200 } },
@@ -185,13 +184,12 @@ describe("applyWriteManifest — the server says what changed", () => {
     // The same liability is cached under the bare key and under each profile
     // filter the user has visited. A balance that updates in one of them and
     // not the others is the "it changed here but not there" report.
-    const { applyWriteManifest } = await import("../client/src/lib/write-sync");
     const rows = [{ id: "liab-1", type: "liability", fields: { currentBalance: 1000 } }];
     queryClient.setQueryData(["/api/profiles"], rows);
     queryClient.setQueryData(["/api/profiles", "everyone"], rows);
     queryClient.setQueryData(["/api/profiles", "selected", SELF], rows);
 
-    await applyWriteManifest({
+    applyWriteManifest({
       domains: ["liabilities"],
       changes: [{ op: "update", endpoint: "/api/profiles", id: "liab-1", row: { id: "liab-1", fields: { currentBalance: 800 } } }],
     });
@@ -203,8 +201,7 @@ describe("applyWriteManifest — the server says what changed", () => {
   });
 
   it("tombstones a delete so an in-flight response cannot put the row back", async () => {
-    const { applyWriteManifest } = await import("../client/src/lib/write-sync");
-    await applyWriteManifest({
+    applyWriteManifest({
       domains: ["tasks"],
       changes: [{ op: "delete", endpoint: "/api/tasks", id: "t1" }],
     });
@@ -216,14 +213,12 @@ describe("applyWriteManifest — the server says what changed", () => {
     // A truncated manifest, or an entity with no list of its own (a tracker
     // entry lives inside its tracker), carries domains and nothing else. That
     // must still refresh — it is the pre-manifest behaviour, not a no-op.
-    const { applyWriteManifest } = await import("../client/src/lib/write-sync");
-    expect(await applyWriteManifest({ domains: ["trackers"], changes: [], truncated: true })).toBe(true);
+    expect(applyWriteManifest({ domains: ["trackers"], changes: [], truncated: true })).toBe(true);
   });
 
   it("declines a manifest it cannot act on, so the fallback path runs", async () => {
-    const { applyWriteManifest } = await import("../client/src/lib/write-sync");
-    expect(await applyWriteManifest(null)).toBe(false);
-    expect(await applyWriteManifest({ domains: [], changes: [] })).toBe(false);
+    expect(applyWriteManifest(null)).toBe(false);
+    expect(applyWriteManifest({ domains: [], changes: [] })).toBe(false);
   });
 });
 
@@ -248,5 +243,51 @@ describe("parseWriteTarget — sub-resource URLs address nothing in the parent l
     tombstone("t9");
     applyRestWrite("PATCH", "/api/tasks/t9/restore", { id: "t9", title: "Back", status: "open" });
     expect(isTombstoned("t9")).toBe(false);
+  });
+});
+
+describe("the manifest must not reintroduce the delay it removes", () => {
+  it("returns before the refetches it triggers have come back", () => {
+    // invalidateQueries resolves only once its refetches land. Awaiting that
+    // here would make every mutation block on the slowest aggregate query it
+    // triggered — the dashboard is ~15 queries deep — which is precisely the
+    // several-second wait this work exists to delete. Synchronous return is the
+    // contract, not an implementation detail.
+    const out = applyWriteManifest({
+      domains: ["liabilities"],
+      changes: [{ op: "update", endpoint: "/api/profiles", id: "x", row: { id: "x", a: 1 } }],
+    });
+    expect(out).toBe(true);
+    expect(typeof (out as any)?.then).toBe("undefined");
+  });
+
+  it("does not add a second copy of a row the screen is already showing", async () => {
+    // A call site with its own optimistic insert has the row on screen under a
+    // temporary id. The server's copy carries the real id, so a blind insert
+    // shows the item twice until a refetch reconciles them.
+    queryClient.setQueryData(["/api/tasks"], [{ id: "tmp-1", title: "Buy milk", _optimistic: true }]);
+
+    applyWriteManifest({
+      domains: ["tasks"],
+      changes: [{ op: "create", endpoint: "/api/tasks", id: "real-1", row: { id: "real-1", title: "Buy milk" } }],
+    });
+
+    expect(queryClient.getQueryData<any[]>(["/api/tasks"])).toHaveLength(1);
+  });
+
+  it("still applies an UPDATE while a create is pending elsewhere in the list", () => {
+    // The guard is about duplicate inserts only. An update names a row that
+    // already exists, so it can never double it — and suppressing it would
+    // leave a stale value on screen.
+    queryClient.setQueryData(["/api/tasks"], [
+      { id: "tmp-1", title: "Pending", _optimistic: true },
+      { id: "real-2", title: "Old" },
+    ]);
+    applyWriteManifest({
+      domains: ["tasks"],
+      changes: [{ op: "update", endpoint: "/api/tasks", id: "real-2", row: { id: "real-2", title: "New" } }],
+    });
+    const rows = queryClient.getQueryData<any[]>(["/api/tasks"])!;
+    expect(rows.find((r) => r.id === "real-2").title).toBe("New");
   });
 });

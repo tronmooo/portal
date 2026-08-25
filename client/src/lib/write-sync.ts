@@ -215,15 +215,23 @@ const AGGREGATE_ENDPOINTS = new Set([
  * to the URL heuristic (and the global mutation default knows it does not need
  * its blanket mark-everything-stale).
  */
-export async function applyWriteManifest(manifest: WriteManifest | null | undefined): Promise<boolean> {
+export function applyWriteManifest(manifest: WriteManifest | null | undefined): boolean {
   if (!manifest || !Array.isArray(manifest.domains) || manifest.domains.length === 0) return false;
 
-  // 1. Optimistic patch from the authoritative rows.
+  // 1. Patch from the authoritative rows. Synchronous on purpose: by the time
+  //    the caller's `await apiRequest(...)` resolves, the new balance is
+  //    already in every cached list that shows it.
   const patches: ChatMutation[] = [];
   for (const change of manifest.changes || []) {
     if (change.op === "delete") tombstone(change.id);
     else clearTombstone(change.id);
     if (!change.endpoint) continue; // no patchable list — invalidation covers it
+    if (change.op === "create" && hasPendingOptimisticRow(change.endpoint)) {
+      // This call site is already showing its own optimistic row for this
+      // write. Inserting the server's copy alongside it would show the item
+      // twice until the refetch reconciled them.
+      continue;
+    }
     patches.push({
       op: change.op,
       entityType: null,
@@ -235,12 +243,13 @@ export async function applyWriteManifest(manifest: WriteManifest | null | undefi
   }
   if (patches.length > 0) applyRowPatches(patches);
 
-  // 2. Background reconcile over exactly the domains this write touched.
-  //    The aggregates are refetched rather than merely marked stale: they are
-  //    what net worth, the KPI tiles and recent activity render, and leaving
-  //    them stale-but-unfetched is what made the NEXT page show pre-write
-  //    numbers while it quietly refetched behind them.
-  await invalidateDomains(...manifest.domains);
+  // 2. Background reconcile over exactly the domains this write touched, and
+  //    deliberately NOT awaited. invalidateQueries resolves only once its
+  //    refetches have come back — awaiting it here would make every mutation
+  //    block on the slowest aggregate query it triggered, which is the delay
+  //    this whole change exists to remove. The user sees step 1; step 2 only
+  //    ever confirms it.
+  void invalidateDomains(...manifest.domains);
   return true;
 }
 

@@ -173,7 +173,7 @@ export async function apiRequest(
         // touched (a payment moves the payment row and the liability balance)
         // and the domains to invalidate, so no call site has to declare them.
         const manifest = decodeWriteManifest(res.headers.get(WRITE_MANIFEST_HEADER));
-        const handled = await applyWriteManifest(manifest);
+        const handled = applyWriteManifest(manifest);
         if (handled) {
           noteManifestApplied();
         } else {

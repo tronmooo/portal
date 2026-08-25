@@ -815,6 +815,9 @@ export function shouldBustCaches(method: string, path: string): boolean {
 // This wraps res.json so a successful response is not sent until the version
 // bump has completed, and carries the new version back as the client's
 // read-your-writes token.
+/** Longest a write may wait for its version bump before answering anyway. */
+const BARRIER_TIMEOUT_MS = 3000;
+
 const AI_WRITE_BARRIER_PATHS = new Set([
   "/api/upload",
   "/api/upload/batch",
@@ -877,6 +880,16 @@ function writeBarrierMiddleware(req: any, res: any, next: any) {
     barrierDone = true;
     attachWriteManifest(res, journal);
     bustUserCaches(uid);
+    // The barrier holds the response open until the version bump lands. That
+    // ordering is the point — but it must never be able to hold it open
+    // FOREVER. An upstream call with no timeout would otherwise turn a slow
+    // Postgres round trip into a hung write. Past the deadline the response
+    // goes out without the token; the client falls back to its own version
+    // memo, which is how every write behaved before the barrier existed.
+    let sent = false;
+    const sendOnce = () => { if (!sent) { sent = true; send(); } };
+    const deadline = setTimeout(sendOnce, BARRIER_TIMEOUT_MS);
+    (deadline as any).unref?.();
     // Only the domains this request actually wrote. A write that reported none
     // (or reported "everything") still moves the epoch, which every cache key
     // carries — so an unclassifiable write invalidates all of them, exactly as
@@ -892,7 +905,7 @@ function writeBarrierMiddleware(req: any, res: any, next: any) {
         }
       })
       .catch(() => { /* fall through: the client keeps its old behavior */ })
-      .finally(send);
+      .finally(() => { clearTimeout(deadline); sendOnce(); });
   };
 
   if (!inlineBarrier) {
