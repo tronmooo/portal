@@ -31,7 +31,8 @@ import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
-import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
+import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
+import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
 
@@ -2528,6 +2529,12 @@ ${JSON.stringify(ctx, null, 2)}`;
   app.post("/api/chat/confirm-extraction", asyncHandler(async (req, res) => {
     try {
       const { extractionId, confirmedFields, targetProfileId, createCalendarEvents, trackerEntries } = req.body;
+      // The Calendar section's decisions — one per recognised date. See
+      // shared/extraction-calendar for why they travel separately from
+      // `createCalendarEvents`: a date the RECORD owns needs no event, only
+      // permission to be derived.
+      const calendarDates: CalendarDateDecision[] = Array.isArray(req.body?.calendarDates)
+        ? req.body.calendarDates : [];
       if (!extractionId) {
         return res.status(400).json({ error: "extractionId required" });
       }
@@ -2635,7 +2642,35 @@ ${JSON.stringify(ctx, null, 2)}`;
             // calendar, Upcoming and Important Dates could all see and none
             // could understand. See shared/date-rules.
             const normalizedDoc = normalizeEntityDateFields(updatedData, { contextKey: docContextForDates });
-            await storage.updateDocument(extractionId, { extractedData: normalizedDoc.fields });
+            // ── The user's calendar decisions, kept ON the record ───────────
+            // A date the record owns reaches the calendar by being derived
+            // (shared/date-rules), so "don't put this on my calendar" cannot be
+            // expressed by NOT creating something — there is nothing to skip.
+            // It is recorded here instead, as an opt-out list the rule engine
+            // reads, which is also what makes the choice durable: edit the date
+            // later and the same decision still applies; clear the opt-out and
+            // the calendar entry comes back. No copy, nothing to drift.
+            const docFields: Record<string, any> = { ...normalizedDoc.fields };
+            const priorOptOut: string[] = Array.isArray((doc.extractedData as any)?.[CALENDAR_OPT_OUT_KEY])
+              ? (doc.extractedData as any)[CALENDAR_OPT_OUT_KEY].map((v: any) => String(v))
+              : [];
+            if (calendarDates.length > 0) {
+              const decidedOff = calendarDates.filter((d) => d && d.addToCalendar === false)
+                .map((d) => String(d.path || d.field)).filter(Boolean);
+              const decidedOn = new Set(calendarDates.filter((d) => d && d.addToCalendar !== false)
+                .map((d) => normalizeFieldKey(d.path || d.field)));
+              const next = [
+                // Keep earlier opt-outs the user did not just revisit…
+                ...priorOptOut.filter((k) => !decidedOn.has(normalizeFieldKey(k))),
+                ...decidedOff,
+              ];
+              const deduped = Array.from(new Set(next.map((k) => String(k)).filter(Boolean)));
+              if (deduped.length > 0) docFields[CALENDAR_OPT_OUT_KEY] = deduped;
+              else delete docFields[CALENDAR_OPT_OUT_KEY];
+            } else if (priorOptOut.length > 0) {
+              docFields[CALENDAR_OPT_OUT_KEY] = priorOptOut;
+            }
+            await storage.updateDocument(extractionId, { extractedData: docFields });
             // Record what LANDED, and under the value that landed — Step 2 has
             // to know not just that the field saved but that a rule can be
             // derived from it.
@@ -2852,7 +2887,26 @@ ${JSON.stringify(ctx, null, 2)}`;
       // A date the classifier does NOT recognise (a one-off "House Viewing"
       // printed on an invitation) has no source field to be derived from, so
       // it still becomes a real event — that is the only case left.
-      if (createCalendarEvents && createCalendarEvents.length > 0) {
+      // The candidate events: the classifier's own suggestions (dates it does
+      // NOT recognise as a rule) PLUS every recognised date the user ticked in
+      // the Calendar section. The `covered` test below is what keeps the second
+      // group from becoming a duplicate: a date the record owns is derived, so
+      // it is skipped here — but a ticked date whose field did not persist, or
+      // which no rule can be derived from, still gets the real event it needs
+      // instead of silently going nowhere.
+      const calendarEventCandidates = [
+        ...(Array.isArray(createCalendarEvents) ? createCalendarEvents : []),
+        ...calendarDates
+          .filter((d) => d && d.addToCalendar !== false && d.field && d.date)
+          .map((d) => ({
+            field: String(d.path || d.field),
+            date: String(d.date),
+            title: d.title || `📅 ${d.field}`,
+            category: d.category || "other",
+          })),
+      ].filter((e, i, arr) =>
+        arr.findIndex((o) => normalizeFieldKey(o.field) === normalizeFieldKey(e.field)) === i);
+      if (calendarEventCandidates.length > 0) {
         // A date is only DERIVED if its field actually PERSISTED.
         //
         // `createCalendarEvents` arrives independently of `confirmedFields`, so
@@ -2860,14 +2914,21 @@ ${JSON.stringify(ctx, null, 2)}`;
         // Step 0's write threw, neither does one that was ticked. Suppressing
         // the event in either case loses the date entirely while the response
         // still reports success, so the set below is the fields that landed.
-        for (const event of createCalendarEvents) {
+        for (const event of calendarEventCandidates) {
           try {
             // A rule must be DERIVABLE, not merely plausible. A value the date
             // engine rejects — a range, a sentence, a timestamp — still
             // classifies as actionable from its field NAME, so suppressing on
             // classification alone left the date on no surface at all while
             // the response reported success.
-            const key = normalizeFieldKey(event.field);
+            // A field may arrive as a dotted PATH ("payment.dueDate"). What
+            // persisted was keyed on the leaf, so both spellings are tried —
+            // otherwise a nested date read as "not covered" and a duplicate
+            // event was created beside the derived rule.
+            const rawField = String(event.field ?? "");
+            const leaf = rawField.split(".").pop() || rawField;
+            const key = persistedFieldValues.has(normalizeFieldKey(rawField))
+              ? normalizeFieldKey(rawField) : normalizeFieldKey(leaf);
             const cls = classifyDateField(event.field, docContextForDates);
             // A document does not derive a BIRTHDAY — that belongs to the
             // person, and only the profile write above can carry it. With no
@@ -2883,6 +2944,11 @@ ${JSON.stringify(ctx, null, 2)}`;
               && (derivedByTheDocument || derivedByTheProfile);
             if (covered) {
               log.info(`[confirm-extraction] "${event.field}" is owned by its record — derived as a Date Rule, no standalone event`);
+              // Say so in the response. The date IS on the calendar — derived
+              // from the field rather than copied into an event — and a silent
+              // skip here is what made the whole thing feel like it did
+              // nothing (user report 2026-08-25).
+              saved.push(`Calendar: ${ruleTypeLabel(cls.ruleType)} ${bareDateOf(persistedFieldValues.get(key)) || ""}`.trim());
               continue;
             }
             // Parse date from the field value. Uses the shared parser so
@@ -8072,22 +8138,21 @@ If unsure, use "other". Use "subscription" for recurring services; "vehicle" for
         return o.nextDueDate >= todayStr && o.nextDueDate <= toLocalDateStr(new Date(now.getTime() + 14 * 86400000), snapTz);
       }).map(o => ({ name: o.name, amount: o.amount, dueDate: o.nextDueDate, autopay: o.autopay }));
 
-      // Document expiration warnings
-      const expiringDocs = documents.filter(d => {
-        if (!d.extractedData || typeof d.extractedData !== "object") return false;
-        const fields = d.extractedData as Record<string, any>;
-        for (const [key, value] of Object.entries(fields)) {
-          if (typeof value !== "string") continue;
-          if (/expir|valid.until|valid.through/i.test(key)) {
-            try {
-              const exp = new Date(value);
-              const diff = (exp.getTime() - now.getTime()) / 86400000;
-              if (diff >= -30 && diff <= 60) return true;
-            } catch (err) { console.error("[routes:ai-digest] document expiration parse failed:", err); }
-          }
-        }
-        return false;
-      }).map(d => ({ name: d.name, type: d.type }));
+      // Documents with a date to act on — expiring OR due.
+      //
+      // This block used to carry its own expiry-key regex and `new Date(value)`
+      // parsing: yet another date vocabulary, blind to due dates and to every
+      // non-ISO value. It reads the ONE Date Rule engine now, so the digest
+      // sees exactly what the Executive tab and the calendar see.
+      const expiringDocs = rulesFromDocuments(documents)
+        .filter((rule) => isDocumentAttentionRule(rule))
+        .map((rule) => ({
+          name: rule.label,
+          type: rule.ruleSubtype || rule.ruleType,
+          date: rule.date,
+          daysUntil: daysBetweenISO(todayStr, rule.date),
+        }))
+        .filter((r) => r.daysUntil >= -30 && r.daysUntil <= 60);
 
       // Tracker entries count this week
       const trackerEntriesThisWeek = trackers.reduce((sum, t) =>

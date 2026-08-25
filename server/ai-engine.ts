@@ -78,7 +78,8 @@ import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTra
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
 import { readProfileFieldValue } from "@shared/profile-field-identity";
-import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel } from "@shared/date-rules";
+import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel, bareDateOf } from "@shared/date-rules";
+import { extractionDateRows, extractionDateTypeLabel, type ExtractionDateRow } from "@shared/extraction-calendar";
 import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
@@ -2431,7 +2432,20 @@ Return ONLY the JSON object, nothing else.`;
     const profileType = linkedProfileObj?.type || '';
     const isVehicleProfile = profileType === 'vehicle';
 
-    const extractedFields: Array<{key: string; label: string; value: any; selected: boolean; isDate: boolean; category: string; suggestedEvent?: string}> = [];
+    const extractedFields: Array<{
+      key: string; label: string; value: any; selected: boolean; isDate: boolean; category: string;
+      suggestedEvent?: string;
+      // What the date MEANS, carried alongside the value so the review UI can
+      // show a Calendar column without re-deriving the classification.
+      dateRuleType?: string;
+      dateTypeLabel?: string;
+      /** The normalized ISO date, when the value is genuinely a date. */
+      dateISO?: string;
+      /** Actionable = due / expiry / renewal / deadline / appointment / payment. */
+      actionableDate?: boolean;
+      /** True when the record itself puts this date on the calendar. */
+      calendarDerived?: boolean;
+    }> = [];
 
     if (parsed.extractedData && typeof parsed.extractedData === 'object') {
       // Flatten nested objects / arrays so EVERY leaf — especially every date in
@@ -2526,15 +2540,40 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         // classify as informational, so the actionable test alone would let
         // them through — and "add `dateAdministered` to the calendar?" is the
         // clutter this branch has always been careful to avoid.
+        const dateCls = classifyDateField(key, docType);
+        const dateISO = hasDate ? (bareDateOf(strVal) || undefined) : undefined;
+        // An ACTIONABLE date (a due date, an expiration, a renewal) reaches the
+        // calendar by being ON the record — shared/date-rules derives it — so
+        // no standalone event is suggested for it and none is created. What
+        // changed (user report 2026-08-25) is that it is no longer SILENT: the
+        // classification travels with the field so extraction review can show
+        // a Calendar row for it, with the type, the countdown and the choice.
+        //
+        // `/valid|issued|administered/` stays suppressed explicitly: those keys
+        // classify as informational, so the actionable test alone would let
+        // them through — and "add `dateAdministered` to the calendar?" is the
+        // clutter this branch has always been careful to avoid.
+        const actionableDate = hasDate && dateCls.actionable && !!dateISO;
         if (hasDate
-          && !classifyDateField(key, docType).actionable
+          && !dateCls.actionable
           && !/valid|issued|administered/i.test(key)) {
           suggestedEvent = `📅 ${label}`;
         }
 
         const category = categorizeField(key, CATEGORY_MAP);
         const selected = true;
-        extractedFields.push({ key, label, value, selected, isDate, category, suggestedEvent });
+        extractedFields.push({
+          key, label, value, selected, isDate, category, suggestedEvent,
+          ...(actionableDate ? {
+            dateRuleType: dateCls.ruleType,
+            dateTypeLabel: extractionDateTypeLabel(dateCls.ruleType, dateCls.ruleSubtype),
+            dateISO,
+            actionableDate: true,
+            // A document does not own a BIRTHDAY — the person's profile does —
+            // so that date is not derived by the document that printed it.
+            calendarDerived: dateCls.ruleType !== "birthday" && dateCls.ruleType !== "anniversary",
+          } : {}),
+        });
 
         // dob/dateOfBirth → also expose a birthday alias field
         if ((key === 'dob' || key === 'dateOfBirth' || /date of birth/i.test(key)) && value) {
@@ -2755,6 +2794,19 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       }
     }
 
+    // ── The Calendar section of extraction review ────────────────────────────
+    // Every actionable date in this document, with its type, its countdown and
+    // the decision the user gets to make before confirming. Built here so the
+    // payload is self-describing; the client recomputes it live as dates are
+    // edited, from the same shared module, so the two never disagree.
+    const calendarDates: ExtractionDateRow[] = extractionDateRows(
+      extractedFields.map((f) => ({ key: f.key, label: f.label, value: f.value, selected: f.selected })),
+      {
+        documentContext: `${docType} ${parsed.label || fileName}`,
+        today: new Date().toLocaleDateString("en-CA"),
+      },
+    );
+
     const pendingExtraction = {
       extractionId: document.id,
       fileName,
@@ -2770,6 +2822,10 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       trackerEntries: parsed.trackerEntries || [],
       documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType },
       pendingFinancial,
+      /** Date-related fields, broken out for the review UI's Calendar section. */
+      calendarDates,
+      /** The document this extraction belongs to — shown against each date. */
+      documentName: document.name || fileName,
       // Surface the classification so the UI can show "I think this is a Parking
       // Receipt; here's what I'll do." The destinations object tells the UI
       // which sub-panels (expense, obligation, tracker, calendar) are even
