@@ -53,6 +53,7 @@ export const CACHE_PREFIX_DOMAINS: Record<string, PrefixDependency> = {
 
   // ── Single-table list caches: narrow, and the whole point of the exercise.
   "profiles:": PROFILE_DEPS,
+  "profiles-lite:": PROFILE_DEPS,   // the same rows, fewer columns
   "trackers:": ["trackers", "habits"],
   "tasks:": ["tasks"],
   "expenses:": ["expenses"],

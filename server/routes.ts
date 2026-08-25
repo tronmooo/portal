@@ -3849,7 +3849,7 @@ ${JSON.stringify(ctx, null, 2)}`;
   // only needs id/type/name/avatar/parent. Skips heavy jsonb columns. MUST be
   // registered before /api/profiles/:id so "lite" isn't matched as an id.
   app.get("/api/profiles/lite", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest, "profiles:");
+    const uid = cacheUserKey(req as AuthenticatedRequest, "profiles-lite:");
     const ck = `profiles-lite:${uid}`;
     const hit = getCached(ck);
     if (hit) {
