@@ -16,7 +16,7 @@
 // shared rule the manual UI shares with them.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { checkProfileRename, cleanProfileName } from "../shared/profile-rename";
+import { checkProfileRename, cleanProfileName, renameOwnerInTitle } from "../shared/profile-rename";
 import { isStaleTurnReplay } from "../shared/ai-tool-routing";
 import { isBareConfirmation, hasBackReference } from "../shared/ai-intent";
 import { finalizeToolResult, buildTurnVerifyContext, buildChatMutation } from "../server/ai-envelope";
@@ -224,5 +224,98 @@ describe("a rename reaches every screen that shows the name", () => {
     );
     expect(env.success).toBe(true);
     expect(env.verification.requested_name_matches).toBe(true);
+  });
+});
+
+// ── Titles the app generated from the old name ───────────────────────────────
+//
+// Found by sweeping the live database for a renamed profile's old name, not by
+// reading the code — which is exactly why the first version of this rename
+// shipped claiming to reach everywhere. Three real rows came back:
+//
+//   habits.name  "Morning Run - Bob QA", "Daily Walk - Bob QA"
+//   events.title "🎂 Bob QA's Birthday"
+//
+// all linked to the profile by id. For trackers it is worse than stale: the
+// read path hides a trailing owner suffix by matching the owner's CURRENT
+// name, so renaming stops the match and the old name REAPPEARS on screen.
+
+describe("renameOwnerInTitle rewrites generated labels only", () => {
+  const from = "Bob QA", to = "Bob Robertson";
+
+  it("rewrites a trailing owner suffix", () => {
+    expect(renameOwnerInTitle("Morning Run - Bob QA", from, to)).toBe("Morning Run - Bob Robertson");
+    expect(renameOwnerInTitle("Daily Walk — Bob QA", from, to)).toBe("Daily Walk — Bob Robertson");
+  });
+
+  it("rewrites a possessive title, emoji and all", () => {
+    expect(renameOwnerInTitle("🎂 Bob QA's Birthday", from, to)).toBe("🎂 Bob Robertson's Birthday");
+    expect(renameOwnerInTitle("Bob QA’s Checkup", from, to)).toBe("Bob Robertson’s Checkup");
+  });
+
+  it("leaves prose that merely mentions the person alone", () => {
+    // A journal entry, a note, a task the user titled themselves.
+    expect(renameOwnerInTitle("Dinner with Bob QA's family", from, to)).toBe("Dinner with Bob QA's family");
+    expect(renameOwnerInTitle("Call Bob QA about the car", from, to)).toBe("Call Bob QA about the car");
+  });
+
+  it("leaves a separator that isn't an owner", () => {
+    expect(renameOwnerInTitle("Blood Pressure - Morning", from, to)).toBe("Blood Pressure - Morning");
+  });
+
+  it("never fires on a one-character owner token", () => {
+    expect(renameOwnerInTitle("Run - B", "B", "Robert")).toBe("Run - B");
+  });
+});
+
+describe("the cascade touches only this profile's generated titles", () => {
+  it("rewrites linked habits, trackers and events — and nothing else", async () => {
+    const { cascadeProfileRename } = await import("../server/profile-rename-cascade");
+    const rows = {
+      habits: [
+        { id: "h1", name: "Morning Run - Bob QA", linkedProfiles: ["p-bob"] },
+        // Same title, someone else's habit: not this rename's business.
+        { id: "h2", name: "Morning Run - Bob QA", linkedProfiles: ["p-jane"] },
+      ],
+      trackers: [{ id: "t1", name: "Weight - Bob QA", linkedProfiles: ["p-bob"] }],
+      events: [
+        { id: "e1", title: "🎂 Bob QA's Birthday", linkedProfiles: ["p-bob"] },
+        { id: "e2", title: "Dinner with Bob QA's family", linkedProfiles: ["p-bob"] },
+      ],
+      tasks: [{ id: "k1", title: "Call Bob QA about the car", linkedProfiles: ["p-bob"] }],
+    };
+    const writes: Array<[string, string, any]> = [];
+    const fake: any = {
+      getHabits: async () => rows.habits, getTrackers: async () => rows.trackers,
+      getEvents: async () => rows.events, getTasks: async () => rows.tasks,
+      updateHabit: async (id: string, p: any) => writes.push(["habit", id, p]),
+      updateTracker: async (id: string, p: any) => writes.push(["tracker", id, p]),
+      updateEvent: async (id: string, p: any) => writes.push(["event", id, p]),
+      updateTask: async (id: string, p: any) => writes.push(["task", id, p]),
+    };
+
+    const res = await cascadeProfileRename(fake, "p-bob", "Bob QA", "Bob Robertson");
+
+    expect(res.updated).toEqual({ habits: 1, trackers: 1, events: 1, tasks: 0 });
+    expect(writes).toEqual([
+      ["habit", "h1", { name: "Morning Run - Bob Robertson" }],
+      ["tracker", "t1", { name: "Weight - Bob Robertson" }],
+      ["event", "e1", { title: "🎂 Bob Robertson's Birthday" }],
+    ]);
+  });
+
+  it("a failed title write never fails the rename", async () => {
+    const { cascadeProfileRename } = await import("../server/profile-rename-cascade");
+    const fake: any = {
+      getHabits: async () => [{ id: "h1", name: "Run - Bob QA", linkedProfiles: ["p-bob"] }],
+      updateHabit: async () => { throw new Error("db down"); },
+      getTrackers: async () => { throw new Error("db down"); },
+      updateTracker: async () => {},
+      getEvents: async () => [], updateEvent: async () => {},
+      getTasks: async () => [], updateTask: async () => {},
+    };
+    const res = await cascadeProfileRename(fake, "p-bob", "Bob QA", "Bob Robertson");
+    expect(res.failed).toBe(1);
+    expect(res.updated.habits).toBe(0);
   });
 });

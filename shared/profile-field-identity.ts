@@ -120,6 +120,37 @@ export interface FieldDeletionResult {
 }
 
 /**
+ * The value a field currently holds, matched by IDENTITY the way deletion is —
+ * top level first, then every nested group. Used to snapshot what a delete is
+ * about to remove so it can be put back.
+ *
+ * Returns undefined when the profile has no such field under any spelling.
+ */
+export function readProfileFieldValue(
+  fields: Record<string, any> | null | undefined,
+  uiKey: unknown,
+): any {
+  if (!fields || typeof fields !== "object") return undefined;
+  const target = fieldIdentity(uiKey);
+  if (!target) return undefined;
+  const groups: Array<Record<string, any>> = [];
+  for (const [key, value] of Object.entries(fields)) {
+    if (key.startsWith("_")) continue;
+    const isGroup =
+      (PROFILE_FIELD_GROUPS as readonly string[]).includes(key) &&
+      value && typeof value === "object" && !Array.isArray(value);
+    if (isGroup) { groups.push(value as Record<string, any>); continue; }
+    if (fieldIdentity(key) === target) return value;
+  }
+  for (const group of groups) {
+    for (const [key, value] of Object.entries(group)) {
+      if (fieldIdentity(key) === target) return value;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Remove EVERY storage key matching the given UI keys — at the top level and
  * inside every nested group — comparing on identity rather than exact string.
  *
