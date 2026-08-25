@@ -2893,7 +2893,9 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
           primaryProfileId: resolvedTargetProfile?.id || existingProfileId || undefined,
           documentId: document.id,
           documentName: document.name || fileName,
-          today: new Date().toLocaleDateString("en-CA"),
+          // The user's day, not the server's: a date rule computed against a
+          // server in another zone is off by one for half of every day.
+          today: getUserToday(),
         })
       : undefined;
 

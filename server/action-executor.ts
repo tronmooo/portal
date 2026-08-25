@@ -38,6 +38,7 @@ import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/c
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { findIdentityMatches } from "@shared/tracker-identity";
 import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE, type Tracker } from "@shared/schema";
+import { getUserToday } from "@shared/timezone";
 
 const CAT = "action-executor";
 
@@ -485,7 +486,12 @@ function requireAmount(v: unknown): number {
   return n;
 }
 
-const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+/**
+ * Today, in the user's timezone. Never a hardcoded zone: an expense stamped
+ * with a fixed West-Coast date lands on the wrong day for anyone east of it,
+ * and a bill dated one day late is a bill that looks paid late.
+ */
+const today = () => getUserToday();
 
 /**
  * Create or update the ONE record a recurrence produces.
