@@ -23,6 +23,7 @@ import { deleteProfileFields } from "../../shared/profile-field-identity";
 /** Every row the fake keeps, so assertions can read what the route wrote. */
 export interface FakeDb {
   profiles: any[];
+  liabilityPayments: any[];
   expenses: any[];
   incomes: any[];
   obligations: any[];
@@ -78,6 +79,18 @@ export function makeFakeStorage(db: FakeDb) {
       db.lastBumpedDomains = [...domains];
       for (const d of domains) db.domainVersions[d] = (db.domainVersions[d] || 0) + 1;
       return { epoch: domains.length === 0 ? db.bumpDataVersionCalls : 0, ...db.domainVersions };
+    },
+
+    // Liability payments: the reference case for post-write synchronization —
+    // one call that writes a payment AND moves the balance on a profile row.
+    liabilityPayments: undefined as any,
+    getLiabilityPayments: async (liabilityProfileId: string) =>
+      db.liabilityPayments.filter((p: any) => p.liabilityProfileId === liabilityProfileId),
+    getRecentLiabilityPayments: async (limit = 10) => db.liabilityPayments.slice(-limit).reverse(),
+    createLiabilityPayment: async (data: any) => {
+      const row = { id: id("pay"), createdAt: new Date().toISOString(), ...data };
+      db.liabilityPayments.push(row);
+      return row;
     },
 
     getProfiles: async () => db.profiles,
@@ -314,7 +327,7 @@ export interface Harness {
 
 export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness> {
   const db: FakeDb = {
-    profiles: [], expenses: [], incomes: [], obligations: [],
+    profiles: [], liabilityPayments: [], expenses: [], incomes: [], obligations: [],
     tasks: [], events: [], documents: [], getDocumentCalls: 0,
     bumpDataVersionCalls: 0, domainVersions: {}, lastBumpedDomains: [], ...seed,
   };

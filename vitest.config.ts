@@ -222,6 +222,7 @@ export default defineConfig({
       'tests/write-sync.test.ts',
       // Post-mutation synchronization: the manifest a write returns, the
       // journal that builds it, and the totals that move on it.
+      'tests/write-manifest-e2e.test.ts',
       'tests/write-manifest.test.ts',
       'tests/write-journal.test.ts',
       'tests/storage-domain-coverage.test.ts',
