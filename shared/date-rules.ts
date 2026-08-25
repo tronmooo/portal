@@ -320,6 +320,56 @@ export const EXPIRY_RULE_TYPES = new Set<DateRuleType>([
   "expiration", "end", "cancellation",
 ]);
 
+/**
+ * How far ahead a dated record counts as "coming up" — the Executive tab's
+ * due/expiring list, the Immediate Attention window, and the badge the
+ * extraction review shows against a date.
+ *
+ * Forty-five days, not thirty, and the parking citation that prompted it is
+ * exactly why: issued 25 August, due 25 September — "next month" in every
+ * human sense, and 31 days, so a 30-day window said nothing about it at all.
+ * "A month out" is 28–31 days depending on the month, and a window that can
+ * miss it by a day is the wrong window. Forty-five covers this month and next
+ * with room to act, and still keeps the narrower promise: anything due within
+ * 30 days is inside it.
+ *
+ * The user can still narrow or widen it (Attention filters → Documents).
+ */
+export const DOC_UPCOMING_WINDOW_DAYS = 45;
+
+/**
+ * A DOCUMENT's own time-sensitive dates: the ones that make the record itself
+ * something to act on before a date passes.
+ *
+ * Deliberately separate from `EXPIRY_RULE_TYPES`. A parking citation does not
+ * "expire" — it is DUE, and a due date is exactly what the user is asked to
+ * act on. Restricted to document-carried dates on purpose: a `premiumDueDate`
+ * typed onto an insurance PROFILE is a bill and belongs on the bills surface,
+ * which is why `isDocumentAttentionRule` also tests the source.
+ */
+export const DOCUMENT_DUE_RULE_TYPES = new Set<DateRuleType>([
+  "due", "deadline", "payment", "renewal", "maintenance",
+]);
+
+/**
+ * Does this rule belong in the Executive tab's "expiring & due documents"
+ * list? Something running out anywhere, or something a DOCUMENT says is due.
+ */
+export function isDocumentAttentionRule(
+  rule: { ruleType: DateRuleType; sourceEntityType?: DateRuleSourceType },
+): boolean {
+  if (EXPIRY_RULE_TYPES.has(rule.ruleType)) return true;
+  return rule.sourceEntityType === "document" && DOCUMENT_DUE_RULE_TYPES.has(rule.ruleType);
+}
+
+/**
+ * The verb a countdown on this kind of date reads with — so a due date says
+ * "Due in 31 days" and never "Expires in 31 days". `[future, past]`.
+ */
+export function dateRuleVerbs(ruleType: DateRuleType): [string, string] {
+  return VERB[ruleType] || ["Due", "Was due"];
+}
+
 /** Every actionable type — i.e. everything except pure metadata. */
 export function isActionableRuleType(t: DateRuleType): boolean {
   return t !== "informational";
@@ -648,7 +698,19 @@ export interface ScanContext {
 export function scanEntityDates(
   fields: unknown,
   ctx: ScanContext,
-  opts: { maxDepth?: number; skipRuleTypes?: ReadonlySet<DateRuleType> } = {},
+  opts: {
+    maxDepth?: number;
+    skipRuleTypes?: ReadonlySet<DateRuleType>;
+    /**
+     * Field keys/paths the user explicitly told us NOT to put on the calendar
+     * during extraction review. Normalized on both sides, so a leaf name, a
+     * dotted path or a different spelling all match. The rule is still derived
+     * — it stays an Important Date and keeps its countdown — it is only
+     * `calendarVisible: false`. That is the whole point: opting out of the
+     * calendar must not delete the date.
+     */
+    calendarOptOut?: ReadonlySet<string>;
+  } = {},
 ): DateRule[] {
   const out: DateRule[] = [];
   const seen = new Set<string>();
@@ -721,7 +783,8 @@ export function scanEntityDates(
         }
       }
 
-      out.push(buildRule({ ...ctx, cls, id, field: key, path: here, raw, iso }));
+      const optedOut = isCalendarOptedOut(opts.calendarOptOut, key, here);
+      out.push(buildRule({ ...ctx, cls, id, field: key, path: here, raw, iso, calendarOptOut: optedOut }));
       if (singletonKey) singletonHolders.set(singletonKey, id);
     }
   };
@@ -757,8 +820,40 @@ export function scanEntityDates(
   return dropped.size > 0 ? out.filter((r) => !dropped.has(r.id)) : out;
 }
 
+/**
+ * Was this field opted out of the calendar? Matched on the leaf key AND the
+ * dotted path, both normalized, so `dueDate`, `due_date` and
+ * `payment.dueDate` all answer for the same decision.
+ */
+export function isCalendarOptedOut(
+  optOut: ReadonlySet<string> | undefined,
+  key: string,
+  path: string,
+): boolean {
+  if (!optOut || optOut.size === 0) return false;
+  const norm = (v: string) => String(v ?? "").split(".").map(normalizeFieldKey).filter(Boolean).join(".");
+  return optOut.has(norm(key)) || optOut.has(norm(path));
+}
+
+/** The stored opt-out list on a field bag → a set the scanner can test. */
+export function calendarOptOutSet(fields: unknown): ReadonlySet<string> {
+  const raw = (fields && typeof fields === "object")
+    ? (fields as any)[CALENDAR_OPT_OUT_KEY] : undefined;
+  if (!Array.isArray(raw)) return new Set<string>();
+  const norm = (v: unknown) => String(v ?? "").split(".").map(normalizeFieldKey).filter(Boolean).join(".");
+  return new Set(raw.map(norm).filter(Boolean));
+}
+
+/**
+ * Where an entity records the date fields the user kept OFF the calendar.
+ * Underscore-prefixed, so `scanEntityDates` already treats it as bookkeeping
+ * and never mistakes the list itself for data.
+ */
+export const CALENDAR_OPT_OUT_KEY = "_calendarOptOut";
+
 function buildRule(a: ScanContext & {
   cls: FieldClassification; id: string; field: string; path: string; raw: string; iso: string;
+  calendarOptOut?: boolean;
 }): DateRule {
   const { cls } = a;
   const recurring = cls.occurrenceType === "recurring";
@@ -780,7 +875,9 @@ function buildRule(a: ScanContext & {
     subtitle: a.entityLabel,
     date: clip(a.iso),
     recurrence: cls.recurrence,
-    calendarVisible: true,
+    // The user's explicit "don't put this on my calendar" from extraction
+    // review. Everything else about the rule survives.
+    calendarVisible: !a.calendarOptOut,
     upcomingVisible: true,
     // The recurring screen shows recurring rules in one half and important
     // future dates in the other; a birthday is the former, an expiration the
@@ -947,7 +1044,7 @@ export function rulesFromProfiles(profiles: readonly any[]): DateRule[] {
       profileId: p.id,
       ownerIds: uniq([p.id, p.parentProfileId, ...(Array.isArray(p.linkedProfiles) ? p.linkedProfiles : [])]),
       href: sourceHref("profile", p.id, p.id),
-    });
+    }, { calendarOptOut: calendarOptOutSet(p.fields) });
     out.push(...(isScheduled
       ? scanned.filter((r) => r.ruleType !== "payment" && r.ruleType !== "due" && r.ruleType !== "income")
       : scanned));
@@ -998,6 +1095,8 @@ export function rulesFromDocuments(documents: readonly any[]): DateRule[] {
     // profileId then shadowed the person's real one.
     out.push(...scanEntityDates(bag, ctx, {
       skipRuleTypes: new Set<DateRuleType>(["birthday", "anniversary"]),
+      // Honour what the user decided in extraction review.
+      calendarOptOut: calendarOptOutSet(d.extractedData),
     }));
   }
   return out;

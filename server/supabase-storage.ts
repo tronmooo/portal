@@ -49,7 +49,7 @@ import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } fr
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "../shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "../shared/date-rules";
 import { deleteProfileFields, mergeFieldWrite } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
@@ -1451,7 +1451,7 @@ export class SupabaseStorage implements IStorage {
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
       for (const e of t.entries) {
-        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: Object.entries(e.values).map(([k, v]) => `${k}: ${v}`).join(", "), data: { ...e.values, computed: e.computed }, timestamp: e.timestamp });
+        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: Object.entries(e.values).map(([k, v]) => `${k}: ${v}`).join(", "), data: { ...e.values, computed: e.computed, trackerId: t.id }, timestamp: e.timestamp });
       }
     }
     for (const e of relatedExpenses) timeline.push({ id: e.id, type: "expense", title: e.description, description: `$${e.amount} - ${e.category}`, timestamp: e.date });
@@ -2206,6 +2206,41 @@ export class SupabaseStorage implements IStorage {
       .rpc("bump_user_data_version", { p_user_id: this.userId });
     if (error) throw error;
     return Number(data || 0);
+  }
+
+  /**
+   * The per-domain version map (migration 20260825).
+   *
+   * `{ epoch, <domain>: <n>, ... }`. The epoch is in every cache key, so a
+   * write that names no domain — or that an older instance made through the
+   * one-argument RPC — still invalidates everything, which is the pre-migration
+   * behavior and the correct direction to fail in.
+   */
+  async getDataVersions(): Promise<Record<string, number>> {
+    const { data, error } = await this.supabase
+      .from("user_data_versions").select("version,domains")
+      .eq("user_id", this.userId).maybeSingle();
+    if (error) throw error;
+    const domains = (data?.domains && typeof data.domains === "object") ? data.domains as Record<string, unknown> : {};
+    const out: Record<string, number> = { epoch: Number(data?.version || 0) };
+    for (const [k, v] of Object.entries(domains)) {
+      const n = Number(v);
+      if (Number.isFinite(n)) out[k] = n;
+    }
+    return out;
+  }
+
+  async bumpDataVersions(domains: string[] = []): Promise<Record<string, number>> {
+    const { data, error } = await this.supabase
+      .rpc("bump_user_domain_versions", { p_user_id: this.userId, p_domains: domains });
+    if (error) throw error;
+    const map = (data && typeof data === "object") ? data as Record<string, unknown> : {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(map)) {
+      const n = Number(v);
+      if (Number.isFinite(n)) out[k] = n;
+    }
+    return out;
   }
 
   // ── Shared response cache (migration 20260731_response_cache) ─────────────
@@ -6152,6 +6187,12 @@ export class SupabaseStorage implements IStorage {
     // whether DB pushdown is safe (see _dbFilterIds), but we don't want to
     // serialize the wave. await it as the very first thing after Promise.all.
     const profilesPromise = this.getProfiles();
+    // Recent Activity has to be able to show a payment. Started here so the one
+    // bounded, indexed read overlaps the rest of the wave instead of adding to
+    // the critical path.
+    const recentPaymentsPromise = Promise.resolve(
+      (this as any).getRecentLiabilityPayments?.(10),
+    ).catch(() => [] as any[]);
     // Best-effort pushdown: if the caller passed a filter that contains NO
     // self profile, the unified rule reduces to "linked_profiles ∩
     // selection ≠ ∅" — which the GIN-indexed cs.[id] check enforces. When
@@ -6333,6 +6374,17 @@ export class SupabaseStorage implements IStorage {
       jCursor = tzAddDays(jCursor, -1);
     }
 
+    // Payments on liabilities the current filter can see. `linkedProfiles` does
+    // not exist on a payment row — a payment belongs to its liability — so the
+    // scope check follows the liability, exactly like the balance does.
+    const liabilityInScope = (p: Profile) =>
+      !fpIds || fpIds.length === 0 ||
+      fpIds.includes(p.id) ||
+      (!!p.parentProfileId && fpIds.includes(p.parentProfileId));
+    const visibleLiabilityIds = new Set(allProfiles.filter(liabilityInScope).map((p) => p.id));
+    const recentLiabilityPayments = ((await recentPaymentsPromise) || [])
+      .filter((p: any) => p && visibleLiabilityIds.has(p.liabilityProfileId));
+
     const recentJournal = [...filteredJournal].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     const currentMood = recentJournal.length > 0 ? recentJournal[0].mood as MoodLevel : undefined;
 
@@ -6353,6 +6405,14 @@ export class SupabaseStorage implements IStorage {
       weeklyEntries,
       streaks,
       recentActivity: [
+        ...recentLiabilityPayments.map((p: any) => {
+          const liability = allProfiles.find((x) => x.id === p.liabilityProfileId);
+          return {
+            type: 'liability_payment',
+            description: `Paid $${p.amount} — ${liability?.name || 'liability'}`,
+            timestamp: p.createdAt || p.paymentDate,
+          };
+        }),
         ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
           type: 'tracker_entry',
           description: (() => {
@@ -6515,12 +6575,15 @@ export class SupabaseStorage implements IStorage {
       const scopedProfilesForExp = allProfiles.filter(p =>
         matchesProfileEnhanced([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
       for (const rule of rulesFromAll({ profiles: scopedProfilesForExp, documents: filteredDocs })) {
-        // Only things that EXPIRE. `countdownEnabled` is wider than that — it
-        // covers due dates and deadlines too — and only liability profiles have
-        // their payment rules stripped, so an insurance profile's
-        // `premiumDueDate` landed in the Documents-expiring tile reading
-        // "Expired 3d ago". A bill belongs on the bills surface.
-        if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;
+        // Things that EXPIRE anywhere, plus what a DOCUMENT says is DUE.
+        //
+        // Expiry alone was too narrow (user report 2026-08-25): a parking
+        // citation due in 31 days is exactly the "act before this date" record
+        // this tile exists for, and it does not "expire". The source test is
+        // what keeps the old bug fixed — a `premiumDueDate` typed onto an
+        // insurance PROFILE is a bill and still belongs on the bills surface,
+        // so only document-carried due dates join the expiries here.
+        if (!isDocumentAttentionRule(rule)) continue;
         const daysUntil = daysBetweenISO(today, rule.date);
         expiringDocs.push({
           documentId: rule.sourceEntityId,
@@ -6535,6 +6598,11 @@ export class SupabaseStorage implements IStorage {
           expirationDate: rule.date,
           daysUntil,
           ruleId: rule.id,
+          // What KIND of date this is, so every surface can say "Due in 31
+          // days" where it means due and "Expires" where it means expires,
+          // instead of labelling everything an expiration.
+          ruleType: rule.ruleType,
+          ruleSubtype: rule.ruleSubtype,
           // A rule can come from a PROFILE (a passport expiration typed onto a
           // person), and `/documents/<profileId>` is not a page. The rule
           // already knows where its record lives.
@@ -7499,6 +7567,24 @@ export class SupabaseStorage implements IStorage {
       });
     } catch (e) { /* best-effort */ }
     return true;
+  }
+
+  /**
+   * The most recent payments across ALL liabilities.
+   *
+   * Recent Activity is built from tracker entries, completed tasks and
+   * expenses — so recording a payment, one of the most consequential things a
+   * person does in this app, never appeared in it at any latency. That is not a
+   * caching problem and no invalidation would have fixed it: the feed simply
+   * did not read this table. One indexed, bounded query.
+   */
+  async getRecentLiabilityPayments(limit: number = 10): Promise<LiabilityPayment[]> {
+    const { data, error } = await this.supabase.from("liability_payments")
+      .select("*").eq("user_id", this.userId)
+      .order("created_at", { ascending: false })
+      .limit(Math.max(1, Math.min(50, limit)));
+    if (error) throw error;
+    return (data || []).map(r => this.rowToLiabilityPayment(r));
   }
 
   async getLiabilityPayments(liabilityProfileId: string): Promise<LiabilityPayment[]> {

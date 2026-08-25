@@ -26,6 +26,10 @@ import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { registerCacheBuster } from "./cache-bus";
+import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
+import { applyLiabilityPayment } from "./liability-payments";
+import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
+import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
@@ -36,8 +40,10 @@ import {
 } from "@shared/extraction-destinations";
 import { findIdentityMatches } from "@shared/tracker-identity";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
-import { checkProfileRename } from "@shared/profile-rename";
-import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
+import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
+import { cascadeProfileRename } from "./profile-rename-cascade";
+import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
+import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
 
@@ -458,61 +464,106 @@ const responseCache = new Map<string, { data: any; expiresAt: number }>();
 // every OTHER instance computes within ~VERSION_MEMO_MS, so stale entries
 // simply stop being addressable. Old entries age out via their TTL.
 const VERSION_MEMO_MS = 2000;
-const versionMemo = new Map<string, { v: number; at: number }>();
-async function currentDataVersion(uid: string): Promise<number> {
+const versionMemo = new Map<string, { v: Record<string, number>; at: number }>();
+
+/**
+ * Per-domain versions, or a single epoch?
+ *
+ * Set PER_DOMAIN_VERSIONS=0 to collapse every cache key back to the epoch
+ * alone — exactly the pre-migration behavior. Rolling that back is an env flip,
+ * not a deploy, because this is the one change here that can serve genuinely
+ * stale data if a prefix under-declares what it reads.
+ */
+const PER_DOMAIN_VERSIONS = () =>
+  process.env.PER_DOMAIN_VERSIONS !== "0" && process.env.PER_DOMAIN_VERSIONS !== "false";
+
+/** This instance's view of a user's version map, memoized for ~2s. */
+async function currentVersions(uid: string): Promise<Record<string, number>> {
   const hit = versionMemo.get(uid);
   if (hit && Date.now() - hit.at < VERSION_MEMO_MS) return hit.v;
-  const v = await (storage as any).getDataVersion?.() ?? 0;
-  if (versionMemo.size > 5000) versionMemo.clear();
-  versionMemo.set(uid, { v: Number(v) || 0, at: Date.now() });
-  return Number(v) || 0;
-}
-/**
- * Bump the user's data version and WAIT for it.
- *
- * The fire-and-forget bump (used by the write middleware, where a pre-handler
- * bump already covers the request) is not enough for AI chat: the chat reply is
- * the client's cue to refetch, so if the bump is still in flight when the reply
- * lands, the refetch computes the PRE-write cache key and is served pre-write
- * data — which React Query then stores as fresh for a full staleTime. That is
- * the "AI said it saved it, the page doesn't show it until I refresh" bug.
- * Awaiting this before sending the reply makes the response a read-your-writes
- * barrier.
- *
- * Returns the new version so it can be handed to the client as a token (see
- * DATA_VERSION_HEADER below); undefined if the storage can't report one, in
- * which case callers fall back to today's behavior.
- */
-export async function bumpDataVersionNow(uid: string): Promise<number | undefined> {
-  versionMemo.delete(uid);
+  let map: Record<string, number> = {};
   try {
-    const raw = await (storage as any).bumpDataVersion?.();
-    const v = Number(raw);
-    if (Number.isFinite(v) && v > 0) {
-      versionMemo.set(uid, { v, at: Date.now() });
-      return v;
+    const raw = await (storage as any).getDataVersions?.();
+    // `!Array.isArray`: an array is an object, and a storage double that answers
+    // unknown methods with [] would otherwise be read as "no versions at all".
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) map = raw as Record<string, number>;
+    else {
+      const legacy = Number(await (storage as any).getDataVersion?.());
+      if (Number.isFinite(legacy)) map = { [EPOCH_KEY]: legacy };
     }
-  } catch { /* the next GET resolves the version from the DB */ }
+  } catch { /* fail open: no version known, same-instance busting still applies */ }
+  if (versionMemo.size > 5000) versionMemo.clear();
+  versionMemo.set(uid, { v: map, at: Date.now() });
+  return map;
+}
+
+/**
+ * Bump the versions of the domains a request wrote, and WAIT for it.
+ *
+ * The wait is the point. The response to a write is what tells the client to
+ * refetch; if the bump is still in flight when that response lands, the refetch
+ * computes the PRE-write cache key and can be served pre-write data, which
+ * React Query then stores as fresh for a full staleTime. That was "it saved,
+ * but the page doesn't show it until I refresh".
+ *
+ * What changed is the SCOPE. This used to bump one counter that appeared in
+ * every cache key, so saving a tracker entry made the dashboard, the expense
+ * list and the calendar unaddressable too — every write cold-started the whole
+ * account. Now a write moves only the domains it touched (plus the epoch, which
+ * every key carries, so an unnamed or unknown domain still invalidates all).
+ *
+ * Returns the new map for the client's read-your-writes token; undefined when
+ * storage can't report one, in which case callers keep their old behavior.
+ */
+export async function bumpDataVersionNow(
+  uid: string,
+  domains: string[] = [],
+): Promise<Record<string, number> | undefined> {
+  versionMemo.delete(uid);
+  // An empty domain list is how the RPC is told "invalidate everything": it
+  // moves the account-wide epoch, which every cache key carries. So a write
+  // that named "everything" — or that could not be classified at all — must
+  // send NO domains rather than the rest of its list, or it would quietly
+  // invalidate less than it asked for.
+  const nuclear = !PER_DOMAIN_VERSIONS() || domains.some((d) => d === "everything");
+  const names = nuclear
+    ? []
+    : domains.filter((d): d is string => typeof d === "string" && d.length > 0);
+  try {
+    const raw = await (storage as any).bumpDataVersions?.(names);
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      const map = raw as Record<string, number>;
+      versionMemo.set(uid, { v: map, at: Date.now() });
+      return map;
+    }
+  } catch { /* fall through to the legacy counter */ }
+  try {
+    const v = Number(await (storage as any).bumpDataVersion?.());
+    if (Number.isFinite(v) && v > 0) {
+      const map = { [EPOCH_KEY]: v };
+      versionMemo.set(uid, { v: map, at: Date.now() });
+      return map;
+    }
+  } catch { /* the next GET resolves versions from the DB */ }
   return undefined;
 }
 
 /**
  * Read-your-writes token. A client that has just been told "saved" sends the
- * data version it was given on every subsequent GET; this instance then uses
- * max(its own memo, the client's token) to build the cache key.
+ * versions it was given on every subsequent GET; this instance then uses the
+ * per-domain max of its own memo and the client's token to build cache keys.
  *
- * Awaiting the bump (above) alone does NOT close the window: the response cache
- * is per-instance and each instance memoizes the version for VERSION_MEMO_MS,
- * so a GET landing on a DIFFERENT warm instance within ~2s still computes the
+ * Awaiting the bump alone does NOT close the window: the response cache is
+ * per-instance and each instance memoizes versions for VERSION_MEMO_MS, so a
+ * GET landing on a DIFFERENT warm instance within ~2s still computes the
  * pre-write key. The token makes that instance compute the post-write key
  * regardless of what its own memo says.
  */
 export const DATA_VERSION_HEADER = "x-data-version";
-// A client token can only ever move the key FORWARD, and only within a sane
-// distance of the version we know about — so a buggy or hostile value costs
-// that one user some cache misses and nothing else. Keys are per-user, so no
-// other account can be affected.
-const MAX_VERSION_LOOKAHEAD = 1000;
+
+export { MAX_VERSION_LOOKAHEAD };
+
+/** Legacy single-counter form, kept for the tests that pin its clamping. */
 export function resolveDataVersion(memoVersion: number, headerValue: unknown): number {
   const raw = Number(Array.isArray(headerValue) ? headerValue[0] : headerValue);
   if (!Number.isFinite(raw) || raw <= memoVersion) return memoVersion;
@@ -538,12 +589,27 @@ function applyStructuredArray<T extends Record<string, any>>(
   merged[key] = mergeStructuredRecords(existingFields[key], incoming, keyOf, fromLegacyString);
 }
 
-function cacheUserKey(req: { userId?: string }): string {
+/**
+ * The per-user, per-prefix cache key segment.
+ *
+ * `prefix` names WHICH cache this key is for, because that decides which
+ * domains' versions belong in the stamp (shared/cache-domains.ts). Omit it and
+ * the key depends on everything — the old behavior, and the safe default for
+ * anything unclassified.
+ *
+ * Callers on the WRITE path pass no prefix and get a bare user id: writes never
+ * resolve versions, and `bustCache(\`stats:${uid}\`)` still prefix-matches every
+ * stamped variant of that key.
+ */
+function cacheUserKey(req: { userId?: string }, prefix?: string): string {
   if (!req.userId) return `nouser-${Math.random().toString(36).slice(2)}`;
-  const v = (req as any).__dataVersion;
-  // Version resolved by the GET middleware below. Fallback "x" (no version
-  // known) still produces a stable key — same-instance busting covers it.
-  return v !== undefined ? `${req.userId}@v${v}` : req.userId;
+  const versions = (req as any).__dataVersions as Record<string, number> | undefined;
+  // Versions are resolved by the GET middleware below. None known (a write, or
+  // a failed resolve) still produces a stable key — same-instance busting
+  // covers it.
+  if (!versions) return req.userId;
+  if (!PER_DOMAIN_VERSIONS()) return `${req.userId}@v${Number(versions[EPOCH_KEY]) || 0}`;
+  return `${req.userId}@${versionStamp(prefix ?? "", versions)}`;
 }
 function getCached(key: string): any | null {
   if (!CACHE_ENABLED) return null;
@@ -776,6 +842,9 @@ export function shouldBustCaches(method: string, path: string): boolean {
 // This wraps res.json so a successful response is not sent until the version
 // bump has completed, and carries the new version back as the client's
 // read-your-writes token.
+/** Longest a write may wait for its version bump before answering anyway. */
+const BARRIER_TIMEOUT_MS = 3000;
+
 const AI_WRITE_BARRIER_PATHS = new Set([
   "/api/upload",
   "/api/upload/batch",
@@ -803,6 +872,18 @@ const AI_WRITE_BARRIER_PATHS = new Set([
  * A header rather than a body field, deliberately: it works for every route
  * regardless of what shape its response has, including deletes that return no
  * JSON at all.
+ *
+ * The same barrier carries the WRITE MANIFEST — what this request actually
+ * changed, recorded by the storage proxy as it wrote (server/write-journal.ts).
+ * Both go out before the response, in this order:
+ *
+ *   db write committed → caches busted + version bumped → manifest attached
+ *   → response sent → client patches its cache from the manifest → dependent
+ *   queries refresh
+ *
+ * The old ordering ended at "response sent" and left the client to guess the
+ * rest, which is why a payment's own row appeared instantly while the balance
+ * it moved took a refetch to catch up.
  */
 function writeBarrierMiddleware(req: any, res: any, next: any) {
   const method = String(req.method || "").toUpperCase();
@@ -814,39 +895,87 @@ function writeBarrierMiddleware(req: any, res: any, next: any) {
   const uid = (req as AuthenticatedRequest).userId;
   if (!uid) return next();
   // /api/chat runs the barrier inline (it must land before the SSE `final`
-  // frame, which never goes through res.json).
-  if (req.path === "/api/chat") return next();
+  // frame, which never goes through res.json). It still opens a journal below —
+  // its manifest reaches the client in the SSE body instead of a header.
+  const inlineBarrier = req.path === "/api/chat";
+
+  const journal = createWriteJournal();
 
   let barrierDone = false;
   const settle = (send: () => void, body: any) => {
     if (barrierDone || res.statusCode >= 400) { send(); return; }
     barrierDone = true;
+    attachWriteManifest(res, journal);
     bustUserCaches(uid);
-    Promise.resolve(bumpDataVersionNow(uid))
+    // The barrier holds the response open until the version bump lands. That
+    // ordering is the point — but it must never be able to hold it open
+    // FOREVER. An upstream call with no timeout would otherwise turn a slow
+    // Postgres round trip into a hung write. Past the deadline the response
+    // goes out without the token; the client falls back to its own version
+    // memo, which is how every write behaved before the barrier existed.
+    let sent = false;
+    const sendOnce = () => { if (!sent) { sent = true; send(); } };
+    const deadline = setTimeout(sendOnce, BARRIER_TIMEOUT_MS);
+    (deadline as any).unref?.();
+    // Only the domains this request actually wrote. A write that reported none
+    // (or reported "everything") still moves the epoch, which every cache key
+    // carries — so an unclassifiable write invalidates all of them, exactly as
+    // every write used to.
+    Promise.resolve(bumpDataVersionNow(uid, journal.drain().domains))
       .then((v) => {
         if (v === undefined) return;
-        try { res.setHeader(DATA_VERSION_HEADER, String(v)); } catch { /* headers already sent */ }
+        try { res.setHeader(DATA_VERSION_HEADER, encodeVersionMap(v)); } catch { /* headers already sent */ }
         // The AI write routes also carry it in the body, which their clients
         // already read; keep that contract.
         if (isAiWrite && body && typeof body === "object" && !Array.isArray(body)) {
-          try { (body as any).dataVersion = v; } catch { /* frozen body */ }
+          try { (body as any).dataVersion = encodeVersionMap(v); } catch { /* frozen body */ }
         }
       })
       .catch(() => { /* fall through: the client keeps its old behavior */ })
-      .finally(send);
+      .finally(() => { clearTimeout(deadline); sendOnce(); });
   };
 
-  const sendJson = res.json.bind(res);
-  res.json = (body: any) => {
-    settle(() => sendJson(body), body);
-    return res;
-  };
-  const sendStatus = res.sendStatus.bind(res);
-  res.sendStatus = (code: number) => {
-    settle(() => sendStatus(code), null);
-    return res;
-  };
-  next();
+  if (!inlineBarrier) {
+    const sendJson = res.json.bind(res);
+    res.json = (body: any) => {
+      settle(() => sendJson(body), body);
+      return res;
+    };
+    const sendStatus = res.sendStatus.bind(res);
+    res.sendStatus = (code: number) => {
+      settle(() => sendStatus(code), null);
+      return res;
+    };
+    // A handler that answers with res.send or a bare res.end (the 204 paths)
+    // used to skip the barrier entirely and ship no manifest at all.
+    const sendRaw = res.send.bind(res);
+    res.send = (body?: any) => {
+      settle(() => sendRaw(body), body);
+      return res;
+    };
+    const endRaw = res.end.bind(res);
+    res.end = (...args: any[]) => {
+      settle(() => endRaw(...args), null);
+      return res;
+    };
+  }
+
+  // Everything the handler does — including the AI tool calls that /api/chat
+  // makes — runs inside the journal, so the manifest describes the whole turn.
+  writeJournalContext.run(journal, next);
+}
+
+/**
+ * Put the request's change manifest on the response, degrading rather than
+ * failing: an unencodable or oversize manifest simply isn't sent, and the
+ * client falls back to the behavior it had before manifests existed.
+ */
+function attachWriteManifest(res: any, journal: WriteJournal): void {
+  try {
+    if (!journal.dirty) return;
+    const encoded = encodeWriteManifest(journal.drain());
+    if (encoded) res.setHeader(WRITE_MANIFEST_HEADER, encoded);
+  } catch { /* headers already sent, or a row that won't serialize */ }
 }
 
 function cacheBustMiddleware(req: any, res: any, next: any) {
@@ -907,7 +1036,21 @@ function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
   (watchdog as any).unref?.();
   return p;
 }
+/**
+ * Drop every cached response under a key prefix.
+ *
+ * The prefix MUST include the user id. `bustCache("enhanced:")` looks like it
+ * clears the caller's dashboard; it actually clears the dashboard of every user
+ * whose request happened to land on this warm instance, cold-starting a ~15
+ * query recompute for each of them. Dozens of those calls had accumulated —
+ * one person saving a tracker entry was making the app slow for strangers.
+ * They were also redundant: bustUserCaches() already covers every per-user
+ * prefix for the writing user, correctly scoped.
+ */
 function bustCache(prefix: string): void {
+  if (process.env.NODE_ENV !== "production" && /^[a-z-]+:$/.test(prefix)) {
+    log.warn(`[cache] bustCache("${prefix}") has no user id — this clears every user on this instance. Use bustCache(\`${prefix}\${uid}\`).`);
+  }
   for (const key of responseCache.keys()) {
     if (key.startsWith(prefix)) responseCache.delete(key);
   }
@@ -1096,7 +1239,7 @@ export async function registerRoutes(
     // The client READS X-Data-Version off write responses to build its
     // read-your-writes token; without this it is invisible to cross-origin
     // callers (the Capacitor shell) and those writes silently lose the barrier.
-    res.setHeader("Access-Control-Expose-Headers", "X-Data-Version, X-Total-Count");
+    res.setHeader("Access-Control-Expose-Headers", "X-Data-Version, X-Write-Manifest, X-Total-Count");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
@@ -1198,12 +1341,14 @@ export async function registerRoutes(
       try {
         // Version-stamp the cache keys exactly like cacheUserKey() does for a
         // GET, so a warmed entry is addressable by the real request that follows
-        // and can never serve a stale (pre-write) version.
-        const v = await currentDataVersion(authed.userId);
-        const uid = `${authed.userId}@v${v}`;
-        const ckStats = `stats:${uid}:${filterKey}`;
-        const ckEnh = `enhanced:${uid}:${filterKey}`;
-        const ckProf = `profiles:${uid}`;
+        // and can never serve a stale (pre-write) version. Per prefix, because
+        // stamps are per prefix now — a key warmed under the wrong stamp is
+        // simply never read, which is a warmup that quietly does nothing.
+        const versions = await currentVersions(authed.userId);
+        const keyFor = (prefix: string) => `${authed.userId}@${versionStamp(prefix, versions)}`;
+        const ckStats = `stats:${keyFor("stats:")}:${filterKey}`;
+        const ckEnh = `enhanced:${keyFor("enhanced:")}:${filterKey}`;
+        const ckProf = `profiles:${keyFor("profiles:")}`;
         try { (scoped as any).enableRequestMemo?.(); } catch {}
         // getCachedShared: skip the recompute when ANY instance already holds
         // a live entry, not just this one.
@@ -1234,9 +1379,9 @@ export async function registerRoutes(
     // resolveDataVersion. A client that was just told "saved" carries the
     // post-write version, so it can never be served this instance's pre-write
     // cache entry even while the 2s memo is still stale.
-    const token = req.headers[DATA_VERSION_HEADER];
-    currentDataVersion(uid)
-      .then((v) => { (req as any).__dataVersion = resolveDataVersion(v, token); next(); })
+    const token = decodeVersionMap(req.headers[DATA_VERSION_HEADER]);
+    currentVersions(uid)
+      .then((own) => { (req as any).__dataVersions = mergeVersionMaps(own, token); next(); })
       .catch(() => next());
   });
 
@@ -1264,6 +1409,9 @@ export async function registerRoutes(
         // Fire-and-forget here: a pre-handler bump already covers this
         // request, so nothing is waiting on the result. AI chat needs the
         // awaited form instead — see bumpDataVersionNow's doc comment.
+        // Fallback only (see below): the turn's own domains are long gone by
+        // 'finish', so this bumps the epoch alone — which invalidates
+        // everything, the safe answer for a turn that bailed out mid-write.
         const bumpVersion = () => { void bumpDataVersionNow(uid); };
         // PERF (2026-08-17): a chat turn only invalidates when it actually
         // MUTATED something. The unconditional bump made every "open my
@@ -1282,16 +1430,17 @@ export async function registerRoutes(
             // but bailed out before reaching that code.
             if ((res as any).locals?.chatMutated && !(res as any).locals?.chatVersionBumped) bumpVersion();
           });
-        } else {
-          // Pre-handler bump covers fast writes; the finish bump covers long
-          // writes whose DB writes land DURING the handler, so a GET racing
-          // mid-handler can't leave stale version-stamped data behind.
-          // Pre-handler bump covers fast writes. The post-write bump that used
-          // to run on 'finish' now runs BEFORE the response, awaited, in
-          // writeBarrierMiddleware — a bump after the response is on the wire
-          // is too late to help the refetch that response triggers.
-          bumpVersion();
         }
+        // Every other write: NO bump here. writeBarrierMiddleware issues one
+        // awaited bump after the write commits and before the response is sent,
+        // which is the only bump whose ordering actually helps. This
+        // pre-handler bump was a second Postgres RPC per write, on the critical
+        // path of the same request, doing nothing the barrier's bump doesn't —
+        // any entry a GET cached mid-handler is made unaddressable by the
+        // barrier's bump before the write response reaches the client.
+        //
+        // cacheBustMiddleware's PRE-HANDLER BUST is a different mechanism and
+        // stays: it clears this instance's entries, which no version bump does.
       }
     }
     next();
@@ -1531,9 +1680,13 @@ export async function registerRoutes(
         // warm instances too. Best-effort: an unavailable counter leaves
         // dataVersion undefined and the client behaves as it did before.
         const tBumpStart = Date.now();
-        const v = await bumpDataVersionNow(userId);
+        // Only the domains this turn actually wrote — read from the same write
+        // journal every other route uses, so a chat turn and a form submission
+        // invalidate on identical terms.
+        const turnDomains = writeJournalContext.getStore()?.drain().domains ?? [];
+        const v = await bumpDataVersionNow(userId, turnDomains);
         tBump = Date.now() - tBumpStart;
-        if (v !== undefined) (result as any).dataVersion = v;
+        if (v !== undefined) (result as any).dataVersion = encodeVersionMap(v);
         // The finish-hook in the write middleware bumps again unless it
         // is told the barrier above already did it — see chatVersionBumped.
         res.locals.chatVersionBumped = true;
@@ -2554,6 +2707,12 @@ ${JSON.stringify(ctx, null, 2)}`;
     try {
       const { extractionId, targetProfileId, items } = req.body;
       let { confirmedFields, createCalendarEvents, trackerEntries } = req.body;
+      // The Calendar section's decisions — one per recognised date. See
+      // shared/extraction-calendar for why they travel separately from
+      // `createCalendarEvents`: a date the RECORD owns needs no event, only
+      // permission to be derived.
+      const calendarDates: CalendarDateDecision[] = Array.isArray(req.body?.calendarDates)
+        ? req.body.calendarDates : [];
       if (!extractionId) {
         return res.status(400).json({ error: "extractionId required" });
       }
@@ -2784,7 +2943,35 @@ ${JSON.stringify(ctx, null, 2)}`;
             // calendar, Upcoming and Important Dates could all see and none
             // could understand. See shared/date-rules.
             const normalizedDoc = normalizeEntityDateFields(updatedData, { contextKey: docContextForDates });
-            await storage.updateDocument(extractionId, { extractedData: normalizedDoc.fields });
+            // ── The user's calendar decisions, kept ON the record ───────────
+            // A date the record owns reaches the calendar by being derived
+            // (shared/date-rules), so "don't put this on my calendar" cannot be
+            // expressed by NOT creating something — there is nothing to skip.
+            // It is recorded here instead, as an opt-out list the rule engine
+            // reads, which is also what makes the choice durable: edit the date
+            // later and the same decision still applies; clear the opt-out and
+            // the calendar entry comes back. No copy, nothing to drift.
+            const docFields: Record<string, any> = { ...normalizedDoc.fields };
+            const priorOptOut: string[] = Array.isArray((doc.extractedData as any)?.[CALENDAR_OPT_OUT_KEY])
+              ? (doc.extractedData as any)[CALENDAR_OPT_OUT_KEY].map((v: any) => String(v))
+              : [];
+            if (calendarDates.length > 0) {
+              const decidedOff = calendarDates.filter((d) => d && d.addToCalendar === false)
+                .map((d) => String(d.path || d.field)).filter(Boolean);
+              const decidedOn = new Set(calendarDates.filter((d) => d && d.addToCalendar !== false)
+                .map((d) => normalizeFieldKey(d.path || d.field)));
+              const next = [
+                // Keep earlier opt-outs the user did not just revisit…
+                ...priorOptOut.filter((k) => !decidedOn.has(normalizeFieldKey(k))),
+                ...decidedOff,
+              ];
+              const deduped = Array.from(new Set(next.map((k) => String(k)).filter(Boolean)));
+              if (deduped.length > 0) docFields[CALENDAR_OPT_OUT_KEY] = deduped;
+              else delete docFields[CALENDAR_OPT_OUT_KEY];
+            } else if (priorOptOut.length > 0) {
+              docFields[CALENDAR_OPT_OUT_KEY] = priorOptOut;
+            }
+            await storage.updateDocument(extractionId, { extractedData: docFields });
             // Record what LANDED, and under the value that landed — Step 2 has
             // to know not just that the field saved but that a rule can be
             // derived from it.
@@ -3042,7 +3229,26 @@ ${JSON.stringify(ctx, null, 2)}`;
       // A date the classifier does NOT recognise (a one-off "House Viewing"
       // printed on an invitation) has no source field to be derived from, so
       // it still becomes a real event — that is the only case left.
-      if (createCalendarEvents && createCalendarEvents.length > 0) {
+      // The candidate events: the classifier's own suggestions (dates it does
+      // NOT recognise as a rule) PLUS every recognised date the user ticked in
+      // the Calendar section. The `covered` test below is what keeps the second
+      // group from becoming a duplicate: a date the record owns is derived, so
+      // it is skipped here — but a ticked date whose field did not persist, or
+      // which no rule can be derived from, still gets the real event it needs
+      // instead of silently going nowhere.
+      const calendarEventCandidates = [
+        ...(Array.isArray(createCalendarEvents) ? createCalendarEvents : []),
+        ...calendarDates
+          .filter((d) => d && d.addToCalendar !== false && d.field && d.date)
+          .map((d) => ({
+            field: String(d.path || d.field),
+            date: String(d.date),
+            title: d.title || `📅 ${d.field}`,
+            category: d.category || "other",
+          })),
+      ].filter((e, i, arr) =>
+        arr.findIndex((o) => normalizeFieldKey(o.field) === normalizeFieldKey(e.field)) === i);
+      if (calendarEventCandidates.length > 0) {
         // A date is only DERIVED if its field actually PERSISTED.
         //
         // `createCalendarEvents` arrives independently of `confirmedFields`, so
@@ -3050,14 +3256,21 @@ ${JSON.stringify(ctx, null, 2)}`;
         // Step 0's write threw, neither does one that was ticked. Suppressing
         // the event in either case loses the date entirely while the response
         // still reports success, so the set below is the fields that landed.
-        for (const event of createCalendarEvents) {
+        for (const event of calendarEventCandidates) {
           try {
             // A rule must be DERIVABLE, not merely plausible. A value the date
             // engine rejects — a range, a sentence, a timestamp — still
             // classifies as actionable from its field NAME, so suppressing on
             // classification alone left the date on no surface at all while
             // the response reported success.
-            const key = normalizeFieldKey(event.field);
+            // A field may arrive as a dotted PATH ("payment.dueDate"). What
+            // persisted was keyed on the leaf, so both spellings are tried —
+            // otherwise a nested date read as "not covered" and a duplicate
+            // event was created beside the derived rule.
+            const rawField = String(event.field ?? "");
+            const leaf = rawField.split(".").pop() || rawField;
+            const key = persistedFieldValues.has(normalizeFieldKey(rawField))
+              ? normalizeFieldKey(rawField) : normalizeFieldKey(leaf);
             const cls = classifyDateField(event.field, docContextForDates);
             // A document does not derive a BIRTHDAY — that belongs to the
             // person, and only the profile write above can carry it. With no
@@ -3073,6 +3286,11 @@ ${JSON.stringify(ctx, null, 2)}`;
               && (derivedByTheDocument || derivedByTheProfile);
             if (covered) {
               log.info(`[confirm-extraction] "${event.field}" is owned by its record — derived as a Date Rule, no standalone event`);
+              // Say so in the response. The date IS on the calendar — derived
+              // from the field rather than copied into an event — and a silent
+              // skip here is what made the whole thing feel like it did
+              // nothing (user report 2026-08-25).
+              saved.push(`Calendar: ${ruleTypeLabel(cls.ruleType)} ${bareDateOf(persistedFieldValues.get(key)) || ""}`.trim());
               continue;
             }
             // Parse date from the field value. Uses the shared parser so
@@ -3494,7 +3712,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
-    const userId = cacheUserKey(req as AuthenticatedRequest);
+    const userId = cacheUserKey(req as AuthenticatedRequest, "stats:");
     const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
@@ -3518,7 +3736,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
-    const userId = cacheUserKey(req as AuthenticatedRequest);
+    const userId = cacheUserKey(req as AuthenticatedRequest, "enhanced:");
     const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
@@ -3572,7 +3790,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
-    const userId = cacheUserKey(req as AuthenticatedRequest);
+    const userId = cacheUserKey(req as AuthenticatedRequest, "bootstrap:");
     const filterKey = filterIds?.join(",") || "all";
     const cacheKey = `bootstrap:${userId}:${filterKey}:${month}`;
     // Shared cache: an instance that never computed this bootstrap can still
@@ -3613,6 +3831,12 @@ ${JSON.stringify(ctx, null, 2)}`;
 
       // PERF: reuse the per-endpoint server caches so bootstrap is cheap when
       // /api/stats or /api/dashboard-enhanced have been hit in the last 15s.
+      // `userId` here carries the bootstrap: stamp. stats:, enhanced: and
+      // bootstrap: all declare "all", so the three stamps are identical and
+      // these seeds land on the keys the real /api/stats and
+      // /api/dashboard-enhanced requests will compute. That equality is pinned
+      // by tests/cache-key-domains.test.ts — narrowing one of the three without
+      // the others would leave this seeding writing keys nobody reads.
       const statsCacheKey = `stats:${userId}:${filterKey}`;
       const enhancedCacheKey = `enhanced:${userId}:${filterKey}`;
 
@@ -3843,7 +4067,7 @@ ${JSON.stringify(ctx, null, 2)}`;
   // ---- Insights ----
   app.get("/api/insights", asyncHandler(async (req, res) => {
     try {
-      const uid = cacheUserKey(req as AuthenticatedRequest);
+      const uid = cacheUserKey(req as AuthenticatedRequest, "insights-data:");
       const profileIdsParam = req.query.profileIds as string | undefined;
       const profileId = req.query.profileId as string | undefined;
       const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
@@ -4000,7 +4224,7 @@ ${JSON.stringify(ctx, null, 2)}`;
   // only needs id/type/name/avatar/parent. Skips heavy jsonb columns. MUST be
   // registered before /api/profiles/:id so "lite" isn't matched as an id.
   app.get("/api/profiles/lite", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "profiles-lite:");
     const ck = `profiles-lite:${uid}`;
     const hit = getCached(ck);
     if (hit) {
@@ -4019,7 +4243,7 @@ ${JSON.stringify(ctx, null, 2)}`;
   }));
 
   app.get("/api/profiles", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "profiles:");
     const ck = `profiles:${uid}`;
     const hit = getCached(ck);
     if (hit) {
@@ -4172,7 +4396,7 @@ ${JSON.stringify(ctx, null, 2)}`;
   // their per-endpoint caches so they're effectively free when warm.
   app.get("/api/profile-bootstrap/:id", asyncHandler(async (req, res) => {
     const profileId = req.params.id;
-    const userId = cacheUserKey(req as AuthenticatedRequest);
+    const userId = cacheUserKey(req as AuthenticatedRequest, "profile-bootstrap:");
     const cacheKey = `profile-bootstrap:${userId}:${profileId}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
@@ -4392,7 +4616,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     }
 
     const created = await storage.createProfile(parsed.data);
-    bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p1}:`);
+    bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`profile-detail:${uid_p1}:`);
 
     // Auto-ownership now lives in a single place: storage.createProfile resolves
     // the owning party from the parent chain (resolveAutoOwner) and links it at
@@ -4474,6 +4698,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         delete (req.body as any).fieldsToDelete;
       }
     }
+    let renamedFromName: string | undefined;
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
         return res.status(400).json({ error: "Profile name must be a non-empty string" });
@@ -4492,7 +4717,18 @@ ${JSON.stringify(ctx, null, 2)}`;
         existingProfile.name,
       );
       if (rename.status === "rejected") return res.status(409).json({ error: rename.error });
+      if (rename.status === "ok") renamedFromName = existingProfile.name;
       req.body.name = rename.name;
+    }
+    if (req.body.type !== undefined) {
+      // Same rule the AI path is held to, for the same reason: a record may
+      // become any KIND except the user's own, which the app resolves by type.
+      const current = await storage.getProfile(req.params.id);
+      if (!current) return res.status(404).json({ error: "Not found" });
+      const typeCheck = checkProfileTypeChange(current.type, req.body.type);
+      if (typeCheck.status === "rejected") return res.status(400).json({ error: typeCheck.error });
+      if (typeCheck.status === "unchanged") delete req.body.type;
+      else req.body.type = typeCheck.type;
     }
     // Manual entry follows the exact same rule as extraction and chat: a date
     // typed as "7/18/2034" is stored as 2034-07-18, so the Date Rule engine
@@ -4580,9 +4816,19 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
     }
 
+    const previousName: string | undefined = renamedFromName;
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    bustCache(`profiles:${uid_p2}`); bustCache(`stats:${uid_p2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);
+    // A rename carries into the titles the app generated from the old name —
+    // the same follow-up the chat tool does, so both doors leave the data in
+    // the same state. Best-effort; the rename itself has already landed.
+    if (previousName && updated.name && previousName !== updated.name) {
+      try { await cascadeProfileRename(storage, req.params.id, previousName, updated.name); }
+      catch (err) { console.warn("[routes:patch-profile] rename cascade failed:", err); }
+    }
+    // `enhanced:` with no uid dropped here: it cleared the dashboard of every
+    // user on this instance, and bustUserCaches() already covers this one.
+    bustCache(`profiles:${uid_p2}`); bustCache(`stats:${uid_p2}`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);
     // Invalidate the cached AI summary so it regenerates on next read. Stored
     // as a preference (profile_ai_<id>) with a 2h TTL — without this, edits to
     // fields like mileage / currentValue won't be reflected in the AI summary
@@ -4597,7 +4843,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const existing = await storage.getProfile(req.params.id);
     if (!existing) return res.status(404).json({ error: "Profile not found" });
     const ok = await storage.deleteProfile(req.params.id);
-    bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
+    bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
     if (!ok) {
       // Cascade had partial failures or the final row delete failed.
       // Surface as 500 so the client can show a real error instead of a
@@ -4629,7 +4875,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         } catch { /* non-critical */ }
       }
       const uid_pl1 = cacheUserKey(req as AuthenticatedRequest);
-      bustCache(`profiles:${uid_pl1}`); bustCache(`profile-detail:${uid_pl1}:`); bustCache(`enhanced:`); bustCache(`stats:${uid_pl1}`); bustCache(`${entityType}s:${uid_pl1}`);
+      bustCache(`profiles:${uid_pl1}`); bustCache(`profile-detail:${uid_pl1}:`); bustCache(`stats:${uid_pl1}`); bustCache(`${entityType}s:${uid_pl1}`);
       res.json({ ok: true });
     } catch (err: any) {
       console.error("[profile-link]", err?.message || err);
@@ -4641,7 +4887,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const { entityType, entityId } = req.body;
     await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
     const uid_pl2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`profiles:${uid_pl2}`); bustCache(`profile-detail:${uid_pl2}:`); bustCache(`enhanced:`); bustCache(`stats:${uid_pl2}`); bustCache(`${entityType}s:${uid_pl2}`);
+    bustCache(`profiles:${uid_pl2}`); bustCache(`profile-detail:${uid_pl2}:`); bustCache(`stats:${uid_pl2}`); bustCache(`${entityType}s:${uid_pl2}`);
     res.json({ ok: true });
   }));
 
@@ -5193,7 +5439,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
 
   // ---- Trackers ----
   app.get("/api/trackers", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "trackers:");
     const ck = `trackers:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getTrackers());
@@ -5273,7 +5519,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // newly added trackers wouldn't appear on dashboard / linked page until
     // the cache expired.
     const uid_tr1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:${uid_tr1}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr1}`); bustCache(`enhanced:`);
+    bustCache(`trackers:${uid_tr1}`); bustCache(`stats:${uid_tr1}`);
     res.status(201).json(created);
   }));
   app.patch("/api/trackers/:id", asyncHandler(async (req, res) => {
@@ -5294,7 +5540,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // expired (e.g. renaming a tracker would still show the old name on the
     // dashboard for up to 5 minutes).
     const uid_tr2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:${uid_tr2}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr2}`); bustCache(`enhanced:`);
+    bustCache(`trackers:${uid_tr2}`); bustCache(`stats:${uid_tr2}`);
     res.json(updated);
   }));
   app.post("/api/trackers/:id/entries", asyncHandler(async (req, res) => {
@@ -5399,8 +5645,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const entry = await storage.logEntry(parsed.data);
     if (!entry) return res.status(404).json({ error: "Tracker not found" });
-    const uid_te1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:`); bustCache(`stats:${uid_te1}`); bustCache(`enhanced:`);
+    const uid_te1 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_te1}`);
     res.status(201).json(entry);
   }));
   app.patch("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
@@ -5428,15 +5673,13 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     }
     const updated = await storage.updateTrackerEntry(req.params.id, req.params.entryId, patch);
     if (!updated) return res.status(404).json({ error: "Entry not found" });
-    const uid_tep = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:`); bustCache(`stats:${uid_tep}`); bustCache(`enhanced:`);
+    const uid_tep = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_tep}`);
     res.json(updated);
   }));
   app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     const deleted = await storage.deleteTrackerEntry(req.params.id, req.params.entryId);
     if (!deleted) return res.status(404).json({ error: "Entry not found" });
-    const uid_te2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:`); bustCache(`stats:${uid_te2}`); bustCache(`enhanced:`);
+    const uid_te2 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_te2}`);
     res.json({ success: true });
   }));
   // Convenience endpoint: delete tracker entry by entry ID only (for chat undo)
@@ -5472,8 +5715,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
       if (entry) {
         const updated = await storage.updateTrackerEntry(t.id, req.params.entryId, patch);
         if (!updated) return res.status(404).json({ error: "Entry not found" });
-        const uid_tep2 = cacheUserKey(req as AuthenticatedRequest);
-        bustCache(`trackers:`); bustCache(`stats:${uid_tep2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_tep2}:`);
+        const uid_tep2 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_tep2}`); bustCache(`profile-detail:${uid_tep2}:`);
         return res.json(updated);
       }
     }
@@ -5486,8 +5728,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
       if (entry) {
         const deleted = await storage.deleteTrackerEntry(t.id, req.params.entryId);
         if (deleted) {
-          const uid_te3 = cacheUserKey(req as AuthenticatedRequest);
-          bustCache(`trackers:`); bustCache(`stats:${uid_te3}`); bustCache(`enhanced:`);
+          const uid_te3 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_te3}`);
           return res.json({ success: true });
         }
       }
@@ -5501,7 +5742,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // Bug fix: deleted trackers stayed visible for up to 5 minutes because
     // the trackers list cache wasn't busted.
     const uid_tr3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:${uid_tr3}`); bustCache(`trackers:`); bustCache(`stats:${uid_tr3}`); bustCache(`enhanced:`);
+    bustCache(`trackers:${uid_tr3}`); bustCache(`stats:${uid_tr3}`);
     res.json({ success: true });
   }));
 
@@ -5582,8 +5823,7 @@ Rules:
     const entry = await storage.logEntry(parsed.data);
     if (!entry) return res.status(500).json({ error: "Failed to log entry" });
 
-    const uid_se = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`trackers:`); bustCache(`stats:${uid_se}`); bustCache(`enhanced:`);
+    const uid_se = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_se}`);
     res.status(201).json({
       entry,
       tracker: { id: tracker.id, name: tracker.name },
@@ -5593,7 +5833,7 @@ Rules:
 
   // ---- Tasks ----
   app.get("/api/tasks", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "tasks:");
     const ck = `tasks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getTasks>> = hit || await dedupe(ck, () => storage.getTasks());
@@ -5654,7 +5894,7 @@ Rules:
       source: "manual",
     });
     const uid_n1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_n1}`); bustCache(`stats:${uid_n1}`); bustCache(`enhanced:`);
+    bustCache(`artifacts:${uid_n1}`); bustCache(`stats:${uid_n1}`);
     res.status(result.deduped ? 200 : 201).json({ ...result.note, deduped: result.deduped });
   }));
   app.patch("/api/notes/:id", asyncHandler(async (req, res) => {
@@ -5666,14 +5906,14 @@ Rules:
     const updated = await updateNote(storage, req.params.id, changes);
     if (!updated) return res.status(404).json({ error: "Note not found" });
     const uid_n2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_n2}`); bustCache(`stats:${uid_n2}`); bustCache(`enhanced:`);
+    bustCache(`artifacts:${uid_n2}`); bustCache(`stats:${uid_n2}`);
     res.json(updated);
   }));
   app.delete("/api/notes/:id", asyncHandler(async (req, res) => {
     const ok = await deleteNote(storage, req.params.id);
     if (!ok) return res.status(404).json({ error: "Note not found" });
     const uid_n3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_n3}`); bustCache(`stats:${uid_n3}`); bustCache(`enhanced:`);
+    bustCache(`artifacts:${uid_n3}`); bustCache(`stats:${uid_n3}`);
     // Notes own no Date Rule, so nothing leaves the calendar with them.
     res.json({ success: true, dateRuleImpact: "none" });
   }));
@@ -5700,7 +5940,7 @@ Rules:
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newTask = await storage.createTask(parsed.data);
     const uid_t1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t1}`); bustCache(`notifications:${uid_t1}`);
+    bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`calendar:${uid_t1}`); bustCache(`notifications:${uid_t1}`);
     // TEMPORAL LAYER — the same step the chat path runs. A manually-created
     // task with a due date or a recurrence must reach the Calendar, Upcoming
     // and Recurring & Important Dates exactly as an AI-created one does.
@@ -5738,7 +5978,7 @@ Rules:
     const updated = await storage.updateTask(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_t2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`tasks:${uid_t2}`); bustCache(`stats:${uid_t2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t2}`); bustCache(`notifications:${uid_t2}`);
+    bustCache(`tasks:${uid_t2}`); bustCache(`stats:${uid_t2}`); bustCache(`calendar:${uid_t2}`); bustCache(`notifications:${uid_t2}`);
     // Re-derive after the edit: moving a due date moves the occurrence, and
     // clearing one removes it. Both fall out of the record automatically —
     // this reports the result so the caller never has to guess.
@@ -5749,14 +5989,14 @@ Rules:
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteTask(req.params.id);
     const uid_t3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`tasks:${uid_t3}`); bustCache(`stats:${uid_t3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t3}`); bustCache(`notifications:${uid_t3}`);
+    bustCache(`tasks:${uid_t3}`); bustCache(`stats:${uid_t3}`); bustCache(`calendar:${uid_t3}`); bustCache(`notifications:${uid_t3}`);
     res.json({ success: true });
   }));
   app.patch("/api/tasks/:id/restore", asyncHandler(async (req, res) => {
     const ok = await storage.restoreTask(req.params.id);
     if (!ok) return res.status(404).json({ error: "Task not found" });
     const uid_t4 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`tasks:${uid_t4}`); bustCache(`stats:${uid_t4}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_t4}`); bustCache(`notifications:${uid_t4}`);
+    bustCache(`tasks:${uid_t4}`); bustCache(`stats:${uid_t4}`); bustCache(`calendar:${uid_t4}`); bustCache(`notifications:${uid_t4}`);
     const task = await storage.getTask(req.params.id);
     res.json(task || { id: req.params.id, restored: true });
   }));
@@ -5940,7 +6180,7 @@ Rules:
 
   // ---- Expenses ----
   app.get("/api/expenses", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "expenses:");
     const ck = `expenses:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getExpenses());
@@ -6054,7 +6294,7 @@ Rules:
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newExpense = await storage.createExpense(parsed.data);
     const uid_e1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`); bustCache(`enhanced:`);
+    bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`);
     // Tell the caller when their text was altered — never change it silently.
     res.status(201).json(expenseSanitized ? { ...newExpense, warning: SANITIZE_NOTICE } : newExpense);
   }));
@@ -6074,20 +6314,20 @@ Rules:
     const updated = await storage.updateExpense(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_e2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`expenses:${uid_e2}`); bustCache(`stats:${uid_e2}`); bustCache(`enhanced:`);
+    bustCache(`expenses:${uid_e2}`); bustCache(`stats:${uid_e2}`);
     res.json(updated);
   }));
   app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted
     await storage.deleteExpense(req.params.id);
     const uid_e3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`); bustCache(`enhanced:`);
+    bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`);
     res.json({ success: true });
   }));
 
   // ---- Paychecks ----
   app.get("/api/paychecks", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "paychecks:");
     const ck = `paychecks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getPaychecks>> = hit || await dedupe(ck, () => storage.getPaychecks());
@@ -6130,7 +6370,7 @@ Rules:
     const uid_pc1 = cacheUserKey(req as AuthenticatedRequest);
     // Bug fix: paychecks list cache had a 3-min TTL but no busting on create —
     // newly added paychecks wouldn't appear on the Finance page until expiry.
-    bustCache(`paychecks:${uid_pc1}`); bustCache(`stats:${uid_pc1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc1}`);
+    bustCache(`paychecks:${uid_pc1}`); bustCache(`stats:${uid_pc1}`); bustCache(`cashflow:${uid_pc1}`);
     res.json(created);
   }));
 
@@ -6138,7 +6378,7 @@ Rules:
     const { actual_amount } = req.body;
     const updated = await storage.confirmPaycheck(req.params.id, actual_amount);
     const uid_pc2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`paychecks:${uid_pc2}`); bustCache(`stats:${uid_pc2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc2}`);
+    bustCache(`paychecks:${uid_pc2}`); bustCache(`stats:${uid_pc2}`); bustCache(`cashflow:${uid_pc2}`);
     res.json(updated);
   }));
 
@@ -6150,7 +6390,7 @@ Rules:
     // inventing a 404 it has no evidence for.
     await storage.deletePaycheck(req.params.id);
     const uid_pc3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`paychecks:${uid_pc3}`); bustCache(`stats:${uid_pc3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_pc3}`);
+    bustCache(`paychecks:${uid_pc3}`); bustCache(`stats:${uid_pc3}`); bustCache(`cashflow:${uid_pc3}`);
     res.json({ success: true });
   }));
 
@@ -6180,14 +6420,14 @@ Rules:
     if (!Array.isArray(entries)) return res.status(400).json({ error: "entries array required" });
     const created = await storage.createLoanSchedule(entries);
     const uid_ln1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`stats:${uid_ln1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_ln1}`); bustCache(`profile-detail:${uid_ln1}:`);
+    bustCache(`stats:${uid_ln1}`); bustCache(`cashflow:${uid_ln1}`); bustCache(`profile-detail:${uid_ln1}:`);
     res.json(created);
   }));
 
   app.patch("/api/loans/payment/:id/mark", asyncHandler(async (req, res) => {
     const updated = await storage.markLoanPayment(req.params.id);
     const uid_ln2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`stats:${uid_ln2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_ln2}`); bustCache(`profile-detail:${uid_ln2}:`);
+    bustCache(`stats:${uid_ln2}`); bustCache(`cashflow:${uid_ln2}`); bustCache(`profile-detail:${uid_ln2}:`);
     res.json(updated);
   }));
 
@@ -6237,7 +6477,7 @@ Rules:
 
   // ---- Events ----
   app.get("/api/events", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "events:");
     const ck = `events:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getEvents());
@@ -6264,7 +6504,7 @@ Rules:
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newEvent = await storage.createEvent(parsed.data);
     const uid_ev1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`events:${uid_ev1}`); bustCache(`stats:${uid_ev1}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev1}`);
+    bustCache(`events:${uid_ev1}`); bustCache(`stats:${uid_ev1}`); bustCache(`calendar:${uid_ev1}`);
     res.status(201).json(newEvent);
   }));
   app.patch("/api/events/:id", asyncHandler(async (req, res) => {
@@ -6280,7 +6520,7 @@ Rules:
     const updated = await storage.updateEvent(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_ev2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`events:${uid_ev2}`); bustCache(`stats:${uid_ev2}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev2}`);
+    bustCache(`events:${uid_ev2}`); bustCache(`stats:${uid_ev2}`); bustCache(`calendar:${uid_ev2}`);
     res.json(updated);
   }));
   app.delete("/api/events/:id", asyncHandler(async (req, res) => {
@@ -6288,7 +6528,7 @@ Rules:
     if (!existing) return res.status(404).json({ error: "Event not found" });
     await storage.deleteEvent(req.params.id);
     const uid_ev3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`events:${uid_ev3}`); bustCache(`stats:${uid_ev3}`); bustCache(`enhanced:`); bustCache(`calendar:${uid_ev3}`);
+    bustCache(`events:${uid_ev3}`); bustCache(`stats:${uid_ev3}`); bustCache(`calendar:${uid_ev3}`);
     res.json({ success: true });
   }));
 
@@ -6310,7 +6550,7 @@ Rules:
       // collapses concurrent identical requests. cacheBustMiddleware clears
       // the cache synchronously on every write, so staleness is bounded by
       // the next mutation, not the TTL.
-      const calUserId = cacheUserKey(req as AuthenticatedRequest);
+      const calUserId = cacheUserKey(req as AuthenticatedRequest, "caltimeline:");
       const calCacheKey = `caltimeline:${calUserId}:${start}:${end}:${profileIds?.join(",") || "all"}:${tz}`;
       const cached = await getCachedShared(calCacheKey);
       if (cached) return res.json(cached);
@@ -6499,7 +6739,7 @@ Rules:
 
       const doc = await storage.createDocument(req.body);
       const uid_d1 = cacheUserKey(req as AuthenticatedRequest);
-      bustCache(`documents:${uid_d1}`); bustCache(`stats:${uid_d1}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d1}:`); bustCache(`notifications:${uid_d1}`);
+      bustCache(`documents:${uid_d1}`); bustCache(`stats:${uid_d1}`); bustCache(`profile-detail:${uid_d1}:`); bustCache(`notifications:${uid_d1}`);
       res.status(201).json(doc);
     } catch (err: any) {
       console.error("[documents]", err?.message || err);
@@ -6529,7 +6769,7 @@ Rules:
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_d2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d2}:`); bustCache(`notifications:${uid_d2}`);
+    bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`profile-detail:${uid_d2}:`); bustCache(`notifications:${uid_d2}`);
     // A document's dates are calendar items, so an edit to them is a calendar
     // change too.
     bustCache(`caltimeline:${uid_d2}`); bustCache(`activity:${uid_d2}`);
@@ -6617,7 +6857,7 @@ Rules:
     // upcoming feed and the Important Dates list — not just the document list.
     // Omitting the calendar bust here is why a deleted licence's expiration
     // outlived it on screen.
-    bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
+    bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
     bustCache(`profiles:${uid_d3}`); bustCache(`events:${uid_d3}`); bustCache(`caltimeline:${uid_d3}`); bustCache(`activity:${uid_d3}`);
     res.json({ success: true });
   }));
@@ -6630,7 +6870,7 @@ Rules:
     const result = await reextractDocument(req.params.id);
     if (!result.ok) return res.status(422).json({ error: result.message });
     const uidR = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`documents:${uidR}`); bustCache(`stats:${uidR}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uidR}:`);
+    bustCache(`documents:${uidR}`); bustCache(`stats:${uidR}`); bustCache(`profile-detail:${uidR}:`);
     res.json(result);
   }));
 
@@ -6651,7 +6891,7 @@ Rules:
       }
     }
     const uidR = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`documents:${uidR}`); bustCache(`stats:${uidR}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uidR}:`);
+    bustCache(`documents:${uidR}`); bustCache(`stats:${uidR}`); bustCache(`profile-detail:${uidR}:`);
     res.json({ documentsProcessed: docs.length, totalNewFields, results });
   }));
 
@@ -6799,7 +7039,7 @@ Rules:
 
   // ---- Habits ----
   app.get("/api/habits", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "habits:");
     const ck = `habits:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getHabits());
@@ -6836,7 +7076,7 @@ Rules:
       if (updated) newHabit = updated;
     }
     const uid_h3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h3}`);
+    bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`); bustCache(`notifications:${uid_h3}`);
     res.status(201).json(newHabit);
   }));
   app.post("/api/habits/:id/checkin", asyncHandler(async (req, res) => {
@@ -6855,10 +7095,10 @@ Rules:
     const updatedHabit = result.habit || await storage.getHabit(req.params.id);
     if (!updatedHabit) return res.status(404).json({ error: "Habit not found" });
     const uid_h1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`habits:${uid_h1}`); bustCache(`stats:${uid_h1}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h1}`);
+    bustCache(`habits:${uid_h1}`); bustCache(`stats:${uid_h1}`); bustCache(`notifications:${uid_h1}`);
     // The mirrored entry changes tracker reads too — without this the Trackers
     // page serves a cached list that predates the check-in.
-    bustCache(`trackers:${uid_h1}`); bustCache(`trackers:`);
+    bustCache(`trackers:${uid_h1}`);
     res.status(201).json({
       ...updatedHabit,
       // What actually happened, so the client can report it honestly rather
@@ -6878,7 +7118,7 @@ Rules:
     const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);
     if (!ok) return res.status(404).json({ error: "Checkin not found" });
     const uid_h2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`enhanced:`); bustCache(`notifications:${uid_h2}`);
+    bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`notifications:${uid_h2}`);
     res.json({ success: true });
   }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
@@ -6891,7 +7131,7 @@ Rules:
       const result = await storage.updateHabit(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Habit not found" });
       const uid_h4 = cacheUserKey(req as AuthenticatedRequest);
-      bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`); bustCache(`enhanced:`);
+      bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`);
       res.json(result);
     } catch (e: any) { console.error("[habits]", e?.message || e); res.status(500).json({ error: "Failed to update habit" }); }
   }));
@@ -6900,7 +7140,7 @@ Rules:
     if (!existing) return res.status(404).json({ error: "Habit not found" });
     await storage.deleteHabit(req.params.id);
     const uid_h5 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`habits:${uid_h5}`); bustCache(`stats:${uid_h5}`); bustCache(`enhanced:`);
+    bustCache(`habits:${uid_h5}`); bustCache(`stats:${uid_h5}`);
     res.json({ success: true });
   }));
   app.patch("/api/habits/:id/restore", asyncHandler(async (req, res) => {
@@ -6909,14 +7149,14 @@ Rules:
     const uid_h6 = cacheUserKey(req as AuthenticatedRequest);
     // Bug fix: missing `enhanced:` bust meant a restored habit could remain
     // missing from the dashboard until the 15-second cache expired.
-    bustCache(`habits:${uid_h6}`); bustCache(`stats:${uid_h6}`); bustCache(`enhanced:`);
+    bustCache(`habits:${uid_h6}`); bustCache(`stats:${uid_h6}`);
     const habit = await storage.getHabit(req.params.id);
     res.json(habit || { id: req.params.id, restored: true });
   }));
 
   // ---- Obligations ----
   app.get("/api/obligations", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "obligations:");
     const ck = `obligations:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getObligations>> = hit || await dedupe(ck, () => storage.getObligations());
@@ -6975,7 +7215,7 @@ Rules:
       const cutoff = Date.now() - 30000;
       for (const [k, v] of recentObligationCreates) if (v.at < cutoff) recentObligationCreates.delete(k);
     }
-    bustCache(`obligations:${uid_o1}`); bustCache(`stats:${uid_o1}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o1}`); bustCache(`calendar:${uid_o1}`); bustCache(`notifications:${uid_o1}`);
+    bustCache(`obligations:${uid_o1}`); bustCache(`stats:${uid_o1}`); bustCache(`cashflow:${uid_o1}`); bustCache(`calendar:${uid_o1}`); bustCache(`notifications:${uid_o1}`);
     res.status(201).json(created);
   }));
 
@@ -7029,14 +7269,16 @@ Rules:
         log.warn("[obligation PATCH] materialize failed", e?.message || e);
       }
     }
-    bustCache(`obligations:${uid_o2}`); bustCache(`stats:${uid_o2}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o2}`); bustCache(`calendar:${uid_o2}`); bustCache(`notifications:${uid_o2}`);
+    bustCache(`obligations:${uid_o2}`); bustCache(`stats:${uid_o2}`); bustCache(`cashflow:${uid_o2}`); bustCache(`calendar:${uid_o2}`); bustCache(`notifications:${uid_o2}`);
     res.json(updated);
   }));
   // In-memory dedupe to absorb rapid double/triple-click of the "Mark Paid"
   // button on flaky connections (the previous implementation let users create
   // 3 duplicate payments by tapping when the UI didn't update fast enough).
   // Key = userId:obligationId; cleared after 8s.
-  const recentPayments = new Map<string, number>();
+  // Value is the payment the first request recorded, so a deduped retry can
+  // answer with the real row instead of a bare acknowledgement.
+  const recentPayments = new Map<string, { at: number; payment: unknown }>();
   app.post("/api/obligations/:id/pay", asyncHandler(async (req, res) => {
     let { amount, method, confirmationNumber, date } = req.body;
     if (amount !== undefined && (typeof amount !== "number" || amount <= 0)) {
@@ -7055,19 +7297,27 @@ Rules:
     }
     // Idempotency window: ignore identical pay request within 8s
     const dedupeKey = `${uid_o3}:${req.params.id}`;
-    const lastAt = recentPayments.get(dedupeKey) || 0;
-    if (Date.now() - lastAt < 8000) {
+    const last = recentPayments.get(dedupeKey);
+    if (last && Date.now() - last.at < 8000) {
+      // Answer with the payment the first request recorded, not a bare
+      // acknowledgement. `{ok:true,deduped:true}` carries no row, so the caller
+      // had nothing to render and fell back to waiting for a refetch — on the
+      // exact interaction (an impatient double-tap) where the UI already felt
+      // slow.
+      const prior = last.payment;
+      if (prior && typeof prior === "object") return res.status(200).json({ ...(prior as object), deduped: true });
       return res.status(200).json({ ok: true, deduped: true });
     }
-    recentPayments.set(dedupeKey, Date.now());
+    recentPayments.set(dedupeKey, { at: Date.now(), payment: null });
     // Clean old entries occasionally to bound memory
     if (recentPayments.size > 500) {
       const cutoff = Date.now() - 30000;
-      for (const [k, t] of recentPayments) if (t < cutoff) recentPayments.delete(k);
+      for (const [k, v] of recentPayments) if (v.at < cutoff) recentPayments.delete(k);
     }
     const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
     if (!payment) return res.status(404).json({ error: "Obligation not found" });
-    bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
+    recentPayments.set(dedupeKey, { at: Date.now(), payment });
+    bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
     res.status(201).json(payment);
   }));
 
@@ -7102,7 +7352,7 @@ Rules:
     }
     // Also clear the dedupe entry so the user can immediately re-pay.
     recentPayments.delete(`${uid}:${req.params.id}`);
-    bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`); bustCache(`notifications:${uid}`);
+    bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`); bustCache(`notifications:${uid}`);
     res.json({ success: true, deletedPaymentId: latest.id });
   }));
 
@@ -7111,7 +7361,7 @@ Rules:
     if (!existing) return res.status(404).json({ error: "Obligation not found" });
     await storage.deleteObligation(req.params.id);
     const uid_o4 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`obligations:${uid_o4}`); bustCache(`stats:${uid_o4}`); bustCache(`enhanced:`); bustCache(`cashflow:${uid_o4}`); bustCache(`calendar:${uid_o4}`); bustCache(`notifications:${uid_o4}`);
+    bustCache(`obligations:${uid_o4}`); bustCache(`stats:${uid_o4}`); bustCache(`cashflow:${uid_o4}`); bustCache(`calendar:${uid_o4}`); bustCache(`notifications:${uid_o4}`);
     res.json({ success: true });
   }));
 
@@ -7123,7 +7373,7 @@ Rules:
   // Bust every finance/calendar surface after a bill or occurrence changes, so
   // dashboard, cash flow, budget, notifications and the calendar all resync.
   const bustBillCaches = (uid: string) => {
-    bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`enhanced:`);
+    bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`);
     bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`);
     bustCache(`notifications:${uid}`); bustCache(`profile-detail:${uid}:`);
   };
@@ -7404,7 +7654,7 @@ Rules:
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const created = await storage.createArtifact(parsed.data);
     const uid_a1 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_a1}`); bustCache(`stats:${uid_a1}`); bustCache(`enhanced:`);
+    bustCache(`artifacts:${uid_a1}`); bustCache(`stats:${uid_a1}`);
     res.status(201).json(created);
   }));
   app.patch("/api/artifacts/:id", asyncHandler(async (req, res) => {
@@ -7434,14 +7684,14 @@ Rules:
     const updated = await storage.updateArtifact(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_a2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_a2}`); bustCache(`stats:${uid_a2}`); bustCache(`enhanced:`);
+    bustCache(`artifacts:${uid_a2}`); bustCache(`stats:${uid_a2}`);
     res.json(updated);
   }));
   app.post("/api/artifacts/:id/toggle/:itemId", asyncHandler(async (req, res) => {
     const result = await storage.toggleChecklistItem(req.params.id, req.params.itemId);
     if (!result) return res.status(404).json({ error: "Not found" });
     const uid_a3 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_a3}`); bustCache(`stats:${uid_a3}`); bustCache(`enhanced:`);
+    bustCache(`artifacts:${uid_a3}`); bustCache(`stats:${uid_a3}`);
     res.json(result);
   }));
   app.delete("/api/artifacts/:id", asyncHandler(async (req, res) => {
@@ -7449,7 +7699,7 @@ Rules:
     if (!existing) return res.status(404).json({ error: "Artifact not found" });
     await storage.deleteArtifact(req.params.id);
     const uid_a4 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_a4}`); bustCache(`stats:${uid_a4}`); bustCache(`enhanced:`);
+    bustCache(`artifacts:${uid_a4}`); bustCache(`stats:${uid_a4}`);
     res.json({ success: true });
   }));
 
@@ -7476,7 +7726,7 @@ Rules:
       source: src.source,
     } as any);
     const uid_adup = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`artifacts:${uid_adup}`); bustCache(`stats:${uid_adup}`); bustCache(`enhanced:`);
+    bustCache(`artifacts:${uid_adup}`); bustCache(`stats:${uid_adup}`);
     res.status(201).json(created);
   }));
 
@@ -7589,7 +7839,7 @@ Rules:
 
   // ---- Journal ----
   app.get("/api/journal", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "journal:");
     const ck = `journal:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getJournalEntries>> = hit || await dedupe(ck, () => storage.getJournalEntries());
@@ -7737,7 +7987,7 @@ Rules:
   // ---- Notifications (computed on each request) ----
   app.get("/api/notifications", asyncHandler(async (req, res) => {
     try {
-      const userId = cacheUserKey(req as AuthenticatedRequest);
+      const userId = cacheUserKey(req as AuthenticatedRequest, "notifications:");
       const notifCacheKey = `notifications:${userId}`;
       // Make profile filter part of the cache key so two different filters
       // don't share the same cached payload (was returning unfiltered list).
@@ -8370,22 +8620,21 @@ If unsure, use "other". Use "subscription" for recurring services; "vehicle" for
         return o.nextDueDate >= todayStr && o.nextDueDate <= toLocalDateStr(new Date(now.getTime() + 14 * 86400000), snapTz);
       }).map(o => ({ name: o.name, amount: o.amount, dueDate: o.nextDueDate, autopay: o.autopay }));
 
-      // Document expiration warnings
-      const expiringDocs = documents.filter(d => {
-        if (!d.extractedData || typeof d.extractedData !== "object") return false;
-        const fields = d.extractedData as Record<string, any>;
-        for (const [key, value] of Object.entries(fields)) {
-          if (typeof value !== "string") continue;
-          if (/expir|valid.until|valid.through/i.test(key)) {
-            try {
-              const exp = new Date(value);
-              const diff = (exp.getTime() - now.getTime()) / 86400000;
-              if (diff >= -30 && diff <= 60) return true;
-            } catch (err) { console.error("[routes:ai-digest] document expiration parse failed:", err); }
-          }
-        }
-        return false;
-      }).map(d => ({ name: d.name, type: d.type }));
+      // Documents with a date to act on — expiring OR due.
+      //
+      // This block used to carry its own expiry-key regex and `new Date(value)`
+      // parsing: yet another date vocabulary, blind to due dates and to every
+      // non-ISO value. It reads the ONE Date Rule engine now, so the digest
+      // sees exactly what the Executive tab and the calendar see.
+      const expiringDocs = rulesFromDocuments(documents)
+        .filter((rule) => isDocumentAttentionRule(rule))
+        .map((rule) => ({
+          name: rule.label,
+          type: rule.ruleSubtype || rule.ruleType,
+          date: rule.date,
+          daysUntil: daysBetweenISO(todayStr, rule.date),
+        }))
+        .filter((r) => r.daysUntil >= -30 && r.daysUntil <= 60);
 
       // Tracker entries count this week
       const trackerEntriesThisWeek = trackers.reduce((sum, t) =>
@@ -8996,7 +9245,7 @@ No emojis. No prose outside the JSON.`,
     // PERF (2026-08-17): this endpoint had no cache at all, yet it's fetched
     // by BOTH the Finance page and the always-mounted KPI strip. Cache the raw
     // list (same pattern as /api/expenses); filtering below stays per-request.
-    const incomesUid = cacheUserKey(req as AuthenticatedRequest);
+    const incomesUid = cacheUserKey(req as AuthenticatedRequest, "incomes:");
     const incomesCk = `incomes:${incomesUid}`;
     const incomesHit = getCached(incomesCk);
     let incomes = incomesHit || await dedupe(incomesCk, () => storage.getIncomes());
@@ -9026,7 +9275,6 @@ No emojis. No prose outside the JSON.`,
     bustCache(`incomes:${uid}`);
     bustCache(`cashflow:${uid}`);
     bustCache(`stats:${uid}`);
-    bustCache(`enhanced:`);
     bustCache(`enhanced:${uid}`);
     bustCache(`profile-detail:${uid}:`);
   };
@@ -9678,67 +9926,24 @@ No emojis. No prose outside the JSON.`,
     const parsed = insertLiabilityPaymentSchema.safeParse({ ...req.body, liabilityProfileId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    // Payment behavior branches on the liability family (type_key). A recurring
-    // service bill (utility / phone / streaming) has no balance to pay down —
-    // paying it just LOGS the charge and ADVANCES the next due date by one cycle.
-    // Amortizing / revolving / one-time debts reduce a real balance.
-    const recurring = isRecurringBill((liability as any).type_key ?? (liability as any).typeKey);
-    const data = { ...parsed.data };
-
-    if (recurring) {
-      // No permanent balance: record the full amount as principal (no interest,
-      // no remainingBalanceAfter) and roll the due date forward.
-      data.principalPortion = data.amount;
-      data.interestPortion = 0;
-      const row = await storage.createLiabilityPayment(data);
-      const todayISO = getUserToday(getTimezone(req));
-      const nextDue = advanceLiabilityDueDate(liability.fields, todayISO);
-      await storage.updateProfile(req.params.id, {
-        fields: {
-          ...(liability.fields || {}),
-          dueDate: nextDue,
-          nextDueDate: nextDue,
-          lastPaidDate: (data as any).paymentDate || todayISO,
-          status: "upcoming",
-        },
-      });
-      return res.json(row);
-    }
-
     // SINGLE SOURCE OF TRUTH: the server — not the client — owns the
-    // principal/interest split AND the resulting balance. The client used to
-    // compute these and ship them, but a field-name mismatch silently dropped
-    // them to $0 and stale client balances caused drift. Compute them here from
-    // the liability's own balance + APR so every reader (profile page, payment
-    // history, dashboard totals, net worth, linked page) agrees.
-    const balanceBefore = resolveLiabilityBalance(liability);
-    const annualRate = resolveAnnualRate(liability.fields);
-    if (balanceBefore > 0) {
-      const split = allocatePayment(data.amount, balanceBefore, annualRate, data.fees ?? 0);
-      data.principalPortion = split.principal;
-      data.interestPortion = split.interest;
-      data.fees = split.fees;
-      data.remainingBalanceAfter = split.remainingBalanceAfter;
-    } else {
-      // No tracked balance: treat the whole payment as principal, no interest.
-      data.principalPortion = data.amount;
-      data.interestPortion = 0;
-    }
-    const row = await storage.createLiabilityPayment(data);
-
-    // Persist the new balance back onto the liability so the rest of the app
-    // reads it from one place. updateProfile deep-merges fields.
-    if (balanceBefore > 0 && data.remainingBalanceAfter != null) {
-      await storage.updateProfile(req.params.id, {
-        fields: {
-          ...(liability.fields || {}),
-          currentBalance: data.remainingBalanceAfter,
-          remainingBalance: data.remainingBalanceAfter,
-          loanBalance: data.remainingBalanceAfter,
-        },
-      });
-    }
-    res.json(row);
+    // principal/interest split AND the resulting balance, and it owns them in
+    // exactly one place (server/liability-payments.ts) so a payment recorded
+    // through chat produces the same row as one recorded through this form.
+    // The client used to compute the split and ship it, but a field-name
+    // mismatch silently dropped it to $0 and stale client balances caused drift.
+    const result = await applyLiabilityPayment(
+      storage,
+      liability,
+      {
+        amount: parsed.data.amount,
+        paymentDate: (parsed.data as any).paymentDate,
+        fees: (parsed.data as any).fees ?? 0,
+        notes: (parsed.data as any).notes ?? null,
+      },
+      getTimezone(req),
+    );
+    res.json(result.payment);
   }));
   app.patch("/api/liability-payments/:id", asyncHandler(async (req, res) => {
     const row = await storage.updateLiabilityPayment(req.params.id, req.body || {});

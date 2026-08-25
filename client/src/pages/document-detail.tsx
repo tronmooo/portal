@@ -2,7 +2,8 @@ import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } fro
 import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getUserToday } from "@shared/timezone";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -28,6 +29,8 @@ import {
 import { cn } from "@/lib/utils";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { useDocumentBlobUrl, classifyDocument, prefetchDocumentBlob } from "@/lib/document-preview";
+import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel } from "@shared/date-rules";
+import { UPCOMING_WINDOW_DAYS } from "@shared/extraction-calendar";
 
 // PDF.js renderer is code-split — only loaded when a PDF is actually viewed.
 const PdfCanvas = lazy(() => import("@/components/PdfCanvas"));
@@ -62,46 +65,54 @@ function formatFieldLabel(key: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function getExpirationStatus(key: string, value: any): "expired" | "soon" | "valid" | null {
-  const lower = key.toLowerCase();
-  if (!lower.includes("expir") && !lower.includes("valid_until") && !lower.includes("expiration")) {
-    return null;
-  }
-  if (!value) return null;
-  try {
-    const date = new Date(value);
-    if (isNaN(date.getTime())) return null;
-    const now = new Date();
-    const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    if (date < now) return "expired";
-    if (date < thirtyDays) return "soon";
-    return "valid";
-  } catch {
-    return null;
-  }
+/**
+ * The status of one dated field on this document — expiring, due, overdue.
+ *
+ * This used to be a private vocabulary: an `expir|valid_until` regex, a
+ * `new Date(value)` parse and a hard-coded 30-day window. It could not see a
+ * DUE date at all, which is how a parking citation's "Due 09/25/2026" rendered
+ * as an ordinary, unremarkable row. It reads the ONE Date Rule engine now, so
+ * this page agrees with the calendar, Upcoming and the Executive tab about
+ * what a date means — and it reports the real days remaining rather than a
+ * fixed label.
+ */
+function getDateFieldStatus(key: string, value: any, docContext?: string): {
+  tone: "past" | "soon" | "ok";
+  label: string;
+} | null {
+  const iso = bareDateOf(value);
+  if (!iso) return null;
+  const cls = classifyDateField(key, docContext);
+  if (!cls.actionable) return null;
+  const today = getUserToday(BROWSER_TIMEZONE);
+  const days = daysBetweenISO(today, iso);
+  return {
+    tone: days < 0 ? "past" : days <= UPCOMING_WINDOW_DAYS ? "soon" : "ok",
+    label: countdownLabel(iso, today, cls.ruleType),
+  };
 }
 
-function ExpirationBadge({ status }: { status: "expired" | "soon" | "valid" }) {
-  if (status === "expired") {
+function DateFieldBadge({ status }: { status: NonNullable<ReturnType<typeof getDateFieldStatus>> }) {
+  if (status.tone === "past") {
     return (
       <Badge variant="destructive" className="text-xs px-1.5 py-0 gap-1">
         <AlertCircle className="h-2.5 w-2.5" />
-        EXPIRED
+        {status.label}
       </Badge>
     );
   }
-  if (status === "soon") {
+  if (status.tone === "soon") {
     return (
       <Badge className="text-xs px-1.5 py-0 gap-1 bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
         <Clock className="h-2.5 w-2.5" />
-        Expiring Soon
+        {status.label}
       </Badge>
     );
   }
   return (
     <Badge className="text-xs px-1.5 py-0 gap-1 bg-green-500/10 text-green-700 dark:text-green-400 border-green-500/30">
       <ShieldCheck className="h-2.5 w-2.5" />
-      Valid
+      {status.label}
     </Badge>
   );
 }
@@ -504,16 +515,16 @@ function DataPanel({
                 <p className="text-xs text-muted-foreground italic py-2">No extracted data</p>
               )}
               {extractedEntries.map(([key, val]) => {
-                const expStatus = getExpirationStatus(key, val);
+                const expStatus = getDateFieldStatus(key, val, `${doc.type ?? ""} ${doc.name ?? ""}`);
                 const isEditing = editingKey === key;
                 return (
                   <div
                     key={key}
                     className={cn(
                       "group flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors",
-                      expStatus === "expired" && "bg-red-500/8 border border-red-500/20",
-                      expStatus === "soon" && "bg-yellow-500/8 border border-yellow-500/20",
-                      expStatus === "valid" && "bg-green-500/5 border border-transparent",
+                      expStatus?.tone === "past" && "bg-red-500/8 border border-red-500/20",
+                      expStatus?.tone === "soon" && "bg-yellow-500/8 border border-yellow-500/20",
+                      expStatus?.tone === "ok" && "bg-green-500/5 border border-transparent",
                       !expStatus && "hover:bg-muted/30 border border-transparent"
                     )}
                     data-testid={`field-row-${key}`}
@@ -523,7 +534,7 @@ function DataPanel({
                         <span className="micro-label text-muted-foreground">
                           {formatFieldLabel(key)}
                         </span>
-                        {expStatus && <ExpirationBadge status={expStatus} />}
+                        {expStatus && <DateFieldBadge status={expStatus} />}
                       </div>
                       {isEditing ? (
                         <Input

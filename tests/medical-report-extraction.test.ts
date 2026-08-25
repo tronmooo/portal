@@ -518,3 +518,89 @@ describe("secondary characteristics — the profile half of a measurement", () =
     expect(stubState.trackers.find((t) => t.name === "Weight").entries[0].values.value).toBe(300);
   });
 });
+
+// ── The merge point (2026-08-25) ────────────────────────────────────────────
+// Two extraction features landed within hours of each other: the destination
+// review list (`items`, each row saying where it goes) and the Calendar section
+// (`calendarDates`, one add-or-not decision per recognised date). Both can carry
+// the SAME date to the confirm route on one request. The route folds them into a
+// single candidate list deduped on the normalized field key — this pins that,
+// because the failure mode is silent: two calendar events for one printed date.
+describe("items and calendarDates carrying one date", () => {
+  let server: Server;
+  let base: string;
+
+  beforeEach(async () => {
+    stubState.profiles.clear();
+    stubState.documents.clear();
+    stubState.events.length = 0;
+    stubState.trackers.length = 0;
+    stubState.entries.length = 0;
+    stubState.profiles.set("profile-sarah", {
+      id: "profile-sarah", name: "Sarah Miller", type: "person", fields: {}, tags: [], notes: "",
+    });
+    stubState.documents.set("doc-report", {
+      id: "doc-report", name: "report", type: "medical_report", mimeType: "image/png",
+      extractedData: {}, linkedProfiles: [], tags: [],
+    });
+    const app = express();
+    app.use(express.json());
+    server = createServer(app);
+    await registerRoutes(server, app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("creates ONE event when both payloads carry the same date", async () => {
+    itemSeq = 0;
+    const res = await post(base, {
+      extractionId: "doc-report",
+      targetProfileId: "profile-sarah",
+      items: [
+        item("calendar", "House Viewing", "2027-03-01", {
+          key: "houseViewing", source: "followup", date: "2027-03-01",
+          payload: { title: "House Viewing", date: "2027-03-01" },
+        }),
+      ],
+      calendarDates: [
+        { field: "houseViewing", date: "2027-03-01", title: "House Viewing", addToCalendar: true, derived: false },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const forThatDay = stubState.events.filter((e: any) => e.date === "2027-03-01");
+    expect(forThatDay, "one printed date is one event").toHaveLength(1);
+  });
+
+  it("still creates the event when only the review list carries it", async () => {
+    itemSeq = 0;
+    await post(base, {
+      extractionId: "doc-report",
+      targetProfileId: "profile-sarah",
+      items: [
+        item("calendar", "House Viewing", "2027-03-01", {
+          key: "houseViewing", source: "followup", date: "2027-03-01",
+          payload: { title: "House Viewing", date: "2027-03-01" },
+        }),
+      ],
+    });
+    expect(stubState.events.filter((e: any) => e.date === "2027-03-01")).toHaveLength(1);
+  });
+
+  it("creates nothing for a date the user unticked in the Calendar section", async () => {
+    itemSeq = 0;
+    await post(base, {
+      extractionId: "doc-report",
+      targetProfileId: "profile-sarah",
+      items: [],
+      calendarDates: [
+        { field: "houseViewing", date: "2027-03-01", title: "House Viewing", addToCalendar: false, derived: false },
+      ],
+    });
+    expect(stubState.events.filter((e: any) => e.date === "2027-03-01")).toHaveLength(0);
+  });
+});

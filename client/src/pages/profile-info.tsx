@@ -31,14 +31,31 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag } from "lucide-react";
 import { deleteProfileFields } from "@shared/profile-field-identity";
-import { checkProfileRename, MAX_PROFILE_NAME_LENGTH } from "@shared/profile-rename";
+import { checkProfileRename, MAX_PROFILE_NAME_LENGTH, PROFILE_TYPES } from "@shared/profile-rename";
 import { invalidateDomain } from "@/lib/cache-bus";
 import EditableTitle from "@/components/EditableTitle";
 import { stringifyField, previewUnrenderable } from "@/lib/field-display";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
+
+// Where an activity row's record actually lives — the page that can edit it.
+// Unknown kinds return null and stay plain text rather than navigating
+// somewhere that cannot show them.
+export function timelineRoute(item: { type?: string; id?: string; data?: any } | null | undefined): string | null {
+  if (!item) return null;
+  switch (String(item.type || "")) {
+    case "tracker": return item.data?.trackerId ? `/trackers?tracker=${item.data.trackerId}` : "/trackers";
+    case "expense": return "/finance";
+    case "task": return "/tasks";
+    case "event": return "/calendar";
+    case "journal": return "/journal";
+    case "document": return item.id ? `/documents/${item.id}` : "/documents";
+    default: return null;
+  }
+}
 
 function timeAgo(ts: string | undefined): string {
   if (!ts) return "";
@@ -326,6 +343,21 @@ function SingleProfileInfo({ id }: { id: string }) {
     toast({ title: `Renamed to ${check.name}` });
   };
 
+  // Re-typing the record. A type decides which tab it lives on, which fields
+  // it suggests and whether it counts toward net worth, so the change touches
+  // more than this page — refresh broadly, as a rename does.
+  const changeType = async (nextType: string) => {
+    if (!id || !profile || nextType === profile.type) return;
+    try {
+      await apiRequest("PATCH", `/api/profiles/${id}`, { type: nextType });
+    } catch (err: any) {
+      toast({ title: "Couldn't change type", description: formatApiError(err), variant: "destructive" });
+      return;
+    }
+    await invalidateDomain("everything");
+    toast({ title: `Now a ${nextType}` });
+  };
+
   const avatarMutation = useMutation({
     mutationFn: async (payload: { fileData: string; mimeType: string }) => {
       await apiRequest("POST", `/api/profiles/${id}/photo`, payload);
@@ -442,7 +474,34 @@ function SingleProfileInfo({ id }: { id: string }) {
             editLabel="Rename"
             testId="info-name"
           />
-          <p className="text-xs text-muted-foreground capitalize">{profile.type}</p>
+          {/* The KIND of record this is. Chat could re-type a profile from the
+              day update_profile existed; this screen could not, so "my truck
+              shows up as a person" had no manual fix. The self profile keeps
+              its type — the app resolves the user's own record by it. */}
+          {isSelf ? (
+            <p className="text-xs text-muted-foreground capitalize" data-testid="info-type">{profile.type}</p>
+          ) : (
+            <Select value={profile.type} onValueChange={(t) => changeType(t)}>
+              <SelectTrigger
+                className="h-6 px-1.5 -ml-1.5 w-auto gap-1 border-0 bg-transparent text-xs text-muted-foreground capitalize hover:bg-muted/60 focus:ring-0"
+                aria-label="Change type"
+                data-testid="info-type"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {/* A row carrying a type outside the list (an older record, a
+                    hand-written import) keeps its own option, so opening the
+                    menu never blanks the value it is showing. */}
+                {(PROFILE_TYPES.includes(profile.type as any)
+                  ? PROFILE_TYPES
+                  : [profile.type, ...PROFILE_TYPES]
+                ).map((t: string) => (
+                  <SelectItem key={t} value={t} className="capitalize text-xs" data-testid={`info-type-${t}`}>{t}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
         <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAddingField(v => !v)} data-testid="info-add-field">
           <Plus className="h-3.5 w-3.5" /> Add field
@@ -543,12 +602,32 @@ function SingleProfileInfo({ id }: { id: string }) {
             <p className="text-xs text-muted-foreground">No recent activity.</p>
           ) : (
             <div className="space-y-2">
-              {timeline.map((t: any) => (
-                <div key={t.id} className="flex items-baseline gap-3 text-sm">
-                  <span className="text-[11px] font-mono text-muted-foreground w-8 shrink-0">{timeAgo(t.timestamp)}</span>
-                  <span className="truncate">{t.title}</span>
-                </div>
-              ))}
+              {/* An activity row is not a record of its own — it is a tracker
+                  entry, an expense, a task or an event that lives on another
+                  page and is edited there. These were dead text, so the only
+                  way to correct one was to go find it. Each row opens the
+                  thing it describes. */}
+              {timeline.map((t: any) => {
+                const href = timelineRoute(t);
+                const row = (
+                  <>
+                    <span className="text-[11px] font-mono text-muted-foreground w-8 shrink-0">{timeAgo(t.timestamp)}</span>
+                    <span className="truncate">{t.title}</span>
+                  </>
+                );
+                if (!href) return <div key={t.id} className="flex items-baseline gap-3 text-sm">{row}</div>;
+                return (
+                  <div
+                    key={t.id}
+                    role="button"
+                    tabIndex={0}
+                    className="flex items-baseline gap-3 text-sm cursor-pointer rounded hover:bg-muted/40 -mx-1 px-1"
+                    onClick={() => navigate(href)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(href); } }}
+                    data-testid={`info-activity-${t.id}`}
+                  >{row}</div>
+                );
+              })}
             </div>
           )}
         </Card>
@@ -746,6 +825,19 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/notes/${id}`); },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/notes"] }),
   });
+  // A saved note could be deleted here but never CORRECTED — the only way to
+  // fix a typo was to delete it and dictate the whole thing again, or ask chat
+  // (which has had update_note all along). Both the title and the body edit in
+  // place now.
+  const editNote = useMutation({
+    mutationFn: async ({ id, title, content }: { id: string; title: string; content: string }) => {
+      await apiRequest("PATCH", `/api/notes/${id}`, { title, content });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
+    },
+  });
 
   const addTag = () => {
     const t = tagInput.trim();
@@ -779,19 +871,12 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
         {savedNotes.length > 0 && (
           <div className="mt-3 space-y-2 border-t pt-3">
             {savedNotes.map((n: any) => (
-              <div key={n.id} className="group flex items-start justify-between gap-2" data-testid={`saved-note-${n.id}`}>
-                <div className="min-w-0">
-                  <p className="text-xs font-medium truncate">{n.title}</p>
-                  <p className="text-xs text-muted-foreground whitespace-pre-wrap">{n.content}</p>
-                </div>
-                <button
-                  onClick={() => removeNote.mutate(n.id)}
-                  className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
-                  aria-label={`Delete note ${n.title}`}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
+              <SavedNote
+                key={n.id}
+                note={n}
+                onSave={(title, content) => editNote.mutate({ id: n.id, title, content })}
+                onRemove={() => removeNote.mutate(n.id)}
+              />
             ))}
           </div>
         )}
@@ -817,6 +902,99 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
           />
         </div>
       </Card>
+    </div>
+  );
+}
+
+// ── One saved note, editable in place ────────────────────────────────────────
+// Tap the note to edit its title and body; Cmd/Ctrl+Enter or Save commits,
+// Escape cancels. Same record `update_note` writes from chat.
+function SavedNote({ note, onSave, onRemove }: {
+  note: any;
+  onSave: (title: string, content: string) => void;
+  onRemove: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(String(note.title || ""));
+  const [content, setContent] = useState(String(note.content || ""));
+  useEffect(() => {
+    if (editing) return;
+    setTitle(String(note.title || ""));
+    setContent(String(note.content || ""));
+  }, [note.title, note.content, editing]);
+
+  const commit = () => {
+    const t = title.trim();
+    const c = content.trim();
+    // An empty body would erase the note without saying so — treat it as a
+    // cancel and leave the record alone. Deleting is the X, deliberately.
+    if (!c) { setContent(String(note.content || "")); setEditing(false); return; }
+    if (t !== String(note.title || "") || c !== String(note.content || "")) {
+      onSave(t || String(note.title || ""), c);
+    }
+    setEditing(false);
+  };
+  const cancel = () => {
+    setTitle(String(note.title || ""));
+    setContent(String(note.content || ""));
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="space-y-1.5" data-testid={`saved-note-${note.id}`}>
+        <Input
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          placeholder="Title"
+          className="h-7 text-xs font-medium"
+          autoFocus
+          onKeyDown={e => { if (e.key === "Escape") cancel(); }}
+          data-testid={`saved-note-title-input-${note.id}`}
+        />
+        <Textarea
+          value={content}
+          onChange={e => setContent(e.target.value)}
+          rows={3}
+          className="text-xs"
+          placeholder="Note"
+          onKeyDown={e => {
+            if (e.key === "Escape") cancel();
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
+          }}
+          data-testid={`saved-note-content-input-${note.id}`}
+        />
+        <div className="flex gap-2">
+          <Button size="sm" className="h-7 text-xs" onClick={commit} data-testid={`saved-note-save-${note.id}`}>Save</Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={cancel}>Cancel</Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group flex items-start justify-between gap-2" data-testid={`saved-note-${note.id}`}>
+      <div
+        role="button"
+        tabIndex={0}
+        className="min-w-0 flex-1 text-left cursor-pointer rounded hover:bg-muted/40 -mx-1 px-1"
+        onClick={() => setEditing(true)}
+        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setEditing(true); } }}
+        aria-label={`Edit note ${note.title}`}
+        data-testid={`saved-note-edit-${note.id}`}
+      >
+        <p className="text-xs font-medium truncate">{note.title}</p>
+        <p className="text-xs text-muted-foreground whitespace-pre-wrap">{note.content}</p>
+      </div>
+      <button
+        onClick={onRemove}
+        // Always visible: Portol is used on a phone, where nothing hovers.
+        className="opacity-60 hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0 p-0.5"
+        aria-label={`Delete note ${note.title}`}
+        data-testid={`saved-note-delete-${note.id}`}
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }

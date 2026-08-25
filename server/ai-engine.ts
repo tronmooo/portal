@@ -77,8 +77,11 @@ import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollo
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
-import { checkProfileRename } from "@shared/profile-rename";
-import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel } from "@shared/date-rules";
+import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
+import { readProfileFieldValue } from "@shared/profile-field-identity";
+import { cascadeProfileRename } from "./profile-rename-cascade";
+import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel, bareDateOf } from "@shared/date-rules";
+import { extractionDateRows, extractionDateTypeLabel, type ExtractionDateRow } from "@shared/extraction-calendar";
 import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
@@ -96,6 +99,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
+import { applyLiabilityPayment } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
@@ -2447,7 +2451,20 @@ Return ONLY the JSON object, nothing else.`;
     const profileType = linkedProfileObj?.type || '';
     const isVehicleProfile = profileType === 'vehicle';
 
-    const extractedFields: Array<{key: string; label: string; value: any; selected: boolean; isDate: boolean; category: string; suggestedEvent?: string}> = [];
+    const extractedFields: Array<{
+      key: string; label: string; value: any; selected: boolean; isDate: boolean; category: string;
+      suggestedEvent?: string;
+      // What the date MEANS, carried alongside the value so the review UI can
+      // show a Calendar column without re-deriving the classification.
+      dateRuleType?: string;
+      dateTypeLabel?: string;
+      /** The normalized ISO date, when the value is genuinely a date. */
+      dateISO?: string;
+      /** Actionable = due / expiry / renewal / deadline / appointment / payment. */
+      actionableDate?: boolean;
+      /** True when the record itself puts this date on the calendar. */
+      calendarDerived?: boolean;
+    }> = [];
 
     if (parsed.extractedData && typeof parsed.extractedData === 'object') {
       // Flatten nested objects / arrays so EVERY leaf — especially every date in
@@ -2542,15 +2559,40 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         // classify as informational, so the actionable test alone would let
         // them through — and "add `dateAdministered` to the calendar?" is the
         // clutter this branch has always been careful to avoid.
+        const dateCls = classifyDateField(key, docType);
+        const dateISO = hasDate ? (bareDateOf(strVal) || undefined) : undefined;
+        // An ACTIONABLE date (a due date, an expiration, a renewal) reaches the
+        // calendar by being ON the record — shared/date-rules derives it — so
+        // no standalone event is suggested for it and none is created. What
+        // changed (user report 2026-08-25) is that it is no longer SILENT: the
+        // classification travels with the field so extraction review can show
+        // a Calendar row for it, with the type, the countdown and the choice.
+        //
+        // `/valid|issued|administered/` stays suppressed explicitly: those keys
+        // classify as informational, so the actionable test alone would let
+        // them through — and "add `dateAdministered` to the calendar?" is the
+        // clutter this branch has always been careful to avoid.
+        const actionableDate = hasDate && dateCls.actionable && !!dateISO;
         if (hasDate
-          && !classifyDateField(key, docType).actionable
+          && !dateCls.actionable
           && !/valid|issued|administered/i.test(key)) {
           suggestedEvent = `📅 ${label}`;
         }
 
         const category = categorizeField(key, CATEGORY_MAP);
         const selected = true;
-        extractedFields.push({ key, label, value, selected, isDate, category, suggestedEvent });
+        extractedFields.push({
+          key, label, value, selected, isDate, category, suggestedEvent,
+          ...(actionableDate ? {
+            dateRuleType: dateCls.ruleType,
+            dateTypeLabel: extractionDateTypeLabel(dateCls.ruleType, dateCls.ruleSubtype),
+            dateISO,
+            actionableDate: true,
+            // A document does not own a BIRTHDAY — the person's profile does —
+            // so that date is not derived by the document that printed it.
+            calendarDerived: dateCls.ruleType !== "birthday" && dateCls.ruleType !== "anniversary",
+          } : {}),
+        });
 
         // dob/dateOfBirth → also expose a birthday alias field
         if ((key === 'dob' || key === 'dateOfBirth' || /date of birth/i.test(key)) && value) {
@@ -2790,6 +2832,19 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       normalizeDate: normalizeDateString,
     });
 
+    // ── The Calendar section of extraction review ────────────────────────────
+    // Every actionable date in this document, with its type, its countdown and
+    // the decision the user gets to make before confirming. Built here so the
+    // payload is self-describing; the client recomputes it live as dates are
+    // edited, from the same shared module, so the two never disagree.
+    const calendarDates: ExtractionDateRow[] = extractionDateRows(
+      extractedFields.map((f) => ({ key: f.key, label: f.label, value: f.value, selected: f.selected })),
+      {
+        documentContext: `${docType} ${parsed.label || fileName}`,
+        today: new Date().toLocaleDateString("en-CA"),
+      },
+    );
+
     const pendingExtraction = {
       extractionId: document.id,
       fileName,
@@ -2806,6 +2861,10 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       trackerEntries: parsed.trackerEntries || [],
       documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType },
       pendingFinancial,
+      /** Date-related fields, broken out for the review UI's Calendar section. */
+      calendarDates,
+      /** The document this extraction belongs to — shown against each date. */
+      documentName: document.name || fileName,
       // Surface the classification so the UI can show "I think this is a Parking
       // Receipt; here's what I'll do." The destinations object tells the UI
       // which sub-panels (expense, obligation, tracker, calendar) are even
@@ -2972,6 +3031,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       properties: {
         name: { type: "string", description: "Name of the profile to update (partial match). Use 'Me' for self profile." },
         changes: { type: "object", description: "What to change. RENAME: set changes.name to the NEW name — 'rename Bob QA to Bob Robertson' is name:'Bob QA', changes:{ name:'Bob Robertson' }. The rename lands on the profile row, so it shows everywhere at once (page header, owner badges, search, the profile switcher) — never create a second profile to rename one. DATA: use the 'fields' object for values like { bloodType: 'O+', allergies: 'penicillin', height: '5\\'10\"', currentValue: 1200, purchasePrice: 800 }. Can also include 'notes' (string) or 'tags' (array)." },
+        removeFields: { type: "array", items: { type: "string" }, description: "Field keys to DELETE from this profile — 'remove Bob's phone number', 'delete the license number', 'that address is wrong, take it off'. Pass the field's key ('phone', 'licenseNumber'); it is removed wherever it lives on the record, including inside a nested group, and every other spelling of the same field goes with it. Use this rather than writing an empty string — a blank field still shows on the Info tab as an empty row." },
         parentProfileName: { type: "string", description: "Move this profile under a different parent. Pass the EXACT name of the new parent profile (e.g. 'My House', 'Kitchen', 'Bob'). Use this for commands like 'Move freezer from garage to basement' — set name='freezer' and parentProfileName='basement'. Pass empty string to detach (make top-level)." },
       },
       required: ["name", "changes"],
@@ -5505,6 +5565,7 @@ CONFIRMATION IS FOR DELETES (and the bulk/merge previews below) — NOTHING ELSE
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
 - MERGE PROFILES: "merge X into Y" / "combine the duplicate profiles" → merge_profiles(source_name, target_name) shows a preview; after the user confirms in their NEXT message, execute_bulk_action({confirm:true}). Same two-turn rule as bulk deletes — never merge in one turn.
+- REMOVE A PROFILE FIELD: "delete Bob's phone number" / "that address is wrong, take it off" / "remove the license number from my info" → update_profile(name:"<profile>", changes:{ removeFields:["phone"] }). NEVER write an empty string to clear a field — a blank value still renders as an empty row on the Info tab, so the user sees the field they asked you to delete. Editing a value is changes.fields; removing it is changes.removeFields; both can travel in one call.
 - RENAME A PROFILE: "rename Bob QA to Bob Robertson" / "change Bob's name to Bob Robertson" / "my truck is called the Beast now" → update_profile(name:"<the name it has NOW>", changes:{ name:"<the new name>" }). One call, no confirmation question when exactly one profile matches the old name — the user named the record and the new name in one sentence, so there is nothing to clarify and asking wastes their turn. The rename lands on the profile row itself and every screen reads the name from there, so it changes everywhere at once; NEVER create a second profile, and never tell the user to rename it by hand. Ask only when the old name matches several profiles (name them) or matches none.
 - MOVE BETWEEN PROFILES: "move the gym expense to Luna" / "that task is actually Mike's" → update_expense/update_task with forProfile:"<target>" (this REPLACES the owner — do not put profile names inside changes). Do NOT delete + recreate, and do NOT use merge_profiles for a single record.
 - DASHBOARD LAYOUT: "hide the X section" / "show Finance on my dashboard" / "move Goals to the top" / "reset my dashboard" → configure_dashboard_sections. This controls SECTIONS of the dashboard, not data. Undoable.
@@ -7124,7 +7185,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (renamedTo) changes.name = renamedTo;
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
       if (input.changes.tags) changes.tags = input.changes.tags;
-      if (input.changes.type) changes.type = input.changes.type;
+      if (input.changes.type) {
+        // Re-typing a record is how "my truck shows up as a person" gets
+        // fixed. The one thing it may not do is create or destroy a `self`:
+        // the app resolves the user's own record by that type.
+        const typeCheck = checkProfileTypeChange(profile.type, input.changes.type);
+        if (typeCheck.status === "rejected") return { error: typeCheck.error };
+        if (typeCheck.status === "ok") changes.type = typeCheck.type;
+      }
 
       // ---- Parent reassignment (parentProfileName) ----
       const previousParentProfileId = input.parentProfileName !== undefined ? (profile.parentProfileId ?? null) : undefined;
@@ -7149,7 +7217,32 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
 
+      // Deleting a field is the same signal the Info tab's X sends: the
+      // storage layer sweeps it by field IDENTITY, so `licenseNumber` takes
+      // `license_number` and `identity.licenseNumber` with it rather than
+      // leaving a twin the next read promotes back. Chat had no way to do this
+      // at all — the model's only option was to write an empty string, which
+      // leaves an empty row on the Info tab rather than removing anything.
+      const removeFields = Array.isArray(input.changes.removeFields)
+        ? input.changes.removeFields.filter((k: any) => typeof k === "string" && k.trim()).map((k: string) => k.trim())
+        : [];
+      const previousRemoved: Record<string, any> = {};
+      if (removeFields.length > 0) {
+        (changes as any).fieldsToDelete = removeFields;
+        for (const key of removeFields) {
+          previousRemoved[key] = readProfileFieldValue(profile.fields, key);
+        }
+      }
+
       const updated = await storage.updateProfile(profile.id, changes);
+      // Carry the new name into the titles this app GENERATED from the old one
+      // ("Morning Run - Bob QA", "🎂 Bob QA's Birthday"). Best-effort: a
+      // rename that landed is never reported as failed because a derived title
+      // could not be rewritten.
+      if (renamedTo && renamedFrom) {
+        try { await cascadeProfileRename(storage, profile.id, renamedFrom, renamedTo); }
+        catch (e) { logger.warn("ai", `Rename cascade failed for ${profile.id}: ${e}`); }
+      }
       // Attach revert metadata so the chat action card can render a Revert button.
       // Non-enumerable would be safer, but the action result is JSON-serialised
       // before reaching the client, so we use a plain underscore-prefixed key.
@@ -7161,7 +7254,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         ...(renamedTo ? { _renamed: { from: renamedFrom, to: renamedTo }, _displayData: { name: renamedTo } } : {}),
         _previousState: {
           profileId: profile.id,
-          fields: previousFields,
+          // A removed field's old value rides along under the same key, so
+          // Revert writes it back exactly as the overwritten ones are.
+          fields: { ...previousFields, ...previousRemoved },
           notes: previousNotes,
           tags: previousTags,
           type: previousType,
@@ -9115,79 +9210,32 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return { error: `You asked to pay your ${pretty(wantType)}, but the only matching loan is "${liability.name}" (a ${pretty(gotType)}). I did NOT apply the $${Number(input.amount) || 0} — that would change the wrong balance. Want me to create a ${pretty(wantType)} first, or apply it to ${liability.name}?` };
         }
       }
-      const f = liability.fields || {};
-      const balance = Number(f.currentBalance) || 0;
-      const monthlyRate = (Number(f.annualInterestRate) || 0) / 12;
-      const amount = Number(input.amount) || 0;
-      let principal = input.principal != null ? Number(input.principal) : NaN;
-      let interest = input.interest != null ? Number(input.interest) : NaN;
-      const escrow = Number(input.escrow) || 0;
-      const fees = Number(input.fees) || 0;
-      const cashTowardLoan = amount - escrow - fees;
-      // Auto-split if not provided
-      if (isNaN(principal) && isNaN(interest)) {
-        const intPortion = Math.min(balance * monthlyRate, cashTowardLoan);
-        interest = Math.max(0, intPortion);
-        principal = Math.max(0, cashTowardLoan - interest);
-      } else if (isNaN(principal)) {
-        principal = Math.max(0, cashTowardLoan - (interest || 0));
-      } else if (isNaN(interest)) {
-        interest = Math.max(0, cashTowardLoan - (principal || 0));
-      }
-      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-      // Determine paymentType (model can override)
-      let paymentType: any = input.paymentType || "standard";
-      const monthly = Number(f.monthlyPayment) || 0;
-      if (!input.paymentType) {
-        if (input.principal != null && interest === 0 && principal > 0) paymentType = "extra_principal";
-        else if (Math.max(0, balance - principal) === 0 && amount > 0) paymentType = "payoff";
-        else if (monthly > 0 && Math.abs(amount - monthly) < 1) paymentType = "standard";
-        else if (monthly > 0 && amount < monthly && amount > 0) paymentType = "partial";
-        else if (monthly > 0 && amount > monthly) paymentType = "custom";
-      }
-      // Compute new balance based on payment type
-      let newBalance: number;
-      if (paymentType === "skipped" || paymentType === "deferred") {
-        // No balance change. Force amount/principal/interest to 0 for the row.
-        newBalance = balance;
-        principal = 0; interest = 0;
-      } else if (paymentType === "reversal") {
-        // Add the amount back to the balance.
-        newBalance = balance + amount;
-        principal = -principal; interest = -interest;
-      } else if (paymentType === "payoff") {
-        // Payoff zeroes the balance regardless of how the AI sliced principal/interest.
-        // Adjust the principal portion so it reconciles with the actual balance reduction.
-        principal = balance;
-        interest = Math.max(0, cashTowardLoan - balance);
-        newBalance = 0;
-      } else {
-        newBalance = Math.max(0, balance - principal);
-        // If the balance is within $1 of zero (rounding noise from AI splits), zero it out cleanly.
-        if (newBalance > 0 && newBalance < 1) {
-          principal = principal + newBalance;
-          newBalance = 0;
-        }
-      }
-      const payment = await storage.createLiabilityPayment({
-        liabilityProfileId: liability.id,
-        paymentDate: input.paymentDate || today,
-        amount,
-        principalPortion: principal,
-        interestPortion: interest,
-        fees: fees + escrow,
-        remainingBalanceAfter: newBalance,
-        paymentType,
-        sourceAccount: input.method || null,
-        notes: input.notes || (input.confirmationNumber ? `conf: ${input.confirmationNumber}` : null),
-      } as any);
-      // Update balance on the liability profile
-      await storage.updateProfile(liability.id, {
-        fields: { ...f, currentBalance: newBalance },
-      } as any);
+      // One implementation of "record a payment", shared with
+      // POST /api/liabilities/:id/payments. This tool used to carry its own:
+      // its own monthly-rate split instead of the canonical amortization math,
+      // a write to `currentBalance` only (the liability card, the dashboard and
+      // net worth read `remainingBalance`/`loanBalance` too, so they kept
+      // showing the pre-payment number), no idea that a recurring service bill
+      // has no balance to reduce, and "today" in a hardcoded timezone.
+      const paid = await applyLiabilityPayment(
+        storage,
+        liability,
+        {
+          amount: Number(input.amount) || 0,
+          paymentDate: input.paymentDate || null,
+          principal: input.principal ?? null,
+          interest: input.interest ?? null,
+          escrow: input.escrow ?? null,
+          fees: input.fees ?? null,
+          paymentType: (input.paymentType as any) ?? null,
+          sourceAccount: input.method || null,
+          notes: input.notes || (input.confirmationNumber ? `conf: ${input.confirmationNumber}` : null),
+        },
+        aiUserTimezone(),
+      );
       return {
-        result: { payment, newBalance, principal, interest },
-        actions: [{ type: "create", category: "liability_payment", data: payment }],
+        result: { payment: paid.payment, newBalance: paid.newBalance, principal: paid.principal, interest: paid.interest },
+        actions: [{ type: "create", category: "liability_payment", data: paid.payment }],
       };
     }
 

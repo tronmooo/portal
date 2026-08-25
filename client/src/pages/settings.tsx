@@ -407,8 +407,12 @@ export default function SettingsPage() {
     setClearingCache(true);
     try {
       queryClient.clear();
-      await new Promise(r => setTimeout(r, 500));
-      queryClient.invalidateQueries();
+      // Refetch what is actually on screen and WAIT for it, instead of firing
+      // an invalidation into an empty cache and sleeping half a second in the
+      // hope it lands. The sleep was never a synchronization mechanism — it was
+      // a guess, and it made the button feel broken on a fast connection and
+      // still lie on a slow one.
+      await queryClient.refetchQueries({ type: "active" });
       toast({ title: "Cache cleared", description: "All cached data has been refreshed." });
     } finally {
       setClearingCache(false);
