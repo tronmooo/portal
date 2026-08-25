@@ -31,6 +31,7 @@ import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
+import { cascadeProfileRename } from "./profile-rename-cascade";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { seriesFromAll } from "@shared/calendar-adapters";
@@ -4232,6 +4233,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         delete (req.body as any).fieldsToDelete;
       }
     }
+    let renamedFromName: string | undefined;
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || req.body.name.trim() === "") {
         return res.status(400).json({ error: "Profile name must be a non-empty string" });
@@ -4250,6 +4252,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         existingProfile.name,
       );
       if (rename.status === "rejected") return res.status(409).json({ error: rename.error });
+      if (rename.status === "ok") renamedFromName = existingProfile.name;
       req.body.name = rename.name;
     }
     if (req.body.type !== undefined) {
@@ -4348,8 +4351,16 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
     }
 
+    const previousName: string | undefined = renamedFromName;
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    // A rename carries into the titles the app generated from the old name —
+    // the same follow-up the chat tool does, so both doors leave the data in
+    // the same state. Best-effort; the rename itself has already landed.
+    if (previousName && updated.name && previousName !== updated.name) {
+      try { await cascadeProfileRename(storage, req.params.id, previousName, updated.name); }
+      catch (err) { console.warn("[routes:patch-profile] rename cascade failed:", err); }
+    }
     bustCache(`profiles:${uid_p2}`); bustCache(`stats:${uid_p2}`); bustCache(`enhanced:`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);
     // Invalidate the cached AI summary so it regenerates on next read. Stored
     // as a preference (profile_ai_<id>) with a 2h TTL — without this, edits to
