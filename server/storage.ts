@@ -17,6 +17,7 @@ import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 // Auth middleware runs storage within this context so all downstream code
 // automatically gets the request-scoped storage instance.
 export const requestStorageContext = new AsyncLocalStorage<IStorage>();
+import { journalStorageCall, isJournaledStorageMethod } from "./write-journal";
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -2711,8 +2712,26 @@ function getStorage(): IStorage {
   return _storageInstance!;
 }
 
+// Which method names the write journal cares about, resolved once per name.
+// The classifier is a couple of regexes and a map lookup, but this proxy is on
+// the hot path of every storage call in the app, so the answer is cached.
+const journaledMethods = new Map<string, boolean>();
+function shouldJournal(name: string): boolean {
+  let hit = journaledMethods.get(name);
+  if (hit === undefined) {
+    hit = isJournaledStorageMethod(name);
+    journaledMethods.set(name, hit);
+  }
+  return hit;
+}
+
 // Proxy that returns the per-request storage instance if available,
 // otherwise falls back to the global singleton (for auth routes, startup, etc.)
+//
+// It is also where the per-request WRITE JOURNAL is filled in. Every write in
+// the app — REST handler, AI tool, cron job — goes through here, so this is the
+// one place that can observe what a request changed without any call site
+// having to declare it. See server/write-journal.ts.
 export const storage: IStorage = new Proxy({} as IStorage, {
   get(_target, prop, _receiver) {
     // Prefer per-request scoped instance from AsyncLocalStorage
@@ -2720,7 +2739,20 @@ export const storage: IStorage = new Proxy({} as IStorage, {
     const instance = requestScoped || getStorage();
     const value = (instance as any)[prop];
     if (typeof value === 'function') {
-      return value.bind(instance);
+      const bound = value.bind(instance);
+      if (typeof prop !== "string" || !shouldJournal(prop)) return bound;
+      const method = prop;
+      return (...args: any[]) => {
+        const out = bound(...args);
+        if (out && typeof out.then === "function") {
+          return out.then((resolved: any) => {
+            journalStorageCall(method, args, resolved);
+            return resolved;
+          });
+        }
+        journalStorageCall(method, args, out);
+        return out;
+      };
     }
     return value;
   },

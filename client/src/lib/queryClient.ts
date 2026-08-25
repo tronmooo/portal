@@ -63,6 +63,19 @@ export function clearDataVersion(): void {
   lastKnownDataVersion = 0;
 }
 
+/* Did the most recent write come back with a server change manifest?
+   The global mutation default below used to mark EVERY /api/* query in the app
+   stale after any mutation. With refetchOnMount that armed a cold refetch on
+   every screen the user visited next, so the next page rendered its pre-write
+   payload while quietly refetching — the "I navigated and it still showed the
+   old number" report. When a manifest handled the write we know precisely
+   which domains moved and have already invalidated them, so the blanket sweep
+   is pure harm and is skipped. Without a manifest it is still the safety net. */
+let lastManifestAppliedAt = 0;
+export function noteManifestApplied(): void { lastManifestAppliedAt = Date.now(); }
+/** A manifest applied within the window that this mutation could have used. */
+function manifestHandledRecently(): boolean { return Date.now() - lastManifestAppliedAt < 2000; }
+
 function dataVersionHeader(): Record<string, string> {
   return lastKnownDataVersion > 0 ? { "X-Data-Version": String(lastKnownDataVersion) } : {};
 }
@@ -135,11 +148,24 @@ export async function apiRequest(
     if (method.toUpperCase() !== "GET") {
       noteDataVersion(res.headers.get("X-Data-Version"));
       try {
-        const { applyRestWrite } = await import("./write-sync");
-        // Read the body from a CLONE: callers still need the original stream.
-        let body: unknown = null;
-        try { body = await res.clone().json(); } catch { /* not JSON — deletes often aren't */ }
-        applyRestWrite(method, url, body);
+        const { applyRestWrite, applyWriteManifest } = await import("./write-sync");
+        const { decodeWriteManifest, WRITE_MANIFEST_HEADER } = await import("@shared/write-manifest");
+        // The server describes what it changed in a header. Preferred over
+        // anything we can infer from the URL: it names EVERY entity the write
+        // touched (a payment moves the payment row and the liability balance)
+        // and the domains to invalidate, so no call site has to declare them.
+        const manifest = decodeWriteManifest(res.headers.get(WRITE_MANIFEST_HEADER));
+        const handled = await applyWriteManifest(manifest);
+        if (handled) {
+          noteManifestApplied();
+        } else {
+          // No manifest (an older server mid-deploy) — fall back to the URL
+          // heuristic, which is exactly the behavior that shipped before.
+          // Read the body from a CLONE: callers still need the original stream.
+          let body: unknown = null;
+          try { body = await res.clone().json(); } catch { /* not JSON — deletes often aren't */ }
+          applyRestWrite(method, url, body);
+        }
       } catch { /* cache sync must never fail a write */ }
     }
     return res;
@@ -341,17 +367,23 @@ export const queryClient = new QueryClient({
         // query after any mutation — a single expense write triggered
         // refetches of profiles, obligations, events, trackers, goals,
         // habits, journal, etc. That's the "app feels slow / over-fetches"
-        // symptom. We now mark them stale (no immediate refetch) so:
-        //  - On-screen data updates the next time the component re-renders
-        //    via the per-mutation optimistic update.
-        //  - Background data refreshes silently when the user navigates to it.
-        // Individual mutations still call invalidateQueries({queryKey: ...,
-        // refetchType: "active"}) for the specific domain they touched, which
-        // is the right scoped refresh.
-        queryClient.invalidateQueries({
-          predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/"),
-          refetchType: "none",
-        });
+        // symptom. Marking them stale instead (refetchType "none") stopped the
+        // refetch storm but replaced it with a slower one: with refetchOnMount,
+        // every screen the user opened NEXT rendered its pre-write payload and
+        // then refetched cold, for as long as it took to visit them all.
+        //
+        // The write manifest removes the need for either. When the server told
+        // us what changed, the domains that changed have already been
+        // invalidated — precisely — by the time this runs. The blanket sweep
+        // only makes the rest of the app slow for no freshness gain, so it is
+        // skipped. A mutation that did NOT go through the manifest path (an old
+        // server, a raw fetch) still gets the safety net.
+        if (!manifestHandledRecently()) {
+          queryClient.invalidateQueries({
+            predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/"),
+            refetchType: "none",
+          });
+        }
       },
       onError: (error: Error) => {
         console.error("Mutation failed:", error.message);
