@@ -145,3 +145,43 @@ export function selfIdsFrom(allProfiles: Array<{ id: string; type?: string | nul
   }
   return out;
 }
+
+/**
+ * Owner ids for a profile, walking the WHOLE nesting chain.
+ *
+ * `ownerCandidatesForProfile` above only looks at the direct
+ * `parentProfileId`, so a grandchild (Bob → Home → MacBook) reads as
+ * unowned. This walks every ancestor and unions in the co-owner party ids
+ * from the link tables at each step.
+ *
+ * Unlike `ownerCandidatesForProfile`, the profile's OWN id is deliberately
+ * excluded: the question here is "who does this belong to?", not "is this the
+ * selected thing?". A profile with no parent and no link rows therefore
+ * returns `[]` — an orphan — which `isInScope(..., "belongs_to_self")` maps
+ * onto the Self profile, matching the app-wide rule that unattributed things
+ * are mine.
+ *
+ * Pure and cycle-safe.
+ */
+export function ownerChainForProfile(
+  profile: { id?: string | null; parentProfileId?: string | null } | null | undefined,
+  allProfiles: ReadonlyArray<{ id: string; parentProfileId?: string | null }>,
+  assetLinks?: ReadonlyArray<{ assetProfileId?: string | null; partyProfileId?: string | null }> | null,
+  liabilityLinks?: ReadonlyArray<{ liabilityProfileId?: string | null; partyProfileId?: string | null }> | null,
+): string[] {
+  const out = new Set<string>();
+  if (!profile || typeof profile.id !== "string" || !profile.id) return [];
+  const byId = new Map((allProfiles || []).map((p) => [p.id, p] as const));
+  const seen = new Set<string>();
+  type Node = { id?: string | null; parentProfileId?: string | null };
+  let cur: Node | undefined = profile;
+  while (cur && typeof cur.id === "string" && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    for (const id of ownerCandidatesForProfile(cur, assetLinks, liabilityLinks)) {
+      if (id !== profile.id) out.add(id);
+    }
+    const nextId: string | null | undefined = cur.parentProfileId;
+    cur = typeof nextId === "string" && nextId ? (byId.get(nextId) as Node | undefined) : undefined;
+  }
+  return [...out];
+}
