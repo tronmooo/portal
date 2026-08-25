@@ -76,7 +76,8 @@ import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollo
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
-import { checkProfileRename } from "@shared/profile-rename";
+import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
+import { readProfileFieldValue } from "@shared/profile-field-identity";
 import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel } from "@shared/date-rules";
 import {
   enrichWalkRunEntry,
@@ -2935,6 +2936,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       properties: {
         name: { type: "string", description: "Name of the profile to update (partial match). Use 'Me' for self profile." },
         changes: { type: "object", description: "What to change. RENAME: set changes.name to the NEW name — 'rename Bob QA to Bob Robertson' is name:'Bob QA', changes:{ name:'Bob Robertson' }. The rename lands on the profile row, so it shows everywhere at once (page header, owner badges, search, the profile switcher) — never create a second profile to rename one. DATA: use the 'fields' object for values like { bloodType: 'O+', allergies: 'penicillin', height: '5\\'10\"', currentValue: 1200, purchasePrice: 800 }. Can also include 'notes' (string) or 'tags' (array)." },
+        removeFields: { type: "array", items: { type: "string" }, description: "Field keys to DELETE from this profile — 'remove Bob's phone number', 'delete the license number', 'that address is wrong, take it off'. Pass the field's key ('phone', 'licenseNumber'); it is removed wherever it lives on the record, including inside a nested group, and every other spelling of the same field goes with it. Use this rather than writing an empty string — a blank field still shows on the Info tab as an empty row." },
         parentProfileName: { type: "string", description: "Move this profile under a different parent. Pass the EXACT name of the new parent profile (e.g. 'My House', 'Kitchen', 'Bob'). Use this for commands like 'Move freezer from garage to basement' — set name='freezer' and parentProfileName='basement'. Pass empty string to detach (make top-level)." },
       },
       required: ["name", "changes"],
@@ -5468,6 +5470,7 @@ CONFIRMATION IS FOR DELETES (and the bulk/merge previews below) — NOTHING ELSE
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
 - MERGE PROFILES: "merge X into Y" / "combine the duplicate profiles" → merge_profiles(source_name, target_name) shows a preview; after the user confirms in their NEXT message, execute_bulk_action({confirm:true}). Same two-turn rule as bulk deletes — never merge in one turn.
+- REMOVE A PROFILE FIELD: "delete Bob's phone number" / "that address is wrong, take it off" / "remove the license number from my info" → update_profile(name:"<profile>", changes:{ removeFields:["phone"] }). NEVER write an empty string to clear a field — a blank value still renders as an empty row on the Info tab, so the user sees the field they asked you to delete. Editing a value is changes.fields; removing it is changes.removeFields; both can travel in one call.
 - RENAME A PROFILE: "rename Bob QA to Bob Robertson" / "change Bob's name to Bob Robertson" / "my truck is called the Beast now" → update_profile(name:"<the name it has NOW>", changes:{ name:"<the new name>" }). One call, no confirmation question when exactly one profile matches the old name — the user named the record and the new name in one sentence, so there is nothing to clarify and asking wastes their turn. The rename lands on the profile row itself and every screen reads the name from there, so it changes everywhere at once; NEVER create a second profile, and never tell the user to rename it by hand. Ask only when the old name matches several profiles (name them) or matches none.
 - MOVE BETWEEN PROFILES: "move the gym expense to Luna" / "that task is actually Mike's" → update_expense/update_task with forProfile:"<target>" (this REPLACES the owner — do not put profile names inside changes). Do NOT delete + recreate, and do NOT use merge_profiles for a single record.
 - DASHBOARD LAYOUT: "hide the X section" / "show Finance on my dashboard" / "move Goals to the top" / "reset my dashboard" → configure_dashboard_sections. This controls SECTIONS of the dashboard, not data. Undoable.
@@ -7087,7 +7090,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (renamedTo) changes.name = renamedTo;
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
       if (input.changes.tags) changes.tags = input.changes.tags;
-      if (input.changes.type) changes.type = input.changes.type;
+      if (input.changes.type) {
+        // Re-typing a record is how "my truck shows up as a person" gets
+        // fixed. The one thing it may not do is create or destroy a `self`:
+        // the app resolves the user's own record by that type.
+        const typeCheck = checkProfileTypeChange(profile.type, input.changes.type);
+        if (typeCheck.status === "rejected") return { error: typeCheck.error };
+        if (typeCheck.status === "ok") changes.type = typeCheck.type;
+      }
 
       // ---- Parent reassignment (parentProfileName) ----
       const previousParentProfileId = input.parentProfileName !== undefined ? (profile.parentProfileId ?? null) : undefined;
@@ -7112,6 +7122,23 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
 
+      // Deleting a field is the same signal the Info tab's X sends: the
+      // storage layer sweeps it by field IDENTITY, so `licenseNumber` takes
+      // `license_number` and `identity.licenseNumber` with it rather than
+      // leaving a twin the next read promotes back. Chat had no way to do this
+      // at all — the model's only option was to write an empty string, which
+      // leaves an empty row on the Info tab rather than removing anything.
+      const removeFields = Array.isArray(input.changes.removeFields)
+        ? input.changes.removeFields.filter((k: any) => typeof k === "string" && k.trim()).map((k: string) => k.trim())
+        : [];
+      const previousRemoved: Record<string, any> = {};
+      if (removeFields.length > 0) {
+        (changes as any).fieldsToDelete = removeFields;
+        for (const key of removeFields) {
+          previousRemoved[key] = readProfileFieldValue(profile.fields, key);
+        }
+      }
+
       const updated = await storage.updateProfile(profile.id, changes);
       // Attach revert metadata so the chat action card can render a Revert button.
       // Non-enumerable would be safer, but the action result is JSON-serialised
@@ -7124,7 +7151,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         ...(renamedTo ? { _renamed: { from: renamedFrom, to: renamedTo }, _displayData: { name: renamedTo } } : {}),
         _previousState: {
           profileId: profile.id,
-          fields: previousFields,
+          // A removed field's old value rides along under the same key, so
+          // Revert writes it back exactly as the overwritten ones are.
+          fields: { ...previousFields, ...previousRemoved },
           notes: previousNotes,
           tags: previousTags,
           type: previousType,

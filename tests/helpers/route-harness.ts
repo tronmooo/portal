@@ -18,6 +18,7 @@ import { createServer, type Server } from "http";
 import type { AddressInfo } from "net";
 import { requestStorageContext } from "../../server/storage";
 import { registerRoutes } from "../../server/routes";
+import { deleteProfileFields } from "../../shared/profile-field-identity";
 
 /** Every row the fake keeps, so assertions can read what the route wrote. */
 export interface FakeDb {
@@ -81,8 +82,17 @@ export function makeFakeStorage(db: FakeDb) {
     updateProfile: async (pid: string, patch: any) => {
       const row = db.profiles.find(p => p.id === pid);
       if (!row) return undefined;
-      const fields = patch.fields ? { ...(row.fields || {}), ...patch.fields } : row.fields;
-      Object.assign(row, patch, { fields });
+      // `fieldsToDelete` is a write-only DELETION HINT, not a column — both
+      // real storages apply it and neither stores it. The double used to
+      // Object.assign it straight onto the row, so a route that correctly
+      // asked for a field to be removed looked like it had done nothing (and
+      // left a `fieldsToDelete` array sitting on the profile).
+      const { fieldsToDelete, fieldPathsToDelete, ...rest } = patch;
+      const merged = patch.fields ? { ...(row.fields || {}), ...patch.fields } : row.fields;
+      const fields = (fieldsToDelete?.length || fieldPathsToDelete?.length)
+        ? deleteProfileFields(merged || {}, fieldsToDelete, fieldPathsToDelete).fields
+        : merged;
+      Object.assign(row, rest, { fields });
       return row;
     },
 

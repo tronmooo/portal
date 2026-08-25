@@ -30,7 +30,7 @@ import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
-import { checkProfileRename } from "@shared/profile-rename";
+import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
@@ -4185,6 +4185,16 @@ ${JSON.stringify(ctx, null, 2)}`;
       );
       if (rename.status === "rejected") return res.status(409).json({ error: rename.error });
       req.body.name = rename.name;
+    }
+    if (req.body.type !== undefined) {
+      // Same rule the AI path is held to, for the same reason: a record may
+      // become any KIND except the user's own, which the app resolves by type.
+      const current = await storage.getProfile(req.params.id);
+      if (!current) return res.status(404).json({ error: "Not found" });
+      const typeCheck = checkProfileTypeChange(current.type, req.body.type);
+      if (typeCheck.status === "rejected") return res.status(400).json({ error: typeCheck.error });
+      if (typeCheck.status === "unchanged") delete req.body.type;
+      else req.body.type = typeCheck.type;
     }
     // Manual entry follows the exact same rule as extraction and chat: a date
     // typed as "7/18/2034" is stored as 2034-07-18, so the Date Rule engine

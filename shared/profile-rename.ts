@@ -64,3 +64,46 @@ export function checkProfileRename(
   }
   return { status: "ok", name };
 }
+
+// ─── Changing what KIND of record this is ───────────────────────────────────
+//
+// A profile's type decides which tab it lands on, which fields it suggests,
+// and whether it counts toward net worth. Chat could change it
+// (`update_profile changes:{type}`) from the day that tool existed; the UI
+// could not, so "my truck shows up as a person" had no manual fix at all.
+
+/** Every type a profile row can hold. Mirrors update_profile's enum. */
+export const PROFILE_TYPES = [
+  "person", "pet", "vehicle", "property", "asset", "investment",
+  "account", "loan", "subscription", "medical",
+] as const;
+
+export type ProfileType = typeof PROFILE_TYPES[number] | "self";
+
+/**
+ * Can this profile become that type?
+ *
+ * "self" is deliberately absent from PROFILE_TYPES and refused both ways: the
+ * app resolves the user's own record by that type, so a second self — or a
+ * self demoted to a person — leaves scope, ownership and "Me" resolution with
+ * no answer. Everything else is the user's call.
+ */
+export function checkProfileTypeChange(currentType: unknown, nextType: unknown):
+  | { status: "ok"; type: string }
+  | { status: "unchanged" }
+  | { status: "rejected"; error: string } {
+  const next = String(nextType ?? "").trim().toLowerCase();
+  const current = String(currentType ?? "").trim().toLowerCase();
+  if (!next) return { status: "rejected", error: "No type given." };
+  if (next === current) return { status: "unchanged" };
+  if (current === "self") {
+    return { status: "rejected", error: "This is your own profile — its type is what makes it yours, so it can't be changed to something else." };
+  }
+  if (next === "self") {
+    return { status: "rejected", error: "There is exactly one 'me' profile, and another record can't become it. Merge into it instead." };
+  }
+  if (!(PROFILE_TYPES as readonly string[]).includes(next)) {
+    return { status: "rejected", error: `"${nextType}" isn't a profile type. Pick one of: ${PROFILE_TYPES.join(", ")}.` };
+  }
+  return { status: "ok", type: next };
+}
