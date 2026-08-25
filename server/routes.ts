@@ -4545,6 +4545,60 @@ ${JSON.stringify(ctx, null, 2)}`;
     res.json({ success: true });
   }));
 
+  // Bulk delete: remove several profiles — people included — and everything
+  // that hung off them, in one call. The per-id path already cascades (child
+  // profiles, then every linked row), so this is a loop over that same
+  // cascade, not a second deletion implementation: one confirmation in the UI
+  // instead of N, and one report of what actually went.
+  //
+  // The Self profile is refused here. It is the account's own root — the
+  // hub switcher, /profiles, and most AI context resolve through it — so
+  // removing it from a multi-select screen would break the app rather than
+  // tidy it. Deleting yourself is an account-level act, not a list edit.
+  app.post("/api/profiles/bulk-delete", asyncHandler(async (req, res) => {
+    const uid_bd = cacheUserKey(req as AuthenticatedRequest);
+    const ids: unknown = (req.body || {}).ids;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "ids must be a non-empty array of profile ids" });
+    }
+    if (ids.length > 100) {
+      return res.status(400).json({ error: "Too many profiles in one request (max 100)" });
+    }
+    const unique = Array.from(new Set(ids.filter((v): v is string => typeof v === "string" && v.length > 0)));
+    if (unique.length === 0) return res.status(400).json({ error: "ids must be a non-empty array of profile ids" });
+
+    const deleted: { id: string; name: string }[] = [];
+    const failed: { id: string; name: string; reason: string }[] = [];
+    for (const id of unique) {
+      const existing = await storage.getProfile(id);
+      if (!existing) { failed.push({ id, name: id, reason: "Profile not found" }); continue; }
+      if (existing.type === "self") {
+        failed.push({ id, name: existing.name, reason: "Your own profile can't be deleted" });
+        continue;
+      }
+      let ok = false;
+      try {
+        ok = await storage.deleteProfile(id);
+      } catch (err: any) {
+        console.error(`[routes:bulk-delete] cascade threw for ${id}:`, err?.message || err);
+        ok = false;
+      }
+      if (ok) deleted.push({ id, name: existing.name });
+      else failed.push({ id, name: existing.name, reason: "Deletion partially failed — some linked items may remain" });
+      // The AI summary is cached as a preference outside the profile row, so
+      // clear it too or a deleted profile's blurb can be re-served for 2h.
+      try { await storage.setPreference(`profile_ai_${id}`, ""); } catch { /* best effort */ }
+    }
+
+    bustCache(`profiles:${uid_bd}`); bustCache(`stats:${uid_bd}`); bustCache(`profile-detail:${uid_bd}:`); bustCache(`cashflow:${uid_bd}`);
+    bustUserCaches(uid_bd);
+
+    // 207-style partial outcome: some rows are gone even when others failed, so
+    // the client must not treat this as an all-or-nothing success.
+    res.status(failed.length > 0 && deleted.length > 0 ? 207 : failed.length > 0 ? 500 : 200)
+      .json({ success: failed.length === 0, deleted, failed });
+  }));
+
   // ---- Profile Link / Unlink ----
   app.post("/api/profiles/:id/link", asyncHandler(async (req, res) => {
     const { entityType, entityId } = req.body;

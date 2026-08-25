@@ -122,6 +122,29 @@ export function makeFakeStorage(db: FakeDb) {
       return row;
     },
 
+    // Cascade delete, modelled on the real one: child profiles go first, then
+    // the profile, then every row that named it. Without this the proxy's
+    // catch-all answered `[]` — TRUTHY — so a delete route "succeeded" while
+    // every row it was supposed to remove stayed in the db.
+    deleteProfile: async (pid: string): Promise<boolean> => {
+      const row = db.profiles.find(p => p.id === pid);
+      if (!row) return false;
+      for (const child of db.profiles.filter(p => p.parentProfileId === pid)) {
+        await impl.deleteProfile(child.id);
+      }
+      db.profiles = db.profiles.filter(p => p.id !== pid);
+      const linked = (r: any) =>
+        r.profileId === pid || (Array.isArray(r.linkedProfiles) && r.linkedProfiles.includes(pid));
+      db.expenses = db.expenses.filter(r => !linked(r));
+      db.incomes = db.incomes.filter(r => !linked(r));
+      db.tasks = db.tasks.filter(r => !linked(r));
+      db.events = db.events.filter(r => !linked(r));
+      db.documents = db.documents.filter(r => !linked(r));
+      db.obligations = db.obligations.filter(r => !linked(r));
+      db.liabilityPayments = db.liabilityPayments.filter(r => r.liabilityId !== pid && !linked(r));
+      return true;
+    },
+
     getExpenses: async () => db.expenses,
     createExpense: async (data: any) => {
       const row = { id: id("exp"), createdAt: new Date().toISOString(), ...data };

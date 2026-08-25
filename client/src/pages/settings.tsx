@@ -470,6 +470,20 @@ export default function SettingsPage() {
                 <StatCard icon={Activity} label="Trackers" value={stats?.totalTrackers || 0} href="/linked" accent="173 60% 44%" />
                 <StatCard icon={FileText} label="Documents" value={allDocs.length} href="/linked" accent="25 80% 54%" />
               </div>
+              {/* The one entry point to the profiles index. /profiles resolves
+                  to your own profile, so without this the page that lists —
+                  and deletes — everyone else was reachable only by URL. */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full mt-2 justify-start gap-2 h-9 text-[13px]"
+                onClick={() => navigate("/profiles/list")}
+                data-testid="button-manage-profiles"
+              >
+                <Users className="h-3.5 w-3.5" />
+                Manage profiles
+                <span className="ml-auto text-xs text-muted-foreground">Review or delete</span>
+              </Button>
             </div>
 
             <Separator />
