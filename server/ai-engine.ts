@@ -34,6 +34,7 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
+import { buildExtractionItems } from "@shared/extraction-destinations";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -1619,6 +1620,22 @@ const EXTRACTION_PROMPT_BASE = `You are reading an arbitrary document. First und
   "summary": "<one line>"
 }
 
+STRUCTURED SECTIONS — include any of these top-level arrays ONLY when the document actually lists them. Omit the key entirely when it has nothing in it. These exist because a person's allergies, prescriptions, conditions, surgeries and a doctor's narrative are DIFFERENT KINDS OF THING and each has its own home in the app; flattening them into "extractedData" keys turns "Penicillin (Rash)" and "Lungs clear bilaterally" into the same kind of loose string.
+
+  "allergies":       [ { "substance": "Penicillin", "reaction": "Rash", "type": "medication" | "environmental" | "food" | "other" } ],
+  "medications":     [ { "name": "Cetirizine", "dose": "10 mg", "frequency": "once daily", "asNeeded": true, "kind": "medication" | "supplement" } ],
+  "conditions":      [ { "name": "GERD", "status": "active" | "history" | "resolved" } ],
+  "surgicalHistory": [ { "procedure": "Appendectomy", "year": 2012 } ],
+  "clinicalNotes":   [ { "title": "Physical Examination Summary", "body": "<the narrative VERBATIM, as one block of prose>" } ],
+  "followUps":       [ { "label": "Repeat labs", "date": "YYYY-MM-DD", "kind": "task" | "appointment" } ]
+
+RULES FOR THE STRUCTURED SECTIONS:
+- A field that belongs in one of these arrays must NOT also be duplicated as an extractedData key. Put it in exactly one place.
+- "medications" is a PRESCRIPTION LIST — what the person is prescribed or takes. It is NEVER a record that a dose was taken. Do not invent a time, a date, or an "adherence"/"taken" value for a medication, and never emit a medication as a trackerEntry. "once daily as needed" means asNeeded: true — that is a PRN prescription, not a daily schedule.
+- "clinicalNotes" is for genuinely unstructured narrative — a physical examination summary, an assessment, a plan, an impression, a doctor's comments. Keep each section's prose intact and verbatim in "body" rather than splitting each sentence into its own field. A measurement, a lab value, a date, an allergy, a medication or a diagnosis is NOT a clinical note.
+- "followUps" is for a future commitment the document states ("repeat labs in 6 months", "return for annual visit on August 25, 2027"). Convert a relative interval to an absolute date using the document's own report date when one is printed; omit the item if you cannot.
+- A number printed with two units ("5 ft 7 in (170 cm)", "300 lb (136.1 kg)") is ONE value — copy it exactly as printed, including both forms. Do not pick one, do not convert, do not drop the unit.
+
 ACCURACY RULES — never fabricate, but be THOROUGH with what is actually printed:
 - Extract ONLY what is actually printed. NEVER guess, infer, calculate, copy, or reuse a value.
 - If a field or a table cell is empty, blank, or shows a placeholder (— or - or "N/A" or "None"), OMIT just that key. This "leave blanks out" rule is ONLY about empty cells — it does NOT mean skip fields that ARE filled in.
@@ -2754,9 +2771,29 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       }
     }
 
+    // ── The review list ──────────────────────────────────────────────────
+    // ONE list, every item carrying its proposed destination, so the review
+    // pane can group by destination and let the user re-route anything before
+    // a single write happens. `extractedFields`, `trackerEntries` and
+    // `pendingFinancial` stay on the payload below exactly as they were, so a
+    // chat message rendered from history keeps working.
+    const reviewItems = buildExtractionItems({
+      extractedFields,
+      trackerEntries: parsed.trackerEntries || [],
+      allergies: Array.isArray(parsed.allergies) ? parsed.allergies : [],
+      medications: Array.isArray(parsed.medications) ? parsed.medications : [],
+      conditions: Array.isArray(parsed.conditions) ? parsed.conditions : [],
+      surgicalHistory: Array.isArray(parsed.surgicalHistory) ? parsed.surgicalHistory : [],
+      clinicalNotes: Array.isArray(parsed.clinicalNotes) ? parsed.clinicalNotes : [],
+      followUps: Array.isArray(parsed.followUps) ? parsed.followUps : [],
+      docContext: `${parsed.documentType ?? ""} ${parsed.label ?? ""}`,
+      normalizeDate: normalizeDateString,
+    });
+
     const pendingExtraction = {
       extractionId: document.id,
       fileName,
+      items: reviewItems,
       // Prefer the classifier's class when available — it's more precise than
       // the extractor's freeform documentType, and gives the UI a stable key
       // to route on (e.g. "parking_receipt" vs. a one-off phrase).

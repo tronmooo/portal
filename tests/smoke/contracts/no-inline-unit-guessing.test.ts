@@ -36,6 +36,15 @@ const SCAN_DIRS = ["client/src", "server", "shared"].map((d) => path.join(REPO_R
 const EXEMPT_FILES = new Set<string>([
   "shared/tracker-units.ts",
   "server/tracker-normalize.ts",
+  // shared/extraction-destinations.ts — `canonMeasurementUnit` is the same
+  // category as tracker-normalize's `canonUnit`: it maps a unit STRING a
+  // document actually printed ("mg/dl", "lb", "°f") to its canonical spelling
+  // so the value can be stored and converted. It never guesses a unit from a
+  // field NAME. The name→unit mappings in that file are DECLARED units on the
+  // HEALTH_METRICS registry — data, not a ladder — and they exist so the unit
+  // is stated explicitly at write time and resolveTrackerUnit's precedence #1
+  // (the field's own declared unit) is what every view then reads.
+  "shared/extraction-destinations.ts",
 ]);
 
 // The closed set of physical-unit string literals a guesser ladder emits.

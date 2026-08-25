@@ -150,3 +150,31 @@ describe("normalizeTrackerEntry — single-numeric mapping is value-aware", () =
     expect(values.mood).toBe("happy");
   });
 });
+
+// ── Height units (user report 2026-08-25) ───────────────────────────────────
+// canonUnit had no case for inches at all, so "in" was an unknown unit: a
+// Height tracker could not reconcile a reading logged in feet with one logged
+// in inches, and neither could be converted to centimetres.
+describe("normalizeTrackerEntry — height units", () => {
+  const heightTracker = {
+    name: "Height",
+    category: "health",
+    unit: "in",
+    fields: [{ name: "value", type: "number", unit: "in", isPrimary: true }],
+  } as any;
+
+  it("converts a reading logged in feet to the tracker's inches", () => {
+    const { values } = normalizeTrackerEntry(heightTracker, { value: "5.5 ft" });
+    expect(values.value).toBe(66);
+  });
+
+  it("converts a reading logged in centimetres to inches", () => {
+    const { values } = normalizeTrackerEntry(heightTracker, { value: "170 cm" });
+    expect(values.value).toBeCloseTo(66.93, 1);
+  });
+
+  it("leaves a reading already in inches alone", () => {
+    const { values } = normalizeTrackerEntry(heightTracker, { value: "67 in" });
+    expect(values.value).toBe(67);
+  });
+});

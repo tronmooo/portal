@@ -100,6 +100,10 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import type { ChatMessage, ChatMutation, ParsedAction, Profile } from "@shared/schema";
+import {
+  DESTINATION_LABEL, DESTINATION_ORDER, parseMeasurement, matchHealthMetric,
+  type ExtractionItem, type ExtractionDestination,
+} from "@shared/extraction-destinations";
 // Type-only import — erased at compile time, does NOT pull recharts into the bundle.
 import type { ChartSpec2 } from "@/components/ChatChartRenderer";
 // ChartCard lazy-loads the recharts body itself, so importing it here stays light.
@@ -662,6 +666,8 @@ function ExtractionConfirmation({
     confirmedFields: Array<{ key: string; value: any }>;
     targetProfileId?: string;
     createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
+    /** The review list, each row carrying the destination the user chose. */
+    items?: ExtractionItem[];
     trackerEntries: any[];
     createExpense?: any;
     createObligation?: any;
@@ -677,26 +683,18 @@ function ExtractionConfirmation({
   const [selectedTrackers, setSelectedTrackers] = useState<boolean[]>(
     () => (extraction.trackerEntries || []).map(() => true)
   );
-  // Track which trackable PROFILE fields (height, weight, etc.) should ALSO be turned
-  // into a time-series tracker entry. Bug fix: previously "create tracker for height"
-  // checkbox had no effect because height was hard-coded as a profile-only field.
-  const TRACKABLE_PROFILE_KEYS = new Set([
-    'height', 'weight', 'bmi', 'bodyFat', 'bodyFatPercentage',
-    'systolic', 'diastolic', 'bloodPressure', 'heartRate', 'pulse',
-    'temperature', 'bodyTemperature', 'restingHeartRate', 'oxygenSaturation', 'spo2',
-    'glucose', 'bloodGlucose', 'cholesterol', 'totalCholesterol', 'ldl', 'hdl', 'triglycerides',
-    'a1c', 'hba1c'
-  ]);
-  const isTrackableField = (key: string) =>
-    TRACKABLE_PROFILE_KEYS.has(key) || /^(height|weight|bp|bmi|temperature|heart_?rate)$/i.test(key);
-  const [alsoTrack, setAlsoTrack] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = {};
-    for (const f of extraction.extractedFields) {
-      // Default to ON for trackable fields — user almost always wants the time-series too.
-      if (isTrackableField(f.key)) init[f.key] = true;
-    }
-    return init;
-  });
+  // ── The review list ────────────────────────────────────────────────────────
+  // One row per extracted fact, each carrying the destination the extractor
+  // proposed and the destinations it may be re-routed to. This replaces a
+  // hard-coded 25-key allowlist that decided which fields were even ALLOWED to
+  // become a tracker — creatinine, sodium, potassium, TSH, respiratory rate and
+  // SpO2 were not on it, so a full lab panel was silently flattened into loose
+  // profile strings (user report 2026-08-25). The vocabulary now lives in
+  // shared/extraction-destinations and the user gets the final say on every row.
+  const [items, setItems] = useState<ExtractionItem[]>(
+    () => (extraction.items || []).map((i) => ({ ...i })),
+  );
+  const hasItems = items.length > 0;
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(extraction.targetProfile?.id);
   const [createExpense, setCreateExpense] = useState(!!extraction.pendingFinancial?.expense);
   const [createObligation, setCreateObligation] = useState(!!extraction.pendingFinancial?.obligation);
@@ -735,14 +733,69 @@ function ExtractionConfirmation({
   // selected we treat the next click as a Deselect All; otherwise we Select
   // All. This is the same affordance spreadsheets give you — one click to
   // flip the entire column.
-  const allSelected = fields.length > 0 && fields.every((f) => f.selected);
+  const allSelected = hasItems
+    ? items.every((i) => i.selected)
+    : (fields.length > 0 && fields.every((f) => f.selected));
   const toggleAllFields = () => {
     const next = !allSelected;
+    if (hasItems) {
+      // Select-all never resurrects a row the router sent to Ignore — those are
+      // document metadata, and ticking them would write "signedBy" to a person.
+      setItems((prev) => prev.map((i) => (i.destination === "ignore" ? i : { ...i, selected: next })));
+      return;
+    }
     setFields((prev) => prev.map((f) => ({ ...f, selected: next })));
     // Mirror the bulk action onto the tracker entry checkboxes so the user's
     // single click clears (or restores) the whole review pane at once.
     setSelectedTrackers((prev) => prev.map(() => next));
   };
+
+  const toggleItem = (id: string) =>
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, selected: !i.selected } : i)));
+
+  /**
+   * Edit a row's value. For a measurement the numbers, not the text, are what
+   * gets logged — so an edited value is re-parsed through the SAME parser the
+   * server used. Without this, correcting a misread height in the review pane
+   * changed the label and left the old number on its way to the tracker.
+   */
+  const setItemValue = (id: string, value: string) =>
+    setItems((prev) => prev.map((i) => {
+      if (i.id !== id) return i;
+      if (!i.values) return { ...i, value };
+      const reparsed = parseMeasurement(value, matchHealthMetric(i.trackerName ?? i.key));
+      return reparsed
+        ? { ...i, value, values: reparsed.values, unit: reparsed.unit || i.unit }
+        : { ...i, value };
+    }));
+
+  /**
+   * Re-route one row. Moving a row OUT of Ignore ticks it — the user only ever
+   * changes a destination because they want that row saved somewhere — and
+   * moving one INTO Ignore unticks it, so the two controls never disagree.
+   */
+  const setItemDestination = (id: string, destination: ExtractionDestination) =>
+    setItems((prev) => prev.map((i) => (
+      i.id === id
+        ? { ...i, destination, selected: destination !== "ignore" }
+        : i
+    )));
+
+  // Rows grouped by destination, in the display order the shared module fixes,
+  // so the same document always reads the same way.
+  const groupedItems = useMemo(() => {
+    const groups = new Map<ExtractionDestination, ExtractionItem[]>();
+    for (const it of items) {
+      const list = groups.get(it.destination) ?? [];
+      list.push(it);
+      groups.set(it.destination, list);
+    }
+    return DESTINATION_ORDER
+      .filter((d) => groups.has(d))
+      .map((d) => ({ destination: d, rows: groups.get(d)! }));
+  }, [items]);
+
+  const selectedItemCount = items.filter((i) => i.selected).length;
 
   // Heuristic: when the upstream classifier did NOT route this document as an
   // expense, but the user can still see a money-shaped "Total" / "Amount"
@@ -755,7 +808,7 @@ function ExtractionConfirmation({
     if (extraction.pendingFinancial?.expense) return null;
     const moneyKeyRe = /(total|amount|price|charge|fee|cost|payment|balance|due|paid|subtotal|grand_?total)/i;
     let best: { amount: number; label: string; key: string; __rank: number } | null = null;
-    for (const f of fields) {
+    for (const f of (hasItems ? items : fields)) {
       const keyStr = String(f.key || '');
       const labelStr = String(f.label || '');
       if (!moneyKeyRe.test(keyStr) && !moneyKeyRe.test(labelStr)) continue;
@@ -770,18 +823,21 @@ function ExtractionConfirmation({
       }
     }
     return best;
-  }, [fields, extraction.pendingFinancial]);
+  }, [fields, items, hasItems, extraction.pendingFinancial]);
   // "Add to Finance" toggle state — only meaningful when moneyFieldCandidate exists.
   const [addManualExpense, setAddManualExpense] = useState(false);
 
   const handleConfirm = async () => {
     setConfirming(true);
-    // Include ALL selected fields (date fields now save to profile AND optionally create calendar events)
-    const confirmedFields = fields.filter((f) => f.selected && f.key).map((f) => {
+    // When the review list is present it IS the payload — every row carries the
+    // destination the user chose, and the server routes on that. The legacy
+    // field/event/tracker shapes below are only built for a chat message
+    // rendered from history, which predates the review list.
+    const confirmedFields = hasItems ? [] : fields.filter((f) => f.selected && f.key).map((f) => {
       const key = f.key === 'dob' ? 'dateOfBirth' : f.key;
       return { key, value: f.value };
     });
-    const createCalendarEvents = fields
+    const createCalendarEvents = hasItems ? [] : fields
       .filter((f) => f.selected && f.isDate && f.suggestedEvent && f.key && f.value)
       .map((f) => ({
         field: f.key,
@@ -789,56 +845,17 @@ function ExtractionConfirmation({
         title: f.suggestedEvent!,
         category: /expir|renew/i.test(f.key || "") ? "finance" : /appoint|visit/i.test(f.key || "") ? "health" : "other",
       }));
-    // Build synthetic tracker entries from the trackable profile fields the user opted into.
-    // This makes the inline "Also track over time" checkbox actually create a tracker, fixing
-    // the silent drop where height/weight checkboxes did nothing because they're personal keys.
-    const syntheticTrackerEntries = fields
-      .filter((f) => f.selected && f.key && alsoTrack[f.key])
-      .map((f) => {
-        const rawStr = String(f.value ?? '').trim();
-        // Try to parse height like 5'10" → 70 (inches)
-        let numValue: number | null = null;
-        let unit = '';
-        if (/^(\d+)'\s*(\d+)?\"?$/.test(rawStr)) {
-          const m = rawStr.match(/^(\d+)'\s*(\d+)?\"?$/)!;
-          numValue = parseInt(m[1], 10) * 12 + parseInt(m[2] || '0', 10);
-          unit = 'in';
-        } else if (/^(\d+(\.\d+)?)\s*(lbs?|kg|cm|in|mmHg|bpm|°F|°C|mg\/dL|%)?$/i.test(rawStr)) {
-          const m = rawStr.match(/^(\d+(?:\.\d+)?)\s*([a-zA-Z%°\/]*)$/)!;
-          numValue = parseFloat(m[1]);
-          unit = (m[2] || '').toLowerCase();
-        } else if (/^\d+\/\d+$/.test(rawStr)) {
-          // Blood pressure like 120/80 — store both
-          const [sys, dia] = rawStr.split('/').map((n) => parseInt(n, 10));
-          return {
-            trackerName: 'Blood Pressure',
-            values: { systolic: sys, diastolic: dia },
-            unit: 'mmHg',
-            category: 'health',
-            __fromProfileField: f.key,
-          };
-        } else {
-          const n = parseFloat(rawStr);
-          if (!isNaN(n)) numValue = n;
-        }
-        if (numValue === null) return null;
-        // Default units when unparseable
-        if (!unit) {
-          if (/height/i.test(f.key)) unit = 'in';
-          else if (/weight/i.test(f.key)) unit = 'lbs';
-          else if (/temperature/i.test(f.key)) unit = '°F';
-          else if (/heart_?rate|pulse/i.test(f.key)) unit = 'bpm';
-        }
-        const niceName = (f.label || f.key).replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim();
-        return {
-          trackerName: niceName,
-          values: { value: numValue },
-          unit,
-          category: 'health',
-          __fromProfileField: f.key,
-        };
-      })
-      .filter((e): e is NonNullable<typeof e> => e !== null);
+    // NOTE: the client no longer parses measurements at all.
+    //
+    // It used to build "synthetic tracker entries" here with three anchored
+    // regexes, a bare parseFloat fallback, and a unit GUESSED from the field
+    // name. A clinic report printing `Height: 5 ft 7 in (170 cm)` matched none
+    // of the regexes, fell through to parseFloat → 5, and was then stamped
+    // `in` because the key contained "height" — the "5 in" the user saw on
+    // their Height tracker. Parsing now happens once, on the server, through
+    // shared/extraction-destinations.parseMeasurement, and arrives on each item
+    // as `values` + `unit`. This code's only job is to send back what the user
+    // chose.
 
     // Build the expense payload. Prefer the classifier-produced one. If the
     // classifier didn't produce a pendingFinancial.expense but the user opted
@@ -861,8 +878,9 @@ function ExtractionConfirmation({
         }
       : undefined;
     if (!expensePayload && addManualExpense && moneyFieldCandidate) {
-      const vendorField = fields.find((f) => /vendor|merchant|company|provider|payee/i.test(String(f.key || '')));
-      const dateField = fields.find((f) => /transaction.?date|date$|paid/i.test(String(f.key || '')));
+      const scan: Array<{ key?: string; value?: any }> = hasItems ? items : fields;
+      const vendorField = scan.find((f) => /vendor|merchant|company|provider|payee/i.test(String(f.key || '')));
+      const dateField = scan.find((f) => /transaction.?date|date$|paid/i.test(String(f.key || '')));
       expensePayload = {
         description: `${vendorField?.value || extraction.label || extraction.fileName} - ${moneyFieldCandidate.label}`,
         amount: moneyFieldCandidate.amount,
@@ -879,10 +897,10 @@ function ExtractionConfirmation({
       confirmedFields,
       targetProfileId: selectedProfileId || extraction.targetProfile?.id,
       createCalendarEvents,
-      trackerEntries: [
-        ...(extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),
-        ...syntheticTrackerEntries,
-      ],
+      items: hasItems ? items : undefined,
+      trackerEntries: hasItems
+        ? []
+        : (extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),
       createExpense: expensePayload,
       createObligation: createObligation ? extraction.pendingFinancial?.obligation : undefined,
     });
@@ -918,8 +936,10 @@ function ExtractionConfirmation({
     <div className="mt-3 rounded-lg bg-muted/40 border border-border overflow-hidden text-foreground">
       {/* Header bar */}
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-border bg-muted/60 flex-wrap">
-        <span className="micro-label text-muted-foreground">
-          Review extracted data · {fields.length}
+        <span className="micro-label text-muted-foreground" data-testid="extraction-count">
+          {hasItems
+            ? `We found ${items.length} piece${items.length === 1 ? "" : "s"} of data`
+            : `Review extracted data · ${fields.length}`}
         </span>
         <button
           type="button"
@@ -946,7 +966,78 @@ function ExtractionConfirmation({
         </div>
       </div>
 
-      {/* Excel-style grid: tight rows, column lines, header row */}
+      {/* Grouped review: one section per destination, every row re-routable.
+          The AI recommends; you get the final say. */}
+      {hasItems && (
+        <div className="divide-y divide-border/60" data-testid="extraction-items">
+          {groupedItems.map(({ destination, rows }) => (
+            <div key={destination}>
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-muted/50">
+                <span className="micro-label text-muted-foreground">
+                  {DESTINATION_LABEL[destination]}
+                </span>
+                <span className="text-[11px] text-muted-foreground tabular-nums">{rows.length}</span>
+              </div>
+              {rows.map((item) => (
+                <div
+                  key={item.id}
+                  className={`flex items-start gap-2 px-2.5 py-1 ${item.selected ? "" : "opacity-50"}`}
+                  data-testid={`extraction-item-${item.id}`}
+                >
+                  <Checkbox
+                    checked={item.selected}
+                    onCheckedChange={() => toggleItem(item.id)}
+                    className="h-3.5 w-3.5 mt-1 shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium truncate">{item.label}</div>
+                    <input
+                      type="text"
+                      className="w-full bg-transparent text-xs text-foreground border-b border-dashed border-border/60 focus:outline-none focus:border-primary focus:bg-primary/5 rounded-t px-0.5 py-0.5"
+                      value={
+                        typeof item.value === "object" && item.value !== null
+                          ? JSON.stringify(item.value)
+                          : String(item.value ?? "")
+                      }
+                      onChange={(e) => setItemValue(item.id, e.target.value)}
+                      data-testid={`extraction-value-${item.id}`}
+                    />
+                    {item.detail && (
+                      <div className="text-[11px] text-muted-foreground leading-tight">{item.detail}</div>
+                    )}
+                    {item.trackerName && item.destination !== "medication" && (
+                      <div className="text-[11px] text-muted-foreground leading-tight">
+                        → {item.trackerName} tracker
+                      </div>
+                    )}
+                    {item.destination === "medication" && (
+                      <div className="text-[11px] text-muted-foreground leading-tight">
+                        → medication record + tracker · no dose logged
+                      </div>
+                    )}
+                  </div>
+                  <select
+                    className="text-[11px] bg-background border border-border rounded px-1 py-0.5 text-foreground max-w-[130px] shrink-0 mt-0.5"
+                    value={item.destination}
+                    onChange={(e) => setItemDestination(item.id, e.target.value as ExtractionDestination)}
+                    data-testid={`extraction-destination-${item.id}`}
+                    title="Change where this is saved"
+                  >
+                    {item.destinationOptions.map((d) => (
+                      <option key={d} value={d}>{DESTINATION_LABEL[d]}</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Excel-style grid: tight rows, column lines, header row.
+          Legacy path — a chat message rendered from history, extracted before
+          the review list existed. */}
+      {!hasItems && (
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-xs">
           <thead>
@@ -1017,22 +1108,6 @@ function ExtractionConfirmation({
                         → {field.suggestedEvent}
                       </div>
                     )}
-                    {field.selected && field.key && isTrackableField(field.key) && (
-                      <label
-                        className="flex items-center gap-1 mt-0.5 cursor-pointer"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <Checkbox
-                          checked={!!alsoTrack[field.key]}
-                          onCheckedChange={(checked) =>
-                            setAlsoTrack((prev) => ({ ...prev, [field.key]: !!checked }))
-                          }
-                          className="h-3 w-3"
-                          data-testid={`also-track-${field.key}`}
-                        />
-                        <span className="text-[11px] text-muted-foreground">Also track over time</span>
-                      </label>
-                    )}
                   </td>
                 </tr>
               );
@@ -1040,9 +1115,10 @@ function ExtractionConfirmation({
           </tbody>
         </table>
       </div>
+      )}
       <div className="p-2.5 pt-2 space-y-2">
 
-      {extraction.trackerEntries && extraction.trackerEntries.length > 0 && (
+      {!hasItems && extraction.trackerEntries && extraction.trackerEntries.length > 0 && (
         <div className="pt-1.5 border-t border-border/50">
           <span className="text-xs text-muted-foreground font-medium">Tracker entries (uncheck to skip):</span>
           {extraction.trackerEntries.map((entry: any, idx: number) => (
@@ -1166,11 +1242,11 @@ function ExtractionConfirmation({
             // (2026-08-17 report). The server only needs extractionId; the
             // expense/obligation/tracker saves are independent of the fields.
             confirming || (
-              fields.every((f) => !f.selected) &&
+              (hasItems ? selectedItemCount === 0 : fields.every((f) => !f.selected)) &&
               !createExpense &&
               !createObligation &&
               !addManualExpense &&
-              !selectedTrackers.some(Boolean)
+              !(hasItems ? false : selectedTrackers.some(Boolean))
             )
           }
         >
@@ -2419,7 +2495,7 @@ const MessageRow = memo(function MessageRow({
         )}
 
         {/* Extraction confirmation UI */}
-        {msg.pendingExtraction && msg.pendingExtraction.extractedFields.length > 0 && (
+        {msg.pendingExtraction && (msg.pendingExtraction.items?.length || msg.pendingExtraction.extractedFields.length) > 0 && (
           <ExtractionConfirmation
             extraction={msg.pendingExtraction}
             onConfirm={handleConfirmExtraction}
@@ -3448,7 +3524,7 @@ export default function ChatPage() {
 
       // Create separate extraction messages for each file with pending extraction
       const extractionMsgs: ChatMessage[] = data.results
-        .filter((r) => r.pendingExtraction?.extractedFields?.length > 0)
+        .filter((r) => (r.pendingExtraction?.items?.length || r.pendingExtraction?.extractedFields?.length || 0) > 0)
         .map((r, idx) => ({
           id: `${crypto.randomUUID()}-extraction-${idx}`,
           role: "assistant" as const,

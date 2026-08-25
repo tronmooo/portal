@@ -4,6 +4,8 @@ import {
   trackerMetricDefinitionSchema,
 } from "./tracker-metric-definition";
 export type { TrackerMetricDefinition } from "./tracker-metric-definition";
+import type { ExtractionItem } from "./extraction-destinations";
+export type { ExtractionItem, ExtractionDestination } from "./extraction-destinations";
 
 // ============================================================
 // SHARED CONSTANTS
@@ -185,6 +187,14 @@ export interface ChatMessage {
     trackerEntries?: Array<{ trackerName: string; values: Record<string, any> }>;
     documentPreview?: { id: string; name: string; mimeType: string; data: string };
     pendingFinancial?: any;
+    /**
+     * The review list: ONE row per extracted fact, each carrying the destination
+     * the extractor proposes and the destinations the user may re-route it to
+     * (shared/extraction-destinations). `extractedFields` and `trackerEntries`
+     * above are kept so a chat message rendered from history still displays;
+     * `items` is what the review pane renders when present.
+     */
+    items?: ExtractionItem[];
   };
   results?: Array<Record<string, any>>;
   // Rich visual output — inline charts, tables, reports

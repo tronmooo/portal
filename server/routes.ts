@@ -29,6 +29,12 @@ import { registerCacheBuster } from "./cache-bus";
 import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
+import {
+  mergeStructuredRecords, allergyKey, medicationKey, conditionKey, surgeryKey,
+  type ExtractionItem, type ExtractionDestination,
+  type ProfileAllergy, type ProfileMedication, type ProfileCondition, type ProfileSurgery,
+} from "@shared/extraction-destinations";
+import { findIdentityMatches } from "@shared/tracker-identity";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename } from "@shared/profile-rename";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
@@ -511,6 +517,25 @@ export function resolveDataVersion(memoVersion: number, headerValue: unknown): n
   const raw = Number(Array.isArray(headerValue) ? headerValue[0] : headerValue);
   if (!Number.isFinite(raw) || raw <= memoVersion) return memoVersion;
   return Math.min(Math.floor(raw), memoVersion + MAX_VERSION_LOOKAHEAD);
+}
+
+/**
+ * Write one structured medical array onto the profile's merged fields.
+ *
+ * Only writes when there is something to write: an extraction that carried no
+ * allergies must not touch `fields.allergies`, and must certainly not convert a
+ * user's free-text allergy string into records for no reason.
+ */
+function applyStructuredArray<T extends Record<string, any>>(
+  merged: Record<string, any>,
+  existingFields: Record<string, any>,
+  key: string,
+  incoming: T[],
+  keyOf: (x: Partial<T>) => string,
+  fromLegacyString: (s: string) => T,
+): void {
+  if (!incoming.length) return;
+  merged[key] = mergeStructuredRecords(existingFields[key], incoming, keyOf, fromLegacyString);
 }
 
 function cacheUserKey(req: { userId?: string }): string {
@@ -2527,9 +2552,133 @@ ${JSON.stringify(ctx, null, 2)}`;
   // ---- Confirm Extraction (two-phase: user approves fields before saving) ----
   app.post("/api/chat/confirm-extraction", asyncHandler(async (req, res) => {
     try {
-      const { extractionId, confirmedFields, targetProfileId, createCalendarEvents, trackerEntries } = req.body;
+      const { extractionId, targetProfileId, items } = req.body;
+      let { confirmedFields, createCalendarEvents, trackerEntries } = req.body;
       if (!extractionId) {
         return res.status(400).json({ error: "extractionId required" });
+      }
+
+      // ═══ THE REVIEW LIST IS THE ROUTING DECISION ═══
+      // The client now sends ONE list, each row carrying the destination the
+      // user actually chose (shared/extraction-destinations). Expand it into
+      // the per-destination payloads the steps below already understand, and
+      // collect the destinations that had no home before this change —
+      // allergies, medications, medical history, notes and tasks.
+      //
+      // A row's destination is the USER'S answer, not the extractor's: the AI
+      // proposes in processFileUpload, the review pane lets it be changed, and
+      // nothing here second-guesses what came back. Rows the user unticked, and
+      // rows routed to "ignore", are not written anywhere.
+      const structuredAllergies: ProfileAllergy[] = [];
+      const structuredMedications: ProfileMedication[] = [];
+      const structuredConditions: ProfileCondition[] = [];
+      const structuredSurgeries: ProfileSurgery[] = [];
+      const noteWrites: Array<{ title: string; content: string }> = [];
+      const taskWrites: Array<{ title: string; dueDate?: string }> = [];
+      const ignoredItems: string[] = [];
+
+      if (Array.isArray(items) && items.length > 0) {
+        const fields: Array<{ key: string; value: any }> = [];
+        const events: Array<{ field: string; date: string; title: string; category: string }> = [];
+        const entries: any[] = [];
+
+        for (const raw of items as ExtractionItem[]) {
+          if (!raw || typeof raw !== "object") continue;
+          const dest = String(raw.destination || "") as ExtractionDestination;
+          if (!raw.selected || dest === "ignore") {
+            if (raw.label) ignoredItems.push(String(raw.label));
+            continue;
+          }
+          const label = String(raw.label ?? raw.key ?? "").trim();
+          const payload = (raw.payload && typeof raw.payload === "object") ? raw.payload : {};
+
+          switch (dest) {
+            case "profile":
+              if (raw.key) fields.push({ key: raw.key, value: raw.value });
+              break;
+
+            case "profile_tracker":
+              // ONE fact, TWO jobs: the person's current height/weight/BMI AND a
+              // point in its time series. The user ticks it once.
+              // The profile half is written whether the row came from a
+              // printed field or from the model's tracker list. Skipping the
+              // latter left `fields.weight` unset, and the estimation engine
+              // (shared/estimation-engine, fed at ai-engine log_tracker_entry)
+              // then sized THIS person's calorie estimates with a population
+              // default instead of their own weight.
+              if (raw.key) fields.push({ key: raw.key, value: raw.value });
+              if (raw.trackerName && raw.values) {
+                entries.push({ trackerName: raw.trackerName, values: raw.values, unit: raw.unit || "", category: raw.category || "health" });
+              }
+              break;
+
+            case "tracker":
+              if (raw.trackerName && raw.values) {
+                entries.push({ trackerName: raw.trackerName, values: raw.values, unit: raw.unit || "", category: raw.category || "health" });
+              }
+              break;
+
+            case "allergy":
+              structuredAllergies.push({
+                substance: String(payload.substance ?? raw.value ?? label),
+                reaction: payload.reaction ? String(payload.reaction) : (raw.detail ? String(raw.detail) : undefined),
+                type: payload.type ? String(payload.type) : undefined,
+                source: extractionId,
+              });
+              break;
+
+            case "medication":
+              structuredMedications.push({
+                name: String(payload.name ?? raw.value ?? label),
+                dose: payload.dose ? String(payload.dose) : undefined,
+                frequency: payload.frequency ? String(payload.frequency) : undefined,
+                asNeeded: payload.asNeeded === true,
+                kind: payload.kind ? String(payload.kind) : undefined,
+                source: extractionId,
+              });
+              break;
+
+            case "medical_history":
+              if (raw.source === "surgery" || payload.procedure) {
+                structuredSurgeries.push({
+                  procedure: String(payload.procedure ?? raw.value ?? label),
+                  year: Number.isFinite(Number(payload.year)) && Number(payload.year) > 0 ? Number(payload.year) : undefined,
+                  source: extractionId,
+                });
+              } else {
+                structuredConditions.push({
+                  name: String(payload.name ?? raw.value ?? label),
+                  status: payload.status ? String(payload.status) : undefined,
+                  source: extractionId,
+                });
+              }
+              break;
+
+            case "note": {
+              const content = String(payload.body ?? raw.value ?? "").trim();
+              if (content) noteWrites.push({ title: String(payload.title ?? label) || "Clinical note", content });
+              break;
+            }
+
+            case "calendar": {
+              const date = normalizeDateString(raw.date ?? raw.value);
+              if (date) events.push({ field: raw.key || label, date, title: label || "Reminder", category: "health" });
+              break;
+            }
+
+            case "task": {
+              const due = normalizeDateString(raw.date ?? raw.value);
+              taskWrites.push({ title: String(payload.title ?? label) || "Follow-up", dueDate: due || undefined });
+              break;
+            }
+          }
+        }
+
+        // Anything the client ALSO sent the old way is kept — a message
+        // rendered from history still posts the legacy shapes.
+        confirmedFields = [...(Array.isArray(confirmedFields) ? confirmedFields : []), ...fields];
+        createCalendarEvents = [...(Array.isArray(createCalendarEvents) ? createCalendarEvents : []), ...events];
+        trackerEntries = [...(Array.isArray(trackerEntries) ? trackerEntries : []), ...entries];
       }
 
       // Ownership: extractionId must point to a document owned by this user.
@@ -2605,7 +2754,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // Fields the routing layer deliberately kept off the profile (document
       // metadata / junk). Surfaced in the response so a "saved" that actually
       // skipped something is visible instead of silent.
-      const skippedFields: string[] = [];
+      const skippedFields: string[] = [...ignoredItems];
 
       // ═══ INTELLIGENT DATA ROUTING ═══
       // Each extracted field gets routed to the correct destination based on what it IS.
@@ -2651,7 +2800,13 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
 
       // Step 1: Classify each field and route to the correct destination
-      if (confirmedFields && confirmedFields.length > 0) {
+      //
+      // Also runs for a confirmation that ticked ONLY structured medical rows
+      // (an allergy list with no scalar fields) — those still have to reach the
+      // profile, and gating this whole step on confirmedFields dropped them.
+      const hasStructuredMedical = structuredAllergies.length > 0 || structuredMedications.length > 0
+        || structuredConditions.length > 0 || structuredSurgeries.length > 0;
+      if ((confirmedFields && confirmedFields.length > 0) || hasStructuredMedical) {
         // Document-metadata fields that should NOT be saved to profiles
         const DOC_ONLY_FIELDS = new Set(['fileName', 'barcode', 'signatureType', 'documentTitle', 'reportTitle', 'signedBy', 'electronicSignature', 'electronicallySignedBy', 'facilityAddress']);
 
@@ -2691,7 +2846,7 @@ ${JSON.stringify(ctx, null, 2)}`;
           return s;
         }
 
-        for (const field of confirmedFields) {
+        for (const field of (confirmedFields || [])) {
           const key = field.key;
           const val = unwrap(field.value);
 
@@ -2719,8 +2874,12 @@ ${JSON.stringify(ctx, null, 2)}`;
           }
         }
 
-        // Save to the resolved profile
-        if (resolvedProfileId && Object.keys(profileFields).length > 0) {
+        // Save to the resolved profile.
+        //
+        // The structured arrays count as "something to write": a report whose
+        // only ticked rows are allergies has no scalar profileFields, and
+        // gating on those alone dropped them silently.
+        if (resolvedProfileId && (Object.keys(profileFields).length > 0 || hasStructuredMedical)) {
           try {
             const profile = await storage.getProfile(resolvedProfileId);
             if (profile) {
@@ -2773,6 +2932,27 @@ ${JSON.stringify(ctx, null, 2)}`;
                 ),
               };
 
+              // ── Structured medical arrays ──────────────────────────────
+              // Allergies, medications, conditions and surgical history are
+              // STRUCTURED DATA, not loose strings: "Penicillin — Rash" is a
+              // substance and a reaction, and an appendectomy is a procedure and
+              // a year. They ride the SAME updateProfile as the scalar fields so
+              // one confirmation is one write.
+              //
+              // Idempotent by construction: mergeStructuredRecords dedupes on a
+              // normalized key, so re-uploading the same report adds nothing and
+              // never overwrites a record the user edited. The legacy free-text
+              // `allergies` / `medications` strings are converted to records on
+              // the first structured write rather than being dropped.
+              applyStructuredArray(merged, existingFields, "allergies", structuredAllergies, allergyKey,
+                (t: string) => ({ substance: t }) as ProfileAllergy);
+              applyStructuredArray(merged, existingFields, "medications", structuredMedications, medicationKey,
+                (t: string) => ({ name: t }) as ProfileMedication);
+              applyStructuredArray(merged, existingFields, "conditions", structuredConditions, conditionKey,
+                (t: string) => ({ name: t }) as ProfileCondition);
+              applyStructuredArray(merged, existingFields, "surgicalHistory", structuredSurgeries, surgeryKey,
+                (t: string) => ({ procedure: t }) as ProfileSurgery);
+
               await storage.updateProfile(resolvedProfileId, { fields: merged });
 
               // Verify the write actually landed before claiming success —
@@ -2804,6 +2984,16 @@ ${JSON.stringify(ctx, null, 2)}`;
               }
               if (savedKeys.length > 0) {
                 saved.push(`Saved ${savedKeys.length} field${savedKeys.length === 1 ? "" : "s"} to ${profile.name}`);
+              }
+              // Name the structured rows separately — "Saved 12 fields" says
+              // nothing about whether the penicillin allergy landed.
+              const structuredSummary: string[] = [];
+              if (structuredAllergies.length) structuredSummary.push(`${structuredAllergies.length} allerg${structuredAllergies.length === 1 ? "y" : "ies"}`);
+              if (structuredConditions.length) structuredSummary.push(`${structuredConditions.length} condition${structuredConditions.length === 1 ? "" : "s"}`);
+              if (structuredSurgeries.length) structuredSummary.push(`${structuredSurgeries.length} surgical record${structuredSurgeries.length === 1 ? "" : "s"}`);
+              if (structuredMedications.length) structuredSummary.push(`${structuredMedications.length} medication${structuredMedications.length === 1 ? "" : "s"}`);
+              if (structuredSummary.length) {
+                saved.push(`Saved ${structuredSummary.join(", ")} to ${profile.name}`);
               }
               // What Step 2 needs: the fields that reached the PROFILE. A
               // document does not derive a birthday, so suppressing that
@@ -2981,13 +3171,24 @@ ${JSON.stringify(ctx, null, 2)}`;
             // Find or create the tracker
             const trackers = await storage.getTrackers();
             const humanName = (entry.trackerName || "").replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase());
-            const normName = (entry.trackerName || "").toLowerCase().replace(/[_\s]/g, "");
-            let tracker = trackers.find(
-              (t: any) => t.name.toLowerCase().replace(/[_\s]/g, "") === normName
-                && (resolvedProfileId
-                    ? (t.linkedProfiles || []).some((pid: string) => pid === resolvedProfileId)
-                    : true)
-            );
+            // Identity, not raw text. The old test lowercased and stripped
+            // spaces, so "Weight" and "Body Weight" compared UNEQUAL and a
+            // document handed the user a second weight tracker beside the one
+            // they already log to (user report 2026-08-25: "Weight", "Body
+            // Weight" and "Weight 2" for one measurement). trackerNamesMatch
+            // folds noise words and matches whole-token containment, which is
+            // the same test the chat path has always used to resolve a tracker
+            // — the two doors now agree.
+            //
+            // Narrowed to the target profile the way pickTrackerForLog does:
+            // an owned tracker first, then an orphan nobody has claimed. A
+            // tracker owned by SOMEONE ELSE is never adopted — that is how one
+            // person's reading lands on another person's chart.
+            const nameMatches = findIdentityMatches(trackers as any[], entry.trackerName || "");
+            let tracker: any = resolvedProfileId
+              ? (nameMatches.find((t: any) => (t.linkedProfiles || []).includes(resolvedProfileId))
+                  ?? nameMatches.find((t: any) => (t.linkedProfiles || []).length === 0))
+              : nameMatches[0];
             if (!tracker) {
               const fieldKeys = Object.keys(entry.values || {});
               tracker = await storage.createTracker({
@@ -3036,6 +3237,110 @@ ${JSON.stringify(ctx, null, 2)}`;
             console.error("Failed to log tracker entry from extraction:", tErr.message);
             failures.push(`tracker entry "${entry.trackerName}": ${tErr?.message || "unknown error"}`);
           }
+        }
+      }
+
+      // 4. Medications and supplements
+      //
+      // A medication in this app IS a tracker with category "medication"
+      // (shared/medication-doses.isMedicationTracker) — its entries are the dose
+      // ledger. So a prescription list creates the RECORD and leaves the ledger
+      // empty: the document says Sarah is prescribed Cetirizine 10 mg once daily
+      // as needed. It does NOT say she took one today, and inventing that entry
+      // would corrupt every adherence number computed from it.
+      //
+      // The dose, frequency and PRN flag live on the profile's medications[]
+      // (written with the profile fields above); the tracker exists so the next
+      // "took my cetirizine" has somewhere to land.
+      if (structuredMedications.length > 0) {
+        for (const med of structuredMedications) {
+          try {
+            const trackers = await storage.getTrackers();
+            const matches = findIdentityMatches(trackers as any[], med.name);
+            const existing = resolvedProfileId
+              ? (matches.find((t: any) => (t.linkedProfiles || []).includes(resolvedProfileId))
+                  ?? matches.find((t: any) => (t.linkedProfiles || []).length === 0))
+              : matches[0];
+            if (existing) {
+              if (resolvedProfileId && !(existing.linkedProfiles || []).includes(resolvedProfileId)) {
+                try {
+                  await storage.updateTracker(existing.id, {
+                    linkedProfiles: [...(existing.linkedProfiles || []), resolvedProfileId],
+                  } as Partial<Tracker>);
+                } catch { /* non-critical */ }
+              }
+              saved.push(`${med.name} already tracked — recorded the prescription`);
+              continue;
+            }
+            await storage.createTracker({
+              name: med.name,
+              // No unit: an adherence tracker measures "did I take it?", not a
+              // physical quantity (shared/tracker-units.isAdherenceTracker).
+              unit: "",
+              category: "medication",
+              fields: [
+                { name: "drugName", type: "text" as const, unit: "", isPrimary: false, options: [] },
+                { name: "dosage", type: "text" as const, unit: "", isPrimary: false, options: [] },
+                { name: "adherence", type: "select" as const, unit: "", isPrimary: true, options: ["taken", "skipped", "missed"] },
+              ],
+              linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+            } as any);
+            const how = [med.dose, med.frequency].filter(Boolean).join(" ");
+            saved.push(`Added medication: ${med.name}${how ? ` (${how})` : ""} — no dose logged`);
+          } catch (mErr: any) {
+            console.error("Failed to create medication tracker from extraction:", mErr?.message);
+            failures.push(`medication "${med.name}": ${mErr?.message || "unknown error"}`);
+          }
+        }
+      }
+
+      // 5. Clinical narrative → notes
+      //
+      // The physical examination summary, the assessment and the plan are prose.
+      // Before this, extraction had no note destination at all: every sentence
+      // either became a loose profile field ("abdomen: Soft, non-tender") or was
+      // dropped. createNote already dedupes on normalized body per profile, so a
+      // re-uploaded report adds no second copy.
+      for (const n of noteWrites) {
+        try {
+          const result = await createNote(storage, {
+            title: n.title,
+            content: n.content,
+            profileId: resolvedProfileId || undefined,
+            tags: ["document-extraction"],
+            source: "chat",
+          } as any);
+          if ((result as any)?.deduped) {
+            saved.push(`Note "${n.title}" already saved — skipped duplicate`);
+          } else {
+            saved.push(`Created note: ${n.title}`);
+          }
+        } catch (nErr: any) {
+          console.error("Failed to create note from extraction:", nErr?.message);
+          failures.push(`note "${n.title}": ${nErr?.message || "unknown error"}`);
+        }
+      }
+
+      // 6. Follow-ups → tasks
+      //
+      // "Repeat labs in 6 months" is a commitment, not a fact about today. The
+      // task runs through syncDateRulesForEntity exactly as POST /api/tasks
+      // does, so it reaches Calendar, Upcoming and Recurring & Important Dates.
+      for (const t of taskWrites) {
+        try {
+          const newTask = await storage.createTask({
+            title: t.title,
+            priority: "medium",
+            status: "todo",
+            dueDate: t.dueDate,
+            tags: ["document-extraction"],
+            linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+          } as any);
+          await syncDateRulesForEntity(storage, cacheUserKey(req as AuthenticatedRequest), "task", newTask.id).catch(() => null);
+          saved.push(`Created task: ${t.title}${t.dueDate ? ` (due ${t.dueDate})` : ""}`);
+        } catch (tskErr: any) {
+          console.error("Failed to create task from extraction:", tskErr?.message);
+          failures.push(`task "${t.title}": ${tskErr?.message || "unknown error"}`);
         }
       }
 
@@ -3121,7 +3426,10 @@ ${JSON.stringify(ctx, null, 2)}`;
 
       // If nothing succeeded but at least one thing was attempted-and-failed,
       // surface as 500 so the client shows a real error.
-      const attempted = (confirmedFields?.length || 0) + (createCalendarEvents?.length || 0) + (trackerEntries?.length || 0) + (req.body.createExpense ? 1 : 0) + (req.body.createObligation ? 1 : 0);
+      const attempted = (confirmedFields?.length || 0) + (createCalendarEvents?.length || 0) + (trackerEntries?.length || 0)
+        + structuredMedications.length + noteWrites.length + taskWrites.length
+        + structuredAllergies.length + structuredConditions.length + structuredSurgeries.length
+        + (req.body.createExpense ? 1 : 0) + (req.body.createObligation ? 1 : 0);
       if (attempted > 0 && saved.length === 0 && failures.length > 0) {
         return res.status(500).json({
           success: false,

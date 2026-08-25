@@ -2958,6 +2958,108 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
 
 // ── Per-group visual identity (icon + accent) for the Info tab sections ──
 // Falls back to a neutral FileText for any title not listed.
+// ── Structured medical record ───────────────────────────────────────────────
+// Allergies, medications, conditions and surgical history are STRUCTURED arrays
+// on `profile.fields` (shared/extraction-destinations), not scalars — so the
+// grouped-field renderer below, which skips anything `typeof v === "object"`,
+// cannot show them and the "Other" catch-all filters them out too. This card is
+// where they live.
+//
+// Reads BOTH shapes: the structured array written by document extraction, and
+// the legacy free-text string a user typed into `allergies` / `medications`
+// before the arrays existed. Neither one is lost.
+
+interface MedicalRecordRow { primary: string; secondary?: string }
+
+function structuredRows(
+  raw: unknown,
+  toRow: (rec: Record<string, any>) => MedicalRecordRow,
+): MedicalRecordRow[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((r) => r && typeof r === "object")
+      .map((r) => toRow(r as Record<string, any>))
+      .filter((r) => !!r.primary);
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.split(/[,;]/).map((t) => ({ primary: t.trim() })).filter((r) => !!r.primary);
+  }
+  return [];
+}
+
+function MedicalRecordCard({ fields }: { fields: Record<string, any> }) {
+  const sections: Array<{ title: string; icon: any; cls: string; rows: MedicalRecordRow[] }> = [
+    {
+      title: "Allergies", icon: AlertTriangle, cls: "text-red-500",
+      rows: structuredRows(fields.allergies, (a) => ({
+        primary: String(a.substance ?? a.name ?? ""),
+        secondary: [a.reaction, a.type].filter(Boolean).join(" · ") || undefined,
+      })),
+    },
+    {
+      title: "Medications", icon: HeartPulse, cls: "text-sky-500",
+      rows: structuredRows(fields.medications, (m) => ({
+        primary: String(m.name ?? ""),
+        // "as needed" is a PRN prescription, not a daily schedule — say so,
+        // because the difference decides whether a missed day is a missed dose.
+        secondary: [m.dose, m.frequency, m.asNeeded ? "as needed" : null]
+          .filter(Boolean).join(" · ") || undefined,
+      })),
+    },
+    {
+      title: "Conditions", icon: Stethoscope, cls: "text-amber-500",
+      rows: structuredRows(fields.conditions, (c) => ({
+        primary: String(c.name ?? ""),
+        secondary: c.status ? String(c.status) : undefined,
+      })),
+    },
+    {
+      title: "Surgical History", icon: FileText, cls: "text-violet-500",
+      rows: structuredRows(fields.surgicalHistory, (sx) => ({
+        primary: String(sx.procedure ?? ""),
+        secondary: sx.year ? String(sx.year) : undefined,
+      })),
+    },
+  ].filter((sec) => sec.rows.length > 0);
+
+  if (sections.length === 0) return null;
+
+  return (
+    <Card data-testid="medical-record-card">
+      <CardHeader className="py-2.5 px-4">
+        <CardTitle className="text-xs font-semibold flex items-center gap-2">
+          <Stethoscope className="h-3.5 w-3.5 text-pink-500" />
+          Medical Record
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pb-3 pt-0 space-y-3">
+        {sections.map((sec) => {
+          const SecIcon = sec.icon;
+          return (
+            <div key={sec.title}>
+              <div className="flex items-center gap-1.5 mb-1">
+                <SecIcon className={`h-3 w-3 shrink-0 ${sec.cls}`} />
+                <span className="micro-label text-muted-foreground">{sec.title}</span>
+                <span className="text-[11px] text-muted-foreground tabular-nums">{sec.rows.length}</span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {sec.rows.map((row, i) => (
+                  <div key={`${row.primary}-${i}`} className="flex items-baseline gap-2 text-[13px]">
+                    <span className="font-medium">{row.primary}</span>
+                    {row.secondary && (
+                      <span className="text-[11px] text-muted-foreground truncate">{row.secondary}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
 const GROUP_META: Record<string, { icon: any; cls: string }> = {
   "Vehicle Identity":      { icon: Car,         cls: "text-blue-500" },
   "Purchase & Value":      { icon: DollarSign,  cls: "text-emerald-500" },
@@ -3438,6 +3540,9 @@ function InfoTab({
         );
       })()}
 
+      {/* ── 2b. Structured medical record (allergies / meds / conditions / surgeries) ── */}
+      <MedicalRecordCard fields={profile.fields || {}} />
+
       {/* ── 3. Grouped Field Sections (type-aware) ── */}
       {/* Only show a group if at least one of its fields has a value. This keeps
           large reference groups (e.g. the comprehensive Address group) from
@@ -3448,6 +3553,7 @@ function InfoTab({
         groups
           .filter(group => group.fields.some(({ key }) => {
             const v = profile.fields[key];
+            if (Array.isArray(v)) return false; // shown by MedicalRecordCard
             return v != null && v !== "" && !(typeof v === "object" && Object.keys(v).length === 0);
           }))
           .slice().sort((a, b) => a.title.localeCompare(b.title)).map(group => {
@@ -3477,8 +3583,12 @@ function InfoTab({
                 <CardContent className="px-4 pb-3 pt-0">
                   {group.fields
                     .filter(({ key, hideWhenEmpty }) => {
-                      if (!hideWhenEmpty) return true;
                       const v = profile.fields[key];
+                      // Structured arrays (allergies, medications) are rendered
+                      // by MedicalRecordCard above. A single-line inline field
+                      // would print them as "[object Object]".
+                      if (Array.isArray(v)) return false;
+                      if (!hideWhenEmpty) return true;
                       return v != null && v !== "";
                     })
                     .map(({ key, label }) => (
