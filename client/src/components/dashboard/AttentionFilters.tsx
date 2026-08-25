@@ -134,7 +134,7 @@ export function AttentionFilters({ prefs, onChange }: {
       </div>
 
       <div className="space-y-1.5">
-        <DayPicker label="Documents" value={draft.docsWithinDays} options={[7, 14, 30, 60, 90]} onChange={v => set({ docsWithinDays: v })} testId="attention-days-docs" />
+        <DayPicker label="Documents" value={draft.docsWithinDays} options={[7, 14, 30, 45, 60, 90]} onChange={v => set({ docsWithinDays: v })} testId="attention-days-docs" />
         <DayPicker label="Bills" value={draft.billsWithinDays} options={[7, 14, 30, 60]} onChange={v => set({ billsWithinDays: v })} testId="attention-days-bills" />
         <DayPicker label="Tasks" value={draft.tasksWithinDays} options={[1, 3, 7, 14, 30]} onChange={v => set({ tasksWithinDays: v })} testId="attention-days-tasks" />
       </div>

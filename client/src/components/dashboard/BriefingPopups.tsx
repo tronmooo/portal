@@ -32,6 +32,7 @@ import { formatMoney } from "@/lib/format";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useShowTestData } from "@/lib/showTestData";
 import { isTestDataRow } from "@shared/test-data";
+import { dateRuleVerbs } from "@shared/date-rules";
 
 // ── Shared date/format helpers ───────────────────────────────────────────────
 function fmtDate(d?: string | null): string {
@@ -53,12 +54,21 @@ export function fmtClock(t?: string | null): string {
   return `${h % 12 || 12}:${m[2]} ${h >= 12 ? "PM" : "AM"}`;
 }
 /** "Expires in 7 days" / "Expires today" / "Expired 3 days ago" */
-function expiryLabel(daysUntil: number): string {
-  if (daysUntil === 0) return "Expires today";
-  if (daysUntil === 1) return "Expires tomorrow";
-  if (daysUntil > 0) return `Expires in ${daysUntil} days`;
+/**
+ * The countdown on a dated record, phrased by what the date MEANS.
+ *
+ * This list is no longer expirations-only: a document's DUE date (a citation,
+ * an invoice) belongs here too, and reading "Expires in 31 days" against a
+ * parking ticket was wrong on the noun as well as unhelpful. The day count is
+ * always the real remaining count — never a fixed window.
+ */
+function expiryLabel(daysUntil: number, ruleType?: string): string {
+  const [future, past] = dateRuleVerbs((ruleType as any) || "expiration");
+  if (daysUntil === 0) return `${future} today`;
+  if (daysUntil === 1) return `${future} tomorrow`;
+  if (daysUntil > 0) return `${future} in ${daysUntil} days`;
   const ago = Math.abs(daysUntil);
-  return ago === 1 ? "Expired yesterday" : `Expired ${ago} days ago`;
+  return ago === 1 ? `${past} yesterday` : `${past} ${ago} days ago`;
 }
 function dueLabel(daysUntil: number): string {
   if (daysUntil === 0) return "Due today";
@@ -664,8 +674,8 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
   // became per-rule keep working.
   const visible = (docs || []).filter((d: any) => !snoozeMap[d.ruleId] && !snoozeMap[d.documentId]);
   const bands: Array<{ key: string; label: string; tone: "neg" | "warn" | "muted"; rows: any[] }> = [
-    { key: "expired", label: "Expired", tone: "neg", rows: visible.filter((d: any) => d.daysUntil < 0) },
-    { key: "soon", label: "Expiring soon · next 30 days", tone: "warn", rows: visible.filter((d: any) => d.daysUntil >= 0 && d.daysUntil <= 30) },
+    { key: "expired", label: "Expired or overdue", tone: "neg", rows: visible.filter((d: any) => d.daysUntil < 0) },
+    { key: "soon", label: "Due or expiring · next 30 days", tone: "warn", rows: visible.filter((d: any) => d.daysUntil >= 0 && d.daysUntil <= 30) },
     { key: "later", label: "Upcoming · 31–90 days", tone: "muted", rows: visible.filter((d: any) => d.daysUntil > 30) },
   ];
 
@@ -684,7 +694,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
               {d.daysUntil < 0 ? <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0 self-center" /> : <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0 self-center" />}
               <span className="text-xs font-semibold truncate">{name}</span>
               <span className={`ml-auto text-[11px] font-medium shrink-0 tabular-nums ${d.daysUntil < 0 ? "text-red-500" : d.daysUntil <= 30 ? "text-amber-500" : "text-muted-foreground"}`}>
-                {expiryLabel(d.daysUntil)}
+                {expiryLabel(d.daysUntil, d.ruleType)}
               </span>
             </div>
             <div className="flex items-center flex-wrap gap-1 mt-1">
@@ -699,6 +709,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
         <div className="space-y-1.5 text-[11px] pt-1">
           <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-muted-foreground">
             <span>Field</span><span className="text-foreground capitalize">{fieldLabel}</span>
+            <span>Type</span><span className="text-foreground capitalize">{String(d.ruleType || "expiration").replace(/_/g, " ")}</span>
             <span>Exact date</span><span className="text-foreground">{fmtDate(d.expirationDate)}</span>
             <span>Days remaining</span><span className="text-foreground tabular-nums">{d.daysUntil >= 0 ? d.daysUntil : `${Math.abs(d.daysUntil)} past`}</span>
           </div>
@@ -734,11 +745,11 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
 
   const soonCount = visible.filter((d: any) => d.daysUntil <= 30).length;
   return (
-    <PopupShell open={open} onClose={onClose} title="Document Expirations" icon={FileText}
+    <PopupShell open={open} onClose={onClose} title="Document Dates · Due & Expiring" icon={FileText}
       accent="0 72% 58%" count={visible.length}
-      subtitle={visible.length ? `${soonCount} expired or expiring within 30 days` : undefined}
+      subtitle={visible.length ? `${soonCount} due, expiring or already past within 30 days` : undefined}
       footerLabel="Open Documents" footerHref="/linked?tab=documents">
-      {visible.length === 0 ? <EmptyNote label="Nothing expiring in the next 90 days." /> : bands.map(band => band.rows.length === 0 ? null : (
+      {visible.length === 0 ? <EmptyNote label="Nothing due or expiring in the next 90 days." /> : bands.map(band => band.rows.length === 0 ? null : (
         <div key={band.key}>
           <div className={`micro-label px-1 pt-2 pb-1 ${band.tone === "neg" ? "text-red-500" : band.tone === "warn" ? "text-amber-500" : "text-muted-foreground"}`}>
             {band.label} · {band.rows.length}

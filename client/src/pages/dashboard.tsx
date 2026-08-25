@@ -1423,7 +1423,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
               <FileWarning className="h-4 w-4 text-amber-500" />
-              Expiring Documents
+              Documents Due & Expiring
               <Badge variant="secondary" className="ml-1 tabular-nums">{visibleDocs.length}</Badge>
             </DialogTitle>
             <DialogDescription className="text-xs">
@@ -1437,7 +1437,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                 if (upcomingCt > 0) parts.push(`${upcomingCt} upcoming`);
                 return parts.length > 0
                   ? `${parts.join(" · ")}. Tap to view, snooze to hide for 30 days.`
-                  : "Documents with upcoming or past expiration dates. Snooze to hide for 30 days.";
+                  : "Documents with an upcoming or past due / expiration date. Snooze to hide for 30 days.";
               })()}
             </DialogDescription>
           </DialogHeader>
@@ -1466,7 +1466,10 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                       <Badge variant="outline" className={`shrink-0 text-xs-tight px-1.5 py-0 h-4 ${
                         expired ? "border-red-500/40 text-red-500" : expiringSoon ? "border-amber-500/40 text-amber-500" : ""
                       }`}>
-                        {expired ? "Expired" : expiringSoon ? "Soon" : "Upcoming"}
+                        {/* A due date is not an expiration — say which. */}
+                        {expired
+                          ? (String(doc.ruleType || "expiration") === "expiration" ? "Expired" : "Overdue")
+                          : expiringSoon ? "Soon" : "Upcoming"}
                       </Badge>
                     </button>
                     <button
@@ -1485,7 +1488,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
               {visibleDocs.length === 0 && (
                 <div className="text-center py-6">
                   <FileText className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-                  <p className="text-xs text-muted-foreground">No expiring documents</p>
+                  <p className="text-xs text-muted-foreground">Nothing due or expiring</p>
                 </div>
               )}
             </div>

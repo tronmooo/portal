@@ -5,7 +5,7 @@ import { autoCheckinLinkedHabits } from "./habit-completion";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "@shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
@@ -2147,8 +2147,15 @@ export class MemStorage implements IStorage {
       const profilesForExp = Array.from(this.profiles.values()).filter(p =>
         matchesFilter([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
       for (const rule of rulesFromAll({ profiles: profilesForExp, documents })) {
-        // Only things that EXPIRE — see the twin in supabase-storage.
-        if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;
+        // Things that EXPIRE anywhere, plus what a DOCUMENT says is DUE.
+        //
+        // Expiry alone was too narrow (user report 2026-08-25): a parking
+        // citation due in 31 days is exactly the "act before this date" record
+        // this tile exists for, and it does not "expire". The source test is
+        // what keeps the old bug fixed — a `premiumDueDate` typed onto an
+        // insurance PROFILE is a bill and still belongs on the bills surface,
+        // so only document-carried due dates join the expiries here.
+        if (!isDocumentAttentionRule(rule)) continue;
         const daysUntil = daysBetweenISO(now.toLocaleDateString("en-CA"), rule.date);
         expiringDocs.push({
           documentId: rule.sourceEntityId,
@@ -2163,6 +2170,11 @@ export class MemStorage implements IStorage {
           expirationDate: rule.date,
           daysUntil,
           ruleId: rule.id,
+          // What KIND of date this is, so every surface can say "Due in 31
+          // days" where it means due and "Expires" where it means expires,
+          // instead of labelling everything an expiration.
+          ruleType: rule.ruleType,
+          ruleSubtype: rule.ruleSubtype,
           sourceEntityType: rule.sourceEntityType,
           href: rule.href,
           relatedProfileId: rule.profileId,

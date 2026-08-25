@@ -180,11 +180,23 @@ export interface ChatMessage {
       isDate: boolean;
       category?: string;
       suggestedEvent?: string;
+      /** What the date MEANS ("due", "expiration"). Set for actionable dates. */
+      dateRuleType?: string;
+      /** "Due Date", "Registration · Renewal Date" — the Calendar column label. */
+      dateTypeLabel?: string;
+      dateISO?: string;
+      actionableDate?: boolean;
+      /** True when the record itself puts this date on the calendar. */
+      calendarDerived?: boolean;
     }>;
     targetProfile?: { name: string; id?: string; type?: string; isNew?: boolean };
     trackerEntries?: Array<{ trackerName: string; values: Record<string, any> }>;
     documentPreview?: { id: string; name: string; mimeType: string; data: string };
     pendingFinancial?: any;
+    /** Date rows for the review UI's Calendar section (shared/extraction-calendar). */
+    calendarDates?: Array<Record<string, any>>;
+    /** The document these dates belong to. */
+    documentName?: string;
   };
   results?: Array<Record<string, any>>;
   // Rich visual output — inline charts, tables, reports
