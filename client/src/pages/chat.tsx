@@ -101,6 +101,12 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import type { ChatMessage, ChatMutation, ParsedAction, Profile } from "@shared/schema";
+import {
+  extractionDateRows,
+  UPCOMING_WINDOW_DAYS,
+  type ExtractionDateRow,
+  type CalendarDateDecision,
+} from "@shared/extraction-calendar";
 // Type-only import — erased at compile time, does NOT pull recharts into the bundle.
 import type { ChartSpec2 } from "@/components/ChatChartRenderer";
 // ChartCard lazy-loads the recharts body itself, so importing it here stays light.
@@ -663,6 +669,8 @@ function ExtractionConfirmation({
     confirmedFields: Array<{ key: string; value: any }>;
     targetProfileId?: string;
     createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
+    /** One decision per recognized date — see shared/extraction-calendar. */
+    calendarDates?: CalendarDateDecision[];
     trackerEntries: any[];
     createExpense?: any;
     createObligation?: any;
@@ -775,6 +783,34 @@ function ExtractionConfirmation({
   // "Add to Finance" toggle state — only meaningful when moneyFieldCandidate exists.
   const [addManualExpense, setAddManualExpense] = useState(false);
 
+  // ── Calendar section ───────────────────────────────────────────────────────
+  // Every actionable date in this extraction — due, expiration, renewal,
+  // deadline, payment, appointment — recomputed from the LIVE field values, so
+  // editing a date in the table updates its type, its countdown and what will
+  // be written. Before this, an actionable date was shown as an ordinary row
+  // with no calendar affordance at all (user report 2026-08-25: a parking
+  // citation's due date was extracted and then went nowhere visible).
+  const todayISO = useMemo(() => getUserToday(BROWSER_TIMEZONE), []);
+  const dateRows: ExtractionDateRow[] = useMemo(
+    () => extractionDateRows(fields, {
+      documentContext: `${extraction.documentType ?? ""} ${extraction.label ?? ""}`,
+      today: todayISO,
+    }),
+    [fields, extraction.documentType, extraction.label, todayISO],
+  );
+  // Path → whether it goes on the calendar. Defaults ON; a row the user
+  // unticks is recorded as a calendar opt-out on the saved record, which turns
+  // its derived rule off without deleting the date.
+  const [addToCalendar, setAddToCalendar] = useState<Record<string, boolean>>({});
+  const calendarChoice = (row: ExtractionDateRow) =>
+    addToCalendar[row.path] ?? row.defaultAddToCalendar;
+  const dateRowByKey = useMemo(() => {
+    const m = new Map<string, ExtractionDateRow>();
+    for (const r of dateRows) m.set(r.key, r);
+    return m;
+  }, [dateRows]);
+  const docLabel = extraction.documentName || extraction.label || extraction.fileName;
+
   const handleConfirm = async () => {
     setConfirming(true);
     // Include ALL selected fields (date fields now save to profile AND optionally create calendar events)
@@ -782,6 +818,9 @@ function ExtractionConfirmation({
       const key = f.key === 'dob' ? 'dateOfBirth' : f.key;
       return { key, value: f.value };
     });
+    // Dates the classifier does NOT recognise as a rule (a one-off "House
+    // Viewing" printed on an invitation) have no field to be derived from, so
+    // a standalone event is the only home they have.
     const createCalendarEvents = fields
       .filter((f) => f.selected && f.isDate && f.suggestedEvent && f.key && f.value)
       .map((f) => ({
@@ -790,6 +829,22 @@ function ExtractionConfirmation({
         title: f.suggestedEvent!,
         category: /expir|renew/i.test(f.key || "") ? "finance" : /appoint|visit/i.test(f.key || "") ? "health" : "other",
       }));
+
+    // Every RECOGNISED date carries the user's explicit choice. A ticked
+    // derived date needs no event — the record already puts it on the calendar
+    // — and an unticked one becomes a calendar opt-out on the saved record.
+    const calendarDates: CalendarDateDecision[] = dateRows.map((row) => ({
+      field: row.key,
+      path: row.path,
+      date: row.date || String(row.rawValue),
+      ruleType: row.ruleType,
+      title: `${row.typeLabel} — ${docLabel}`,
+      category: row.ruleType === "appointment" ? "health"
+        : (row.ruleType === "due" || row.ruleType === "payment" || row.ruleType === "expiration" || row.ruleType === "renewal") ? "finance"
+        : "other",
+      addToCalendar: calendarChoice(row),
+      derived: row.derived,
+    }));
     // Build synthetic tracker entries from the trackable profile fields the user opted into.
     // This makes the inline "Also track over time" checkbox actually create a tracker, fixing
     // the silent drop where height/weight checkboxes did nothing because they're personal keys.
@@ -880,6 +935,7 @@ function ExtractionConfirmation({
       confirmedFields,
       targetProfileId: selectedProfileId || extraction.targetProfile?.id,
       createCalendarEvents,
+      calendarDates,
       trackerEntries: [
         ...(extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),
         ...syntheticTrackerEntries,
@@ -907,12 +963,16 @@ function ExtractionConfirmation({
   // Excel/spreadsheet-friendly TSV (Field<TAB>Value) of all extracted fields so
   // the user can paste the whole table straight into a sheet.
   const buildTsv = () =>
-    "Field\tValue\n" +
+    // Three columns, because the Calendar column is part of the table now: a
+    // pasted sheet should say which values are dates and what kind.
+    "Field\tValue\tCalendar\n" +
     fields.map((f) => {
       const v = typeof f.value === 'object' && f.value !== null
         ? JSON.stringify(f.value)
         : String(f.value ?? '');
-      return `${f.label || f.key}\t${v}`;
+      const row = dateRowByKey.get(f.key);
+      const cal = row ? `${row.typeLabel}${row.countdown ? ` (${row.countdown})` : ''}` : '';
+      return `${f.label || f.key}\t${v}\t${cal}`;
     }).join("\n");
 
   return (
@@ -955,6 +1015,10 @@ function ExtractionConfirmation({
               <th className="w-7 border-b border-border px-1 py-1 font-medium"></th>
               <th className="border-b border-border px-2 py-1 text-left font-medium">Field</th>
               <th className="border-b border-border px-2 py-1 text-left font-medium">Value</th>
+              {/* Dates get their OWN column — what kind of date it is and
+                  whether it is going on the calendar, visible at a glance
+                  instead of buried under the value. */}
+              <th className="border-b border-border px-2 py-1 text-left font-medium">Calendar</th>
             </tr>
           </thead>
           <tbody>
@@ -1035,6 +1099,46 @@ function ExtractionConfirmation({
                       </label>
                     )}
                   </td>
+                  {/* Calendar column — the date's TYPE and its destination. */}
+                  <td className="border-l border-border/60 px-2 py-0.5 align-middle whitespace-nowrap">
+                    {(() => {
+                      const row = dateRowByKey.get(field.key);
+                      if (!row) {
+                        return field.isDate
+                          ? <span className="text-[11px] text-muted-foreground/60">—</span>
+                          : null;
+                      }
+                      const on = calendarChoice(row);
+                      return (
+                        <div className="flex items-center gap-1.5" data-testid={`calendar-cell-${field.key}`}>
+                          <Checkbox
+                            checked={on}
+                            onCheckedChange={(checked) =>
+                              setAddToCalendar((prev) => ({ ...prev, [row.path]: !!checked }))}
+                            className="h-3.5 w-3.5"
+                            aria-label={`Add ${row.typeLabel} to calendar`}
+                            data-testid={`calendar-toggle-${field.key}`}
+                          />
+                          <div className="leading-tight">
+                            <div className="flex items-center gap-1">
+                              <Calendar className={`h-3 w-3 shrink-0 ${on ? 'text-blue-500' : 'text-muted-foreground/50'}`} />
+                              <span className={`text-[11px] font-medium ${on ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
+                                {row.typeLabel}
+                              </span>
+                            </div>
+                            {row.countdown && (
+                              <span className={`text-[11px] ${
+                                (row.daysUntil ?? 99) < 0 ? 'text-red-500'
+                                : (row.daysUntil ?? 99) <= UPCOMING_WINDOW_DAYS ? 'text-amber-500'
+                                : 'text-muted-foreground'}`}>
+                                {row.countdown}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </td>
                 </tr>
               );
             })}
@@ -1042,6 +1146,71 @@ function ExtractionConfirmation({
         </table>
       </div>
       <div className="p-2.5 pt-2 space-y-2">
+
+      {/* ── Calendar ────────────────────────────────────────────────────────
+          The section the user asked for: every date that means something to
+          act on, with its Type, its Date, an Add-to-Calendar choice, and the
+          document it came from. Shown BEFORE confirming, so the decision is
+          made with the dates in view rather than discovered afterwards. */}
+      {dateRows.length > 0 && (
+        <div className="pt-1.5 border-t border-border/50" data-testid="extraction-calendar-section">
+          <div className="flex items-center gap-1.5">
+            <Calendar className="h-3.5 w-3.5 text-blue-500" />
+            <span className="text-xs text-muted-foreground font-medium">
+              Calendar · {dateRows.length} date{dateRows.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="mt-1 space-y-1">
+            {dateRows.map((row) => {
+              const on = calendarChoice(row);
+              const soon = typeof row.daysUntil === 'number' && row.daysUntil <= UPCOMING_WINDOW_DAYS;
+              const past = typeof row.daysUntil === 'number' && row.daysUntil < 0;
+              return (
+                <div
+                  key={row.path}
+                  className={`rounded-md border px-2 py-1.5 ${
+                    past ? 'border-red-500/30 bg-red-500/5'
+                    : soon ? 'border-amber-500/30 bg-amber-500/5'
+                    : 'border-border/50'}`}
+                  data-testid={`calendar-row-${row.key}`}
+                >
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      checked={on}
+                      onCheckedChange={(checked) =>
+                        setAddToCalendar((prev) => ({ ...prev, [row.path]: !!checked }))}
+                      className="h-3.5 w-3.5 mt-0.5"
+                      aria-label={`Add ${row.typeLabel} to calendar`}
+                      data-testid={`calendar-section-toggle-${row.key}`}
+                    />
+                    <div className="min-w-0 flex-1 text-[11px] leading-tight">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-foreground font-medium">{row.typeLabel}</span>
+                        <span className="text-muted-foreground tabular-nums">{row.date}</span>
+                        {row.countdown && (
+                          <span className={past ? 'text-red-500' : soon ? 'text-amber-500' : 'text-muted-foreground'}>
+                            · {row.countdown}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-muted-foreground truncate">
+                        {row.label} · {docLabel}
+                      </div>
+                      <div className={on ? 'text-blue-600 dark:text-blue-400' : 'text-muted-foreground'}>
+                        {on
+                          ? (soon
+                              ? `→ Add to Calendar · shows in the Executive Dashboard as due soon`
+                              : `→ Add to Calendar`)
+                          : '→ Kept on the document only — not on your calendar'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {extraction.trackerEntries && extraction.trackerEntries.length > 0 && (
         <div className="pt-1.5 border-t border-border/50">
@@ -3574,6 +3743,7 @@ export default function ChatPage() {
     confirmedFields: Array<{ key: string; value: any }>;
     targetProfileId?: string;
     createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
+    calendarDates?: CalendarDateDecision[];
     trackerEntries: any[];
     createExpense?: any;
     createObligation?: any;

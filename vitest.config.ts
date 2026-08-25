@@ -95,6 +95,8 @@ export default defineConfig({
       'tests/date-rules.test.ts',
       'tests/date-rules-persistence.test.ts',
       'tests/date-rules-routes.test.ts',
+      'tests/extraction-calendar.test.ts',
+      'tests/extraction-due-dates.test.ts',
       'tests/calendar-capabilities.test.ts',
       'tests/calendar-categories.test.ts',
       'tests/recurring-dates-page.test.tsx',

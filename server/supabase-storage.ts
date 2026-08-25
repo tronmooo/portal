@@ -49,7 +49,7 @@ import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } fr
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "../shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "../shared/date-rules";
 import { deleteProfileFields, mergeFieldWrite } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
@@ -6575,12 +6575,15 @@ export class SupabaseStorage implements IStorage {
       const scopedProfilesForExp = allProfiles.filter(p =>
         matchesProfileEnhanced([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
       for (const rule of rulesFromAll({ profiles: scopedProfilesForExp, documents: filteredDocs })) {
-        // Only things that EXPIRE. `countdownEnabled` is wider than that — it
-        // covers due dates and deadlines too — and only liability profiles have
-        // their payment rules stripped, so an insurance profile's
-        // `premiumDueDate` landed in the Documents-expiring tile reading
-        // "Expired 3d ago". A bill belongs on the bills surface.
-        if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;
+        // Things that EXPIRE anywhere, plus what a DOCUMENT says is DUE.
+        //
+        // Expiry alone was too narrow (user report 2026-08-25): a parking
+        // citation due in 31 days is exactly the "act before this date" record
+        // this tile exists for, and it does not "expire". The source test is
+        // what keeps the old bug fixed — a `premiumDueDate` typed onto an
+        // insurance PROFILE is a bill and still belongs on the bills surface,
+        // so only document-carried due dates join the expiries here.
+        if (!isDocumentAttentionRule(rule)) continue;
         const daysUntil = daysBetweenISO(today, rule.date);
         expiringDocs.push({
           documentId: rule.sourceEntityId,
@@ -6595,6 +6598,11 @@ export class SupabaseStorage implements IStorage {
           expirationDate: rule.date,
           daysUntil,
           ruleId: rule.id,
+          // What KIND of date this is, so every surface can say "Due in 31
+          // days" where it means due and "Expires" where it means expires,
+          // instead of labelling everything an expiration.
+          ruleType: rule.ruleType,
+          ruleSubtype: rule.ruleSubtype,
           // A rule can come from a PROFILE (a passport expiration typed onto a
           // person), and `/documents/<profileId>` is not a page. The rule
           // already knows where its record lives.

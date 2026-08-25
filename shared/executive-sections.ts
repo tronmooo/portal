@@ -24,7 +24,7 @@
 // display.
 
 import { computeAttention, BIRTHDAY_RE, type AttentionItem, type AttentionInputs, type AttentionConfig } from "./attention";
-import { ruleClaimKey } from "./date-rules";
+import { ruleClaimKey, dateRuleVerbs, DOC_UPCOMING_WINDOW_DAYS, type DateRuleType } from "./date-rules";
 import { dayLabel } from "./now-rank";
 import { isHabitDueOn, isHabitDoneOn } from "./habit-schedule";
 import { habitDayProgress } from "./habit-progress";
@@ -525,7 +525,7 @@ export function buildExecutiveSections(
       // other never appeared.
       const groupKey = d?.ruleId || id;
       const du = typeof d.daysUntil === "number" ? d.daysUntil : daysBetween(today, d.expirationDate);
-      if (du == null || du > (config?.docsWithinDays ?? 30)) continue;
+      if (du == null || du > (config?.docsWithinDays ?? DOC_UPCOMING_WINDOW_DAYS)) continue;
       const prev = bestByDoc.get(groupKey);
       if (!prev || du < prev.du) bestByDoc.set(groupKey, { doc: d, du });
     }
@@ -536,7 +536,16 @@ export function buildExecutiveSections(
         sourceKey: doc?.ruleId ? ruleClaimKey(doc.ruleId) : `document:${groupKey}`,
         kind: "document",
         title: doc.documentName || doc.name || doc.fieldName || "Document",
-        reason: du < 0 ? `Expired ${Math.abs(du)}d ago` : du === 0 ? "Expires today" : `Expires ${dayLabel(du)}`,
+        ruleType: doc?.ruleType ? String(doc.ruleType) : undefined,
+        // The verb comes from what the date MEANS. A parking citation is DUE,
+        // not expiring, and the day count is always the real one — `dayLabel`
+        // renders the actual days remaining, never a fixed window.
+        reason: (() => {
+          const [future, past] = dateRuleVerbs((doc?.ruleType as DateRuleType) || "expiration");
+          if (du < 0) return `${past} ${Math.abs(du)}d ago`;
+          if (du === 0) return `${future} today`;
+          return `${future} ${dayLabel(du)}`;
+        })(),
         tier: du <= 0 ? "immediate" : du <= 7 ? "soon" : "upcoming",
         // Prefer the row's own link. An expiration can be carried by a
         // PROFILE (a passport typed onto a person) as well as by a document,

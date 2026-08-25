@@ -17,7 +17,7 @@
 // score = urgency (shared curve) + impact. Higher surfaces sooner.
 
 import { dayLabel, urgencyScore } from "./now-rank";
-import { ruleClaimKey } from "./date-rules";
+import { ruleClaimKey, dateRuleVerbs, DOC_UPCOMING_WINDOW_DAYS, type DateRuleType } from "./date-rules";
 import { isHabitDueOn, isHabitDoneOn, type HabitScheduleShape } from "./habit-schedule";
 import { habitDayProgress } from "./habit-progress";
 
@@ -56,6 +56,12 @@ export interface AttentionItem {
   /** Route to the source record — never a dead end. */
   href: string;
   action?: { kind: AttentionActionKind; label: string };
+  /**
+   * For a dated record, what its date MEANS ("due", "expiration", "renewal").
+   * Set on document rows so a surface can say "Due in 31d" where it means due,
+   * and so a due date can earn a slot an expiration would not.
+   */
+  ruleType?: string;
   /** Rolled-up members (habits for the day, a medication's doses). */
   children?: AttentionItem[];
   /** Members represented by this row, including itself. */
@@ -80,7 +86,10 @@ export interface AttentionConfig {
 }
 
 export const DEFAULT_ATTENTION_CONFIG: AttentionConfig = {
-  docsWithinDays: 30,
+  // "A month out" is 28–31 days depending on the month, so a 30-day window
+  // could miss a document due exactly one month from today. See
+  // UPCOMING_WINDOW_DAYS in shared/extraction-calendar.
+  docsWithinDays: DOC_UPCOMING_WINDOW_DAYS,
   billsWithinDays: 30,
   tasksWithinDays: 7,
   includeTasks: true,
@@ -135,6 +144,9 @@ export interface AttentionResult {
 export const BIRTHDAY_RE = /\b(birthday|bday|anniversary|b-day)\b/i;
 
 /** Documents whose expiry carries real consequence (mirrors now-rank). */
+/** Document date types that cost something if missed — see `earnsUpcomingSlot`. */
+const DUE_KIND_RULE_TYPES = new Set(["due", "payment", "deadline"]);
+
 const CRITICAL_DOC =
   /(id|passport|licen|insur|registration|visa|permit|ssn|social|title|deed|will|medical|prescription)/i;
 
@@ -336,9 +348,16 @@ export function computeAttention(
         sourceKey: doc?.ruleId ? ruleClaimKey(doc.ruleId) : `document:${groupKey}`,
         kind: "document",
         title: name,
-        reason: du < 0
-          ? (du === -1 ? "Expired yesterday" : `Expired ${Math.abs(du)} days ago`)
-          : du === 0 ? "Expires today" : `Expires ${dayLabel(du)}`,
+        ruleType: doc?.ruleType ? String(doc.ruleType) : undefined,
+        // The verb follows what the date MEANS. This list carries a document's
+        // DUE dates as well as its expirations now, and "Expires in 31 days"
+        // was simply wrong about a parking citation.
+        reason: (() => {
+          const [future, past] = dateRuleVerbs((doc?.ruleType as DateRuleType) || "expiration");
+          if (du < 0) return du === -1 ? `${past} yesterday` : `${past} ${Math.abs(du)} days ago`;
+          if (du === 0) return `${future} today`;
+          return `${future} ${dayLabel(du)}`;
+        })(),
         tier: tierOf(du),
         daysUntil: du,
         score: urgencyScore(du) + (critical ? 160 : 20),
@@ -573,7 +592,12 @@ function earnsUpcomingSlot(item: AttentionItem, cfg: AttentionConfig): boolean {
   switch (item.kind) {
     case "document":
       // A passport matters a month out; a warranty card does not.
-      return CRITICAL_DOC.test(item.title);
+      //
+      // A DUE date is the other thing that does: a citation, an invoice or a
+      // filing deadline costs money or a penalty if it is missed, whatever the
+      // document is called, so it earns the slot on what the date MEANS rather
+      // than on whether the title happens to match a critical-document word.
+      return CRITICAL_DOC.test(item.title) || DUE_KIND_RULE_TYPES.has(String(item.ruleType || ""));
     case "bill":
       return (item.amount ?? 0) >= cfg.upcomingMinBillAmount;
     case "task":

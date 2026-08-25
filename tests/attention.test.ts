@@ -264,8 +264,13 @@ describe("tiers and threshold", () => {
   });
 
   it("honors the per-kind day windows", () => {
-    expect(run({ documents: [{ documentId: "d1", documentName: "Passport", daysUntil: 40 }] }).items).toHaveLength(0);
-    expect(run({ documents: [{ documentId: "d1", documentName: "Passport", daysUntil: 40 }] }, { docsWithinDays: 60 }).items).toHaveLength(1);
+    // The default documents window is DOC_UPCOMING_WINDOW_DAYS (45), widened
+    // from 30 so a date exactly one month out — 31 days in a 31-day month —
+    // cannot fall through it. 50 is outside either way.
+    expect(run({ documents: [{ documentId: "d1", documentName: "Passport", daysUntil: 50 }] }).items).toHaveLength(0);
+    expect(run({ documents: [{ documentId: "d1", documentName: "Passport", daysUntil: 50 }] }, { docsWithinDays: 60 }).items).toHaveLength(1);
+    // …and the widened default is what carries a one-month-out due date.
+    expect(run({ documents: [{ documentId: "d1", documentName: "Parking Citation", ruleType: "due", daysUntil: 31 }] }).items).toHaveLength(1);
   });
 
   it("ranks overdue above due-today above due-later", () => {
