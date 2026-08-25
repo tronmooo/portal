@@ -27,6 +27,11 @@ import {
   extractionDateRows, isUpcomingWithinWindow, UPCOMING_WINDOW_DAYS,
   type ExtractionDateRow, type CalendarDateDecision,
 } from "@shared/extraction-calendar";
+import type { ProposedAction } from "@shared/extraction-actions";
+import { DocumentUnderstanding } from "./DocumentUnderstanding";
+import { ProposedActions } from "./ProposedActions";
+import { ActionGroupSection } from "./ActionGroupSection";
+import { AddActionDialog } from "./AddActionDialog";
 
 
 // ── Extraction Confirmation UI (two-phase extraction) ───────────────────────
@@ -45,6 +50,8 @@ export function ExtractionConfirmation({
     items?: ExtractionItem[];
     /** One decision per recognized date — see shared/extraction-calendar. */
     calendarDates?: CalendarDateDecision[];
+    /** The reviewed plan — see shared/extraction-actions. */
+    actions?: ProposedAction[];
     trackerEntries: any[];
     createExpense?: any;
     createObligation?: any;
@@ -72,6 +79,56 @@ export function ExtractionConfirmation({
     () => (extraction.items || []).map((i) => ({ ...i })),
   );
   const hasItems = items.length > 0;
+
+  // ── The reviewed plan ──────────────────────────────────────────────────────
+  // What the app intends to DO, as opposed to what it found. Present when the
+  // understanding stage produced one; absent for a chat message rendered from
+  // history, or when reasoning degraded — in which case the pane below falls
+  // back to per-field routing and says so.
+  const [actions, setActions] = useState<ProposedAction[]>(
+    () => (extraction.actionPlan?.actions ?? []).map((a) => ({ ...a })),
+  );
+  const hasPlan = actions.length > 0;
+
+  const itemsById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
+
+  /** Keep / Don't save. */
+  const toggleAction = (id: string) =>
+    setActions((prev) => prev.map((a) => (a.id === id ? { ...a, selected: !a.selected } : a)));
+
+  /**
+   * Change destination. Re-routing something is an act of WANTING it saved, so
+   * it turns the action on — the alternative makes the user pick a destination
+   * and then separately notice it is still switched off.
+   */
+  const setActionDestination = (id: string, destination: ExtractionDestination) =>
+    setActions((prev) => prev.map((a) =>
+      a.id === id
+        ? { ...a, destination, selected: destination !== "ignore" && destination !== "reference" }
+        : a));
+
+  const addAction = (action: ProposedAction) =>
+    setActions((prev) => [...prev.filter((a) => a.id !== action.id), action]);
+
+  /** Groups, recomputed as the user re-routes so a moved row moves sections. */
+  const actionGroups = useMemo(() => {
+    const order = extraction.actionPlan?.groups.map((g) => g.destination) ?? [];
+    const byDest = new Map<ExtractionDestination, ProposedAction[]>();
+    for (const a of actions) {
+      const list = byDest.get(a.destination) ?? [];
+      list.push(a);
+      byDest.set(a.destination, list);
+    }
+    const labels = new Map(extraction.actionPlan?.groups.map((g) => [g.destination, g.label]) ?? []);
+    const seen = new Set<ExtractionDestination>();
+    const out: Array<{ destination: ExtractionDestination; label: string; actions: ProposedAction[] }> = [];
+    for (const d of [...order, ...byDest.keys()]) {
+      if (seen.has(d) || !byDest.has(d)) continue;
+      seen.add(d);
+      out.push({ destination: d, label: labels.get(d) ?? DESTINATION_LABEL[d], actions: byDest.get(d)! });
+    }
+    return out;
+  }, [actions, extraction.actionPlan]);
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(extraction.targetProfile?.id);
   const [createExpense, setCreateExpense] = useState(!!extraction.pendingFinancial?.expense);
   const [createObligation, setCreateObligation] = useState(!!extraction.pendingFinancial?.obligation);
@@ -320,12 +377,26 @@ export function ExtractionConfirmation({
       };
     }
 
+    // Partition. A row a live action is writing must NOT also travel as a
+    // legacy item — the two paths would write the same fact twice. (The route
+    // enforces this as well rather than trusting it, but sending a clean
+    // payload is what keeps the two implementations honest about who owns what.)
+    const claimedByActions = new Set(
+      actions
+        .filter((a) => a.selected && a.operation !== "NO_ACTION")
+        .flatMap((a) => a.itemIds),
+    );
+    const unclaimedItems = hasPlan
+      ? items.filter((i) => !claimedByActions.has(i.id))
+      : items;
+
     const success = await onConfirm({
       extractionId: extraction.extractionId,
       confirmedFields,
       targetProfileId: selectedProfileId || extraction.targetProfile?.id,
       createCalendarEvents,
-      items: hasItems ? items : undefined,
+      actions: hasPlan ? actions : undefined,
+      items: hasItems ? unclaimedItems : undefined,
       calendarDates,
       trackerEntries: hasItems
         ? []
@@ -370,9 +441,11 @@ export function ExtractionConfirmation({
       {/* Header bar */}
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-border bg-muted/60 flex-wrap">
         <span className="micro-label text-muted-foreground" data-testid="extraction-count">
-          {hasItems
-            ? `We found ${items.length} piece${items.length === 1 ? "" : "s"} of data`
-            : `Review extracted data · ${fields.length}`}
+          {hasPlan
+            ? `Extracted data · ${items.length}`
+            : hasItems
+              ? `We found ${items.length} piece${items.length === 1 ? "" : "s"} of data`
+              : `Review extracted data · ${fields.length}`}
         </span>
         <button
           type="button"
@@ -399,9 +472,74 @@ export function ExtractionConfirmation({
         </div>
       </div>
 
-      {/* Grouped review: one section per destination, every row re-routable.
-          The AI recommends; you get the final say. */}
-      {hasItems && (
+      {/* ── Level 2: what it MEANS ── */}
+      <DocumentUnderstanding
+        plan={extraction.actionPlan}
+        degraded={extraction.semanticDegraded}
+      />
+
+      {/* ── Level 3: what will HAPPEN ── */}
+      {hasPlan && (
+        <>
+          <ProposedActions actions={actions} />
+          <div className="divide-y divide-border/60" data-testid="extraction-actions">
+            {actionGroups.map((group) => (
+              <ActionGroupSection
+                key={group.destination}
+                group={group}
+                itemsById={itemsById}
+                onToggle={toggleAction}
+                onDestinationChange={setActionDestination}
+                onValueChange={setItemValue}
+              />
+            ))}
+          </div>
+          <div className="border-t border-border/60">
+            <AddActionDialog
+              items={items}
+              profiles={allProfiles as any[]}
+              documentId={extraction.extractionId}
+              onAdd={addAction}
+            />
+          </div>
+        </>
+      )}
+
+      {/* ── Level 1: everything that was found ──
+          Under a plan these rows are EVIDENCE — each is already shown beneath
+          the action that cites it — so the full list is collapsed rather than
+          removed. Nothing extracted is ever lost, but the reader does not have
+          to decipher seventy-five rows to find out what the document means. */}
+      {hasPlan && (
+        <details className="border-t border-border/60" data-testid="extracted-data-section">
+          <summary className="px-2.5 py-1 bg-muted/50 cursor-pointer micro-label text-muted-foreground">
+            Extracted data · {items.length}
+          </summary>
+          <div className="divide-y divide-border/40">
+            {items.map((item) => (
+              <div key={item.id} className="flex items-baseline gap-2 px-2.5 py-1" data-testid={`extracted-row-${item.id}`}>
+                <span className="text-[11px] text-muted-foreground shrink-0 truncate max-w-[40%]">{item.label}</span>
+                <input
+                  type="text"
+                  className="flex-1 min-w-0 bg-transparent text-[11px] text-foreground border-b border-dashed border-border/60 focus:outline-none focus:border-primary focus:bg-primary/5 px-0.5"
+                  value={
+                    typeof item.value === "object" && item.value !== null
+                      ? JSON.stringify(item.value)
+                      : String(item.value ?? "")
+                  }
+                  onChange={(e) => setItemValue(item.id, e.target.value)}
+                  data-testid={`extracted-value-${item.id}`}
+                />
+                {!item.actionIds?.length && (
+                  <span className="text-[11px] text-muted-foreground shrink-0">document only</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {hasItems && !hasPlan && (
         <div className="divide-y divide-border/60" data-testid="extraction-items">
           {groupedItems.map(({ destination, rows }) => (
             <div key={destination}>
@@ -622,7 +760,12 @@ export function ExtractionConfirmation({
           act on, with its Type, its Date, an Add-to-Calendar choice, and the
           document it came from. Shown BEFORE confirming, so the decision is
           made with the dates in view rather than discovered afterwards. */}
-      {dateRows.length > 0 && (
+      {/* The Calendar section and the Financial Records panel below are the
+          PRE-PLAN review. With a plan they would be a second, parallel system
+          for the same decisions — a date already has its rule action and a
+          premium already has its obligation — and two panes proposing the same
+          write is how one commitment becomes two records. */}
+      {!hasPlan && dateRows.length > 0 && (
         <div className="pt-1.5 border-t border-border/50" data-testid="extraction-calendar-section">
           <div className="flex items-center gap-1.5">
             <Calendar className="h-3.5 w-3.5 text-blue-500" />
@@ -705,7 +848,7 @@ export function ExtractionConfirmation({
         </div>
       )}
 
-      {extraction.pendingFinancial && (
+      {!hasPlan && extraction.pendingFinancial && (
         <div className="pt-1.5 border-t border-border/50">
           <span className="text-xs text-muted-foreground font-medium">💰 Financial Records</span>
           {extraction.pendingFinancial.expense && (
@@ -782,7 +925,7 @@ export function ExtractionConfirmation({
           is the missing button the user asked for: a parking receipt with a
           $130.29 Total Amount should always have a one-click path to Finance,
           even if the classifier missed it. */}
-      {!extraction.pendingFinancial?.expense && moneyFieldCandidate && (
+      {!hasPlan && !extraction.pendingFinancial?.expense && moneyFieldCandidate && (
         <div className="pt-1.5 border-t border-border/50">
           <span className="text-xs text-muted-foreground font-medium">💰 Add to Finance</span>
           <label className="flex items-center gap-2 cursor-pointer ml-1 py-1" data-testid="manual-add-expense">
@@ -806,7 +949,12 @@ export function ExtractionConfirmation({
             // (2026-08-17 report). The server only needs extractionId; the
             // expense/obligation/tracker saves are independent of the fields.
             confirming || (
-              (hasItems ? selectedItemCount === 0 : fields.every((f) => !f.selected)) &&
+              // A plan-driven review has no ticked `items` of its own — the
+              // actions are what will be written, so they are what decides
+              // whether there is anything to confirm.
+              (hasPlan
+                ? !actions.some((a) => a.selected && a.operation !== "NO_ACTION")
+                : hasItems ? selectedItemCount === 0 : fields.every((f) => !f.selected)) &&
               !createExpense &&
               !createObligation &&
               !addManualExpense &&

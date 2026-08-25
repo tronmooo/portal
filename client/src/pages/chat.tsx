@@ -101,6 +101,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { CopyButton } from "@/components/chat/CopyButton";
 import { ExtractionConfirmation } from "@/components/chat/ExtractionReview";
+import type { ProposedAction } from "@shared/extraction-actions";
 import { useToast } from "@/hooks/use-toast";
 import type { ChatMessage, ChatMutation, ParsedAction, Profile } from "@shared/schema";
 import {
@@ -2998,6 +2999,8 @@ export default function ChatPage() {
     targetProfileId?: string;
     createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
     calendarDates?: CalendarDateDecision[];
+    /** The reviewed plan of writes — see shared/extraction-actions. */
+    actions?: ProposedAction[];
     trackerEntries: any[];
     createExpense?: any;
     createObligation?: any;

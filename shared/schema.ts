@@ -5,7 +5,11 @@ import {
 } from "./tracker-metric-definition";
 export type { TrackerMetricDefinition } from "./tracker-metric-definition";
 import type { ExtractionItem } from "./extraction-destinations";
+import type { SemanticDocument } from "./semantic-document";
+import type { ActionPlan } from "./extraction-actions";
 export type { ExtractionItem, ExtractionDestination } from "./extraction-destinations";
+export type { SemanticDocument } from "./semantic-document";
+export type { ActionPlan, ProposedAction, ActionGroup } from "./extraction-actions";
 
 // ============================================================
 // SHARED CONSTANTS
@@ -207,6 +211,23 @@ export interface ChatMessage {
     calendarDates?: Array<Record<string, any>>;
     /** The document these dates belong to. */
     documentName?: string;
+    /**
+     * What the document MEANS — entities, relationships, facts, recurrence
+     * (shared/semantic-document). Absent when the understanding stage degraded.
+     */
+    semantic?: SemanticDocument;
+    /**
+     * What will HAPPEN — the reviewable plan of writes, grouped by destination
+     * (shared/extraction-actions). The review pane renders this when present
+     * and falls back to `items` when it is not.
+     */
+    actionPlan?: ActionPlan;
+    /**
+     * Set when the understanding stage could not interpret this document. The
+     * review pane says so and routes per-field instead — an upload is never
+     * blocked by the reasoning step failing.
+     */
+    semanticDegraded?: string;
   };
   results?: Array<Record<string, any>>;
   // Rich visual output — inline charts, tables, reports
