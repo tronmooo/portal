@@ -186,7 +186,7 @@ function declarationsPlan(): ProposedAction[] {
       id: "a-property", destination: "entity_field", operation: "UPDATE",
       target: { kind: "profile", id: "prop-1", name: "123 Evergreen Ln", profileType: "property" },
       title: "Update 3 fields on 123 Evergreen Ln",
-      itemIds: ["field-yearBuilt", "field-squareFeet", "field-roofType"],
+      itemIds: ["field-yearbuilt", "field-squarefeet", "field-rooftype"],
       payload: {
         profileId: "prop-1",
         fields: { yearBuilt: "2018", squareFeet: "2450", roofType: "Composition Single" },
@@ -197,7 +197,7 @@ function declarationsPlan(): ProposedAction[] {
       id: "a-policy", destination: "entity_record", operation: "UPDATE",
       target: { kind: "profile", id: "prop-1", name: "123 Evergreen Ln", profileType: "property", group: "insurance" },
       title: "Update 2 fields on 123 Evergreen Ln",
-      itemIds: ["field-policyNumber", "field-carrier"],
+      itemIds: ["field-policynumber", "field-carrier"],
       payload: {
         profileId: "prop-1", group: "insurance",
         fields: { policyNumber: "SPI-24-87654321", carrier: "Summit Peak Insurance Group" },
@@ -208,7 +208,7 @@ function declarationsPlan(): ProposedAction[] {
       id: "a-person", destination: "profile", operation: "UPDATE",
       target: { kind: "profile", id: "person-1", name: "Johnathan A. Doe", profileType: "self" },
       title: "Update 1 field on Johnathan A. Doe",
-      itemIds: ["field-mailingAddress"],
+      itemIds: ["field-mailingaddress"],
       payload: {
         profileId: "person-1",
         fields: { mailingAddress: "123 Evergreen Lane, Springfield, CO 80501" },
@@ -219,7 +219,7 @@ function declarationsPlan(): ProposedAction[] {
       id: "a-premium", destination: "obligation", operation: "CREATE",
       target: { kind: "obligation", id: null, name: "Homeowners premium" },
       title: "Create recurring obligation — $1,428 yearly",
-      itemIds: ["field-annualPremium", "field-paymentPlan", "field-paymentDueDate"],
+      itemIds: ["field-annualpremium", "field-paymentplan", "field-paymentduedate"],
       payload: {
         name: "Homeowners premium", amount: 1428, frequency: "yearly",
         nextDueDate: "2024-06-01", recurrenceEnd: "2025-06-01",
@@ -232,7 +232,7 @@ function declarationsPlan(): ProposedAction[] {
       id: "a-expiry", destination: "calendar", operation: "UPDATE",
       target: { kind: "profile", id: "prop-1", name: "123 Evergreen Ln", profileType: "property" },
       title: "Expiration rule — Expiration Date",
-      itemIds: ["field-expirationDate"],
+      itemIds: ["field-expirationdate"],
       payload: {
         key: "expirationDate", date: "2025-06-01", ruleType: "expiration",
         profileId: "prop-1", group: "insurance", derived: true,
@@ -259,7 +259,7 @@ function declarationsPlan(): ProposedAction[] {
       id: "a-signature", destination: "reference", operation: "NO_ACTION",
       target: { kind: "document", id: DOC, name: "declarations page" },
       title: "Authorized Representative Signature Date",
-      itemIds: ["field-signatureDate"],
+      itemIds: ["field-signaturedate"],
       payload: { key: "signatureDate", value: "2024-05-20", calendarOptOut: true },
       stage: 4,
     }),
@@ -469,7 +469,7 @@ describe("POST /api/chat/confirm-extraction — the reviewed plan", () => {
       targetProfileId: "person-1",
       actions: declarationsPlan(),
       items: [{
-        id: "field-yearBuilt", key: "yearBuilt", label: "Year Built", value: "1999",
+        id: "field-yearbuilt", key: "yearBuilt", label: "Year Built", value: "1999",
         destination: "profile", destinationOptions: [], selected: true, source: "field",
       }],
     });

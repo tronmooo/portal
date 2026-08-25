@@ -230,6 +230,47 @@ describe("cross-field reasoning — meaning comes from fields together", () => {
   });
 });
 
+describe("field keys come off the row, not off the row's id", () => {
+  it("writes yearBuilt, not yearbuilt", () => {
+    // An item id is `field-${slug(key)}` and slugging LOWERCASES. Reading the
+    // field key back out of the id produced `yearbuilt` and wrote a second,
+    // differently-spelled copy of a field the profile already had. The row
+    // carries the real key; the planner reads it from there.
+    const p = plan(insuranceDeclarations);
+    const fields = p.actions.find((a) => a.destination === "entity_field")!.payload.fields;
+    expect(Object.keys(fields)).toEqual(
+      expect.arrayContaining(["yearBuilt", "squareFeet", "roofType"]),
+    );
+    expect(fields).not.toHaveProperty("yearbuilt");
+  });
+
+  it("keeps the printed spelling for a reference row too", () => {
+    const p = plan(insuranceDeclarations);
+    const sig = p.actions.find((a) => a.factIds.includes("f-sig"))!;
+    expect(sig.payload.key).toBe("signatureDate");
+  });
+
+  it("camel-cases a label only when no row backs the fact", () => {
+    const p = planExtractionActions({
+      semantic: {
+        ...medicalReport.semantic,
+        facts: [{
+          id: "f-orphan", itemIds: [], label: "Total Annual Cost", value: 960,
+          roles: ["financial"], subject: { entityRef: "e-person", confidence: 0.9 },
+          volatility: "changeable", confidence: 0.9,
+        }],
+      },
+      items: [],
+      index: medicalReport.index,
+      primaryProfileId: medicalReport.primaryProfileId,
+      documentId: "doc-1",
+      today: TODAY,
+    });
+    const fields = p.actions.find((a) => a.payload?.fields)?.payload.fields;
+    expect(Object.keys(fields ?? {})).toEqual(["totalAnnualCost"]);
+  });
+});
+
 describe("resolution precedes creation", () => {
   it("an identifier match beats a name guess", () => {
     const { target } = resolveEntity(
@@ -448,7 +489,7 @@ describe("the raw rows are annotated, never discarded", () => {
 
   it("a row that fed an action carries a link back to it", () => {
     const p = plan(loanStatement);
-    const row = p.items.find((i) => i.id === "field-monthlyPayment")!;
+    const row = p.items.find((i) => i.id === "field-monthlypayment")!;
     expect(row.actionIds?.length).toBeGreaterThan(0);
     expect(row.actionLabel).toBeTruthy();
   });

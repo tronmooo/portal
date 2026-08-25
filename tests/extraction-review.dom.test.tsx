@@ -152,22 +152,37 @@ describe("the user's routing always wins", () => {
     expect(moved.selected).toBe(true);
   });
 
-  it("an edited value travels with the action that cites it", async () => {
+  it("a corrected number is the number that gets written", async () => {
+    // The rows under an action are its evidence, and editing one is how a
+    // misread figure is fixed before confirming. Showing 1,500 and saving
+    // 1,428 would be the worst of both — a correction the user believes they
+    // made.
     const { onConfirm } = renderPane(buildExtraction());
     const obligation = screen.getByTestId("action-group-obligation");
     fireEvent.click(within(obligation).getByTestId(/action-evidence-toggle-/));
-    const input = screen.getByTestId("action-evidence-value-field-annualPremium");
-    fireEvent.change(input, { target: { value: "1500.00" } });
+    fireEvent.change(screen.getByTestId("action-evidence-value-field-annualpremium"), {
+      target: { value: "1500.00" },
+    });
 
     fireEvent.click(screen.getByText("Confirm"));
-    const payload = confirmPayload(onConfirm);
-    const row = payload.items?.find((i: any) => i.id === "field-annualPremium")
-      ?? screen.getByTestId("extracted-value-field-annualPremium");
-    // Whether it rides as an unclaimed item or stays on the rendered row, the
-    // number the user typed is the number on screen — no silent revert.
-    expect((screen.getByTestId("extracted-value-field-annualPremium") as HTMLInputElement).value)
+    const written = confirmPayload(onConfirm).actions.find((a: any) => a.destination === "obligation");
+    expect(written.payload.amount).toBe(1500);
+    expect((screen.getByTestId("extracted-value-field-annualpremium") as HTMLInputElement).value)
       .toBe("1500.00");
-    expect(row).toBeTruthy();
+  });
+
+  it("editing one row of a multi-row action leaves the rest alone", async () => {
+    const { onConfirm } = renderPane(buildExtraction());
+    const fieldsGroup = screen.getByTestId("action-group-entity_field");
+    fireEvent.click(within(fieldsGroup).getByTestId(/action-evidence-toggle-/));
+    fireEvent.change(screen.getByTestId("action-evidence-value-field-squarefeet"), {
+      target: { value: "2680" },
+    });
+
+    fireEvent.click(screen.getByText("Confirm"));
+    const written = confirmPayload(onConfirm).actions.find((a: any) => a.destination === "entity_field");
+    expect(written.payload.fields.squareFeet).toBe("2680");
+    expect(written.payload.fields.yearBuilt).toBe("2018");
   });
 });
 
@@ -178,7 +193,7 @@ describe("+ Add action — routing the engine did not propose", () => {
     const { onConfirm } = renderPane(buildExtraction());
     fireEvent.click(screen.getByTestId("add-action-open"));
 
-    fireEvent.click(screen.getByTestId("add-action-row-field-annualPremium"));
+    fireEvent.click(screen.getByTestId("add-action-row-field-annualpremium"));
     fireEvent.change(screen.getByTestId("add-action-destination"), { target: { value: "expense" } });
     fireEvent.change(screen.getByTestId("add-action-amount"), { target: { value: "1428" } });
     fireEvent.click(screen.getByTestId("add-action-submit"));
@@ -188,7 +203,7 @@ describe("+ Add action — routing the engine did not propose", () => {
     const manual = actions.find((a: any) => a.origin === "manual");
     expect(manual).toBeTruthy();
     expect(manual.destination).toBe("expense");
-    expect(manual.itemIds).toEqual(["field-annualPremium"]);
+    expect(manual.itemIds).toEqual(["field-annualpremium"]);
     // The original obligation is untouched — this is an ADDITIONAL destination,
     // not a replacement.
     expect(actions.some((a: any) => a.destination === "obligation" && a.selected)).toBe(true);

@@ -193,7 +193,7 @@ export function ExtractionConfirmation({
    * server used. Without this, correcting a misread height in the review pane
    * changed the label and left the old number on its way to the tracker.
    */
-  const setItemValue = (id: string, value: string) =>
+  const setItemValue = (id: string, value: string) => {
     setItems((prev) => prev.map((i) => {
       if (i.id !== id) return i;
       if (!i.values) return { ...i, value };
@@ -202,6 +202,47 @@ export function ExtractionConfirmation({
         ? { ...i, value, values: reparsed.values, unit: reparsed.unit || i.unit }
         : { ...i, value };
     }));
+    applyEditToActions(id, value);
+  };
+
+  /**
+   * An edited value has to reach the WRITE, not just the input.
+   *
+   * The rows under an action are its evidence, and editing one is how a user
+   * corrects a misread number before confirming. The action's payload was built
+   * from the original reading, so without this the pane would show 1,500 and
+   * save 1,428 — the exact "what you see is what saves" contract the expense
+   * draft has always kept, applied to every action.
+   *
+   * Only the fields that came FROM this row are touched; an amount the user
+   * never edited is left exactly as the planner computed it.
+   */
+  const applyEditToActions = (itemId: string, value: string) => {
+    const row = items.find((i) => i.id === itemId);
+    if (!row) return;
+    const numeric = Number(String(value).replace(/[$,\s]/g, ""));
+    setActions((prev) => prev.map((a) => {
+      if (!a.itemIds.includes(itemId)) return a;
+      const payload: Record<string, any> = { ...a.payload };
+      if (payload.fields && typeof payload.fields === "object" && row.key in payload.fields) {
+        payload.fields = { ...payload.fields, [row.key]: value };
+      }
+      if (payload.key === row.key) payload.value = value;
+      // A money or date field only follows the edit when the row IS that field —
+      // a three-row obligation must not take its due date from its premium.
+      if (typeof payload.amount === "number" && isFinite(numeric) && numeric > 0
+        && Number(row.value) === payload.amount) {
+        payload.amount = numeric;
+      }
+      if (payload.date && String(row.value) === String(payload.date)) payload.date = value;
+      if (payload.nextDueDate && String(row.value) === String(payload.nextDueDate)) payload.nextDueDate = value;
+      if (payload.values && typeof payload.values === "object" && "value" in payload.values
+        && isFinite(numeric)) {
+        payload.values = { ...payload.values, value: numeric };
+      }
+      return { ...a, payload };
+    }));
+  };
 
   /**
    * Re-route one row. Moving a row OUT of Ignore ticks it — the user only ever

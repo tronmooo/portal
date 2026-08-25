@@ -42,7 +42,10 @@ export interface DocumentFixture {
 
 let n = 0;
 const item = (key: string, label: string, value: any): ExtractionItem => ({
-  id: `field-${key}`,
+  // The id is built the way `buildExtractionItems` builds it — slugged, and so
+  // LOWERCASED. Hand-writing `field-yearbuilt` here is what let a bug through
+  // where the planner read the field key off the id and wrote `yearbuilt`.
+  id: `field-${key.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`,
   key,
   label,
   value,
@@ -113,17 +116,17 @@ export const insuranceDeclarations: DocumentFixture = {
       { from: "e-property", to: "e-lender", type: "financed_by", confidence: 0.88 },
     ],
     facts: [
-      { id: "f-year", itemIds: ["field-yearBuilt"], label: "Year Built", value: "2018", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.95 }, volatility: "stable", confidence: 0.95 },
-      { id: "f-sqft", itemIds: ["field-squareFeet"], label: "Square Feet", value: "2450", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.95 }, volatility: "stable", confidence: 0.94 },
-      { id: "f-roof", itemIds: ["field-roofType"], label: "Roof Type", value: "Composition Single", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
-      { id: "f-constr", itemIds: ["field-constructionType"], label: "Construction Type", value: "Frame", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "stable", confidence: 0.9 },
-      { id: "f-policy", itemIds: ["field-policyNumber"], label: "Policy Number", value: "SPI-24-87654321", roles: ["entity_data"], subject: { entityRef: "e-carrier", confidence: 0.95 }, volatility: "stable", confidence: 0.95 },
-      { id: "f-expiry", itemIds: ["field-expirationDate"], label: "Expiration Date", value: "2025-06-01", roles: ["actionable_date"], subject: { entityRef: "e-carrier", confidence: 0.93 }, volatility: "changeable", confidence: 0.93 },
-      { id: "f-premium", itemIds: ["field-annualPremium"], label: "Annual Premium", value: 1428, roles: ["financial", "recurring_obligation"], subject: { entityRef: "e-property", confidence: 0.94 }, volatility: "changeable", confidence: 0.94 },
-      { id: "f-plan", itemIds: ["field-paymentPlan"], label: "Payment Plan", value: "Annual", roles: ["recurring_obligation"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
-      { id: "f-due", itemIds: ["field-paymentDueDate"], label: "Payment Due Date", value: "2024-06-01", roles: ["recurring_obligation", "actionable_date"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
-      { id: "f-sig", itemIds: ["field-signatureDate"], label: "Authorized Representative Signature Date", value: "2024-05-20", roles: ["reference_only"], subject: { entityRef: "e-carrier", confidence: 0.9 }, volatility: "historical", confidence: 0.92 },
-      { id: "f-naic", itemIds: ["field-naicCode"], label: "NAIC Company Code", value: "12345", roles: ["document_metadata"], subject: { entityRef: "e-carrier", confidence: 0.9 }, volatility: "stable", confidence: 0.9 },
+      { id: "f-year", itemIds: ["field-yearbuilt"], label: "Year Built", value: "2018", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.95 }, volatility: "stable", confidence: 0.95 },
+      { id: "f-sqft", itemIds: ["field-squarefeet"], label: "Square Feet", value: "2450", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.95 }, volatility: "stable", confidence: 0.94 },
+      { id: "f-roof", itemIds: ["field-rooftype"], label: "Roof Type", value: "Composition Single", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
+      { id: "f-constr", itemIds: ["field-constructiontype"], label: "Construction Type", value: "Frame", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "stable", confidence: 0.9 },
+      { id: "f-policy", itemIds: ["field-policynumber"], label: "Policy Number", value: "SPI-24-87654321", roles: ["entity_data"], subject: { entityRef: "e-carrier", confidence: 0.95 }, volatility: "stable", confidence: 0.95 },
+      { id: "f-expiry", itemIds: ["field-expirationdate"], label: "Expiration Date", value: "2025-06-01", roles: ["actionable_date"], subject: { entityRef: "e-carrier", confidence: 0.93 }, volatility: "changeable", confidence: 0.93 },
+      { id: "f-premium", itemIds: ["field-annualpremium"], label: "Annual Premium", value: 1428, roles: ["financial", "recurring_obligation"], subject: { entityRef: "e-property", confidence: 0.94 }, volatility: "changeable", confidence: 0.94 },
+      { id: "f-plan", itemIds: ["field-paymentplan"], label: "Payment Plan", value: "Annual", roles: ["recurring_obligation"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
+      { id: "f-due", itemIds: ["field-paymentduedate"], label: "Payment Due Date", value: "2024-06-01", roles: ["recurring_obligation", "actionable_date"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
+      { id: "f-sig", itemIds: ["field-signaturedate"], label: "Authorized Representative Signature Date", value: "2024-05-20", roles: ["reference_only"], subject: { entityRef: "e-carrier", confidence: 0.9 }, volatility: "historical", confidence: 0.92 },
+      { id: "f-naic", itemIds: ["field-naiccode"], label: "NAIC Company Code", value: "12345", roles: ["document_metadata"], subject: { entityRef: "e-carrier", confidence: 0.9 }, volatility: "stable", confidence: 0.9 },
     ],
     recurrences: [{
       id: "r-premium",
@@ -142,7 +145,7 @@ export const insuranceDeclarations: DocumentFixture = {
   },
   expectations: {
     obligations: 1,
-    referenceOnlyItemIds: ["field-signatureDate", "field-naicCode"],
+    referenceOnlyItemIds: ["field-signaturedate", "field-naiccode"],
     destinations: ["obligation", "entity_field", "reference"],
   },
 };
@@ -175,9 +178,9 @@ export const medicalReport: DocumentFixture = {
     relationships: [],
     facts: [
       { id: "f-weight", itemIds: ["field-weight"], label: "Weight", value: 300, roles: ["measurement", "profile_data"], subject: { entityRef: "e-person", confidence: 0.96 }, volatility: "changeable", unit: "lbs", date: "2026-08-01", confidence: 0.95 },
-      { id: "f-blood", itemIds: ["field-bloodType"], label: "Blood Type", value: "AB-", roles: ["profile_data"], subject: { entityRef: "e-person", confidence: 0.95 }, volatility: "stable", confidence: 0.9 },
-      { id: "f-a1c", itemIds: ["field-hemoglobinA1c"], label: "Hemoglobin A1C", value: 5.8, roles: ["measurement"], subject: { entityRef: "e-person", confidence: 0.95 }, volatility: "changeable", unit: "%", date: "2026-08-01", confidence: 0.94 },
-      { id: "f-exam", itemIds: ["field-examSummary"], label: "Physical Exam", value: "Lungs clear bilaterally. No murmurs, rubs or gallops. Abdomen soft and non-tender.", roles: ["narrative"], subject: { entityRef: "e-person", confidence: 0.94 }, volatility: "historical", confidence: 0.92 },
+      { id: "f-blood", itemIds: ["field-bloodtype"], label: "Blood Type", value: "AB-", roles: ["profile_data"], subject: { entityRef: "e-person", confidence: 0.95 }, volatility: "stable", confidence: 0.9 },
+      { id: "f-a1c", itemIds: ["field-hemoglobina1c"], label: "Hemoglobin A1C", value: 5.8, roles: ["measurement"], subject: { entityRef: "e-person", confidence: 0.95 }, volatility: "changeable", unit: "%", date: "2026-08-01", confidence: 0.94 },
+      { id: "f-exam", itemIds: ["field-examsummary"], label: "Physical Exam", value: "Lungs clear bilaterally. No murmurs, rubs or gallops. Abdomen soft and non-tender.", roles: ["narrative"], subject: { entityRef: "e-person", confidence: 0.94 }, volatility: "historical", confidence: 0.92 },
     ],
     recurrences: [],
     narrative: [],
@@ -209,8 +212,8 @@ export const receipt: DocumentFixture = {
     ],
     relationships: [{ from: "e-person", to: "e-vendor", type: "pays", confidence: 0.85 }],
     facts: [
-      { id: "f-total", itemIds: ["field-totalAmount"], label: "Total", value: 84.19, roles: ["financial"], subject: { entityRef: "e-person", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
-      { id: "f-date", itemIds: ["field-transactionDate"], label: "Transaction Date", value: "2026-08-14", roles: ["reference_only"], subject: { entityRef: "e-person", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
+      { id: "f-total", itemIds: ["field-totalamount"], label: "Total", value: 84.19, roles: ["financial"], subject: { entityRef: "e-person", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
+      { id: "f-date", itemIds: ["field-transactiondate"], label: "Transaction Date", value: "2026-08-14", roles: ["reference_only"], subject: { entityRef: "e-person", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
     ],
     recurrences: [],
     narrative: [],
@@ -243,14 +246,14 @@ export const parkingTicket: DocumentFixture = {
     entities: [{ ref: "e-vehicle", kind: "vehicle", name: "Honda CR-V", identifiers: {}, confidence: 0.9 }],
     relationships: [],
     facts: [
-      { id: "f-fine", itemIds: ["field-fineAmount"], label: "Fine Amount", value: 65, roles: ["financial"], subject: { entityRef: "e-vehicle", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
-      { id: "f-due", itemIds: ["field-dueDate"], label: "Due Date", value: "2026-09-25", roles: ["actionable_date"], subject: { entityRef: "e-vehicle", confidence: 0.92 }, volatility: "changeable", confidence: 0.92 },
-      { id: "f-issued", itemIds: ["field-issueDate"], label: "Issue Date", value: "2026-08-25", roles: ["reference_only"], subject: { entityRef: "e-vehicle", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
+      { id: "f-fine", itemIds: ["field-fineamount"], label: "Fine Amount", value: 65, roles: ["financial"], subject: { entityRef: "e-vehicle", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
+      { id: "f-due", itemIds: ["field-duedate"], label: "Due Date", value: "2026-09-25", roles: ["actionable_date"], subject: { entityRef: "e-vehicle", confidence: 0.92 }, volatility: "changeable", confidence: 0.92 },
+      { id: "f-issued", itemIds: ["field-issuedate"], label: "Issue Date", value: "2026-08-25", roles: ["reference_only"], subject: { entityRef: "e-vehicle", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
     ],
     recurrences: [],
     narrative: [],
   },
-  expectations: { referenceOnlyItemIds: ["field-issueDate"], destinations: ["calendar"] },
+  expectations: { referenceOnlyItemIds: ["field-issuedate"], destinations: ["calendar"] },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -278,9 +281,9 @@ export const loanStatement: DocumentFixture = {
     entities: [{ ref: "e-loan", kind: "liability", name: "Cascade Auto Loan", identifiers: {}, confidence: 0.93 }],
     relationships: [],
     facts: [
-      { id: "f-balance", itemIds: ["field-currentBalance"], label: "Current Balance", value: 18240.55, roles: ["financial", "entity_data"], subject: { entityRef: "e-loan", confidence: 0.93 }, volatility: "changeable", confidence: 0.93 },
-      { id: "f-payment", itemIds: ["field-monthlyPayment"], label: "Monthly Payment", value: 412.9, roles: ["financial", "recurring_obligation"], subject: { entityRef: "e-loan", confidence: 0.93 }, volatility: "changeable", confidence: 0.93 },
-      { id: "f-due", itemIds: ["field-nextDueDate"], label: "Next Payment Due", value: "2026-09-15", roles: ["recurring_obligation", "actionable_date"], subject: { entityRef: "e-loan", confidence: 0.92 }, volatility: "changeable", confidence: 0.92 },
+      { id: "f-balance", itemIds: ["field-currentbalance"], label: "Current Balance", value: 18240.55, roles: ["financial", "entity_data"], subject: { entityRef: "e-loan", confidence: 0.93 }, volatility: "changeable", confidence: 0.93 },
+      { id: "f-payment", itemIds: ["field-monthlypayment"], label: "Monthly Payment", value: 412.9, roles: ["financial", "recurring_obligation"], subject: { entityRef: "e-loan", confidence: 0.93 }, volatility: "changeable", confidence: 0.93 },
+      { id: "f-due", itemIds: ["field-nextduedate"], label: "Next Payment Due", value: "2026-09-15", roles: ["recurring_obligation", "actionable_date"], subject: { entityRef: "e-loan", confidence: 0.92 }, volatility: "changeable", confidence: 0.92 },
     ],
     recurrences: [{
       id: "r-loan", factIds: ["f-payment", "f-due"], label: "Auto loan payment",
@@ -313,14 +316,14 @@ export const deed: DocumentFixture = {
     entities: [{ ref: "e-property", kind: "property", name: "123 Evergreen Lane", identifiers: { parcelNumber: "0451-223-19-007" }, confidence: 0.92 }],
     relationships: [],
     facts: [
-      { id: "f-parcel", itemIds: ["field-parcelNumber"], label: "Parcel Number", value: "0451-223-19-007", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.92 }, volatility: "stable", confidence: 0.92 },
-      { id: "f-legal", itemIds: ["field-legalDescription"], label: "Legal Description", value: "Lot 14, Block 3, Evergreen Addition", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "stable", confidence: 0.9 },
-      { id: "f-recorded", itemIds: ["field-recordedDate"], label: "Recorded Date", value: "2018-04-02", roles: ["reference_only"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
+      { id: "f-parcel", itemIds: ["field-parcelnumber"], label: "Parcel Number", value: "0451-223-19-007", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.92 }, volatility: "stable", confidence: 0.92 },
+      { id: "f-legal", itemIds: ["field-legaldescription"], label: "Legal Description", value: "Lot 14, Block 3, Evergreen Addition", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "stable", confidence: 0.9 },
+      { id: "f-recorded", itemIds: ["field-recordeddate"], label: "Recorded Date", value: "2018-04-02", roles: ["reference_only"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
     ],
     recurrences: [],
     narrative: [],
   },
-  expectations: { obligations: 0, referenceOnlyItemIds: ["field-recordedDate"] },
+  expectations: { obligations: 0, referenceOnlyItemIds: ["field-recordeddate"] },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -347,7 +350,7 @@ export const prescription: DocumentFixture = {
     ],
     relationships: [{ from: "e-clinic", to: "e-person", type: "prescribed", confidence: 0.9 }],
     facts: [
-      { id: "f-med", itemIds: ["field-medicationName", "field-dose"], label: "Metformin", value: "500 mg", roles: ["profile_data"], subject: { entityRef: "e-person", confidence: 0.92 }, volatility: "changeable", confidence: 0.92 },
+      { id: "f-med", itemIds: ["field-medicationname", "field-dose"], label: "Metformin", value: "500 mg", roles: ["profile_data"], subject: { entityRef: "e-person", confidence: 0.92 }, volatility: "changeable", confidence: 0.92 },
       { id: "f-freq", itemIds: ["field-frequency"], label: "Frequency", value: "Twice daily", roles: ["recurring_obligation"], subject: { entityRef: "e-person", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
     ],
     recurrences: [],
@@ -377,9 +380,9 @@ export const lease: DocumentFixture = {
     entities: [{ ref: "e-unit", kind: "property", name: "Unit 4B, Larkspur Court", identifiers: {}, confidence: 0.91 }],
     relationships: [],
     facts: [
-      { id: "f-rent", itemIds: ["field-monthlyRent"], label: "Monthly Rent", value: 2150, roles: ["financial", "recurring_obligation"], subject: { entityRef: "e-unit", confidence: 0.91 }, volatility: "changeable", confidence: 0.91 },
-      { id: "f-end", itemIds: ["field-leaseEndDate"], label: "Lease End Date", value: "2027-05-31", roles: ["actionable_date"], subject: { entityRef: "e-unit", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
-      { id: "f-due", itemIds: ["field-rentDueDay"], label: "Rent Due", value: "2026-09-01", roles: ["recurring_obligation", "actionable_date"], subject: { entityRef: "e-unit", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
+      { id: "f-rent", itemIds: ["field-monthlyrent"], label: "Monthly Rent", value: 2150, roles: ["financial", "recurring_obligation"], subject: { entityRef: "e-unit", confidence: 0.91 }, volatility: "changeable", confidence: 0.91 },
+      { id: "f-end", itemIds: ["field-leaseenddate"], label: "Lease End Date", value: "2027-05-31", roles: ["actionable_date"], subject: { entityRef: "e-unit", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
+      { id: "f-due", itemIds: ["field-rentdueday"], label: "Rent Due", value: "2026-09-01", roles: ["recurring_obligation", "actionable_date"], subject: { entityRef: "e-unit", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
     ],
     recurrences: [{
       id: "r-rent", factIds: ["f-rent", "f-due"], label: "Rent",
@@ -415,9 +418,9 @@ export const taxRecord: DocumentFixture = {
     ],
     relationships: [{ from: "e-person", to: "e-employer", type: "employed_by", confidence: 0.9 }],
     facts: [
-      { id: "f-wages", itemIds: ["field-wagesTipsOther"], label: "Wages", value: 94500, roles: ["financial"], subject: { entityRef: "e-person", confidence: 0.93 }, volatility: "historical", confidence: 0.93 },
-      { id: "f-withheld", itemIds: ["field-federalIncomeTaxWithheld"], label: "Federal Income Tax Withheld", value: 13120, roles: ["financial"], subject: { entityRef: "e-person", confidence: 0.92 }, volatility: "historical", confidence: 0.92 },
-      { id: "f-year", itemIds: ["field-taxYear"], label: "Tax Year", value: "2025", roles: ["document_metadata"], subject: { entityRef: "e-person", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
+      { id: "f-wages", itemIds: ["field-wagestipsother"], label: "Wages", value: 94500, roles: ["financial"], subject: { entityRef: "e-person", confidence: 0.93 }, volatility: "historical", confidence: 0.93 },
+      { id: "f-withheld", itemIds: ["field-federalincometaxwithheld"], label: "Federal Income Tax Withheld", value: 13120, roles: ["financial"], subject: { entityRef: "e-person", confidence: 0.92 }, volatility: "historical", confidence: 0.92 },
+      { id: "f-year", itemIds: ["field-taxyear"], label: "Tax Year", value: "2025", roles: ["document_metadata"], subject: { entityRef: "e-person", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
     ],
     recurrences: [],
     narrative: [],
@@ -446,14 +449,14 @@ export const warranty: DocumentFixture = {
     entities: [{ ref: "e-appliance", kind: "asset", name: "Kitchen Refrigerator", identifiers: { serialNumber: "RF28-99120847" }, confidence: 0.9 }],
     relationships: [],
     facts: [
-      { id: "f-serial", itemIds: ["field-serialNumber"], label: "Serial Number", value: "RF28-99120847", roles: ["entity_data"], subject: { entityRef: "e-appliance", confidence: 0.9 }, volatility: "stable", confidence: 0.9 },
-      { id: "f-exp", itemIds: ["field-warrantyExpiration"], label: "Warranty Expiration", value: "2029-03-11", roles: ["actionable_date"], subject: { entityRef: "e-appliance", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
-      { id: "f-purchase", itemIds: ["field-purchaseDate"], label: "Purchase Date", value: "2026-03-11", roles: ["reference_only"], subject: { entityRef: "e-appliance", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
+      { id: "f-serial", itemIds: ["field-serialnumber"], label: "Serial Number", value: "RF28-99120847", roles: ["entity_data"], subject: { entityRef: "e-appliance", confidence: 0.9 }, volatility: "stable", confidence: 0.9 },
+      { id: "f-exp", itemIds: ["field-warrantyexpiration"], label: "Warranty Expiration", value: "2029-03-11", roles: ["actionable_date"], subject: { entityRef: "e-appliance", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },
+      { id: "f-purchase", itemIds: ["field-purchasedate"], label: "Purchase Date", value: "2026-03-11", roles: ["reference_only"], subject: { entityRef: "e-appliance", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
     ],
     recurrences: [],
     narrative: [],
   },
-  expectations: { referenceOnlyItemIds: ["field-purchaseDate"], destinations: ["calendar"] },
+  expectations: { referenceOnlyItemIds: ["field-purchasedate"], destinations: ["calendar"] },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -489,12 +492,12 @@ export const unrecognizedDocument: DocumentFixture = {
     ],
     relationships: [{ from: "e-person", to: "e-club", type: "pays", confidence: 0.82 }],
     facts: [
-      { id: "f-slip", itemIds: ["field-slipAssignment"], label: "Slip Assignment", value: "Dock C, Slip 19", roles: ["profile_data"], subject: { entityRef: "e-person", confidence: 0.8 }, volatility: "changeable", confidence: 0.8 },
-      { id: "f-dues", itemIds: ["field-duesAmount"], label: "Dues", value: 310, roles: ["financial", "recurring_obligation"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "changeable", confidence: 0.85 },
-      { id: "f-schedule", itemIds: ["field-duesSchedule"], label: "Dues Schedule", value: "Quarterly", roles: ["recurring_obligation"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "changeable", confidence: 0.85 },
-      { id: "f-next", itemIds: ["field-nextDuesDate"], label: "Next Dues Date", value: "2026-10-01", roles: ["recurring_obligation", "actionable_date"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "changeable", confidence: 0.85 },
-      { id: "f-expires", itemIds: ["field-membershipExpires"], label: "Membership Expires", value: "2027-04-01", roles: ["actionable_date"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "changeable", confidence: 0.85 },
-      { id: "f-issued", itemIds: ["field-certificateIssued"], label: "Certificate Issued", value: "2026-07-02", roles: ["reference_only"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "historical", confidence: 0.85 },
+      { id: "f-slip", itemIds: ["field-slipassignment"], label: "Slip Assignment", value: "Dock C, Slip 19", roles: ["profile_data"], subject: { entityRef: "e-person", confidence: 0.8 }, volatility: "changeable", confidence: 0.8 },
+      { id: "f-dues", itemIds: ["field-duesamount"], label: "Dues", value: 310, roles: ["financial", "recurring_obligation"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "changeable", confidence: 0.85 },
+      { id: "f-schedule", itemIds: ["field-duesschedule"], label: "Dues Schedule", value: "Quarterly", roles: ["recurring_obligation"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "changeable", confidence: 0.85 },
+      { id: "f-next", itemIds: ["field-nextduesdate"], label: "Next Dues Date", value: "2026-10-01", roles: ["recurring_obligation", "actionable_date"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "changeable", confidence: 0.85 },
+      { id: "f-expires", itemIds: ["field-membershipexpires"], label: "Membership Expires", value: "2027-04-01", roles: ["actionable_date"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "changeable", confidence: 0.85 },
+      { id: "f-issued", itemIds: ["field-certificateissued"], label: "Certificate Issued", value: "2026-07-02", roles: ["reference_only"], subject: { entityRef: "e-person", confidence: 0.85 }, volatility: "historical", confidence: 0.85 },
     ],
     recurrences: [{
       id: "r-dues", factIds: ["f-dues", "f-schedule", "f-next"], label: "Boat club dues",
@@ -505,7 +508,7 @@ export const unrecognizedDocument: DocumentFixture = {
   },
   expectations: {
     obligations: 1,
-    referenceOnlyItemIds: ["field-certificateIssued"],
+    referenceOnlyItemIds: ["field-certificateissued"],
     destinations: ["obligation", "calendar"],
   },
 };

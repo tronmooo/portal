@@ -1699,6 +1699,11 @@ export function mergeExtractedData(
 // fields the original pass missed (e.g. a license number) and merges them in
 // without clobbering values the user may have edited. Returns a summary of what
 // was recovered. Side-effect-free beyond updating the document's extractedData.
+//
+// It deliberately does NOT plan or apply actions. Re-reading a document can
+// change what it appears to mean, and a re-extraction that silently re-ran the
+// writes would create records the user never saw proposed. New fields land on
+// the document; acting on them is a fresh review.
 export async function reextractDocument(documentId: string): Promise<{
   ok: boolean;
   message: string;

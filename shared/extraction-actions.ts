@@ -724,7 +724,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
 
     // ── Reference-only and document metadata: kept, never acted on ──
     if (roles.includes("reference_only") || roles.includes("document_metadata")) {
-      push(referenceAction(fact, semantic, documentId));
+      push(referenceAction(fact, semantic, documentId, itemById));
       continue;
     }
 
@@ -766,7 +766,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     // a disconnected second copy. Falling through to the field bucket as well
     // would put the same date in two actions and, downstream, on two surfaces.
     if (roles.includes("actionable_date")) {
-      push(dateActionFor(fact, landingFor(fact.subject.entityRef), semantic, documentId));
+      push(dateActionFor(fact, landingFor(fact.subject.entityRef), semantic, documentId, itemById));
       continue;
     }
 
@@ -774,7 +774,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     const landing = landingFor(fact.subject.entityRef);
     if (!landing.target.id) {
       // We do not know what this belongs to. Keep the value; ask.
-      push(unresolvedAction(fact, landing.target, documentId));
+      push(unresolvedAction(fact, landing.target, documentId, itemById));
       continue;
     }
     const bucketKey = `${landing.target.id}::${landing.group ?? ""}`;
@@ -792,7 +792,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     const fields: Record<string, any> = {};
     const w: ActionWarning[] = [];
     for (const f of bucket.facts) {
-      const fieldKey = fieldKeyFor(f);
+      const fieldKey = fieldKeyFor(f, itemById);
       fields[fieldKey] = f.value;
       const existing = readField(profile?.fields, fieldKey, bucket.group);
       const c = conflictFor(f, existing, fieldKey);
@@ -925,7 +925,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
 
 // ─── Action builders ─────────────────────────────────────────────────────────
 
-function referenceAction(fact: SemanticFact, doc: SemanticDocument, documentId: string): Omit<ProposedAction, "destinationOptions"> {
+function referenceAction(fact: SemanticFact, doc: SemanticDocument, documentId: string, rows?: Map<string, ExtractionItem>): Omit<ProposedAction, "destinationOptions"> {
   return {
     id: `act-ref-${slug(fact.id)}`,
     operation: "NO_ACTION",
@@ -936,7 +936,7 @@ function referenceAction(fact: SemanticFact, doc: SemanticDocument, documentId: 
     detail: "Reference only — no calendar event, no record created",
     factIds: [fact.id],
     itemIds: [...fact.itemIds],
-    payload: { key: fieldKeyFor(fact), value: fact.value, calendarOptOut: true },
+    payload: { key: fieldKeyFor(fact, rows), value: fact.value, calendarOptOut: true },
     origin: "stated",
     selected: true,
     confidence: fact.confidence,
@@ -946,7 +946,7 @@ function referenceAction(fact: SemanticFact, doc: SemanticDocument, documentId: 
   };
 }
 
-function unresolvedAction(fact: SemanticFact, target: TargetRef, documentId: string): Omit<ProposedAction, "destinationOptions"> {
+function unresolvedAction(fact: SemanticFact, target: TargetRef, documentId: string, rows?: Map<string, ExtractionItem>): Omit<ProposedAction, "destinationOptions"> {
   return {
     id: `act-ask-${slug(fact.id)}`,
     operation: "NO_ACTION",
@@ -957,7 +957,7 @@ function unresolvedAction(fact: SemanticFact, target: TargetRef, documentId: str
     detail: `Found this, but not sure where it belongs${target.name ? ` — it seems to be about ${target.name}` : ""}.`,
     factIds: [fact.id],
     itemIds: [...fact.itemIds],
-    payload: { key: fieldKeyFor(fact), value: fact.value },
+    payload: { key: fieldKeyFor(fact, rows), value: fact.value },
     origin: "stated",
     selected: false,
     confidence: fact.confidence,
@@ -1043,14 +1043,15 @@ function dateActionFor(
   landing: { target: TargetRef; group?: string },
   doc: SemanticDocument,
   documentId: string,
+  rows?: Map<string, ExtractionItem>,
 ): Omit<ProposedAction, "destinationOptions"> {
-  const key = fieldKeyFor(fact);
+  const key = fieldKeyFor(fact, rows);
   const iso = normalizeDateString(fact.value) || normalizeDateString(fact.date);
   const cls = classifyDateField(key, doc.documentType);
 
   if (!iso || !cls.actionable || fact.volatility === "historical") {
     return {
-      ...referenceAction(fact, doc, documentId),
+      ...referenceAction(fact, doc, documentId, rows),
       detail: iso
         ? `${fact.label} is a historical date — kept on the document, no calendar entry.`
         : "Reference only — no calendar event, no record created",
@@ -1156,11 +1157,21 @@ function itemIdsForFacts(doc: SemanticDocument, factIds: string[]): string[] {
   return out;
 }
 
-/** The `profile.fields` key a fact writes to. */
-function fieldKeyFor(fact: SemanticFact): string {
-  const fromItem = fact.itemIds[0];
-  if (fromItem && /^field-/.test(fromItem)) {
-    return fromItem.replace(/^field-/, "").replace(/-(\d+)$/, "");
+/**
+ * The `profile.fields` key a fact writes to.
+ *
+ * Taken from the extracted ROW, never from the row's id. An item id is
+ * `field-${slug(key)}` and slugging lowercases — so deriving the key from the
+ * id turned `yearBuilt` into `yearbuilt` and wrote a second, differently-spelled
+ * copy of a field the profile already had. The row carries the real key; use it.
+ *
+ * Only a fact with no row behind it (a derived total) falls back to camel-casing
+ * its label.
+ */
+function fieldKeyFor(fact: SemanticFact, rows?: Map<string, ExtractionItem>): string {
+  for (const id of fact.itemIds) {
+    const key = rows?.get(id)?.key;
+    if (key) return String(key);
   }
   return String(fact.label || fact.id)
     .replace(/[^a-zA-Z0-9 ]/g, " ")
