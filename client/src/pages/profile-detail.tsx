@@ -278,6 +278,7 @@ import { Slider } from "@/components/ui/slider";
 import type { ProfileDetail, Profile, Document, TimelineEntry, Tracker } from "@shared/schema";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
+import { checkProfileRename } from "@shared/profile-rename";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr } from "@shared/timezone";
 import { habitDayProgress } from "@shared/habit-progress";
@@ -8110,21 +8111,37 @@ function EditProfileDialog({
   const mutation = useMutation({
     mutationFn: async () => {
       if (!validateFields()) throw new Error("Validation failed");
+      // Renaming is held to the same rule as the AI path: a name another
+      // profile already answers to is refused, not silently duplicated
+      // (shared/profile-rename.ts).
+      const known: Array<{ id: string; name: string }> =
+        (queryClient.getQueryData(["/api/profiles"]) as any[] | undefined)?.filter(
+          (p: any) => p && typeof p.id === "string" && typeof p.name === "string",
+        ) ?? [];
+      const rename = checkProfileRename(known, profile.id, name, profile.name);
+      if (rename.status === "rejected") {
+        toast({ title: "Couldn't rename", description: rename.error, variant: "destructive" });
+        throw new Error(rename.error);
+      }
       const parsedFields: Record<string, any> = {};
       for (const [k, v] of Object.entries(fields)) {
         const num = Number(v);
         parsedFields[k] = v !== "" && !isNaN(num) && v.trim() !== "" ? num : v;
       }
       const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
-        name,
+        name: rename.name,
         notes,
         fields: { ...profile.fields, ...parsedFields },
       });
-      return res.json();
+      return { row: await res.json(), renamed: rename.status === "ok" };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       toast({ title: `"${name}" updated` });
-      invalidateDomains("profiles");
+      // A NAME is drawn by every screen that mentions this record — owner
+      // badges, list rows, search, the profile switcher — none of which sit
+      // under the profiles domain. A rename is rare; refresh everything rather
+      // than leave half the app calling them by the old name.
+      invalidateDomains(result?.renamed ? "everything" : "profiles");
       onSaved();
       onClose();
     },

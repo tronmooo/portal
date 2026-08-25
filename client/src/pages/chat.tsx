@@ -6,6 +6,7 @@ import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
 import { applyChatMutations } from "@/lib/chat-sync";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { perfMark, perfMeasure, logServerTimings } from "@/lib/perf-marks";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
@@ -2687,6 +2688,10 @@ const MessageRow = memo(function MessageRow({
                             }
                             const body: any = { fields: restoredFields };
                             if (fieldsToDelete.length > 0) body.fieldsToDelete = fieldsToDelete;
+                            // A rename records the name it replaced, so Revert
+                            // puts the old name back rather than leaving the
+                            // record renamed with its fields rolled back.
+                            if (typeof ps.name === "string" && ps.name) body.name = ps.name;
                             if (ps.notes !== undefined) body.notes = ps.notes;
                             if (ps.tags !== undefined) body.tags = ps.tags;
                             if (ps.type !== undefined) body.type = ps.type;
@@ -2696,12 +2701,19 @@ const MessageRow = memo(function MessageRow({
                               ...m,
                               actions: m.actions ? [...m.actions] : m.actions,
                             })));
-                            queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-                            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                            queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                            if (typeof ps.name === "string" && ps.name) {
+                              // Undoing a rename changes the name every screen
+                              // shows, so refresh them all — the same reason
+                              // the rename itself does (see buildChatMutation).
+                              await invalidateDomain("everything");
+                            } else {
+                              queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+                              queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                              queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                            }
                             toast({
                               title: "Reverted",
-                              description: `Restored ${cur?.name || 'profile'} to its previous state`,
+                              description: `Restored ${ps.name || cur?.name || 'profile'} to its previous state`,
                             });
                           } catch {
                             toast({ title: "Revert failed — try again", variant: "destructive" });

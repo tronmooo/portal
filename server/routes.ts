@@ -30,6 +30,7 @@ import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
+import { checkProfileRename } from "@shared/profile-rename";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromSeries, dedupeRules, type DateRule } from "@shared/date-rules";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
@@ -4170,6 +4171,20 @@ ${JSON.stringify(ctx, null, 2)}`;
         return res.status(400).json({ error: "Profile name must be a non-empty string" });
       }
       req.body.name = sanitize(req.body.name);
+      // A rename is checked here rather than in each screen, so the manual
+      // door and the AI door refuse the same names: two profiles answering to
+      // one name make every later "update <name>" a coin flip.
+      // shared/profile-rename.ts holds the rule both callers read.
+      const existingProfile = await storage.getProfile(req.params.id);
+      if (!existingProfile) return res.status(404).json({ error: "Not found" });
+      const rename = checkProfileRename(
+        storage.getProfilesLite ? await storage.getProfilesLite() : await storage.getProfiles(),
+        req.params.id,
+        req.body.name,
+        existingProfile.name,
+      );
+      if (rename.status === "rejected") return res.status(409).json({ error: rename.error });
+      req.body.name = rename.name;
     }
     // Manual entry follows the exact same rule as extraction and chat: a date
     // typed as "7/18/2034" is stored as 2034-07-18, so the Date Rule engine

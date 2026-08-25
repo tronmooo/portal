@@ -33,6 +33,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag } from "lucide-react";
 import { deleteProfileFields } from "@shared/profile-field-identity";
+import { checkProfileRename, MAX_PROFILE_NAME_LENGTH } from "@shared/profile-rename";
+import { invalidateDomain } from "@/lib/cache-bus";
+import EditableTitle from "@/components/EditableTitle";
 import { stringifyField, previewUnrenderable } from "@/lib/field-display";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
@@ -290,6 +293,39 @@ function SingleProfileInfo({ id }: { id: string }) {
     })();
   };
 
+  // ── Rename ────────────────────────────────────────────────────────────────
+  // The name is the profile's identity on every screen that mentions it, and
+  // until now this header rendered it as static text — the only way to change
+  // it was to ask chat, which silently dropped the change (see
+  // shared/profile-rename.ts). Renaming by hand is the same write chat makes.
+  const renameProfile = async (next: string) => {
+    if (!id || !profile) return;
+    // Same rules the AI path is held to, so a collision is refused identically
+    // whichever door the rename came in by.
+    const known: Array<{ id: string; name: string }> =
+      (queryClient.getQueryData(["/api/profiles"]) as any[] | undefined)?.filter(
+        (p: any) => p && typeof p.id === "string" && typeof p.name === "string",
+      ) ?? [];
+    const check = checkProfileRename(known, id, next, profile.name);
+    if (check.status === "unchanged") return;
+    if (check.status === "rejected") {
+      toast({ title: "Couldn't rename", description: check.error, variant: "destructive" });
+      throw new Error(check.error);
+    }
+    try {
+      await apiRequest("PATCH", `/api/profiles/${id}`, { name: check.name });
+    } catch (err: any) {
+      toast({ title: "Failed to rename", description: formatApiError(err), variant: "destructive" });
+      throw err;
+    }
+    // A name is rendered by owner badges, list rows, search and the profile
+    // switcher as well as this header — none of which live under the profile
+    // queries. A rename is rare; refresh the lot so nothing keeps showing the
+    // old name.
+    await invalidateDomain("everything");
+    toast({ title: `Renamed to ${check.name}` });
+  };
+
   const avatarMutation = useMutation({
     mutationFn: async (payload: { fileData: string; mimeType: string }) => {
       await apiRequest("POST", `/api/profiles/${id}/photo`, payload);
@@ -396,7 +432,16 @@ function SingleProfileInfo({ id }: { id: string }) {
         </button>
         <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={onAvatarChange} />
         <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-bold tracking-tight leading-tight truncate" data-testid="info-name">{profile.name}</h1>
+          <EditableTitle
+            value={profile.name || ""}
+            onSave={renameProfile}
+            className="text-lg font-bold tracking-tight leading-tight truncate"
+            inputClassName="text-lg font-bold"
+            maxLength={MAX_PROFILE_NAME_LENGTH}
+            placeholder="Name"
+            editLabel="Rename"
+            testId="info-name"
+          />
           <p className="text-xs text-muted-foreground capitalize">{profile.type}</p>
         </div>
         <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAddingField(v => !v)} data-testid="info-add-field">
