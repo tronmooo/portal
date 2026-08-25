@@ -12,6 +12,11 @@ interface EditableTitleProps {
   disabled?: boolean;
   editing?: boolean;
   onEditingChange?: (editing: boolean) => void;
+  /** Applied to the text and to the input, so a test (or a screen reader
+   *  label) can address the same element in both states. */
+  testId?: string;
+  /** Tooltip on the pencil — "Edit title" reads wrong on a person's name. */
+  editLabel?: string;
 }
 
 export default function EditableTitle({
@@ -24,6 +29,8 @@ export default function EditableTitle({
   disabled = false,
   editing: externalEditing,
   onEditingChange,
+  testId,
+  editLabel = "Edit title",
 }: EditableTitleProps) {
   const [internalEditing, setInternalEditing] = useState(false);
   const editing = externalEditing !== undefined ? externalEditing : internalEditing;
@@ -93,6 +100,8 @@ export default function EditableTitle({
           maxLength={maxLength}
           placeholder={placeholder}
           disabled={saving}
+          aria-label={editLabel}
+          data-testid={testId}
           className={cn(
             "bg-transparent border-b border-primary/40 outline-none px-0 py-0.5 min-w-0 flex-1",
             inputClassName
@@ -124,15 +133,16 @@ export default function EditableTitle({
 
   return (
     <span className={cn("inline-flex items-center gap-1 group min-w-0", className)}>
-      <span className="truncate">{value || placeholder}</span>
+      <span className="truncate" data-testid={testId}>{value || placeholder}</span>
       {!disabled && (
         <button
           type="button"
           onClick={(e) => { stop(e); setEditing(true); }}
           onMouseDown={stop}
           className="shrink-0 opacity-60 group-hover:opacity-100 focus:opacity-100 transition-opacity p-0.5 rounded hover:bg-muted/50 text-muted-foreground"
-          title="Edit title"
-          data-testid="button-edit-title"
+          title={editLabel}
+          aria-label={editLabel}
+          data-testid={testId ? `button-edit-${testId}` : "button-edit-title"}
         >
           <Pencil className="h-3 w-3" />
         </button>

@@ -518,9 +518,33 @@ const ANAPHORA: RegExp[] = [
   /\byou\s+(?:just\s+)?(?:made|created|added|logged|said)\b/,
 ];
 
+/**
+ * A bare AGREEMENT — "confirm", "yes", "yes please", "go ahead", "do it",
+ * "sounds good", "correct". The whole message is an answer to the question the
+ * assistant just asked, so everything it refers to lives in the PREVIOUS turn
+ * by definition; there is nothing else it could possibly mean.
+ *
+ * User report 2026-08-25: "Change bob's name to Bob Robertson" → the assistant
+ * asked to confirm → "confirm" → the rename was blocked as a stale replay,
+ * because the name being written appeared only in the earlier message. Asking
+ * a question and then refusing the answer is not a safety property; it is a
+ * dead end the user can only escape by retyping their request.
+ *
+ * Deliberately whole-message: "yes, and also add a task" carries new work and
+ * is not a bare confirmation, so replay detection still applies to it.
+ */
+const BARE_CONFIRMATION =
+  /^(?:ok(?:ay)?|yes|yea|yeah|yep|yup|ya|sure|confirm(?:ed|ing)?|confirm\s+it|correct|right|affirmative|approved?|accept(?:ed)?|go\s+ahead|proceed|continue|do\s+it|make\s+it\s+so|sounds?\s+good|looks?\s+good|that'?s?\s+(?:right|correct|it)|perfect|exactly|please\s+do|yes\s+please|do\s+that|go\s+for\s+it)$/;
+
+export function isBareConfirmation(message: string): boolean {
+  const m = lc(message).replace(/[!.…?,\s]+$/g, "").replace(/^[\s"'`]+/, "").trim();
+  if (!m) return false;
+  return BARE_CONFIRMATION.test(m);
+}
+
 export function hasBackReference(message: string): boolean {
   const m = lc(message);
-  return ANAPHORA.some((re) => re.test(m));
+  return isBareConfirmation(message) || ANAPHORA.some((re) => re.test(m));
 }
 
 // ── How long does the habit run? ────────────────────────────────────────────

@@ -76,6 +76,7 @@ import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollo
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
+import { checkProfileRename } from "@shared/profile-rename";
 import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel } from "@shared/date-rules";
 import {
   enrichWalkRunEntry,
@@ -2933,7 +2934,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Name of the profile to update (partial match). Use 'Me' for self profile." },
-        changes: { type: "object", description: "Fields to update — use 'fields' object for data like { bloodType: 'O+', allergies: 'penicillin', height: '5\'10\"', currentValue: 1200, purchasePrice: 800 }. Can also include 'notes' (string) or 'tags' (array)." },
+        changes: { type: "object", description: "What to change. RENAME: set changes.name to the NEW name — 'rename Bob QA to Bob Robertson' is name:'Bob QA', changes:{ name:'Bob Robertson' }. The rename lands on the profile row, so it shows everywhere at once (page header, owner badges, search, the profile switcher) — never create a second profile to rename one. DATA: use the 'fields' object for values like { bloodType: 'O+', allergies: 'penicillin', height: '5\\'10\"', currentValue: 1200, purchasePrice: 800 }. Can also include 'notes' (string) or 'tags' (array)." },
         parentProfileName: { type: "string", description: "Move this profile under a different parent. Pass the EXACT name of the new parent profile (e.g. 'My House', 'Kitchen', 'Bob'). Use this for commands like 'Move freezer from garage to basement' — set name='freezer' and parentProfileName='basement'. Pass empty string to detach (make top-level)." },
       },
       required: ["name", "changes"],
@@ -5446,11 +5447,13 @@ BEFORE calling ANY delete tool (delete_profile, delete_task, delete_expense, del
 4. If the user says "delete X" as a direct command, that counts as confirmation — proceed
 5. But if YOU are suggesting a delete (e.g., "I found duplicates, want me to clean them up?"), wait for explicit yes
 This is a HARD RULE — never silently delete anything the user didn't explicitly ask to delete.
+CONFIRMATION IS FOR DELETES (and the bulk/merge previews below) — NOTHING ELSE. A create, an update, a rename, a log, a check-off: the user asked, so DO IT on this turn and report what happened. Do not answer a clear instruction with "just to confirm, do you want me to…?" — that turns one sentence of theirs into three of yours and leaves their data unchanged. Ask a question only when you genuinely cannot tell WHICH record they mean (several match, or none do), and then ask that specific question and name the candidates.
 
 ━━━ HONESTY RULES ━━━
 - DESCRIBE WHAT THE SYSTEM DID, NOT WHAT YOU PLANNED. The words "Created", "Updated", "Deleted", "Marked complete", "Scheduled" and "Saved" are reserved for a tool that RETURNED success in THIS turn. Your summary must name the same operation and the same entity as the tool result: if the result says action:"create_profile" you say created; if it says action:"update_profile" you say updated. Never describe an update as a creation or a creation as an update — the server compares your wording against the executed tools and will replace your reply with a failure notice if they disagree.
 - Do not summarize a write you did not perform this turn, and do not restate earlier turns' actions as though they just happened.
 - NEVER quote a tool's error text back to the user. Tool errors are written for you, not for them: they name internal tools and give you instructions. Say in your own plain words what did not happen and what you need.
+- NEVER ask the user to resend, retype or rephrase a request they already made, and never describe the system's internals to them ("the system is blocking this", "the request originated in a prior turn", "try wording it as…"). They asked once; asking them to ask again is the failure, not the fix. If a call was refused, either satisfy the refusal yourself on this turn (the directive tells you how) or say plainly what you could not do and offer the next step you can take.
 - Never volunteer limitations you have not verified. Do not tell a user a feature is unavailable, binary, manual, or unsupported unless a tool result in this turn said so.
 - OWNERSHIP PHRASING: write results may include an "owner" field — the person who actually owns the touched item, resolved through nested assets (a Honda CRV nested under Jim is JIM'S car). When owner is someone other than the user, name them: "Color updated to white on Jim's Honda CRV 2021" — NEVER call another person's asset, vehicle, or liability "your".
 - If a tool returns {error: "..."} → tell the user it FAILED. Never say "Done!" on failure.
@@ -5465,6 +5468,7 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
 - MERGE PROFILES: "merge X into Y" / "combine the duplicate profiles" → merge_profiles(source_name, target_name) shows a preview; after the user confirms in their NEXT message, execute_bulk_action({confirm:true}). Same two-turn rule as bulk deletes — never merge in one turn.
+- RENAME A PROFILE: "rename Bob QA to Bob Robertson" / "change Bob's name to Bob Robertson" / "my truck is called the Beast now" → update_profile(name:"<the name it has NOW>", changes:{ name:"<the new name>" }). One call, no confirmation question when exactly one profile matches the old name — the user named the record and the new name in one sentence, so there is nothing to clarify and asking wastes their turn. The rename lands on the profile row itself and every screen reads the name from there, so it changes everywhere at once; NEVER create a second profile, and never tell the user to rename it by hand. Ask only when the old name matches several profiles (name them) or matches none.
 - MOVE BETWEEN PROFILES: "move the gym expense to Luna" / "that task is actually Mike's" → update_expense/update_task with forProfile:"<target>" (this REPLACES the owner — do not put profile names inside changes). Do NOT delete + recreate, and do NOT use merge_profiles for a single record.
 - DASHBOARD LAYOUT: "hide the X section" / "show Finance on my dashboard" / "move Goals to the top" / "reset my dashboard" → configure_dashboard_sections. This controls SECTIONS of the dashboard, not data. Undoable.
 - DOCUMENT FIELD LOOKUPS: "what's my license plate / VIN / policy number / registration expiry / license number" → the answer usually lives in a DOCUMENT's extracted fields, not profile fields. Check in order: (1) get_profile_data(profile) — its documents[] include each doc's extracted "fields"; (2) search_documents(forProfile) for that profile's docs; (3) search_documents WITHOUT forProfile — searches EVERY document's name, type, AND field contents, including documents not linked to any profile. A vehicle registration's licenseNumber/plate field IS the license plate. NEVER say a value isn't stored until you've searched all documents. If a document exists but lacks the field, say which document you checked.
@@ -7003,6 +7007,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           previousFields[key] = key in profile.fields ? (profile.fields as any)[key] : undefined;
         }
       }
+      // ----- Rename -----
+      // The name is the profile's identity on every surface that shows it, and
+      // all of them read it off this row by id — so writing the row here IS
+      // the propagation. Before 2026-08-25 this branch did not exist: a
+      // changes.name arrived, fell through the fields/notes/tags/type merge
+      // below, and was dropped, so "rename Bob QA to Bob Robertson" reported
+      // success and changed nothing.
+      let renamedFrom: string | undefined;
+      let renamedTo: string | undefined;
+      if (input.changes.name !== undefined) {
+        const check = checkProfileRename(profiles, profile.id, input.changes.name, profile.name);
+        if (check.status === "rejected") return { error: check.error };
+        if (check.status === "ok") {
+          renamedFrom = profile.name;
+          renamedTo = check.name;
+        }
+      }
+
       const previousNotes = input.changes.notes !== undefined ? (profile.notes ?? null) : undefined;
       const previousTags = input.changes.tags !== undefined ? (profile.tags || []) : undefined;
       const previousType = input.changes.type !== undefined ? profile.type : undefined;
@@ -7062,6 +7084,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }
         }
       }
+      if (renamedTo) changes.name = renamedTo;
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
       if (input.changes.tags) changes.tags = input.changes.tags;
       if (input.changes.type) changes.type = input.changes.type;
@@ -7095,6 +7118,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // before reaching the client, so we use a plain underscore-prefixed key.
       return {
         ...(updated || {}),
+        // A rename changes what EVERY list, badge and header calls this record,
+        // so the card names the new name and the client refreshes everything
+        // rather than the profile queries alone (see buildChatMutation).
+        ...(renamedTo ? { _renamed: { from: renamedFrom, to: renamedTo }, _displayData: { name: renamedTo } } : {}),
         _previousState: {
           profileId: profile.id,
           fields: previousFields,
@@ -7102,6 +7129,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           tags: previousTags,
           type: previousType,
           parentProfileId: previousParentProfileId,
+          ...(renamedTo ? { name: renamedFrom } : {}),
         },
       };
     }
