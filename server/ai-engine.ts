@@ -35,6 +35,9 @@ import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { buildExtractionItems } from "@shared/extraction-destinations";
+import { reasonAboutDocument } from "./semantic-reasoner";
+import { planExtractionActions } from "@shared/extraction-actions";
+import { buildEntityIndex } from "./entity-index";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -2733,7 +2736,13 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     // accidentally proposing an expense.
     const allowExpense = classification.destinations.expense === true;
     const allowObligation = classification.destinations.obligation === true;
-    if (amount && amount > 0 && allowExpense) {
+    // An obligation is NOT a kind of expense, and gating it behind one was a
+    // real hole: a homeowners declarations page sets `obligation` and clears
+    // `expense` — it is not a charge, it is a commitment — so this whole block
+    // was skipped and the $1,428 annual premium reached no finance surface at
+    // all. `Add to Finance` in the review pane was the manual patch over it.
+    // The two questions are independent, so they are asked independently.
+    if (amount && amount > 0 && (allowExpense || allowObligation)) {
       // Expense category derivation now flows from the classifier's BROAD
       // CATEGORY bucket (Identity | Vehicle | Property | Financial | Medical |
       // Insurance | Legal | Education | Pet | Receipt | Asset | Travel |
@@ -2787,20 +2796,23 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       const dueDate = fieldLookup['duedate'] || fieldLookup['paymentduedate'] || fieldLookup['nextduedate'] || '';
       // Recurring decision: classifier obligation flag first (intent-based),
       // then a category + freeform-type sniff as a backstop.
-      const recurringCats = new Set(['Subscription']);
-      const recurringTypeRe = /(subscription|utility|rent|mortgage|loan_statement|membership|premium)/i;
-      const isRecurring = allowObligation && (recurringCats.has(classification.category) || recurringTypeRe.test(classification.documentClass) || recurringTypeRe.test(docType));
+      // A document the classifier called an obligation IS one — the category and
+      // freeform-type sniffs below are a backstop for the cases where it only
+      // said so implicitly, not an extra hurdle for the cases where it said so
+      // outright.
+      const isRecurring = allowObligation;
       const billingFrequency = String(fieldLookup['billingfrequency'] || 'monthly').toLowerCase();
 
-      pendingFinancial = {
-        expense: {
+      pendingFinancial = {};
+      if (allowExpense) {
+        pendingFinancial.expense = {
           description: `${vendor || classification.label || parsed.label || fileName} - ${category}`,
           amount,
           category,
           vendor: vendor || undefined,
           date: fieldLookup['transactiondate'] || fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
-        },
-      };
+        };
+      }
 
       if (isRecurring && dueDate) {
         pendingFinancial.obligation = {
@@ -2845,10 +2857,55 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       },
     );
 
+    // ── Understand ───────────────────────────────────────────────────────────
+    // Extraction is not complete when fields have been read off the page. This
+    // is the stage that asks what the document MEANS: who it is about, how the
+    // entities in it relate, which facts are permanent and which are
+    // measurements, what recurs, which dates matter, and what is implied.
+    //
+    // It runs for every document, not as a fallback for ones a table did not
+    // recognise — there is no table. See server/semantic-reasoner.ts.
+    const reasoned = await reasonAboutDocument(getClient(), {
+      rows: reviewItems.map((i) => ({ id: i.id, key: i.key, label: i.label, value: i.value })),
+      documentType: docType,
+      documentLabel: parsed.label || fileName,
+      domainHint: classification.domainHint,
+      userMessage,
+      content: messageContent as any,
+    });
+
+    // ── Infer actions, resolve existing records, validate ────────────────────
+    // Deterministic from here on. The reasoner said what the document means;
+    // this decides what happens, and holds every invariant a model must not be
+    // trusted with — resolution before creation, one recurrence to one record,
+    // the rule engine's last word on dates, conflicts surfaced not applied.
+    const entityIndex = await buildEntityIndex();
+    const actionPlan = reasoned.ok
+      ? planExtractionActions({
+          semantic: reasoned.semantic,
+          items: reviewItems,
+          index: entityIndex,
+          primaryProfileId: resolvedTargetProfile?.id || existingProfileId || undefined,
+          documentId: document.id,
+          documentName: document.name || fileName,
+          today: new Date().toLocaleDateString("en-CA"),
+        })
+      : undefined;
+
     const pendingExtraction = {
       extractionId: document.id,
       fileName,
-      items: reviewItems,
+      items: actionPlan ? actionPlan.items : reviewItems,
+      /** What the document MEANS. Absent when the reasoning stage degraded. */
+      semantic: reasoned.ok ? reasoned.semantic : undefined,
+      /** What will HAPPEN. Absent when there was nothing to reason about. */
+      actionPlan,
+      /**
+       * Set when the reasoning stage could not interpret this document. The
+       * review pane says so out loud and falls back to per-field routing —
+       * an upload is never blocked by the understanding step failing.
+       */
+      semanticDegraded: reasoned.ok ? undefined : reasoned.degradedReason,
       // Prefer the classifier's class when available — it's more precise than
       // the extractor's freeform documentType, and gives the UI a stable key
       // to route on (e.g. "parking_receipt" vs. a one-off phrase).
