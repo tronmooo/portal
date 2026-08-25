@@ -420,11 +420,21 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
   const avatarMutation = useMutation({
     mutationFn: async (base64: string) => {
+      // No invalidateDomains here. Every write leaves through apiRequest, and
+      // the server's response says which entities it changed and which domains
+      // those feed — so the cache is already patched and the right queries are
+      // already refreshing by the time this runs. Screens declaring it
+      // themselves is the pattern that let one quietly forget a domain; see
+      // lib/write-sync.ts applyWriteManifest.
+      //
+      // The few calls left in this file name a domain the write itself does not
+      // touch (deleting a liability clears calendar events; an upload links a
+      // document to a profile). Those are claims about consequences the server
+      // cannot report, so they stay.
       await apiRequest("PATCH", `/api/profiles/${profile.id}`, { avatar: base64 });
     },
     onSuccess: () => {
       toast({ title: "Profile picture updated" });
-      invalidateDomains("liabilities");
     },
     onError: (err: Error) => toast({ title: "Failed to update picture", description: formatApiError(err), variant: "destructive" }),
   });
@@ -450,7 +460,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     },
     onSuccess: () => {
       toast({ title: "Profile updated" });
-      invalidateDomains("liabilities");
       setShowEditDialog(false);
     },
     onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
@@ -701,7 +710,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       // every affected owner's detail / ["/api/parties", ownerId, "liabilities"]
       // caches via the bus predicate — no per-owner loop needed.
       void affectedOwnerIds;
-      invalidateDomains("liabilities", "people");
       setOwnerPopoverOpen(false);
     },
     onError: (err: Error) => toast({ title: "Failed to update ownership", description: formatApiError(err), variant: "destructive" }),
@@ -908,7 +916,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     },
     onSuccess: () => {
       toast({ title: "Payment reversed" });
-      invalidateDomains("liabilities");
     },
     onError: (err: Error) =>
       toast({
@@ -937,7 +944,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     },
     onSuccess: () => {
       toast({ title: "Payment recorded" });
-      invalidateDomains("liabilities");
       setPaymentDialog((s) => ({ ...s, open: false }));
     },
     onError: (err: Error) =>
@@ -2584,7 +2590,6 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
       void vars;
       qc.invalidateQueries({ queryKey: ["/api/liabilities", liabilityId, "parties"] });
       qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
-      invalidateDomains("liabilities", "people");
       setPickerOpen(false);
       setSelectedPartyId("");
     },
@@ -2630,7 +2635,6 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
       // profiles list, detail keys, /api/parties/* and the dashboard.
       qc.invalidateQueries({ queryKey: ["/api/liabilities", liabilityId, "parties"] });
       qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
-      invalidateDomains("liabilities", "people");
     },
   });
 
@@ -2873,7 +2877,6 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
     },
     onSuccess: () => {
       setChildName(""); setChildBalance(""); setChildSubtype("other"); setAdding(false);
-      invalidateDomains("profiles"); // covers the relationships graph + profiles list
       toast({ title: "Nested liability added" });
     },
     onError: (e: any) => toast({ title: "Couldn't add it", description: formatApiError(e), variant: "destructive" }),

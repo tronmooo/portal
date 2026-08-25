@@ -226,6 +226,7 @@ export default defineConfig({
       'tests/write-journal.test.ts',
       'tests/storage-domain-coverage.test.ts',
       'tests/derived-aggregates.test.ts',
+      'tests/cache-key-domains.test.ts',
       'tests/liability-payment-parity.test.ts',
       'tests/profile-rename.test.ts',
     ],

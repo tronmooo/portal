@@ -2208,6 +2208,41 @@ export class SupabaseStorage implements IStorage {
     return Number(data || 0);
   }
 
+  /**
+   * The per-domain version map (migration 20260825).
+   *
+   * `{ epoch, <domain>: <n>, ... }`. The epoch is in every cache key, so a
+   * write that names no domain — or that an older instance made through the
+   * one-argument RPC — still invalidates everything, which is the pre-migration
+   * behavior and the correct direction to fail in.
+   */
+  async getDataVersions(): Promise<Record<string, number>> {
+    const { data, error } = await this.supabase
+      .from("user_data_versions").select("version,domains")
+      .eq("user_id", this.userId).maybeSingle();
+    if (error) throw error;
+    const domains = (data?.domains && typeof data.domains === "object") ? data.domains as Record<string, unknown> : {};
+    const out: Record<string, number> = { epoch: Number(data?.version || 0) };
+    for (const [k, v] of Object.entries(domains)) {
+      const n = Number(v);
+      if (Number.isFinite(n)) out[k] = n;
+    }
+    return out;
+  }
+
+  async bumpDataVersions(domains: string[] = []): Promise<Record<string, number>> {
+    const { data, error } = await this.supabase
+      .rpc("bump_user_domain_versions", { p_user_id: this.userId, p_domains: domains });
+    if (error) throw error;
+    const map = (data && typeof data === "object") ? data as Record<string, unknown> : {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(map)) {
+      const n = Number(v);
+      if (Number.isFinite(n)) out[k] = n;
+    }
+    return out;
+  }
+
   // ── Shared response cache (migration 20260731_response_cache) ─────────────
   // Cross-INSTANCE warm cache for the handful of expensive aggregations
   // (bootstrap/stats/enhanced/calendar-timeline). The in-memory response cache

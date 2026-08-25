@@ -3,6 +3,7 @@ import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation"
 import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
 import { getProfileFilterSnapshot } from "./profileFilter";
 import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
+import { decodeVersionMap, encodeVersionMap, EPOCH_KEY } from "@shared/cache-domains";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -46,21 +47,37 @@ function activeProfileHeader(): Record<string, string> {
    regardless of its own memo. Monotonic (a stale response can never walk it
    backwards) and deliberately in-memory only: persisting it would let a version
    outlive its session and pin the cache key forever. */
-let lastKnownDataVersion = 0;
+let knownDataVersions: Record<string, number> = {};
 
-/** Record a data version returned by a mutating response. Highest wins. */
+/**
+ * Record the versions a mutating response handed back. Monotonic PER DOMAIN —
+ * a response that arrives out of order can never walk one backwards.
+ *
+ * The token is a map rather than a single number because the server no longer
+ * keys its caches on one counter: a write moves only the domains it touched, so
+ * telling an instance "the liabilities are at 9" must not also claim the
+ * trackers moved. Accepts a bare number too, which is what an older server
+ * sends mid-deploy, and reads it as the account-wide epoch.
+ */
 export function noteDataVersion(version: unknown): void {
-  const v = Number(version);
-  if (Number.isFinite(v) && v > lastKnownDataVersion) lastKnownDataVersion = v;
+  if (version === null || version === undefined || version === "") return;
+  const incoming = decodeVersionMap(version);
+  for (const [domain, v] of Object.entries(incoming)) {
+    if (Number.isFinite(v) && v > (knownDataVersions[domain] ?? 0)) knownDataVersions[domain] = v;
+  }
 }
 
 export function getKnownDataVersion(): number {
-  return lastKnownDataVersion;
+  return knownDataVersions[EPOCH_KEY] ?? 0;
+}
+
+export function getKnownDataVersions(): Record<string, number> {
+  return { ...knownDataVersions };
 }
 
 /** Reset on sign-out / account switch — one user's version must not key another's reads. */
 export function clearDataVersion(): void {
-  lastKnownDataVersion = 0;
+  knownDataVersions = {};
 }
 
 /* Did the most recent write come back with a server change manifest?
@@ -77,7 +94,8 @@ export function noteManifestApplied(): void { lastManifestAppliedAt = Date.now()
 function manifestHandledRecently(): boolean { return Date.now() - lastManifestAppliedAt < 2000; }
 
 function dataVersionHeader(): Record<string, string> {
-  return lastKnownDataVersion > 0 ? { "X-Data-Version": String(lastKnownDataVersion) } : {};
+  const encoded = encodeVersionMap(knownDataVersions);
+  return encoded ? { "X-Data-Version": encoded } : {};
 }
 
 async function throwIfResNotOk(res: Response) {

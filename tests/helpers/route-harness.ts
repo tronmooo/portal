@@ -34,6 +34,8 @@ export interface FakeDb {
   /** Call counter for the per-user data-version bump, so a test can prove a
    *  read-only chat turn does NOT globally invalidate the dashboard caches. */
   bumpDataVersionCalls: number;
+  domainVersions: Record<string, number>;
+  lastBumpedDomains: string[];
 }
 
 let seq = 0;
@@ -64,6 +66,17 @@ export function makeFakeStorage(db: FakeDb) {
     bumpDataVersion: async () => {
       db.bumpDataVersionCalls++;
       return db.bumpDataVersionCalls;
+    },
+
+    // Per-domain versions (migration 20260825). A write bumps only the domains
+    // it touched; an empty list means "could not classify", which moves the
+    // account-wide epoch and therefore invalidates every cache key.
+    getDataVersions: async () => ({ epoch: db.bumpDataVersionCalls, ...db.domainVersions }),
+    bumpDataVersions: async (domains: string[] = []) => {
+      db.bumpDataVersionCalls++;
+      db.lastBumpedDomains = [...domains];
+      for (const d of domains) db.domainVersions[d] = (db.domainVersions[d] || 0) + 1;
+      return { epoch: domains.length === 0 ? db.bumpDataVersionCalls : 0, ...db.domainVersions };
     },
 
     getProfiles: async () => db.profiles,
@@ -293,7 +306,7 @@ export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness>
   const db: FakeDb = {
     profiles: [], expenses: [], incomes: [], obligations: [],
     tasks: [], events: [], documents: [], getDocumentCalls: 0,
-    bumpDataVersionCalls: 0, ...seed,
+    bumpDataVersionCalls: 0, domainVersions: {}, lastBumpedDomains: [], ...seed,
   };
   const storage = makeFakeStorage(db);
 

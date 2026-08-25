@@ -26,6 +26,7 @@ import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { registerCacheBuster } from "./cache-bus";
+import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
 import { applyLiabilityPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
@@ -455,73 +456,133 @@ const responseCache = new Map<string, { data: any; expiresAt: number }>();
 // every OTHER instance computes within ~VERSION_MEMO_MS, so stale entries
 // simply stop being addressable. Old entries age out via their TTL.
 const VERSION_MEMO_MS = 2000;
-const versionMemo = new Map<string, { v: number; at: number }>();
-async function currentDataVersion(uid: string): Promise<number> {
+const versionMemo = new Map<string, { v: Record<string, number>; at: number }>();
+
+/**
+ * Per-domain versions, or a single epoch?
+ *
+ * Set PER_DOMAIN_VERSIONS=0 to collapse every cache key back to the epoch
+ * alone — exactly the pre-migration behavior. Rolling that back is an env flip,
+ * not a deploy, because this is the one change here that can serve genuinely
+ * stale data if a prefix under-declares what it reads.
+ */
+const PER_DOMAIN_VERSIONS = () =>
+  process.env.PER_DOMAIN_VERSIONS !== "0" && process.env.PER_DOMAIN_VERSIONS !== "false";
+
+/** This instance's view of a user's version map, memoized for ~2s. */
+async function currentVersions(uid: string): Promise<Record<string, number>> {
   const hit = versionMemo.get(uid);
   if (hit && Date.now() - hit.at < VERSION_MEMO_MS) return hit.v;
-  const v = await (storage as any).getDataVersion?.() ?? 0;
-  if (versionMemo.size > 5000) versionMemo.clear();
-  versionMemo.set(uid, { v: Number(v) || 0, at: Date.now() });
-  return Number(v) || 0;
-}
-/**
- * Bump the user's data version and WAIT for it.
- *
- * The fire-and-forget bump (used by the write middleware, where a pre-handler
- * bump already covers the request) is not enough for AI chat: the chat reply is
- * the client's cue to refetch, so if the bump is still in flight when the reply
- * lands, the refetch computes the PRE-write cache key and is served pre-write
- * data — which React Query then stores as fresh for a full staleTime. That is
- * the "AI said it saved it, the page doesn't show it until I refresh" bug.
- * Awaiting this before sending the reply makes the response a read-your-writes
- * barrier.
- *
- * Returns the new version so it can be handed to the client as a token (see
- * DATA_VERSION_HEADER below); undefined if the storage can't report one, in
- * which case callers fall back to today's behavior.
- */
-export async function bumpDataVersionNow(uid: string): Promise<number | undefined> {
-  versionMemo.delete(uid);
+  let map: Record<string, number> = {};
   try {
-    const raw = await (storage as any).bumpDataVersion?.();
-    const v = Number(raw);
-    if (Number.isFinite(v) && v > 0) {
-      versionMemo.set(uid, { v, at: Date.now() });
-      return v;
+    const raw = await (storage as any).getDataVersions?.();
+    // `!Array.isArray`: an array is an object, and a storage double that answers
+    // unknown methods with [] would otherwise be read as "no versions at all".
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) map = raw as Record<string, number>;
+    else {
+      const legacy = Number(await (storage as any).getDataVersion?.());
+      if (Number.isFinite(legacy)) map = { [EPOCH_KEY]: legacy };
     }
-  } catch { /* the next GET resolves the version from the DB */ }
+  } catch { /* fail open: no version known, same-instance busting still applies */ }
+  if (versionMemo.size > 5000) versionMemo.clear();
+  versionMemo.set(uid, { v: map, at: Date.now() });
+  return map;
+}
+
+/**
+ * Bump the versions of the domains a request wrote, and WAIT for it.
+ *
+ * The wait is the point. The response to a write is what tells the client to
+ * refetch; if the bump is still in flight when that response lands, the refetch
+ * computes the PRE-write cache key and can be served pre-write data, which
+ * React Query then stores as fresh for a full staleTime. That was "it saved,
+ * but the page doesn't show it until I refresh".
+ *
+ * What changed is the SCOPE. This used to bump one counter that appeared in
+ * every cache key, so saving a tracker entry made the dashboard, the expense
+ * list and the calendar unaddressable too — every write cold-started the whole
+ * account. Now a write moves only the domains it touched (plus the epoch, which
+ * every key carries, so an unnamed or unknown domain still invalidates all).
+ *
+ * Returns the new map for the client's read-your-writes token; undefined when
+ * storage can't report one, in which case callers keep their old behavior.
+ */
+export async function bumpDataVersionNow(
+  uid: string,
+  domains: string[] = [],
+): Promise<Record<string, number> | undefined> {
+  versionMemo.delete(uid);
+  // An empty domain list is how the RPC is told "invalidate everything": it
+  // moves the account-wide epoch, which every cache key carries. So a write
+  // that named "everything" — or that could not be classified at all — must
+  // send NO domains rather than the rest of its list, or it would quietly
+  // invalidate less than it asked for.
+  const nuclear = !PER_DOMAIN_VERSIONS() || domains.some((d) => d === "everything");
+  const names = nuclear
+    ? []
+    : domains.filter((d): d is string => typeof d === "string" && d.length > 0);
+  try {
+    const raw = await (storage as any).bumpDataVersions?.(names);
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      const map = raw as Record<string, number>;
+      versionMemo.set(uid, { v: map, at: Date.now() });
+      return map;
+    }
+  } catch { /* fall through to the legacy counter */ }
+  try {
+    const v = Number(await (storage as any).bumpDataVersion?.());
+    if (Number.isFinite(v) && v > 0) {
+      const map = { [EPOCH_KEY]: v };
+      versionMemo.set(uid, { v: map, at: Date.now() });
+      return map;
+    }
+  } catch { /* the next GET resolves versions from the DB */ }
   return undefined;
 }
 
 /**
  * Read-your-writes token. A client that has just been told "saved" sends the
- * data version it was given on every subsequent GET; this instance then uses
- * max(its own memo, the client's token) to build the cache key.
+ * versions it was given on every subsequent GET; this instance then uses the
+ * per-domain max of its own memo and the client's token to build cache keys.
  *
- * Awaiting the bump (above) alone does NOT close the window: the response cache
- * is per-instance and each instance memoizes the version for VERSION_MEMO_MS,
- * so a GET landing on a DIFFERENT warm instance within ~2s still computes the
+ * Awaiting the bump alone does NOT close the window: the response cache is
+ * per-instance and each instance memoizes versions for VERSION_MEMO_MS, so a
+ * GET landing on a DIFFERENT warm instance within ~2s still computes the
  * pre-write key. The token makes that instance compute the post-write key
  * regardless of what its own memo says.
  */
 export const DATA_VERSION_HEADER = "x-data-version";
-// A client token can only ever move the key FORWARD, and only within a sane
-// distance of the version we know about — so a buggy or hostile value costs
-// that one user some cache misses and nothing else. Keys are per-user, so no
-// other account can be affected.
-const MAX_VERSION_LOOKAHEAD = 1000;
+
+export { MAX_VERSION_LOOKAHEAD };
+
+/** Legacy single-counter form, kept for the tests that pin its clamping. */
 export function resolveDataVersion(memoVersion: number, headerValue: unknown): number {
   const raw = Number(Array.isArray(headerValue) ? headerValue[0] : headerValue);
   if (!Number.isFinite(raw) || raw <= memoVersion) return memoVersion;
   return Math.min(Math.floor(raw), memoVersion + MAX_VERSION_LOOKAHEAD);
 }
 
-function cacheUserKey(req: { userId?: string }): string {
+/**
+ * The per-user, per-prefix cache key segment.
+ *
+ * `prefix` names WHICH cache this key is for, because that decides which
+ * domains' versions belong in the stamp (shared/cache-domains.ts). Omit it and
+ * the key depends on everything — the old behavior, and the safe default for
+ * anything unclassified.
+ *
+ * Callers on the WRITE path pass no prefix and get a bare user id: writes never
+ * resolve versions, and `bustCache(\`stats:${uid}\`)` still prefix-matches every
+ * stamped variant of that key.
+ */
+function cacheUserKey(req: { userId?: string }, prefix?: string): string {
   if (!req.userId) return `nouser-${Math.random().toString(36).slice(2)}`;
-  const v = (req as any).__dataVersion;
-  // Version resolved by the GET middleware below. Fallback "x" (no version
-  // known) still produces a stable key — same-instance busting covers it.
-  return v !== undefined ? `${req.userId}@v${v}` : req.userId;
+  const versions = (req as any).__dataVersions as Record<string, number> | undefined;
+  // Versions are resolved by the GET middleware below. None known (a write, or
+  // a failed resolve) still produces a stable key — same-instance busting
+  // covers it.
+  if (!versions) return req.userId;
+  if (!PER_DOMAIN_VERSIONS()) return `${req.userId}@v${Number(versions[EPOCH_KEY]) || 0}`;
+  return `${req.userId}@${versionStamp(prefix ?? "", versions)}`;
 }
 function getCached(key: string): any | null {
   if (!CACHE_ENABLED) return null;
@@ -816,14 +877,18 @@ function writeBarrierMiddleware(req: any, res: any, next: any) {
     barrierDone = true;
     attachWriteManifest(res, journal);
     bustUserCaches(uid);
-    Promise.resolve(bumpDataVersionNow(uid))
+    // Only the domains this request actually wrote. A write that reported none
+    // (or reported "everything") still moves the epoch, which every cache key
+    // carries — so an unclassifiable write invalidates all of them, exactly as
+    // every write used to.
+    Promise.resolve(bumpDataVersionNow(uid, journal.drain().domains))
       .then((v) => {
         if (v === undefined) return;
-        try { res.setHeader(DATA_VERSION_HEADER, String(v)); } catch { /* headers already sent */ }
+        try { res.setHeader(DATA_VERSION_HEADER, encodeVersionMap(v)); } catch { /* headers already sent */ }
         // The AI write routes also carry it in the body, which their clients
         // already read; keep that contract.
         if (isAiWrite && body && typeof body === "object" && !Array.isArray(body)) {
-          try { (body as any).dataVersion = v; } catch { /* frozen body */ }
+          try { (body as any).dataVersion = encodeVersionMap(v); } catch { /* frozen body */ }
         }
       })
       .catch(() => { /* fall through: the client keeps its old behavior */ })
@@ -1236,12 +1301,14 @@ export async function registerRoutes(
       try {
         // Version-stamp the cache keys exactly like cacheUserKey() does for a
         // GET, so a warmed entry is addressable by the real request that follows
-        // and can never serve a stale (pre-write) version.
-        const v = await currentDataVersion(authed.userId);
-        const uid = `${authed.userId}@v${v}`;
-        const ckStats = `stats:${uid}:${filterKey}`;
-        const ckEnh = `enhanced:${uid}:${filterKey}`;
-        const ckProf = `profiles:${uid}`;
+        // and can never serve a stale (pre-write) version. Per prefix, because
+        // stamps are per prefix now — a key warmed under the wrong stamp is
+        // simply never read, which is a warmup that quietly does nothing.
+        const versions = await currentVersions(authed.userId);
+        const keyFor = (prefix: string) => `${authed.userId}@${versionStamp(prefix, versions)}`;
+        const ckStats = `stats:${keyFor("stats:")}:${filterKey}`;
+        const ckEnh = `enhanced:${keyFor("enhanced:")}:${filterKey}`;
+        const ckProf = `profiles:${keyFor("profiles:")}`;
         try { (scoped as any).enableRequestMemo?.(); } catch {}
         // getCachedShared: skip the recompute when ANY instance already holds
         // a live entry, not just this one.
@@ -1272,9 +1339,9 @@ export async function registerRoutes(
     // resolveDataVersion. A client that was just told "saved" carries the
     // post-write version, so it can never be served this instance's pre-write
     // cache entry even while the 2s memo is still stale.
-    const token = req.headers[DATA_VERSION_HEADER];
-    currentDataVersion(uid)
-      .then((v) => { (req as any).__dataVersion = resolveDataVersion(v, token); next(); })
+    const token = decodeVersionMap(req.headers[DATA_VERSION_HEADER]);
+    currentVersions(uid)
+      .then((own) => { (req as any).__dataVersions = mergeVersionMaps(own, token); next(); })
       .catch(() => next());
   });
 
@@ -1302,6 +1369,9 @@ export async function registerRoutes(
         // Fire-and-forget here: a pre-handler bump already covers this
         // request, so nothing is waiting on the result. AI chat needs the
         // awaited form instead — see bumpDataVersionNow's doc comment.
+        // Fallback only (see below): the turn's own domains are long gone by
+        // 'finish', so this bumps the epoch alone — which invalidates
+        // everything, the safe answer for a turn that bailed out mid-write.
         const bumpVersion = () => { void bumpDataVersionNow(uid); };
         // PERF (2026-08-17): a chat turn only invalidates when it actually
         // MUTATED something. The unconditional bump made every "open my
@@ -1570,9 +1640,13 @@ export async function registerRoutes(
         // warm instances too. Best-effort: an unavailable counter leaves
         // dataVersion undefined and the client behaves as it did before.
         const tBumpStart = Date.now();
-        const v = await bumpDataVersionNow(userId);
+        // Only the domains this turn actually wrote — read from the same write
+        // journal every other route uses, so a chat turn and a form submission
+        // invalidate on identical terms.
+        const turnDomains = writeJournalContext.getStore()?.drain().domains ?? [];
+        const v = await bumpDataVersionNow(userId, turnDomains);
         tBump = Date.now() - tBumpStart;
-        if (v !== undefined) (result as any).dataVersion = v;
+        if (v !== undefined) (result as any).dataVersion = encodeVersionMap(v);
         // The finish-hook in the write middleware bumps again unless it
         // is told the barrier above already did it — see chatVersionBumped.
         res.locals.chatVersionBumped = true;
@@ -3250,7 +3324,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
-    const userId = cacheUserKey(req as AuthenticatedRequest);
+    const userId = cacheUserKey(req as AuthenticatedRequest, "stats:");
     const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
@@ -3274,7 +3348,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
-    const userId = cacheUserKey(req as AuthenticatedRequest);
+    const userId = cacheUserKey(req as AuthenticatedRequest, "enhanced:");
     const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
     const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
@@ -3328,7 +3402,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
-    const userId = cacheUserKey(req as AuthenticatedRequest);
+    const userId = cacheUserKey(req as AuthenticatedRequest, "bootstrap:");
     const filterKey = filterIds?.join(",") || "all";
     const cacheKey = `bootstrap:${userId}:${filterKey}:${month}`;
     // Shared cache: an instance that never computed this bootstrap can still
@@ -3369,6 +3443,12 @@ ${JSON.stringify(ctx, null, 2)}`;
 
       // PERF: reuse the per-endpoint server caches so bootstrap is cheap when
       // /api/stats or /api/dashboard-enhanced have been hit in the last 15s.
+      // `userId` here carries the bootstrap: stamp. stats:, enhanced: and
+      // bootstrap: all declare "all", so the three stamps are identical and
+      // these seeds land on the keys the real /api/stats and
+      // /api/dashboard-enhanced requests will compute. That equality is pinned
+      // by tests/cache-key-domains.test.ts — narrowing one of the three without
+      // the others would leave this seeding writing keys nobody reads.
       const statsCacheKey = `stats:${userId}:${filterKey}`;
       const enhancedCacheKey = `enhanced:${userId}:${filterKey}`;
 
@@ -3599,7 +3679,7 @@ ${JSON.stringify(ctx, null, 2)}`;
   // ---- Insights ----
   app.get("/api/insights", asyncHandler(async (req, res) => {
     try {
-      const uid = cacheUserKey(req as AuthenticatedRequest);
+      const uid = cacheUserKey(req as AuthenticatedRequest, "insights-data:");
       const profileIdsParam = req.query.profileIds as string | undefined;
       const profileId = req.query.profileId as string | undefined;
       const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
@@ -3756,7 +3836,7 @@ ${JSON.stringify(ctx, null, 2)}`;
   // only needs id/type/name/avatar/parent. Skips heavy jsonb columns. MUST be
   // registered before /api/profiles/:id so "lite" isn't matched as an id.
   app.get("/api/profiles/lite", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "profiles:");
     const ck = `profiles-lite:${uid}`;
     const hit = getCached(ck);
     if (hit) {
@@ -3775,7 +3855,7 @@ ${JSON.stringify(ctx, null, 2)}`;
   }));
 
   app.get("/api/profiles", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "profiles:");
     const ck = `profiles:${uid}`;
     const hit = getCached(ck);
     if (hit) {
@@ -3928,7 +4008,7 @@ ${JSON.stringify(ctx, null, 2)}`;
   // their per-endpoint caches so they're effectively free when warm.
   app.get("/api/profile-bootstrap/:id", asyncHandler(async (req, res) => {
     const profileId = req.params.id;
-    const userId = cacheUserKey(req as AuthenticatedRequest);
+    const userId = cacheUserKey(req as AuthenticatedRequest, "profile-bootstrap:");
     const cacheKey = `profile-bootstrap:${userId}:${profileId}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
@@ -4949,7 +5029,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
 
   // ---- Trackers ----
   app.get("/api/trackers", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "trackers:");
     const ck = `trackers:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getTrackers());
@@ -5343,7 +5423,7 @@ Rules:
 
   // ---- Tasks ----
   app.get("/api/tasks", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "tasks:");
     const ck = `tasks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getTasks>> = hit || await dedupe(ck, () => storage.getTasks());
@@ -5690,7 +5770,7 @@ Rules:
 
   // ---- Expenses ----
   app.get("/api/expenses", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "expenses:");
     const ck = `expenses:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getExpenses());
@@ -5837,7 +5917,7 @@ Rules:
 
   // ---- Paychecks ----
   app.get("/api/paychecks", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "paychecks:");
     const ck = `paychecks:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getPaychecks>> = hit || await dedupe(ck, () => storage.getPaychecks());
@@ -5987,7 +6067,7 @@ Rules:
 
   // ---- Events ----
   app.get("/api/events", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "events:");
     const ck = `events:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getEvents());
@@ -6060,7 +6140,7 @@ Rules:
       // collapses concurrent identical requests. cacheBustMiddleware clears
       // the cache synchronously on every write, so staleness is bounded by
       // the next mutation, not the TTL.
-      const calUserId = cacheUserKey(req as AuthenticatedRequest);
+      const calUserId = cacheUserKey(req as AuthenticatedRequest, "caltimeline:");
       const calCacheKey = `caltimeline:${calUserId}:${start}:${end}:${profileIds?.join(",") || "all"}:${tz}`;
       const cached = await getCachedShared(calCacheKey);
       if (cached) return res.json(cached);
@@ -6549,7 +6629,7 @@ Rules:
 
   // ---- Habits ----
   app.get("/api/habits", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "habits:");
     const ck = `habits:${uid}`;
     const hit = getCached(ck);
     let items = hit || await dedupe(ck, () => storage.getHabits());
@@ -6666,7 +6746,7 @@ Rules:
 
   // ---- Obligations ----
   app.get("/api/obligations", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "obligations:");
     const ck = `obligations:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getObligations>> = hit || await dedupe(ck, () => storage.getObligations());
@@ -7349,7 +7429,7 @@ Rules:
 
   // ---- Journal ----
   app.get("/api/journal", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const uid = cacheUserKey(req as AuthenticatedRequest, "journal:");
     const ck = `journal:${uid}`;
     const hit = getCached(ck);
     let items: Awaited<ReturnType<typeof storage.getJournalEntries>> = hit || await dedupe(ck, () => storage.getJournalEntries());
@@ -7497,7 +7577,7 @@ Rules:
   // ---- Notifications (computed on each request) ----
   app.get("/api/notifications", asyncHandler(async (req, res) => {
     try {
-      const userId = cacheUserKey(req as AuthenticatedRequest);
+      const userId = cacheUserKey(req as AuthenticatedRequest, "notifications:");
       const notifCacheKey = `notifications:${userId}`;
       // Make profile filter part of the cache key so two different filters
       // don't share the same cached payload (was returning unfiltered list).
@@ -8756,7 +8836,7 @@ No emojis. No prose outside the JSON.`,
     // PERF (2026-08-17): this endpoint had no cache at all, yet it's fetched
     // by BOTH the Finance page and the always-mounted KPI strip. Cache the raw
     // list (same pattern as /api/expenses); filtering below stays per-request.
-    const incomesUid = cacheUserKey(req as AuthenticatedRequest);
+    const incomesUid = cacheUserKey(req as AuthenticatedRequest, "incomes:");
     const incomesCk = `incomes:${incomesUid}`;
     const incomesHit = getCached(incomesCk);
     let incomes = incomesHit || await dedupe(incomesCk, () => storage.getIncomes());

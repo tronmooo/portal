@@ -342,6 +342,8 @@ export interface IStorage {
   getDataVersion?(): Promise<number>;
   getRecentLiabilityPayments?(limit?: number): Promise<any[]>;
   bumpDataVersion?(): Promise<number>;
+  getDataVersions?(): Promise<Record<string, number>>;
+  bumpDataVersions?(domains?: string[]): Promise<Record<string, number>>;
   repairOwnershipConsistency?(): Promise<{ scanned: number; repaired: number; details: string[] }>;
 
   // Universal Captures (PR Y) ---------------------------------------------
