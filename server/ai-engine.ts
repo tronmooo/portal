@@ -78,6 +78,7 @@ import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTra
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
 import { readProfileFieldValue } from "@shared/profile-field-identity";
+import { cascadeProfileRename } from "./profile-rename-cascade";
 import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel } from "@shared/date-rules";
 import {
   enrichWalkRunEntry,
@@ -7140,6 +7141,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
 
       const updated = await storage.updateProfile(profile.id, changes);
+      // Carry the new name into the titles this app GENERATED from the old one
+      // ("Morning Run - Bob QA", "🎂 Bob QA's Birthday"). Best-effort: a
+      // rename that landed is never reported as failed because a derived title
+      // could not be rewritten.
+      if (renamedTo && renamedFrom) {
+        try { await cascadeProfileRename(storage, profile.id, renamedFrom, renamedTo); }
+        catch (e) { logger.warn("ai", `Rename cascade failed for ${profile.id}: ${e}`); }
+      }
       // Attach revert metadata so the chat action card can render a Revert button.
       // Non-enumerable would be safer, but the action result is JSON-serialised
       // before reaching the client, so we use a plain underscore-prefixed key.
