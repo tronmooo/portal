@@ -44,6 +44,8 @@ import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rena
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
+import type { ProposedAction } from "@shared/extraction-actions";
+import { executeActions } from "./action-executor";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
 
@@ -2706,6 +2708,12 @@ ${JSON.stringify(ctx, null, 2)}`;
   app.post("/api/chat/confirm-extraction", asyncHandler(async (req, res) => {
     try {
       const { extractionId, targetProfileId, items } = req.body;
+      // The reviewed plan (shared/extraction-actions). Present when the
+      // understanding stage produced one and the user confirmed from the
+      // action review; absent for a chat message rendered from history, or
+      // when reasoning degraded and the pane fell back to per-field routing.
+      const reviewedActions: ProposedAction[] = Array.isArray(req.body?.actions)
+        ? req.body.actions : [];
       let { confirmedFields, createCalendarEvents, trackerEntries } = req.body;
       // The Calendar section's decisions — one per recognised date. See
       // shared/extraction-calendar for why they travel separately from
@@ -2736,6 +2744,16 @@ ${JSON.stringify(ctx, null, 2)}`;
       const taskWrites: Array<{ title: string; dueDate?: string }> = [];
       const ignoredItems: string[] = [];
 
+      // Rows the reviewed plan is already writing. The client partitions the
+      // two lists, but a row reaching BOTH paths would write the same fact
+      // twice — one profile field written by an action and again by the legacy
+      // switch — so the partition is enforced here as well rather than trusted.
+      const claimedByActions = new Set<string>();
+      for (const a of reviewedActions) {
+        if (!a || a.selected === false || a.operation === "NO_ACTION") continue;
+        for (const id of a.itemIds || []) claimedByActions.add(String(id));
+      }
+
       if (Array.isArray(items) && items.length > 0) {
         const fields: Array<{ key: string; value: any }> = [];
         const events: Array<{ field: string; date: string; title: string; category: string }> = [];
@@ -2743,6 +2761,7 @@ ${JSON.stringify(ctx, null, 2)}`;
 
         for (const raw of items as ExtractionItem[]) {
           if (!raw || typeof raw !== "object") continue;
+          if (claimedByActions.has(String(raw.id))) continue;
           const dest = String(raw.destination || "") as ExtractionDestination;
           if (!raw.selected || dest === "ignore") {
             if (raw.label) ignoredItems.push(String(raw.label));
@@ -3639,6 +3658,44 @@ ${JSON.stringify(ctx, null, 2)}`;
         }
       }
 
+      // ═══ THE REVIEWED PLAN ═══
+      // Runs last, and in stages: entities, then the records that reference
+      // them, then the links between them, then dates. A link needs both ends
+      // to exist, which is why the order is a dependency graph and not a
+      // convention. See server/action-executor.ts.
+      let actionResults: Array<{ actionId: string; status: string; message: string }> = [];
+      if (reviewedActions.length > 0) {
+        const outcome = await executeActions({
+          actions: reviewedActions,
+          documentId: extractionId,
+          documentName: extractionDoc?.name,
+        });
+        actionResults = outcome.results;
+        saved.push(...outcome.saved);
+        failures.push(...outcome.failures);
+
+        // Rows the user chose to keep on the document only. Recorded as
+        // calendar opt-outs so the rule engine stops deriving an entry for
+        // them — the same mechanism the Calendar section already uses, so a
+        // signature date declines to become an event by the same route
+        // whichever pane the decision was made in.
+        if (outcome.calendarOptOuts.length > 0) {
+          try {
+            const doc = await storage.getDocument(extractionId);
+            const data: Record<string, any> = { ...((doc as any)?.extractedData || {}) };
+            const prior: string[] = Array.isArray(data[CALENDAR_OPT_OUT_KEY])
+              ? data[CALENDAR_OPT_OUT_KEY].map((v: any) => String(v)) : [];
+            const next = Array.from(new Set([...prior, ...outcome.calendarOptOuts]));
+            if (next.length !== prior.length) {
+              data[CALENDAR_OPT_OUT_KEY] = next;
+              await storage.updateDocument(extractionId, { extractedData: data });
+            }
+          } catch (e: any) {
+            log.warn(`[confirm-extraction] could not record calendar opt-outs: ${e?.message || e}`);
+          }
+        }
+      }
+
       // Bust caches BEFORE responding so client's invalidate-and-refetch sees fresh state.
       clearAllCache();
 
@@ -3647,7 +3704,8 @@ ${JSON.stringify(ctx, null, 2)}`;
       const attempted = (confirmedFields?.length || 0) + (createCalendarEvents?.length || 0) + (trackerEntries?.length || 0)
         + structuredMedications.length + noteWrites.length + taskWrites.length
         + structuredAllergies.length + structuredConditions.length + structuredSurgeries.length
-        + (req.body.createExpense ? 1 : 0) + (req.body.createObligation ? 1 : 0);
+        + (req.body.createExpense ? 1 : 0) + (req.body.createObligation ? 1 : 0)
+        + reviewedActions.filter((a) => a && a.selected !== false && a.operation !== "NO_ACTION").length;
       if (attempted > 0 && saved.length === 0 && failures.length > 0) {
         return res.status(500).json({
           success: false,
@@ -3666,6 +3724,10 @@ ${JSON.stringify(ctx, null, 2)}`;
           : (failures.length > 0 ? `All steps failed: ${failures.join("; ")}` : "No fields to save"),
         saved,
         failures,
+        // Per-action outcomes. `skipped` here means "not attempted, because
+        // what it depended on failed" — which is the dependency made visible
+        // instead of a cascade of secondary errors burying the one real cause.
+        actionResults,
         // Fields deliberately kept on the document only (metadata/junk) —
         // named so a partial save is visible instead of silently claimed.
         skipped: skippedFields,

@@ -149,6 +149,7 @@ export default defineConfig({
       'tests/improve-estimate.test.ts',
       'tests/lookup-value-route.test.ts',
       'tests/confirm-extraction-save.test.ts',
+      'tests/confirm-extraction-actions.test.ts',
       'tests/medical-report-extraction.test.ts',
       'tests/upload-dedupe.test.ts',
       'tests/cache-bust-predicate.test.ts',
