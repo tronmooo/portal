@@ -394,11 +394,10 @@ export default function FinancePage() {
           return old;
         });
       }
-      // Cache bus: one call ripples to every surface that reads expense data
-      // (dashboard KPIs, stats, budgets, cashflow, activity, insights).
-      invalidateDomain("expenses");
-      // A spend from an account also moved that account's balance.
-      if (_vars.accountId) invalidateDomains("profiles", "assets", "liabilities");
+      // No invalidation declared here: the write went out through apiRequest,
+      // and the server reported the expense row AND — when the spend came from
+      // an account — the account balance it moved, along with every domain
+      // those feed. See lib/write-sync.ts applyWriteManifest.
       toast({ title: `$${result.amount.toFixed(2)} expense added`, description: result.description });
     },
     onError: (err: Error, _v, ctx) => {
@@ -553,9 +552,9 @@ export default function FinancePage() {
       return { prev };
     },
     onSuccess: () => {
-      // "obligations" covers loans/schedule + cashflow + dashboard + stats;
-      // marking a payment also writes an expense row.
-      invalidateDomains("obligations", "expenses");
+      // The obligation domain (loans/schedule, cashflow, dashboard, stats) and
+      // the expense row a payment writes both come back on the write's own
+      // manifest — the server names what it wrote, so this screen doesn't.
       toast({ title: "Loan payment marked as paid" });
     },
     onError: (err: Error, _v, ctx) => {

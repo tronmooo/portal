@@ -97,6 +97,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
+import { applyLiabilityPayment } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
@@ -9116,79 +9117,32 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return { error: `You asked to pay your ${pretty(wantType)}, but the only matching loan is "${liability.name}" (a ${pretty(gotType)}). I did NOT apply the $${Number(input.amount) || 0} — that would change the wrong balance. Want me to create a ${pretty(wantType)} first, or apply it to ${liability.name}?` };
         }
       }
-      const f = liability.fields || {};
-      const balance = Number(f.currentBalance) || 0;
-      const monthlyRate = (Number(f.annualInterestRate) || 0) / 12;
-      const amount = Number(input.amount) || 0;
-      let principal = input.principal != null ? Number(input.principal) : NaN;
-      let interest = input.interest != null ? Number(input.interest) : NaN;
-      const escrow = Number(input.escrow) || 0;
-      const fees = Number(input.fees) || 0;
-      const cashTowardLoan = amount - escrow - fees;
-      // Auto-split if not provided
-      if (isNaN(principal) && isNaN(interest)) {
-        const intPortion = Math.min(balance * monthlyRate, cashTowardLoan);
-        interest = Math.max(0, intPortion);
-        principal = Math.max(0, cashTowardLoan - interest);
-      } else if (isNaN(principal)) {
-        principal = Math.max(0, cashTowardLoan - (interest || 0));
-      } else if (isNaN(interest)) {
-        interest = Math.max(0, cashTowardLoan - (principal || 0));
-      }
-      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-      // Determine paymentType (model can override)
-      let paymentType: any = input.paymentType || "standard";
-      const monthly = Number(f.monthlyPayment) || 0;
-      if (!input.paymentType) {
-        if (input.principal != null && interest === 0 && principal > 0) paymentType = "extra_principal";
-        else if (Math.max(0, balance - principal) === 0 && amount > 0) paymentType = "payoff";
-        else if (monthly > 0 && Math.abs(amount - monthly) < 1) paymentType = "standard";
-        else if (monthly > 0 && amount < monthly && amount > 0) paymentType = "partial";
-        else if (monthly > 0 && amount > monthly) paymentType = "custom";
-      }
-      // Compute new balance based on payment type
-      let newBalance: number;
-      if (paymentType === "skipped" || paymentType === "deferred") {
-        // No balance change. Force amount/principal/interest to 0 for the row.
-        newBalance = balance;
-        principal = 0; interest = 0;
-      } else if (paymentType === "reversal") {
-        // Add the amount back to the balance.
-        newBalance = balance + amount;
-        principal = -principal; interest = -interest;
-      } else if (paymentType === "payoff") {
-        // Payoff zeroes the balance regardless of how the AI sliced principal/interest.
-        // Adjust the principal portion so it reconciles with the actual balance reduction.
-        principal = balance;
-        interest = Math.max(0, cashTowardLoan - balance);
-        newBalance = 0;
-      } else {
-        newBalance = Math.max(0, balance - principal);
-        // If the balance is within $1 of zero (rounding noise from AI splits), zero it out cleanly.
-        if (newBalance > 0 && newBalance < 1) {
-          principal = principal + newBalance;
-          newBalance = 0;
-        }
-      }
-      const payment = await storage.createLiabilityPayment({
-        liabilityProfileId: liability.id,
-        paymentDate: input.paymentDate || today,
-        amount,
-        principalPortion: principal,
-        interestPortion: interest,
-        fees: fees + escrow,
-        remainingBalanceAfter: newBalance,
-        paymentType,
-        sourceAccount: input.method || null,
-        notes: input.notes || (input.confirmationNumber ? `conf: ${input.confirmationNumber}` : null),
-      } as any);
-      // Update balance on the liability profile
-      await storage.updateProfile(liability.id, {
-        fields: { ...f, currentBalance: newBalance },
-      } as any);
+      // One implementation of "record a payment", shared with
+      // POST /api/liabilities/:id/payments. This tool used to carry its own:
+      // its own monthly-rate split instead of the canonical amortization math,
+      // a write to `currentBalance` only (the liability card, the dashboard and
+      // net worth read `remainingBalance`/`loanBalance` too, so they kept
+      // showing the pre-payment number), no idea that a recurring service bill
+      // has no balance to reduce, and "today" in a hardcoded timezone.
+      const paid = await applyLiabilityPayment(
+        storage,
+        liability,
+        {
+          amount: Number(input.amount) || 0,
+          paymentDate: input.paymentDate || null,
+          principal: input.principal ?? null,
+          interest: input.interest ?? null,
+          escrow: input.escrow ?? null,
+          fees: input.fees ?? null,
+          paymentType: (input.paymentType as any) ?? null,
+          sourceAccount: input.method || null,
+          notes: input.notes || (input.confirmationNumber ? `conf: ${input.confirmationNumber}` : null),
+        },
+        aiUserTimezone(),
+      );
       return {
-        result: { payment, newBalance, principal, interest },
-        actions: [{ type: "create", category: "liability_payment", data: payment }],
+        result: { payment: paid.payment, newBalance: paid.newBalance, principal: paid.principal, interest: paid.interest },
+        actions: [{ type: "create", category: "liability_payment", data: paid.payment }],
       };
     }
 

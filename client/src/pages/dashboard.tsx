@@ -22,6 +22,7 @@ import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
+import { useLiveTotal } from "@/lib/derived-aggregates";
 import { netWorthView, isNetWorthLoaded } from "@/lib/net-worth-view";
 import { computeNowItems, dayLabel, type NowItem } from "@shared/now-rank";
 import {
@@ -734,20 +735,27 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   const showTestDataKpi = useShowTestData();
   const sheet = useMemo(() => netWorthView(financeSnap, showTestDataKpi), [financeSnap, showTestDataKpi]);
   const netWorthLoaded = isNetWorthLoaded(financeSnap);
-  const totalAssetValue = netWorthLoaded
-    ? sheet.totalAssets
-    : filterActive
-      ? 0
-      : allProfiles
-        ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0)
-        : 0;
-  const totalLiabilities = netWorthLoaded
-    ? sheet.totalLiabilities
-    : filterActive
-      ? 0
-      : allProfiles
-        ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
-        : 0;
+  const heroDerivedAssets = useMemo(
+    () => (allProfiles ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0) : 0),
+    [allProfiles, heroAssetProfiles],
+  );
+  const heroDerivedLiabilities = useMemo(
+    () => (allProfiles ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0) : 0),
+    [allProfiles, heroLiabilityProfiles],
+  );
+  const heroEnhancedKey = useMemo(
+    () => ["/api/dashboard-enhanced", filterMode, ...filterIds],
+    [filterMode, filterIds],
+  );
+  // Once the server snapshot has landed it owns the level, and the client walk
+  // supplies only the movement since — so a payment or a revaluation shows on
+  // this tile as soon as the write returns, instead of after the aggregate
+  // recompute. Before it lands, nothing has changed: an active filter still
+  // shows 0 rather than risk a client roll-up that flashes the wrong number.
+  const liveAssets = useLiveTotal(netWorthLoaded ? sheet.totalAssets : undefined, heroDerivedAssets, heroEnhancedKey);
+  const liveLiabilities = useLiveTotal(netWorthLoaded ? sheet.totalLiabilities : undefined, heroDerivedLiabilities, heroEnhancedKey);
+  const totalAssetValue = netWorthLoaded ? liveAssets : filterActive ? 0 : heroDerivedAssets;
+  const totalLiabilities = netWorthLoaded ? liveLiabilities : filterActive ? 0 : heroDerivedLiabilities;
   const netWorth = totalAssetValue - totalLiabilities;
   // P6.1: the stats fallback is safe — /api/stats monthlySpend and
   // /api/dashboard-enhanced totalMonthlySpend are computed from the same
@@ -3828,10 +3836,26 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
   // data.totalLiabilities) is the single source of truth for roll-up numbers.
   // It is party_links + parent-residual aware; the client-side walk over
   // allProfiles is parent-only and diverges on co-ownership/wrong-link data.
-  // Prefer the server numbers; fall back to the client walk only for the brief
-  // window before /api/dashboard-enhanced resolves.
-  const totalAssetValue = data?.totalAssetValue ?? (assetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0));
-  const totalLiabilities = data?.totalLiabilities ?? (tileLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0));
+  // The server owns the LEVEL — and still does below. What changed is that the
+  // walk now supplies the DELTA while the server payload is being recomputed,
+  // so a payment or a revaluation moves this tile on the write instead of
+  // several seconds later when ~15 aggregate queries come back. At rest the
+  // delta is zero and this is exactly the server's number. See
+  // lib/derived-aggregates.ts.
+  const derivedAssetValue = useMemo(
+    () => assetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0),
+    [assetProfiles],
+  );
+  const derivedLiabilities = useMemo(
+    () => tileLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0),
+    [tileLiabilityProfiles],
+  );
+  const enhancedTotalsKey = useMemo(
+    () => ["/api/dashboard-enhanced", filterMode, ...filterIds],
+    [filterMode, filterIds],
+  );
+  const totalAssetValue = useLiveTotal(data?.totalAssetValue, derivedAssetValue, enhancedTotalsKey);
+  const totalLiabilities = useLiveTotal(data?.totalLiabilities, derivedLiabilities, enhancedTotalsKey);
   const netWorth = totalAssetValue - totalLiabilities;
 
   if (!data && !stats) {
