@@ -130,6 +130,8 @@ export default defineConfig({
       'tests/bulk-extraction-normalize.test.ts',
       'tests/upcoming-timed-tasks.test.ts',
       'tests/estimation-engine.test.ts',
+      'tests/activity-met-estimation.test.ts',
+      'tests/multi-profile-derived-values.test.ts',
       'tests/canonical-activity.test.ts',
       'tests/habit-intent.test.ts',
       'tests/mood-detect.test.ts',

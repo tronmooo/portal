@@ -10,6 +10,8 @@
 //
 // Pinned by tests/estimation-engine.test.ts.
 
+import { resolveActivityMet, intensityMultiplier, DEFAULT_ACTIVITY_INTENSITY } from "./activity-met";
+
 // ─── Provenance ──────────────────────────────────────────────────────────────
 
 export type ValueSource =
@@ -210,7 +212,7 @@ const DEFAULT_STRIDE_M = 0.76;   // population average walking stride
 const DEFAULT_WALK_PACE_MIN_PER_MILE = 20;
 const DEFAULT_RUN_PACE_MIN_PER_MILE = 10;
 const DEFAULT_CYCLE_PACE_MIN_PER_MILE = 5; // ~12 mph casual ride
-const DEFAULT_WEIGHT_KG = 70;
+export const DEFAULT_WEIGHT_KG = 70;
 /** Net energy cost per kg of body weight per mile, by activity. */
 const KCAL_PER_KG_PER_MILE: Record<CardioActivity, number> = {
   walking: 0.8,
@@ -481,6 +483,132 @@ export function enrichStrengthEntry(explicit: Record<string, any>): Enrichment {
   }
   return out;
 }
+
+// ─── General activity (any sport) — MET × THIS PERSON'S weight ──────────────
+
+/**
+ * Calories for any activity that isn't one of the distance-based cardio types:
+ * basketball, tennis, swimming, yoga, a lifting session — anything with a
+ * duration and an activity name.
+ *
+ * The whole point is that `ctx` describes ONE entity. Two people who played the
+ * same 20-minute game share the primary facts (basketball, 20 minutes) but not
+ * the derived one: each gets kcal = MET × their OWN weight × hours. When a
+ * person's weight is unknown we fall back to the population default and SAY SO
+ * in the method + assumptions — we never borrow the other person's weight, and
+ * we never withhold the estimate for want of it.
+ */
+export function enrichActivityEntry(
+  activity: string,
+  explicit: Record<string, any>,
+  ctx: ActivityProfileContext = {},
+): Enrichment {
+  const met = resolveActivityMet(String(activity || ""));
+  const out = emptyEnrichment(met.matched ? met.key : undefined);
+
+  const minutes = numeric(explicit.duration ?? explicit.minutes ?? explicit.durationMinutes);
+  if (minutes == null || minutes <= 0) return out; // no duration → no calories invented
+  out.canonical.durationSeconds = round(minutes * 60);
+
+  // Explicit user values are never overwritten.
+  if (numeric(explicit.caloriesBurned ?? explicit.calories) != null) return out;
+
+  const weightKnown = !!(ctx.weightKg && ctx.weightKg > 20);
+  const weightKg = weightKnown ? ctx.weightKg! : DEFAULT_WEIGHT_KG;
+  const intensity = intensityMultiplier(explicit.intensity);
+  const effectiveMet = met.met * intensity.mult;
+  const hours = minutes / 60;
+  const kcal = effectiveMet * weightKg * hours;
+
+  // Same ladder as the cardio branch: knowing the person's weight is worth
+  // more than recognizing the sport. Every outcome clears MIN_SAVE_CONFIDENCE,
+  // so an activity is always logged with an estimate rather than left blank.
+  const confidence = Math.max(
+    MIN_SAVE_CONFIDENCE,
+    Math.min(0.7, (weightKnown ? 0.6 : 0.4) + 0.1 - (met.matched ? 0 : 0.1)),
+  );
+
+  out.estimated.caloriesBurned = {
+    value: Math.round(kcal),
+    source: "estimated",
+    confidence,
+    method: `MET ${round(effectiveMet, 1)} (${met.label}, ${intensity.label}) × ${weightKnown ? "profile" : "default"} weight ${round(weightKg)}kg × ${round(hours, 2)}h`,
+  };
+  out.assumptions.push({
+    field: "caloriesBurned",
+    assumption: weightKnown ? "Used profile weight" : "Used population default weight",
+    valueUsed: `${round(weightKg)} kg`,
+    confidence,
+  });
+  if (!intensity.stated) {
+    out.assumptions.push({
+      field: "caloriesBurned",
+      assumption: `Assumed ${DEFAULT_ACTIVITY_INTENSITY} intensity`,
+      valueUsed: DEFAULT_ACTIVITY_INTENSITY,
+      confidence,
+    });
+  }
+  if (!met.matched) {
+    out.assumptions.push({
+      field: "caloriesBurned",
+      assumption: "Unrecognized activity — used generic moderate-activity MET",
+      valueUsed: `MET ${met.met}`,
+      confidence,
+    });
+  }
+  return out;
+}
+
+// ─── Whose calorie claim is it? ─────────────────────────────────────────────
+
+/**
+ * Did the user state a calorie number for THIS entity, in this message?
+ *
+ * The raw message reaching a tool call is the whole turn, so a single "I burned
+ * 300 calories" used to license the model's invented number for EVERY person
+ * logged that turn — the same copy-one-answer-to-everyone bug this module
+ * exists to kill. Scoping the claim to the clause that names the entity keeps
+ * one person's stated calories on that person. When no clause resolves we
+ * return false, which strips the model's guess and lets the deterministic
+ * per-person estimate stand — the safe direction.
+ */
+export function messageClaimsCaloriesFor(
+  message: string,
+  entityName: string | undefined,
+  isSelf: boolean,
+): boolean {
+  const msg = String(message || "");
+  if (!msg || !CALORIE_WORD.test(msg)) return false;
+  const first = String(entityName || "").trim().split(/\s+/)[0];
+  const nameRe = first
+    ? new RegExp(`\\b${first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")
+    : null;
+
+  // Sentence first, then clause: a subject carries across clauses of the SAME
+  // sentence ("I played basketball for 20 minutes and burned 300 calories" is
+  // one person's claim) but never across sentences.
+  for (const sentence of msg.split(/[.;!?]+/)) {
+    if (!CALORIE_WORD.test(sentence)) continue;
+    const clauses = sentence.split(/,|\band\b/i).filter((c) => c.trim());
+    let subject: "self" | "thisEntity" | "someoneElse" | null = null;
+    for (const clause of clauses) {
+      // A clause with no subject of its own inherits the last one stated.
+      if (SELF_SUBJECT.test(clause)) subject = "self";
+      else if (PROPER_NAME.test(clause)) {
+        subject = nameRe && nameRe.test(clause) ? "thisEntity" : "someoneElse";
+      }
+      if (!CALORIE_WORD.test(clause)) continue;
+      if (isSelf && subject === "self") return true;
+      if (!isSelf && subject === "thisEntity") return true;
+    }
+  }
+  return false;
+}
+
+const CALORIE_WORD = /calor|kcal|burn/i;
+const SELF_SUBJECT = /\b(i|i'm|im|me|my|we|our)\b/i;
+/** A capitalized word that isn't the pronoun "I" — a stand-in for "names someone". */
+const PROPER_NAME = /\b[A-Z][a-z]{1,}\b/;
 
 // ─── Applying enrichment to the stored entry ─────────────────────────────────
 

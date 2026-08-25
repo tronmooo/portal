@@ -416,13 +416,25 @@ export function computeSecondaryData(trackerName: string, category: string, valu
   const computed: ComputedData = {};
   const name = trackerName.toLowerCase();
 
+  // Calories are person-dependent, and this function has no idea who is
+  // logging. shared/estimation-engine already derived them from THAT profile's
+  // own weight (or a labeled standard default) before the write, so prefer the
+  // number sitting in values over any flat per-distance/per-minute rate below —
+  // recomputing here would put a person-blind figure in `computed`, which is
+  // what the "calories burned today" insight and the daily rollups read.
+  const statedCalories = parseFloat(values.caloriesBurned ?? values.calories);
+  const hasStatedCalories = isFinite(statedCalories) && statedCalories > 0;
+  const setCalories = (fallback: number) => {
+    computed.caloriesBurned = Math.round(hasStatedCalories ? statedCalories : fallback);
+  };
+
   // Running / Cardio
   if (name.includes("run") || name.includes("jog") || (category === "fitness" && values.distance)) {
     const distance = parseFloat(values.distance) || 0;
     const duration = parseDuration(values.duration);
     if (distance > 0) {
       computed.distanceMiles = distance;
-      computed.caloriesBurned = Math.round(distance * 100);
+      setCalories(distance * 100);
       computed.intensity = distance > 6 ? "extreme" : distance > 4 ? "high" : distance > 2 ? "moderate" : "low";
     }
     if (duration > 0 && distance > 0) {
@@ -446,7 +458,7 @@ export function computeSecondaryData(trackerName: string, category: string, valu
     const distance = parseFloat(values.distance) || parseFloat(values.steps) / 2000 || 0;
     if (distance > 0) {
       computed.distanceMiles = distance;
-      computed.caloriesBurned = Math.round(distance * 80);
+      setCalories(distance * 80);
       computed.intensity = "low";
       computed.heartRateZone = "fat_burn";
     }
@@ -457,7 +469,7 @@ export function computeSecondaryData(trackerName: string, category: string, valu
     const distance = parseFloat(values.distance) || 0;
     if (distance > 0) {
       computed.distanceMiles = distance;
-      computed.caloriesBurned = Math.round(distance * 50);
+      setCalories(distance * 50);
       computed.intensity = distance > 20 ? "high" : distance > 10 ? "moderate" : "low";
     }
   }
@@ -465,7 +477,7 @@ export function computeSecondaryData(trackerName: string, category: string, valu
   // Weight / Gym
   if (name.includes("weight") && category === "fitness") {
     const duration = parseDuration(values.duration) || 45;
-    computed.caloriesBurned = Math.round(duration * 7);
+    setCalories(duration * 7);
     computed.durationMinutes = duration;
     computed.intensity = "moderate";
   }
@@ -473,7 +485,7 @@ export function computeSecondaryData(trackerName: string, category: string, valu
   // Yoga / Stretching
   if (name.includes("yoga") || name.includes("stretch") || name.includes("pilates")) {
     const duration = parseDuration(values.duration) || 30;
-    computed.caloriesBurned = Math.round(duration * 4);
+    setCalories(duration * 4);
     computed.durationMinutes = duration;
     computed.intensity = "low";
     computed.heartRateZone = "recovery";
@@ -482,7 +494,7 @@ export function computeSecondaryData(trackerName: string, category: string, valu
   // Swimming
   if (name.includes("swim")) {
     const duration = parseDuration(values.duration) || 30;
-    computed.caloriesBurned = Math.round(duration * 10);
+    setCalories(duration * 10);
     computed.durationMinutes = duration;
     computed.intensity = "high";
     computed.heartRateZone = "cardio";
@@ -528,6 +540,14 @@ export function computeSecondaryData(trackerName: string, category: string, valu
         computed.caloriesConsumed = Math.round(protein * 4 + carbs * 4 + fat * 9);
       }
     }
+  }
+
+  // Sports with no branch above (basketball, tennis, soccer, …) still carry a
+  // personalized calorie estimate in values — mirror it into computed so the
+  // daily rollups and the "calories burned today" insight count it. Without
+  // this the whole non-cardio half of fitness is invisible to those totals.
+  if (hasStatedCalories && computed.caloriesBurned == null && category === "fitness") {
+    computed.caloriesBurned = Math.round(statedCalories);
   }
 
   return computed;

@@ -175,7 +175,7 @@ const SUPPLEMENTS: string[] = [
 ];
 
 // Strength training — categorized "fitness".
-const STRENGTH: string[] = [
+export const STRENGTH: string[] = [
   "push up", "pushup", "pull up", "pullup", "chin up", "chinup", "bench press",
   "incline press", "overhead press", "shoulder press", "military press", "squat",
   "front squat", "back squat", "goblet squat", "deadlift", "romanian deadlift",
@@ -190,7 +190,7 @@ const STRENGTH: string[] = [
 ];
 
 // Cardio — categorized "fitness".
-const CARDIO: string[] = [
+export const CARDIO: string[] = [
   "walking", "walk", "running", "run", "jog", "jogging", "cycling", "biking", "bike",
   "swimming", "swim", "hiking", "hike", "elliptical", "treadmill", "rowing",
   "jump rope", "jumping jack", "stairmaster", "stair climber", "stair stepper",
@@ -199,7 +199,7 @@ const CARDIO: string[] = [
 ];
 
 // Sports — categorized "fitness".
-const SPORTS: string[] = [
+export const SPORTS: string[] = [
   "basketball", "tennis", "soccer", "football", "volleyball", "baseball", "softball",
   "hockey", "golf", "pickleball", "badminton", "cricket", "rugby", "lacrosse",
   "skiing", "snowboarding", "skating", "ice skating", "rollerblading", "surfing",
@@ -211,7 +211,7 @@ const SPORTS: string[] = [
 ];
 
 // Flexibility / mind-body — categorized "fitness".
-const FLEXIBILITY: string[] = [
+export const FLEXIBILITY: string[] = [
   "yoga", "stretching", "stretch", "pilates", "tai chi", "mobility", "foam rolling",
   "barre",
 ];

@@ -82,12 +82,15 @@ import {
   enrichHydrationEntry,
   enrichSleepEntry,
   enrichStrengthEntry,
+  enrichActivityEntry,
+  messageClaimsCaloriesFor,
   applyEnrichmentToValues,
   derivePersonalMetrics,
   parseHeightToCm,
   parseWeightToKg,
   summarizeEnrichment,
   type Enrichment,
+  type ActivityProfileContext,
 } from "@shared/estimation-engine";
 import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossessive, detectPossessiveOwner } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
@@ -3133,7 +3136,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport. Strength/workout logs use the EXERCISE's exact name ('Weighted Pull-Ups', 'Bench Press', 'Face Pulls') — each exercise is its own tracker. NEVER 'Weight': that tracker holds body-weight weigh-ins ONLY, and a name merely CONTAINING 'weight' ('Weighted Pull-Ups') is an exercise, not a weigh-in." },
-        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
+        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. ALL OTHER SPORTS/ACTIVITIES (basketball, tennis, soccer, swimming, yoga, HIIT, lifting — everything) follow the SAME rule: pass ONLY what the user stated — { activityType, duration } plus the sport-specific facts they gave (distance, sets, reps). NEVER compute or guess caloriesBurned/calories or pace: calories depend on body weight, and the server computes them from THAT PERSON'S own height/weight with a confidence label, falling back to a standard default when that person's weight is unknown. Include intensity ('light'|'moderate'|'intense' or a 1-3 zone) and heartRate (avg bpm) ONLY when the user described the effort or gave a number — these surface as effort chips on the card. When one message logs an activity for SEVERAL people, make one call per person with its own forProfile and the same stated facts; never copy a derived number between them. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
         at: { type: "string", description: "Optional date/time the entry actually happened (ISO date, natural language like 'June 3 2025', or a bare clock time like '8:15 AM' which is treated as today at that time). ALWAYS set this when the user attaches a time to the action ('at 8:15 AM', 'this morning at 7', 'yesterday'). Omit for 'now'." },
@@ -5643,7 +5646,7 @@ ASSET & SUBSCRIPTION CRUD via chat:
 - LOAN PAYMENTS: "Made a $500 payment on my car loan" → pay_obligation with the obligation name
 - SUBSCRIPTION PAYMENTS: "Paid $15 for Netflix" → create_expense with category: "subscription", forProfile: "Netflix"
 
-SECONDARY DATA EXTRACTION — critical. When logging tracker entries, compute all possible secondary data:
+SECONDARY DATA — the SERVER computes it. Extract the facts the user stated; never derive the numbers yourself:
 
 ACTIVITY TRACKING ARCHITECTURE — follow exactly:
 
@@ -5666,25 +5669,33 @@ ACTIVITY TRACKING ARCHITECTURE — follow exactly:
    NEVER use "Running" for basketball, tennis, soccer, or any non-running activity.
 
 3. EVERY FITNESS ENTRY MUST INCLUDE activityType in values:
-   Basketball example values: { activityType: "basketball", duration: 30, caloriesBurned: 210, intensity: "moderate" }
-   Running example values: { activityType: "running", distance: 5, duration: 50, pace: "10:00", caloriesBurned: 500 }
-   Tennis example values: { activityType: "tennis", duration: 60, caloriesBurned: 480, intensity: "high" }
-   Yoga example values: { activityType: "yoga", duration: 45, caloriesBurned: 135, style: "vinyasa" }
+   Basketball example values: { activityType: "basketball", duration: 30 }
+   Running example values: { activityType: "running", distance: 5, duration: 50 }
+   Tennis example values: { activityType: "tennis", duration: 60, intensity: "high" }   ← intensity ONLY because the user described the effort
+   Yoga example values: { activityType: "yoga", duration: 45, style: "vinyasa" }
+   Note what is ABSENT from every example: caloriesBurned and pace. Those are derived, and the server derives them.
    The activityType field preserves identity so summaries ("cardio this week") can aggregate across Basketball + Running + Tennis WITHOUT merging their trackers.
 
-4. CALORIE ESTIMATION by activity:
-   - Running: ~100 cal/mile or ~10 cal/min
-   - Walking: ~80 cal/mile or ~5 cal/min
-   - Cycling: ~50 cal/mile or ~8 cal/min
-   - Swimming: ~10 cal/min
-   - Basketball: ~7 cal/min (moderate), ~9 cal/min (intense game)
-   - Tennis: ~8 cal/min
-   - Soccer: ~8 cal/min
-   - Weight lifting: ~5-7 cal/min
-   - Yoga: ~3 cal/min
-   - HIIT: ~12 cal/min
-   - Hiking: ~6 cal/min
-   Always include caloriesBurned as a derived field.
+4. NEVER CALCULATE CALORIES. Do NOT put caloriesBurned (or calories) in a fitness entry unless the
+   USER stated the number. Calories depend on the logger's body weight, so there is no correct
+   per-minute rate you could apply: the server computes MET × THAT PERSON'S OWN weight × duration,
+   labels the result an estimate with a confidence, and records which weight it used. A number you
+   invent overwrites that and is silently wrong for anyone who isn't average. The same goes for
+   every other derived value — pace, steps, distance-from-duration, heart-rate zones, workout load.
+   Pass the facts (activityType, duration, distance, sets, reps, and intensity only when the user
+   described the effort); the tool result's estimateNote tells you what was derived so you can echo
+   it as an estimate.
+
+5. MULTIPLE PEOPLE, ONE ACTIVITY. "Sarah Miller and I both played basketball for 20 minutes" is TWO
+   log_tracker_entry calls — one per person, each with its own forProfile, each carrying only the
+   shared stated facts { activityType: "basketball", duration: 20 }.
+   - The PRIMARY facts are shared because the user said so: the sport, the duration, the date.
+   - The DERIVED values are NOT. Never copy one person's weight, height, calories, pace, or any
+     calculated number to the other, and never reuse a figure you worked out for the first person.
+   - Never ask for someone's weight, height or age before logging. If the server has no stored value
+     for that person it uses a standard default and says so. Missing personal data lowers the
+     confidence of an estimate; it never blocks the log and is never a reason for a follow-up
+     question.
 
 For FOOD/NUTRITION entries:
 - Always estimate calories if not given
@@ -7726,7 +7737,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             || trackerNameContains(named, t.name)
             || trackerNamesMatch(t.name, input.trackerName);
         });
-        if (!anyMatch) {
+        // A RECOGNIZED subject auto-creates its tracker even for a named person
+        // — which is what this tool's own contract promises. Refusing here made
+        // the first log of an activity for someone else depend on the user
+        // having logged it themselves first: "Sarah Miller and I both played
+        // basketball" worked only if my call happened to run before hers, and
+        // asked "which tracker did you mean?" when it didn't. The guard still
+        // covers what it was written for — an UNRECOGNIZED name aimed at a
+        // named profile, where auto-creating would spawn a junk tracker.
+        const recognized = resolveCanonicalActivity(String(input.trackerName || ""))
+          || classifyEntity(String(input.trackerName || ""), { values: input.values || {} }).confidence !== "none";
+        if (!anyMatch && !recognized) {
           const available = trackers.slice(0, 5).map(t => t.name).join(", ") || "none yet";
           return { error: `I couldn't find a tracker named '${input.trackerName}' for any profile. Which tracker did you mean? Available: ${available}.` };
         }
@@ -7749,27 +7770,42 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       try {
         const canonType = canonActivity?.type;
         input.values = input.values || {};
-        if (canonType === "walking" || canonType === "running" || canonType === "cycling") {
-          // The model routinely invents caloriesBurned for cardio ("jogged an
-          // hour" → caloriesBurned: 600) despite being told to pass only
-          // explicit facts. A fabricated explicit value blocks the engine's
-          // provenance-labeled estimate — drop it unless the user actually
-          // talked about calories.
-          const cardioMsg = String((input as any).__userMessage || "");
-          if (cardioMsg && !/calor|kcal|burn/i.test(cardioMsg)) {
+        const isCardio = canonType === "walking" || canonType === "running" || canonType === "cycling";
+        const isFitness = isFitnessActivityEntry(String(input.trackerName || ""), input.values);
+
+        // The model routinely invents caloriesBurned ("jogged an hour" →
+        // caloriesBurned: 600) despite being told to pass only explicit facts,
+        // and — the bug this guard exists for — reuses ONE number for every
+        // person in a multi-person message. A fabricated explicit value blocks
+        // the engine's per-person, provenance-labeled estimate, so drop it
+        // unless the user actually stated calories FOR THIS ENTITY.
+        //
+        // Scoping matters: __userMessage is the whole turn, so an unscoped
+        // /calor|burn/ test let one person's "I burned 300 calories" license
+        // the model's guess for everyone logged that turn. messageClaimsCalories
+        // For narrows the claim to the clause naming this entity; when nothing
+        // resolves it returns false, and stripping is the safe direction — a
+        // labeled estimate beats a number copied off someone else.
+        if (isCardio || isFitness) {
+          const targetProf: any = profiles.find(p => p.id === targetProfileId);
+          const claimed = messageClaimsCaloriesFor(
+            String((input as any).__userMessage || ""),
+            targetProf?.name,
+            targetProf?.type === "self",
+          );
+          if (!claimed) {
             delete (input.values as any).caloriesBurned;
             delete (input.values as any).calories;
           }
-          const targetProf: any = profiles.find(p => p.id === targetProfileId);
-          const pf = targetProf?.fields || {};
-          const heightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);
-          const weightKg = parseWeightToKg(pf.weight ?? pf.weightLbs ?? pf.weight_lbs ?? pf.weightKg);
-          const histTracker = trackers.find(t => trackerNamesMatch(t.name, input.trackerName));
-          const histEntries = (histTracker?.entries || [])
-            .filter((e: any) => !e.profileId || e.profileId === targetProfileId)
-            .slice(0, 60);
-          const personal = derivePersonalMetrics(histEntries);
-          entryEnrichment = enrichWalkRunEntry(canonType, input.values, { heightCm, weightKg, personal });
+        }
+
+        // Personal context is resolved ONCE, for the target profile only, and
+        // shared by every branch below — so no branch can accidentally read a
+        // different person's characteristics.
+        const activityCtx = activityContextFor(profiles, targetProfileId, trackers, String(input.trackerName || ""));
+
+        if (isCardio) {
+          entryEnrichment = enrichWalkRunEntry(canonType as any, input.values, activityCtx);
         } else if (canonType === "hydration") {
           entryEnrichment = enrichHydrationEntry(input.values);
         } else if (canonType === "sleep") {
@@ -7778,6 +7814,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           // Strength-shaped entry on any tracker (Bench Press, Squats, …):
           // weight × reps × sets → total volume, calculated exactly.
           entryEnrichment = enrichStrengthEntry(input.values);
+        } else if (isFitness) {
+          // Every other sport/activity — basketball, tennis, swimming, yoga.
+          // Before this branch existed these never reached the engine at all,
+          // so their calories came from the model's flat cal/min table, which
+          // knows nothing about who is logging (user report: two people, one
+          // 20-minute basketball game, identical ~140 cal on both cards).
+          entryEnrichment = enrichActivityEntry(
+            String(input.values.activityType || input.trackerName || ""),
+            input.values,
+            activityCtx,
+          );
         }
         if (entryEnrichment && (
           Object.keys(entryEnrichment.calculated).length ||
@@ -16359,6 +16406,79 @@ function mapToolToActionType(toolName: string): ParsedAction["type"] {
 // `startRow` may be a profile row not yet in `profiles` (a create from this
 // same turn) — it's used as the walk's starting point directly.
 // Exported for tests (tests/ai-owner-attribution.test.ts).
+/**
+ * Height, weight and walking history for ONE profile — never another's.
+ *
+ * Secondary values (calories, steps, pace) are derived from personal
+ * characteristics, so the inputs must be resolved per entity even when the
+ * primary facts are shared: "Sarah Miller and I both played basketball for 20
+ * minutes" states one game and one duration, but two different bodies.
+ *
+ * Weight resolution ladder, highest priority first:
+ *   1. the profile's own stored weight field
+ *   2. that profile's most recent weigh-in, from its own Weight tracker
+ *   3. nothing — the estimation engine then applies the population default
+ * There is deliberately no step that reads another profile. A missing weight
+ * yields `undefined`, which becomes a labeled standard estimate downstream; it
+ * never blocks the log and never triggers a follow-up question.
+ */
+export function activityContextFor(
+  profiles: any[],
+  targetProfileId: string | undefined,
+  trackers: any[],
+  trackerName: string,
+): ActivityProfileContext {
+  const targetProf: any = (profiles || []).find((p) => p.id === targetProfileId);
+  const pf = targetProf?.fields || {};
+  const heightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);
+
+  // Entries belonging to this profile (an entry with no profileId predates
+  // ownership scoping and belongs to whoever is being logged).
+  const ownEntries = (t: any) =>
+    (t?.entries || []).filter((e: any) => !e.profileId || e.profileId === targetProfileId);
+
+  let weightKg = parseWeightToKg(pf.weight ?? pf.weightLbs ?? pf.weight_lbs ?? pf.weightKg);
+  if (weightKg == null) {
+    // Fall back to this person's own latest weigh-in before the population
+    // default — it is a stored value for THIS entity, and it is profile-scoped,
+    // so it cannot borrow anyone else's number.
+    const weightTracker = (trackers || []).find((t) => trackerIdentityKey(t.name) === "weight");
+    const latest = ownEntries(weightTracker)
+      .slice()
+      .sort((a: any, b: any) => String(b.timestamp || "").localeCompare(String(a.timestamp || "")))[0];
+    const v = latest?.values || {};
+    weightKg = parseWeightToKg(v.weight ?? v.weightLbs ?? v.bodyWeight ?? v.lbs);
+  }
+
+  const histTracker = (trackers || []).find((t) => trackerNamesMatch(t.name, trackerName));
+  const personal = derivePersonalMetrics(ownEntries(histTracker).slice(0, 60));
+  return { heightCm, weightKg, personal };
+}
+
+/**
+ * Is this a fitness entry whose calories we should compute ourselves?
+ *
+ * Requires a real duration plus positive evidence that the subject is exercise
+ * — otherwise "read for 30 minutes" and "showered for 10 minutes" would start
+ * reporting calories burned.
+ */
+export function isFitnessActivityEntry(
+  trackerName: string,
+  values: Record<string, any>,
+  category?: string,
+): boolean {
+  const v = values || {};
+  const minutes = parseFloat(String(v.duration ?? v.minutes ?? v.durationMinutes ?? ""));
+  if (!isFinite(minutes) || minutes <= 0) return false;
+  if (typeof v.activityType === "string" && v.activityType.trim() !== "") return true;
+  if (category === "fitness") return true;
+  try {
+    return classifyEntity(String(trackerName || ""), { values: v }).category === "fitness";
+  } catch {
+    return false;
+  }
+}
+
 export function resolveEntityOwner(
   startRow: { id?: string; parentProfileId?: string | null; type?: string; name?: string } | undefined,
   profiles: any[],

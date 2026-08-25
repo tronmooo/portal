@@ -34,6 +34,7 @@ export const PERSON_INFO_FIELDS: Array<{ key: string; label: string }> = [
   { key: "bloodType",        label: "Blood Type" },
   { key: "allergies",        label: "Allergies" },
   { key: "height",           label: "Height" },
+  { key: "weight",           label: "Weight" },
   { key: "occupation",       label: "Occupation" },
 ];
 
