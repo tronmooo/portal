@@ -90,7 +90,11 @@ export async function applyLiabilityPayment(
   // A phone or utility bill isn't debt; paying it records the charge and moves
   // the next due date on by one cycle. Reducing a "balance" here would invent
   // a number, which is what the AI path used to do.
-  if (isRecurringBill(fields.subtype ?? (liability as any).type_key ?? (liability as any).typeKey)) {
+  // `type_key ?? typeKey` is the canonical way this app names a liability's
+  // family — shared/asset-value.ts decides what counts toward net worth the
+  // same way. Reading `fields.subtype` here instead would let this function
+  // call something a recurring bill while net worth still counted it as debt.
+  if (isRecurringBill((liability as any).type_key ?? (liability as any).typeKey)) {
     const payment = await storage.createLiabilityPayment({
       liabilityProfileId: liability.id,
       paymentDate,

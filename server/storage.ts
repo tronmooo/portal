@@ -340,6 +340,7 @@ export interface IStorage {
    *  only the Supabase backend implements the invariant probes. */
   /** Cross-instance cache coherence (migration 010). Optional: MemStorage has no instances. */
   getDataVersion?(): Promise<number>;
+  getRecentLiabilityPayments?(limit?: number): Promise<any[]>;
   bumpDataVersion?(): Promise<number>;
   repairOwnershipConsistency?(): Promise<{ scanned: number; repaired: number; details: string[] }>;
 

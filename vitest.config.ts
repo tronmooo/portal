@@ -220,6 +220,13 @@ export default defineConfig({
       'tests/chat-sync.test.ts',
       'tests/chat-read-your-writes.test.ts',
       'tests/write-sync.test.ts',
+      // Post-mutation synchronization: the manifest a write returns, the
+      // journal that builds it, and the totals that move on it.
+      'tests/write-manifest.test.ts',
+      'tests/write-journal.test.ts',
+      'tests/storage-domain-coverage.test.ts',
+      'tests/derived-aggregates.test.ts',
+      'tests/liability-payment-parity.test.ts',
       'tests/profile-rename.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],

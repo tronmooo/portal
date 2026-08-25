@@ -6152,6 +6152,12 @@ export class SupabaseStorage implements IStorage {
     // whether DB pushdown is safe (see _dbFilterIds), but we don't want to
     // serialize the wave. await it as the very first thing after Promise.all.
     const profilesPromise = this.getProfiles();
+    // Recent Activity has to be able to show a payment. Started here so the one
+    // bounded, indexed read overlaps the rest of the wave instead of adding to
+    // the critical path.
+    const recentPaymentsPromise = Promise.resolve(
+      (this as any).getRecentLiabilityPayments?.(10),
+    ).catch(() => [] as any[]);
     // Best-effort pushdown: if the caller passed a filter that contains NO
     // self profile, the unified rule reduces to "linked_profiles ∩
     // selection ≠ ∅" — which the GIN-indexed cs.[id] check enforces. When
@@ -6333,6 +6339,17 @@ export class SupabaseStorage implements IStorage {
       jCursor = tzAddDays(jCursor, -1);
     }
 
+    // Payments on liabilities the current filter can see. `linkedProfiles` does
+    // not exist on a payment row — a payment belongs to its liability — so the
+    // scope check follows the liability, exactly like the balance does.
+    const liabilityInScope = (p: Profile) =>
+      !fpIds || fpIds.length === 0 ||
+      fpIds.includes(p.id) ||
+      (!!p.parentProfileId && fpIds.includes(p.parentProfileId));
+    const visibleLiabilityIds = new Set(allProfiles.filter(liabilityInScope).map((p) => p.id));
+    const recentLiabilityPayments = ((await recentPaymentsPromise) || [])
+      .filter((p: any) => p && visibleLiabilityIds.has(p.liabilityProfileId));
+
     const recentJournal = [...filteredJournal].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     const currentMood = recentJournal.length > 0 ? recentJournal[0].mood as MoodLevel : undefined;
 
@@ -6353,6 +6370,14 @@ export class SupabaseStorage implements IStorage {
       weeklyEntries,
       streaks,
       recentActivity: [
+        ...recentLiabilityPayments.map((p: any) => {
+          const liability = allProfiles.find((x) => x.id === p.liabilityProfileId);
+          return {
+            type: 'liability_payment',
+            description: `Paid $${p.amount} — ${liability?.name || 'liability'}`,
+            timestamp: p.createdAt || p.paymentDate,
+          };
+        }),
         ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
           type: 'tracker_entry',
           description: (() => {
@@ -7499,6 +7524,24 @@ export class SupabaseStorage implements IStorage {
       });
     } catch (e) { /* best-effort */ }
     return true;
+  }
+
+  /**
+   * The most recent payments across ALL liabilities.
+   *
+   * Recent Activity is built from tracker entries, completed tasks and
+   * expenses — so recording a payment, one of the most consequential things a
+   * person does in this app, never appeared in it at any latency. That is not a
+   * caching problem and no invalidation would have fixed it: the feed simply
+   * did not read this table. One indexed, bounded query.
+   */
+  async getRecentLiabilityPayments(limit: number = 10): Promise<LiabilityPayment[]> {
+    const { data, error } = await this.supabase.from("liability_payments")
+      .select("*").eq("user_id", this.userId)
+      .order("created_at", { ascending: false })
+      .limit(Math.max(1, Math.min(50, limit)));
+    if (error) throw error;
+    return (data || []).map(r => this.rowToLiabilityPayment(r));
   }
 
   async getLiabilityPayments(liabilityProfileId: string): Promise<LiabilityPayment[]> {
