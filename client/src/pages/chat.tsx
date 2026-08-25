@@ -11,6 +11,7 @@ import { perfMark, perfMeasure, logServerTimings } from "@/lib/perf-marks";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stopProp } from "@/lib/event-utils";
 import { isInternalDirective } from "@shared/ai-message-kinds";
+import { isInScope, ownerChainForProfile, selfIdsFrom } from "@shared/scope";
 
 // ── Lazy-loaded heavy components ─────────────────────────────────────────────
 // chat.tsx is the EAGER home page (imported non-lazy in App.tsx). Anything
@@ -1262,18 +1263,6 @@ function GuidedDestinationPicker({
       .slice().sort((a, b) => (a.type === "self" ? -1 : b.type === "self" ? 1 : (a.name || "").localeCompare(b.name || ""))),
     [profiles],
   );
-  const categories = useMemo(() => {
-    const m = new Map<string, Profile[]>();
-    for (const p of profiles) {
-      if (p.type === "self" || p.type === "person") continue;
-      const label = DEST_CATEGORY_LABELS[p.type] || "Other";
-      const list = m.get(label);
-      if (list) list.push(p); else m.set(label, [p]);
-    }
-    for (const list of m.values()) list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-    return m;
-  }, [profiles]);
-
   // Derive owner/destination from the selection string so parent state stays
   // the single source of truth.
   const selectedIds = selectedProfileId.split(",").map((s) => s.trim()).filter((s) => s && s !== "none");
@@ -1281,6 +1270,57 @@ function GuidedDestinationPicker({
   const selfOwner = owners.find((o) => o.type === "self");
   const ownerId = selectedIds.find(isOwnerId) || selfOwner?.id;
   const owner = owners.find((o) => o.id === ownerId);
+
+  // Co-ownership link tables. Both keys are seeded by the app bootstrap
+  // (lib/bootstrap-seed-keys.ts), so this reads from cache — no extra request
+  // when the attachment panel opens.
+  const { data: assetPartyLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/asset-party-links"],
+    queryFn: () => apiRequest("GET", "/api/asset-party-links").then((r) => r.json()),
+    staleTime: 60_000,
+  });
+  const { data: liabilityProfileLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/liability-profile-links"],
+    queryFn: () => apiRequest("GET", "/api/liability-profile-links").then((r) => r.json()),
+    staleTime: 60_000,
+  });
+  const selfIds = useMemo(() => selfIdsFrom(profiles), [profiles]);
+
+  /**
+   * Does this thing belong to the person currently picked as Owner?
+   *
+   * BUG: the category chips used to be built from EVERY non-person profile,
+   * so picking "Sarah Miller" still offered the whole household's assets,
+   * liabilities and vehicles — and filing a document under one of them
+   * silently attached it to somebody else's thing. Ownership is resolved the
+   * same way the dashboard and net-worth surfaces resolve it: the nesting
+   * chain plus the co-owner link tables, with unattributed profiles falling
+   * to Self.
+   */
+  const belongsToOwner = useCallback(
+    (p: Profile, personId: string | undefined) => {
+      if (!personId) return true;
+      return isInScope(
+        ownerChainForProfile(p, profiles, assetPartyLinks, liabilityProfileLinks),
+        { selectedIds: [personId], selfIds },
+        "belongs_to_self",
+      );
+    },
+    [profiles, assetPartyLinks, liabilityProfileLinks, selfIds],
+  );
+
+  const categories = useMemo(() => {
+    const m = new Map<string, Profile[]>();
+    for (const p of profiles) {
+      if (p.type === "self" || p.type === "person") continue;
+      if (!belongsToOwner(p, ownerId)) continue;
+      const label = DEST_CATEGORY_LABELS[p.type] || "Other";
+      const list = m.get(label);
+      if (list) list.push(p); else m.set(label, [p]);
+    }
+    for (const list of m.values()) list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    return m;
+  }, [profiles, belongsToOwner, ownerId]);
   const destId = selectedIds.find((id) => !isOwnerId(id));
   const dest = destId ? profiles.find((p) => p.id === destId) : undefined;
   const destCategory = dest ? (DEST_CATEGORY_LABELS[dest.type] || "Other") : null;
@@ -1303,7 +1343,12 @@ function GuidedDestinationPicker({
               key={o.id}
               type="button"
               disabled={disabled}
-              onClick={() => commit(o.id, destId)}
+              onClick={() => {
+                // Switching owner must not carry over someone else's thing.
+                const keep = destId && dest && belongsToOwner(dest, o.id) ? destId : undefined;
+                if (!keep) setOpenCategory(null);
+                commit(o.id, keep);
+              }}
               className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${o.id === ownerId
                 ? "border-primary bg-primary/10 text-primary font-semibold"
                 : "border-border bg-background text-foreground hover:bg-muted"}`}
@@ -1345,6 +1390,11 @@ function GuidedDestinationPicker({
             </button>
           ))}
         </div>
+        {categories.size === 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="dest-no-categories">
+            {owner ? `${owner.name} has no assets, vehicles or accounts yet.` : "Nothing to file this under yet."}
+          </p>
+        )}
       </div>
 
       {/* Step 3 — only the profiles in the chosen category */}
