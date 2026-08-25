@@ -58,11 +58,32 @@ export type ExtractionDestination =
   | "note"             // a note artifact linked to the profile
   | "calendar"         // a calendar event
   | "task"             // a to-do
-  | "ignore";          // document metadata / junk — written nowhere
+  | "ignore"           // document metadata / junk — written nowhere
+  // ── Universal destinations (2026-08-25) ────────────────────────────────────
+  // The ten above grew out of ONE document type — a clinic report — and a
+  // property attribute, a policy term, a premium or a mortgagee had nowhere to
+  // land but `profile`, which is why 75 rows of a declarations page arrived
+  // flat on one profile. These are deliberately named for what they DO, not for
+  // any document that produces them: a lease, a deed, a loan statement and an
+  // insurance policy all reach `entity_field` and `obligation`.
+  //
+  // Appended, never reordered: DESTINATION_ORDER below still lists the medical
+  // ten first, so an existing review pane renders exactly as it did.
+  | "entity_field"       // a field on a property/vehicle/asset/liability profile
+  | "entity_record"      // a namespaced group on a profile (`insurance.*`, `loan.*`)
+  | "structured_append"  // a row appended to a JSONB array (coverages, holdings)
+  | "obligation"         // a recurring commitment
+  | "expense"            // a one-off ledger row
+  | "income"             // a one-off or recurring receipt
+  | "relationship_link"  // an edge between two records (owns, insured_by, finances)
+  | "document_attach"    // this document, filed against an entity
+  | "reference";         // kept on the document ON PURPOSE — must cause nothing
 
 export const ALL_DESTINATIONS: readonly ExtractionDestination[] = [
   "profile", "profile_tracker", "tracker", "allergy", "medication",
   "medical_history", "note", "calendar", "task", "ignore",
+  "entity_field", "entity_record", "structured_append", "obligation",
+  "expense", "income", "relationship_link", "document_attach", "reference",
 ] as const;
 
 /** Human labels for the review UI's group headers and dropdown. */
@@ -77,12 +98,23 @@ export const DESTINATION_LABEL: Record<ExtractionDestination, string> = {
   calendar: "Calendar",
   task: "Task",
   ignore: "Ignore",
+  entity_field: "Entity data",
+  entity_record: "Entity record",
+  structured_append: "Structured list",
+  obligation: "Recurring obligation",
+  expense: "Expense",
+  income: "Income",
+  relationship_link: "Relationship",
+  document_attach: "Attach document",
+  reference: "Reference only",
 };
 
 /** Display order for the grouped review pane. */
 export const DESTINATION_ORDER: readonly ExtractionDestination[] = [
   "profile", "profile_tracker", "tracker", "allergy", "medication",
   "medical_history", "note", "calendar", "task", "ignore",
+  "entity_record", "entity_field", "structured_append", "obligation",
+  "expense", "income", "relationship_link", "document_attach", "reference",
 ] as const;
 
 // ─── The unified review item ─────────────────────────────────────────────────
@@ -120,6 +152,22 @@ export interface ExtractionItem {
   date?: string;
   /** Structured payload for allergy/medication/condition/surgery/note items. */
   payload?: Record<string, any>;
+
+  // ── Semantic layer (2026-08-25) ────────────────────────────────────────────
+  // Filled in by shared/extraction-actions.ts AFTER the reasoning stage, never
+  // by `buildExtractionItems` below — which is why every one of them is
+  // optional and why nothing that constructs an ExtractionItem today had to
+  // change. A row that carries none of these behaves exactly as it always has.
+  /** What this fact IS (a fact can be several things at once). */
+  roles?: string[];
+  /** Entity ref of WHO/WHAT it is about. Resolved to a record by the planner. */
+  subjectRef?: string;
+  /** The semantic fact this raw row was read into. */
+  factId?: string;
+  /** Which proposed actions cite this row as evidence. */
+  actionIds?: string[];
+  /** "→ Create recurring obligation" — what the review row prints. */
+  actionLabel?: string;
 }
 
 // ─── Health metric registry ──────────────────────────────────────────────────

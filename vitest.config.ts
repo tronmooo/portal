@@ -59,6 +59,8 @@ export default defineConfig({
       'tests/asset-classification.test.ts',
       'tests/extraction-normalize.test.ts',
       'tests/extraction-destinations.test.ts',
+      'tests/extraction-actions.test.ts',
+      'tests/semantic-envelope.test.ts',
       'tests/ai-parent-resolution.test.ts',
       'tests/dashboard-card-consistency.test.ts',
       'tests/auto-ownership-hook.test.ts',
