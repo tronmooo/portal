@@ -121,6 +121,12 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   ],
   liabilities: [
     ["/api/profiles"], // liabilities are profiles
+    // The liability's own sub-resources: its occurrence schedule, its payment
+    // history, its linked assets and its parties. Every one of them changes
+    // when a payment is recorded — from this page, from the calendar, from the
+    // dashboard or from the AI — and none of them was listed here.
+    ["/api/liabilities"],
+    ["/api/obligation-occurrences"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/rel-liabilities"],
@@ -192,6 +198,13 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   ],
   obligations: [
     ["/api/obligations"],
+    // A bill IS a liability profile: paying one occurrence rewrites
+    // fields.occurrences on the profile and inserts a liability_payments row,
+    // which is what the profile's Schedule & Calendar and Payment History read.
+    ["/api/liabilities"],
+    ["/api/obligation-occurrences"],
+    ["/api/profiles"],
+    ["/api/dashboard-bootstrap"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/loans/schedule"],
@@ -276,11 +289,32 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
         return (
           k0.startsWith("/api/profiles") ||
           k0.startsWith("/api/rel-") ||
-          k0.startsWith("/api/assets/") ||
-          k0.startsWith("/api/liabilities/") ||
+          // No trailing slash. These same reads are keyed BOTH ways across the
+          // app — ["/api/liabilities", id, "schedule"] on the liability page,
+          // ["/api/liabilities/<id>/payments"] two components over — and
+          // requiring the slash matched only the second spelling. That is why
+          // marking a payment paid on the calendar left the liability's
+          // Payments tab showing it as still upcoming: the write's manifest
+          // named the "liabilities" domain, the bus fired, and the one query
+          // that renders the schedule did not match the predicate.
+          k0.startsWith("/api/assets") ||
+          k0.startsWith("/api/liabilities") ||
           k0.startsWith("/api/parties") ||
           k0.startsWith("/api/relationships/") ||
           k0.startsWith("/api/ownership-history")
+        );
+      };
+    case "obligations":
+      // A bill occurrence lives on the liability profile (fields.occurrences),
+      // so an obligation write moves the liability's schedule, its payment
+      // history and its profile row — all of them nested keys.
+      return (q) => {
+        const k0 = String(q.queryKey?.[0] || "");
+        return (
+          k0.startsWith("/api/obligations") ||
+          k0.startsWith("/api/obligation-occurrences") ||
+          k0.startsWith("/api/liabilities") ||
+          k0.startsWith("/api/profiles")
         );
       };
     case "trackers":

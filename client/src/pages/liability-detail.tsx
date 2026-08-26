@@ -591,9 +591,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     onSuccess: () => {
       toast({ title: "Bill updated", description: "Schedule and calendar refreshed." });
       setEditingBill(false);
-      // The schedule key is ["/api/liabilities", id, "schedule"] — the domain
-      // bus predicate matches "/api/liabilities/" (with the slash), so this one
-      // has to be invalidated by hand or the card keeps the pre-edit series.
+      // The domain bus now matches both spellings of the liability keys, so
+      // this is belt-and-braces: it refetches the visible card immediately
+      // rather than waiting on the bus's own pass.
       qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "schedule"] });
       invalidateDomains("liabilities", "events");
     },
@@ -1164,44 +1164,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             {/* AI insights card */}
             <AISummaryCard profileId={profile.id} />
 
-            {/* Linked assets — surfaced near the top for parity with asset profiles */}
-            <section data-testid="overview-linked-assets">
-              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked assets</p>
-              <LinkedAssetsCard liabilityId={profile.id} />
-            </section>
-
-            {/* Ownership — fractional owner shares, atomic + validated. Same
-                slider-based editor as the asset overview, pointed at the
-                liability junction table. The previous "Add Linked Person"
-                modal incrementally inserted rows that tripped the DB-side
-                >100 guard the moment a co-owner was added on top of an
-                existing 100% link. PUT /api/profiles/:id/liability-owners
-                replaces the whole set atomically, validates total=100, and
-                writes phases that never grow the running sum past the
-                guardrail. */}
-            <section data-testid="overview-ownership">
-              <OwnershipEditor
-                profile={profile as any}
-                allProfiles={(ownerCandidates || []) as any}
-                onSaved={() => { /* React Query invalidations handled inside OwnershipEditor */ }}
-                kind="liability"
-              />
-            </section>
-
-            {/* Linked people — non-owner roles (co_signer, guarantor, etc.)
-                still live here. Ownership shares are managed by the editor
-                above; this section shows everyone else attached to the
-                liability (and on a fresh liability, it's how you add the
-                first owner since the dialog also surfaces the role). */}
-            <section data-testid="overview-linked-people">
-              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked people</p>
-              <LinkedPeopleTab
-                profileId={profile.id}
-                profileType={profile.type}
-                onChanged={() => { /* React Query invalidations handled inside */ }}
-              />
-            </section>
-
             {/* Composed Overview — what this liability IS decides what shows
                 here. The per-subtype snapshot cards (credit card / mortgage /
                 auto loan / student loan) that used to live at this spot were
@@ -1311,7 +1273,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
             </Card>
             </>)}
 
-            {/* Nested sections — mirroring asset Overview layout (Linked Assets is now surfaced near the top) */}
+            {/* Nested sections — liabilities filed under this one. Linked assets,
+                ownership and linked people moved to the Details tab. */}
             <section>
               <p className="micro-label text-muted-foreground mb-2 px-0.5">Nested Liabilities</p>
               <NestedLiabilitiesCard liabilityId={profile.id} />
@@ -1324,7 +1287,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           </TabsContent>
 
           {/* DETAILS */}
-          <TabsContent value="details" className="mt-4">
+          <TabsContent value="details" className="mt-4 space-y-4">
             {recurringBill && editingBill ? (
               <Card data-testid="bill-details-edit-card">
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
@@ -1529,6 +1492,51 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 </CardContent>
               </Card>
             )}
+
+            {/* Who and what this liability is attached to. These three sections
+                used to sit at the top of Overview, above the composed summary —
+                but a link table, an ownership slider and a people list are
+                field-level DETAIL, not a summary of the debt. Overview keeps
+                the read-only ownership rollup the composition draws; editing
+                the split, linking collateral and adding a co-signer live here,
+                next to the terms they qualify. */}
+            {/* Linked assets — the collateral or property this debt is against. */}
+            <section data-testid="details-linked-assets">
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked assets</p>
+              <LinkedAssetsCard liabilityId={profile.id} />
+            </section>
+
+            {/* Ownership — fractional owner shares, atomic + validated. Same
+                slider-based editor as the asset overview, pointed at the
+                liability junction table. The previous "Add Linked Person"
+                modal incrementally inserted rows that tripped the DB-side
+                >100 guard the moment a co-owner was added on top of an
+                existing 100% link. PUT /api/profiles/:id/liability-owners
+                replaces the whole set atomically, validates total=100, and
+                writes phases that never grow the running sum past the
+                guardrail. */}
+            <section data-testid="details-ownership">
+              <OwnershipEditor
+                profile={profile as any}
+                allProfiles={(ownerCandidates || []) as any}
+                onSaved={() => { /* React Query invalidations handled inside OwnershipEditor */ }}
+                kind="liability"
+              />
+            </section>
+
+            {/* Linked people — non-owner roles (co_signer, guarantor, etc.).
+                Ownership shares are managed by the editor
+                above; this section shows everyone else attached to the
+                liability (and on a fresh liability, it's how you add the
+                first owner since the dialog also surfaces the role). */}
+            <section data-testid="details-linked-people">
+              <p className="micro-label text-muted-foreground mb-2 px-0.5">Linked people</p>
+              <LinkedPeopleTab
+                profileId={profile.id}
+                profileType={profile.type}
+                onChanged={() => { /* React Query invalidations handled inside */ }}
+              />
+            </section>
           </TabsContent>
 
           {/* PAYMENTS — unified tab: upcoming schedule + payment history +

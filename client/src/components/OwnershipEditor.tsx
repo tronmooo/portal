@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -148,12 +149,12 @@ export function OwnershipEditor({
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ownership-history"] });
-      // Liability detail page reads from these:
-      if (kind === "liability") {
-        queryClient.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "parties"] });
-      } else {
-        queryClient.invalidateQueries({ queryKey: ["/api/assets", profile.id, "parties"] });
-      }
+      // Liability / asset detail pages read the party links under TWO key
+      // spellings — ["/api/liabilities", id, "parties"] here and
+      // ["/api/liabilities/<id>/parties"] in the Linked people card — so
+      // invalidating one of them left the other card showing the pre-save
+      // split. The domain bus matches both by prefix.
+      void invalidateDomains(kind === "liability" ? "liabilities" : "assets", "people", "profiles");
       onSaved?.();
     },
     onError: (err: Error) => toast({ title: "Couldn't save ownership", description: err.message, variant: "destructive" }),

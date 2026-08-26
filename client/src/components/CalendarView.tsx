@@ -626,11 +626,12 @@ export function EventDetailDialog({
     try {
       await apiRequest("POST", `/api/obligation-occurrences/${item.meta.occurrenceId}/status`, { status });
       // Invalidate every surface that reads this occurrence — including the
-      // liability's own Schedule & Calendar section (/api/liabilities/:id/
-      // schedule) so an action taken here stays in sync with the profile page.
-      for (const key of ["/api/calendar/timeline", "/api/obligations", "/api/liabilities", "/api/dashboard-enhanced", "/api/profiles", "/api/stats"]) {
-        queryClient.invalidateQueries({ queryKey: [key] });
-      }
+      // liability's own Schedule & Calendar section and its Payment History, so
+      // an action taken here stays in sync with the profile page. The domain
+      // bus owns that fan-out (it reaches cash flow, the bell and the bootstrap
+      // payload too); the timeline key is kept so the grid repaints at once.
+      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      await invalidateDomains("liabilities", "obligations", "dashboard");
       toast({ title: status === "done" ? "Marked paid" : "Payment skipped", description: item.title });
       onClose();
     } catch (e: any) {

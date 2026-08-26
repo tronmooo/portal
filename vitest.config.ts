@@ -249,6 +249,10 @@ export default defineConfig({
       'tests/derived-aggregates.test.ts',
       'tests/cache-key-domains.test.ts',
       'tests/liability-payment-parity.test.ts',
+      // Liability profile ↔ calendar ↔ dashboard sync (2026-08-26): a payment
+      // marked anywhere must land everywhere, and the relational sections live
+      // on the Details tab.
+      'tests/liability-profile-sync.dom.test.tsx',
       'tests/profile-rename.test.ts',
       'tests/info-tab-editable.dom.test.tsx',
       'tests/info-tab-ai-parity.test.ts',

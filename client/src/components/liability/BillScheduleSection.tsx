@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -83,11 +84,14 @@ export function BillScheduleSection({ liabilityId }: { liabilityId: string }) {
     queryFn: async () => (await apiRequest("GET", `/api/liabilities/${liabilityId}/schedule?months=12`)).json(),
   });
 
+  // One occurrence action moves this card, the calendar, the dashboard bills,
+  // cash flow and the notification bell. The hand-written key list this used to
+  // carry named five of those and missed the rest, so paying here left the
+  // calendar showing the date as still due. The domain bus owns that mapping —
+  // this only adds the card's own key so the row flips without waiting.
   const resync = () => {
     queryClient.invalidateQueries({ queryKey: scheduleKey });
-    for (const k of ["/api/calendar/timeline", "/api/obligations", "/api/dashboard-enhanced", "/api/profiles", "/api/stats"]) {
-      queryClient.invalidateQueries({ queryKey: [k] });
-    }
+    void invalidateDomains("liabilities", "obligations", "dashboard");
   };
   const run = useMutation({
     mutationFn: async (fn: () => Promise<Response>) => (await fn()).json(),
