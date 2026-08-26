@@ -20,6 +20,8 @@ import { MemStorage } from "../server/storage";
 import {
   computeDocumentDeletionImpact,
   deleteDocumentEverywhere,
+  repairOrphanedDocumentEvents,
+  isDocumentDerivedEvent,
   aiSummaryCacheKey,
 } from "../server/document-deletion";
 
@@ -254,5 +256,110 @@ describe("the impact preview the confirmation dialog shows", () => {
 
   it("is undefined for a document that isn't there", async () => {
     expect(await computeDocumentDeletionImpact(storage as any, "nope")).toBeUndefined();
+  });
+});
+
+// ─── The shapes extraction has actually written ─────────────────────────────
+//
+// Every row here was observed in a real account. The first fix matched only on
+// the `document-extraction` tag, which left 28 of 69 document-linked events
+// behind — the user's "I deleted the document and the calendar date is still
+// there". Note the fourth: `source: "manual"` on an event whose description
+// says it was auto-created, which is why `source` cannot be the discriminator.
+describe("recognising an event this app derived from a document", () => {
+  const SHAPES = [
+    { name: "current extraction", tags: ["document-extraction"], description: "Auto-created from document extraction (expirationDate)" },
+    { name: "uncovered extraction date", tags: ["document-extraction", "date-rule-uncovered"], description: "Auto-created from document extraction (plan Recommendations 4)" },
+    { name: "legacy AI, untagged", tags: [], description: "Auto-created from document: CA Vehicle Registration – Honda 2021" },
+    { name: "legacy auto-extraction", tags: ["auto-extraction"], description: "Auto-created from Driver License - Jane Doe (expirationDate)" },
+    { name: "legacy from-document alert", tags: ["from-document", "expiration-alert"], description: "Auto-created from document: Florida Driver License - Expires 2024" },
+    { name: "auto reminder", tags: ["auto-reminder"], description: "Reminder: ⚠️ Driver License — Expiration is in 1 days" },
+  ];
+
+  for (const shape of SHAPES) {
+    it(`claims the ${shape.name} shape`, () => {
+      expect(isDocumentDerivedEvent(shape)).toBe(true);
+    });
+  }
+
+  it("never claims an event the user made and linked by hand", () => {
+    // CalendarManagerPanel lets a user attach a document to their own event, so
+    // a link is not evidence of anything. No auto tag, no auto description.
+    expect(isDocumentDerivedEvent({ tags: [], description: "Dinner with Sam" })).toBe(false);
+    expect(isDocumentDerivedEvent({ tags: ["reminder"], description: null })).toBe(false);
+    expect(isDocumentDerivedEvent({})).toBe(false);
+  });
+
+  it("deletes every derived shape when its document goes", async () => {
+    for (const shape of SHAPES) {
+      storage = new MemStorage();
+      const house = await storage.createProfile({ name: "123 Evergreen Ln", type: "property" } as any);
+      houseId = house.id;
+      const doc = await uploadPolicy();
+      const ev = await storage.createEvent({
+        title: "Derived date", date: "2027-06-01",
+        linkedProfiles: [houseId], linkedDocuments: [doc.id],
+        tags: shape.tags, description: shape.description,
+      } as any);
+
+      await deleteDocumentEverywhere(storage as any, doc.id, "cascade", silent);
+
+      expect(await storage.getEvent(ev.id), shape.name).toBeUndefined();
+    }
+  });
+});
+
+describe("repairing orphans left by deletes that predate the cascade", () => {
+  it("removes a derived event whose document is already gone", async () => {
+    const doc = await uploadPolicy();
+    const orphan = await storage.createEvent({
+      title: "⚠️ Florida Driver's License — Expires", date: "2030-11-24",
+      linkedProfiles: [houseId], linkedDocuments: [doc.id], tags: [],
+      description: "Auto-created from document: Florida Driver's License",
+    } as any);
+    // Delete the document the way the OLD path did — the row only.
+    await storage.deleteDocument(doc.id);
+    expect(await storage.getEvent(orphan.id)).toBeDefined();
+
+    const dry = await repairOrphanedDocumentEvents(storage as any, {}, silent);
+    expect(dry.dryRun).toBe(true);
+    expect(dry.orphaned.map((o) => o.eventId)).toEqual([orphan.id]);
+    expect(dry.removed).toBe(0);
+    expect(await storage.getEvent(orphan.id)).toBeDefined(); // a dry run touches nothing
+
+    const applied = await repairOrphanedDocumentEvents(storage as any, { dryRun: false }, silent);
+    expect(applied.removed).toBe(1);
+    expect(await storage.getEvent(orphan.id)).toBeUndefined();
+  });
+
+  it("leaves an event alone while any of its documents is still alive", async () => {
+    const dead = await uploadPolicy();
+    const alive = await uploadPolicy({ name: "Renewal notice" });
+    const ev = await storage.createEvent({
+      title: "Insurance renewal", date: "2027-06-01",
+      linkedProfiles: [houseId], linkedDocuments: [dead.id, alive.id],
+      tags: ["document-extraction"], description: "Auto-created from document extraction (expirationDate)",
+    } as any);
+    await storage.deleteDocument(dead.id);
+
+    const dry = await repairOrphanedDocumentEvents(storage as any, {}, silent);
+
+    expect(dry.orphaned).toEqual([]);
+    expect(await storage.getEvent(ev.id)).toBeDefined();
+  });
+
+  it("never removes a user's own event, even with a dead document attached", async () => {
+    const doc = await uploadPolicy();
+    const mine = await storage.createEvent({
+      title: "Call the insurance agent", date: "2027-06-01",
+      linkedProfiles: [houseId], linkedDocuments: [doc.id], tags: [],
+      description: "Ask about the roof discount",
+    } as any);
+    await storage.deleteDocument(doc.id);
+
+    const applied = await repairOrphanedDocumentEvents(storage as any, { dryRun: false }, silent);
+
+    expect(applied.removed).toBe(0);
+    expect(await storage.getEvent(mine.id)).toBeDefined();
   });
 });

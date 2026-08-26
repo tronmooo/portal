@@ -34,8 +34,45 @@ import {
   splitDocumentContributedFields,
 } from "@shared/profile-field-identity";
 
-/** Tag extraction puts on the calendar events it auto-creates from a document. */
-const EXTRACTION_EVENT_TAG = "document-extraction";
+// ─── "This app made this event from that document" ──────────────────────────
+//
+// Extraction has written document-derived events under SIX different shapes
+// over the app's life, and only the newest carries the `document-extraction`
+// tag. Matching on that tag alone left the other five behind — 28 of the 69
+// document-linked events in a real account — so deleting the document left its
+// expiration sitting on the calendar with no source. That is the orphan the
+// user reported, and it survived the first fix because the fix only knew about
+// the shape the CURRENT code writes.
+//
+// `source` looked like the obvious discriminator and is not: one legacy shape
+// writes `source: "manual"` on an event whose own description says
+// "Auto-created from document". Tags plus that description prefix identify all
+// six; nothing else does.
+const AUTO_EVENT_TAGS = new Set([
+  "document-extraction", // current extraction path
+  "auto-extraction",     // legacy AI extraction
+  "auto-reminder",       // the "⏰ 30d reminder: …" leaders for an expiry
+  "from-document",       // legacy, paired with expiration-alert
+  "expiration-alert",
+]);
+
+/** Every auto-created shape says so here; a user's own event does not. */
+const AUTO_EVENT_DESCRIPTION = /^\s*auto-created from\b/i;
+
+/**
+ * Is this event something the app derived FROM this document, as opposed to
+ * something the user made and linked themselves?
+ *
+ * A user CAN link a document to an event by hand (CalendarManagerPanel), so
+ * `linkedDocuments` alone proves nothing — the marker has to be positive
+ * evidence of auto-creation. A hand-made event carries neither an auto tag nor
+ * an "Auto-created from…" description, so it is never this document's to take.
+ */
+export function isDocumentDerivedEvent(ev: any): boolean {
+  const tags: string[] = Array.isArray(ev?.tags) ? ev.tags : [];
+  if (tags.some((t) => AUTO_EVENT_TAGS.has(String(t)))) return true;
+  return AUTO_EVENT_DESCRIPTION.test(String(ev?.description ?? ""));
+}
 
 /** Preference key holding a profile's cached AI summary (see /api/profiles/:id/ai-summary). */
 export const aiSummaryCacheKey = (profileId: string) => `profile_ai_${profileId}`;
@@ -169,9 +206,8 @@ export async function computeDocumentDeletionImpact(
   const derivedEvents: DocumentEventImpact[] = [];
   for (const ev of events as any[]) {
     const linked: string[] = Array.isArray(ev?.linkedDocuments) ? ev.linkedDocuments : [];
-    const tags: string[] = Array.isArray(ev?.tags) ? ev.tags : [];
     if (!linked.includes(documentId)) continue;
-    if (!tags.includes(EXTRACTION_EVENT_TAG)) continue;
+    if (!isDocumentDerivedEvent(ev)) continue;
     derivedEvents.push({
       eventId: ev.id,
       title: ev.title || "Untitled",
@@ -288,17 +324,16 @@ export async function deleteDocumentEverywhere(
   }
 
   // ── 2. Derived calendar events ─────────────────────────────────────────
-  // Only events this app auto-created FROM this document (tagged
-  // `document-extraction`), never anything the user made themselves. An event
+  // Only events this app auto-created FROM this document (see
+  // isDocumentDerivedEvent), never anything the user made themselves. An event
   // that other documents also feed is unlinked, not deleted — it is not this
   // document's to take.
   try {
     const events = await storage.getEvents();
     for (const ev of events as any[]) {
       const linked: string[] = Array.isArray(ev?.linkedDocuments) ? ev.linkedDocuments : [];
-      const tags: string[] = Array.isArray(ev?.tags) ? ev.tags : [];
       if (!linked.includes(documentId)) continue;
-      if (!tags.includes(EXTRACTION_EVENT_TAG)) continue;
+      if (!isDocumentDerivedEvent(ev)) continue;
       const others = linked.filter((d) => d !== documentId);
       if (others.length > 0 || mode === "document-only") {
         // "document-only" keeps the date — it is derived DATA — but the event
@@ -373,4 +408,78 @@ export async function deleteDocumentEverywhere(
 
   result.affectedProfileIds = Array.from(affected);
   return result;
+}
+
+// ─── Repairing the orphans the old cascade left behind ──────────────────────
+//
+// The cascade above stops NEW orphans. It does nothing about the ones already
+// sitting in the database from every delete that happened before it existed —
+// events whose source document is deleted or gone entirely, still rendering on
+// the calendar, in Upcoming and in Recurring & Important Dates, with nothing
+// behind them. A real account had 40, including an expiry dated year 1085.
+//
+// The rule is the same one the cascade uses, which is the point of sharing
+// isDocumentDerivedEvent: an event is orphaned only if this app auto-created it
+// from a document AND every document it names is gone. An event still linked to
+// one live document is not an orphan, and a user's own event is never one no
+// matter what it links to.
+
+export interface OrphanedDocumentEvent {
+  eventId: string;
+  title: string;
+  date?: string;
+  /** The dead document ids it still names. */
+  documentIds: string[];
+}
+
+export interface OrphanRepairResult {
+  scanned: number;
+  orphaned: OrphanedDocumentEvent[];
+  removed: number;
+  dryRun: boolean;
+}
+
+/**
+ * Find (and optionally remove) events whose source document no longer exists.
+ *
+ * Defaults to a dry run: it reports what it would take and touches nothing, so
+ * the list can be read before anything is deleted.
+ */
+export async function repairOrphanedDocumentEvents(
+  storage: AnyStorage,
+  opts: { dryRun?: boolean } = {},
+  logger: { info: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void } = console,
+): Promise<OrphanRepairResult> {
+  const dryRun = opts.dryRun !== false;
+  const [events, documents] = await Promise.all([
+    storage.getEvents().catch(() => [] as any[]),
+    storage.getDocuments().catch(() => [] as any[]),
+  ]);
+  // getDocuments already excludes soft-deleted rows, so "not in this set" covers
+  // both a deleted document and one whose row is gone outright.
+  const live = new Set<string>((documents as any[]).map((d: any) => d?.id).filter(Boolean));
+
+  const orphaned: OrphanedDocumentEvent[] = [];
+  for (const ev of events as any[]) {
+    const linked: string[] = Array.isArray(ev?.linkedDocuments) ? ev.linkedDocuments : [];
+    if (linked.length === 0) continue;
+    if (!isDocumentDerivedEvent(ev)) continue;
+    if (linked.some((id) => live.has(id))) continue; // still has a living source
+    orphaned.push({ eventId: ev.id, title: ev.title || "Untitled", date: ev.date, documentIds: linked });
+  }
+
+  let removed = 0;
+  if (!dryRun) {
+    for (const o of orphaned) {
+      try {
+        await storage.deleteEvent(o.eventId);
+        removed++;
+        logger.info(`[doc-orphan-repair] removed ${o.eventId} "${o.title}" (${o.date ?? "no date"})`);
+      } catch (err: any) {
+        logger.error(`[doc-orphan-repair] failed to remove ${o.eventId}: ${err?.message || err}`);
+      }
+    }
+  }
+
+  return { scanned: (events as any[]).length, orphaned, removed, dryRun };
 }

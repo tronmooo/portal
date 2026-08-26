@@ -92,7 +92,7 @@ function applyActiveProfileScope(
 interface AuthenticatedRequest extends Request {
   userId?: string;
 }
-import { computeDocumentDeletionImpact, deleteDocumentEverywhere, parseDeletionMode } from "./document-deletion";
+import { computeDocumentDeletionImpact, deleteDocumentEverywhere, parseDeletionMode, repairOrphanedDocumentEvents } from "./document-deletion";
 import { storage } from "./storage";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
@@ -6808,6 +6808,22 @@ Rules:
     bustCache(`profiles:${uid_d3}`); bustCache(`events:${uid_d3}`); bustCache(`caltimeline:${uid_d3}`); bustCache(`activity:${uid_d3}`);
     res.json({ success: true, ...outcome });
   }));
+  // ---- Repair: events whose source document is gone ----
+  // One-off cleanup for orphans created before the delete cascade existed.
+  // Dry run by default — pass ?apply=true to actually remove them. Uses the
+  // same isDocumentDerivedEvent rule the cascade does, so this can never take
+  // something a live delete would have left alone.
+  app.post("/api/documents/repair-orphaned-events", asyncHandler(async (req, res) => {
+    const apply = req.query.apply === "true";
+    const result = await repairOrphanedDocumentEvents(storage as any, { dryRun: !apply }, log);
+    if (result.removed > 0) {
+      const uidO = cacheUserKey(req as AuthenticatedRequest);
+      bustCache(`events:${uidO}`); bustCache(`caltimeline:${uidO}`); bustCache(`stats:${uidO}`);
+      bustCache(`notifications:${uidO}`); bustCache(`activity:${uidO}`); bustCache(`profile-detail:${uidO}:`);
+    }
+    res.json(result);
+  }));
+
   // ---- Re-extract: re-read a stored document and recover missed fields ----
   // No re-upload needed — we re-read the file bytes saved at upload time and
   // merge any newly-found fields into extractedData (existing values kept).
