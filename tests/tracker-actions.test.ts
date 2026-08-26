@@ -19,6 +19,7 @@ import {
   type EntityIndex,
 } from "../shared/extraction-actions";
 import type { ExtractionItem } from "../shared/extraction-destinations";
+import { emptySemanticDocument } from "../shared/semantic-document";
 import { medicalReport, insuranceDeclarations } from "./document-fixtures";
 
 const plan = (fixture: any, over: any = {}) => planExtractionActions({
@@ -232,5 +233,60 @@ describe("tracker suggestions are generated from the document, not from a tag", 
       }
       for (const n of byItem.values()) expect(n).toBe(1);
     }
+  });
+});
+
+// ─── When the reasoner produced nothing at all ───────────────────────────────
+//
+// USER REPORT (2026-08-26): a 63-field biometric report arrived with "Actions 0"
+// and a blank rail. Planning was gated on the reasoner having succeeded, so a
+// timeout or a truncated JSON reply took the DETERMINISTIC passes down with it
+// — the tracker and deadline passes read the extracted ROWS and never needed
+// the reasoner at all, and filing the document under the profile the user
+// picked by hand needed it least of any.
+
+describe("a document the AI could not interpret still produces actions", () => {
+  const bare = {
+    semantic: emptySemanticDocument("wellness_report", ""),
+    items: [
+      item("field-weight", "weight", "Weight", "185 lb"),
+      item("field-restingheartrate", "restingHeartRate", "Resting Heart Rate", "58 bpm"),
+      item("field-facilityphone", "facilityPhone", "Facility Phone", "(555) 019-8273"),
+      item("field-reportdate", "reportDate", "Report Date", "2026-08-01"),
+    ],
+    index: {
+      ...emptyIndex(),
+      profiles: [{ id: "person-1", type: "self", name: "John Doe", fields: {} }],
+    },
+    primaryProfileId: "person-1",
+  };
+
+  it("does not throw on an empty semantic envelope", () => {
+    expect(() => plan(bare)).not.toThrow();
+  });
+
+  it("still proposes trackers, read straight off the rows", () => {
+    const trackers = plan(bare).actions.filter((a) => a.destination === "tracker");
+    const named = trackers.map((a) => a.payload.trackerName).sort();
+    expect(named).toContain("Weight");
+    // Canonicalised: a "Resting Heart Rate" reading joins the one Heart Rate
+    // series rather than starting a second chart beside it.
+    expect(named).toContain("Heart Rate");
+    // …and still refuses the phone number and the date.
+    expect(trackers.flatMap((a) => a.itemIds)).not.toContain("field-facilityphone");
+    expect(trackers.flatMap((a) => a.itemIds)).not.toContain("field-reportdate");
+  });
+
+  it("still files the document under the profile the user picked", () => {
+    const attach = plan(bare).actions.find((a) => a.destination === "document_attach");
+    expect(attach).toBeTruthy();
+    expect(attach!.payload.profileId).toBe("person-1");
+    expect(attach!.title).toContain("John Doe");
+    expect(attach!.selected).toBe(true);
+  });
+
+  it("the rail is therefore not empty", () => {
+    const proposable = plan(bare).actions.filter((a) => a.operation !== "NO_ACTION");
+    expect(proposable.length).toBeGreaterThan(0);
   });
 });

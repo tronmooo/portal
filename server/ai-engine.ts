@@ -1924,24 +1924,34 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
   })();
   const entityIndex = await entityIndexPromise;
   const filedUnder = profile ? entityIndex.profiles.find((x) => x.id === profile.id) : undefined;
-  console.log(`[upload-timing] reason=${Date.now() - tReason}ms rows=${reviewItems.length} vision=${resendDocument ? "resent" : "rows-only"} model=${runFast ? "fast" : "default"} ok=${reasoned.ok}`);
+  console.log(`[upload-timing] reason=${Date.now() - tReason}ms rows=${reviewItems.length} vision=${resendDocument ? "resent" : "rows-only"} model=${runFast ? "fast" : "default"} ok=${reasoned.ok}${reasoned.ok ? "" : ` degraded="${reasoned.degradedReason}"`}`);
 
   // Planning is pure and deterministic, but a bad envelope must not cost the
   // user their review either.
-  const actionPlan = reasoned.ok
-    ? safePlan({
-        semantic: reasoned.semantic,
-        items: reviewItems,
-        index: entityIndex,
-        context: filedUnder
-          ? { entityId: filedUnder.id, entityType: filedUnder.type, entityName: filedUnder.name }
-          : undefined,
-        primaryProfileId: profile?.id,
-        documentId: input.documentId,
-        documentName: input.documentName,
-        today: getUserToday(),
-      })
-    : undefined;
+  //
+  // AND IT RUNS EVEN WHEN THE REASONER FAILED. Planning used to be gated on
+  // `reasoned.ok`, which threw away far more than the reasoning: the
+  // tracker-candidate pass and the period-deadline pass iterate the extracted
+  // ROWS, not the reasoner's facts, and filing a document under the profile the
+  // user picked needs no reasoning at all. So a 63-field report whose
+  // understanding step timed out arrived with an EMPTY actions rail — the one
+  // document where "start tracking this" was worth the most produced nothing
+  // (user report 2026-08-26).
+  //
+  // With an empty envelope the fact/recurrence/relationship passes contribute
+  // nothing by construction, and the row-driven passes still do their work.
+  const actionPlan = safePlan({
+    semantic: reasoned.ok ? reasoned.semantic : emptySemanticDocument(input.documentType, ""),
+    items: reviewItems,
+    index: entityIndex,
+    context: filedUnder
+      ? { entityId: filedUnder.id, entityType: filedUnder.type, entityName: filedUnder.name }
+      : undefined,
+    primaryProfileId: profile?.id,
+    documentId: input.documentId,
+    documentName: input.documentName,
+    today: getUserToday(),
+  });
 
   return {
     extractionId: input.documentId,

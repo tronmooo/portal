@@ -643,7 +643,7 @@ export function DocumentReviewScreen({
               <InfoRow label="Document Type" value={understanding?.documentType || prettify(extraction.documentType)} />
               <InfoRow label="Category" value={extraction.label} />
               <InfoRow label="Extracted" value={extractedAt} />
-              {typeof confidenceScore === "number" && (
+              {typeof confidenceScore === "number" && confidenceScore > 0 && (
                 <div>
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground">Confidence Score</span>
@@ -659,11 +659,6 @@ export function DocumentReviewScreen({
                     />
                   </div>
                 </div>
-              )}
-              {extraction.semanticDegraded && (
-                <p className="text-[11px] leading-tight" style={{ color: `hsl(${ACCENT.amber})` }}>
-                  Understanding degraded — routing per field. {extraction.semanticDegraded}
-                </p>
               )}
             </div>
 
@@ -1010,7 +1005,7 @@ export function DocumentReviewScreen({
           </section>
 
           {/* ── Right: validation, actions, entities ── */}
-          <aside className="xl:w-80 shrink-0 space-y-4 xl:overflow-y-auto">
+          <aside className="xl:w-80 shrink-0 space-y-4 xl:overflow-y-auto" data-testid="review-actions-rail">
             {blockedActions.length > 0 && (
               <div
                 className="bubble p-3.5 space-y-2.5"
@@ -1076,11 +1071,44 @@ export function DocumentReviewScreen({
               </div>
             )}
 
-            {suggestedActions.length > 0 && (
-              <div className="bubble p-3.5 space-y-1" data-testid="review-suggested-actions">
+            {/* The explanation sits beside the thing it explains: when the
+                understanding step degrades it is the ACTIONS that thin out, so
+                saying so in the left-hand document panel (where it used to
+                live) put the notice nowhere near its consequence. */}
+            {extraction.semanticDegraded && (
+              <div
+                className="bubble p-3.5"
+                style={{ ["--accent-hsl" as any]: ACCENT.amber }}
+                data-testid="review-degraded-notice"
+              >
+                <h3 className="micro-label flex items-center gap-1.5" style={{ color: `hsl(${ACCENT.amber})` }}>
+                  <AlertTriangle className="h-3.5 w-3.5" /> Understanding degraded
+                </h3>
+                <p className="text-xs text-muted-foreground leading-snug mt-1.5">
+                  Fields were read and routed one by one — {extraction.semanticDegraded}. Anything
+                  suggested below comes from the fields themselves.
+                </p>
+              </div>
+            )}
+
+            {/* ALWAYS A BOX. Every block in this rail used to be gated on a
+                non-empty list, so a document whose understanding step degraded
+                rendered an aside with nothing in it at all — a 320px column of
+                blank next to the table, with no hint that anything was missing
+                (user report 2026-08-26). The box is the rail's identity: it
+                says what it is, counts what it has, and explains an empty list
+                rather than becoming invisible. */}
+            <div className="bubble p-3.5 space-y-1" data-testid="review-suggested-actions">
                 <h3 className="micro-label text-muted-foreground pb-1">
                   Suggested Actions ({suggestedActions.length})
                 </h3>
+                {suggestedActions.length === 0 && (
+                  <p className="text-xs text-muted-foreground leading-snug" data-testid="review-actions-empty">
+                    {extraction.semanticDegraded
+                      ? "The understanding step didn't finish, so only the fields were read. Everything selected still saves — there just isn't anything extra to do with it."
+                      : "Nothing to do beyond saving these fields."}
+                  </p>
+                )}
                 {suggestedActions.map((a) => {
                   const vis = actionVisual(a);
                   return (
@@ -1123,17 +1151,18 @@ export function DocumentReviewScreen({
                     </label>
                   );
                 })}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full h-7 text-[11px] mt-1"
-                  onClick={() => setCategory("actions")}
-                  data-testid="btn-review-all-actions"
-                >
-                  Review All Actions
-                </Button>
+                {suggestedActions.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full h-7 text-[11px] mt-1"
+                    onClick={() => setCategory("actions")}
+                    data-testid="btn-review-all-actions"
+                  >
+                    Review All Actions
+                  </Button>
+                )}
               </div>
-            )}
 
             {entities.length > 0 && (
               <div className="bubble p-3.5 space-y-1" data-testid="review-entities">
