@@ -950,12 +950,21 @@ export function ExtractionConfirmation({
             </div>
           )}
           {extraction.pendingFinancial.obligation && (
-            <label className="flex items-center gap-2 cursor-pointer ml-1 py-1">
-              <Checkbox checked={createObligation} onCheckedChange={() => setCreateObligation(!createObligation)} className="h-3.5 w-3.5" />
-              <span className={`text-xs ${createObligation ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
-                Create recurring bill: ${extraction.pendingFinancial.obligation.amount.toFixed(2)}/mo — {extraction.pendingFinancial.obligation.name}
-              </span>
-            </label>
+            <div className="ml-1 py-1">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox checked={createObligation} onCheckedChange={() => setCreateObligation(!createObligation)} className="h-3.5 w-3.5" />
+                <span className={`text-xs ${createObligation ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
+                  Update recurring bill: ${extraction.pendingFinancial.obligation.amount.toFixed(2)}/mo — {extraction.pendingFinancial.obligation.name}
+                </span>
+              </label>
+              {/* Says what it can actually do. A new bill is stored as a
+                  liability, and document extraction never creates one — so
+                  promising "Create recurring bill" here was a promise the
+                  server correctly refuses to keep. */}
+              <div className="text-[11px] text-muted-foreground leading-tight ml-6">
+                Updates a bill you already have. A new one would be a new liability, which extraction never creates.
+              </div>
+            </div>
           )}
         </div>
       )}

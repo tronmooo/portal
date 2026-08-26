@@ -404,6 +404,40 @@ describe("POST /api/chat/confirm-extraction — the reviewed plan", () => {
     expect(task.linkedProfiles).toEqual(["prop-1"]);
   });
 
+  it("RULE 1 — the legacy path cannot create one either", async () => {
+    // This is the path that runs when the understanding stage degraded, or for
+    // a chat message rendered from history. It used to call createObligation
+    // directly, which mints a liability profile — so confirming a declarations
+    // page would leave a liability beside the house. It updates or it reports;
+    // it never creates.
+    const res = await post(base, {
+      extractionId: DOC,
+      targetProfileId: "prop-1",
+      createObligation: { name: "Homeowners premium", amount: 1428, frequency: "yearly", nextDueDate: "2024-06-01" },
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(stubState.obligations).toHaveLength(0);
+    expect(stubState.profiles.size).toBe(3);
+    expect(data.skipped.join(" ")).toMatch(/never creates one/i);
+  });
+
+  it("the legacy path DOES update a bill that already exists", async () => {
+    stubState.obligations.push({
+      id: "obl-1", name: "Homeowners premium", amount: 1200,
+      linkedProfiles: ["prop-1"], fields: {},
+    });
+    const res = await post(base, {
+      extractionId: DOC,
+      targetProfileId: "prop-1",
+      createObligation: { name: "Homeowners premium", amount: 1428, frequency: "yearly", nextDueDate: "2024-06-01" },
+    });
+    expect(res.status).toBe(200);
+    expect(stubState.obligations).toHaveLength(1);
+    expect(stubState.obligations[0].amount).toBe(1428);
+    expect(stubState.obligations[0].nextDueDate).toBe("2024-06-01");
+  });
+
   it("RULE 1 — refuses to create a liability even when asked to", async () => {
     // The planner will not mark this savable and the UI will not tick it. This
     // asserts the third gate: a hand-edited request body still writes nothing.

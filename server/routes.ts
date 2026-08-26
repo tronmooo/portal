@@ -3631,7 +3631,18 @@ ${JSON.stringify(ctx, null, 2)}`;
         }
       }
 
-      // Create obligation if user confirmed
+      // Recurring bill — UPDATE ONLY, never create.
+      //
+      // This is the pre-plan path: it still runs for a chat message rendered
+      // from history, and whenever the understanding stage degraded. It used to
+      // call storage.createObligation, and in this app that ends in
+      // createProfile({ type: "liability" }) — so confirming a declarations
+      // page would mint a liability beside the house it was filed under.
+      //
+      // Document extraction never creates a profile, asset or liability. The
+      // action path enforces that in three places; this is the fourth, and it
+      // matters precisely because it is the path that runs when the smart one
+      // could not.
       if (req.body.createObligation) {
         try {
           const obl = req.body.createObligation;
@@ -3639,21 +3650,30 @@ ${JSON.stringify(ctx, null, 2)}`;
           if (!isFinite(amt) || amt <= 0) {
             throw new Error("Obligation amount must be a positive number");
           }
-          if (!obl.nextDueDate) {
-            throw new Error("Obligation requires a next due date");
-          }
-          await storage.createObligation({
-            name: obl.name,
-            amount: amt,
-            frequency: obl.frequency || 'monthly',
-            category: canonicalObligationCategory(obl.category || 'general'),
-            nextDueDate: obl.nextDueDate,
-            autopay: false,
-            linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+          // Is there already a bill this describes? Then update it.
+          const priorBills = await storage.getObligations();
+          const match = (priorBills || []).find((o: any) => {
+            const sameName = String(o?.name || "").trim().toLowerCase()
+              === String(obl.name || "").trim().toLowerCase();
+            const sameOwner = resolvedProfileId
+              && ((o?.linkedProfiles || []).includes(resolvedProfileId) || o?.linkedAssetId === resolvedProfileId);
+            return sameName || sameOwner;
           });
-          saved.push(`Created bill: $${amt.toFixed(2)}/${obl.frequency || 'mo'} ${obl.name}`);
+          if (match) {
+            await storage.updateObligation(match.id, {
+              amount: amt,
+              frequency: obl.frequency || "monthly",
+              ...(obl.nextDueDate ? { nextDueDate: obl.nextDueDate } : {}),
+              linkedDocumentId: extractionId,
+            } as any);
+            saved.push(`Updated bill: $${amt.toFixed(2)}/${obl.frequency || "mo"} ${match.name}`);
+          } else {
+            skippedFields.push(
+              `recurring bill "${obl.name}" — a new bill is stored as a liability, and document extraction never creates one`,
+            );
+          }
         } catch (oErr: any) {
-          console.error("Failed to create obligation from extraction:", oErr?.message);
+          console.error("Failed to record obligation from extraction:", oErr?.message);
           failures.push(`obligation: ${oErr?.message || "unknown error"}`);
         }
       }
