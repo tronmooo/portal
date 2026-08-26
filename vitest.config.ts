@@ -155,6 +155,7 @@ export default defineConfig({
       'tests/extraction-review.dom.test.tsx',
       'tests/document-review.dom.test.tsx',
       'tests/extraction-sections.test.ts',
+      'tests/document-dates-group.test.ts',
       'tests/medical-report-extraction.test.ts',
       'tests/upload-dedupe.test.ts',
       'tests/cache-bust-predicate.test.ts',

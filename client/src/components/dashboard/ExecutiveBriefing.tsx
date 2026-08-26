@@ -68,6 +68,7 @@ import type { AttentionItem } from "@shared/attention";
 // One relative-due formatter for the whole app. Interpolating a raw `daysUntil`
 // is what once produced "Lawn care ($40) due in -29d".
 import { dayLabel } from "@shared/now-rank";
+import { groupDocumentDates } from "@shared/document-dates";
 import { buildExecutiveSections, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
@@ -733,13 +734,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     .sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9));
 
   // Documents
-  const visibleDocs = allExpiringDocs
-    // Dismissal is per RULE now that one record can carry several expirations.
-    // Filtering on the record id alone left a dismissed row in this card and in
-    // the count below while the popup and the executive section hid it.
-    .filter((d: any) => !snoozedDocumentIds.includes(d.ruleId) && !snoozedDocumentIds.includes(d.documentId))
-    .filter((d: any) => typeof d.daysUntil === "number")
-    .sort((a: any, b: any) => a.daysUntil - b.daysUntil);
+  // Grouped to ONE CARD PER RECORD PER DAY so this card, its count and the
+  // popup all report the same number — a policy that expires and takes its
+  // premium on one day is one thing to act on, not two.
+  const visibleDocs = groupDocumentDates(
+    allExpiringDocs
+      // Dismissal is per RULE now that one record can carry several expirations.
+      // Filtering on the record id alone left a dismissed row in this card and in
+      // the count below while the popup and the executive section hid it.
+      .filter((d: any) => !snoozedDocumentIds.includes(d.ruleId) && !snoozedDocumentIds.includes(d.documentId))
+      .filter((d: any) => typeof d.daysUntil === "number"),
+  ).sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
   const docsSoonCount = visibleDocs.filter((d: any) => d.daysUntil <= 30).length;
 
   // Wellness — same extraction the Wellness tab uses, from the same trackers,

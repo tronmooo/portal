@@ -21,6 +21,7 @@ import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
+import { groupDocumentDates, ruleIdsOf } from "@shared/document-dates";
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
 import { useLiveTotal } from "@/lib/derived-aggregates";
 import { netWorthView, isNetWorthLoaded } from "@/lib/net-worth-view";
@@ -1103,8 +1104,14 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     return (kpiProfiles.find((p: any) => p.type === "self")?.id) || "";
   }, [filterMode, filterIds, kpiProfiles]);
   const [docSnoozeMap, setDocSnoozeMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
-  const snoozeDoc = (docId: string) => {
-    const next = { ...docSnoozeMap, [docId]: Date.now() + 30 * 86400000 };
+  const snoozeDoc = (docIdOrRow: string | { ruleIds?: string[]; ruleId?: string }) => {
+    // A card can stand for several rules (one record, one day, two kinds of
+    // date). Snoozing only the first left its twin on screen.
+    const ids = typeof docIdOrRow === "string" ? [docIdOrRow] : ruleIdsOf(docIdOrRow as any);
+    if (ids.length === 0) return;
+    const until = Date.now() + 30 * 86400000;
+    const next = { ...docSnoozeMap };
+    for (const id of ids) next[id] = until;
     setDocSnoozeMap(next);
     saveDocSnoozeMap(next);
     toast({ title: "Document snoozed", description: "Hidden from alerts for 30 days" });
@@ -1114,8 +1121,13 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     // honouring a record-id snooze taken before that was true. Keying on the
     // record alone left a dismissed row visible here while the popup and the
     // Executive section both hid it.
-    return (enhanced?.expiringDocuments || [])
-      .filter((d: any) => !docSnoozeMap[d.ruleId] && !docSnoozeMap[d.documentId]);
+    // Grouped to ONE CARD PER RECORD PER DAY, the same way the popup renders
+    // them, so the KPI badge counts what the list shows. Ungrouped, a policy
+    // that expires and takes its premium on one day read as two documents.
+    return groupDocumentDates(
+      (enhanced?.expiringDocuments || [])
+        .filter((d: any) => !docSnoozeMap[d.ruleId] && !docSnoozeMap[d.documentId]),
+    );
   }, [enhanced, docSnoozeMap]);
 
   // BUG-20260530-stats-slow-blank-tiles: when /api/stats is slow (8-12s cold

@@ -20,6 +20,7 @@ import {
   PathPreviewLine as RebuildPathPreview,
 } from "@/components/asset/asset-overview";
 import { DetailHero, type HeroStat } from "@/components/profile/DetailHero";
+import { ProfileAlertsSection } from "@/components/ProfileAlertsSection";
 import { profileVisual } from "@/lib/profile-visuals";
 import { AccountOverview, accountHeroStats } from "@/components/finance/AccountOverview";
 import { isAccountProfile, accountKindMeta, accountKindOf } from "@shared/finance-accounts";
@@ -13567,6 +13568,17 @@ export default function ProfileDetailPage() {
                       )}
                     </>
                   )}
+
+                  {/* All the way down the Info tab: what you do TO this record
+                      — silence the alerts it raises, or remove it. Both were
+                      previously unreachable from here (clearing lived inside an
+                      expanded row of a dashboard popup; Delete only in the page
+                      header). User report 2026-08-26. */}
+                  <ProfileAlertsSection
+                    profileId={profile.id}
+                    profileType={profile.type}
+                    onDelete={() => setShowDeleteDialog(true)}
+                  />
                 </TabsContent>
               )}
 
