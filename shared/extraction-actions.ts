@@ -57,6 +57,8 @@ import { normalizeDateString } from "./extraction-normalize";
 import { rankByName, sameEntityName } from "./entity-resolution";
 import { trackerIdentityKey } from "./tracker-identity";
 import { derivePeriodDeadlines } from "./period-deadlines";
+import { detectTrackable, isConfidentlyTrackable } from "./trackable-values";
+import { findCompatibleTracker } from "./tracker-identity";
 import {
   entityFamily, destinationsForFamily, canonicalFieldName, matchConcept,
   identifyingConcepts, identifiersAgree, FAMILY_LABEL, type EntityFamily,
@@ -201,6 +203,66 @@ export interface ProposedAction {
    * Shown BEFORE the user saves, so Save is never a surprise.
    */
   writesLabel?: string;
+}
+
+// ─── The partition: what a row's data owes to the action that cites it ───────
+
+/** Destinations whose own write IS the storage of the rows they cite. */
+const STORAGE_DESTINATIONS: ReadonlySet<ExtractionDestination> = new Set([
+  "profile", "entity_field", "entity_record", "structured_append",
+]);
+
+/**
+ * Does this action itself persist its rows' values?
+ *
+ * THE RULE THIS ENFORCES (user directive, 2026-08-26): "facts get saved;
+ * actions get performed. The same fact may be both saved as structured data and
+ * used by one or more actions." A row must be withheld from the data path ONLY
+ * when a selected action already performs that exact write — otherwise the two
+ * paths would write the same fact twice.
+ *
+ * It is false for tracker, expense, obligation, income, task and link actions:
+ * those are CONSEQUENCES of a fact, not its storage. Ticking "append 185 lb to
+ * the Weight tracker" used to delete `weight` from the profile, because the row
+ * was withheld from the data path and the tracker executor writes no fields.
+ * Deselecting an action can therefore never cost the user their data, and
+ * selecting one can never move a fact out of its home.
+ */
+export function actionStoresItem(
+  action: Pick<ProposedAction, "destination" | "operation" | "payload">,
+  item?: Pick<ExtractionItem, "destination">,
+): boolean {
+  if (action.operation === "NO_ACTION") return false;
+  if (STORAGE_DESTINATIONS.has(action.destination)) return true;
+  // These two write fields only when the payload actually carries them — a
+  // date derived ONTO a record, a balance that is both a field and a series.
+  if (action.destination === "profile_tracker" || action.destination === "calendar") {
+    return Boolean(action.payload?.fields && action.payload?.profileId);
+  }
+  // The loose path would otherwise create the same record this action creates:
+  // a note action plus a row routed to "note" is two notes.
+  return Boolean(item && item.destination === action.destination);
+}
+
+/**
+ * The rows a SELECTED action already stores — the one partition rule, shared by
+ * the review page, the inline chat pane and the confirm route so all three
+ * agree about what has already been written.
+ */
+export function itemsClaimedByActions(
+  actions: readonly Pick<ProposedAction, "destination" | "operation" | "payload" | "selected" | "itemIds">[],
+  items: readonly Pick<ExtractionItem, "id" | "destination">[],
+): Set<string> {
+  const byId = new Map(items.map((i) => [String(i.id), i]));
+  const claimed = new Set<string>();
+  for (const a of actions || []) {
+    if (!a || a.selected === false) continue;
+    for (const id of a.itemIds || []) {
+      const key = String(id);
+      if (actionStoresItem(a, byId.get(key))) claimed.add(key);
+    }
+  }
+  return claimed;
 }
 
 /**
@@ -697,6 +759,14 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       it.roles = Array.from(new Set([...(it.roles ?? []), ...fact.roles]));
     }
   }
+  // `factByItem` lets the tracker pass below read a row's declared unit and
+  // financial kind without re-deriving them from the label.
+  const factByItem = new Map<string, SemanticFact>();
+  for (const fact of semantic.facts) {
+    for (const iid of fact.itemIds) {
+      if (!factByItem.has(iid)) factByItem.set(iid, fact);
+    }
+  }
 
   // ── Resolve every entity once ──
   // ── RULE 1: the parent is the context, and it is never duplicated ────────
@@ -892,7 +962,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       const it = itemById.get(iid);
       if (it) {
         it.actionIds = [...(it.actionIds || []), action.id];
-        it.actionLabel = `${OPERATION_LABEL[action.operation]} ${targetLabel(action.target)}`;
+        it.actionLabel ??= `${OPERATION_LABEL[action.operation]} ${targetLabel(action.target)}`;
       }
     }
   };
@@ -1406,6 +1476,114 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     });
   }
 
+  // ═══ EVERY EXTRACTED FACT, EXAMINED FOR A CHART ═════════════════════════
+  //
+  // "The Suggested Actions panel is the authority for what becomes tracked."
+  // Until now a tracker action existed only when the reasoner happened to tag a
+  // fact `measurement`, so an odometer reading, a property valuation and an
+  // annual premium — all plainly values over time — produced nothing, and the
+  // user had to route each field into a tracker by hand just to make the option
+  // appear. This pass reads EVERY row and lets shape decide
+  // (shared/trackable-values), independent of what the reasoner noticed.
+  //
+  // A candidate cites its row and NO fact. That is load-bearing: the invariants
+  // "every fact reaches exactly one action" and "one recurrence, one action" are
+  // asserted over factIds, and a tracker suggestion is an additional use of a
+  // fact, never a competing home for it.
+  {
+    // Rows already spoken for: the measurement branch got there first, or the
+    // reasoner said the row must cause nothing at all.
+    const settled = new Set<string>();
+    for (const a of actions) {
+      if (a.destination === "tracker" || a.destination === "profile_tracker" || a.destination === "reference") {
+        for (const iid of a.itemIds) settled.add(iid);
+      }
+    }
+    for (const item of items) {
+      if (settled.has(item.id)) continue;
+      const fact = factByItem.get(item.id);
+      const candidate = detectTrackable({
+        key: item.key,
+        label: item.label,
+        value: item.value,
+        date: item.date,
+        roles: item.roles,
+        unit: item.unit ?? fact?.unit,
+        financialKind: fact?.financialKind,
+        trackerName: item.trackerName,
+      });
+      if (!candidate) continue;
+
+      const ownerTarget = item.subjectRef ? landingFor(item.subjectRef).target : contextTarget;
+      const ownerId = ownerTarget?.kind === "profile" ? ownerTarget.id ?? undefined : undefined;
+      const existing = findCompatibleTracker(index.trackers, candidate.name, {
+        unit: candidate.unit,
+        ownerProfileId: ownerId,
+      });
+      const when = normalizeDateString(item.date) || today;
+      // A currency sits in FRONT of its number; every other unit follows it.
+      const numbers = Object.values(candidate.values).join("/");
+      const rendered = /^[$€£¥]$/.test(candidate.unit)
+        ? `${candidate.unit}${numbers}`
+        : numbers + (candidate.unit ? ` ${candidate.unit}` : "");
+
+      push({
+        id: `act-track-${slug(item.id)}`,
+        operation: existing ? "APPEND" : "CREATE",
+        destination: "tracker",
+        target: { kind: "tracker", id: existing?.id ?? null, name: existing?.name ?? candidate.name },
+        roles: (item.roles ?? []) as SemanticRole[],
+        title: existing
+          ? `Add to ${existing.name} — ${rendered}`
+          : `Start tracking ${candidate.name} — ${rendered}`,
+        detail: [ownerTarget?.name, when].filter(Boolean).join(" · "),
+        // No factIds — see the note above. This is an extra USE of the row.
+        factIds: [],
+        itemIds: [item.id],
+        payload: {
+          trackerId: existing?.id,
+          trackerName: existing?.name ?? candidate.name,
+          values: candidate.values,
+          unit: candidate.unit,
+          category: candidate.category,
+          date: when,
+          profileId: ownerId,
+          profileName: ownerTarget?.name,
+          source: documentId,
+          _source: { documentId, itemIds: [item.id] },
+        },
+        origin: "implied",
+        // Appending to a series the user already keeps is what they asked for,
+        // so it arrives ticked. Minting a NEW chart is a proposal they opt into
+        // unless the value is one the app genuinely understands as longitudinal
+        // — otherwise one lab panel silently creates twenty trackers.
+        selected: Boolean(existing) || isConfidentlyTrackable(candidate),
+        confidence: fact?.confidence ?? 0.7,
+        warnings: [],
+        stage: 2,
+        dedupeKey: stableKey([documentId, "tracker", existing?.id ?? candidate.identityKey, when]),
+      });
+    }
+  }
+
+  // ═══ THE MIDDLE TABLE IS DATA, NEVER A VERB ═════════════════════════════
+  //
+  // "Never use Tracker as the storage destination of an extracted fact."
+  // A row an action already covers keeps its VALUE in the middle table but not
+  // the verb: tracking, scheduling and spending are what the rail is for, and
+  // leaving them as storage destinations is what made one row mean two things.
+  // Rows no action cites are untouched, which is what keeps the degraded
+  // (no-plan) path — where `profile_tracker` writes both halves itself —
+  // working exactly as before.
+  for (const item of items) {
+    if (!item.actionIds?.length) continue;
+    if (!ACTION_ONLY_DESTINATIONS.has(item.destination)) continue;
+    const ownerTarget = item.subjectRef ? landingFor(item.subjectRef).target : contextTarget;
+    const home = dataDestinationFor(item, ownerTarget);
+    item.destination = home;
+    item.destinationOptions = [home, ...item.destinationOptions.filter((d) => d !== home)];
+  }
+
   // ── Understanding header ──
   const primary = semantic.primarySubject ? targets.get(semantic.primarySubject) : undefined;
   const understanding: DocumentUnderstanding = {
@@ -1437,6 +1615,22 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     warnings,
     unresolvedItemIds,
   };
+}
+
+/**
+ * Destinations that are ACTIONS rather than storage. On the plan path the rail
+ * owns every one of them, so an item may not also carry one as its home.
+ */
+const ACTION_ONLY_DESTINATIONS: ReadonlySet<ExtractionDestination> = new Set([
+  "tracker", "profile_tracker", "calendar", "task", "expense", "income",
+  "obligation", "liability_payment", "relationship_link", "document_attach",
+]);
+
+/** Where a row's DATA lives once its verb has moved to the actions rail. */
+function dataDestinationFor(item: ExtractionItem, target?: TargetRef): ExtractionDestination {
+  if (item.group) return "entity_record";
+  const family = entityFamily(target?.profileType, target?.typeKey);
+  return family === "person" || family === "pet" ? "profile" : "entity_field";
 }
 
 // ─── Action builders ─────────────────────────────────────────────────────────

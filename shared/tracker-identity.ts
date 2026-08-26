@@ -19,6 +19,8 @@
 // and "Multivitamin" are the SAME tracker. Note these only strip as WHOLE
 // tokens, never substrings — "Multivitamin" is one token and survives, while
 // "Vitamin D" keeps the disambiguating "d".
+import { unitsCompatible } from "./tracker-units";
+
 const NOISE_WORDS = new Set([
   "supplement", "supplements", "supp", "supps",
   "daily", "morning", "evening", "nightly", "my", "the", "a", "an", "of",
@@ -136,6 +138,9 @@ export interface TrackerIdentityLike {
   id?: string;
   name?: string | null;
   category?: string | null;
+  /** The series' own unit. Used as a VETO on top of name identity — see
+   *  findCompatibleTracker. Optional: most callers never had one to give. */
+  unit?: string | null;
   linkedProfiles?: string[];
 }
 
@@ -151,4 +156,50 @@ export function findIdentityMatches<T extends TrackerIdentityLike>(
 ): T[] {
   if (!queryName) return [];
   return trackers.filter((t) => trackerNamesMatch(t.name, queryName));
+}
+
+// ─── Resolution: the ONE tracker a value should join ─────────────────────────
+
+export interface TrackerMatchOptions {
+  /** The unit the incoming value is in, when known. */
+  unit?: string | null;
+  /** The record the value is ABOUT. Its trackers are preferred. */
+  ownerProfileId?: string | null;
+}
+
+/**
+ * The single tracker an incoming value belongs on, or null to start a new one.
+ *
+ * Mirrors `pickTrackerForLog` and the executor's `appendTrackerEntry` so the
+ * plan a user reviews and the write that follows can never disagree:
+ *
+ *   1. an identity match this record already owns,
+ *   2. an identity match nobody has claimed (an orphan),
+ *   3. nothing — a tracker owned by SOMEONE ELSE is never adopted, which is how
+ *      one person's reading ends up on another person's chart.
+ *
+ * Units are a veto layered on identity, never a matcher. `Weight [lbs]` and
+ * `Weight [kg]` are one metric because their NAMES agree and mass ≡ mass;
+ * `Loan Balance` and `Monthly Payment` stay apart because their names do, even
+ * though both are money.
+ */
+export function findCompatibleTracker<T extends TrackerIdentityLike>(
+  trackers: readonly T[],
+  queryName: string | null | undefined,
+  opts: TrackerMatchOptions = {},
+): T | null {
+  if (!queryName) return null;
+  const named = (trackers || []).filter((t) => trackerNamesMatch(t.name, queryName));
+  if (named.length === 0) return null;
+  const fits = named.filter((t) => unitsCompatible(t.unit, opts.unit));
+  if (fits.length === 0) return null;
+  const owner = opts.ownerProfileId;
+  if (owner) {
+    const owned = fits.find((t) => (t.linkedProfiles || []).includes(owner));
+    if (owned) return owned;
+  }
+  const orphan = fits.find((t) => (t.linkedProfiles || []).length === 0);
+  if (orphan) return orphan;
+  // Everything left belongs to someone else. Better a new chart than a wrong one.
+  return owner ? null : fits[0];
 }

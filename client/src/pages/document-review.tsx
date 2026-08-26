@@ -54,7 +54,7 @@ import {
 } from "@shared/extraction-destinations";
 import { extractionDateRows, type CalendarDateDecision } from "@shared/extraction-calendar";
 import { groupItemsIntoSections } from "@shared/extraction-sections";
-import type { ProposedAction } from "@shared/extraction-actions";
+import { itemsClaimedByActions, OPERATION_LABEL, type ProposedAction } from "@shared/extraction-actions";
 import type { SemanticEntity } from "@shared/semantic-document";
 import { CONFIDENCE_HIGH, CONFIDENCE_MEDIUM } from "@shared/semantic-document";
 
@@ -190,6 +190,8 @@ function actionVisual(a: ProposedAction): { icon: typeof Zap; accent: string } {
     case "income":
     case "obligation":
     case "liability_payment": return { icon: DollarSign, accent: ACCENT.green };
+    case "tracker":
+    case "profile_tracker": return { icon: TrendingUp, accent: ACCENT.green };
     case "entity_record": return { icon: ShieldCheck, accent: ACCENT.teal };
     case "entity_field": return { icon: RefreshCw, accent: ACCENT.teal };
     case "relationship_link": return { icon: Link2, accent: ACCENT.purple };
@@ -558,13 +560,11 @@ export function DocumentReviewScreen({
       derived: row.derived,
     }));
 
-    // Partition: a row a selected action is writing never also travels as a
-    // loose item — the two paths would write the same fact twice.
-    const claimedByActions = new Set(
-      liveActions
-        .filter((a) => a.selected && a.operation !== "NO_ACTION")
-        .flatMap((a) => a.itemIds),
-    );
+    // Partition: a row is withheld from the data path ONLY when a selected
+    // action already performs that exact write (shared/extraction-actions).
+    // A tracker, expense or obligation action is a CONSEQUENCE of a fact, not
+    // its storage — ticking one used to delete the fact from its profile.
+    const claimedByActions = itemsClaimedByActions(liveActions, liveItems);
     const unclaimedItems = hasPlan
       ? liveItems.filter((i) => !claimedByActions.has(i.id))
       : liveItems;
@@ -803,14 +803,14 @@ export function DocumentReviewScreen({
                     const citing = (item.actionIds ?? [])
                       .map((id) => actionById.get(id))
                       .filter(Boolean) as ProposedAction[];
-                    const targetName = citing[0]?.target?.name ?? linkedProfile?.name;
-                    const destPrefix = item.group
-                      ? prettify(item.group)
-                      : citing[0]?.target?.group
-                        ? prettify(citing[0].target.group)
-                        : citing[0]?.target?.profileType
-                          ? prettify(citing[0].target.profileType)
-                          : DESTINATION_LABEL[item.destination];
+                    // The record this row's DATA belongs to. The planner
+                    // resolves it per row, so a policy's lender fields can name
+                    // the loan even though the document was filed on the house.
+                    const ownerLabel = item.ownerName
+                      ?? citing.find((a) => a.target?.kind === "profile")?.target?.name
+                      ?? linkedProfile?.name
+                      ?? "This document";
+                    const targetName = item.group ? prettify(item.group) : undefined;
                     return (
                       <tr
                         key={item.id}
@@ -877,7 +877,11 @@ export function DocumentReviewScreen({
                               className="flex items-center gap-1 text-[11px] font-semibold truncate"
                               style={{ color: `hsl(${warnings.length > 0 ? ACCENT.orange : ACCENT.teal})` }}
                             >
-                              <span className="truncate">{destPrefix} → {item.label}</span>
+                              {/* WHERE THE FACT IS SAVED — never what happens to
+                                  it. Tracking, reminders and expenses live in
+                                  the rail; this column answers one question:
+                                  which record holds this value. */}
+                              <span className="truncate">{ownerLabel} → {shortSection(section.label)}</span>
                               <ChevronDown className="h-3 w-3 shrink-0 opacity-70" />
                             </div>
                             <select
@@ -895,15 +899,6 @@ export function DocumentReviewScreen({
                           </div>
                           {targetName && (
                             <div className="text-[11px] text-muted-foreground truncate max-w-[200px]">{targetName}</div>
-                          )}
-                          {item.trackerName && (item.destination === "tracker" || item.destination === "profile_tracker") && (
-                            <div
-                              className="text-[11px] font-medium truncate max-w-[200px]"
-                              style={{ color: `hsl(${ACCENT.green})` }}
-                              data-testid={`review-tracker-hint-${item.id}`}
-                            >
-                              → {item.trackerName} tracker
-                            </div>
                           )}
                         </td>
                         <td className="px-2 py-2.5">
@@ -1100,9 +1095,20 @@ export function DocumentReviewScreen({
                       <Medallion icon={vis.icon} accent={vis.accent} size="sm" />
                       <div className="min-w-0 flex-1 text-xs leading-snug">
                         <p className="font-semibold">{a.title}</p>
-                        {(a.writesLabel || a.detail) && (
-                          <p className="text-[11px] text-muted-foreground truncate">{a.writesLabel || a.detail}</p>
+                        {a.writesLabel && (
+                          <p className="text-[11px] text-muted-foreground truncate">{a.writesLabel}</p>
                         )}
+                        {/* Exactly what this action does and to WHAT: creates or
+                            appends, which record it targets, and who it belongs
+                            to. Without it "Add to Weight" never said whose. */}
+                        <p
+                          className="text-[11px] text-muted-foreground truncate"
+                          data-testid={`action-target-${a.id}`}
+                        >
+                          {OPERATION_LABEL[a.operation]}
+                          {a.target?.name ? ` · ${a.target.name}` : ""}
+                          {a.payload?.profileName ? ` · ${a.payload.profileName}` : ""}
+                        </p>
                         {!a.savable && a.unsupportedReason && (
                           <p className="text-[11px]" style={{ color: `hsl(${ACCENT.amber})` }}>{a.unsupportedReason}</p>
                         )}
@@ -1112,6 +1118,7 @@ export function DocumentReviewScreen({
                         disabled={!a.savable}
                         onCheckedChange={() => toggleAction(a.id)}
                         className="h-3.5 w-3.5 shrink-0"
+                        data-testid={`suggested-action-check-${a.id}`}
                       />
                     </label>
                   );
@@ -1182,6 +1189,14 @@ function initialReviewItems(extraction: PendingExtraction): ExtractionItem[] {
   );
   return (extraction.items || []).map((i) =>
     blockedRows.has(i.id) ? { ...i, selected: false } : { ...i });
+}
+
+/**
+ * A section name short enough to sit in a table cell: the row already lives
+ * under the full heading, so "Property Details" reads as "Property" here.
+ */
+function shortSection(label: string): string {
+  return String(label || "").replace(/\s+(Details|Information)$/i, "").trim() || label;
 }
 
 function prettify(s: string | undefined): string {

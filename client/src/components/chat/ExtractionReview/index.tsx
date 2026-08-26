@@ -27,7 +27,7 @@ import {
   extractionDateRows, isUpcomingWithinWindow, UPCOMING_WINDOW_DAYS,
   type ExtractionDateRow, type CalendarDateDecision,
 } from "@shared/extraction-calendar";
-import type { ProposedAction } from "@shared/extraction-actions";
+import { itemsClaimedByActions, type ProposedAction } from "@shared/extraction-actions";
 import { DocumentUnderstanding } from "./DocumentUnderstanding";
 import { ProposedActions } from "./ProposedActions";
 import { ActionGroupSection } from "./ActionGroupSection";
@@ -422,11 +422,9 @@ export function ExtractionConfirmation({
     // legacy item — the two paths would write the same fact twice. (The route
     // enforces this as well rather than trusting it, but sending a clean
     // payload is what keeps the two implementations honest about who owns what.)
-    const claimedByActions = new Set(
-      actions
-        .filter((a) => a.selected && a.operation !== "NO_ACTION")
-        .flatMap((a) => a.itemIds),
-    );
+    // Same rule as the full-screen review: only an action that itself performs
+    // the field write withholds its row from the data path.
+    const claimedByActions = itemsClaimedByActions(actions, items);
     const unclaimedItems = hasPlan
       ? items.filter((i) => !claimedByActions.has(i.id))
       : items;
