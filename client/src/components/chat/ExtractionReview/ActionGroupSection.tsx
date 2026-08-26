@@ -18,9 +18,15 @@ export function ActionGroupSection({
   itemsById,
   ...handlers
 }: { group: ActionGroup; itemsById: Map<string, ExtractionItem> } & Handlers) {
-  const startsClosed = group.destination === "reference" || group.destination === "ignore";
+  // Reference-only and unsavable rows start collapsed. Both are real
+  // information the user asked to see, and both are the half of a document that
+  // changes nothing — opening on them buries the half that does.
+  const startsClosed = group.destination === "reference"
+    || group.destination === "ignore"
+    || group.destination === "unsupported";
   const [open, setOpen] = useState(!startsClosed);
   const live = group.actions.filter((a) => a.selected && a.operation !== "NO_ACTION").length;
+  const allUnsavable = group.actions.every((a) => a.savable === false);
 
   return (
     <div data-testid={`action-group-${group.destination}`}>
@@ -34,7 +40,9 @@ export function ActionGroupSection({
         <ChevronRight className={`h-3 w-3 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`} />
         <span className="micro-label text-muted-foreground">{group.label}</span>
         <span className="text-[11px] text-muted-foreground tabular-nums">
-          {live > 0 && live !== group.actions.length ? `${live}/${group.actions.length}` : group.actions.length}
+          {allUnsavable || live === 0 || live === group.actions.length
+            ? group.actions.length
+            : `${live}/${group.actions.length}`}
         </span>
       </button>
       {open && (

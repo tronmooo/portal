@@ -66,13 +66,15 @@ export type SemanticRole =
   | "actionable_date"       // a date requiring future awareness
   | "relationship"          // ownership, lender, insurer, provider, employer…
   | "narrative"             // meaningful unstructured information
+  | "status_change"         // the document says an existing record's state is now X
+  | "event_occurred"        // the document is PROOF something already happened
   | "document_metadata"     // issuer, document number, creation/signature info
   | "reference_only";       // keep it, act on nothing
 
 export const ALL_SEMANTIC_ROLES: readonly SemanticRole[] = [
   "profile_data", "entity_data", "measurement", "financial",
   "recurring_obligation", "actionable_date", "relationship", "narrative",
-  "document_metadata", "reference_only",
+  "status_change", "event_occurred", "document_metadata", "reference_only",
 ] as const;
 
 const ROLE_SET: ReadonlySet<string> = new Set(ALL_SEMANTIC_ROLES);
@@ -87,6 +89,8 @@ export const SEMANTIC_ROLE_LABEL: Record<SemanticRole, string> = {
   actionable_date: "Actionable date",
   relationship: "Relationship",
   narrative: "Note",
+  status_change: "Status change",
+  event_occurred: "Already happened",
   document_metadata: "Document metadata",
   reference_only: "Reference only",
 };
@@ -158,6 +162,58 @@ export interface SemanticRelationship {
 // ─── Facts ───────────────────────────────────────────────────────────────────
 
 /**
+ * For a fact with the `financial` role: WHAT KIND of money this is.
+ *
+ * An amount alone is not enough to route anything. $612 on a loan statement is
+ * a PAYMENT against the balance; $612 on a repair invoice is a CHARGE; $612 on
+ * a settlement letter is a REFUND. Without this distinction the planner has to
+ * guess, and the guesses are the ones that hurt: a loan payment filed as an
+ * expense double-counts the month's outgoings, and a refund filed as income
+ * inflates earnings.
+ *
+ * `estimate` is deliberately separate from every other kind. A payoff quote or
+ * a projected annual total is a CALCULATION about the future, not a ledger
+ * event, and it must never become a transaction.
+ */
+export type FinancialKind =
+  | "charge"    // a cost incurred — an expense
+  | "payment"   // money paid out, possibly against a liability
+  | "refund"    // money coming back — NOT income
+  | "credit"    // an account credit — NOT income
+  | "transfer"  // moved between the user's own records — neither
+  | "income"    // money genuinely earned or received as income
+  | "balance"   // what is owed or held right now — a field, and a point in time
+  | "rate"      // APR, interest rate, percentage — a field
+  | "fee"       // a late fee or penalty — a charge, worth naming as one
+  | "estimate"; // a quote or projection — never a ledger row
+
+export const ALL_FINANCIAL_KINDS: readonly FinancialKind[] = [
+  "charge", "payment", "refund", "credit", "transfer",
+  "income", "balance", "rate", "fee", "estimate",
+] as const;
+
+const FINANCIAL_KIND_SET: ReadonlySet<string> = new Set(ALL_FINANCIAL_KINDS);
+
+/**
+ * For a fact with the `status_change` role: what the document says a record's
+ * state now IS.
+ *
+ * A statement stamped PAID, a policy marked CANCELLED, a permit marked APPROVED
+ * — the document is evidence about an existing record's lifecycle, not a new
+ * record.
+ */
+export type StatusValue =
+  | "active" | "paid" | "overdue" | "cancelled" | "renewed" | "expired"
+  | "closed" | "completed" | "approved" | "denied" | "pending" | "suspended";
+
+export const ALL_STATUS_VALUES: readonly StatusValue[] = [
+  "active", "paid", "overdue", "cancelled", "renewed", "expired",
+  "closed", "completed", "approved", "denied", "pending", "suspended",
+] as const;
+
+const STATUS_VALUE_SET: ReadonlySet<string> = new Set(ALL_STATUS_VALUES);
+
+/**
  * Whether a property is expected to change, and therefore what a NEW value for
  * it means:
  *
@@ -196,6 +252,20 @@ export interface SemanticFact {
   unit?: string;
   /** When the fact was TRUE (a lab draw date), not when the paper was printed. */
   date?: string;
+  /**
+   * For a `financial` fact: what kind of money. Routing depends on it entirely
+   * — see FinancialKind. A financial fact without one is treated as unknown and
+   * asked about rather than guessed at.
+   */
+  financialKind?: FinancialKind;
+  /** For a `status_change` fact: the state the document says the record is in. */
+  status?: StatusValue;
+  /**
+   * For an `actionable_date`: how many days ahead the user wants warning. The
+   * app escalates every date through one attention ladder, so this is a single
+   * lead time, not a list of intervals — see the planner for why.
+   */
+  reminderDaysBefore?: number;
   confidence: number;
   /**
    * Set when the value was CALCULATED rather than printed. "$960/yr — derived
@@ -475,6 +545,42 @@ export function validateSemanticDocument(
       }
       value = n;
     }
+
+    // What KIND of money. An unrecognised kind is dropped rather than defaulted:
+    // defaulting to "charge" is how a loan payment becomes an expense and the
+    // month's outgoings double. With no kind at all the planner asks instead.
+    const rawKind = str(f?.financialKind);
+    let financialKind: FinancialKind | undefined;
+    if (rawKind) {
+      if (!FINANCIAL_KIND_SET.has(rawKind)) {
+        fail(`fact "${id}": unknown financialKind "${rawKind}" — dropped, will be asked about`);
+      } else {
+        financialKind = rawKind as FinancialKind;
+      }
+    }
+
+    // A status the app does not model cannot be applied to a record.
+    const rawStatus = str(f?.status);
+    let status: StatusValue | undefined;
+    if (rawStatus) {
+      if (!STATUS_VALUE_SET.has(rawStatus)) {
+        fail(`fact "${id}": unknown status "${rawStatus}"`);
+      } else {
+        status = rawStatus as StatusValue;
+      }
+    }
+    if (roles.includes("status_change") && !status) {
+      // A status change that names no status says nothing actionable.
+      report.droppedFacts.push(id);
+      fail(`fact "${id}": status_change with no recognised status`);
+      continue;
+    }
+
+    // A lead time must be a sane number of days. A "remind me 4000 days early"
+    // is not a preference, it is a parse failure.
+    const rawLead = Number(f?.reminderDaysBefore);
+    const reminderDaysBefore =
+      isFinite(rawLead) && rawLead >= 0 && rawLead <= 365 ? Math.round(rawLead) : undefined;
     let derivedFrom: SemanticFact["derivedFrom"];
     if (f?.derivedFrom && typeof f.derivedFrom === "object") {
       const from = (Array.isArray(f.derivedFrom.factIds) ? f.derivedFrom.factIds : []).map(str).filter(Boolean);
@@ -488,6 +594,9 @@ export function validateSemanticDocument(
       volatility: volatility as FactVolatility,
       unit: str(f?.unit) || undefined,
       date: str(f?.date) || undefined,
+      financialKind,
+      status,
+      reminderDaysBefore,
       confidence: clampConfidence(f?.confidence),
       derivedFrom,
     });

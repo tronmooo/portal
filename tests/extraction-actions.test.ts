@@ -76,21 +76,58 @@ describe.each(ALL_FIXTURES.map((f) => [f.name, f] as const))(
       expect(new Set(keys).size).toBe(keys.length);
     });
 
-    it("one recurrence produces exactly one financial record", () => {
-      const financial = p.actions.filter(
-        (a) => a.destination === "obligation" || a.destination === "expense" || a.destination === "income",
-      );
-      expect(financial.length).toBeLessThanOrEqual(fixture.semantic.recurrences.length + financial.filter((a) => a.destination !== "obligation").length);
-      const obligations = p.actions.filter((a) => a.destination === "obligation");
-      expect(obligations.length).toBe(fixture.semantic.recurrences.length);
+    it("one recurrence produces exactly one action, whatever its destination", () => {
+      // The DESTINATION varies — an existing bill is updated, a moneyless duty
+      // becomes a repeating task, a new recurring payment has nowhere to go —
+      // but the count never does. Two actions for one commitment is how one
+      // premium becomes both a bill and a charge.
+      for (const r of fixture.semantic.recurrences) {
+        const owning = p.actions.filter((a) => r.factIds.some((f) => a.factIds.includes(f)));
+        expect(owning, `recurrence ${r.id}`).toHaveLength(1);
+      }
     });
 
     it("a fact claimed by a recurrence is never also written as a separate record", () => {
       const claimed = new Set(fixture.semantic.recurrences.flatMap((r) => r.factIds));
       if (claimed.size === 0) return;
+      const recurrenceActionIds = new Set(
+        p.actions
+          .filter((a) => fixture.semantic.recurrences.some((r) => r.factIds.some((f) => a.factIds.includes(f))))
+          .map((a) => a.id),
+      );
       for (const a of p.actions) {
-        if (a.destination === "obligation") continue;
+        if (recurrenceActionIds.has(a.id)) continue;
         for (const fid of a.factIds) expect(claimed.has(fid)).toBe(false);
+      }
+    });
+
+    it("RULE 1 — never creates a profile, asset or liability", () => {
+      // The single most important invariant in the engine. The selected record
+      // already exists; nothing in any document may mint another.
+      for (const a of p.actions) {
+        if (a.operation !== "CREATE") continue;
+        expect(["profile", "obligation"], `${a.id} would create an entity`)
+          .not.toContain(a.target.kind);
+      }
+      // And if one is ever proposed anyway, it must be unsavable.
+      for (const a of p.actions) {
+        if (a.operation === "CREATE" && ["profile", "obligation"].includes(a.target.kind)) {
+          expect(a.savable).toBe(false);
+        }
+      }
+    });
+
+    it("an unsavable action is never ticked, and says why", () => {
+      for (const a of p.actions) {
+        if (a.savable) continue;
+        expect(a.selected, `${a.id} is unsavable but ticked`).toBe(false);
+        expect(a.unsupportedReason, `${a.id} gives no reason`).toBeTruthy();
+      }
+    });
+
+    it("every action says what it will write before it is saved", () => {
+      for (const a of p.actions) {
+        expect(a.writesLabel, `${a.id} has no writesLabel`).toBeTruthy();
       }
     });
 
@@ -145,8 +182,15 @@ describe.each(ALL_FIXTURES.map((f) => [f.name, f] as const))(
     it("meets its own stated expectations", () => {
       const e = fixture.expectations;
       if (!e) return;
-      if (e.obligations !== undefined) {
-        expect(p.actions.filter((a) => a.destination === "obligation").length).toBe(e.obligations);
+      if (e.recurrenceDestination !== undefined) {
+        const r = fixture.semantic.recurrences[0];
+        const owning = p.actions.find((a) => r.factIds.some((f) => a.factIds.includes(f)));
+        expect(owning?.destination, "recurrence landed somewhere unexpected")
+          .toBe(e.recurrenceDestination);
+      }
+      if (e.savableActions !== undefined) {
+        expect(p.actions.filter((a) => a.savable && a.operation !== "NO_ACTION").length)
+          .toBe(e.savableActions);
       }
       for (const itemId of e.referenceOnlyItemIds ?? []) {
         const owning = p.actions.filter((a) => a.itemIds.includes(itemId));
@@ -168,15 +212,30 @@ describe.each(ALL_FIXTURES.map((f) => [f.name, f] as const))(
 describe("cross-field reasoning — meaning comes from fields together", () => {
   const p = plan(insuranceDeclarations);
 
-  it("premium + payment plan + due date become ONE recurring obligation", () => {
-    const obligations = p.actions.filter((a) => a.destination === "obligation");
-    expect(obligations).toHaveLength(1);
-    const o = obligations[0];
-    // The relationship is visible: the action cites all three facts as evidence.
+  it("premium + payment plan + due date become ONE inferred commitment", () => {
+    // Three fields, one commitment — the relationship is what the engine is
+    // for, and the action cites all three as its evidence.
+    const owning = p.actions.filter((a) =>
+      ["f-due", "f-plan", "f-premium"].some((f) => a.factIds.includes(f)));
+    expect(owning).toHaveLength(1);
+    const o = owning[0];
     expect(o.factIds.sort()).toEqual(["f-due", "f-plan", "f-premium"]);
     expect(o.payload.frequency).toBe("yearly");
     expect(o.payload.amount).toBe(1428);
     expect(o.payload.nextDueDate).toBe("2024-06-01");
+  });
+
+  it("but it cannot be saved, because a new bill would be a new liability", () => {
+    // The reasoning is right and there is nowhere to put it. Saying so is the
+    // honest answer; quietly creating a liability profile beside the house
+    // would be rule 1 broken by the very feature meant to respect it.
+    const o = p.actions.find((a) => a.factIds.includes("f-premium"))!;
+    expect(o.savable).toBe(false);
+    expect(o.destination).toBe("unsupported");
+    expect(o.unsupportedCode).toBe("would_create_entity");
+    expect(o.selected).toBe(false);
+    expect(o.unsupportedReason).toMatch(/liability/i);
+    expect(o.writesLabel).toMatch(/Nothing/i);
   });
 
   it("the property's attributes become ONE update, not four rows", () => {
@@ -345,7 +404,7 @@ describe("conflicts are surfaced, not silently applied", () => {
 });
 
 describe("never double-count", () => {
-  it("a cost already bundled into a related liability is suppressed, not silently added", () => {
+  it("a cost already bundled into a related liability is flagged, not silently added", () => {
     const p = plan({
       ...insuranceDeclarations,
       index: {
@@ -355,14 +414,14 @@ describe("never double-count", () => {
         ),
       },
     });
-    const o = p.actions.find((a) => a.destination === "obligation")!;
+    const o = p.actions.find((a) => a.factIds.includes("f-premium"))!;
     const w = o.warnings.find((x) => x.code === "double_count");
     expect(w).toBeTruthy();
     expect(w!.blocking).toBe(true);
     expect(o.selected).toBe(false);
   });
 
-  it("an obligation that already tracks this becomes an update, not a twin", () => {
+  it("a bill that already tracks this is UPDATED — rule 2, prefer updating", () => {
     const p = plan({
       ...insuranceDeclarations,
       index: {
@@ -373,15 +432,22 @@ describe("never double-count", () => {
     const o = p.actions.find((a) => a.destination === "obligation")!;
     expect(o.operation).toBe("UPDATE");
     expect(o.target.id).toBe("obl-1");
+    expect(o.savable).toBe(true);
     expect(o.warnings.some((w) => w.code === "duplicate_record")).toBe(true);
   });
 
-  it("the premium reaches carrying costs by a link, never by a second expense row", () => {
-    const p = plan(insuranceDeclarations);
-    const o = p.actions.find((a) => a.destination === "obligation")!;
-    expect(o.payload.linkedAssetId).toBe("prop-1");
-    expect(o.payload.autoLogExpense).toBe(true);
-    expect(p.actions.filter((a) => a.destination === "expense")).toHaveLength(0);
+  it("a statement filed under a loan updates THAT loan's terms — never a second one", () => {
+    const p = plan(loanStatement);
+    const a = p.actions.find((x) => x.factIds.includes("f-payment"))!;
+    expect(a.destination).toBe("entity_field");
+    expect(a.operation).toBe("UPDATE");
+    expect(a.target.id).toBe("liab-2");
+    expect(a.savable).toBe(true);
+    expect(a.payload.fields.monthlyPayment).toBe(412.9);
+    expect(a.payload.fields.nextDueDate).toBe("2026-09-15");
+    // And no second liability, and no stray expense for the same money.
+    expect(p.actions.some((x) => x.operation === "CREATE" && x.target.kind === "profile")).toBe(false);
+    expect(p.actions.filter((x) => x.destination === "expense")).toHaveLength(0);
   });
 });
 
@@ -418,7 +484,7 @@ describe("annual cost is not annual payment", () => {
         }],
       },
     });
-    const o = p.actions.find((a) => a.destination === "obligation")!;
+    const o = p.actions.find((a) => a.factIds.includes("f-dues"))!;
     expect(o.warnings.some((w) => w.code === "derived_value")).toBe(true);
     expect(o.payload.amount).toBe(310);
   });
@@ -452,26 +518,34 @@ describe("the unknown document still gets reasoned about", () => {
 
   it("does not fall back to dumping every field on a profile", () => {
     const destinations = new Set(p.actions.map((a) => a.destination));
-    expect(destinations.has("obligation")).toBe(true);
     expect(destinations.has("calendar")).toBe(true);
     expect(destinations.has("reference")).toBe(true);
     // The whole document is not one profile blob.
     expect(destinations.size).toBeGreaterThan(2);
   });
 
-  it("infers a quarterly obligation nobody wrote a rule for", () => {
-    const o = p.actions.find((a) => a.destination === "obligation")!;
+  it("still works out the quarterly commitment, even with nowhere to file it", () => {
+    // "Not savable" is a statement about this app's records, not about the
+    // reasoning. The cadence, the amount and the end date were all understood.
+    const o = p.actions.find((a) => a.factIds.includes("f-dues"))!;
     expect(o.payload.frequency).toBe("quarterly");
     expect(o.payload.amount).toBe(310);
     expect(o.payload.recurrenceEnd).toBe("2027-04-01");
+    expect(o.savable).toBe(false);
+    expect(o.unsupportedReason).toBeTruthy();
   });
 });
 
 describe("summarizeActions", () => {
   it("says what will happen, in counts", () => {
     const s = summarizeActions(plan(insuranceDeclarations).actions);
-    expect(s).toMatch(/Recurring obligation/);
+    expect(s).toMatch(/Entity field update/);
     expect(s).toMatch(/kept as reference only/);
+  });
+
+  it("counts what cannot be saved separately from what will happen", () => {
+    const s = summarizeActions(plan(insuranceDeclarations).actions);
+    expect(s).toMatch(/understood but not savable/);
   });
 
   it("says so plainly when nothing is selected", () => {

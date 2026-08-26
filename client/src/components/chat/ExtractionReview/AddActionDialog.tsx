@@ -124,6 +124,12 @@ export function AddActionDialog({
       warnings: [],
       stage: 2,
       dedupeKey: `manual|${documentId}|${destination}|${targetId}|${chosen.map((c) => c.id).join(",")}`,
+      // A hand-made action only ever targets an EXISTING record — the picker
+      // lists nothing else — so it is always savable.
+      savable: true,
+      writesLabel: target
+        ? `You routed this to ${target.name}`
+        : `You routed this to ${DESTINATION_LABEL[destination]}`,
     });
     reset();
     setOpen(false);

@@ -65,7 +65,7 @@ import { trackerIdentityKey } from "./tracker-identity";
  * house the app already knows about must UPDATE that house, not mint a second.
  */
 export type ActionOperation =
-  | "UPDATE" | "APPEND" | "LINK" | "MERGE" | "CREATE" | "NO_ACTION";
+  | "UPDATE" | "APPEND" | "LINK" | "MERGE" | "CREATE" | "RECORD" | "NO_ACTION";
 
 export const OPERATION_LABEL: Record<ActionOperation, string> = {
   UPDATE: "Update",
@@ -73,6 +73,7 @@ export const OPERATION_LABEL: Record<ActionOperation, string> = {
   LINK: "Link",
   MERGE: "Merge into",
   CREATE: "Create",
+  RECORD: "Record",
   NO_ACTION: "Keep on document",
 };
 
@@ -80,7 +81,8 @@ export const OPERATION_LABEL: Record<ActionOperation, string> = {
 
 export type TargetKind =
   | "profile" | "obligation" | "expense" | "income" | "event" | "task"
-  | "tracker" | "note" | "document" | "relationship" | "none";
+  | "tracker" | "note" | "document" | "relationship" | "liability_payment"
+  | "none";
 
 /**
  * The record an action writes to.
@@ -132,6 +134,21 @@ export interface ActionWarning {
 
 // ─── Actions ─────────────────────────────────────────────────────────────────
 
+/**
+ * Why an inferred action cannot be saved.
+ *
+ * These are NOT errors and they are NOT reasons to hide the action. The user
+ * asked for every valid consequence to be inferred and shown; a consequence
+ * with nowhere to go is still worth seeing, and saying so plainly is more
+ * useful than silently dropping it or — far worse — forcing it into a record
+ * that means something else.
+ */
+export type UnsupportedReasonCode =
+  | "would_create_entity"     // creating a profile/asset/liability is never allowed
+  | "no_record_type"          // the app has no record that means this
+  | "no_matching_record"      // it would update something we could not find
+  | "not_a_ledger_event";     // a projection or quote, not a transaction
+
 export interface ProposedAction {
   id: string;
   operation: ActionOperation;
@@ -157,7 +174,40 @@ export interface ProposedAction {
   stage: 1 | 2 | 3 | 4;
   /** Idempotency. Two runs over one document produce the same key. */
   dedupeKey: string;
+
+  /**
+   * Can this actually be written?
+   *
+   * False means the engine understood the consequence and has nowhere
+   * compatible to put it. The row still renders — with its reason, and with
+   * Save disabled — because "I worked out that this is a refund and this app
+   * has no refund record" is real information, and quietly inventing an
+   * expense instead would be a lie the user only finds later.
+   */
+  savable: boolean;
+  unsupportedCode?: UnsupportedReasonCode;
+  /** Shown on the row: "No save destination — this app has no refund record." */
+  unsupportedReason?: string;
+  /**
+   * Exactly what record this will create or change, in the app's own words —
+   * "Expense · $84.19 · housing", "Liability payment against Cascade Auto Loan".
+   * Shown BEFORE the user saves, so Save is never a surprise.
+   */
+  writesLabel?: string;
 }
+
+/**
+ * What an action builder returns. `destinationOptions`, `savable` and
+ * `writesLabel` are filled in by the single `push` gate, so no builder can
+ * accidentally declare itself savable — that decision is made in one place.
+ */
+export type PushInput =
+  Omit<ProposedAction, "destinationOptions" | "savable" | "writesLabel">
+  & {
+    destinationOptions?: ExtractionDestination[];
+    savable?: boolean;
+    writesLabel?: string;
+  };
 
 export interface ActionGroup {
   destination: ExtractionDestination;
@@ -287,6 +337,17 @@ const KIND_TO_PROFILE_TYPES: Record<SemanticEntityKind, string[]> = {
  * rule. An insurer reached by `insured_by` writes `insurance.*` whether the
  * page was a homeowners declaration, a pet policy or a travel certificate.
  */
+/**
+ * Target kinds that ARE a stored entity — a profile, and therefore also an
+ * asset, a liability or a recurring bill, since this app models all of them as
+ * profiles discriminated by type. Creating any of these from a document is
+ * forbidden; see the gate in `push`.
+ */
+const ENTITY_TARGET_KINDS: ReadonlySet<string> = new Set(["profile", "obligation"]);
+
+/** Profile types that carry debt terms — a payment amount, a rate, a balance. */
+const LIABILITY_PROFILE_TYPES: ReadonlySet<string> = new Set(["liability", "loan"]);
+
 const RELATIONSHIP_TO_GROUP: Partial<Record<SemanticRelationship["type"], string>> = {
   insured_by: "insurance",
   insures: "insurance",
@@ -328,6 +389,38 @@ const CADENCE_WORD: Record<string, string> = {
   quarterly: "quarterly", semiannual: "twice a year", yearly: "yearly",
   per_installment: "per installment",
 };
+
+/**
+ * Cadence → the `recur:` tag vocabulary a repeating TASK uses
+ * (shared/recurrence). Only the frequencies tasks actually support appear;
+ * anything else falls back to the nearest one a task can express, because a
+ * task that repeats slightly wrong still beats no task at all.
+ */
+const CADENCE_TO_TASK_RECURRENCE: Record<string, string> = {
+  daily: "daily", weekly: "weekly", biweekly: "weekly", monthly: "monthly",
+  quarterly: "monthly", semiannual: "yearly", yearly: "yearly",
+  per_installment: "monthly",
+};
+
+/**
+ * How many days of warning a recurrence deserves.
+ *
+ * One number, not a list of intervals: the app escalates every date through a
+ * single attention ladder (shared/attention — overdue, within 7 days,
+ * upcoming), so the ladder already provides the "warn me as it approaches"
+ * behaviour. This sets the one knob that is genuinely per-record — how far out
+ * it starts mattering — and a yearly renewal deserves far more notice than a
+ * monthly bill.
+ */
+function leadDaysFor(p: RecurrencePattern): number {
+  switch (p.cadence) {
+    case "yearly": return 30;
+    case "semiannual": return 21;
+    case "quarterly": return 14;
+    case "monthly": return 5;
+    default: return 3;
+  }
+}
 
 /** Map our cadence vocabulary onto the Obligation frequency enum. */
 const CADENCE_TO_FREQUENCY: Record<string, string> = {
@@ -499,11 +592,33 @@ function conflictFor(fact: SemanticFact, existing: unknown, key: string): Action
 
 // ─── The planner ─────────────────────────────────────────────────────────────
 
+/**
+ * The record this document was filed under, chosen by a person BEFORE the
+ * upload. It already exists. It is the immovable context for everything the
+ * document implies, and nothing in the document can replace it, duplicate it,
+ * or cause a second one to be made.
+ *
+ * This is what makes rule 1 enforceable rather than merely true-by-accident: a
+ * statement filed under "2025 Dodge Ram Auto Loan" has that liability as
+ * context, and no amount of confident reasoning about the words "Dodge Ram Auto
+ * Loan" on the page may produce a second liability beside it.
+ */
+export interface ExtractionContext {
+  entityId: string;
+  /** ProfileType — property, vehicle, liability, person, asset… */
+  entityType: string;
+  entityName: string;
+  /** The person who owns it, when the context is an asset or a liability. */
+  ownerId?: string;
+}
+
 export interface PlanInput {
   semantic: SemanticDocument;
   /** The raw extraction rows, so actions can cite their evidence. */
   items: ExtractionItem[];
   index: EntityIndex;
+  /** The record this document was filed under. See ExtractionContext. */
+  context?: ExtractionContext;
   /** The profile the upload already filed this document under. */
   primaryProfileId?: string;
   /** The person who owns that profile. */
@@ -531,26 +646,56 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
   const itemById = new Map(items.map((i) => [i.id, i]));
 
   // ── Resolve every entity once ──
+  // ── RULE 1: the parent is the context, and it is never duplicated ────────
+  //
+  // A person chose this record before the upload. Any entity in the document
+  // that plausibly IS that record resolves to it — not to a lookalike, not to a
+  // "where does this go?" row, and never to something new.
+  const contextProfile = input.context
+    ? index.profiles.find((p) => p.id === input.context!.entityId)
+    : input.primaryProfileId
+      ? index.profiles.find((p) => p.id === input.primaryProfileId)
+      : undefined;
+
+  const contextTarget: TargetRef | undefined = contextProfile
+    ? {
+        kind: "profile", id: contextProfile.id, name: contextProfile.name,
+        profileType: contextProfile.type, matchConfidence: 1,
+        matchReason: "you filed this document here",
+      }
+    : undefined;
+
+  /**
+   * Is this entity the record we are already filed under?
+   *
+   * Deliberately generous, because the cost of the two answers is not
+   * symmetric. Saying yes when the document merely names the parent again
+   * costs nothing — the writes land where they were always going. Saying no
+   * produces either a duplicate or an unnecessary question about a record the
+   * user already picked.
+   *
+   * The one thing that overrides it is a stronger claim elsewhere: an entity
+   * carrying an identifier that exactly matches a DIFFERENT record is that
+   * other record, whatever its name looks like.
+   */
+  const isTheContext = (e: SemanticEntity, resolved: TargetRef): boolean => {
+    if (!contextProfile || !contextTarget) return false;
+    if (resolved.id === contextProfile.id) return true;
+    // An identifier match on some other record wins — it is not a guess.
+    if (resolved.id && resolved.id !== contextProfile.id
+      && (resolved.matchConfidence ?? 0) >= 0.9) return false;
+    const allowed = KIND_TO_PROFILE_TYPES[e.kind] ?? [];
+    if (!allowed.includes(contextProfile.type)) return false;
+    // Same kind as the context, and nothing stronger claimed it.
+    return !resolved.id || (resolved.matchConfidence ?? 0) < 0.9;
+  };
+
   const targets = new Map<string, TargetRef>();
   for (const e of semantic.entities) {
     const { target } = resolveEntity(e, index);
-    // The upload already told us where this document lives. When the primary
-    // subject did not resolve on its own, that choice IS the answer — it is a
-    // human's, and it beats any name match.
-    if (
-      e.ref === semantic.primarySubject &&
-      !target.id &&
-      input.primaryProfileId &&
-      target.kind === "profile"
-    ) {
-      const p = index.profiles.find((x) => x.id === input.primaryProfileId);
-      if (p) {
-        targets.set(e.ref, {
-          ...target, id: p.id, name: p.name, profileType: p.type,
-          matchConfidence: 1, matchReason: "you filed this document here",
-        });
-        continue;
-      }
+    if (isTheContext(e, target)) {
+      targets.set(e.ref, { ...contextTarget!, entityRef: e.ref });
+      continue;
     }
     targets.set(e.ref, target);
   }
@@ -587,7 +732,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
   const claimedFacts = new Set<string>();
   const usedDedupeKeys = new Set<string>();
 
-  const push = (a: Omit<ProposedAction, "destinationOptions"> & { destinationOptions?: ExtractionDestination[] }) => {
+  const push = (a: PushInput) => {
     // INVARIANT: no two actions may share a dedupeKey. A collision means one
     // real-world fact is about to be written twice — the exact failure the
     // "never double-count" rule exists to prevent — so the second is dropped
@@ -600,8 +745,37 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       return;
     }
     usedDedupeKeys.add(a.dedupeKey);
+
+    // ── RULE 1, ENFORCED IN ONE PLACE ────────────────────────────────────
+    // Every action passes through here, so this is the only gate that has to
+    // hold. Creating a profile, asset or liability is never allowed — not at
+    // high confidence, not for an unfamiliar document, not when the record
+    // obviously "should" exist. The selected record already exists; the
+    // engine's job is consequences, not entities.
+    //
+    // Note this catches more than it looks: in this app a recurring bill IS a
+    // liability profile (supabase-storage.createObligation → createProfile
+    // type:"liability"), so "create an obligation" is caught by the same rule
+    // rather than needing its own.
+    let savable = a.savable ?? true;
+    let unsupportedCode = a.unsupportedCode;
+    let unsupportedReason = a.unsupportedReason;
+    if (a.operation === "CREATE" && ENTITY_TARGET_KINDS.has(a.target?.kind ?? "none")) {
+      savable = false;
+      unsupportedCode = "would_create_entity";
+      unsupportedReason =
+        `This would create a new ${a.target.profileType || "record"}. Document extraction never creates profiles, assets or liabilities — it only updates the ones you already have.`;
+    }
+
     const action: ProposedAction = {
       ...a,
+      savable,
+      unsupportedCode,
+      unsupportedReason,
+      writesLabel: a.writesLabel ?? describeWrite(a.destination, a.operation, a.payload, a.target),
+      // Nothing that cannot be written is ever ticked. An unsavable row is
+      // information, not an instruction.
+      selected: savable ? a.selected : false,
       destinationOptions: a.destinationOptions ?? defaultOptionsFor(a.destination),
     };
     actions.push(action);
@@ -619,6 +793,20 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
   //
   // A premium is claimed here so the financial pass below cannot also propose
   // it as a one-off expense. One real-world commitment, one record.
+  //
+  // WHERE A RECURRENCE CAN GO, and why the obvious answer is wrong:
+  //
+  // "This recurs" reads like it should create a recurring bill. In this app a
+  // recurring bill IS a liability profile — supabase-storage.createObligation
+  // ends in createProfile({ type: "liability" }) — so creating one from a
+  // document would be creating a liability from a document, which is exactly
+  // what rule 1 forbids. The three honest homes are:
+  //
+  //   • an EXISTING bill or liability the recurrence describes → update it
+  //   • a recurring DUTY with no money attached (renew, inspect, file,
+  //     return, service) → a repeating task, which is not an entity
+  //   • a new recurring PAYMENT with no record behind it → nowhere. Shown,
+  //     explained, Save disabled.
   for (const p of semantic.recurrences) {
     const subject = p.subjectRef ? landingFor(p.subjectRef) : { target: primaryTarget(semantic, targets) };
     const amounts = recurrenceAmounts(p);
@@ -626,6 +814,8 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     const annual = amounts.annual;
     const cadence = CADENCE_WORD[p.cadence] || p.cadence;
     const nextDue = normalizeDateString(p.nextOccurrence) || undefined;
+    const amount = per ?? annual ?? null;
+    const isMoney = amount !== null && amount > 0;
 
     const w: ActionWarning[] = [];
     if (amounts.perOccurrenceDerived && per !== null) {
@@ -634,28 +824,22 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
         message: `${money(per)} ${cadence} is calculated from the ${money(annual ?? 0)} annual figure — the document did not print it.`,
       });
     }
-    // Does a bill like this already exist? Then this is an UPDATE, not a second
-    // one. Matching on the asset it is for plus a near-identical amount is the
-    // narrowest test that still catches a re-uploaded statement.
-    const assetId = subject.target.kind === "profile" ? subject.target.id ?? undefined : undefined;
+
+    const subjectId = subject.target.kind === "profile" ? subject.target.id ?? undefined : undefined;
+
+    // Does a bill already exist for this? Then this is an UPDATE — the whole
+    // point of "prefer updating over creating".
     const existing = index.obligations.find((o) => {
       const sameDoc = o.linkedDocumentId && o.linkedDocumentId === documentId;
-      const sameAsset = assetId && (o.linkedAssetId === assetId || (o.linkedProfiles || []).includes(assetId));
-      const amt = per ?? annual;
-      const sameAmount = amt != null && o.amount != null && Math.abs(o.amount - amt) <= Math.max(1, amt * 0.01);
-      return Boolean(sameDoc || (sameAsset && sameAmount));
+      const sameSubject = subjectId && (o.id === subjectId || o.linkedAssetId === subjectId
+        || (o.linkedProfiles || []).includes(subjectId));
+      const sameAmount = amount != null && o.amount != null
+        && Math.abs(o.amount - amount) <= Math.max(1, amount * 0.25);
+      return Boolean(sameDoc || (sameSubject && (sameAmount || o.id === subjectId)));
     });
-    if (existing) {
-      w.push({
-        code: "duplicate_record", blocking: false,
-        message: `"${existing.name}" already tracks this — it will be updated, not duplicated.`,
-      });
-    }
 
-    // Is this cost ALREADY carried by something else? A premium bundled into a
-    // mortgage escrow is genuinely owed once; recording it again would double
-    // the user's outgoings. Detected structurally: a liability related to this
-    // same subject that already carries a non-zero bundled figure.
+    // A cost already carried inside something else — a premium bundled into a
+    // mortgage escrow — is genuinely owed once. Recording it again doubles it.
     const bundled = bundledCarrier(semantic, targets, index, p, subject.target);
     if (bundled) {
       w.push({
@@ -664,55 +848,155 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       });
     }
 
-    const amountForBill = per ?? annual ?? 0;
-    const confidence = p.confidence;
-    const blocking = w.some((x) => x.blocking);
-    const dedupeKey = stableKey([documentId, "obligation", subject.target.id ?? subject.target.name, p.id]);
+    const dedupeKey = stableKey([documentId, "recurrence", subjectId ?? subject.target.name, p.id]);
+    const commonPayload = {
+      name: p.label,
+      amount: amount ?? undefined,
+      frequency: CADENCE_TO_FREQUENCY[p.cadence] || "monthly",
+      nextDueDate: nextDue,
+      recurrenceEnd: normalizeDateString(p.endsOn) || undefined,
+      annualizedTotal: annual ?? undefined,
+      linkedDocumentId: documentId,
+      _source: { documentId, factIds: [...p.factIds] },
+    };
+    const detail = [
+      `Frequency: ${cadence}`,
+      nextDue ? `next ${nextDue}` : null,
+      annual !== null && per !== null && annual !== per
+        ? `${money(annual)}/year total${amounts.annualDerived ? " (calculated)" : ""}`
+        : null,
+      subject.target.id ? targetLabel(subject.target) : null,
+    ].filter(Boolean).join(" · ");
 
+    // ── (a) An existing bill or liability: update it ──
+    if (existing) {
+      w.push({
+        code: "duplicate_record", blocking: false,
+        message: `"${existing.name}" already tracks this — it will be updated, not duplicated.`,
+      });
+      push({
+        id: `act-recurrence-${slug(p.id)}`,
+        operation: "UPDATE",
+        destination: "obligation",
+        target: { kind: "obligation", id: existing.id, name: existing.name, entityRef: p.subjectRef },
+        roles: ["recurring_obligation", "financial"],
+        title: `Update recurring bill — ${isMoney ? money(amount!) : ""} ${cadence}`.replace(/\s+/g, " ").trim(),
+        detail,
+        factIds: [...p.factIds],
+        itemIds: itemIdsForFacts(semantic, p.factIds),
+        payload: { ...commonPayload, existingObligationId: existing.id, leadTimeDays: leadDaysFor(p) },
+        origin: p.stated === "both" ? "stated" : "implied",
+        selected: !w.some((x) => x.blocking) && confidenceTier(p.confidence) !== "low",
+        confidence: p.confidence,
+        warnings: w,
+        stage: 2,
+        dedupeKey,
+      });
+      continue;
+    }
+
+    // ── (a2) The subject IS an existing liability: update ITS terms ──
+    // A loan statement filed under an auto loan describes that loan's payment,
+    // not a new bill beside it. The payment amount, the frequency and the next
+    // due date are fields on the liability we already have — updating them is
+    // both the correct write and the one that cannot create anything.
+    const subjectProfile = subjectId
+      ? index.profiles.find((x) => x.id === subjectId)
+      : undefined;
+    if (isMoney && subjectProfile && LIABILITY_PROFILE_TYPES.has(subjectProfile.type)) {
+      const fields: Record<string, any> = {
+        monthlyPayment: amount,
+        frequency: CADENCE_TO_FREQUENCY[p.cadence] || "monthly",
+      };
+      if (nextDue) { fields.nextDueDate = nextDue; fields.dueDate = nextDue; }
+      if (commonPayload.recurrenceEnd) fields.maturityDate = commonPayload.recurrenceEnd;
+      push({
+        id: `act-recurrence-${slug(p.id)}`,
+        operation: "UPDATE",
+        destination: "entity_field",
+        target: subject.target,
+        roles: ["recurring_obligation", "financial"],
+        title: `Update payment terms on ${subjectProfile.name} — ${money(amount!)} ${cadence}`,
+        detail,
+        factIds: [...p.factIds],
+        itemIds: itemIdsForFacts(semantic, p.factIds),
+        payload: {
+          profileId: subjectProfile.id,
+          fields,
+          leadTimeDays: leadDaysFor(p),
+          _source: { documentId, factIds: [...p.factIds] },
+        },
+        origin: p.stated === "both" ? "stated" : "implied",
+        selected: !w.some((x) => x.blocking) && confidenceTier(p.confidence) !== "low",
+        confidence: p.confidence,
+        warnings: w,
+        stage: 2,
+        dedupeKey,
+      });
+      continue;
+    }
+
+    // ── (b) No money attached: a repeating duty is a repeating TASK ──
+    // A task is not an entity, so this is always allowed — and it is the right
+    // shape anyway for "renew the registration", "file the return", "service
+    // it again in six months".
+    if (!isMoney) {
+      push({
+        id: `act-recurrence-${slug(p.id)}`,
+        operation: "CREATE",
+        destination: "task",
+        target: { kind: "task", id: null, name: p.label },
+        roles: ["recurring_obligation"],
+        title: `Repeating task — ${p.label}`,
+        detail,
+        factIds: [...p.factIds],
+        itemIds: itemIdsForFacts(semantic, p.factIds),
+        payload: {
+          title: p.label,
+          dueDate: nextDue,
+          recurrence: CADENCE_TO_TASK_RECURRENCE[p.cadence],
+          recurrenceEnd: normalizeDateString(p.endsOn) || undefined,
+          linkedProfileId: subjectId,
+          _source: { documentId, factIds: [...p.factIds] },
+        },
+        origin: "implied",
+        selected: confidenceTier(p.confidence) !== "low",
+        confidence: p.confidence,
+        warnings: w,
+        stage: 2,
+        dedupeKey,
+      });
+      continue;
+    }
+
+    // ── (c) A recurring payment with no record behind it ──
+    // Understood, and nowhere to put it. Shown with the reason rather than
+    // dropped, and rather than being forced into a record that means something
+    // else.
     push({
       id: `act-recurrence-${slug(p.id)}`,
-      operation: existing ? "UPDATE" : "CREATE",
-      destination: "obligation",
-      target: existing
-        ? { kind: "obligation", id: existing.id, name: existing.name, entityRef: p.subjectRef }
-        : { kind: "obligation", id: null, name: p.label, entityRef: p.subjectRef },
+      operation: "CREATE",
+      destination: "unsupported",
+      target: { kind: "none", id: null, name: p.label },
       roles: ["recurring_obligation", "financial"],
-      title: `${existing ? "Update" : "Create"} recurring obligation — ${money(amountForBill)} ${cadence}`,
-      detail: [
-        `Frequency: ${cadence}`,
-        nextDue ? `next ${nextDue}` : null,
-        annual !== null && per !== null && annual !== per
-          ? `${money(annual)}/year total${amounts.annualDerived ? " (calculated)" : ""}`
-          : null,
-        subject.target.id ? targetLabel(subject.target) : null,
-      ].filter(Boolean).join(" · "),
+      title: `Recurring payment — ${money(amount!)} ${cadence}`,
+      detail,
       factIds: [...p.factIds],
       itemIds: itemIdsForFacts(semantic, p.factIds),
-      payload: {
-        name: p.label,
-        amount: amountForBill,
-        frequency: CADENCE_TO_FREQUENCY[p.cadence] || "monthly",
-        nextDueDate: nextDue,
-        recurrenceEnd: normalizeDateString(p.endsOn) || undefined,
-        annualizedTotal: annual ?? undefined,
-        linkedAssetId: assetId,
-        linkedDocumentId: documentId,
-        // The asset link plus auto-logging IS how this reaches the asset's
-        // carrying costs (shared/cost-of-ownership derives them from expenses
-        // against owned assets). Writing a separate expense row would double it.
-        autoLogExpense: true,
-        existingObligationId: existing?.id,
-        _source: { documentId, factIds: [...p.factIds] },
-      },
-      origin: p.stated === "both" ? "stated" : "implied",
-      selected: !blocking && confidenceTier(confidence) !== "low",
-      confidence,
+      payload: commonPayload,
+      origin: "implied",
+      selected: false,
+      confidence: p.confidence,
       warnings: w,
       stage: 2,
       dedupeKey,
+      savable: false,
+      unsupportedCode: "would_create_entity",
+      unsupportedReason:
+        `A new recurring bill is stored as a liability, and document extraction never creates one. Attach this to an existing bill or liability and it will update that instead.`,
+      writesLabel: "Nothing — no compatible record exists",
     });
   }
-
   // ═══ 2. Facts, grouped by where they land ════════════════════════════════
   const fieldBuckets = new Map<string, {
     target: TargetRef; group?: string; facts: SemanticFact[]; roles: Set<SemanticRole>;
@@ -925,7 +1209,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
 
 // ─── Action builders ─────────────────────────────────────────────────────────
 
-function referenceAction(fact: SemanticFact, doc: SemanticDocument, documentId: string, rows?: Map<string, ExtractionItem>): Omit<ProposedAction, "destinationOptions"> {
+function referenceAction(fact: SemanticFact, doc: SemanticDocument, documentId: string, rows?: Map<string, ExtractionItem>): PushInput {
   return {
     id: `act-ref-${slug(fact.id)}`,
     operation: "NO_ACTION",
@@ -946,7 +1230,7 @@ function referenceAction(fact: SemanticFact, doc: SemanticDocument, documentId: 
   };
 }
 
-function unresolvedAction(fact: SemanticFact, target: TargetRef, documentId: string, rows?: Map<string, ExtractionItem>): Omit<ProposedAction, "destinationOptions"> {
+function unresolvedAction(fact: SemanticFact, target: TargetRef, documentId: string, rows?: Map<string, ExtractionItem>): PushInput {
   return {
     id: `act-ask-${slug(fact.id)}`,
     operation: "NO_ACTION",
@@ -986,7 +1270,7 @@ function measurementAction(
   index: EntityIndex,
   documentId: string,
   today: string,
-): Omit<ProposedAction, "destinationOptions"> {
+): PushInput {
   const wanted = trackerIdentityKey(fact.label);
   const existing = index.trackers.find((t) => trackerIdentityKey(t.name) === wanted);
   const num = Number(fact.value);
@@ -1044,7 +1328,7 @@ function dateActionFor(
   doc: SemanticDocument,
   documentId: string,
   rows?: Map<string, ExtractionItem>,
-): Omit<ProposedAction, "destinationOptions"> {
+): PushInput {
   const key = fieldKeyFor(fact, rows);
   const iso = normalizeDateString(fact.value) || normalizeDateString(fact.date);
   const cls = classifyDateField(key, doc.documentType);
@@ -1135,6 +1419,63 @@ function bundledCarrier(
 
 // ─── Presentation ────────────────────────────────────────────────────────────
 
+/**
+ * Exactly what record this action will create or change, in the app's own
+ * vocabulary. Shown on the row BEFORE the user saves, so pressing Save is never
+ * a surprise about which part of the app just changed.
+ */
+function describeWrite(
+  destination: ExtractionDestination,
+  operation: ActionOperation,
+  payload: Record<string, any> | undefined,
+  target: TargetRef | undefined,
+): string {
+  const p = payload || {};
+  const on = target?.name ? ` on ${target.name}` : "";
+  switch (destination) {
+    case "profile":
+    case "entity_field":
+      return `Updates ${Object.keys(p.fields || {}).length} field(s)${on}`;
+    case "entity_record":
+      return `Updates ${Object.keys(p.fields || {}).length} field(s) under "${p.group}"${on}`;
+    case "structured_append":
+      return `Adds ${(p.rows || []).length} row(s) to ${p.arrayKey}${on}`;
+    case "obligation":
+      return operation === "UPDATE"
+        ? `Updates the recurring bill${on}`
+        : "Would create a recurring bill";
+    case "liability_payment":
+      return `Records a payment of ${money(Number(p.amount) || 0)}${on}, and updates the balance`;
+    case "expense":
+      return `Creates an expense · ${money(Number(p.amount) || 0)} · ${p.category || "general"}`;
+    case "income":
+      return `Creates an income entry · ${money(Number(p.amount) || 0)}`;
+    case "tracker":
+    case "profile_tracker":
+      return operation === "APPEND"
+        ? `Adds an entry to the ${target?.name} tracker`
+        : `Creates a ${target?.name} tracker and its first entry`;
+    case "calendar":
+      return p.derived
+        ? `Sets ${p.key} — the reminder follows from the record, no separate event`
+        : `Creates a calendar event on ${p.date}`;
+    case "task":
+      return p.recurrence
+        ? `Creates a repeating task (${p.recurrence})${p.dueDate ? ` from ${p.dueDate}` : ""}`
+        : `Creates a task${p.dueDate ? ` due ${p.dueDate}` : ""}`;
+    case "note":
+      return `Saves a note${on}`;
+    case "relationship_link":
+      return `Links two records (${p.type})`;
+    case "document_attach":
+      return `Files this document under ${target?.name}`;
+    case "reference":
+      return "Kept on the document only — nothing else changes";
+    default:
+      return "";
+  }
+}
+
 function targetLabel(t: TargetRef | undefined): string {
   if (!t || !t.name) return "";
   const kind = t.profileType
@@ -1211,9 +1552,9 @@ function defaultOptionsFor(d: ExtractionDestination): ExtractionDestination[] {
 
 const GROUP_ORDER: ExtractionDestination[] = [
   "entity_record", "entity_field", "profile", "profile_tracker", "tracker",
-  "structured_append", "obligation", "expense", "income", "calendar", "task",
-  "allergy", "medication", "medical_history", "note",
-  "relationship_link", "document_attach", "reference", "ignore",
+  "structured_append", "obligation", "liability_payment", "expense", "income",
+  "calendar", "task", "allergy", "medication", "medical_history", "note",
+  "relationship_link", "document_attach", "reference", "unsupported", "ignore",
 ];
 
 function groupActions(actions: ProposedAction[]): ActionGroup[] {
@@ -1248,7 +1589,9 @@ const GROUP_LABEL: Partial<Record<ExtractionDestination, string>> = {
   note: "Notes",
   relationship_link: "Relationships",
   document_attach: "Document filing",
+  liability_payment: "Payments",
   reference: "Reference only",
+  unsupported: "Understood, but nowhere to save it",
 };
 
 /**
@@ -1272,7 +1615,8 @@ export function summarizeActions(actions: ProposedAction[]): string {
       case "tracker":
       case "profile_tracker":
         bump("Tracker update"); break;
-      case "obligation": bump("Recurring obligation"); break;
+      case "obligation": bump("Recurring bill update"); break;
+      case "liability_payment": bump("Payment"); break;
       case "expense": bump("Expense"); break;
       case "income": bump("Income entry"); break;
       case "calendar": bump("Calendar rule"); break;
@@ -1285,9 +1629,13 @@ export function summarizeActions(actions: ProposedAction[]): string {
     }
   }
   const referenced = actions.filter((a) => a.destination === "reference").length;
+  // Named separately and never counted as something that will happen: the
+  // whole point of an unsavable row is that it will NOT be written.
+  const unsavable = actions.filter((a) => !a.savable).length;
 
   const parts = [...counts.entries()].map(([label, n]) => `${n} ${label}${n === 1 ? "" : "s"}`);
   if (referenced > 0) parts.push(`${referenced} kept as reference only`);
+  if (unsavable > 0) parts.push(`${unsavable} understood but not savable`);
   return parts.length > 0 ? parts.join(" · ") : "Nothing to save";
 }
 

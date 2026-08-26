@@ -77,13 +77,20 @@ export type ExtractionDestination =
   | "income"             // a one-off or recurring receipt
   | "relationship_link"  // an edge between two records (owns, insured_by, finances)
   | "document_attach"    // this document, filed against an entity
-  | "reference";         // kept on the document ON PURPOSE — must cause nothing
+  | "liability_payment"  // a payment recorded against an existing liability
+  | "reference"          // kept on the document ON PURPOSE — must cause nothing
+  // A consequence the engine understood and this app has nowhere to put. It is
+  // shown, with its reason, and Save is disabled — because "this is a refund
+  // and there is no refund record" is real information, and quietly filing it
+  // as income instead would be a lie the user only discovers later.
+  | "unsupported";
 
 export const ALL_DESTINATIONS: readonly ExtractionDestination[] = [
   "profile", "profile_tracker", "tracker", "allergy", "medication",
   "medical_history", "note", "calendar", "task", "ignore",
   "entity_field", "entity_record", "structured_append", "obligation",
-  "expense", "income", "relationship_link", "document_attach", "reference",
+  "expense", "income", "liability_payment", "relationship_link",
+  "document_attach", "reference", "unsupported",
 ] as const;
 
 /** Human labels for the review UI's group headers and dropdown. */
@@ -106,7 +113,9 @@ export const DESTINATION_LABEL: Record<ExtractionDestination, string> = {
   income: "Income",
   relationship_link: "Relationship",
   document_attach: "Attach document",
+  liability_payment: "Payment",
   reference: "Reference only",
+  unsupported: "No save destination",
 };
 
 /** Display order for the grouped review pane. */
@@ -114,7 +123,8 @@ export const DESTINATION_ORDER: readonly ExtractionDestination[] = [
   "profile", "profile_tracker", "tracker", "allergy", "medication",
   "medical_history", "note", "calendar", "task", "ignore",
   "entity_record", "entity_field", "structured_append", "obligation",
-  "expense", "income", "relationship_link", "document_attach", "reference",
+  "liability_payment", "expense", "income", "relationship_link",
+  "document_attach", "reference", "unsupported",
 ] as const;
 
 // ─── The unified review item ─────────────────────────────────────────────────

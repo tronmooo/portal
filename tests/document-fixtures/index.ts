@@ -29,8 +29,15 @@ export interface DocumentFixture {
   primaryProfileId?: string;
   /** What this fixture is here to prove, beyond the universal invariants. */
   expectations?: {
-    /** Exactly this many obligation actions. */
-    obligations?: number;
+    /**
+     * Where the document's recurrence (if any) is allowed to land. Not a count
+     * of obligations: a recurrence resolves to an existing bill, to the terms
+     * of an existing liability, to a repeating task, or to nothing at all —
+     * and which one it is depends on what already exists, not on the document.
+     */
+    recurrenceDestination?: string;
+    /** Exactly this many actions that will actually be written. */
+    savableActions?: number;
     /** These raw rows must reach `reference` and cause nothing. */
     referenceOnlyItemIds?: string[];
     /** At least one action of each of these destinations. */
@@ -144,9 +151,11 @@ export const insuranceDeclarations: DocumentFixture = {
     narrative: [],
   },
   expectations: {
-    obligations: 1,
+    // The property has no existing bill for this premium, and creating one
+    // would create a liability. Understood, shown, not savable.
+    recurrenceDestination: "unsupported",
     referenceOnlyItemIds: ["field-signaturedate", "field-naiccode"],
-    destinations: ["obligation", "entity_field", "reference"],
+    destinations: ["unsupported", "entity_field", "reference"],
   },
 };
 
@@ -185,7 +194,7 @@ export const medicalReport: DocumentFixture = {
     recurrences: [],
     narrative: [],
   },
-  expectations: { obligations: 0, destinations: ["tracker", "profile", "note"] },
+  expectations: { destinations: ["tracker", "profile", "note"] },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -218,7 +227,7 @@ export const receipt: DocumentFixture = {
     recurrences: [],
     narrative: [],
   },
-  expectations: { obligations: 0 },
+  expectations: {},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -292,7 +301,11 @@ export const loanStatement: DocumentFixture = {
     }],
     narrative: [],
   },
-  expectations: { obligations: 1 },
+  expectations: {
+    // The statement is filed under the loan itself, so the payment terms are
+    // fields on a liability we already have — the case rule 2 is about.
+    recurrenceDestination: "entity_field",
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -323,7 +336,7 @@ export const deed: DocumentFixture = {
     recurrences: [],
     narrative: [],
   },
-  expectations: { obligations: 0, referenceOnlyItemIds: ["field-recordeddate"] },
+  expectations: { referenceOnlyItemIds: ["field-recordeddate"] },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -356,7 +369,7 @@ export const prescription: DocumentFixture = {
     recurrences: [],
     narrative: [],
   },
-  expectations: { obligations: 0 },
+  expectations: {},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -391,7 +404,10 @@ export const lease: DocumentFixture = {
     }],
     narrative: [],
   },
-  expectations: { obligations: 1 },
+  expectations: {
+    // Rent on a property with no rent bill on file. Nowhere to save it.
+    recurrenceDestination: "unsupported",
+  },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -425,7 +441,7 @@ export const taxRecord: DocumentFixture = {
     recurrences: [],
     narrative: [],
   },
-  expectations: { obligations: 0 },
+  expectations: {},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -507,9 +523,10 @@ export const unrecognizedDocument: DocumentFixture = {
     narrative: [],
   },
   expectations: {
-    obligations: 1,
+    // Quarterly dues owed to a club, with no bill record behind them.
+    recurrenceDestination: "unsupported",
     referenceOnlyItemIds: ["field-certificateissued"],
-    destinations: ["obligation", "calendar"],
+    destinations: ["unsupported", "calendar"],
   },
 };
 

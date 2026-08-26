@@ -10,7 +10,7 @@
 // one yearly bill" checkable instead of something to be taken on faith.
 
 import { useState } from "react";
-import { ChevronRight, AlertTriangle, Info } from "lucide-react";
+import { ChevronRight, AlertTriangle, Info, Ban } from "lucide-react";
 import {
   DESTINATION_LABEL, type ExtractionDestination, type ExtractionItem,
 } from "@shared/extraction-destinations";
@@ -42,6 +42,11 @@ export function ActionRow({
   const blocking = action.warnings.filter((w) => w.blocking);
   const advisory = action.warnings.filter((w) => !w.blocking);
   const isReference = action.operation === "NO_ACTION";
+  // An inferred consequence with nowhere to go. It is shown, with its reason,
+  // and Save is off — because "this is a refund and this app has no refund
+  // record" is real information, and quietly filing it as income instead would
+  // be a lie the user only discovers later.
+  const unsavable = action.savable === false;
 
   return (
     <div
@@ -50,8 +55,15 @@ export function ActionRow({
     >
       <div className="flex items-start gap-2">
         {/* Keep / Don't save. A reference row has nothing to turn off — it is
-            already the decision to write nothing. */}
-        {!isReference && (
+            already the decision to write nothing — and neither does a row with
+            no save destination. */}
+        {unsavable && (
+          <Ban
+            className="h-3.5 w-3.5 mt-1 shrink-0 text-muted-foreground"
+            aria-label="Cannot be saved"
+          />
+        )}
+        {!isReference && !unsavable && (
           <button
             type="button"
             role="switch"
@@ -73,11 +85,31 @@ export function ActionRow({
 
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium leading-tight">
-            {!isReference && (
+            {!isReference && !unsavable && (
               <span className="text-primary">{OPERATION_LABEL[action.operation]} </span>
             )}
             {action.title}
           </div>
+
+          {unsavable && (
+            <div
+              className="text-[11px] leading-tight text-amber-700 dark:text-amber-400 mt-0.5"
+              data-testid={`action-unsupported-${action.id}`}
+            >
+              <span className="font-medium">No save destination.</span>{" "}
+              {action.unsupportedReason}
+            </div>
+          )}
+
+          {/* Exactly what record changes, before Save is pressed. */}
+          {action.writesLabel && !unsavable && !isReference && (
+            <div
+              className="text-[11px] text-muted-foreground leading-tight"
+              data-testid={`action-writes-${action.id}`}
+            >
+              {action.writesLabel}
+            </div>
+          )}
 
           {targetText(action) && (
             <div className="text-[11px] text-muted-foreground leading-tight" data-testid={`action-target-${action.id}`}>
@@ -145,7 +177,7 @@ export function ActionRow({
         </div>
 
         {/* Change destination. */}
-        {action.destinationOptions.length > 1 && (
+        {action.destinationOptions.length > 1 && !unsavable && (
           <select
             className="text-[11px] bg-background border border-border rounded px-1 py-0.5 text-foreground max-w-[130px] shrink-0 mt-0.5"
             value={action.destination}

@@ -9,7 +9,10 @@ import { summarizeActions, type ProposedAction } from "@shared/extraction-action
 
 export function ProposedActions({ actions }: { actions: ProposedAction[] }) {
   const live = actions.filter((a) => a.selected && a.operation !== "NO_ACTION");
-  const flagged = actions.filter((a) => a.warnings.some((w) => w.blocking));
+  const flagged = actions.filter((a) => a.savable !== false && a.warnings.some((w) => w.blocking));
+  // Counted apart from everything else: these were understood and will not be
+  // written, and folding them into "12 actions" would overstate what Save does.
+  const unsavable = actions.filter((a) => a.savable === false);
 
   return (
     <div className="px-2.5 py-1.5 bg-muted/40 border-b border-border/60" data-testid="proposed-actions">
@@ -21,6 +24,14 @@ export function ProposedActions({ actions }: { actions: ProposedAction[] }) {
       <div className="text-[11px] text-foreground leading-tight mt-0.5" data-testid="proposed-actions-summary">
         {summarizeActions(actions)}
       </div>
+      {unsavable.length > 0 && (
+        <div
+          className="text-[11px] leading-tight text-muted-foreground mt-0.5"
+          data-testid="proposed-actions-unsavable"
+        >
+          {unsavable.length} inferred {unsavable.length === 1 ? "action has" : "actions have"} no save destination in this app — shown below with the reason
+        </div>
+      )}
       {flagged.length > 0 && (
         <div
           className="text-[11px] leading-tight text-amber-700 dark:text-amber-400 mt-0.5"

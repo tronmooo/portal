@@ -39,6 +39,8 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { findIdentityMatches } from "@shared/tracker-identity";
 import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE, type Tracker } from "@shared/schema";
 import { getUserToday } from "@shared/timezone";
+import { applyLiabilityPayment } from "./liability-payments";
+import { recurrenceToTags } from "@shared/recurrence";
 
 const CAT = "action-executor";
 
@@ -85,6 +87,23 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
     .filter((a) => a && a.id && a.operation !== "NO_ACTION" && a.selected !== false)
     .sort((a, b) => (a.stage ?? 2) - (b.stage ?? 2));
 
+  // ── RULE 1, ENFORCED AGAIN AT THE WRITE ──────────────────────────────────
+  // The planner already refuses to make these savable, and the UI already
+  // refuses to tick them. This is the third gate, and it is here because it is
+  // the only one an edited request body cannot get past: a client that sends
+  // `savable: true` on an action that would create a liability still writes
+  // nothing. Cheap to check, and the thing it prevents is a phantom profile in
+  // someone's net worth.
+  const refused = actions.filter((a) => a.savable === false
+    || (a.operation === "CREATE" && (a.target?.kind === "profile" || a.target?.kind === "obligation")));
+  for (const a of refused) {
+    out.results.push({
+      actionId: a.id, status: "skipped",
+      message: `${a.title} — not saved: ${a.unsupportedReason || "document extraction never creates profiles, assets or liabilities"}`,
+    });
+  }
+  const refusedIds = new Set(refused.map((a) => a.id));
+
   // Reference rows carry no write, but they DO carry a decision: keep this on
   // the document and derive nothing from it. Collected separately because they
   // are filtered out above.
@@ -119,6 +138,7 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
   };
 
   for (const action of actions) {
+    if (refusedIds.has(action.id)) continue;
     const targetId = action.target?.id
       ?? (action.payload?.profileId ? String(action.payload.profileId) : undefined)
       ?? undefined;
@@ -178,6 +198,19 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
 
         case "obligation": {
           const msg = await writeObligation(action, input.documentId);
+          ok(action, msg);
+          break;
+        }
+
+        case "liability_payment": {
+          const msg = await writeLiabilityPayment(action, input.documentId);
+          if (targetId) touched.add(targetId);
+          ok(action, msg);
+          break;
+        }
+
+        case "task": {
+          const msg = await writeTask(action, input.documentId);
           ok(action, msg);
           break;
         }
@@ -494,65 +527,43 @@ function requireAmount(v: unknown): number {
 const today = () => getUserToday();
 
 /**
- * Create or update the ONE record a recurrence produces.
+ * Update an EXISTING recurring bill. It never creates one.
  *
- * `linkedAssetId` plus `autoLogExpense` is how a cost reaches the asset's
- * carrying costs (shared/cost-of-ownership derives them from expenses against
- * owned assets). Writing a separate expense row alongside would count the same
- * commitment twice, which is the failure the whole double-count rule exists to
- * prevent.
+ * `storage.createObligation` is not called from here and must not be: in this
+ * app a recurring bill is a liability profile — supabase-storage's
+ * implementation ends in `createProfile({ type: "liability" })` — so "create an
+ * obligation" and "create a liability from a document" are the same operation
+ * wearing different names, and the second is forbidden.
+ *
+ * A recurrence with no existing bill behind it never reaches this function: the
+ * planner routes it to the liability's own terms, to a repeating task, or to a
+ * row that says plainly there is nowhere to put it.
  */
 async function writeObligation(action: ProposedAction, documentId: string): Promise<string> {
   const p = action.payload || {};
   const amount = requireAmount(p.amount);
   const existingId = p.existingObligationId ? String(p.existingObligationId) : (action.target?.id ?? undefined);
 
-  if (existingId) {
+  if (!existingId) {
+    throw new Error("no existing bill to update — a new one would create a liability");
+  }
+
+  {
     const patch: Record<string, any> = {
       amount,
       frequency: p.frequency || "monthly",
       linkedDocumentId: documentId,
     };
+    // ONE lead time, not a list of intervals: the app escalates every date
+    // through a single attention ladder (shared/attention), so this only sets
+    // how far out the date starts mattering.
+    if (typeof p.leadTimeDays === "number") patch.leadTimeDays = p.leadTimeDays;
     if (p.nextDueDate) patch.nextDueDate = String(p.nextDueDate);
     if (p.recurrenceEnd) patch.recurrenceEnd = String(p.recurrenceEnd);
     const updated = await storage.updateObligation(existingId, patch as any);
-    if (!updated) throw new Error(`obligation ${existingId} not found`);
+    if (!updated) throw new Error(`bill ${existingId} not found`);
     return `Updated recurring bill: $${amount.toFixed(2)} ${(updated as any).name}`;
   }
-
-  if (!p.nextDueDate) throw new Error("a recurring bill needs a next due date");
-
-  // Idempotency across confirms: a bill this document already created is not
-  // created again. Keyed on the document plus the planner's dedupeKey, both of
-  // which are stable across re-extraction.
-  const priors = await storage.getObligations();
-  const dup = (priors || []).find((o: any) =>
-    o?.linkedDocumentId === documentId &&
-    (o?.fields?._extractionAction === action.dedupeKey ||
-      Math.abs(Number(o?.amount) - amount) < 0.005));
-  if (dup) return `Recurring bill already exists (${(dup as any).name}) — not duplicated`;
-
-  const created = await storage.createObligation({
-    name: String(p.name || action.title),
-    amount,
-    frequency: p.frequency || "monthly",
-    category: canonicalObligationCategory(String(p.category || "general")),
-    kind: "bill",
-    nextDueDate: String(p.nextDueDate),
-    autopay: false,
-    autoLogExpense: p.autoLogExpense !== false,
-    linkedAssetId: p.linkedAssetId || undefined,
-    linkedLiabilityId: p.linkedLiabilityId || undefined,
-    linkedDocumentId: documentId,
-    linkedProfiles: p.linkedAssetId ? [String(p.linkedAssetId)] : [],
-    recurrenceEnd: p.recurrenceEnd ? String(p.recurrenceEnd) : undefined,
-  } as any);
-  try {
-    await storage.updateObligation((created as any).id, {
-      fields: { ...((created as any).fields || {}), _extractionAction: action.dedupeKey, _source: { documentId } },
-    } as any);
-  } catch { /* the marker is an optimisation, not a requirement */ }
-  return `Created recurring bill: $${amount.toFixed(2)}/${p.frequency || "mo"} ${(created as any).name}`;
 }
 
 /**
@@ -589,6 +600,106 @@ async function writeExpense(action: ProposedAction, documentId: string): Promise
   } as any);
   try { await storage.linkProfileTo((expense as any).id, "document", documentId); } catch { /* best effort */ }
   return `Created expense: $${amount.toFixed(2)} ${(expense as any).description}`;
+}
+
+/**
+ * Record a payment against an existing liability.
+ *
+ * Delegates to `applyLiabilityPayment` (server/liability-payments.ts) rather
+ * than writing the payment row here, because that function does the part this
+ * one must not get wrong: it splits the amount into principal and interest with
+ * the canonical amortization math, moves the balance, and advances the due date
+ * — all in one place. A payment written without that is the exact shape of "the
+ * payment saved but the balance didn't change".
+ *
+ * The user asked for the payment and the balance to be separately toggleable.
+ * They are: the planner emits the balance as its own `entity_field` action from
+ * the figure the statement PRINTS, which is not always the figure implied by
+ * the payment — a statement's balance often predates the payment on it.
+ */
+async function writeLiabilityPayment(action: ProposedAction, documentId: string): Promise<string> {
+  const p = action.payload || {};
+  const liabilityId = String(p.liabilityId || action.target?.id || "");
+  if (!liabilityId) throw new Error("no liability to record this against");
+  const liability = await storage.getProfile(liabilityId);
+  if (!liability) throw new Error(`liability ${liabilityId} not found`);
+
+  const amount = requireAmount(p.amount);
+
+  // Idempotency: the same payment from the same document is recorded once.
+  try {
+    const priors = await storage.getLiabilityPayments(liabilityId);
+    const dup = (priors || []).find((x: any) =>
+      x?.documentId === documentId &&
+      Math.abs(Number(x?.amount) - amount) < 0.005 &&
+      String(x?.paymentDate || "") === String(p.date || x?.paymentDate || ""));
+    if (dup) return `Payment of $${amount.toFixed(2)} from this document is already recorded`;
+  } catch { /* the check is an optimisation; a missing reader must not block the write */ }
+
+  const result = await applyLiabilityPayment(storage, liability, {
+    amount,
+    paymentDate: p.date ? String(p.date) : null,
+    principal: typeof p.principal === "number" ? p.principal : null,
+    interest: typeof p.interest === "number" ? p.interest : null,
+    escrow: typeof p.escrow === "number" ? p.escrow : null,
+    fees: typeof p.fees === "number" ? p.fees : null,
+    // "partial" is a real, named payment type — a statement showing less than
+    // the scheduled amount is not a malformed standard payment.
+    paymentType: p.paymentType ? String(p.paymentType) as any : null,
+    notes: `From document extraction`,
+  });
+
+  try {
+    await storage.updateLiabilityPayment?.((result.payment as any)?.id, { documentId } as any);
+  } catch { /* provenance is best-effort; the payment itself is the contract */ }
+
+  return result.recurring
+    ? `Recorded $${amount.toFixed(2)} paid on ${(liability as any).name}`
+    : `Recorded $${amount.toFixed(2)} on ${(liability as any).name} — balance now $${Number(result.newBalance).toFixed(2)}`;
+}
+
+/**
+ * A thing to do, one-off or repeating.
+ *
+ * Repetition lives in `tags` (shared/recurrence: `recur:`/`runtil:`), which is
+ * how every other repeating task in the app is expressed — so an extracted
+ * "renew the registration every year" is indistinguishable from one typed by
+ * hand, and every surface that already understands repeating tasks understands
+ * this one too.
+ */
+async function writeTask(action: ProposedAction, documentId: string): Promise<string> {
+  const p = action.payload || {};
+  const title = String(p.title || action.title).trim();
+  if (!title) throw new Error("a task needs a title");
+  const dueDate = p.dueDate ? String(p.dueDate) : undefined;
+
+  // Idempotency: one document does not produce the same to-do twice.
+  const priors = await storage.getTasks();
+  const dup = (priors || []).find((t: any) =>
+    String(t?.title || "").trim().toLowerCase() === title.toLowerCase() &&
+    String(t?.dueDate || "") === String(dueDate || ""));
+  if (dup) return `Task "${title}" already exists`;
+
+  let tags: string[] = [`document:${documentId}`];
+  if (p.recurrence) {
+    tags = recurrenceToTags(
+      { freq: String(p.recurrence), until: p.recurrenceEnd ? String(p.recurrenceEnd) : undefined } as any,
+      tags,
+    );
+  }
+
+  const task = await storage.createTask({
+    title,
+    description: p.description ? String(p.description) : undefined,
+    status: "todo",
+    priority: "medium",
+    dueDate,
+    linkedProfiles: p.linkedProfileId ? [String(p.linkedProfileId)] : [],
+    tags,
+  } as any);
+  return p.recurrence
+    ? `Created repeating task: ${(task as any).title}`
+    : `Created task: ${(task as any).title}${dueDate ? ` (due ${dueDate})` : ""}`;
 }
 
 // ─── Relationships ───────────────────────────────────────────────────────────

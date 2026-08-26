@@ -78,15 +78,40 @@ describe("the review pane leads with meaning, not with 75 rows", () => {
   it("summarises what will happen, in counts", () => {
     renderPane(buildExtraction());
     const summary = screen.getByTestId("proposed-actions-summary").textContent || "";
-    expect(summary).toMatch(/Recurring obligation/);
+    expect(summary).toMatch(/Entity field update/);
     expect(summary).toMatch(/kept as reference only/);
+  });
+
+  it("says separately what it understood but cannot save", () => {
+    renderPane(buildExtraction());
+    expect(screen.getByTestId("proposed-actions-unsavable").textContent)
+      .toMatch(/no save destination in this app/);
   });
 
   it("groups the actions by where they go", () => {
     renderPane(buildExtraction());
-    expect(screen.getByTestId("action-group-obligation")).toBeTruthy();
     expect(screen.getByTestId("action-group-entity_field")).toBeTruthy();
     expect(screen.getByTestId("action-group-reference")).toBeTruthy();
+    expect(screen.getByTestId("action-group-unsupported")).toBeTruthy();
+  });
+
+  it("shows what each savable action will actually write, before Save", () => {
+    renderPane(buildExtraction());
+    const fields = screen.getByTestId("action-group-entity_field");
+    expect(within(fields).getByTestId(/action-writes-/).textContent)
+      .toMatch(/Updates \d+ field/);
+  });
+
+  it("shows an unsavable action with its reason, and no way to turn it on", () => {
+    renderPane(buildExtraction());
+    const group = screen.getByTestId("action-group-unsupported");
+    fireEvent.click(within(group).getByTestId("action-group-toggle-unsupported"));
+    expect(within(group).getByTestId(/action-unsupported-/).textContent)
+      .toMatch(/No save destination/);
+    // No toggle, and no destination picker that could be used to smuggle it
+    // into a record that means something else.
+    expect(within(group).queryByTestId(/action-toggle-/)).toBeNull();
+    expect(within(group).queryByTestId(/action-destination-/)).toBeNull();
   });
 
   it("keeps every extracted row reachable rather than discarding it", () => {
@@ -99,13 +124,14 @@ describe("the review pane leads with meaning, not with 75 rows", () => {
     }
   });
 
-  it("shows the evidence behind a claim, so 'these five fields are one bill' is checkable", () => {
+  it("shows the evidence behind a claim, so 'these three fields are one bill' is checkable", () => {
     renderPane(buildExtraction());
-    const obligation = screen.getByTestId("action-group-obligation");
-    const toggle = within(obligation).getByTestId(/action-evidence-toggle-/);
+    const group = screen.getByTestId("action-group-unsupported");
+    fireEvent.click(within(group).getByTestId("action-group-toggle-unsupported"));
+    const toggle = within(group).getByTestId(/action-evidence-toggle-/);
     expect(toggle.textContent).toMatch(/3 fields this came from/);
     fireEvent.click(toggle);
-    const evidence = within(obligation).getByTestId(/^action-evidence-act-/);
+    const evidence = within(group).getByTestId(/^action-evidence-act-/);
     expect(evidence.textContent).toMatch(/Annual Premium/);
     expect(evidence.textContent).toMatch(/Payment Plan/);
   });
@@ -119,13 +145,22 @@ describe("the user's routing always wins", () => {
     fireEvent.click(screen.getByText("Confirm"));
     const payload = confirmPayload(onConfirm);
     expect(payload.actions.length).toBeGreaterThan(0);
-    expect(payload.actions.some((a: any) => a.destination === "obligation")).toBe(true);
+    expect(payload.actions.some((a: any) => a.destination === "entity_field")).toBe(true);
+  });
+
+  it("never sends an unsavable action as something to write", () => {
+    const { onConfirm } = renderPane(buildExtraction());
+    fireEvent.click(screen.getByText("Confirm"));
+    const written = confirmPayload(onConfirm).actions.filter(
+      (a: any) => a.selected && a.operation !== "NO_ACTION",
+    );
+    expect(written.every((a: any) => a.savable !== false)).toBe(true);
   });
 
   it("Don't save takes the action out of what gets written", async () => {
     const { onConfirm } = renderPane(buildExtraction());
-    const obligation = screen.getByTestId("action-group-obligation");
-    const toggle = within(obligation).getByTestId(/action-toggle-/);
+    const group = screen.getByTestId("action-group-entity_field");
+    const toggle = within(group).getByTestId(/action-toggle-/);
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
@@ -134,19 +169,18 @@ describe("the user's routing always wins", () => {
     const written = confirmPayload(onConfirm).actions.filter(
       (a: any) => a.selected && a.operation !== "NO_ACTION",
     );
-    expect(written.some((a: any) => a.destination === "obligation")).toBe(false);
+    expect(written.some((a: any) => a.destination === "entity_field")).toBe(false);
   });
 
   it("changing a destination re-routes the write AND turns it on", async () => {
     const { onConfirm } = renderPane(buildExtraction());
-    const obligation = screen.getByTestId("action-group-obligation");
-    const select = within(obligation).getByTestId(/action-destination-/) as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: "expense" } });
+    const group = screen.getByTestId("action-group-entity_field");
+    const select = within(group).getByTestId(/action-destination-/) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "note" } });
 
     fireEvent.click(screen.getByText("Confirm"));
     const actions = confirmPayload(onConfirm).actions;
-    expect(actions.some((a: any) => a.destination === "obligation")).toBe(false);
-    const moved = actions.find((a: any) => a.destination === "expense");
+    const moved = actions.find((a: any) => a.destination === "note" && a.itemIds.includes("field-yearbuilt"));
     expect(moved).toBeTruthy();
     // Re-routing something is an act of wanting it saved.
     expect(moved.selected).toBe(true);
@@ -158,14 +192,15 @@ describe("the user's routing always wins", () => {
     // 1,428 would be the worst of both — a correction the user believes they
     // made.
     const { onConfirm } = renderPane(buildExtraction());
-    const obligation = screen.getByTestId("action-group-obligation");
-    fireEvent.click(within(obligation).getByTestId(/action-evidence-toggle-/));
+    const group = screen.getByTestId("action-group-unsupported");
+    fireEvent.click(within(group).getByTestId("action-group-toggle-unsupported"));
+    fireEvent.click(within(group).getByTestId(/action-evidence-toggle-/));
     fireEvent.change(screen.getByTestId("action-evidence-value-field-annualpremium"), {
       target: { value: "1500.00" },
     });
 
     fireEvent.click(screen.getByText("Confirm"));
-    const written = confirmPayload(onConfirm).actions.find((a: any) => a.destination === "obligation");
+    const written = confirmPayload(onConfirm).actions.find((a: any) => a.factIds.includes("f-premium"));
     expect(written.payload.amount).toBe(1500);
     expect((screen.getByTestId("extracted-value-field-annualpremium") as HTMLInputElement).value)
       .toBe("1500.00");
@@ -204,9 +239,9 @@ describe("+ Add action — routing the engine did not propose", () => {
     expect(manual).toBeTruthy();
     expect(manual.destination).toBe("expense");
     expect(manual.itemIds).toEqual(["field-annualpremium"]);
-    // The original obligation is untouched — this is an ADDITIONAL destination,
+    // The original inference is untouched — this is an ADDITIONAL destination,
     // not a replacement.
-    expect(actions.some((a: any) => a.destination === "obligation" && a.selected)).toBe(true);
+    expect(actions.some((a: any) => a.factIds.includes("f-premium"))).toBe(true);
   });
 
   it("will not add an action with nowhere to put it", async () => {
@@ -262,11 +297,10 @@ describe("blocking warnings hold the write open", () => {
     });
     renderPane({ ...buildExtraction(), actionPlan: plan, items: plan.items });
 
-    const obligation = screen.getByTestId("action-group-obligation");
-    expect(within(obligation).getByTestId(/action-toggle-/).getAttribute("aria-checked")).toBe("false");
-    expect(within(obligation).getByTestId(/action-warning-/).textContent)
+    const group = screen.getByTestId("action-group-unsupported");
+    fireEvent.click(within(group).getByTestId("action-group-toggle-unsupported"));
+    expect(within(group).getByTestId(/action-warning-/).textContent)
       .toMatch(/already includes this cost/);
-    expect(screen.getByTestId("proposed-actions-flagged").textContent)
-      .toMatch(/needs a decision/);
+    expect(within(group).queryByTestId(/action-toggle-/)).toBeNull();
   });
 });

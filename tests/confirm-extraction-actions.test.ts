@@ -22,6 +22,8 @@ const { stubState, stubStorage } = vi.hoisted(() => {
     profiles: new Map<string, any>(),
     documents: new Map<string, any>(),
     obligations: [] as any[],
+    liabilityPayments: [] as any[],
+    tasks: [] as any[],
     expenses: [] as any[],
     trackers: [] as any[],
     entries: [] as any[],
@@ -63,6 +65,23 @@ const { stubState, stubStorage } = vi.hoisted(() => {
       return updated;
     },
     async getObligations() { return state.obligations; },
+    async getLiabilityPayments() { return state.liabilityPayments; },
+    async createLiabilityPayment(data: any) {
+      const row = { id: id("pay"), ...data };
+      state.liabilityPayments.push(row);
+      return row;
+    },
+    async updateLiabilityPayment(pid: string, patch: any) {
+      const row = state.liabilityPayments.find((x) => x.id === pid);
+      if (row) Object.assign(row, patch);
+      return row;
+    },
+    async getTasks() { return state.tasks; },
+    async createTask(data: any) {
+      const row = { id: id("task"), ...data };
+      state.tasks.push(row);
+      return row;
+    },
     async createObligation(data: any) {
       const row = { id: id("obl"), fields: {}, ...data };
       state.obligations.push(row);
@@ -216,17 +235,27 @@ function declarationsPlan(): ProposedAction[] {
       },
     }),
     action({
-      id: "a-premium", destination: "obligation", operation: "CREATE",
-      target: { kind: "obligation", id: null, name: "Homeowners premium" },
-      title: "Create recurring obligation — $1,428 yearly",
-      itemIds: ["field-annualpremium", "field-paymentplan", "field-paymentduedate"],
+      id: "a-payment", destination: "liability_payment", operation: "RECORD",
+      target: { kind: "liability_payment", id: "liab-1", name: "Pinnacle Home Loans Mortgage" },
+      title: "Record payment — $1,428",
+      itemIds: ["field-annualpremium"],
       payload: {
-        name: "Homeowners premium", amount: 1428, frequency: "yearly",
-        nextDueDate: "2024-06-01", recurrenceEnd: "2025-06-01",
-        category: "insurance", linkedAssetId: "prop-1", linkedDocumentId: DOC,
-        autoLogExpense: true, _source: { documentId: DOC },
+        liabilityId: "liab-1", amount: 1428, date: "2024-06-01",
+        _source: { documentId: DOC },
       },
-      dedupeKey: "k-premium",
+      dedupeKey: "k-payment",
+    }),
+    action({
+      id: "a-renewal", destination: "task", operation: "CREATE",
+      target: { kind: "task", id: null, name: "Renew homeowners policy" },
+      title: "Repeating task — Renew homeowners policy",
+      itemIds: ["field-paymentplan", "field-paymentduedate"],
+      payload: {
+        title: "Renew homeowners policy", dueDate: "2025-06-01",
+        recurrence: "yearly", linkedProfileId: "prop-1",
+        _source: { documentId: DOC },
+      },
+      dedupeKey: "k-renewal",
     }),
     action({
       id: "a-expiry", destination: "calendar", operation: "UPDATE",
@@ -282,6 +311,8 @@ describe("POST /api/chat/confirm-extraction — the reviewed plan", () => {
     stubState.profiles.clear();
     stubState.documents.clear();
     stubState.obligations.length = 0;
+    stubState.liabilityPayments.length = 0;
+    stubState.tasks.length = 0;
     stubState.expenses.length = 0;
     stubState.trackers.length = 0;
     stubState.entries.length = 0;
@@ -353,19 +384,45 @@ describe("POST /api/chat/confirm-extraction — the reviewed plan", () => {
     expect(Object.keys(person._docFields[DOC])).toEqual(["mailingAddress"]);
   });
 
-  it("creates the recurring obligation the old expense gate suppressed", async () => {
+  it("records the payment through the existing liability-payment path", async () => {
     await confirm();
-    expect(stubState.obligations).toHaveLength(1);
-    const o = stubState.obligations[0];
-    expect(o.amount).toBe(1428);
-    expect(o.frequency).toBe("yearly");
-    expect(o.nextDueDate).toBe("2024-06-01");
-    expect(o.recurrenceEnd).toBe("2025-06-01");
-    // The asset link plus auto-logging is how this reaches the property's
-    // carrying costs — no second expense row, so nothing is counted twice.
-    expect(o.linkedAssetId).toBe("prop-1");
-    expect(o.autoLogExpense).toBe(true);
+    expect(stubState.liabilityPayments).toHaveLength(1);
+    const pay = stubState.liabilityPayments[0];
+    expect(pay.liabilityProfileId).toBe("liab-1");
+    expect(pay.amount).toBe(1428);
+    // Not filed as an expense: a payment against a debt and a charge are
+    // different things, and counting it as both doubles the month's outgoings.
     expect(stubState.expenses).toHaveLength(0);
+  });
+
+  it("creates a repeating task for the renewal, tagged the way every other one is", async () => {
+    await confirm();
+    const task = stubState.tasks.find((t: any) => t.title === "Renew homeowners policy");
+    expect(task).toBeTruthy();
+    expect(task.dueDate).toBe("2025-06-01");
+    expect(task.tags).toContain("recur:yearly");
+    expect(task.linkedProfiles).toEqual(["prop-1"]);
+  });
+
+  it("RULE 1 — refuses to create a liability even when asked to", async () => {
+    // The planner will not mark this savable and the UI will not tick it. This
+    // asserts the third gate: a hand-edited request body still writes nothing.
+    const rogue = action({
+      id: "a-rogue", destination: "obligation", operation: "CREATE",
+      target: { kind: "obligation", id: null, name: "Homeowners premium" },
+      title: "Create recurring bill",
+      payload: { name: "Homeowners premium", amount: 1428, frequency: "yearly", nextDueDate: "2024-06-01" },
+      dedupeKey: "k-rogue",
+      selected: true,
+    });
+    const res = await post(base, { extractionId: DOC, actions: [rogue] });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(stubState.obligations).toHaveLength(0);
+    expect(stubState.profiles.size).toBe(3);   // exactly the three we seeded
+    const r = data.actionResults.find((x: any) => x.actionId === "a-rogue");
+    expect(r.status).toBe("skipped");
+    expect(r.message).toMatch(/never creates profiles|liabilit/i);
   });
 
   it("puts the expiration on the record instead of creating a second copy of it", async () => {
@@ -412,7 +469,8 @@ describe("POST /api/chat/confirm-extraction — the reviewed plan", () => {
     const afterFirst = JSON.stringify({
       prop: stubState.profiles.get("prop-1").fields,
       person: stubState.profiles.get("person-1").fields,
-      obligations: stubState.obligations.length,
+      payments: stubState.liabilityPayments.length,
+      tasks: stubState.tasks.length,
       links: stubState.entityLinks.length,
     });
 
@@ -421,13 +479,15 @@ describe("POST /api/chat/confirm-extraction — the reviewed plan", () => {
     const data = await res.json();
     expect(data.failures).toEqual([]);
 
-    expect(stubState.obligations).toHaveLength(1);
+    expect(stubState.liabilityPayments).toHaveLength(1);
+    expect(stubState.tasks).toHaveLength(1);
     expect(stubState.expenses).toHaveLength(0);
     expect(stubState.events).toHaveLength(0);
     const afterSecond = JSON.stringify({
       prop: stubState.profiles.get("prop-1").fields,
       person: stubState.profiles.get("person-1").fields,
-      obligations: stubState.obligations.length,
+      payments: stubState.liabilityPayments.length,
+      tasks: stubState.tasks.length,
       links: stubState.entityLinks.length,
     });
     expect(afterSecond).toBe(afterFirst);
@@ -449,14 +509,14 @@ describe("POST /api/chat/confirm-extraction — the reviewed plan", () => {
     }
     // And the writes that had nothing to do with the property still happened.
     expect(stubState.profiles.get("person-1").fields.mailingAddress).toBeTruthy();
-    expect(stubState.obligations).toHaveLength(1);
+    expect(stubState.liabilityPayments).toHaveLength(1);
   });
 
   it("an unticked action is not written", async () => {
     const p = declarationsPlan().map((a) =>
-      a.id === "a-premium" ? { ...a, selected: false } : a);
+      a.id === "a-payment" ? { ...a, selected: false } : a);
     await confirm(p);
-    expect(stubState.obligations).toHaveLength(0);
+    expect(stubState.liabilityPayments).toHaveLength(0);
     expect(stubState.profiles.get("prop-1").fields.yearBuilt).toBe("2018");
   });
 
