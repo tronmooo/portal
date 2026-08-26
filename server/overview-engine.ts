@@ -32,6 +32,7 @@ import {
   type RelationKind,
 } from "@shared/overview-compose";
 import { classifyOverviewEntity } from "@shared/overview-semantics";
+import { MS_PER_DAY, toMonthlyAmount } from "@shared/obligation-windows";
 import {
   normalizeSchemaHints,
   overviewSignature,
@@ -62,16 +63,18 @@ function relationFor(related: { type?: string | null; type_key?: string | null; 
 }
 
 /** Monthly average spend over the window the expenses actually span, so a
- *  single 3-year-old repair doesn't read as a monthly cost. */
+ *  single 3-year-old repair doesn't read as a monthly cost. Goes through the
+ *  canonical cadence math (spend per day → per month) rather than carrying its
+ *  own days-per-month constant. */
 function monthlyAverage(expenses: Array<{ amount?: any; date?: string | null }>): number | null {
   const rows = expenses
     .map(e => ({ amount: parseMoney(e.amount), time: e.date ? new Date(e.date).getTime() : NaN }))
     .filter(r => Number.isFinite(r.amount) && Number.isFinite(r.time));
   if (rows.length < 2) return null;
   const times = rows.map(r => r.time);
-  const spanMonths = Math.max(1, (Math.max(...times) - Math.min(...times)) / (30.44 * 86_400_000));
+  const spanDays = Math.max(1, (Math.max(...times) - Math.min(...times)) / MS_PER_DAY);
   const total = rows.reduce((s, r) => s + r.amount, 0);
-  return total / spanMonths;
+  return toMonthlyAmount(total / spanDays, "daily");
 }
 
 /**

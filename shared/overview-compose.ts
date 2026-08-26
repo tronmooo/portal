@@ -12,6 +12,7 @@
 // Pinned by tests/overview-compose.test.ts.
 
 import { parseMoney } from "./asset-value";
+import { toMonthlyAmount } from "./obligation-windows";
 import { canonicalFieldKey } from "./profile-field-canon";
 import { humanizeFieldName } from "./field-label";
 import {
@@ -121,18 +122,26 @@ function daysBetween(from: Date, to: Date): number {
   return Math.round((to.getTime() - from.getTime()) / MS_DAY);
 }
 
-/** Monthly-equivalent of an amount on a frequency. Unknown cadence → monthly,
- *  which is the only assumption that can't silently 12× a number. */
+/**
+ * Monthly-equivalent of an amount on a frequency. The cadence→multiplier math
+ * itself belongs to toMonthlyAmount(); this only maps the free-text cadences
+ * that reach an Overview ("every other month", "one-time") onto the canonical
+ * vocabulary. Unknown cadence → already monthly, the one assumption that
+ * cannot silently 12x a number.
+ */
 export function monthlyEquivalent(amount: number, frequency?: string | null): number {
-  const f = String(frequency || "monthly").toLowerCase();
-  if (/week/.test(f)) return /bi|two|every other/.test(f) ? (amount * 26) / 12 : (amount * 52) / 12;
-  if (/day|daily/.test(f)) return (amount * 365) / 12;
-  if (/quarter/.test(f)) return amount / 3;
-  if (/semi|half.?year|6 ?month/.test(f)) return amount / 6;
-  if (/year|annual/.test(f)) return amount / 12;
-  if (/bi.?month|every other month/.test(f)) return amount / 2;
+  const f = String(frequency || "monthly").toLowerCase().trim();
   if (/one.?time|once/.test(f)) return 0;
-  return amount;
+  if (/bi.?month|every other month/.test(f)) return amount / 2;
+  const canonical =
+    /bi.?week|fortnight|every other week|every.?2.?weeks/.test(f) ? "biweekly"
+      : /week/.test(f) ? "weekly"
+      : /day|daily/.test(f) ? "daily"
+      : /quarter/.test(f) ? "quarterly"
+      : /semi|half.?year|6 ?month/.test(f) ? "semiannual"
+      : /year|annual/.test(f) ? "annual"
+      : "monthly";
+  return toMonthlyAmount(amount, canonical);
 }
 
 function firstMoney(fields: Record<string, any>, keys: string[]): { key: string; value: number } | null {
