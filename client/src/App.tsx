@@ -58,6 +58,7 @@ const _profDispatchImport = () => import("@/pages/profile-route-dispatch");
 const _profInfoImport = () => import("@/pages/profile-info");
 const _profListImport = () => import("@/pages/profiles-list");
 const _docDImport  = () => import("@/pages/document-detail");
+const _docRImport  = () => import("@/pages/document-review");
 const _authImport  = () => import("@/pages/auth");
 const _resetImport = () => import("@/pages/reset-password");
 const _settImport  = () => import("@/pages/settings");
@@ -83,6 +84,7 @@ const ProfileRouteDispatch = lazy(_profDispatchImport);
 const ProfileInfoPage  = lazy(_profInfoImport);
 const ProfilesListPage = lazy(_profListImport);
 const DocumentDetailPage = lazy(_docDImport);
+const DocumentReviewPage = lazy(_docRImport);
 const AuthPage         = lazy(_authImport);
 const ResetPasswordPage = lazy(_resetImport);
 const SettingsPage     = lazy(_settImport);
@@ -777,6 +779,9 @@ function AppRouter() {
         {/* Dispatcher: people redirect to their dashboard + Info; every other
             profile type still renders the per-type detail page. */}
         <Route path="/profiles/:id" component={ProfileRouteDispatch} />
+        {/* Review must precede /documents/:id — this matcher takes the first
+            pattern that fits, and the less specific one fits both. */}
+        <Route path="/documents/:id/review" component={DocumentReviewPage} />
         <Route path="/documents/:id" component={DocumentDetailPage} />
         <Route path="/calendar" component={CalendarPage} />
         <Route path="/settings" component={SettingsPage} />
