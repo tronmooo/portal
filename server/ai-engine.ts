@@ -36,6 +36,10 @@ import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { buildExtractionItems } from "@shared/extraction-destinations";
+import { reasonAboutDocument } from "./semantic-reasoner";
+import { planExtractionActions } from "@shared/extraction-actions";
+import { buildEntityIndex } from "./entity-index";
+import { entityFamily } from "@shared/entity-shape";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -1697,6 +1701,11 @@ export function mergeExtractedData(
 // fields the original pass missed (e.g. a license number) and merges them in
 // without clobbering values the user may have edited. Returns a summary of what
 // was recovered. Side-effect-free beyond updating the document's extractedData.
+//
+// It deliberately does NOT plan or apply actions. Re-reading a document can
+// change what it appears to mean, and a re-extraction that silently re-ran the
+// writes would create records the user never saw proposed. New fields land on
+// the document; acting on them is a fresh review.
 export async function reextractDocument(documentId: string): Promise<{
   ok: boolean;
   message: string;
@@ -2448,7 +2457,23 @@ Return ONLY the JSON object, nothing else.`;
     // Determine context for smart pre-selection
     const docType = (parsed.documentType || 'other').toLowerCase();
     const isFinanceDoc = /bill|invoice|statement|receipt|payment|insurance|loan|mortgage|tax/i.test(docType);
-    const linkedProfileObj = existingProfileId ? await storage.getProfile(existingProfileId) : null;
+    // `profileId` arrives from the guided destination picker as a COMPOUND
+    // string — "destId,ownerId", destination first (see chat.tsx's picker
+    // contract). Passing it to getProfile whole returns null, so this was
+    // silently resolving to no profile at all whenever the user picked a
+    // destination as well as an owner: `profileType` came back empty, the
+    // vehicle check below never fired, and — once routing became entity-aware
+    // — a house looked like a generic record instead of a property.
+    //
+    // The linking code at the top of this function already splits it the same
+    // way; this is the read path catching up.
+    const linkedProfileObj = await (async () => {
+      for (const id of String(existingProfileId || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+        const p = await storage.getProfile(id).catch(() => null);
+        if (p) return p;
+      }
+      return null;
+    })();
     const profileType = linkedProfileObj?.type || '';
     const isVehicleProfile = profileType === 'vehicle';
 
@@ -2734,7 +2759,13 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     // accidentally proposing an expense.
     const allowExpense = classification.destinations.expense === true;
     const allowObligation = classification.destinations.obligation === true;
-    if (amount && amount > 0 && allowExpense) {
+    // An obligation is NOT a kind of expense, and gating it behind one was a
+    // real hole: a homeowners declarations page sets `obligation` and clears
+    // `expense` — it is not a charge, it is a commitment — so this whole block
+    // was skipped and the $1,428 annual premium reached no finance surface at
+    // all. `Add to Finance` in the review pane was the manual patch over it.
+    // The two questions are independent, so they are asked independently.
+    if (amount && amount > 0 && (allowExpense || allowObligation)) {
       // Expense category derivation now flows from the classifier's BROAD
       // CATEGORY bucket (Identity | Vehicle | Property | Financial | Medical |
       // Insurance | Legal | Education | Pet | Receipt | Asset | Travel |
@@ -2788,20 +2819,23 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       const dueDate = fieldLookup['duedate'] || fieldLookup['paymentduedate'] || fieldLookup['nextduedate'] || '';
       // Recurring decision: classifier obligation flag first (intent-based),
       // then a category + freeform-type sniff as a backstop.
-      const recurringCats = new Set(['Subscription']);
-      const recurringTypeRe = /(subscription|utility|rent|mortgage|loan_statement|membership|premium)/i;
-      const isRecurring = allowObligation && (recurringCats.has(classification.category) || recurringTypeRe.test(classification.documentClass) || recurringTypeRe.test(docType));
+      // A document the classifier called an obligation IS one — the category and
+      // freeform-type sniffs below are a backstop for the cases where it only
+      // said so implicitly, not an extra hurdle for the cases where it said so
+      // outright.
+      const isRecurring = allowObligation;
       const billingFrequency = String(fieldLookup['billingfrequency'] || 'monthly').toLowerCase();
 
-      pendingFinancial = {
-        expense: {
+      pendingFinancial = {};
+      if (allowExpense) {
+        pendingFinancial.expense = {
           description: `${vendor || classification.label || parsed.label || fileName} - ${category}`,
           amount,
           category,
           vendor: vendor || undefined,
           date: fieldLookup['transactiondate'] || fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
-        },
-      };
+        };
+      }
 
       if (isRecurring && dueDate) {
         pendingFinancial.obligation = {
@@ -2830,6 +2864,13 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       clinicalNotes: Array.isArray(parsed.clinicalNotes) ? parsed.clinicalNotes : [],
       followUps: Array.isArray(parsed.followUps) ? parsed.followUps : [],
       docContext: `${parsed.documentType ?? ""} ${parsed.label ?? ""}`,
+      // What the document was filed under decides what its fields can MEAN. A
+      // house is never offered Allergies; "Living Area" is square footage only
+      // once we know we are looking at a property.
+      family: entityFamily(
+        linkedProfileObj?.type ?? (linkedProfileObj as any)?.type_key,
+        (linkedProfileObj as any)?.type_key,
+      ),
       normalizeDate: normalizeDateString,
     });
 
@@ -2846,10 +2887,75 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       },
     );
 
+    // ── Understand ───────────────────────────────────────────────────────────
+    // Extraction is not complete when fields have been read off the page. This
+    // is the stage that asks what the document MEANS: who it is about, how the
+    // entities in it relate, which facts are permanent and which are
+    // measurements, what recurs, which dates matter, and what is implied.
+    //
+    // It runs for every document, not as a fallback for ones a table did not
+    // recognise — there is no table. See server/semantic-reasoner.ts.
+    const entityIndex = await buildEntityIndex();
+    const filedUnderProfile = (() => {
+      const id = resolvedTargetProfile?.id || existingProfileId || undefined;
+      return id ? entityIndex.profiles.find((x) => x.id === id) : undefined;
+    })();
+
+    const reasoned = await reasonAboutDocument(getClient(), {
+      rows: reviewItems.map((i) => ({ id: i.id, key: i.key, label: i.label, value: i.value })),
+      documentType: docType,
+      documentLabel: parsed.label || fileName,
+      domainHint: classification.domainHint,
+      filedUnder: filedUnderProfile
+        ? `${filedUnderProfile.name} (${filedUnderProfile.type})`
+        : undefined,
+      userMessage,
+      content: messageContent as any,
+    });
+
+    // ── Infer actions, resolve existing records, validate ────────────────────
+    // Deterministic from here on. The reasoner said what the document means;
+    // this decides what happens, and holds every invariant a model must not be
+    // trusted with — resolution before creation, one recurrence to one record,
+    // the rule engine's last word on dates, conflicts surfaced not applied.
+    const actionPlan = reasoned.ok
+      ? planExtractionActions({
+          semantic: reasoned.semantic,
+          items: reviewItems,
+          index: entityIndex,
+          // The record this document was filed under, chosen by a person before
+          // the upload. It is the immovable context: nothing in the document
+          // may replace it, duplicate it, or cause a second one to be made.
+          context: filedUnderProfile
+            ? {
+                entityId: filedUnderProfile.id,
+                entityType: filedUnderProfile.type,
+                entityName: filedUnderProfile.name,
+              }
+            : undefined,
+          primaryProfileId: resolvedTargetProfile?.id || existingProfileId || undefined,
+          documentId: document.id,
+          documentName: document.name || fileName,
+          // The user's day, not the server's: a date rule computed against a
+          // server in another zone is off by one for half of every day.
+          today: getUserToday(),
+        })
+      : undefined;
+
     const pendingExtraction = {
       extractionId: document.id,
       fileName,
-      items: reviewItems,
+      items: actionPlan ? actionPlan.items : reviewItems,
+      /** What the document MEANS. Absent when the reasoning stage degraded. */
+      semantic: reasoned.ok ? reasoned.semantic : undefined,
+      /** What will HAPPEN. Absent when there was nothing to reason about. */
+      actionPlan,
+      /**
+       * Set when the reasoning stage could not interpret this document. The
+       * review pane says so out loud and falls back to per-field routing —
+       * an upload is never blocked by the understanding step failing.
+       */
+      semanticDegraded: reasoned.ok ? undefined : reasoned.degradedReason,
       // Prefer the classifier's class when available — it's more precise than
       // the extractor's freeform documentType, and gives the UI a stable key
       // to route on (e.g. "parking_receipt" vs. a one-off phrase).
