@@ -57,6 +57,10 @@ export type DomainKind =
   // Structured domains
   | "profile_field" | "asset" | "liability" | "income" | "expense"
   | "subscription" | "document" | "health" | "pet" | "tracker"
+  // Artifacts (documents/checklists the app generates) — never produced by the
+  // classifier, only used to name what create_artifact writes so the routing
+  // guard can refuse it when the user asked for something else.
+  | "artifact"
   // Escape hatches
   | "structured" | "unknown";
 
@@ -632,6 +636,13 @@ export const CONTENT_TOOL_KIND: Record<string, DomainKind> = {
   create_event: "event",
   update_event: "event",
   delete_event: "event",
+  // User report 2026-08-22: "TSA PreCheck note was routed through Create
+  // Artifact." The classifier read "note" correctly and with high confidence —
+  // nothing refused the artifact write, because these tools were missing here.
+  // An artifact is a generated document, not a place to put a note.
+  create_artifact: "artifact",
+  update_artifact: "artifact",
+  duplicate_artifact: "artifact",
 };
 
 export interface ContentRoutingViolation {
@@ -689,7 +700,7 @@ export function checkContentRouting(toolName: string, message: string): ContentR
     requestedKind,
     toolKind,
     modelDirective:
-      `The user explicitly asked for a ${requestedKind.toUpperCase()}, and ${toolName} writes a ${toolKind}. ` +
+      `The user explicitly asked for a ${requestedKind.toUpperCase()}, and ${toolName} writes ${/^[aeiou]/.test(toolKind) ? "an" : "a"} ${toolKind}. ` +
       `Explicit intent is never overridden. Call ${right} instead. If the content ALSO deserves a ${toolKind}, ` +
       `create that as a SECOND object in addition to the ${requestedKind} — never in place of it.`,
     userMessage: `You asked for a ${requestedKind}, so I saved it as a ${requestedKind}.`,

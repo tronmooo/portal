@@ -14,6 +14,7 @@ const { stubState, stubStorage } = vi.hoisted(() => {
   const state = {
     documents: [] as any[],
     created: [] as any[],
+    profiles: [] as any[],
   };
   const impl: any = {
     async getDocuments() { return state.documents; },
@@ -23,7 +24,8 @@ const { stubState, stubStorage } = vi.hoisted(() => {
       state.documents.push(row);
       return row;
     },
-    async getProfiles() { return []; },
+    async getProfiles() { return state.profiles; },
+    async getProfile(id: string) { return state.profiles.find((p: any) => p.id === id); },
   };
   const storage = new Proxy(impl, {
     get(target, prop) {
@@ -58,6 +60,7 @@ describe("processFileUpload — idempotent re-upload guard", () => {
   beforeEach(() => {
     stubState.documents.length = 0;
     stubState.created.length = 0;
+    stubState.profiles.length = 0;
   });
 
   it("returns the existing document for a re-sent identical file instead of creating a duplicate", async () => {
@@ -89,6 +92,81 @@ describe("processFileUpload — idempotent re-upload guard", () => {
     expect(byKey.currentMileage).toBe(69063);
     expect(byKey.serviceDate).toBe("2026-07-22");
     expect(result.pendingExtraction.extractionId).toBe("doc-original");
+  });
+
+  it("gives a re-upload the SAME review as a first upload, not a bare field list", async () => {
+    // Report 2026-08-26: re-uploading the policy to check a fix showed the old
+    // flat FIELD/VALUE table, with the chosen property replaced by "me". This
+    // branch returned extractedFields and nothing else — no `items`, so the
+    // pane fell back to its legacy table; no `targetProfile`, so it defaulted
+    // to the self profile and the destination the user picked vanished.
+    //
+    // Indistinguishable from the feature having been reverted, which is what
+    // makes it worth pinning: both paths now build the review with one
+    // function, so they cannot drift apart again.
+    stubState.profiles.push({
+      id: "prop-1", name: "123 Evergreen Ln", type: "property", fields: {},
+    });
+    stubState.documents.push({
+      id: "doc-original",
+      name: "Homeowners Insurance Policy Declaration",
+      type: "insurance_policy",
+      mimeType: "image/png",
+      createdAt: new Date().toISOString(),
+      tags: ["insurance_policy", HASH_TAG],
+      extractedData: {
+        roofType: "Composition Shingle",
+        occupancy: "Owner Occupied",
+        livingArea: "2450",
+        agentPhone: "(303) 555-2899",
+      },
+    });
+
+    const result = await processFileUpload("prop.png", "image/png", FILE_BASE64, undefined, "prop-1");
+    const pe: any = result.pendingExtraction;
+
+    // The review list exists — this is what the pane renders instead of the
+    // legacy table.
+    expect(pe.items?.length, "a re-upload produced no review items").toBeGreaterThan(0);
+
+    // The property the user picked survived.
+    expect(pe.targetProfile?.id).toBe("prop-1");
+    expect(pe.targetProfile?.type).toBe("property");
+
+    // Entity-aware: a house is offered no medical destinations, and the
+    // agent's phone belongs to the policy on it rather than to the house.
+    for (const item of pe.items) {
+      expect(item.destinationOptions, item.label).not.toContain("allergy");
+      expect(item.destinationOptions, item.label).not.toContain("medication");
+    }
+    const agent = pe.items.find((i: any) => i.key === "agentPhone");
+    expect(agent?.group).toBe("insurance");
+
+    // And the concept guard still folds the spelling.
+    expect(pe.items.some((i: any) => i.key === "squareFeet")).toBe(true);
+  });
+
+  it("still renders a review when the reasoning step is unavailable", async () => {
+    // No API key here, which is the point: the rows, the chosen profile and
+    // the routing are all computed without the model. Losing the understanding
+    // step must degrade the review, never fail the upload — `getClient()`
+    // throwing outside the reasoner's own guard is exactly how a missing key
+    // turned into a re-upload creating a duplicate document.
+    stubState.documents.push({
+      id: "doc-original",
+      name: "Policy",
+      type: "insurance_policy",
+      mimeType: "image/png",
+      createdAt: new Date().toISOString(),
+      tags: [HASH_TAG],
+      extractedData: { roofType: "Composition Shingle" },
+    });
+
+    const result = await processFileUpload("prop.png", "image/png", FILE_BASE64);
+    expect(result.documentId).toBe("doc-original");
+    expect(stubState.created).toHaveLength(0);
+    expect(result.pendingExtraction.items.length).toBeGreaterThan(0);
+    expect(result.pendingExtraction.semanticDegraded).toBeTruthy();
   });
 
   it("ignores stale hash matches outside the dedupe window", async () => {

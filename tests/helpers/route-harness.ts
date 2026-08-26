@@ -18,10 +18,12 @@ import { createServer, type Server } from "http";
 import type { AddressInfo } from "net";
 import { requestStorageContext } from "../../server/storage";
 import { registerRoutes } from "../../server/routes";
+import { deleteProfileFields } from "../../shared/profile-field-identity";
 
 /** Every row the fake keeps, so assertions can read what the route wrote. */
 export interface FakeDb {
   profiles: any[];
+  liabilityPayments: any[];
   expenses: any[];
   incomes: any[];
   obligations: any[];
@@ -34,6 +36,8 @@ export interface FakeDb {
   /** Call counter for the per-user data-version bump, so a test can prove a
    *  read-only chat turn does NOT globally invalidate the dashboard caches. */
   bumpDataVersionCalls: number;
+  domainVersions: Record<string, number>;
+  lastBumpedDomains: string[];
 }
 
 let seq = 0;
@@ -66,6 +70,29 @@ export function makeFakeStorage(db: FakeDb) {
       return db.bumpDataVersionCalls;
     },
 
+    // Per-domain versions (migration 20260825). A write bumps only the domains
+    // it touched; an empty list means "could not classify", which moves the
+    // account-wide epoch and therefore invalidates every cache key.
+    getDataVersions: async () => ({ epoch: db.bumpDataVersionCalls, ...db.domainVersions }),
+    bumpDataVersions: async (domains: string[] = []) => {
+      db.bumpDataVersionCalls++;
+      db.lastBumpedDomains = [...domains];
+      for (const d of domains) db.domainVersions[d] = (db.domainVersions[d] || 0) + 1;
+      return { epoch: domains.length === 0 ? db.bumpDataVersionCalls : 0, ...db.domainVersions };
+    },
+
+    // Liability payments: the reference case for post-write synchronization —
+    // one call that writes a payment AND moves the balance on a profile row.
+    liabilityPayments: undefined as any,
+    getLiabilityPayments: async (liabilityProfileId: string) =>
+      db.liabilityPayments.filter((p: any) => p.liabilityProfileId === liabilityProfileId),
+    getRecentLiabilityPayments: async (limit = 10) => db.liabilityPayments.slice(-limit).reverse(),
+    createLiabilityPayment: async (data: any) => {
+      const row = { id: id("pay"), createdAt: new Date().toISOString(), ...data };
+      db.liabilityPayments.push(row);
+      return row;
+    },
+
     getProfiles: async () => db.profiles,
     getProfilesLite: async () => db.profiles,
     getProfile: async (pid: string) => db.profiles.find(p => p.id === pid),
@@ -81,9 +108,43 @@ export function makeFakeStorage(db: FakeDb) {
     updateProfile: async (pid: string, patch: any) => {
       const row = db.profiles.find(p => p.id === pid);
       if (!row) return undefined;
-      const fields = patch.fields ? { ...(row.fields || {}), ...patch.fields } : row.fields;
-      Object.assign(row, patch, { fields });
+      // `fieldsToDelete` is a write-only DELETION HINT, not a column — both
+      // real storages apply it and neither stores it. The double used to
+      // Object.assign it straight onto the row, so a route that correctly
+      // asked for a field to be removed looked like it had done nothing (and
+      // left a `fieldsToDelete` array sitting on the profile).
+      const { fieldsToDelete, fieldPathsToDelete, ...rest } = patch;
+      const merged = patch.fields ? { ...(row.fields || {}), ...patch.fields } : row.fields;
+      const fields = (fieldsToDelete?.length || fieldPathsToDelete?.length)
+        ? deleteProfileFields(merged || {}, fieldsToDelete, fieldPathsToDelete).fields
+        : merged;
+      Object.assign(row, rest, { fields });
       return row;
+    },
+
+    // A real cascade, in miniature. DELETE /api/profiles/:id is now reachable
+    // from the Info tab, and its whole promise is that the profile's data goes
+    // with it — so the double has to actually remove rows, not answer `true`.
+    // Same rule the storages follow: a row this profile SOLELY owns is
+    // deleted; a co-owned row keeps its place and just loses this owner.
+    deleteProfile: async (pid: string) => {
+      const row = db.profiles.find(p => p.id === pid);
+      if (!row) return false;
+      const owned = (r: any) => Array.isArray(r?.linkedProfiles) && r.linkedProfiles.includes(pid);
+      const sweep = (rows: any[]) => rows.flatMap((r: any) => {
+        if (!owned(r)) return [r];
+        if (r.linkedProfiles.length <= 1) return [];
+        return [{ ...r, linkedProfiles: r.linkedProfiles.filter((x: string) => x !== pid) }];
+      });
+      db.expenses = sweep(db.expenses);
+      db.tasks = sweep(db.tasks);
+      db.events = sweep(db.events);
+      db.documents = sweep(db.documents);
+      db.incomes = sweep(db.incomes);
+      // Child profiles (a person's vehicle, say) cascade too.
+      const children = db.profiles.filter(p => p.parentProfileId === pid).map(p => p.id);
+      db.profiles = db.profiles.filter(p => p.id !== pid && !children.includes(p.id));
+      return true;
     },
 
     getExpenses: async () => db.expenses,
@@ -291,9 +352,9 @@ export interface Harness {
 
 export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness> {
   const db: FakeDb = {
-    profiles: [], expenses: [], incomes: [], obligations: [],
+    profiles: [], liabilityPayments: [], expenses: [], incomes: [], obligations: [],
     tasks: [], events: [], documents: [], getDocumentCalls: 0,
-    bumpDataVersionCalls: 0, ...seed,
+    bumpDataVersionCalls: 0, domainVersions: {}, lastBumpedDomains: [], ...seed,
   };
   const storage = makeFakeStorage(db);
 

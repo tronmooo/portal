@@ -512,6 +512,47 @@ describe("one create request produces one record", () => {
     expect(v.modelDirective).toMatch(/already created/i);
   });
 
+  it("does NOT block two logs to the same tracker in one turn (Bob and I both ran)", () => {
+    // Regression (2026-08-22): "Bob and I both went running this morning" logged
+    // the user's run and then REFUSED Bob's, telling them to resend it as a
+    // follow-up message. Logging an entry appends to a tracker; it does not
+    // create a record, so the one-record-per-turn guard must not touch it.
+    const mine = recordTurnCreate("log_tracker_entry", {
+      trackerName: "Running",
+      values: { distance: 3.1, duration: 31 },
+    });
+    expect(mine).toBeNull();
+    expect(
+      findDuplicateCreateInTurn(
+        "log_tracker_entry",
+        { trackerName: "Running", forProfile: "Bob", values: { distance: 2.6, duration: 29 } },
+        [],
+      ),
+    ).toBeNull();
+  });
+
+  it("does NOT block the same-named record for a DIFFERENT owner", () => {
+    // Bob can have a Running tracker and Robert can have a Running tracker.
+    // Only the same name for the SAME owner is a duplicate.
+    const bob = recordTurnCreate("create_tracker", { name: "Running", forProfile: "Bob" })!;
+    expect(bob.owner).toBe("bob");
+    expect(
+      findDuplicateCreateInTurn("create_tracker", { name: "Running", forProfile: "Robert" }, [bob]),
+    ).toBeNull();
+    // ...and the same owner twice is still one record.
+    expect(
+      findDuplicateCreateInTurn("create_tracker", { name: "running", forProfile: "bob" }, [bob]),
+    ).not.toBeNull();
+  });
+
+  it("does NOT block two logs of the same kind for two people", () => {
+    const first = recordTurnCreate("log_medication_dose", { trackerName: "Amoxicillin" });
+    expect(first).toBeNull();
+    expect(
+      findDuplicateCreateInTurn("log_medication_dose", { trackerName: "Amoxicillin", forProfile: "Rex" }, []),
+    ).toBeNull();
+  });
+
   it("does NOT block two creates of DIFFERENT things in one turn", () => {
     const luna = recordTurnCreate("create_profile", { name: "Luna", type: "pet" })!;
     expect(findDuplicateCreateInTurn("create_profile", { name: "Rex", type: "pet" }, [luna])).toBeNull();

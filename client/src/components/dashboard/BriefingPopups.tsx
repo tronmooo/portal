@@ -14,6 +14,7 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { addMonthsClamped, addYearsClamped, toISODate } from "@shared/date-math";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
+import { groupDocumentDates, countDocumentDateRecords, ruleIdsOf } from "@shared/document-dates";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -32,6 +33,7 @@ import { formatMoney } from "@/lib/format";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useShowTestData } from "@/lib/showTestData";
 import { isTestDataRow } from "@shared/test-data";
+import { dateRuleVerbs } from "@shared/date-rules";
 
 // ── Shared date/format helpers ───────────────────────────────────────────────
 function fmtDate(d?: string | null): string {
@@ -53,12 +55,21 @@ export function fmtClock(t?: string | null): string {
   return `${h % 12 || 12}:${m[2]} ${h >= 12 ? "PM" : "AM"}`;
 }
 /** "Expires in 7 days" / "Expires today" / "Expired 3 days ago" */
-function expiryLabel(daysUntil: number): string {
-  if (daysUntil === 0) return "Expires today";
-  if (daysUntil === 1) return "Expires tomorrow";
-  if (daysUntil > 0) return `Expires in ${daysUntil} days`;
+/**
+ * The countdown on a dated record, phrased by what the date MEANS.
+ *
+ * This list is no longer expirations-only: a document's DUE date (a citation,
+ * an invoice) belongs here too, and reading "Expires in 31 days" against a
+ * parking ticket was wrong on the noun as well as unhelpful. The day count is
+ * always the real remaining count — never a fixed window.
+ */
+function expiryLabel(daysUntil: number, ruleType?: string): string {
+  const [future, past] = dateRuleVerbs((ruleType as any) || "expiration");
+  if (daysUntil === 0) return `${future} today`;
+  if (daysUntil === 1) return `${future} tomorrow`;
+  if (daysUntil > 0) return `${future} in ${daysUntil} days`;
   const ago = Math.abs(daysUntil);
-  return ago === 1 ? "Expired yesterday" : `Expired ${ago} days ago`;
+  return ago === 1 ? `${past} yesterday` : `${past} ${ago} days ago`;
 }
 function dueLabel(daysUntil: number): string {
   if (daysUntil === 0) return "Due today";
@@ -618,7 +629,8 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
    * at once: dismissing one hid the rest, and opening the date editor opened
    * every row's.
    */
-  const rowKey = (row: any): string => String(row?.ruleId || row?.documentId || "");
+  const rowKey = (row: any): string =>
+    String((Array.isArray(row?.ruleIds) && row.ruleIds[0]) || row?.ruleId || row?.documentId || "");
 
   const renew = useMutation({
     mutationFn: async (vars: { row: any; newDate: string }) => {
@@ -654,18 +666,35 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
     },
     onError: (e: any) => toast({ title: "Couldn't update", description: e?.message, variant: "destructive" }),
   });
-  const dismiss = (docId: string) => {
-    const next = { ...snoozeMap, [docId]: Date.now() + 30 * 86400000 };
+  /**
+   * Dismiss every rule a card stands for.
+   *
+   * A card is one record on one day and may cover several dated fields (a
+   * policy that expires and takes its premium the same day). Snoozing only the
+   * first rule left its twin on screen, which read as "dismiss did nothing".
+   */
+  const dismissRules = (ids: string[], label: string) => {
+    if (ids.length === 0) return;
+    const until = Date.now() + 30 * 86400000;
+    const next = { ...snoozeMap };
+    for (const id of ids) next[id] = until;
     setSnoozeMap(next); saveDocSnoozeMap(next);
-    toast({ title: "Alert dismissed", description: "Hidden from expiration alerts for 30 days." });
+    toast({ title: label, description: "Hidden from document alerts for 30 days." });
   };
 
   // Per-rule, with the record id still honoured so snoozes taken before rows
-  // became per-rule keep working.
-  const visible = (docs || []).filter((d: any) => !snoozeMap[d.ruleId] && !snoozeMap[d.documentId]);
+  // became per-rule keep working…
+  const unsnoozed = (docs || []).filter((d: any) => !snoozeMap[d.ruleId] && !snoozeMap[d.documentId]);
+  // …then ONE CARD PER RECORD PER DAY. A homeowners policy that expires and
+  // takes its premium on June 1 is one thing to act on, not two rows with the
+  // same name and the same date — the "why does it say two documents when
+  // there is only one" report. Nothing is lost: the card names both kinds of
+  // date and dismissing it dismisses both rules.
+  const visible = groupDocumentDates(unsnoozed);
+  const recordCount = countDocumentDateRecords(unsnoozed);
   const bands: Array<{ key: string; label: string; tone: "neg" | "warn" | "muted"; rows: any[] }> = [
-    { key: "expired", label: "Expired", tone: "neg", rows: visible.filter((d: any) => d.daysUntil < 0) },
-    { key: "soon", label: "Expiring soon · next 30 days", tone: "warn", rows: visible.filter((d: any) => d.daysUntil >= 0 && d.daysUntil <= 30) },
+    { key: "expired", label: "Expired or overdue", tone: "neg", rows: visible.filter((d: any) => d.daysUntil < 0) },
+    { key: "soon", label: "Due or expiring · next 30 days", tone: "warn", rows: visible.filter((d: any) => d.daysUntil >= 0 && d.daysUntil <= 30) },
     { key: "later", label: "Upcoming · 31–90 days", tone: "muted", rows: visible.filter((d: any) => d.daysUntil > 30) },
   ];
 
@@ -673,9 +702,12 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
     const full = docById.get(d.documentId);
     const ownerNames = owners.names(full?.linkedProfiles);
     const urgent = d.daysUntil < 0 ? "red" as const : d.daysUntil <= 30 ? "amber" as const : undefined;
-    const name = d.documentName || full?.name || d.name || "Document";
+    const name = d.baseName || d.documentName || full?.name || d.name || "Document";
     const type = d.documentType || full?.type;
     const fieldLabel = String(d.fieldName || "expiration").replace(/[_-]+/g, " ");
+    // Every kind of date this card covers, so a merged row still says what it
+    // merged ("Expiration · Payment due") instead of hiding one behind the other.
+    const typesLabel = String(d.typesLabel || "");
     return (
       <ExpandCard key={rowKey(d)} urgentBorder={urgent} testId={`doc-card-${rowKey(d)}`}
         summary={
@@ -684,10 +716,11 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
               {d.daysUntil < 0 ? <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0 self-center" /> : <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0 self-center" />}
               <span className="text-xs font-semibold truncate">{name}</span>
               <span className={`ml-auto text-[11px] font-medium shrink-0 tabular-nums ${d.daysUntil < 0 ? "text-red-500" : d.daysUntil <= 30 ? "text-amber-500" : "text-muted-foreground"}`}>
-                {expiryLabel(d.daysUntil)}
+                {expiryLabel(d.daysUntil, d.ruleType)}
               </span>
             </div>
             <div className="flex items-center flex-wrap gap-1 mt-1">
+              {typesLabel && <Chip>{typesLabel}</Chip>}
               {type && <Chip>{type}</Chip>}
               {ownerNames && <Chip><User className="h-2.5 w-2.5" />{ownerNames}</Chip>}
               <Chip tone={d.daysUntil < 0 ? "neg" : d.daysUntil <= 30 ? "warn" : "muted"}>
@@ -699,6 +732,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
         <div className="space-y-1.5 text-[11px] pt-1">
           <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-muted-foreground">
             <span>Field</span><span className="text-foreground capitalize">{fieldLabel}</span>
+            <span>Type</span><span className="text-foreground capitalize">{String(d.ruleType || "expiration").replace(/_/g, " ")}</span>
             <span>Exact date</span><span className="text-foreground">{fmtDate(d.expirationDate)}</span>
             <span>Days remaining</span><span className="text-foreground tabular-nums">{d.daysUntil >= 0 ? d.daysUntil : `${Math.abs(d.daysUntil)} past`}</span>
           </div>
@@ -724,7 +758,9 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
               {d.sourceEntityType !== "profile" && (
                 <ActionBtn label="Renewed — set new date" icon={RefreshCw} onClick={() => { setRenewId(rowKey(d)); setRenewDate(""); }} testId={`doc-renew-${rowKey(d)}`} />
               )}
-              <ActionBtn label="Dismiss 30d" icon={BellOff} onClick={() => dismiss(rowKey(d))} testId={`doc-dismiss-${rowKey(d)}`} />
+              <ActionBtn label="Dismiss 30d" icon={BellOff}
+                onClick={() => dismissRules(ruleIdsOf(d), "Alert dismissed")}
+                testId={`doc-dismiss-${rowKey(d)}`} />
             </div>
           )}
         </div>
@@ -733,12 +769,28 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
   };
 
   const soonCount = visible.filter((d: any) => d.daysUntil <= 30).length;
+  // Says how many RECORDS the list covers, not just how many rows — the count
+  // badge and "2 documents" reading are what sent the user hunting for a
+  // second document that never existed.
+  const subtitle = visible.length
+    ? `${soonCount} due, expiring or already past within 30 days · ${recordCount} ${recordCount === 1 ? "record" : "records"}`
+    : undefined;
+  /** Clear the whole list in one action — the "how do I clear this?" ask. */
+  const dismissAll = () => {
+    const ids = visible.flatMap((d: any) => ruleIdsOf(d));
+    dismissRules(ids, `Cleared ${visible.length} alert${visible.length === 1 ? "" : "s"}`);
+  };
   return (
-    <PopupShell open={open} onClose={onClose} title="Document Expirations" icon={FileText}
+    <PopupShell open={open} onClose={onClose} title="Document Dates · Due & Expiring" icon={FileText}
       accent="0 72% 58%" count={visible.length}
-      subtitle={visible.length ? `${soonCount} expired or expiring within 30 days` : undefined}
+      subtitle={subtitle}
       footerLabel="Open Documents" footerHref="/linked?tab=documents">
-      {visible.length === 0 ? <EmptyNote label="Nothing expiring in the next 90 days." /> : bands.map(band => band.rows.length === 0 ? null : (
+      {visible.length > 0 && (
+        <div className="flex justify-end px-1 pt-1">
+          <ActionBtn label="Clear all · 30d" icon={BellOff} onClick={dismissAll} testId="doc-dismiss-all" />
+        </div>
+      )}
+      {visible.length === 0 ? <EmptyNote label="Nothing due or expiring in the next 90 days." /> : bands.map(band => band.rows.length === 0 ? null : (
         <div key={band.key}>
           <div className={`micro-label px-1 pt-2 pb-1 ${band.tone === "neg" ? "text-red-500" : band.tone === "warn" ? "text-amber-500" : "text-muted-foreground"}`}>
             {band.label} · {band.rows.length}

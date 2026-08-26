@@ -75,7 +75,12 @@ function canonUnit(u: string | null | undefined): string | null {
   if (lc === "km" || lc === "kilometer" || lc === "kilometers") return "km";
   if (lc === "mi" || lc === "mile" || lc === "miles") return "mi";
   if (lc === "m" || lc === "meter" || lc === "meters") return "m";
+  if (lc === "cm" || lc === "centimeter" || lc === "centimeters") return "cm";
   if (lc === "ft" || lc === "feet" || lc === "foot") return "ft";
+  // Inches had no case at all, so a Height tracker's "in" was an unknown unit:
+  // no ft→in conversion existed and a value printed in feet could never be
+  // reconciled with one printed in inches (user report 2026-08-25).
+  if (lc === "in" || lc === "inch" || lc === "inches" || lc === '"') return "in";
   if (lc === "%" || lc === "percent" || lc === "percentage") return "%";
   if (lc === "bpm") return "bpm";
   if (lc === "mmhg") return "mmHg";
@@ -102,6 +107,12 @@ function convertUnit(value: number, fromUnit: string | null, toUnit: string | nu
   if (a === "mi" && b === "km") return value * 1.609344;
   if (a === "m" && b === "ft") return value * 3.280839895;
   if (a === "ft" && b === "m") return value / 3.280839895;
+  if (a === "ft" && b === "in") return value * 12;
+  if (a === "in" && b === "ft") return value / 12;
+  if (a === "in" && b === "cm") return value * 2.54;
+  if (a === "cm" && b === "in") return value / 2.54;
+  if (a === "m" && b === "cm") return value * 100;
+  if (a === "cm" && b === "m") return value / 100;
   if (a === "km" && b === "m") return value * 1000;
   if (a === "m" && b === "km") return value / 1000;
 

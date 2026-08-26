@@ -1,10 +1,11 @@
 import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { autoCheckinLinkedHabits } from "./habit-completion";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "@shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
@@ -16,6 +17,7 @@ import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 // Auth middleware runs storage within this context so all downstream code
 // automatically gets the request-scoped storage instance.
 export const requestStorageContext = new AsyncLocalStorage<IStorage>();
+import { journalStorageCall, isJournaledStorageMethod } from "./write-journal";
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -338,7 +340,10 @@ export interface IStorage {
    *  only the Supabase backend implements the invariant probes. */
   /** Cross-instance cache coherence (migration 010). Optional: MemStorage has no instances. */
   getDataVersion?(): Promise<number>;
+  getRecentLiabilityPayments?(limit?: number): Promise<any[]>;
   bumpDataVersion?(): Promise<number>;
+  getDataVersions?(): Promise<Record<string, number>>;
+  bumpDataVersions?(domains?: string[]): Promise<Record<string, number>>;
   repairOwnershipConsistency?(): Promise<{ scanned: number; repaired: number; details: string[] }>;
 
   // Universal Captures (PR Y) ---------------------------------------------
@@ -885,7 +890,7 @@ export class MemStorage implements IStorage {
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
       for (const e of t.entries) {
-        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: formatTrackerValues(t.name, e.values, t.unit), data: { ...e.values, computed: e.computed }, timestamp: e.timestamp });
+        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: formatTrackerValues(t.name, e.values, t.unit), data: { ...e.values, computed: e.computed, trackerId: t.id }, timestamp: e.timestamp });
       }
     }
     for (const e of relatedExpenses) { timeline.push({ id: e.id, type: "expense", title: e.description, description: `$${e.amount} - ${e.category}`, timestamp: e.date }); }
@@ -939,7 +944,25 @@ export class MemStorage implements IStorage {
     // storage exists to provide.
     const { fieldsToDelete, fieldPathsToDelete, ...rest } = data as any;
     data = rest;
+    // A null/undefined VALUE inside `fields` is a deletion intent, not data —
+    // the protocol SupabaseStorage speaks (see its updateProfile) and the one
+    // the document-delete cascade uses to take back a field a deleted document
+    // contributed. Without this, that cascade left a literal `null` sitting
+    // where the value had been: the field still rendered, now empty, and the
+    // profile still carried a key whose source no longer existed.
+    const deletionIntents: string[] = [];
+    if (data.fields && typeof data.fields === "object") {
+      const kept: Record<string, any> = {};
+      for (const [k, v] of Object.entries(data.fields as Record<string, any>)) {
+        if (v === null || v === undefined) deletionIntents.push(k);
+        else kept[k] = v;
+      }
+      if (deletionIntents.length > 0) data = { ...data, fields: kept };
+    }
     const updated = { ...p, ...data, updatedAt: new Date().toISOString() };
+    if (deletionIntents.length > 0) {
+      updated.fields = deleteProfileFields(updated.fields || {}, deletionIntents).fields;
+    }
     if ((fieldsToDelete?.length || 0) + (fieldPathsToDelete?.length || 0) > 0) {
       updated.fields = deleteProfileFields(
         { ...(p.fields || {}), ...(data.fields || {}) },
@@ -1178,6 +1201,13 @@ export class MemStorage implements IStorage {
         `Tracker entry write could not be confirmed: entry ${entry.id} is not present on ` +
         `tracker "${tracker.name}" (${data.trackerId}) after logging.`
       );
+    }
+    // Habit ↔ tracker link: one activity record updates both. Advances any
+    // habit linked to this tracker by one completion for the entry's day
+    // (best-effort — see server/habit-completion.ts). Skipped when this write
+    // IS the mirror of a habit check-in, which would otherwise loop.
+    if (!(data as any).__skipHabitSync) {
+      await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: stored.timestamp, values: stored.values });
     }
     return stored;
   }
@@ -2139,8 +2169,15 @@ export class MemStorage implements IStorage {
       const profilesForExp = Array.from(this.profiles.values()).filter(p =>
         matchesFilter([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
       for (const rule of rulesFromAll({ profiles: profilesForExp, documents })) {
-        // Only things that EXPIRE — see the twin in supabase-storage.
-        if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;
+        // Things that EXPIRE anywhere, plus what a DOCUMENT says is DUE.
+        //
+        // Expiry alone was too narrow (user report 2026-08-25): a parking
+        // citation due in 31 days is exactly the "act before this date" record
+        // this tile exists for, and it does not "expire". The source test is
+        // what keeps the old bug fixed — a `premiumDueDate` typed onto an
+        // insurance PROFILE is a bill and still belongs on the bills surface,
+        // so only document-carried due dates join the expiries here.
+        if (!isDocumentAttentionRule(rule)) continue;
         const daysUntil = daysBetweenISO(now.toLocaleDateString("en-CA"), rule.date);
         expiringDocs.push({
           documentId: rule.sourceEntityId,
@@ -2155,6 +2192,11 @@ export class MemStorage implements IStorage {
           expirationDate: rule.date,
           daysUntil,
           ruleId: rule.id,
+          // What KIND of date this is, so every surface can say "Due in 31
+          // days" where it means due and "Expires" where it means expires,
+          // instead of labelling everything an expiration.
+          ruleType: rule.ruleType,
+          ruleSubtype: rule.ruleSubtype,
           sourceEntityType: rule.sourceEntityType,
           href: rule.href,
           relatedProfileId: rule.profileId,
@@ -2703,8 +2745,26 @@ function getStorage(): IStorage {
   return _storageInstance!;
 }
 
+// Which method names the write journal cares about, resolved once per name.
+// The classifier is a couple of regexes and a map lookup, but this proxy is on
+// the hot path of every storage call in the app, so the answer is cached.
+const journaledMethods = new Map<string, boolean>();
+function shouldJournal(name: string): boolean {
+  let hit = journaledMethods.get(name);
+  if (hit === undefined) {
+    hit = isJournaledStorageMethod(name);
+    journaledMethods.set(name, hit);
+  }
+  return hit;
+}
+
 // Proxy that returns the per-request storage instance if available,
 // otherwise falls back to the global singleton (for auth routes, startup, etc.)
+//
+// It is also where the per-request WRITE JOURNAL is filled in. Every write in
+// the app — REST handler, AI tool, cron job — goes through here, so this is the
+// one place that can observe what a request changed without any call site
+// having to declare it. See server/write-journal.ts.
 export const storage: IStorage = new Proxy({} as IStorage, {
   get(_target, prop, _receiver) {
     // Prefer per-request scoped instance from AsyncLocalStorage
@@ -2712,7 +2772,20 @@ export const storage: IStorage = new Proxy({} as IStorage, {
     const instance = requestScoped || getStorage();
     const value = (instance as any)[prop];
     if (typeof value === 'function') {
-      return value.bind(instance);
+      const bound = value.bind(instance);
+      if (typeof prop !== "string" || !shouldJournal(prop)) return bound;
+      const method = prop;
+      return (...args: any[]) => {
+        const out = bound(...args);
+        if (out && typeof out.then === "function") {
+          return out.then((resolved: any) => {
+            journalStorageCall(method, args, resolved);
+            return resolved;
+          });
+        }
+        journalStorageCall(method, args, out);
+        return out;
+      };
     }
     return value;
   },

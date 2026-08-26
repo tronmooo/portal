@@ -20,6 +20,7 @@ import {
   PathPreviewLine as RebuildPathPreview,
 } from "@/components/asset/asset-overview";
 import { DetailHero, type HeroStat } from "@/components/profile/DetailHero";
+import { ProfileAlertsSection } from "@/components/ProfileAlertsSection";
 import { profileVisual } from "@/lib/profile-visuals";
 import { AccountOverview, accountHeroStats } from "@/components/finance/AccountOverview";
 import { isAccountProfile, accountKindMeta, accountKindOf } from "@shared/finance-accounts";
@@ -278,9 +279,11 @@ import { Slider } from "@/components/ui/slider";
 import type { ProfileDetail, Profile, Document, TimelineEntry, Tracker } from "@shared/schema";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
+import { checkProfileRename } from "@shared/profile-rename";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr } from "@shared/timezone";
 import { habitDayProgress } from "@shared/habit-progress";
+import { DocumentDeleteDialog } from "@/components/DocumentDeleteDialog";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
@@ -521,7 +524,8 @@ function getMaintenanceCost(fields: any): number {
 // there was an inline copy here that could drift from the shared version —
 // removed 2026-05-27.
 import { computeAssetRollup as sharedComputeAssetRollup } from "@shared/asset-rollup";
-import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
+import { resolveAssetValue, resolveLiabilityBalance, isAssetTabProfile, isLiabilityTabProfile } from "@shared/asset-value";
+import { DynamicOverview } from "@/components/overview/DynamicOverview";
 import { isRecurringBill } from "@shared/liability-types";
 function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup {
   // The shared function ignores everything except `fields` and
@@ -2957,6 +2961,108 @@ const FIELD_GROUPS: Record<string, { title: string; fields: { key: string; label
 
 // ── Per-group visual identity (icon + accent) for the Info tab sections ──
 // Falls back to a neutral FileText for any title not listed.
+// ── Structured medical record ───────────────────────────────────────────────
+// Allergies, medications, conditions and surgical history are STRUCTURED arrays
+// on `profile.fields` (shared/extraction-destinations), not scalars — so the
+// grouped-field renderer below, which skips anything `typeof v === "object"`,
+// cannot show them and the "Other" catch-all filters them out too. This card is
+// where they live.
+//
+// Reads BOTH shapes: the structured array written by document extraction, and
+// the legacy free-text string a user typed into `allergies` / `medications`
+// before the arrays existed. Neither one is lost.
+
+interface MedicalRecordRow { primary: string; secondary?: string }
+
+function structuredRows(
+  raw: unknown,
+  toRow: (rec: Record<string, any>) => MedicalRecordRow,
+): MedicalRecordRow[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .filter((r) => r && typeof r === "object")
+      .map((r) => toRow(r as Record<string, any>))
+      .filter((r) => !!r.primary);
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.split(/[,;]/).map((t) => ({ primary: t.trim() })).filter((r) => !!r.primary);
+  }
+  return [];
+}
+
+function MedicalRecordCard({ fields }: { fields: Record<string, any> }) {
+  const sections: Array<{ title: string; icon: any; cls: string; rows: MedicalRecordRow[] }> = [
+    {
+      title: "Allergies", icon: AlertTriangle, cls: "text-red-500",
+      rows: structuredRows(fields.allergies, (a) => ({
+        primary: String(a.substance ?? a.name ?? ""),
+        secondary: [a.reaction, a.type].filter(Boolean).join(" · ") || undefined,
+      })),
+    },
+    {
+      title: "Medications", icon: HeartPulse, cls: "text-sky-500",
+      rows: structuredRows(fields.medications, (m) => ({
+        primary: String(m.name ?? ""),
+        // "as needed" is a PRN prescription, not a daily schedule — say so,
+        // because the difference decides whether a missed day is a missed dose.
+        secondary: [m.dose, m.frequency, m.asNeeded ? "as needed" : null]
+          .filter(Boolean).join(" · ") || undefined,
+      })),
+    },
+    {
+      title: "Conditions", icon: Stethoscope, cls: "text-amber-500",
+      rows: structuredRows(fields.conditions, (c) => ({
+        primary: String(c.name ?? ""),
+        secondary: c.status ? String(c.status) : undefined,
+      })),
+    },
+    {
+      title: "Surgical History", icon: FileText, cls: "text-violet-500",
+      rows: structuredRows(fields.surgicalHistory, (sx) => ({
+        primary: String(sx.procedure ?? ""),
+        secondary: sx.year ? String(sx.year) : undefined,
+      })),
+    },
+  ].filter((sec) => sec.rows.length > 0);
+
+  if (sections.length === 0) return null;
+
+  return (
+    <Card data-testid="medical-record-card">
+      <CardHeader className="py-2.5 px-4">
+        <CardTitle className="text-xs font-semibold flex items-center gap-2">
+          <Stethoscope className="h-3.5 w-3.5 text-pink-500" />
+          Medical Record
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-4 pb-3 pt-0 space-y-3">
+        {sections.map((sec) => {
+          const SecIcon = sec.icon;
+          return (
+            <div key={sec.title}>
+              <div className="flex items-center gap-1.5 mb-1">
+                <SecIcon className={`h-3 w-3 shrink-0 ${sec.cls}`} />
+                <span className="micro-label text-muted-foreground">{sec.title}</span>
+                <span className="text-[11px] text-muted-foreground tabular-nums">{sec.rows.length}</span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {sec.rows.map((row, i) => (
+                  <div key={`${row.primary}-${i}`} className="flex items-baseline gap-2 text-[13px]">
+                    <span className="font-medium">{row.primary}</span>
+                    {row.secondary && (
+                      <span className="text-[11px] text-muted-foreground truncate">{row.secondary}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
 const GROUP_META: Record<string, { icon: any; cls: string }> = {
   "Vehicle Identity":      { icon: Car,         cls: "text-blue-500" },
   "Purchase & Value":      { icon: DollarSign,  cls: "text-emerald-500" },
@@ -3013,7 +3119,68 @@ function formatFieldDisplayValue(fieldKey: string, raw: string): string {
   return raw;
 }
 
-function InfoTab({
+/**
+ * DYNAMIC OVERVIEW (2026-08-26)
+ *
+ * Asset and liability profiles no longer render a per-type field list. Their
+ * Overview is composed server-side from what the entity actually IS — see
+ * shared/overview-compose.ts — and drawn by DynamicOverview. StaticInfoTab
+ * below stays as the renderer for person / pet / medical profiles (whose
+ * Overview is purpose-built) and as the fallback if a composition can't be
+ * fetched, so the page can never end up blank.
+ */
+function InfoTab({ profile, onEdit }: { profile: ProfileDetail; onEdit: () => void }) {
+  const dynamic = isAssetTabProfile(profile as any) || isLiabilityTabProfile(profile as any);
+  const legacy = <StaticInfoTab profile={profile} onEdit={onEdit} />;
+  if (!dynamic) return legacy;
+  return (
+    <DynamicOverview profileId={profile.id} fallback={legacy}>
+      <OverviewEditors profile={profile} />
+    </DynamicOverview>
+  );
+}
+
+/**
+ * The editing affordances that are NOT part of the composed summary: where the
+ * thing physically lives, and what it belongs to. These write relationships,
+ * not display fields, so they stay hand-built and sit under the composition.
+ */
+function OverviewEditors({ profile }: { profile: ProfileDetail }) {
+  const isNestedAsset = NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType);
+  const isNestableLiability = profile.type === "liability" || profile.type === "loan" || profile.type === "subscription";
+  const { data: allProfiles } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: isNestedAsset || isNestableLiability,
+  });
+  const onSaved = () => invalidateDomains("profiles");
+  if (!isNestedAsset && !isNestableLiability) return null;
+  return (
+    <>
+      {isNestedAsset && (
+        <NestedAssetSections
+          profile={profile}
+          allProfiles={allProfiles || []}
+          onSaved={onSaved}
+          mode="location-only"
+        />
+      )}
+      {isNestableLiability && (
+        <Card data-testid="card-liability-belongs-to">
+          <CardContent className="p-3">
+            <BelongsToEditor
+              profile={profile}
+              allProfiles={allProfiles || []}
+              onSaved={onSaved}
+            />
+          </CardContent>
+        </Card>
+      )}
+    </>
+  );
+}
+
+function StaticInfoTab({
   profile,
   onEdit,
 }: {
@@ -3437,6 +3604,9 @@ function InfoTab({
         );
       })()}
 
+      {/* ── 2b. Structured medical record (allergies / meds / conditions / surgeries) ── */}
+      <MedicalRecordCard fields={profile.fields || {}} />
+
       {/* ── 3. Grouped Field Sections (type-aware) ── */}
       {/* Only show a group if at least one of its fields has a value. This keeps
           large reference groups (e.g. the comprehensive Address group) from
@@ -3447,6 +3617,7 @@ function InfoTab({
         groups
           .filter(group => group.fields.some(({ key }) => {
             const v = profile.fields[key];
+            if (Array.isArray(v)) return false; // shown by MedicalRecordCard
             return v != null && v !== "" && !(typeof v === "object" && Object.keys(v).length === 0);
           }))
           .slice().sort((a, b) => a.title.localeCompare(b.title)).map(group => {
@@ -3476,8 +3647,12 @@ function InfoTab({
                 <CardContent className="px-4 pb-3 pt-0">
                   {group.fields
                     .filter(({ key, hideWhenEmpty }) => {
-                      if (!hideWhenEmpty) return true;
                       const v = profile.fields[key];
+                      // Structured arrays (allergies, medications) are rendered
+                      // by MedicalRecordCard above. A single-line inline field
+                      // would print them as "[object Object]".
+                      if (Array.isArray(v)) return false;
+                      if (!hideWhenEmpty) return true;
                       return v != null && v !== "";
                     })
                     .map(({ key, label }) => (
@@ -4276,55 +4451,6 @@ function DocumentsTab({
     },
   });
 
-  // BUG-20260528-mutation-onmutate-rollback: setQueryData moved to onMutate
-  // with snapshot/rollback. See ARCHITECTURE.md §5.3.
-  const deleteMutation = useMutation({
-    mutationFn: async (docId: string) => {
-      await apiRequest("DELETE", `/api/documents/${docId}`);
-    },
-    onMutate: async (docId: string) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/documents"] });
-      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      const prevDocs = queryClient.getQueryData<any[]>(["/api/documents"]);
-      const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
-      queryClient.setQueryData<any[]>(["/api/documents"], (old) => (old || []).filter((d: any) => d.id !== docId));
-      // The profile detail carries documents as `relatedDocuments` (plus a
-      // separate total and the activity timeline). This used to patch
-      // `old.documents`, a key the ProfileDetail shape has never had — so the
-      // optimistic delete silently did nothing and the Info tab kept showing
-      // the deleted document, its count, and its timeline entry.
-      queryClient.setQueryData<any>(["/api/profiles", profileId, "detail"], (old: any) => {
-        if (!old) return old;
-        const kept = (old.relatedDocuments || []).filter((d: any) => d.id !== docId);
-        if (kept.length === (old.relatedDocuments || []).length && !old.timeline) return old;
-        return {
-          ...old,
-          relatedDocuments: kept,
-          ...(typeof old.relatedDocumentsTotal === "number"
-            ? { relatedDocumentsTotal: Math.max(0, old.relatedDocumentsTotal - 1) }
-            : {}),
-          ...(Array.isArray(old.timeline)
-            ? { timeline: old.timeline.filter((t: any) => !(t.type === "document" && t.id === docId)) }
-            : {}),
-        };
-      });
-      return { prevDocs, prevDetail };
-    },
-    onSuccess: () => {
-      // "profiles" as well: the Info tab, the tab counters and the activity
-      // feed all read the profile-detail embed, not the document list.
-      invalidateDomains("documents", "profiles");
-      toast({ title: "Document deleted" });
-      setDeletingDocId(null);
-      onUploaded();
-    },
-    onError: (err: Error, _docId, ctx: any) => {
-      if (ctx?.prevDocs !== undefined) queryClient.setQueryData(["/api/documents"], ctx.prevDocs);
-      if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
-      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
-    },
-  });
-
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) uploadMutation.mutate(file);
@@ -4644,24 +4770,16 @@ function DocumentsTab({
         />
       )}
 
-      <AlertDialog open={!!deletingDocId} onOpenChange={() => setDeletingDocId(null)}>
-        <AlertDialogContent data-testid="dialog-confirm-delete-document">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete document?</AlertDialogTitle>
-            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="button-cancel-delete-document">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deletingDocId && deleteMutation.mutate(deletingDocId)}
-              disabled={deleteMutation.isPending}
-              data-testid="button-confirm-delete-document"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Deleting a document here is the same act as deleting it on the
+          Documents page — same prompt, same cascade, same invalidation. The
+          shared dialog is what makes that true; a local copy is how the two
+          screens came to disagree about whether a document still existed. */}
+      <DocumentDeleteDialog
+        documentId={deletingDocId}
+        documentName={documents.find((d: any) => d.id === deletingDocId)?.name}
+        onOpenChange={(open) => { if (!open) setDeletingDocId(null); }}
+        onDeleted={() => { setDeletingDocId(null); onUploaded(); }}
+      />
     </>
   );
 }
@@ -8110,21 +8228,37 @@ function EditProfileDialog({
   const mutation = useMutation({
     mutationFn: async () => {
       if (!validateFields()) throw new Error("Validation failed");
+      // Renaming is held to the same rule as the AI path: a name another
+      // profile already answers to is refused, not silently duplicated
+      // (shared/profile-rename.ts).
+      const known: Array<{ id: string; name: string }> =
+        (queryClient.getQueryData(["/api/profiles"]) as any[] | undefined)?.filter(
+          (p: any) => p && typeof p.id === "string" && typeof p.name === "string",
+        ) ?? [];
+      const rename = checkProfileRename(known, profile.id, name, profile.name);
+      if (rename.status === "rejected") {
+        toast({ title: "Couldn't rename", description: rename.error, variant: "destructive" });
+        throw new Error(rename.error);
+      }
       const parsedFields: Record<string, any> = {};
       for (const [k, v] of Object.entries(fields)) {
         const num = Number(v);
         parsedFields[k] = v !== "" && !isNaN(num) && v.trim() !== "" ? num : v;
       }
       const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
-        name,
+        name: rename.name,
         notes,
         fields: { ...profile.fields, ...parsedFields },
       });
-      return res.json();
+      return { row: await res.json(), renamed: rename.status === "ok" };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       toast({ title: `"${name}" updated` });
-      invalidateDomains("profiles");
+      // A NAME is drawn by every screen that mentions this record — owner
+      // badges, list rows, search, the profile switcher — none of which sit
+      // under the profiles domain. A rename is rare; refresh everything rather
+      // than leave half the app calling them by the old name.
+      invalidateDomains(result?.renamed ? "everything" : "profiles");
       onSaved();
       onClose();
     },
@@ -13434,6 +13568,17 @@ export default function ProfileDetailPage() {
                       )}
                     </>
                   )}
+
+                  {/* All the way down the Info tab: what you do TO this record
+                      — silence the alerts it raises, or remove it. Both were
+                      previously unreachable from here (clearing lived inside an
+                      expanded row of a dashboard popup; Delete only in the page
+                      header). User report 2026-08-26. */}
+                  <ProfileAlertsSection
+                    profileId={profile.id}
+                    profileType={profile.type}
+                    onDelete={() => setShowDeleteDialog(true)}
+                  />
                 </TabsContent>
               )}
 

@@ -77,3 +77,69 @@ describe("cache bus domain coverage", () => {
     expect(src).toContain('from "@shared/entity-domains"');
   });
 });
+
+// ─── Domain dependency gaps ────────────────────────────────────────────────
+// A domain that omits a key its data feeds is a screen that stays stale until
+// something unrelated happens to refetch it. These were the actual omissions
+// behind "I recorded a payment and the budget/net-worth/dashboard didn't move".
+describe("cache bus — a finance write reaches everything it feeds", () => {
+  const src = fs.readFileSync(
+    path.resolve(__dirname, "../client/src/lib/cache-bus.ts"),
+    "utf8",
+  );
+
+  /** The keys listed under one domain in DOMAIN_KEYS. */
+  function keysFor(domain: string): string[] {
+    const start = src.indexOf(`\n  ${domain}: [`);
+    expect(start, `domain ${domain} not found`).toBeGreaterThan(-1);
+    const end = src.indexOf("\n  ],", start);
+    return [...src.slice(start, end).matchAll(/\["([^"]+)"\]/g)].map((m) => m[1]);
+  }
+
+  it("routes a liability write into the money surfaces it moves", () => {
+    const keys = keysFor("liabilities");
+    // A payment is money out: it belongs in the spend totals and this month's
+    // budget exactly like any other outflow, and it moves net worth.
+    for (const key of [
+      "/api/profiles", "/api/dashboard-enhanced", "/api/stats",
+      "/api/expenses", "/api/budgets/summary", "/api/net-worth/history",
+      "/api/dashboard-bootstrap", "/api/obligations", "/api/accounts",
+    ]) {
+      expect(keys, key).toContain(key);
+    }
+  });
+
+  it("routes an asset write into the persisted bootstrap payload", () => {
+    // dashboard-bootstrap SEEDS ~24 list caches on next launch and is persisted
+    // to localStorage. Omitting it meant a revalued car came back at its old
+    // value after a reload.
+    const keys = keysFor("assets");
+    for (const key of [
+      "/api/profiles", "/api/dashboard-enhanced", "/api/stats",
+      "/api/dashboard-bootstrap", "/api/net-worth/history", "/api/insights",
+    ]) {
+      expect(keys, key).toContain(key);
+    }
+  });
+
+  it("lists no key that nothing in the app reads", () => {
+    // ["/api/activity"] sat in eight domains. No query ever used it — recent
+    // activity comes from stats.recentActivity — so every one of those entries
+    // was invalidation theatre.
+    const app = fs.readFileSync(path.resolve(__dirname, "../client/src/lib/cache-bus.ts"), "utf8");
+    expect(app).not.toContain('["/api/activity"]');
+  });
+});
+
+// ─── Cross-instance cache busting must stay per-user ───────────────────────
+describe("server cache busts name a user", () => {
+  const src = fs.readFileSync(path.resolve(__dirname, "../server/routes.ts"), "utf8");
+
+  it("never busts a per-user prefix for every user on the instance", () => {
+    // bustCache("enhanced:") reads as "clear my dashboard" and actually clears
+    // the dashboard of every user sharing this warm lambda, cold-starting a
+    // ~15-query recompute for each of them. Dozens of these had accumulated.
+    const offenders = [...src.matchAll(/bustCache\(`([a-z-]+:)`\)/g)].map((m) => m[1]);
+    expect(offenders).toEqual([]);
+  });
+});

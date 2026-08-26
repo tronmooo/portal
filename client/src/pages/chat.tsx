@@ -6,10 +6,13 @@ import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
 import { applyChatMutations } from "@/lib/chat-sync";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { perfMark, perfMeasure, logServerTimings } from "@/lib/perf-marks";
 import { hashNavigate } from "@/lib/hashNavigate";
+import { stashPendingReview } from "@/lib/pending-review";
 import { stopProp } from "@/lib/event-utils";
 import { isInternalDirective } from "@shared/ai-message-kinds";
+import { isInScope, ownerChainForProfile, selfIdsFrom } from "@shared/scope";
 
 // ── Lazy-loaded heavy components ─────────────────────────────────────────────
 // chat.tsx is the EAGER home page (imported non-lazy in App.tsx). Anything
@@ -97,8 +100,21 @@ import {
   Copy,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { CopyButton } from "@/components/chat/CopyButton";
+import { ExtractionConfirmation } from "@/components/chat/ExtractionReview";
+import type { ProposedAction } from "@shared/extraction-actions";
 import { useToast } from "@/hooks/use-toast";
 import type { ChatMessage, ChatMutation, ParsedAction, Profile } from "@shared/schema";
+import {
+  DESTINATION_LABEL, DESTINATION_ORDER, parseMeasurement, matchHealthMetric,
+  type ExtractionItem, type ExtractionDestination,
+} from "@shared/extraction-destinations";
+import {
+  extractionDateRows,
+  UPCOMING_WINDOW_DAYS,
+  type ExtractionDateRow,
+  type CalendarDateDecision,
+} from "@shared/extraction-calendar";
 // Type-only import — erased at compile time, does NOT pull recharts into the bundle.
 import type { ChartSpec2 } from "@/components/ChatChartRenderer";
 // ChartCard lazy-loads the recharts body itself, so importing it here stays light.
@@ -124,54 +140,6 @@ interface ReportSpec2 { title:string; subtitle?:string; sections:ReportSection2[
 // Lightweight, reusable copy control used across chat (messages, extracted data,
 // tables). Shows a transient check on success. No new features — purely a
 // convenience affordance for content already on screen.
-function CopyButton({
-  value,
-  label = "Copy",
-  className = "",
-  iconOnly = false,
-}: {
-  value: string | (() => string);
-  label?: string;
-  className?: string;
-  iconOnly?: boolean;
-}) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const text = typeof value === "function" ? value() : value;
-    if (!text) return;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-      }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked — silently ignore */
-    }
-  };
-  return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      className={`inline-flex items-center gap-1 rounded-md text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors ${iconOnly ? "p-1" : "px-1.5 py-0.5"} ${className}`}
-      aria-label={label}
-      title={copied ? "Copied" : label}
-    >
-      {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-      {!iconOnly && <span>{copied ? "Copied" : label}</span>}
-    </button>
-  );
-}
 
 // ─── Rich Visual Components ────────────────────────────────────────────────────────────────────────
 function fmtVal(v:any, fmt?:string): string {
@@ -649,547 +617,6 @@ function ChatDocumentPreviews({
   );
 }
 
-// ── Extraction Confirmation UI (two-phase extraction) ───────────────────────
-function ExtractionConfirmation({
-  extraction,
-  onConfirm,
-  onSkip,
-}: {
-  extraction: NonNullable<ChatMessage["pendingExtraction"]>;
-  onConfirm: (data: {
-    extractionId: string;
-    confirmedFields: Array<{ key: string; value: any }>;
-    targetProfileId?: string;
-    createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
-    trackerEntries: any[];
-    createExpense?: any;
-    createObligation?: any;
-  }) => Promise<boolean>;
-  onSkip: () => void;
-}) {
-  const [fields, setFields] = useState(
-    () => extraction.extractedFields.map((f) => ({ ...f }))
-  );
-  const [confirming, setConfirming] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
-  // Track which tracker entries the user wants to create (all selected by default)
-  const [selectedTrackers, setSelectedTrackers] = useState<boolean[]>(
-    () => (extraction.trackerEntries || []).map(() => true)
-  );
-  // Track which trackable PROFILE fields (height, weight, etc.) should ALSO be turned
-  // into a time-series tracker entry. Bug fix: previously "create tracker for height"
-  // checkbox had no effect because height was hard-coded as a profile-only field.
-  const TRACKABLE_PROFILE_KEYS = new Set([
-    'height', 'weight', 'bmi', 'bodyFat', 'bodyFatPercentage',
-    'systolic', 'diastolic', 'bloodPressure', 'heartRate', 'pulse',
-    'temperature', 'bodyTemperature', 'restingHeartRate', 'oxygenSaturation', 'spo2',
-    'glucose', 'bloodGlucose', 'cholesterol', 'totalCholesterol', 'ldl', 'hdl', 'triglycerides',
-    'a1c', 'hba1c'
-  ]);
-  const isTrackableField = (key: string) =>
-    TRACKABLE_PROFILE_KEYS.has(key) || /^(height|weight|bp|bmi|temperature|heart_?rate)$/i.test(key);
-  const [alsoTrack, setAlsoTrack] = useState<Record<string, boolean>>(() => {
-    const init: Record<string, boolean> = {};
-    for (const f of extraction.extractedFields) {
-      // Default to ON for trackable fields — user almost always wants the time-series too.
-      if (isTrackableField(f.key)) init[f.key] = true;
-    }
-    return init;
-  });
-  const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(extraction.targetProfile?.id);
-  const [createExpense, setCreateExpense] = useState(!!extraction.pendingFinancial?.expense);
-  const [createObligation, setCreateObligation] = useState(!!extraction.pendingFinancial?.obligation);
-  // The proposed expense is a SUGGESTION — every part of it is editable before
-  // saving. (Bug report: the AI proposed $84.97 while the receipt's Total
-  // Amount 92.40 sat in the checklist, and the user had no way to correct it.)
-  const [expenseDraft, setExpenseDraft] = useState(() => {
-    const e = extraction.pendingFinancial?.expense;
-    return e ? {
-      description: String(e.description ?? ""),
-      amount: String(e.amount ?? ""),
-      category: String(e.category ?? "general"),
-      date: String(e.date ?? ""),
-    } : null;
-  });
-
-  // Fetch profiles for the dropdown
-  const { data: allProfiles = [] } = useQuery<any[]>({
-    queryKey: ["/api/profiles"],
-  });
-
-  // Default the linked profile to "my profile" (the self profile) whenever the
-  // extraction didn't already target someone specific. Runs once profiles load.
-  useEffect(() => {
-    if (selectedProfileId) return;
-    if (extraction.targetProfile?.id) return;
-    const self = allProfiles.find((p: any) => p.type === "self");
-    if (self) setSelectedProfileId(self.id);
-  }, [allProfiles, selectedProfileId, extraction.targetProfile?.id]);
-
-  const toggleField = (idx: number) => {
-    setFields((prev) => prev.map((f, i) => i === idx ? { ...f, selected: !f.selected } : f));
-  };
-
-  // Bulk toggle for the review-table header. If every row is currently
-  // selected we treat the next click as a Deselect All; otherwise we Select
-  // All. This is the same affordance spreadsheets give you — one click to
-  // flip the entire column.
-  const allSelected = fields.length > 0 && fields.every((f) => f.selected);
-  const toggleAllFields = () => {
-    const next = !allSelected;
-    setFields((prev) => prev.map((f) => ({ ...f, selected: next })));
-    // Mirror the bulk action onto the tracker entry checkboxes so the user's
-    // single click clears (or restores) the whole review pane at once.
-    setSelectedTrackers((prev) => prev.map(() => next));
-  };
-
-  // Heuristic: when the upstream classifier did NOT route this document as an
-  // expense, but the user can still see a money-shaped "Total" / "Amount"
-  // field in the extracted table, we want a one-click way to push that
-  // number into Finance. We scan for a numeric value on a field whose
-  // key/label sounds like a charge — only used when
-  // extraction.pendingFinancial.expense is absent. This is the missing
-  // "Add to Finance" button the user asked for.
-  const moneyFieldCandidate = useMemo(() => {
-    if (extraction.pendingFinancial?.expense) return null;
-    const moneyKeyRe = /(total|amount|price|charge|fee|cost|payment|balance|due|paid|subtotal|grand_?total)/i;
-    let best: { amount: number; label: string; key: string; __rank: number } | null = null;
-    for (const f of fields) {
-      const keyStr = String(f.key || '');
-      const labelStr = String(f.label || '');
-      if (!moneyKeyRe.test(keyStr) && !moneyKeyRe.test(labelStr)) continue;
-      const raw = String(f.value ?? '').replace(/[$,€£¥₹₩]/g, '').trim();
-      const num = parseFloat(raw);
-      if (!isNaN(num) && num > 0) {
-        // Prefer "total" > "amount/paid" > anything else when multiple match.
-        const rank = /total|grand/i.test(keyStr + labelStr) ? 0 : /amount|paid/i.test(keyStr + labelStr) ? 1 : 2;
-        if (!best || rank < best.__rank) {
-          best = { amount: num, label: labelStr || keyStr, key: keyStr, __rank: rank };
-        }
-      }
-    }
-    return best;
-  }, [fields, extraction.pendingFinancial]);
-  // "Add to Finance" toggle state — only meaningful when moneyFieldCandidate exists.
-  const [addManualExpense, setAddManualExpense] = useState(false);
-
-  const handleConfirm = async () => {
-    setConfirming(true);
-    // Include ALL selected fields (date fields now save to profile AND optionally create calendar events)
-    const confirmedFields = fields.filter((f) => f.selected && f.key).map((f) => {
-      const key = f.key === 'dob' ? 'dateOfBirth' : f.key;
-      return { key, value: f.value };
-    });
-    const createCalendarEvents = fields
-      .filter((f) => f.selected && f.isDate && f.suggestedEvent && f.key && f.value)
-      .map((f) => ({
-        field: f.key,
-        date: String(f.value),
-        title: f.suggestedEvent!,
-        category: /expir|renew/i.test(f.key || "") ? "finance" : /appoint|visit/i.test(f.key || "") ? "health" : "other",
-      }));
-    // Build synthetic tracker entries from the trackable profile fields the user opted into.
-    // This makes the inline "Also track over time" checkbox actually create a tracker, fixing
-    // the silent drop where height/weight checkboxes did nothing because they're personal keys.
-    const syntheticTrackerEntries = fields
-      .filter((f) => f.selected && f.key && alsoTrack[f.key])
-      .map((f) => {
-        const rawStr = String(f.value ?? '').trim();
-        // Try to parse height like 5'10" → 70 (inches)
-        let numValue: number | null = null;
-        let unit = '';
-        if (/^(\d+)'\s*(\d+)?\"?$/.test(rawStr)) {
-          const m = rawStr.match(/^(\d+)'\s*(\d+)?\"?$/)!;
-          numValue = parseInt(m[1], 10) * 12 + parseInt(m[2] || '0', 10);
-          unit = 'in';
-        } else if (/^(\d+(\.\d+)?)\s*(lbs?|kg|cm|in|mmHg|bpm|°F|°C|mg\/dL|%)?$/i.test(rawStr)) {
-          const m = rawStr.match(/^(\d+(?:\.\d+)?)\s*([a-zA-Z%°\/]*)$/)!;
-          numValue = parseFloat(m[1]);
-          unit = (m[2] || '').toLowerCase();
-        } else if (/^\d+\/\d+$/.test(rawStr)) {
-          // Blood pressure like 120/80 — store both
-          const [sys, dia] = rawStr.split('/').map((n) => parseInt(n, 10));
-          return {
-            trackerName: 'Blood Pressure',
-            values: { systolic: sys, diastolic: dia },
-            unit: 'mmHg',
-            category: 'health',
-            __fromProfileField: f.key,
-          };
-        } else {
-          const n = parseFloat(rawStr);
-          if (!isNaN(n)) numValue = n;
-        }
-        if (numValue === null) return null;
-        // Default units when unparseable
-        if (!unit) {
-          if (/height/i.test(f.key)) unit = 'in';
-          else if (/weight/i.test(f.key)) unit = 'lbs';
-          else if (/temperature/i.test(f.key)) unit = '°F';
-          else if (/heart_?rate|pulse/i.test(f.key)) unit = 'bpm';
-        }
-        const niceName = (f.label || f.key).replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim();
-        return {
-          trackerName: niceName,
-          values: { value: numValue },
-          unit,
-          category: 'health',
-          __fromProfileField: f.key,
-        };
-      })
-      .filter((e): e is NonNullable<typeof e> => e !== null);
-
-    // Build the expense payload. Prefer the classifier-produced one. If the
-    // classifier didn't produce a pendingFinancial.expense but the user opted
-    // in via the manual "Add to Finance" toggle, synthesize one from the
-    // money-shaped field we detected.
-    // The user's edits win over the AI proposal — whatever is in the draft is
-    // exactly what gets saved.
-    let expensePayload: any = (createExpense && extraction.pendingFinancial?.expense)
-      ? {
-          ...extraction.pendingFinancial.expense,
-          ...(expenseDraft ? {
-            description: expenseDraft.description.trim() || extraction.pendingFinancial.expense.description,
-            amount: (() => {
-              const n = parseFloat(String(expenseDraft.amount).replace(/[$,\s]/g, ""));
-              return isFinite(n) && n > 0 ? n : extraction.pendingFinancial.expense.amount;
-            })(),
-            category: expenseDraft.category || extraction.pendingFinancial.expense.category,
-            date: expenseDraft.date || extraction.pendingFinancial.expense.date,
-          } : {}),
-        }
-      : undefined;
-    if (!expensePayload && addManualExpense && moneyFieldCandidate) {
-      const vendorField = fields.find((f) => /vendor|merchant|company|provider|payee/i.test(String(f.key || '')));
-      const dateField = fields.find((f) => /transaction.?date|date$|paid/i.test(String(f.key || '')));
-      expensePayload = {
-        description: `${vendorField?.value || extraction.label || extraction.fileName} - ${moneyFieldCandidate.label}`,
-        amount: moneyFieldCandidate.amount,
-        category: 'general',
-        vendor: vendorField?.value ? String(vendorField.value) : undefined,
-        date: dateField?.value
-          ? String(dateField.value)
-          : getUserToday(BROWSER_TIMEZONE),
-      };
-    }
-
-    const success = await onConfirm({
-      extractionId: extraction.extractionId,
-      confirmedFields,
-      targetProfileId: selectedProfileId || extraction.targetProfile?.id,
-      createCalendarEvents,
-      trackerEntries: [
-        ...(extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),
-        ...syntheticTrackerEntries,
-      ],
-      createExpense: expensePayload,
-      createObligation: createObligation ? extraction.pendingFinancial?.obligation : undefined,
-    });
-    if (success) {
-      setConfirmed(true);
-    }
-    setConfirming(false);
-  };
-
-  if (confirmed) {
-    return (
-      <div className="mt-2 p-3 rounded-lg bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800">
-        <div className="flex items-center gap-2 text-green-700 dark:text-green-400 text-xs font-medium">
-          <Check className="h-3.5 w-3.5" />
-          Extraction confirmed and saved
-        </div>
-      </div>
-    );
-  }
-
-  // Excel/spreadsheet-friendly TSV (Field<TAB>Value) of all extracted fields so
-  // the user can paste the whole table straight into a sheet.
-  const buildTsv = () =>
-    "Field\tValue\n" +
-    fields.map((f) => {
-      const v = typeof f.value === 'object' && f.value !== null
-        ? JSON.stringify(f.value)
-        : String(f.value ?? '');
-      return `${f.label || f.key}\t${v}`;
-    }).join("\n");
-
-  return (
-    <div className="mt-3 rounded-lg bg-muted/40 border border-border overflow-hidden text-foreground">
-      {/* Header bar */}
-      <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-border bg-muted/60 flex-wrap">
-        <span className="micro-label text-muted-foreground">
-          Review extracted data · {fields.length}
-        </span>
-        <button
-          type="button"
-          onClick={toggleAllFields}
-          className="text-[11px] px-1.5 py-0.5 rounded border border-border bg-background hover:bg-muted text-foreground transition-colors"
-          data-testid="button-toggle-all-fields"
-          title={allSelected ? 'Deselect every row' : 'Select every row'}
-        >
-          {allSelected ? 'Deselect all' : 'Select all'}
-        </button>
-        <div className="ml-auto flex items-center gap-1.5">
-          <CopyButton value={buildTsv} label="Copy" />
-          <select
-            className="text-[11px] bg-background border border-border rounded px-1 py-0.5 text-foreground max-w-[150px]"
-            value={selectedProfileId || ""}
-            onChange={(e) => setSelectedProfileId(e.target.value || undefined)}
-            data-testid="select-extraction-profile"
-          >
-            <option value="">Link to profile…</option>
-            {allProfiles.slice().sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')).map((p: any) => (
-              <option key={p.id} value={p.id}>{p.name}{p.type === 'self' ? ' (me)' : ` (${p.type})`}</option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Excel-style grid: tight rows, column lines, header row */}
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-xs">
-          <thead>
-            <tr className="bg-muted/40 micro-label text-muted-foreground">
-              <th className="w-7 border-b border-border px-1 py-1 font-medium"></th>
-              <th className="border-b border-border px-2 py-1 text-left font-medium">Field</th>
-              <th className="border-b border-border px-2 py-1 text-left font-medium">Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            {fields.map((field, idx) => {
-              const strVal = typeof field.value === 'object' && field.value !== null
-                ? JSON.stringify(field.value).replace(/[{}"/]/g, '').replace(/,/g, ', ')
-                : String(field.value ?? '');
-              const isDateField = field.category === 'DATE' || field.isDate;
-              const isBoolField = strVal === 'true' || strVal === 'false' || strVal === 'True' || strVal === 'False';
-              const isNumField = !isDateField && !isBoolField && /^-?\$?[\d,]+(\.[\d]+)?$/.test(strVal.trim());
-              return (
-                <tr
-                  key={field.key}
-                  className={`border-b border-border/60 last:border-0 ${field.selected ? '' : 'opacity-50'}`}
-                >
-                  <td className="border-r border-border/60 px-1 py-0.5 text-center align-middle">
-                    <Checkbox
-                      checked={field.selected}
-                      onCheckedChange={() => toggleField(idx)}
-                      className="h-3.5 w-3.5"
-                    />
-                  </td>
-                  <td className="border-r border-border/60 px-2 py-0.5 align-middle">
-                    <div className="flex items-center gap-1">
-                      <span className="font-medium capitalize">{field.label}</span>
-                      {field.isDate && field.suggestedEvent && (
-                        <Calendar className="h-3 w-3 text-blue-500 shrink-0" />
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-2 py-0.5 align-middle">
-                    {isBoolField ? (
-                      <div className="flex items-center gap-1.5">
-                        <Checkbox
-                          checked={strVal === 'true' || strVal === 'True'}
-                          onCheckedChange={(checked) => {
-                            const newFields = [...fields];
-                            newFields[idx] = { ...newFields[idx], value: String(!!checked) };
-                            setFields(newFields);
-                          }}
-                          className="h-3.5 w-3.5"
-                        />
-                        <span className="text-muted-foreground">{strVal === 'true' || strVal === 'True' ? 'Yes' : 'No'}</span>
-                      </div>
-                    ) : (
-                      <input
-                        type={isDateField ? 'date' : isNumField ? 'number' : 'text'}
-                        // Dashed underline signals "tap to edit" — these values
-                        // were always editable but looked like static text.
-                        className="w-full bg-transparent text-foreground border-b border-dashed border-border/60 focus:outline-none focus:border-primary focus:bg-primary/5 rounded-t px-0.5 py-0.5"
-                        value={strVal}
-                        onChange={(e) => {
-                          const newFields = [...fields];
-                          newFields[idx] = { ...newFields[idx], value: e.target.value };
-                          setFields(newFields);
-                        }}
-                      />
-                    )}
-                    {field.isDate && field.suggestedEvent && field.selected && (
-                      <div className="text-[11px] text-blue-600 dark:text-blue-400 leading-tight">
-                        → {field.suggestedEvent}
-                      </div>
-                    )}
-                    {field.selected && field.key && isTrackableField(field.key) && (
-                      <label
-                        className="flex items-center gap-1 mt-0.5 cursor-pointer"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <Checkbox
-                          checked={!!alsoTrack[field.key]}
-                          onCheckedChange={(checked) =>
-                            setAlsoTrack((prev) => ({ ...prev, [field.key]: !!checked }))
-                          }
-                          className="h-3 w-3"
-                          data-testid={`also-track-${field.key}`}
-                        />
-                        <span className="text-[11px] text-muted-foreground">Also track over time</span>
-                      </label>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <div className="p-2.5 pt-2 space-y-2">
-
-      {extraction.trackerEntries && extraction.trackerEntries.length > 0 && (
-        <div className="pt-1.5 border-t border-border/50">
-          <span className="text-xs text-muted-foreground font-medium">Tracker entries (uncheck to skip):</span>
-          {extraction.trackerEntries.map((entry: any, idx: number) => (
-            <label key={idx} className="flex items-center gap-2 cursor-pointer ml-1 py-0.5">
-              <Checkbox
-                checked={selectedTrackers[idx] ?? true}
-                onCheckedChange={() => {
-                  const next = [...selectedTrackers];
-                  next[idx] = !next[idx];
-                  setSelectedTrackers(next);
-                }}
-                className="h-3.5 w-3.5"
-              />
-              <span className={`text-xs ${selectedTrackers[idx] ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
-                {(entry.trackerName || '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}:
-                {' '}{Object.entries(entry.values || {}).map(([k, v]) => `${v}`).join(', ')} {entry.unit || ''}
-              </span>
-            </label>
-          ))}
-        </div>
-      )}
-
-      {extraction.pendingFinancial && (
-        <div className="pt-1.5 border-t border-border/50">
-          <span className="text-xs text-muted-foreground font-medium">💰 Financial Records</span>
-          {extraction.pendingFinancial.expense && (
-            <div className="ml-1 py-1">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <Checkbox checked={createExpense} onCheckedChange={() => setCreateExpense(!createExpense)} className="h-3.5 w-3.5" />
-                <span className={`text-xs ${createExpense ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
-                  Create expense{!createExpense && expenseDraft ? `: $${expenseDraft.amount} — ${expenseDraft.description}` : ""}
-                </span>
-              </label>
-              {/* Every part of the proposal is editable — amount, description,
-                  category, date. What you see here is exactly what saves. */}
-              {createExpense && expenseDraft && (
-                <div className="mt-1.5 ml-6 space-y-1.5" data-testid="expense-draft-editor">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-muted-foreground">$</span>
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      step="0.01"
-                      value={expenseDraft.amount}
-                      onChange={(e) => setExpenseDraft({ ...expenseDraft, amount: e.target.value })}
-                      className="w-24 text-xs bg-background border border-border rounded px-1.5 py-1 text-foreground tabular-nums"
-                      data-testid="input-expense-amount"
-                      aria-label="Expense amount"
-                    />
-                    <select
-                      value={expenseDraft.category}
-                      onChange={(e) => setExpenseDraft({ ...expenseDraft, category: e.target.value })}
-                      className="text-xs bg-background border border-border rounded px-1 py-1 text-foreground"
-                      data-testid="select-expense-category"
-                      aria-label="Expense category"
-                    >
-                      {(EXPENSE_CATEGORIES as readonly string[]).map((c) => (
-                        <option key={c} value={c}>{categoryLabel(c)}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="date"
-                      value={/^\d{4}-\d{2}-\d{2}$/.test(expenseDraft.date) ? expenseDraft.date : ""}
-                      onChange={(e) => setExpenseDraft({ ...expenseDraft, date: e.target.value })}
-                      className="text-xs bg-background border border-border rounded px-1.5 py-1 text-foreground"
-                      data-testid="input-expense-date"
-                      aria-label="Expense date"
-                    />
-                  </div>
-                  <input
-                    type="text"
-                    value={expenseDraft.description}
-                    onChange={(e) => setExpenseDraft({ ...expenseDraft, description: e.target.value })}
-                    className="w-full text-xs bg-background border border-border rounded px-1.5 py-1 text-foreground"
-                    placeholder="Description"
-                    data-testid="input-expense-description"
-                    aria-label="Expense description"
-                  />
-                </div>
-              )}
-            </div>
-          )}
-          {extraction.pendingFinancial.obligation && (
-            <label className="flex items-center gap-2 cursor-pointer ml-1 py-1">
-              <Checkbox checked={createObligation} onCheckedChange={() => setCreateObligation(!createObligation)} className="h-3.5 w-3.5" />
-              <span className={`text-xs ${createObligation ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
-                Create recurring bill: ${extraction.pendingFinancial.obligation.amount.toFixed(2)}/mo — {extraction.pendingFinancial.obligation.name}
-              </span>
-            </label>
-          )}
-        </div>
-      )}
-
-      {/* Manual “Add to Finance” affordance — only when the classifier did NOT
-          already produce a pendingFinancial.expense AND we detect a money-
-          shaped field (Total / Amount / Price…) in the extracted table. This
-          is the missing button the user asked for: a parking receipt with a
-          $130.29 Total Amount should always have a one-click path to Finance,
-          even if the classifier missed it. */}
-      {!extraction.pendingFinancial?.expense && moneyFieldCandidate && (
-        <div className="pt-1.5 border-t border-border/50">
-          <span className="text-xs text-muted-foreground font-medium">💰 Add to Finance</span>
-          <label className="flex items-center gap-2 cursor-pointer ml-1 py-1" data-testid="manual-add-expense">
-            <Checkbox checked={addManualExpense} onCheckedChange={() => setAddManualExpense(!addManualExpense)} className="h-3.5 w-3.5" />
-            <span className={`text-xs ${addManualExpense ? 'text-foreground' : 'text-muted-foreground'}`}>
-              Save ${moneyFieldCandidate.amount.toFixed(2)} as an expense ({moneyFieldCandidate.label})
-            </span>
-          </label>
-        </div>
-      )}
-
-      <div className="flex gap-2 pt-1">
-        <Button
-          size="sm"
-          className="h-7 text-xs"
-          onClick={() => handleConfirm()}
-          disabled={
-            // Enabled as long as ANYTHING is selected. Requiring a profile
-            // field made "just save the $475 total as an expense" impossible —
-            // deselect-all + Create expense left a dead Confirm button
-            // (2026-08-17 report). The server only needs extractionId; the
-            // expense/obligation/tracker saves are independent of the fields.
-            confirming || (
-              fields.every((f) => !f.selected) &&
-              !createExpense &&
-              !createObligation &&
-              !addManualExpense &&
-              !selectedTrackers.some(Boolean)
-            )
-          }
-        >
-          {confirming ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
-          Confirm
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 text-xs"
-          onClick={onSkip}
-          disabled={confirming}
-        >
-          Skip
-        </Button>
-      </div>
-      </div>
-    </div>
-  );
-}
 
 // ── Attachment type ──────────────────────────────────────────────────────────
 interface StagedAttachment {
@@ -1261,18 +688,6 @@ function GuidedDestinationPicker({
       .slice().sort((a, b) => (a.type === "self" ? -1 : b.type === "self" ? 1 : (a.name || "").localeCompare(b.name || ""))),
     [profiles],
   );
-  const categories = useMemo(() => {
-    const m = new Map<string, Profile[]>();
-    for (const p of profiles) {
-      if (p.type === "self" || p.type === "person") continue;
-      const label = DEST_CATEGORY_LABELS[p.type] || "Other";
-      const list = m.get(label);
-      if (list) list.push(p); else m.set(label, [p]);
-    }
-    for (const list of m.values()) list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-    return m;
-  }, [profiles]);
-
   // Derive owner/destination from the selection string so parent state stays
   // the single source of truth.
   const selectedIds = selectedProfileId.split(",").map((s) => s.trim()).filter((s) => s && s !== "none");
@@ -1280,6 +695,57 @@ function GuidedDestinationPicker({
   const selfOwner = owners.find((o) => o.type === "self");
   const ownerId = selectedIds.find(isOwnerId) || selfOwner?.id;
   const owner = owners.find((o) => o.id === ownerId);
+
+  // Co-ownership link tables. Both keys are seeded by the app bootstrap
+  // (lib/bootstrap-seed-keys.ts), so this reads from cache — no extra request
+  // when the attachment panel opens.
+  const { data: assetPartyLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/asset-party-links"],
+    queryFn: () => apiRequest("GET", "/api/asset-party-links").then((r) => r.json()),
+    staleTime: 60_000,
+  });
+  const { data: liabilityProfileLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/liability-profile-links"],
+    queryFn: () => apiRequest("GET", "/api/liability-profile-links").then((r) => r.json()),
+    staleTime: 60_000,
+  });
+  const selfIds = useMemo(() => selfIdsFrom(profiles), [profiles]);
+
+  /**
+   * Does this thing belong to the person currently picked as Owner?
+   *
+   * BUG: the category chips used to be built from EVERY non-person profile,
+   * so picking "Sarah Miller" still offered the whole household's assets,
+   * liabilities and vehicles — and filing a document under one of them
+   * silently attached it to somebody else's thing. Ownership is resolved the
+   * same way the dashboard and net-worth surfaces resolve it: the nesting
+   * chain plus the co-owner link tables, with unattributed profiles falling
+   * to Self.
+   */
+  const belongsToOwner = useCallback(
+    (p: Profile, personId: string | undefined) => {
+      if (!personId) return true;
+      return isInScope(
+        ownerChainForProfile(p, profiles, assetPartyLinks, liabilityProfileLinks),
+        { selectedIds: [personId], selfIds },
+        "belongs_to_self",
+      );
+    },
+    [profiles, assetPartyLinks, liabilityProfileLinks, selfIds],
+  );
+
+  const categories = useMemo(() => {
+    const m = new Map<string, Profile[]>();
+    for (const p of profiles) {
+      if (p.type === "self" || p.type === "person") continue;
+      if (!belongsToOwner(p, ownerId)) continue;
+      const label = DEST_CATEGORY_LABELS[p.type] || "Other";
+      const list = m.get(label);
+      if (list) list.push(p); else m.set(label, [p]);
+    }
+    for (const list of m.values()) list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    return m;
+  }, [profiles, belongsToOwner, ownerId]);
   const destId = selectedIds.find((id) => !isOwnerId(id));
   const dest = destId ? profiles.find((p) => p.id === destId) : undefined;
   const destCategory = dest ? (DEST_CATEGORY_LABELS[dest.type] || "Other") : null;
@@ -1302,7 +768,12 @@ function GuidedDestinationPicker({
               key={o.id}
               type="button"
               disabled={disabled}
-              onClick={() => commit(o.id, destId)}
+              onClick={() => {
+                // Switching owner must not carry over someone else's thing.
+                const keep = destId && dest && belongsToOwner(dest, o.id) ? destId : undefined;
+                if (!keep) setOpenCategory(null);
+                commit(o.id, keep);
+              }}
               className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${o.id === ownerId
                 ? "border-primary bg-primary/10 text-primary font-semibold"
                 : "border-border bg-background text-foreground hover:bg-muted"}`}
@@ -1344,6 +815,11 @@ function GuidedDestinationPicker({
             </button>
           ))}
         </div>
+        {categories.size === 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="dest-no-categories">
+            {owner ? `${owner.name} has no assets, vehicles or accounts yet.` : "Nothing to file this under yet."}
+          </p>
+        )}
       </div>
 
       {/* Step 3 — only the profiles in the chosen category */}
@@ -2418,7 +1894,7 @@ const MessageRow = memo(function MessageRow({
         )}
 
         {/* Extraction confirmation UI */}
-        {msg.pendingExtraction && msg.pendingExtraction.extractedFields.length > 0 && (
+        {msg.pendingExtraction && (msg.pendingExtraction.items?.length || msg.pendingExtraction.extractedFields.length) > 0 && (
           <ExtractionConfirmation
             extraction={msg.pendingExtraction}
             onConfirm={handleConfirmExtraction}
@@ -2687,6 +2163,10 @@ const MessageRow = memo(function MessageRow({
                             }
                             const body: any = { fields: restoredFields };
                             if (fieldsToDelete.length > 0) body.fieldsToDelete = fieldsToDelete;
+                            // A rename records the name it replaced, so Revert
+                            // puts the old name back rather than leaving the
+                            // record renamed with its fields rolled back.
+                            if (typeof ps.name === "string" && ps.name) body.name = ps.name;
                             if (ps.notes !== undefined) body.notes = ps.notes;
                             if (ps.tags !== undefined) body.tags = ps.tags;
                             if (ps.type !== undefined) body.type = ps.type;
@@ -2696,12 +2176,19 @@ const MessageRow = memo(function MessageRow({
                               ...m,
                               actions: m.actions ? [...m.actions] : m.actions,
                             })));
-                            queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-                            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                            queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                            if (typeof ps.name === "string" && ps.name) {
+                              // Undoing a rename changes the name every screen
+                              // shows, so refresh them all — the same reason
+                              // the rename itself does (see buildChatMutation).
+                              await invalidateDomain("everything");
+                            } else {
+                              queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+                              queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+                              queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                            }
                             toast({
                               title: "Reverted",
-                              description: `Restored ${cur?.name || 'profile'} to its previous state`,
+                              description: `Restored ${ps.name || cur?.name || 'profile'} to its previous state`,
                             });
                           } catch {
                             toast({ title: "Revert failed — try again", variant: "destructive" });
@@ -3290,6 +2777,26 @@ export default function ChatPage() {
       }
     },
     onSuccess: (data) => {
+      // A single upload that produced a review goes to the full-screen review
+      // page (#/documents/:id/review) instead of an inline pane squeezed into
+      // a message bubble. The payload travels through lib/pending-review —
+      // stash first, THEN strip it off the transcript message, so the review
+      // is offered in exactly one place and a stale confirm pane can never
+      // resurface from chat history after the page already saved it.
+      const reviewDocId: string | undefined =
+        (data.pendingExtraction?.items?.length || data.pendingExtraction?.extractedFields?.length)
+          ? (data.pendingExtraction.documentPreview?.id || data.documentId || data.pendingExtraction.extractionId)
+          : undefined;
+      if (reviewDocId) {
+        stashPendingReview(reviewDocId, {
+          ...data.pendingExtraction,
+          // Carry the inline binary when the server sent one — the review
+          // page's preview renders instantly instead of re-downloading.
+          documentPreview: data.pendingExtraction.documentPreview
+            ? { ...data.pendingExtraction.documentPreview, data: data.documentPreview?.data || "" }
+            : data.documentPreview,
+        });
+      }
       const assistantMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -3299,7 +2806,7 @@ export default function ChatPage() {
         results: data.results,
         documentPreview: data.documentPreview,
         documentPreviews: data.documentPreviews,
-        pendingExtraction: data.pendingExtraction,
+        pendingExtraction: reviewDocId ? undefined : data.pendingExtraction,
       };
       setMessages((prev) => [...prev, assistantMsg]);
       // Only NOW release the staged attachment — it stays attached through
@@ -3316,6 +2823,7 @@ export default function ChatPage() {
       });
       setSelectedProfileId("none");
       syncFromResponse(data as any);
+      if (reviewDocId) hashNavigate(`/documents/${reviewDocId}/review`);
     },
     onError: (err: Error) => {
       const isConnectionDrop =
@@ -3436,7 +2944,7 @@ export default function ChatPage() {
 
       // Create separate extraction messages for each file with pending extraction
       const extractionMsgs: ChatMessage[] = data.results
-        .filter((r) => r.pendingExtraction?.extractedFields?.length > 0)
+        .filter((r) => (r.pendingExtraction?.items?.length || r.pendingExtraction?.extractedFields?.length || 0) > 0)
         .map((r, idx) => ({
           id: `${crypto.randomUUID()}-extraction-${idx}`,
           role: "assistant" as const,
@@ -3512,6 +3020,9 @@ export default function ChatPage() {
     confirmedFields: Array<{ key: string; value: any }>;
     targetProfileId?: string;
     createCalendarEvents: Array<{ field: string; date: string; title: string; category: string }>;
+    calendarDates?: CalendarDateDecision[];
+    /** The reviewed plan of writes — see shared/extraction-actions. */
+    actions?: ProposedAction[];
     trackerEntries: any[];
     createExpense?: any;
     createObligation?: any;

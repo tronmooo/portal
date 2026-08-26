@@ -48,7 +48,6 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     // tasks affect KPI tile + dashboard widget + activity feed
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
-    ["/api/activity"],
     ["/api/calendar/timeline"],
     ["/api/date-rules"],  // a due date is a deadline rule
     ["/api/insights"],
@@ -63,9 +62,18 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/habits"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
-    ["/api/activity"],
     ["/api/insights"],
     ["/api/ai-digest"],
+    // Completing a habit writes its linked tracker's record too (one
+    // completion, one pipeline — server/habit-completion.ts), so the Trackers
+    // page and every tracker-fed chart are stale the moment a habit is
+    // checked off. The reverse edge is in the trackers domain below; both
+    // directions are needed because either side can be the one that moves.
+    ["/api/trackers"],
+    // A profile's detail payload embeds its habits (relatedHabits) and its
+    // activity timeline, so a check-in made anywhere else leaves the person's
+    // page showing the pre-check-in count until something unrelated refetches.
+    ["/api/profiles"],
   ],
   trackers: [
     ["/api/trackers"],
@@ -73,15 +81,18 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/stats"],
     ["/api/insights"],
     ["/api/ai-digest"],
-    ["/api/activity"],
     ["/api/goals"], // goals can auto-update from tracker entries
+    // Habit ↔ tracker link (2026-08-20): logging an entry to a tracker
+    // advances any habit linked to it (server/habit-completion.ts), so a
+    // manual log on the Trackers page must refresh the Habits ring too —
+    // otherwise the habit shows pre-log progress until an unrelated refetch.
+    ["/api/habits"],
   ],
   profiles: [
     ["/api/profiles"],
     ["/api/accounts"], // accounts ARE profiles (type: "account")
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
-    ["/api/activity"],
     ["/api/insights"],
     ["/api/ai-digest"],
     // A profile OWNS dates — a date of birth, an anniversary, a licence or
@@ -99,6 +110,14 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/stats"],
     ["/api/rel-assets"],
     ["/api/cashflow"],
+    // An asset's value is an input to every one of these, and none of them
+    // was listed: the bootstrap payload SEEDS ~24 list caches on next launch
+    // and is persisted to localStorage, so omitting it meant a revalued car
+    // came back at its old value after a reload.
+    ["/api/dashboard-bootstrap"],
+    ["/api/insights"],
+    ["/api/ai-digest"],
+    ["/api/net-worth/history"],
   ],
   liabilities: [
     ["/api/profiles"], // liabilities are profiles
@@ -113,6 +132,17 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     // Paying a bill from an account moves that account's balance, so the
     // Accounts list is stale the moment a liability write lands.
     ["/api/accounts"],
+    // A payment is money spent: it lands in the spend totals and the month's
+    // budget just like any other outflow, and it moves net worth. None of
+    // these were listed, so "record a payment" left the budget summary and the
+    // net-worth trend showing the pre-payment picture.
+    ["/api/expenses"],
+    ["/api/budgets"],
+    ["/api/budgets/summary"],
+    ["/api/net-worth/history"],
+    ["/api/dashboard-bootstrap"],
+    ["/api/insights"],
+    ["/api/ai-digest"],
   ],
   people: [
     ["/api/profiles"],
@@ -123,7 +153,6 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/documents"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
-    ["/api/activity"],
     // User report 2026-08-20 (screenshot): a deleted document vanished from
     // the Documents tab instantly and stayed on the Info tab. The Info tab
     // reads the profile-detail EMBED (`relatedDocuments`) and the activity
@@ -146,7 +175,6 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/budgets"],
     ["/api/budgets/summary"],
     ["/api/cashflow"],
-    ["/api/activity"],
     ["/api/insights"],
     ["/api/ai-digest"],
   ],
@@ -189,7 +217,6 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/calendar/timeline"],
     ["/api/date-rules"],
     ["/api/dashboard-enhanced"],
-    ["/api/activity"],
   ],
   journal: [
     ["/api/journal"],
@@ -201,7 +228,6 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/artifacts"],
     ["/api/chat-artifacts"],
     ["/api/dashboard-enhanced"],
-    ["/api/activity"],
   ],
   memories: [
     ["/api/memories"],
@@ -273,7 +299,13 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
     case "tasks":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/tasks");
     case "habits":
-      return (q) => String(q.queryKey?.[0] || "").startsWith("/api/habits");
+      // Nested keys too: a habit check-in mirrors into its linked tracker (the
+      // Trackers page reads ["/api/trackers", id]) and shows up on the owner's
+      // profile detail (["/api/profiles", id, "detail"]).
+      return (q) => {
+        const k0 = String(q.queryKey?.[0] || "");
+        return k0.startsWith("/api/habits") || k0.startsWith("/api/trackers") || k0.startsWith("/api/profiles");
+      };
     case "artifacts":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/artifacts");
     case "everything":
@@ -303,7 +335,8 @@ function channel(): BroadcastChannel | null {
     _channel.onmessage = (e: MessageEvent) => {
       const domains = Array.isArray(e.data?.domains) ? (e.data.domains as Domain[]) : [];
       if (domains.length === 0) return;
-      // remote=true so the replay doesn't re-broadcast (no infinite ping-pong).
+      // remote=true: don't re-broadcast (no infinite ping-pong), and don't
+      // have every background tab race to recompute the same aggregates.
       void invalidateDomainsInternal(domains, true);
     };
   } catch { return null; }
@@ -324,12 +357,32 @@ try { channel(); } catch {}
 // optimistic updates already showed the change instantly.
 export function invalidateDomains(...domains: Domain[]): Promise<void> {
   try { channel()?.postMessage({ domains }); } catch {}
-  return invalidateDomainsInternal(domains, true);
+  return invalidateDomainsInternal(domains, false);
 }
 
-function invalidateDomainsInternal(domains: Domain[], _remote: boolean): Promise<void> {
+/**
+ * The aggregate payloads. They are the most expensive thing the server
+ * computes (~15 queries) and nothing can patch them, so their refetch policy
+ * is worth being deliberate about: the tab that made the write refetches them
+ * immediately (they are what net worth and the KPI tiles render), while tabs
+ * merely replaying the broadcast only mark them stale — otherwise five open
+ * tabs answer one write with five identical cold recomputes.
+ */
+const AGGREGATE_KEYS = new Set([
+  "/api/stats",
+  "/api/dashboard-enhanced",
+  "/api/dashboard-bootstrap",
+  "/api/insights",
+  "/api/ai-digest",
+]);
+
+function invalidateDomainsInternal(domains: Domain[], remote: boolean): Promise<void> {
   const seen = new Set<string>();
   const promises: Promise<unknown>[] = [];
+  const refetchFor = (key: unknown) =>
+    remote && typeof key === "string" && AGGREGATE_KEYS.has(key)
+      ? ("none" as const)
+      : ("active" as const);
 
   for (const d of domains) {
     // 1. Explicit top-level keys
@@ -338,7 +391,7 @@ function invalidateDomainsInternal(domains: Domain[], _remote: boolean): Promise
       if (seen.has(tag)) continue;
       seen.add(tag);
       promises.push(
-        queryClient.invalidateQueries({ queryKey: key, refetchType: "active" })
+        queryClient.invalidateQueries({ queryKey: key, refetchType: refetchFor(key[0]) })
       );
     }
     // 2. Predicate match for nested keys

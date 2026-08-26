@@ -162,3 +162,69 @@ export function resolveTrackerUnit(t: UnitTrackerLike, fieldName?: string): stri
   }
   return "";
 }
+
+// ─── Dimensions: may two units describe the same metric? ─────────────────────
+//
+// Tracker matching has always compared NAMES. That is right as the primary
+// gate — "Height" and "Weight" are different metrics however similar their
+// numbers — but it is not sufficient: a value in miles must never be appended
+// to a series kept in dollars just because both trackers happen to be called
+// "Value". A dimension is the second gate, and only ever a VETO layered on top
+// of name identity; it never matches two trackers that names kept apart.
+//
+// This table lives here because this is the one file allowed to know about
+// units (see the contract test named at the top).
+
+export type UnitDimension =
+  | "mass" | "length" | "distance" | "temperature" | "pressure" | "rate"
+  | "percent" | "money" | "volume" | "time" | "energy" | "concentration" | "count";
+
+/** Longest-first, so "mg/dl" is read as a concentration before "mg" is read as a mass. */
+const DIMENSION_TABLE: ReadonlyArray<readonly [RegExp, UnitDimension]> = [
+  [/^(mg\/dl|mmol\/l|miu\/l|mcg\/dl|ng\/ml|g\/dl|meq\/l|iu\/l|mg\/l)$/, "concentration"],
+  [/^(breaths?\/min|bpm|rpm|steps?\/min|\/min)$/, "rate"],
+  [/^(mmhg|psi|bar|kpa)$/, "pressure"],
+  [/^(kg|kgs|kilogram|kilograms|lb|lbs|pound|pounds|g|grams|oz|ounce|ounces|mg|mcg)$/, "mass"],
+  [/^(cm|centimeter|centimeters|in|inch|inches|ft|feet|foot|m|meter|meters|mm)$/, "length"],
+  [/^(mi|mile|miles|km|kilometer|kilometers|yd|yard|yards)$/, "distance"],
+  [/^(f|c|°f|°c|fahrenheit|celsius)$/, "temperature"],
+  [/^(%|percent|percentage|pct)$/, "percent"],
+  [/^(\$|usd|eur|gbp|cad|aud|dollars?)$/, "money"],
+  [/^(ml|l|liter|liters|fl oz|floz|gal|gallon|gallons|cup|cups|qt|quart)$/, "volume"],
+  [/^(min|mins|minute|minutes|hr|hrs|hour|hours|sec|secs|second|seconds|days?)$/, "time"],
+  [/^(cal|kcal|calorie|calories|kj)$/, "energy"],
+  [/^(count|reps?|steps?|times?|x)$/, "count"],
+];
+
+/**
+ * What KIND of quantity this unit measures, or null when the unit is absent or
+ * one we have no dimension for. Never throws — an unknown unit is a reason to
+ * stay permissive, not to block a legitimate append.
+ */
+export function unitDimension(unit: string | null | undefined): UnitDimension | null {
+  const u = String(unit ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!u) return null;
+  for (const [re, dim] of DIMENSION_TABLE) {
+    if (re.test(u)) return dim;
+  }
+  return null;
+}
+
+/**
+ * May a value recorded in unit `a` join a series kept in unit `b`?
+ *
+ * Permissive by default: when either side declares no unit, or carries one this
+ * table does not know, the answer is yes — blocking an append because nobody
+ * wrote down a unit would lose real data. Two KNOWN units must agree on
+ * dimension: lbs ≡ kg (conversion happens at write time in
+ * server/tracker-normalize), in ≢ lbs, mi ≢ $.
+ */
+export function unitsCompatible(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const da = unitDimension(a);
+  const db = unitDimension(b);
+  if (da === null || db === null) return true;
+  return da === db;
+}

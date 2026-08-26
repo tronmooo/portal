@@ -84,10 +84,26 @@ describe("client data-version token", () => {
     const before = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
     expect(before["X-Data-Version"]).toBeUndefined();
 
+    // The token is a per-domain map now: the server keys its caches per domain,
+    // so claiming "everything is at 21" would tell an instance the trackers had
+    // moved when only the liabilities did. A bare number is still accepted —
+    // that is what an older server sends mid-deploy — and reads as the epoch.
     noteDataVersion(21);
     await apiRequest("GET", "/api/tasks");
     const after = (fetchMock.mock.calls[1][1] as RequestInit).headers as Record<string, string>;
-    expect(after["X-Data-Version"]).toBe("21");
+    expect(after["X-Data-Version"]).toBe("epoch:21");
+
+    noteDataVersion("epoch:21,liabilities:4");
+    await apiRequest("GET", "/api/tasks");
+    const merged = (fetchMock.mock.calls[2][1] as RequestInit).headers as Record<string, string>;
+    expect(merged["X-Data-Version"]).toBe("epoch:21,liabilities:4");
+
+    // Monotonic per domain: a response that arrives out of order cannot walk
+    // one backwards, and cannot drag the others down with it.
+    noteDataVersion("epoch:3,liabilities:9");
+    await apiRequest("GET", "/api/tasks");
+    const kept = (fetchMock.mock.calls[3][1] as RequestInit).headers as Record<string, string>;
+    expect(kept["X-Data-Version"]).toBe("epoch:21,liabilities:9");
   });
 
   it("is NOT sent on document file fetches, which must stay header-clean for cross-origin redirects", async () => {
@@ -114,10 +130,22 @@ describe("the chat reply is a read-your-writes barrier", () => {
     expect(h.db.bumpDataVersionCalls).toBeGreaterThan(0);
   });
 
-  it("hands the client the post-write version as its token", async () => {
+  it("hands the client the post-write versions as its token", async () => {
     const r = await h.api("POST", "/api/chat", { message: "mood good" });
-    expect(typeof r.data?.dataVersion).toBe("number");
-    expect(r.data.dataVersion).toBeGreaterThan(0);
+    // An encoded domain→version map, not a single counter — see noteDataVersion.
+    expect(typeof r.data?.dataVersion).toBe("string");
+    expect(r.data.dataVersion).toMatch(/^[a-z]+:\d+(,[a-z]+:\d+)*$/);
+  });
+
+  it("bumps only the domains the turn actually wrote", async () => {
+    // The whole point of per-domain versions. "mood good" writes a journal
+    // entry; it must not change the cache key of the liability list, the
+    // document list or the calendar, because doing so cold-starts every one of
+    // them — which is what made the app slow after ANY change.
+    await h.api("POST", "/api/chat", { message: "mood good" });
+    expect(h.db.lastBumpedDomains.length).toBeGreaterThan(0);
+    expect(h.db.lastBumpedDomains).not.toContain("liabilities");
+    expect(h.db.lastBumpedDomains).not.toContain("documents");
   });
 
   it("reports what it changed, so the client patches instead of re-asking for everything", async () => {

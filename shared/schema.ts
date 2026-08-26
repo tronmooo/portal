@@ -4,6 +4,12 @@ import {
   trackerMetricDefinitionSchema,
 } from "./tracker-metric-definition";
 export type { TrackerMetricDefinition } from "./tracker-metric-definition";
+import type { ExtractionItem } from "./extraction-destinations";
+import type { SemanticDocument } from "./semantic-document";
+import type { ActionPlan } from "./extraction-actions";
+export type { ExtractionItem, ExtractionDestination } from "./extraction-destinations";
+export type { SemanticDocument } from "./semantic-document";
+export type { ActionPlan, ProposedAction, ActionGroup } from "./extraction-actions";
 
 // ============================================================
 // SHARED CONSTANTS
@@ -180,11 +186,48 @@ export interface ChatMessage {
       isDate: boolean;
       category?: string;
       suggestedEvent?: string;
+      /** What the date MEANS ("due", "expiration"). Set for actionable dates. */
+      dateRuleType?: string;
+      /** "Due Date", "Registration · Renewal Date" — the Calendar column label. */
+      dateTypeLabel?: string;
+      dateISO?: string;
+      actionableDate?: boolean;
+      /** True when the record itself puts this date on the calendar. */
+      calendarDerived?: boolean;
     }>;
     targetProfile?: { name: string; id?: string; type?: string; isNew?: boolean };
     trackerEntries?: Array<{ trackerName: string; values: Record<string, any> }>;
     documentPreview?: { id: string; name: string; mimeType: string; data: string };
     pendingFinancial?: any;
+    /**
+     * The review list: ONE row per extracted fact, each carrying the destination
+     * the extractor proposes and the destinations the user may re-route it to
+     * (shared/extraction-destinations). `extractedFields` and `trackerEntries`
+     * above are kept so a chat message rendered from history still displays;
+     * `items` is what the review pane renders when present.
+     */
+    items?: ExtractionItem[];
+    /** Date rows for the review UI's Calendar section (shared/extraction-calendar). */
+    calendarDates?: Array<Record<string, any>>;
+    /** The document these dates belong to. */
+    documentName?: string;
+    /**
+     * What the document MEANS — entities, relationships, facts, recurrence
+     * (shared/semantic-document). Absent when the understanding stage degraded.
+     */
+    semantic?: SemanticDocument;
+    /**
+     * What will HAPPEN — the reviewable plan of writes, grouped by destination
+     * (shared/extraction-actions). The review pane renders this when present
+     * and falls back to `items` when it is not.
+     */
+    actionPlan?: ActionPlan;
+    /**
+     * Set when the understanding stage could not interpret this document. The
+     * review pane says so and routes per-field instead — an upload is never
+     * blocked by the reasoning step failing.
+     */
+    semanticDegraded?: string;
   };
   results?: Array<Record<string, any>>;
   // Rich visual output — inline charts, tables, reports
@@ -479,6 +522,17 @@ export interface Habit {
   endDate?: string;
   timeOfDay?: HabitTimeOfDay; // Scheduled slot; editable from the habit profile
   scheduledTime?: string; // "HH:MM" (24h) when timeOfDay is "custom" or a precise time is set
+  /**
+   * Optional link to the Tracker that MEASURES this habit. A habit records
+   * consistency (was the day's target met); its tracker records the richer
+   * data (ounces, miles, duration, intensity). Logging an entry to the linked
+   * tracker advances the habit's progress for that day (see
+   * server/habit-completion.ts). Absent for completion-only habits ("make my
+   * bed") — those measure nothing beyond the check-in itself. A habit's
+   * schedule lives entirely in the habit system: neither the habit nor its
+   * tracker ever creates calendar events or recurring calendar rules.
+   */
+  linkedTrackerId?: string | null;
   currentStreak: number;
   longestStreak: number;
   checkins: HabitCheckin[];
@@ -514,6 +568,8 @@ export const insertHabitSchema = z.object({
   // not just leave it unset (undefined).
   timeOfDay: z.enum(["morning", "afternoon", "evening", "bedtime", "anytime"]).nullable().optional(),
   scheduledTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)").nullable().optional(),
+  // Nullable so a PATCH can unlink a habit from its tracker (send null).
+  linkedTrackerId: z.string().nullable().optional(),
 });
 
 export type InsertHabit = z.input<typeof insertHabitSchema>;

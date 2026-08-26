@@ -23,7 +23,8 @@
 //   result unchanged.
 import type { IStorage } from "./storage";
 import type { ChatMutation } from "@shared/schema";
-import { domainsForEntity, endpointForEntity } from "@shared/entity-domains";
+import { domainsForEntity, endpointForEntity, type Domain } from "@shared/entity-domains";
+import { deleteDocumentEverywhere } from "./document-deletion";
 
 export interface ToolVerification {
   /** Post-write read-back: the record is visible in the database (creates/
@@ -367,7 +368,9 @@ const DELETE_FN: Record<string, (s: AnyStorage, id: string) => Promise<any>> = {
   income: (s, id) => s.deleteIncome(id),
   event: (s, id) => s.deleteEvent(id),
   habit: (s, id) => s.deleteHabit(id),
-  document: (s, id) => s.deleteDocument(id),
+  // Full lifecycle, not the bare row: undoing a document CREATE must also take
+  // back the fields and dates its extraction wrote. See document-deletion.ts.
+  document: (s, id) => deleteDocumentEverywhere(s, id, "cascade").then((r) => r.deleted),
   profile: (s, id) => s.deleteProfile(id),
   obligation: (s, id) => s.deleteObligation(id),
   memory: (s, id) => s.deleteMemory(id),
@@ -622,7 +625,13 @@ export async function finalizeToolResult(
     // "Updated the Dodge Ram 2025" on a request to create one. Compared on
     // normalized names, and only when the input named something to begin with.
     if (op !== "delete" && verification.database_record_exists === true) {
-      const requested = input?.title || input?.name || input?.description || input?.trackerName || input?.key;
+      // A RENAME is the one update whose request names the OLD name on
+      // purpose: `update_profile(name:"Bob QA", changes:{name:"Bob Robertson"})`
+      // reads back as "Bob Robertson", which is the rename working. Compare
+      // against the name that was asked FOR, or every rename reports itself as
+      // having landed on the wrong record.
+      const requested = input?.changes?.name
+        || input?.title || input?.name || input?.description || input?.trackerName || input?.key;
       const requestedNorm = normalizeName(String(requested ?? ""));
       const writtenNorm = normalizeName(String(entityName ?? ""));
       if (requestedNorm && writtenNorm) {
@@ -665,7 +674,7 @@ export async function finalizeToolResult(
 const NON_ROW_KEYS = new Set([
   "success", "action", "action_type", "message", "entity", "verification",
   "error", "deduped", "_verify", "_displayData", "_validationWarnings",
-  "_previousState", "trackerId",
+  "_previousState", "_renamed", "trackerId",
 ]);
 
 /**
@@ -740,7 +749,15 @@ export function buildChatMutation(
       || null;
     const id = (typeof envelopeResult?.entity?.id === "string" && envelopeResult.entity.id)
       || manifestEntityId(rawResult);
-    const domains = domainsForEntity(entityType);
+    // A rename changes what this record is CALLED, and the name is rendered by
+    // every surface that mentions it — the owner badge on a task, the label on
+    // an expense row, search results, the profile switcher. None of those live
+    // under the profile domain, so a rename refreshes the lot: it is a rare
+    // write and a half-renamed app is exactly the "it didn't update everywhere"
+    // the user reported.
+    const domains: Domain[] = rawResult?._renamed
+      ? ["everything"]
+      : domainsForEntity(entityType);
     const endpoint = endpointForEntity(entityType);
     const row = op === "delete" ? undefined : pickRow(rawResult, entityType || undefined, id);
     return {

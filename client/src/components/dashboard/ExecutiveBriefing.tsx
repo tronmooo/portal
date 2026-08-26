@@ -68,6 +68,7 @@ import type { AttentionItem } from "@shared/attention";
 // One relative-due formatter for the whole app. Interpolating a raw `daysUntil`
 // is what once produced "Lawn care ($40) due in -29d".
 import { dayLabel } from "@shared/now-rank";
+import { groupDocumentDates } from "@shared/document-dates";
 import { buildExecutiveSections, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
@@ -170,14 +171,22 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
   id: string; icon: LucideIcon; title: string; accent: string;
   headerRight?: ReactNode; children: ReactNode; className?: string; index?: number;
 }) {
+  // h-full + flex column is what makes a card FILL its grid row instead of
+  // hugging its content and leaving the rest of the cell black (user report
+  // 2026-08-20: "there's a lot of empty space in the executive tab").
+  //
+  // The body is a plain flex region — NOT a scroll container. Bounding it with
+  // max-height + overflow-y broke page scrolling on this tab (the wheel went
+  // to the card under the pointer instead of the page), so content bounding
+  // lives in the ExpandableRows caps below instead. See index.css.
   return (
     <section
-      className={`bubble bubble-enter p-3.5 sm:p-4 ${className}`}
+      className={`bubble bubble-enter p-3.5 sm:p-4 h-full flex flex-col ${className}`}
       style={{ ["--accent-hsl" as any]: accent, ["--i" as any]: index }}
       data-testid={`exec-card-${id}`}
       aria-label={title}
     >
-      <div className="flex items-center justify-between gap-2 mb-3">
+      <div className="flex items-center justify-between gap-2 mb-3 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <Icon className="h-4 w-4 shrink-0" style={{ color: `hsl(${accent})` }} strokeWidth={2.2} aria-hidden="true" />
           <h3 className="text-[11px] font-extrabold tracking-[0.14em] uppercase truncate" style={{ color: `hsl(${accent})` }}>
@@ -186,13 +195,19 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
         </div>
         {headerRight}
       </div>
-      {children}
+      <div className="exec-card-body flex-1 min-h-0 flex flex-col">{children}</div>
     </section>
   );
 }
 
+/** An empty card still fills its cell — the message centres in the space
+ *  rather than sitting at the top with a black void under it. */
 function CardEmpty({ children }: { children: ReactNode }) {
-  return <p className="text-[12px] text-muted-foreground py-2">{children}</p>;
+  return (
+    <p className="flex-1 flex items-center justify-center text-center text-[12px] text-muted-foreground py-2">
+      {children}
+    </p>
+  );
 }
 
 /**
@@ -719,13 +734,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     .sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9));
 
   // Documents
-  const visibleDocs = allExpiringDocs
-    // Dismissal is per RULE now that one record can carry several expirations.
-    // Filtering on the record id alone left a dismissed row in this card and in
-    // the count below while the popup and the executive section hid it.
-    .filter((d: any) => !snoozedDocumentIds.includes(d.ruleId) && !snoozedDocumentIds.includes(d.documentId))
-    .filter((d: any) => typeof d.daysUntil === "number")
-    .sort((a: any, b: any) => a.daysUntil - b.daysUntil);
+  // Grouped to ONE CARD PER RECORD PER DAY so this card, its count and the
+  // popup all report the same number — a policy that expires and takes its
+  // premium on one day is one thing to act on, not two.
+  const visibleDocs = groupDocumentDates(
+    allExpiringDocs
+      // Dismissal is per RULE now that one record can carry several expirations.
+      // Filtering on the record id alone left a dismissed row in this card and in
+      // the count below while the popup and the executive section hid it.
+      .filter((d: any) => !snoozedDocumentIds.includes(d.ruleId) && !snoozedDocumentIds.includes(d.documentId))
+      .filter((d: any) => typeof d.daysUntil === "number"),
+  ).sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
   const docsSoonCount = visibleDocs.filter((d: any) => d.daysUntil <= 30).length;
 
   // Wellness — same extraction the Wellness tab uses, from the same trackers,
@@ -812,10 +831,47 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     onSuccess: () => { toast({ title: "Task completed" }); invalidateDomain("tasks"); },
     onError: () => toast({ title: "Couldn't complete task", variant: "destructive" }),
   });
-  const checkinHabit = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("POST", `/api/habits/${id}/checkin`, {}); },
-    onSuccess: () => { toast({ title: "Checked in" }); invalidateDomain("habits"); },
-    onError: () => toast({ title: "Check-in failed", variant: "destructive" }),
+  // Checking a habit off from the dashboard goes through the same completion
+  // pipeline as chat and the Habits page (server/habit-completion.ts), so it
+  // also writes the linked tracker record. The ring moves optimistically —
+  // waiting for a cold serverless roundtrip is what made the counter look
+  // stuck — and reconciles against what the server actually recorded.
+  const checkinHabit = useMutation<any, Error, string, { prev: any }>({
+    mutationFn: async (id: string) => await apiRequest("POST", `/api/habits/${id}/checkin`, { date: todayStr }),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
+      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+        (old || []).map((h: any) => h.id === id
+          ? { ...h, checkins: [...(h.checkins || []), { id: `optimistic-${Date.now()}`, date: todayStr, timestamp: new Date().toISOString() }] }
+          : h));
+      return { prev };
+    },
+    onSuccess: (res: any) => {
+      const c = res?.completion;
+      if (res?.id) {
+        queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
+          (old || []).map((h: any) => (h.id === res.id ? { ...h, ...res } : h)));
+      }
+      // Say what actually happened: a day that was already finished records
+      // nothing, and claiming otherwise is the "it says done but the count
+      // didn't move" report in reverse.
+      if (c?.alreadyComplete) {
+        toast({ title: "Already done today", description: `${res?.name || "Habit"} — ${c.progress?.label ?? "complete"}` });
+      } else if (c?.progress?.required > 1) {
+        toast({
+          title: c.progress.isComplete ? `✨ ${res?.name || "Habit"} complete!` : `${res?.name || "Habit"} — ${c.progress.completed} of ${c.progress.required}`,
+          description: c.tracker ? `Logged to ${c.tracker.name} too.` : undefined,
+        });
+      } else {
+        toast({ title: "Checked in", description: c?.tracker ? `Logged to ${c.tracker.name} too.` : undefined });
+      }
+      invalidateDomain("habits");
+    },
+    onError: (_e, _id, ctx) => {
+      if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
+      toast({ title: "Check-in failed", variant: "destructive" });
+    },
   });
   const dismissAlert = useMutation({
     // Same store the bell and the AI's dismiss_notifications tool write to.
@@ -976,7 +1032,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
+          {/* exec-grid: rows stretch so both cards in a row are the same
+              height, and a trailing odd card spans the full width — no blank
+              cell, no black gap under a short card (index.css). */}
+          <div className="exec-grid grid grid-cols-1 md:grid-cols-2 gap-3">
 
             {/* ── Needs Attention ──────────────────────────────────────────── */}
             <ExecCard

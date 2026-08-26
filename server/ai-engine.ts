@@ -2,6 +2,7 @@ import { logger } from "./logger";
 import { getAnthropicClient } from "./anthropic-client";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
+import { deleteDocumentEverywhere } from "./document-deletion";
 import { storage } from "./storage";
 import {
   createNote, updateNote, deleteNote, listNotes,
@@ -34,6 +35,12 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
+import { buildExtractionItems } from "@shared/extraction-destinations";
+import { reasonAboutDocument } from "./semantic-reasoner";
+import { emptySemanticDocument } from "@shared/semantic-document";
+import { planExtractionActions } from "@shared/extraction-actions";
+import { buildEntityIndex } from "./entity-index";
+import { entityFamily } from "@shared/entity-shape";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -48,6 +55,9 @@ import { canonicalExpenseCategory } from "@shared/category-canon";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
+import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompletionVeto } from "@shared/habit-completion-intent";
+import { resolveReferent, buildReferentDirective, type ReferentCandidate } from "@shared/referent-resolution";
+import { completeHabitOccurrence, resolveTrackerForHabit, type HabitCompletionSource } from "./habit-completion";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
@@ -73,7 +83,11 @@ import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollo
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
-import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel } from "@shared/date-rules";
+import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
+import { readProfileFieldValue } from "@shared/profile-field-identity";
+import { cascadeProfileRename } from "./profile-rename-cascade";
+import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel, bareDateOf } from "@shared/date-rules";
+import { extractionDateRows, extractionDateTypeLabel, type ExtractionDateRow } from "@shared/extraction-calendar";
 import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
@@ -91,6 +105,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
+import { applyLiabilityPayment } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
@@ -1615,6 +1630,22 @@ const EXTRACTION_PROMPT_BASE = `You are reading an arbitrary document. First und
   "summary": "<one line>"
 }
 
+STRUCTURED SECTIONS — include any of these top-level arrays ONLY when the document actually lists them. Omit the key entirely when it has nothing in it. These exist because a person's allergies, prescriptions, conditions, surgeries and a doctor's narrative are DIFFERENT KINDS OF THING and each has its own home in the app; flattening them into "extractedData" keys turns "Penicillin (Rash)" and "Lungs clear bilaterally" into the same kind of loose string.
+
+  "allergies":       [ { "substance": "Penicillin", "reaction": "Rash", "type": "medication" | "environmental" | "food" | "other" } ],
+  "medications":     [ { "name": "Cetirizine", "dose": "10 mg", "frequency": "once daily", "asNeeded": true, "kind": "medication" | "supplement" } ],
+  "conditions":      [ { "name": "GERD", "status": "active" | "history" | "resolved" } ],
+  "surgicalHistory": [ { "procedure": "Appendectomy", "year": 2012 } ],
+  "clinicalNotes":   [ { "title": "Physical Examination Summary", "body": "<the narrative VERBATIM, as one block of prose>" } ],
+  "followUps":       [ { "label": "Repeat labs", "date": "YYYY-MM-DD", "kind": "task" | "appointment" } ]
+
+RULES FOR THE STRUCTURED SECTIONS:
+- A field that belongs in one of these arrays must NOT also be duplicated as an extractedData key. Put it in exactly one place.
+- "medications" is a PRESCRIPTION LIST — what the person is prescribed or takes. It is NEVER a record that a dose was taken. Do not invent a time, a date, or an "adherence"/"taken" value for a medication, and never emit a medication as a trackerEntry. "once daily as needed" means asNeeded: true — that is a PRN prescription, not a daily schedule.
+- "clinicalNotes" is for genuinely unstructured narrative — a physical examination summary, an assessment, a plan, an impression, a doctor's comments. Keep each section's prose intact and verbatim in "body" rather than splitting each sentence into its own field. A measurement, a lab value, a date, an allergy, a medication or a diagnosis is NOT a clinical note.
+- "followUps" is for a future commitment the document states ("repeat labs in 6 months", "return for annual visit on August 25, 2027"). Convert a relative interval to an absolute date using the document's own report date when one is printed; omit the item if you cannot.
+- A number printed with two units ("5 ft 7 in (170 cm)", "300 lb (136.1 kg)") is ONE value — copy it exactly as printed, including both forms. Do not pick one, do not convert, do not drop the unit.
+
 ACCURACY RULES — never fabricate, but be THOROUGH with what is actually printed:
 - Extract ONLY what is actually printed. NEVER guess, infer, calculate, copy, or reuse a value.
 - If a field or a table cell is empty, blank, or shows a placeholder (— or - or "N/A" or "None"), OMIT just that key. This "leave blanks out" rule is ONLY about empty cells — it does NOT mean skip fields that ARE filled in.
@@ -1671,6 +1702,11 @@ export function mergeExtractedData(
 // fields the original pass missed (e.g. a license number) and merges them in
 // without clobbering values the user may have edited. Returns a summary of what
 // was recovered. Side-effect-free beyond updating the document's extractedData.
+//
+// It deliberately does NOT plan or apply actions. Re-reading a document can
+// change what it appears to mean, and a re-extraction that silently re-ran the
+// writes would create records the user never saw proposed. New fields land on
+// the document; acting on them is a fresh review.
 export async function reextractDocument(documentId: string): Promise<{
   ok: boolean;
   message: string;
@@ -1752,6 +1788,195 @@ Return only what you actually read. When a value is unreadable or blank, leave t
   };
 }
 
+
+// ─── The review payload, built once for every path that produces one ─────────
+//
+// Two code paths produce an extraction review: a fresh upload, and a re-upload
+// of the same file within the hour, which reuses the existing document rather
+// than making a duplicate.
+//
+// The second one used to return a BARE payload — extractedFields and nothing
+// else. No `items`, so the review pane fell back to its flat FIELD/VALUE table;
+// no `targetProfile`, so the pane defaulted to the self profile and the
+// property the user had actually picked vanished; no family, so a house was
+// offered a patient's chart; and no plan, so none of the understanding work
+// happened at all.
+//
+// It was invisible until someone re-uploaded the same document to check a fix
+// and got the old behaviour back, which looks exactly like a regression. One
+// builder, used by both, is the only way that stays fixed.
+
+interface ReviewPayloadInput {
+  documentId: string;
+  documentName: string;
+  fileName: string;
+  documentType: string;
+  label: string;
+  mimeType: string;
+  extractedFields: any[];
+  /** Everything the extractor produced beyond plain fields. Empty on a re-upload. */
+  parsed?: any;
+  pendingFinancial?: any;
+  targetProfile?: { name: string; id?: string; type?: string; isNew: boolean };
+  /** Raw profile id from the client — may be the picker's "destId,ownerId". */
+  profileId?: string;
+  userMessage?: string;
+  domainHint?: string;
+  /** The page itself, so the reasoner can see layout. */
+  content?: any[];
+  classification?: any;
+  /** When the upload started — the reasoner adapts to the remaining budget. */
+  startedAt?: number;
+}
+
+async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
+  const parsed = input.parsed || {};
+  // The picker sends "destId,ownerId" — destination first. Resolve the first id
+  // that is a real profile.
+  const profile = await (async () => {
+    for (const id of String(input.profileId || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+      const p = await storage.getProfile(id).catch(() => null);
+      if (p) return p;
+    }
+    return null;
+  })();
+  const family = entityFamily(profile?.type, (profile as any)?.type_key);
+
+  const reviewItems = buildExtractionItems({
+    extractedFields: input.extractedFields,
+    trackerEntries: parsed.trackerEntries || [],
+    allergies: Array.isArray(parsed.allergies) ? parsed.allergies : [],
+    medications: Array.isArray(parsed.medications) ? parsed.medications : [],
+    conditions: Array.isArray(parsed.conditions) ? parsed.conditions : [],
+    surgicalHistory: Array.isArray(parsed.surgicalHistory) ? parsed.surgicalHistory : [],
+    clinicalNotes: Array.isArray(parsed.clinicalNotes) ? parsed.clinicalNotes : [],
+    followUps: Array.isArray(parsed.followUps) ? parsed.followUps : [],
+    docContext: `${input.documentType} ${input.label}`,
+    family,
+    normalizeDate: normalizeDateString,
+  });
+
+  const calendarDates: ExtractionDateRow[] = extractionDateRows(
+    input.extractedFields.map((f: any) => ({ key: f.key, label: f.label, value: f.value, selected: f.selected })),
+    { documentContext: `${input.documentType} ${input.label}`, today: getUserToday() },
+  );
+
+  // The index is storage reads and the reasoner is a model call — nothing
+  // about either needs the other, so they run CONCURRENTLY instead of the
+  // index sitting on the critical path in front of the slowest stage. The
+  // reasoner's "filed under" line only needs the profile we already loaded.
+  const entityIndexPromise = buildEntityIndex();
+  // The real await is below, after the reasoner; this interim handler only
+  // stops a rejection during the model call from surfacing as unhandled.
+  entityIndexPromise.catch(() => {});
+
+  // The document was already vision-ingested twice (classifier, extractor).
+  // A third full ingestion for the reasoner is the single largest piece of
+  // duplicated latency on a multi-page PDF — and when extraction produced a
+  // rich row table, the rows plus the classifier's hint carry the content.
+  // The page is only re-sent when extraction came back sparse, where layout
+  // is genuinely all the evidence there is. Overridable for tuning:
+  // SEMANTIC_REASONER_VISION=always|never|auto (default auto).
+  const visionMode = String(process.env.SEMANTIC_REASONER_VISION || "auto").toLowerCase();
+  const resendDocument = visionMode === "always"
+    || (visionMode !== "never" && reviewItems.length < 8);
+
+  // The understanding step is the one part of this that can fail for reasons
+  // outside the document — no API key, a network fault, a timeout. It must
+  // never take the review down with it: the rows, the chosen profile and the
+  // entity-aware routing are all already computed above and are useful on their
+  // own. `reasonAboutDocument` guards its own body, but `getClient()` throws
+  // BEFORE it is entered, which is exactly how a missing key turned into a
+  // failed upload rather than a degraded review.
+  // The latency budget ("an upload lands in under 30 seconds"): when the
+  // classifier + extractor have already burned most of it, the reasoner runs
+  // on the fast model instead of losing the whole understanding stage to a
+  // timeout — a validated Haiku answer beats a degraded review every time.
+  // Its deadline is whatever budget remains, floored so a slow-but-alive call
+  // still finishes.
+  const elapsedMs = input.startedAt ? Date.now() - input.startedAt : 0;
+  const budgetMs = Number(process.env.UPLOAD_LATENCY_BUDGET_MS || 30_000);
+  const runFast = elapsedMs > budgetMs / 2;
+  const fastModel = process.env.ANTHROPIC_REASONER_MODEL_FAST || "claude-haiku-4-5-20251001";
+  const tReason = Date.now();
+  const reasoned = await (async () => {
+    try {
+      return await reasonAboutDocument(getClient(), {
+        rows: reviewItems.map((i) => ({ id: i.id, key: i.key, label: i.label, value: i.value })),
+        documentType: input.documentType,
+        documentLabel: input.label,
+        domainHint: input.domainHint,
+        userMessage: input.userMessage,
+        filedUnder: profile ? `${profile.name} (${profile.type})` : undefined,
+        content: resendDocument ? (input.content as any) : undefined,
+        model: runFast ? fastModel : undefined,
+        timeoutMs: input.startedAt ? Math.max(15_000, budgetMs - elapsedMs) : undefined,
+      });
+    } catch (e: any) {
+      logger.warn("semantic-reasoner", `unavailable: ${e?.message || e}`);
+      return {
+        ok: false as const,
+        semantic: emptySemanticDocument(input.documentType, ""),
+        report: { ok: false, droppedEntities: [], droppedFacts: [], droppedRelationships: [], droppedRecurrences: [], reasons: [] },
+        degradedReason: "the reasoning step is unavailable right now",
+      };
+    }
+  })();
+  const entityIndex = await entityIndexPromise;
+  const filedUnder = profile ? entityIndex.profiles.find((x) => x.id === profile.id) : undefined;
+  console.log(`[upload-timing] reason=${Date.now() - tReason}ms rows=${reviewItems.length} vision=${resendDocument ? "resent" : "rows-only"} model=${runFast ? "fast" : "default"} ok=${reasoned.ok}`);
+
+  // Planning is pure and deterministic, but a bad envelope must not cost the
+  // user their review either.
+  const actionPlan = reasoned.ok
+    ? safePlan({
+        semantic: reasoned.semantic,
+        items: reviewItems,
+        index: entityIndex,
+        context: filedUnder
+          ? { entityId: filedUnder.id, entityType: filedUnder.type, entityName: filedUnder.name }
+          : undefined,
+        primaryProfileId: profile?.id,
+        documentId: input.documentId,
+        documentName: input.documentName,
+        today: getUserToday(),
+      })
+    : undefined;
+
+  return {
+    extractionId: input.documentId,
+    fileName: input.fileName,
+    items: actionPlan ? actionPlan.items : reviewItems,
+    semantic: reasoned.ok ? reasoned.semantic : undefined,
+    actionPlan,
+    semanticDegraded: reasoned.ok ? undefined : reasoned.degradedReason,
+    documentType: input.documentType,
+    label: input.label,
+    extractedFields: input.extractedFields,
+    // The profile the user actually picked — a real id, never the compound
+    // string, so the review pane's select can match it instead of silently
+    // falling back to "me".
+    targetProfile: input.targetProfile
+      ?? (profile ? { name: profile.name, id: profile.id, type: profile.type, isNew: false } : undefined),
+    trackerEntries: parsed.trackerEntries || [],
+    documentPreview: { id: input.documentId, name: input.documentName, mimeType: input.mimeType },
+    pendingFinancial: input.pendingFinancial,
+    calendarDates,
+    documentName: input.documentName,
+    classification: input.classification,
+  };
+}
+
+/** Plan, or degrade to no plan. Never throws. */
+function safePlan(input: Parameters<typeof planExtractionActions>[0]) {
+  try {
+    return planExtractionActions(input);
+  } catch (e: any) {
+    logger.warn("extraction-plan", `planning failed: ${e?.message || e}`);
+    return undefined;
+  }
+}
+
 export async function processFileUpload(
   fileName: string,
   mimeType: string,
@@ -1766,6 +1991,10 @@ export async function processFileUpload(
   documentPreview?: { id: string; name: string; mimeType: string; data: string };
   pendingExtraction?: any;
 }> {
+  // Wall-clock for the whole upload. Each stage logs its own [upload-timing]
+  // line; this one is the number the person actually experiences, so a slow
+  // upload names its own bottleneck in the logs instead of being a report.
+  const tUpload = Date.now();
   const actions: ParsedAction[] = [];
   const results: any[] = [];
 
@@ -1800,6 +2029,21 @@ export async function processFileUpload(
   // file re-sent within the window short-circuits to the existing document,
   // rebuilding the extraction checklist from its saved extractedData so the
   // confirm-and-save flow still works.
+  /**
+   * The page itself, as a content block the reasoner can look at. Built lazily
+   * because the duplicate-upload branch below needs it BEFORE the classifier
+   * assembles its own copy further down.
+   */
+  const classifierContentForReason = (): any[] => {
+    if (isImage0 || isPdf0) {
+      return [{
+        type: isPdf0 ? "document" : "image",
+        source: { type: "base64", media_type: isPdf0 ? "application/pdf" : mediaType0, data: cleanBase640 },
+      }];
+    }
+    return [];
+  };
+
   const uploadHashTag = `sha256:${createHash("sha256").update(cleanBase640).digest("hex").slice(0, 32)}`;
   try {
     const recentDocs = await storage.getDocuments();
@@ -1825,15 +2069,25 @@ export async function processFileUpload(
         results: [existingUpload],
         documentId: existingUpload.id,
         documentPreview: { id: existingUpload.id, name: existingUpload.name, mimeType: existingUpload.mimeType, data: "" },
-        pendingExtraction: dupFields.length > 0 ? {
-          extractionId: existingUpload.id,
-          fileName,
-          documentType: existingUpload.type || "other",
-          label: existingUpload.name,
-          extractedFields: dupFields,
-          trackerEntries: [],
-          documentPreview: { id: existingUpload.id, name: existingUpload.name, mimeType: existingUpload.mimeType },
-        } : undefined,
+        // Re-uploading the same file must give the SAME review as uploading it
+        // the first time. This used to return extractedFields and nothing else,
+        // which silently dropped the chosen profile, the entity-aware routing
+        // and the whole understanding step — so a re-upload looked like the
+        // feature had been reverted.
+        pendingExtraction: dupFields.length > 0
+          ? await buildReviewPayload({
+              documentId: existingUpload.id,
+              documentName: existingUpload.name,
+              fileName,
+              documentType: existingUpload.type || "other",
+              label: existingUpload.name,
+              mimeType: existingUpload.mimeType,
+              extractedFields: dupFields,
+              profileId,
+              userMessage,
+              content: classifierContentForReason(),
+            })
+          : undefined,
       };
     }
   } catch (dupErr: any) {
@@ -1940,7 +2194,18 @@ Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nT
     domainHint: "",
   };
 
-  try {
+  // PERF (2026-08-26, "uploads must land under 30 seconds"): the classifier
+  // used to run to completion BEFORE extraction so its domainHint could steer
+  // the extraction prompt. That serialised the two model calls — 3-6 seconds
+  // of pure addition on every upload — for steering whose real enforcement is
+  // deterministic anyway: the classifier-gate below strips disallowed
+  // trackerEntries after the fact, and expense/obligation creation is gated on
+  // classification.destinations in code, not in the prompt. So both calls now
+  // START TOGETHER; the classifier's answer is awaited right after extraction
+  // parses, in time for every consumer that actually reads it (the date-verify
+  // trigger, the gates, pendingFinancial, the review payload).
+  const tClassify = Date.now();
+  const classifierPromise: Promise<void> = (async () => {
     const classifierResp = await getClient().messages.create({
       // Haiku is fast and cheap; we just need a 1-class decision + short hint.
       model: process.env.ANTHROPIC_CLASSIFIER_MODEL || "claude-haiku-4-5-20251001",
@@ -1988,29 +2253,26 @@ Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nT
       }
     }
     console.log(`[classifier] type=${classification.documentClass} cat=${classification.category} conf=${classification.confidence} dest=${JSON.stringify(classification.destinations)} hint="${classification.domainHint.slice(0, 140)}"`);
-  } catch (e: any) {
+    console.log(`[upload-timing] classify=${Date.now() - tClassify}ms`);
+  })().catch((e: any) => {
+    // Same contract as before: a failed classification never fails the upload —
+    // the default "other" classification stands and extraction proceeds alone.
     console.error(`[classifier] failed silently — falling back to legacy one-shot extraction: ${e?.message || e}`);
-  }
+  });
 
   // ============================================================================
-  // STEP 1 — EXTRACTION (informed by classification)
+  // STEP 1 — EXTRACTION (concurrent with classification)
   // ============================================================================
-  // The extraction prompt now receives the classification's domainHint, which
-  // tailors what to look for and how to route it. Document-agnostic accuracy
-  // rules still apply; only the routing guidance is class-specific.
-  const classifierContext = (classification.documentClass !== "other" || classification.domainHint)
-    ? `\n\n=== DOCUMENT ALREADY CLASSIFIED ===\nA prior pass identified this as: ${classification.documentClass} (category: ${classification.category}, confidence ${classification.confidence.toFixed(2)}).\nLabel: ${classification.label}\nSummary: ${classification.summary}\n\nClass-specific guidance (FOLLOW THIS):\n${classification.domainHint}\n\nAllowed destinations for this class:\n- profileFacts:   ${classification.destinations.profileFacts}\n- expense:        ${classification.destinations.expense}\n- obligation:     ${classification.destinations.obligation}\n- calendarEvent:  ${classification.destinations.calendarEvent}\n- trackerEntries: ${classification.destinations.trackerEntries}   <-- if false, return trackerEntries: []\n- asset:          ${classification.destinations.asset}\n=== END CLASSIFIED ===\n`
-    : "";
-
-  // Use Claude vision to analyze the image/document.
   // The instructions are deliberately DOCUMENT-AGNOSTIC: the model identifies
   // what the document is and decides what matters. We do not hardcode document
   // types, field names, or domain rules here — a vaccination record, a lease, a
   // warranty, a lab panel and a bank statement all flow through the same prompt.
+  // The classifier's routing decisions are enforced AFTER extraction by the
+  // deterministic gates below (classifier-gate for trackers, destination gates
+  // for expense/obligation) — enforcement in code, not in a prompt hint.
   const extractionPrompt = `${EXTRACTION_PROMPT_BASE}
 
 ${userMessage ? `User said: "${userMessage}"` : ""}
-${classifierContext}
 Return only what you actually read. When a value is unreadable or blank, leave that field out — but include every field you CAN read.`;
 
   try {
@@ -2032,6 +2294,14 @@ Return only what you actually read. When a value is unreadable or blank, leave t
       messageContent.push({
         type: isPdf ? "document" : "image",
         source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: cleanBase64 },
+        // PERF: this exact block is re-sent by every follow-up pass below (date
+        // verification, the lab pass, the pet-vaccine pass). Marking it as a
+        // cache breakpoint means those passes read the ALREADY-PROCESSED
+        // document instead of re-ingesting a multi-page PDF from scratch —
+        // vision ingestion, not generation, is what makes a second pass over a
+        // big document expensive. Below the cacheable minimum the field is
+        // ignored, so a one-page image is unaffected.
+        cache_control: { type: "ephemeral" },
       });
     } else {
       // Text files: decode and send as text
@@ -2047,10 +2317,21 @@ Return only what you actually read. When a value is unreadable or blank, leave t
     // biggest lever for spatially-tricky documents (e.g. a 2-column "due in the
     // future" table). The model reasons about which date lines up with which row
     // before answering, instead of pattern-matching dates onto blank rows.
+    // Thinking is generated serially, so this budget is a direct latency
+    // ceiling on the slowest call in the pipeline. 2,000 still lets the model
+    // reason about which date lines up with which row before answering — the
+    // reason the budget exists — while returning several seconds per upload.
+    // Raise it with EXTRACTION_THINKING if a spatially tricky document needs
+    // more; no deploy required.
+    const extractThinking = (() => {
+      const n = Number(process.env.EXTRACTION_THINKING || 2_000);
+      return isFinite(n) && n >= 1024 ? Math.round(n) : 2_000;
+    })();
+    const tExtract = Date.now();
     const response = await getClient().messages.create({
       model: "claude-sonnet-4-6", // Sonnet 4.6 — same model family as Claude app, best vision accuracy
       max_tokens: 8000,
-      thinking: { type: "enabled", budget_tokens: 3000 },
+      thinking: { type: "enabled", budget_tokens: extractThinking },
       messages: [{
         role: "user",
         content: [
@@ -2062,7 +2343,12 @@ Return only what you actually read. When a value is unreadable or blank, leave t
 
     // With thinking enabled the first block is a thinking block — pick the text block.
     const text = (response.content.find((b: any) => b.type === "text") as any)?.text ?? "{}";
+    console.log(`[upload-timing] extract=${Date.now() - tExtract}ms`);
     console.log(`[extraction] Claude response (first 500 chars): ${text.slice(0, 500)}`);
+    // The classifier ran concurrently with extraction; from here on its answer
+    // is read (date-verify trigger, destination gates, the review payload), so
+    // this is where the join belongs. Failure was already swallowed above.
+    await classifierPromise;
     let parsed: any;
     try {
       const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -2422,11 +2708,40 @@ Return ONLY the JSON object, nothing else.`;
     // Determine context for smart pre-selection
     const docType = (parsed.documentType || 'other').toLowerCase();
     const isFinanceDoc = /bill|invoice|statement|receipt|payment|insurance|loan|mortgage|tax/i.test(docType);
-    const linkedProfileObj = existingProfileId ? await storage.getProfile(existingProfileId) : null;
+    // `profileId` arrives from the guided destination picker as a COMPOUND
+    // string — "destId,ownerId", destination first (see chat.tsx's picker
+    // contract). Passing it to getProfile whole returns null, so this was
+    // silently resolving to no profile at all whenever the user picked a
+    // destination as well as an owner: `profileType` came back empty, the
+    // vehicle check below never fired, and — once routing became entity-aware
+    // — a house looked like a generic record instead of a property.
+    //
+    // The linking code at the top of this function already splits it the same
+    // way; this is the read path catching up.
+    const linkedProfileObj = await (async () => {
+      for (const id of String(existingProfileId || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+        const p = await storage.getProfile(id).catch(() => null);
+        if (p) return p;
+      }
+      return null;
+    })();
     const profileType = linkedProfileObj?.type || '';
     const isVehicleProfile = profileType === 'vehicle';
 
-    const extractedFields: Array<{key: string; label: string; value: any; selected: boolean; isDate: boolean; category: string; suggestedEvent?: string}> = [];
+    const extractedFields: Array<{
+      key: string; label: string; value: any; selected: boolean; isDate: boolean; category: string;
+      suggestedEvent?: string;
+      // What the date MEANS, carried alongside the value so the review UI can
+      // show a Calendar column without re-deriving the classification.
+      dateRuleType?: string;
+      dateTypeLabel?: string;
+      /** The normalized ISO date, when the value is genuinely a date. */
+      dateISO?: string;
+      /** Actionable = due / expiry / renewal / deadline / appointment / payment. */
+      actionableDate?: boolean;
+      /** True when the record itself puts this date on the calendar. */
+      calendarDerived?: boolean;
+    }> = [];
 
     if (parsed.extractedData && typeof parsed.extractedData === 'object') {
       // Flatten nested objects / arrays so EVERY leaf — especially every date in
@@ -2464,9 +2779,25 @@ Return ONLY the JSON object, nothing else.`;
       // (10-20s) for a document that has no date table at all. Receipts /
       // expense-classified documents never take the pass, and everything else
       // needs a genuinely table-like number of dated fields (≥4).
+      //
+      // PERF (2026-08-26): ≥4 dated fields alone was still far too broad. An
+      // insurance declarations page prints effective, expiration, payment-due
+      // and signature dates — four legitimate, mostly-distinct dates and no
+      // table at all — and paid the full round-trip on every upload.
+      //
+      // The failure this pass catches is a date SMEARED across rows: one value
+      // copied onto rows that are actually blank. That is visible without the
+      // model — smearing means many dated rows collapse onto few distinct
+      // values. So the pass now runs only when at least half the dated rows
+      // are duplicates of another row (distinct × 2 ≤ total). A vaccine
+      // schedule with 8 dated rows and 2 distinct values still takes it; a
+      // declarations page with 4 rows and 3 distinct values no longer does.
       const isReceiptLike = (classification as any)?.destinations?.expense === true
         || (classification as any)?.category === "Receipt";
-      if (!isReceiptLike && dateEntries.length >= 4) {
+      const distinctDates = new Set(dateEntries.map((e) => e.date)).size;
+      const smeared = distinctDates * 2 <= dateEntries.length;
+      console.log(`[upload-timing] date-verify ${!isReceiptLike && dateEntries.length >= 4 && smeared ? "RUNS" : "skipped"} (dates=${dateEntries.length} distinct=${distinctDates} receiptLike=${isReceiptLike})`);
+      if (!isReceiptLike && dateEntries.length >= 4 && smeared) {
         try {
           const verifyList = dateEntries.map((e, i) => `${i + 1}. id="${e.key}" — "${e.label}" = ${e.date}`).join('\n');
           const verifyPrompt = `Look at the SAME document image again. From it I extracted these dated items:
@@ -2476,12 +2807,17 @@ ${verifyList}
 For EACH item, check the document carefully: is that exact date actually printed on that item's OWN row? Many rows are intentionally blank (shown as "—" or nothing) and MUST be rejected. Reject any date that was borrowed from a different row, or copied from the document's header/exam/print date. Keep a date only if you can see it printed next to that specific item.
 
 Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely printed on that item's own row. Omit every id you are not certain about.`;
+          // Output is a bare keep-list, so the budgets are sized for the
+          // check, not the document — thinking is serial generation, and every
+          // unused budget token here was pure wall-clock on the upload path.
+          const tVerify = Date.now();
           const vr = await getClient().messages.create({
             model: "claude-sonnet-4-6",
-            max_tokens: 4000,
-            thinking: { type: "enabled", budget_tokens: 2500 },
+            max_tokens: 2500,
+            thinking: { type: "enabled", budget_tokens: 1500 },
             messages: [{ role: "user", content: [...messageContent, { type: "text", text: verifyPrompt }] }],
           });
+          console.log(`[upload-timing] date-verify=${Date.now() - tVerify}ms`);
           const vtext = (vr.content.find((b: any) => b.type === "text") as any)?.text ?? "";
           const vmatch = vtext.match(/\{[\s\S]*\}/);
           if (vmatch) {
@@ -2521,15 +2857,40 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         // classify as informational, so the actionable test alone would let
         // them through — and "add `dateAdministered` to the calendar?" is the
         // clutter this branch has always been careful to avoid.
+        const dateCls = classifyDateField(key, docType);
+        const dateISO = hasDate ? (bareDateOf(strVal) || undefined) : undefined;
+        // An ACTIONABLE date (a due date, an expiration, a renewal) reaches the
+        // calendar by being ON the record — shared/date-rules derives it — so
+        // no standalone event is suggested for it and none is created. What
+        // changed (user report 2026-08-25) is that it is no longer SILENT: the
+        // classification travels with the field so extraction review can show
+        // a Calendar row for it, with the type, the countdown and the choice.
+        //
+        // `/valid|issued|administered/` stays suppressed explicitly: those keys
+        // classify as informational, so the actionable test alone would let
+        // them through — and "add `dateAdministered` to the calendar?" is the
+        // clutter this branch has always been careful to avoid.
+        const actionableDate = hasDate && dateCls.actionable && !!dateISO;
         if (hasDate
-          && !classifyDateField(key, docType).actionable
+          && !dateCls.actionable
           && !/valid|issued|administered/i.test(key)) {
           suggestedEvent = `📅 ${label}`;
         }
 
         const category = categorizeField(key, CATEGORY_MAP);
         const selected = true;
-        extractedFields.push({ key, label, value, selected, isDate, category, suggestedEvent });
+        extractedFields.push({
+          key, label, value, selected, isDate, category, suggestedEvent,
+          ...(actionableDate ? {
+            dateRuleType: dateCls.ruleType,
+            dateTypeLabel: extractionDateTypeLabel(dateCls.ruleType, dateCls.ruleSubtype),
+            dateISO,
+            actionableDate: true,
+            // A document does not own a BIRTHDAY — the person's profile does —
+            // so that date is not derived by the document that printed it.
+            calendarDerived: dateCls.ruleType !== "birthday" && dateCls.ruleType !== "anniversary",
+          } : {}),
+        });
 
         // dob/dateOfBirth → also expose a birthday alias field
         if ((key === 'dob' || key === 'dateOfBirth' || /date of birth/i.test(key)) && value) {
@@ -2547,13 +2908,15 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     // The photo's linked profile (from user selection) is the ONLY destination.
     // NO AI matching — the user manually selects where data goes.
     let resolvedTargetProfile: { name: string; id?: string; type?: string; isNew: boolean } | undefined;
-    if (existingProfileId) {
-      // Reuse linkedProfileObj if already fetched above, otherwise fetch
-      const linkedProfile = linkedProfileObj || await storage.getProfile(existingProfileId);
+    if (linkedProfileObj) {
+      // The id must be the RESOLVED profile's, never the raw `existingProfileId`
+      // — the picker sends "destId,ownerId", and putting that compound string
+      // here meant the review pane's profile select could not match any option
+      // and silently fell back to "me", losing the destination the user chose.
       resolvedTargetProfile = {
-        name: linkedProfile?.name || 'Unknown',
-        id: existingProfileId,
-        type: linkedProfile?.type,
+        name: linkedProfileObj.name || 'Unknown',
+        id: linkedProfileObj.id,
+        type: linkedProfileObj.type,
         isNew: false,
       };
     }
@@ -2670,7 +3033,13 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     // accidentally proposing an expense.
     const allowExpense = classification.destinations.expense === true;
     const allowObligation = classification.destinations.obligation === true;
-    if (amount && amount > 0 && allowExpense) {
+    // An obligation is NOT a kind of expense, and gating it behind one was a
+    // real hole: a homeowners declarations page sets `obligation` and clears
+    // `expense` — it is not a charge, it is a commitment — so this whole block
+    // was skipped and the $1,428 annual premium reached no finance surface at
+    // all. `Add to Finance` in the review pane was the manual patch over it.
+    // The two questions are independent, so they are asked independently.
+    if (amount && amount > 0 && (allowExpense || allowObligation)) {
       // Expense category derivation now flows from the classifier's BROAD
       // CATEGORY bucket (Identity | Vehicle | Property | Financial | Medical |
       // Insurance | Legal | Education | Pet | Receipt | Asset | Travel |
@@ -2724,20 +3093,23 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       const dueDate = fieldLookup['duedate'] || fieldLookup['paymentduedate'] || fieldLookup['nextduedate'] || '';
       // Recurring decision: classifier obligation flag first (intent-based),
       // then a category + freeform-type sniff as a backstop.
-      const recurringCats = new Set(['Subscription']);
-      const recurringTypeRe = /(subscription|utility|rent|mortgage|loan_statement|membership|premium)/i;
-      const isRecurring = allowObligation && (recurringCats.has(classification.category) || recurringTypeRe.test(classification.documentClass) || recurringTypeRe.test(docType));
+      // A document the classifier called an obligation IS one — the category and
+      // freeform-type sniffs below are a backstop for the cases where it only
+      // said so implicitly, not an extra hurdle for the cases where it said so
+      // outright.
+      const isRecurring = allowObligation;
       const billingFrequency = String(fieldLookup['billingfrequency'] || 'monthly').toLowerCase();
 
-      pendingFinancial = {
-        expense: {
+      pendingFinancial = {};
+      if (allowExpense) {
+        pendingFinancial.expense = {
           description: `${vendor || classification.label || parsed.label || fileName} - ${category}`,
           amount,
           category,
           vendor: vendor || undefined,
           date: fieldLookup['transactiondate'] || fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
-        },
-      };
+        };
+      }
 
       if (isRecurring && dueDate) {
         pendingFinancial.obligation = {
@@ -2750,25 +3122,27 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       }
     }
 
-    const pendingExtraction = {
-      extractionId: document.id,
+    // ── The review payload ───────────────────────────────────────────────
+    // Built by the SAME function the duplicate-upload branch uses, so the two
+    // paths cannot drift into producing different reviews for one document.
+    const pendingExtraction = await buildReviewPayload({
+      documentId: document.id,
+      documentName: document.name || fileName,
       fileName,
-      // Prefer the classifier's class when available — it's more precise than
-      // the extractor's freeform documentType, and gives the UI a stable key
-      // to route on (e.g. "parking_receipt" vs. a one-off phrase).
       documentType: classification.documentClass && classification.documentClass !== "other"
         ? classification.documentClass
         : (parsed.documentType || "other"),
       label: classification.label || parsed.label || fileName,
+      mimeType: document.mimeType,
       extractedFields,
-      targetProfile: resolvedTargetProfile,
-      trackerEntries: parsed.trackerEntries || [],
-      documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType },
+      parsed,
       pendingFinancial,
-      // Surface the classification so the UI can show "I think this is a Parking
-      // Receipt; here's what I'll do." The destinations object tells the UI
-      // which sub-panels (expense, obligation, tracker, calendar) are even
-      // relevant for this doc.
+      targetProfile: resolvedTargetProfile,
+      profileId: existingProfileId,
+      userMessage,
+      domainHint: classification.domainHint,
+      content: messageContent as any,
+      startedAt: tUpload,
       classification: {
         documentClass: classification.documentClass,
         category: classification.category,
@@ -2776,7 +3150,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         summary: classification.summary,
         destinations: classification.destinations,
       },
-    };
+    });
 
     let reply = parsed.summary || `Processed "${fileName}"`;
     if (savedItems.length > 0) {
@@ -2795,6 +3169,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       data: document.fileData,
     };
 
+    console.log(`[upload-timing] TOTAL=${Date.now() - tUpload}ms file="${fileName}"`);
     return { reply, actions, results, documentId: document.id, documentPreview, pendingExtraction };
   } catch (err: any) {
     const errMsg = err?.message || String(err);
@@ -2930,7 +3305,8 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Name of the profile to update (partial match). Use 'Me' for self profile." },
-        changes: { type: "object", description: "Fields to update — use 'fields' object for data like { bloodType: 'O+', allergies: 'penicillin', height: '5\'10\"', currentValue: 1200, purchasePrice: 800 }. Can also include 'notes' (string) or 'tags' (array)." },
+        changes: { type: "object", description: "What to change. RENAME: set changes.name to the NEW name — 'rename Bob QA to Bob Robertson' is name:'Bob QA', changes:{ name:'Bob Robertson' }. The rename lands on the profile row, so it shows everywhere at once (page header, owner badges, search, the profile switcher) — never create a second profile to rename one. DATA: use the 'fields' object for values like { bloodType: 'O+', allergies: 'penicillin', height: '5\\'10\"', currentValue: 1200, purchasePrice: 800 }. Can also include 'notes' (string) or 'tags' (array)." },
+        removeFields: { type: "array", items: { type: "string" }, description: "Field keys to DELETE from this profile — 'remove Bob's phone number', 'delete the license number', 'that address is wrong, take it off'. Pass the field's key ('phone', 'licenseNumber'); it is removed wherever it lives on the record, including inside a nested group, and every other spelling of the same field goes with it. Use this rather than writing an empty string — a blank field still shows on the Info tab as an empty row." },
         parentProfileName: { type: "string", description: "Move this profile under a different parent. Pass the EXACT name of the new parent profile (e.g. 'My House', 'Kitchen', 'Bob'). Use this for commands like 'Move freezer from garage to basement' — set name='freezer' and parentProfileName='basement'. Pass empty string to detach (make top-level)." },
       },
       required: ["name", "changes"],
@@ -3627,7 +4003,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- CRUD: Habits ---
   {
     name: "create_habit",
-    description: "Create a new habit — ONLY when the user EXPLICITLY asks for a recurring habit/routine ('make this a habit', 'add a habit to meditate', 'remind me to stretch every day'). A past-tense activity report ('I took a shower', 'I smoked a blunt', 'I went to the bathroom') is NEVER a habit — log it with log_tracker_entry. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).\n\nHabits are COUNT-BASED, not binary: a habit that happens N times a day is ONE habit with dailyTarget:N, and each check-in counts toward that target. 'Walk the dog twice a day' → create_habit(name:'Walk the Dog', dailyTarget:2) — ONE call. NEVER create two habits for a twice-daily routine, and NEVER tell the user habits are limited to a single daily check-off; that limitation does not exist. Only split into separate habits when the user explicitly asks for separate ones (e.g. 'make a morning walk habit and an evening walk habit').",
+    description: "Create a new habit — ONLY when the user EXPLICITLY asks for a recurring habit/routine ('make this a habit', 'add a habit to meditate', 'remind me to stretch every day'). A past-tense activity report ('I took a shower', 'I smoked a blunt', 'I went to the bathroom') is NEVER a habit — log it with log_tracker_entry. Set timeOfDay when the user says when it should happen (e.g. 'take lisinopril in the morning' → morning, 'meditate before bed' → bedtime).\n\nHabits are COUNT-BASED, not binary: a habit that happens N times a day is ONE habit with dailyTarget:N, and each check-in counts toward that target. 'Walk the dog twice a day' → create_habit(name:'Walk the Dog', dailyTarget:2) — ONE call. NEVER create two habits for a twice-daily routine, and NEVER tell the user habits are limited to a single daily check-off; that limitation does not exist. Only split into separate habits when the user explicitly asks for separate ones (e.g. 'make a morning walk habit and an evening walk habit').\n\nNO CALENDAR, EVER: a habit's schedule ('daily', '3x/week', 'every morning') is INTERNAL habit recurrence — never also call create_event, create_task, or any calendar tool for it. The Habits page is where it lives. Only a SEPARATE, explicit request for a calendar item/reminder gets one.\n\nMEASURABLE HABITS LINK TO A TRACKER — the server handles this automatically: if the habit measures something ('drink 64 oz water', 'run 3 miles'), the server finds a compatible existing tracker (or creates one) and links it, so logging to that tracker advances the habit's progress. Set linkTracker to steer it; do NOT also call create_tracker yourself.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -3642,13 +4018,14 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening", "bedtime", "anytime"], description: "When during the day the habit should occur. Infer from phrasing like 'in the morning', 'after lunch' (afternoon), 'this evening', 'before bed' (bedtime)." },
         scheduledTime: { type: "string", description: "Optional precise time in 24h HH:MM (e.g. '08:00', '21:30') when the user gives a specific time." },
         forProfile: { type: "string", description: "Name of the profile this habit belongs to. ALWAYS set when the user mentions a specific person or pet." },
+        linkTracker: { type: "string", description: "OPTIONAL: name of the TRACKER that measures this habit, when the habit is measurable ('Drink 64 oz water daily' → 'Hydration'; 'Run 3 miles 3x/week' → 'Running'). The server reuses/expands a compatible existing tracker (never a duplicate — 'Water' reconnects to an existing Hydration tracker; a running habit can expand an existing Exercise tracker) or creates one, then links habit ↔ tracker so tracker logs advance the habit's progress. Pass 'none' for a completion-only habit with nothing to measure ('make my bed', 'call mom') — do NOT manufacture a pointless tracker. Omit to let the server decide. NEVER call create_tracker yourself for a habit." },
       },
       required: ["name"],
     },
   },
   {
     name: "checkin_habit",
-    description: "Record ONE completion of a habit. ONLY when the user EXPLICITLY references the habit: 'mark X done', 'mark off X', 'completed X habit', 'checked off X', 'I took my first dose', 'I did one of them'. A plain activity report ('I did X', 'I took a shower') is NOT a habit check-in — log it with log_tracker_entry instead. IMPORTANT: a habit can require SEVERAL completions a day (2× daily, 3× daily). One call records ONE occurrence and fills the next outstanding one — it does NOT finish the day. 'Mark my medication done' on a twice-daily habit leaves it at 1 of 2 (50%); the user saying 'again' or 'I took the second one' later records the second. Pass `count` ONLY when they explicitly said how many ('I took both doses' → 2, 'I did it twice today' → 2). The result reports completed/required/percent — quote those, never just 'done'. Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
+    description: "Record ONE completion of a habit. Use it when the user references the habit ('mark X done', 'mark off X', 'completed X habit', 'I took my first dose') AND when they simply REPORT DOING something that is already one of their habits ('I walked the dog' with a Walk the Dog habit → check it in, no permission needed; log_tracker_entry too when there is something to measure). A report of an activity that is NOT an existing habit is just a tracker log. Never infer a completion from a plan, a question, a negation, or someone else's action ('I might walk the dog later', 'did I walk the dog?', 'John walked the dog'). IMPORTANT: a habit can require SEVERAL completions a day (2× daily, 3× daily). One call records ONE occurrence and fills the next outstanding one — it does NOT finish the day. 'Mark my medication done' on a twice-daily habit leaves it at 1 of 2 (50%); the user saying 'again' or 'I took the second one' later records the second. Pass `count` ONLY when they explicitly said how many ('I took both doses' → 2, 'I did it twice today' → 2). The result reports completed/required/percent — quote those, never just 'done'. Set forProfile ONLY when the user names that person in THIS message ('mark off Joe's water habit') — never infer a profile from conversation history or from who owns a similar-sounding habit.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4641,7 +5018,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Query tools: calendar, expenses, tasks ---
   {
     name: "query_calendar",
-    description: "Query the unified calendar timeline for a date range. Returns events, tasks with due dates, habit schedules, and obligation due dates. Use when user asks 'am I free Friday?', 'what's on my calendar next week?', 'show my schedule for tomorrow', 'any appointments this week?'.",
+    description: "Query the unified calendar timeline for a date range. Returns events, tasks with due dates, and obligation due dates. Habits are NOT on the calendar — their schedules are internal to the Habits page (use get_summary type:'habits' for those). Use when user asks 'am I free Friday?', 'what's on my calendar next week?', 'show my schedule for tomorrow', 'any appointments this week?'.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4697,14 +5074,16 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // --- Income logging ---
   {
     name: "log_income",
-    description: "Log an income entry. Use when user says 'I got paid $X', 'received $X from freelance', 'paycheck of $X', or mentions any incoming money.",
+    description: "Log an income entry — one-off OR recurring. Use when the user says 'I got paid $X', 'received $X from freelance', 'paycheck of $X', or describes money coming IN on a schedule ('Sarah earns $750 every Friday', '$4,000 salary twice a month').\n\nRECURRING INCOME IS SUPPORTED: set `frequency` whenever the user states a cadence. 'every Friday' → frequency:'weekly'. 'twice a month' / 'every other week' → 'biweekly'. 'monthly' → 'monthly'. NEVER tell the user that recurring income is unsupported or that they must log each payday by hand — that is false. Omit frequency ONLY for a single payment that already happened.\n\nALWAYS set forProfile when the money belongs to a specific person ('Sarah earns…' → forProfile:'Sarah Miller'), or it lands on the wrong person's finances.",
     input_schema: {
       type: "object" as const,
       properties: {
-        amount: { type: "number", description: "Income amount in dollars" },
+        amount: { type: "number", description: "Income amount in dollars, per payment (not the annual total)." },
         source: { type: "string", description: "Income source (employer, client, freelance, etc.)" },
-        date: { type: "string", description: "Date received (YYYY-MM-DD). Defaults to today." },
+        date: { type: "string", description: "Date received, or the first/next payment date for recurring income (YYYY-MM-DD). Defaults to today." },
         category: { type: "string", description: "Category: salary, freelance, investment, gift, refund, other" },
+        frequency: { type: "string", enum: ["once", "weekly", "biweekly", "monthly", "quarterly", "yearly"], description: "How often this income arrives. 'every Friday' → weekly; 'every other week' → biweekly; 'monthly'/'every month' → monthly. Defaults to 'once' (a single payment). Set it whenever the user states a cadence — recurring income is fully supported." },
+        forProfile: { type: "string", description: "Name of the person this income belongs to (e.g. 'Sarah Miller'). ALWAYS set it when the user names whose money it is; without it the income is filed under the account owner and is invisible on that person's Finance screen." },
         notes: { type: "string", description: "Optional notes" },
       },
       required: ["amount", "source"],
@@ -5106,7 +5485,7 @@ BEHAVIOR:
 - Extract the due date AND the clock time when either is mentioned ("Friday at 10am" → dueDate + dueTime:"10:00").
 - BIAS TO ACTION: When the user asks to create, schedule, add, mark off, complete, or check in something, DO IT immediately. NEVER ask clarifying questions for simple CRUD. Just execute.
   - "Mark off my run" → checkin_habit(name: "Running" or "Morning Run" — find closest match) — DO NOT ask which one
-  - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" / "I went to X" → log_tracker_entry — these are ACTIVITY REPORTS, not habit check-ins. Habits only move on EXPLICIT language ("mark off", "check in", "my X habit").
+  - "I went on my morning run" / "I did X" / "I took X" / "I smoked X" / "I went to X" → log_tracker_entry — these are ACTIVITY REPORTS. If a HABIT BY THAT NAME already exists (the user's habits are listed in your context), ALSO call checkin_habit for it in the same turn: a past-tense report of doing an existing habit completes today's occurrence. Never ask permission for that.
   - "schedule a doctor appointment" → create_task immediately
   - If ambiguous between 2 items with similar names, pick the closest match and do it. You can mention in your response what you picked.
   - NEVER present numbered options for simple check-ins, completions, or mark-offs. That is hostile UX.
@@ -5176,6 +5555,9 @@ ONLY ask for the value when the user has EXPLICITLY signaled an exact figure the
 - update: update_habit(name, changes)
 - delete: delete_habit(name)
 - DUPLICATE FOR ANOTHER PROFILE: "give Luna the same water habit" / "duplicate this habit for Mike" → read the existing habit (its frequency/schedule), then create_habit with the SAME name+schedule and forProfile set to the target. Habits are profile-exclusive — never just add the second profile to the existing habit's links.
+- HABITS NEVER TOUCH THE CALENDAR. A habit's schedule/frequency ("daily", "3x/week", "every morning at 7") is internal habit recurrence and progress logic — NEVER interpret it as a calendar date, event, reminder, or recurring calendar rule. Never pair create_habit with create_event or create_task for the same routine. The single exception: the user separately and EXPLICITLY asks for a calendar item/reminder on top of the habit.
+- HABIT ↔ TRACKER LINK: a MEASURABLE habit gets a linked tracker automatically — create_habit's result may carry __linkedTracker; when it does, tell the user the habit is connected to that tracker (and whether the tracker was created or an existing one was reused). "Drink 64 oz water daily" → Water habit + Hydration tracker; logging water then advances BOTH. "Run 3 miles 3x/week" → Running habit + a Running (or existing Exercise) tracker — one activity record updates both. "Make my bed every morning" → habit ONLY: nothing to measure beyond completion, so no tracker is created. Steer with linkTracker (a tracker name, or 'none'); NEVER call create_tracker alongside create_habit — the server reuses or creates the tracker itself, and never duplicates one that exists.
+- TRACKING ≠ HABIT: a tracker never implies a habit. Users track weight, mood, expenses, sleep without any habit — never create a habit because a tracker exists or is being logged to, and never create a tracker "to go with" a non-measurable habit.
 
 ━━━ GOAL CRUD ━━━
 - PROJECTS ARE GOALS: "create a project called X" / "my kitchen remodel project" / "add X to my projects" → the Goals module IS the projects list. create_goal(title, type:"custom"), update_goal, delete_goal. Never create a tracker/artifact for a "project".
@@ -5211,7 +5593,12 @@ When the user attaches a clock time or date to an action, pass it via the at par
 - Pass only the explicit facts; the server's estimation engine converts units and derives the rest (steps from distance via the user's own stride/history, pace from distance+duration, calories from weight+pace) with per-value confidence.
 - ESTIMATE HONESTY: the tool result's estimateNote lists derived/estimated values. Reply like "Logged a 1-mile walk — about 2,150 steps and ~20 minutes based on your walking history." NEVER present an estimated number as something the user said, and NEVER invent numbers not in the tool result.
 - Explicit user values are never overwritten by estimates: "1 mile and 2,400 steps" saves BOTH exactly as given.
-- ACTIVITY ≠ HABIT: "I did / I took / I smoked / I went / I played" are ACTIVITY REPORTS → log_tracker_entry, ALWAYS — even when a habit with a similar name exists (on any profile). NEVER call checkin_habit or create_habit for them, never ask "did you mean the habit?", and never derail the rest of the message over a habit. Habits move ONLY on explicit language: "mark off X", "check in X", "completed my X habit", "make this a habit", "every day", "remind me".
+- ACTIVITY REPORTS AND EXISTING HABITS: "I did / I took / I went / I played / I walked the dog" are ACTIVITY REPORTS → log_tracker_entry. Whether they ALSO move a habit depends on one thing — does a habit of that name already exist ON THE USER'S OWN PROFILE (they are listed in your context)?
+  · IT EXISTS → the report completes today's occurrence. Call checkin_habit TOO (same turn, both calls). "I walked the dog" with a "Walk the Dog" habit → log_tracker_entry AND checkin_habit. NEVER reply "say 'mark off my Walk the Dog habit' to count it" and NEVER ask "do you want me to mark it off?" — their sentence already said they did it. Requiring them to repeat it as a command is a bug. Report the new progress instead: "logged — Walk the Dog is 1 of 2 today".
+  · IT DOES NOT EXIST → log_tracker_entry only. Do NOT create a habit from an activity report (that still needs "make this a habit" / "every day" / "remind me").
+  · NEVER check in ANOTHER PROFILE'S habit from an unqualified report, and never derail the rest of the message over a habit.
+- DO NOT INFER A COMPLETION from a plan, a question, a negation, or someone else's action: "I might walk the dog later", "remind me to walk the dog", "did I walk the dog?", "I forgot to walk the dog", "John walked the dog" → NONE of these complete anything. Ask or answer instead. A vague activity that only partly matches a habit ("I walked for twenty minutes" vs a "Walk the Dog" habit) is a tracker log, not that habit.
+- ONE COMPLETION, ONE RECORD: checking a habit off — from chat, the Habits page, or by logging its linked tracker — all write the same occurrence. Repeating it does NOT stack: a second "I walked the dog" returns alreadyComplete. Say it was already recorded; never claim a second completion.
 - NEVER DROP DETAILS: every number, unit, duration, count, method, and timestamp the user states MUST appear in the entry ("for an hour" → duration:60; "once" → count:1; "a blunt" → method:"blunt"; "at 8:15 AM" → at:"8:15 AM"). Losing a stated detail is a logging failure.
 - PROFILE OWNERSHIP: entries belong to the user (self) unless THIS message explicitly names someone else ("Rex threw up", "log water for Mom"). NEVER pick a profile from conversation history, from the active dashboard filter chatter, or from which profile happens to own a similar tracker/habit name.
 
@@ -5334,8 +5721,14 @@ edited. Create an event only for something that has no other record.
 
 HABITS ARE THE ONE EXCEPTION, ON PURPOSE. A habit repeats but is NOT a calendar
 date — it is a practice with a streak, scheduled and checked off on the Habits
-page. Never create a calendar event or a recurring task to "put a habit on the
-calendar"; the habit record alone is correct and complete.
+page. Habit schedules ("daily", "3x/week", "every morning") are INTERNAL habit
+recurrence/progress logic and must NEVER be interpreted as calendar dates,
+events, reminders, or recurring calendar rules — a "daily" habit must not
+litter the calendar with an entry per day. Never create a calendar event or a
+recurring task to "put a habit on the calendar"; the habit record alone is
+correct and complete. The ONLY exception: the user separately and EXPLICITLY
+asks for a calendar item/reminder in addition to the habit ("and put a 7am
+reminder on my calendar") — then, and only then, create that one item.
 
 ONE MESSAGE CAN CREATE SEVERAL OBJECTS. "Journal this: I had a stressful day.
 Remind me to call my landlord tomorrow." is a journal entry AND a task. Never
@@ -5426,11 +5819,13 @@ BEFORE calling ANY delete tool (delete_profile, delete_task, delete_expense, del
 4. If the user says "delete X" as a direct command, that counts as confirmation — proceed
 5. But if YOU are suggesting a delete (e.g., "I found duplicates, want me to clean them up?"), wait for explicit yes
 This is a HARD RULE — never silently delete anything the user didn't explicitly ask to delete.
+CONFIRMATION IS FOR DELETES (and the bulk/merge previews below) — NOTHING ELSE. A create, an update, a rename, a log, a check-off: the user asked, so DO IT on this turn and report what happened. Do not answer a clear instruction with "just to confirm, do you want me to…?" — that turns one sentence of theirs into three of yours and leaves their data unchanged. Ask a question only when you genuinely cannot tell WHICH record they mean (several match, or none do), and then ask that specific question and name the candidates.
 
 ━━━ HONESTY RULES ━━━
 - DESCRIBE WHAT THE SYSTEM DID, NOT WHAT YOU PLANNED. The words "Created", "Updated", "Deleted", "Marked complete", "Scheduled" and "Saved" are reserved for a tool that RETURNED success in THIS turn. Your summary must name the same operation and the same entity as the tool result: if the result says action:"create_profile" you say created; if it says action:"update_profile" you say updated. Never describe an update as a creation or a creation as an update — the server compares your wording against the executed tools and will replace your reply with a failure notice if they disagree.
 - Do not summarize a write you did not perform this turn, and do not restate earlier turns' actions as though they just happened.
 - NEVER quote a tool's error text back to the user. Tool errors are written for you, not for them: they name internal tools and give you instructions. Say in your own plain words what did not happen and what you need.
+- NEVER ask the user to resend, retype or rephrase a request they already made, and never describe the system's internals to them ("the system is blocking this", "the request originated in a prior turn", "try wording it as…"). They asked once; asking them to ask again is the failure, not the fix. If a call was refused, either satisfy the refusal yourself on this turn (the directive tells you how) or say plainly what you could not do and offer the next step you can take.
 - Never volunteer limitations you have not verified. Do not tell a user a feature is unavailable, binary, manual, or unsupported unless a tool result in this turn said so.
 - OWNERSHIP PHRASING: write results may include an "owner" field — the person who actually owns the touched item, resolved through nested assets (a Honda CRV nested under Jim is JIM'S car). When owner is someone other than the user, name them: "Color updated to white on Jim's Honda CRV 2021" — NEVER call another person's asset, vehicle, or liability "your".
 - If a tool returns {error: "..."} → tell the user it FAILED. Never say "Done!" on failure.
@@ -5445,6 +5840,8 @@ This is a HARD RULE — never silently delete anything the user didn't explicitl
 - UNDO: "undo that" / "take that back" / "I didn't mean to" → undo_last_action (optionally tool/entity_name to target an earlier action). NEVER manually reverse by guessing — the ledger knows exactly what was done. If it reports irreversible, relay that honestly.
 - HISTORY: "who changed X" / "what happened to X" / "show X's history" → get_entity_history(entity_type, name).
 - MERGE PROFILES: "merge X into Y" / "combine the duplicate profiles" → merge_profiles(source_name, target_name) shows a preview; after the user confirms in their NEXT message, execute_bulk_action({confirm:true}). Same two-turn rule as bulk deletes — never merge in one turn.
+- REMOVE A PROFILE FIELD: "delete Bob's phone number" / "that address is wrong, take it off" / "remove the license number from my info" → update_profile(name:"<profile>", changes:{ removeFields:["phone"] }). NEVER write an empty string to clear a field — a blank value still renders as an empty row on the Info tab, so the user sees the field they asked you to delete. Editing a value is changes.fields; removing it is changes.removeFields; both can travel in one call.
+- RENAME A PROFILE: "rename Bob QA to Bob Robertson" / "change Bob's name to Bob Robertson" / "my truck is called the Beast now" → update_profile(name:"<the name it has NOW>", changes:{ name:"<the new name>" }). One call, no confirmation question when exactly one profile matches the old name — the user named the record and the new name in one sentence, so there is nothing to clarify and asking wastes their turn. The rename lands on the profile row itself and every screen reads the name from there, so it changes everywhere at once; NEVER create a second profile, and never tell the user to rename it by hand. Ask only when the old name matches several profiles (name them) or matches none.
 - MOVE BETWEEN PROFILES: "move the gym expense to Luna" / "that task is actually Mike's" → update_expense/update_task with forProfile:"<target>" (this REPLACES the owner — do not put profile names inside changes). Do NOT delete + recreate, and do NOT use merge_profiles for a single record.
 - DASHBOARD LAYOUT: "hide the X section" / "show Finance on my dashboard" / "move Goals to the top" / "reset my dashboard" → configure_dashboard_sections. This controls SECTIONS of the dashboard, not data. Undoable.
 - DOCUMENT FIELD LOOKUPS: "what's my license plate / VIN / policy number / registration expiry / license number" → the answer usually lives in a DOCUMENT's extracted fields, not profile fields. Check in order: (1) get_profile_data(profile) — its documents[] include each doc's extracted "fields"; (2) search_documents(forProfile) for that profile's docs; (3) search_documents WITHOUT forProfile — searches EVERY document's name, type, AND field contents, including documents not linked to any profile. A vehicle registration's licenseNumber/plate field IS the license plate. NEVER say a value isn't stored until you've searched all documents. If a document exists but lacks the field, say which document you checked.
@@ -5489,8 +5886,9 @@ Ownership decides which balance sheet an asset lands on, whose totals it counts 
 DATA CLASSIFICATION RULES (NEVER VIOLATE):
 - MEDICATION: When a user mentions a NEW/prescribed medication ("prescribed lisinopril", "Max is on Heartgard now"), update the PROFILE with medication info in their health fields (update_profile with fields: { medications: "..." }). Do NOT create a "Medication" tracker unless the user asks to track doses over time.
 - MEDICATION DOSES: "I took my Lisinopril" / "gave Max his pill" → log_medication_dose. "I skipped/forgot tonight's dose" → skip_medication_dose (missed:true when forgotten). "what doses did I miss this week" / "how's my adherence" → get_missed_doses. "show my dose history" / "when did I last take it" → get_dose_history. These need a medication TRACKER; if none exists, say so and offer to create one. If the user has several medications and didn't name one, the tool will ask — relay its question.
-- WATER INTAKE / HYDRATION: If a user says "drank 8 glasses of water" or "8oz water", log to the existing Hydration/Water tracker if one exists. If none exists, create a habit ("Drink water") rather than a tracker — daily water goals are habits, not measurements.
-- HABITS vs TRACKERS: Habits are recurring actions with a per-day COUNT (dailyTarget 1-10, multiple check-ins per day, optional scheduled time). Trackers are numeric measurements over time. "Take medication" = habit. "Blood pressure 120/80" = tracker. "Drank 8 glasses" = habit check-in. "Weight 180 lbs" = tracker. Habits are NOT binary — never describe them as a single yes/no check-off.
+- WATER INTAKE / HYDRATION: "drank 8 glasses of water" / "8oz water" is an ACTIVITY REPORT → log_tracker_entry to the Hydration/Water tracker (reuse it if it exists; it is auto-created otherwise). If a water habit is LINKED to that tracker, the log advances the habit's progress automatically — never also call checkin_habit for the same drink. A water HABIT ("drink 64 oz daily", "make drinking water a habit") is created only on explicit habit language, and gets its tracker linked by the server.
+- HABITS vs TRACKERS: a HABIT records consistency — a recurring behaviour with a per-day COUNT (dailyTarget 1-10, streaks, optional scheduled time). A TRACKER records the measurement — richer data over time (a running tracker holds distance, duration, pace, intensity; the habit only cares whether today's goal was satisfied). "Take medication" = habit. "Blood pressure 120/80" = tracker. "Weight 180 lbs" = tracker, and needs NO habit. Habits are NOT binary — never describe them as a single yes/no check-off. Measurable habits are LINKED to their tracker (server-managed); completion-only habits ("make my bed") have no tracker and must not get one.
+- RECURRING INCOME IS SUPPORTED. "Sarah earns $750 every Friday" → log_income(amount:750, source:"Freelance", frequency:"weekly", forProfile:"Sarah Miller"). Cadence goes in the frequency argument (weekly / biweekly / monthly / quarterly / yearly). NEVER say the app cannot do recurring income, and never ask the user to log each payday by hand — both are false. Whose money it is goes in forProfile, always, or it lands on the account owner and is missing from that person's Finance screen.
 - LOANS/BILLS: When a user mentions rent, bills, or debts, use create_obligation. Do NOT create a "loan" profile for recurring bills. Loans are only for actual loan instruments (mortgage, car loan, student loan) with APR, term, and principal.
 
 LIABILITIES — FIRST-CLASS DEBT INSTRUMENTS (CRITICAL — read carefully):
@@ -5692,6 +6090,11 @@ DATA ISOLATION RULES:
 2. If the user says "Craig Isolation Test's blood pressure", forProfile MUST be "Craig Isolation Test" — NOT just "Craig".
 3. NEVER use a partial name that could match multiple profiles. Use the FULL profile name.
 4. If unsure which profile the user means, ASK instead of guessing.
+4-PRONOUNS. READING THE CONVERSATION IS NOT GUESSING — this is the exception to rule 4, and it wins. A pronoun ("she", "her", "he", "his", "they", "it", "that") refers to whoever or whatever the user named in a RECENT TURN. Resolve it from the conversation and ACT.
+  · "Sarah earns $750 every Friday." → "This Friday she's only getting $500." — "she" is Sarah. Update Sarah's income. NEVER reply "who is 'she'?".
+  · "Add Netflix for $15/month." → "It comes out on the 22nd." — "it" is Netflix. Set Netflix's due day.
+  · "Sarah's email is x@y.com" → "Change her email to z@y.com" — "her" is Sarah. Update Sarah's profile.
+  When the referent is resolvable, a clarifying question is a FAILURE: it makes the user repeat what they just said. Ask ONLY when the recent turns name two or more equally plausible candidates, or none at all. A [REFERENT] line on the user's message states the resolved answer — when it is present, treat it as settled and never ask.
 4a. AMBIGUITY DETECTION — ZERO SILENT GUESSING: Before you pass a value to forProfile, scan the data snapshot. If TWO OR MORE profiles match the user's referent by name OR by core noun (e.g. user says "the computer" and you see "Dell Laptop" and "MacBook Pro" both classified as computers, or two profiles whose names both contain "computer"), you MUST NOT pick one. Instead, reply with a clarifying question listing the candidates (e.g. "I see two computers: A) Dell Laptop ($1,200 under House) and B) MacBook Pro ($2,500 under House). Which one did you mean?") and make NO tool call. Wait for the user's next message. The same rule applies when the user says "the car", "my dog", "the credit card", etc. and multiple profiles fit. Picking one silently is a critical data-isolation failure.
 5. Data for Person A must NEVER appear under Person B, Pet C, or Vehicle D.
 6. When creating trackers, tasks, expenses, events, goals, or habits for a specific entity, the forProfile field is MANDATORY.
@@ -6977,6 +7380,24 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           previousFields[key] = key in profile.fields ? (profile.fields as any)[key] : undefined;
         }
       }
+      // ----- Rename -----
+      // The name is the profile's identity on every surface that shows it, and
+      // all of them read it off this row by id — so writing the row here IS
+      // the propagation. Before 2026-08-25 this branch did not exist: a
+      // changes.name arrived, fell through the fields/notes/tags/type merge
+      // below, and was dropped, so "rename Bob QA to Bob Robertson" reported
+      // success and changed nothing.
+      let renamedFrom: string | undefined;
+      let renamedTo: string | undefined;
+      if (input.changes.name !== undefined) {
+        const check = checkProfileRename(profiles, profile.id, input.changes.name, profile.name);
+        if (check.status === "rejected") return { error: check.error };
+        if (check.status === "ok") {
+          renamedFrom = profile.name;
+          renamedTo = check.name;
+        }
+      }
+
       const previousNotes = input.changes.notes !== undefined ? (profile.notes ?? null) : undefined;
       const previousTags = input.changes.tags !== undefined ? (profile.tags || []) : undefined;
       const previousType = input.changes.type !== undefined ? profile.type : undefined;
@@ -7036,9 +7457,17 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }
         }
       }
+      if (renamedTo) changes.name = renamedTo;
       if (input.changes.notes !== undefined) changes.notes = input.changes.notes;
       if (input.changes.tags) changes.tags = input.changes.tags;
-      if (input.changes.type) changes.type = input.changes.type;
+      if (input.changes.type) {
+        // Re-typing a record is how "my truck shows up as a person" gets
+        // fixed. The one thing it may not do is create or destroy a `self`:
+        // the app resolves the user's own record by that type.
+        const typeCheck = checkProfileTypeChange(profile.type, input.changes.type);
+        if (typeCheck.status === "rejected") return { error: typeCheck.error };
+        if (typeCheck.status === "ok") changes.type = typeCheck.type;
+      }
 
       // ---- Parent reassignment (parentProfileName) ----
       const previousParentProfileId = input.parentProfileName !== undefined ? (profile.parentProfileId ?? null) : undefined;
@@ -7063,19 +7492,51 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
 
+      // Deleting a field is the same signal the Info tab's X sends: the
+      // storage layer sweeps it by field IDENTITY, so `licenseNumber` takes
+      // `license_number` and `identity.licenseNumber` with it rather than
+      // leaving a twin the next read promotes back. Chat had no way to do this
+      // at all — the model's only option was to write an empty string, which
+      // leaves an empty row on the Info tab rather than removing anything.
+      const removeFields = Array.isArray(input.changes.removeFields)
+        ? input.changes.removeFields.filter((k: any) => typeof k === "string" && k.trim()).map((k: string) => k.trim())
+        : [];
+      const previousRemoved: Record<string, any> = {};
+      if (removeFields.length > 0) {
+        (changes as any).fieldsToDelete = removeFields;
+        for (const key of removeFields) {
+          previousRemoved[key] = readProfileFieldValue(profile.fields, key);
+        }
+      }
+
       const updated = await storage.updateProfile(profile.id, changes);
+      // Carry the new name into the titles this app GENERATED from the old one
+      // ("Morning Run - Bob QA", "🎂 Bob QA's Birthday"). Best-effort: a
+      // rename that landed is never reported as failed because a derived title
+      // could not be rewritten.
+      if (renamedTo && renamedFrom) {
+        try { await cascadeProfileRename(storage, profile.id, renamedFrom, renamedTo); }
+        catch (e) { logger.warn("ai", `Rename cascade failed for ${profile.id}: ${e}`); }
+      }
       // Attach revert metadata so the chat action card can render a Revert button.
       // Non-enumerable would be safer, but the action result is JSON-serialised
       // before reaching the client, so we use a plain underscore-prefixed key.
       return {
         ...(updated || {}),
+        // A rename changes what EVERY list, badge and header calls this record,
+        // so the card names the new name and the client refreshes everything
+        // rather than the profile queries alone (see buildChatMutation).
+        ...(renamedTo ? { _renamed: { from: renamedFrom, to: renamedTo }, _displayData: { name: renamedTo } } : {}),
         _previousState: {
           profileId: profile.id,
-          fields: previousFields,
+          // A removed field's old value rides along under the same key, so
+          // Revert writes it back exactly as the overwritten ones are.
+          fields: { ...previousFields, ...previousRemoved },
           notes: previousNotes,
           tags: previousTags,
           type: previousType,
           parentProfileId: previousParentProfileId,
+          ...(renamedTo ? { name: renamedFrom } : {}),
         },
       };
     }
@@ -7955,9 +8416,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         } catch { /* never block a log on dose inference */ }
 
         // Dedup: check if nearly identical entry was logged in the last 2 minutes
+        // by the SAME person. Two people reporting the same activity in one
+        // message ("Sarah and I both ran two miles") produce identical numbers,
+        // and those are two runs, not one logged twice — collapsing them loses
+        // one person's data.
         const twoMinAgo = Date.now() - 120000;
         const recentDup = tracker.entries.find((e: any) => {
           if (new Date(e.timestamp).getTime() < twoMinAgo) return false;
+          if ((e.profileId || null) !== (targetProfileId || null)) return false;
           const existingNums = Object.entries(e.values).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           const newNums = Object.entries(entryValues).filter(([k, v]) => typeof v === 'number' && k !== '_notes');
           if (existingNums.length === 0 || newNums.length === 0) return false;
@@ -8045,6 +8511,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, normalizedValues);
+        await syncHabitsForTrackerLog(entry, tracker, {
+          userMessage: String((input as any).__userMessage || ""),
+          targetProfileId,
+          activityName: input.trackerName,
+        });
         // Only warn about fields we genuinely could NOT make first-class (long
         // free-form text). Fields we just auto-added (sugar, fiber, sodium, …)
         // DO show on the card/chart, so they must not trigger the scary
@@ -8141,10 +8612,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // throughout my entire app"): a person/pet's tracker was force-suffixed
       // "<Name> - <Profile>" whenever a same-name tracker existed on another
       // profile (e.g. the self user also had "Calories"), so Craig's trackers all
-      // showed up as "Calories - Craig" / "Running - Craig". The trackers table
-      // has NO unique(name) constraint (only habits do — see supabase-migration
-      // .sql), and createTracker dedups per-profile, so same-named trackers across
-      // profiles coexist cleanly with no "(2)" fallback. Drop the suffix entirely.
+      // showed up as "Calories - Craig" / "Running - Craig".
+      //
+      // That suffix kept coming back because this layer dropping it wasn't
+      // enough: the trackers table was UNIQUE on (user_id, name), so the storage
+      // layer had to re-add a suffix to insert the row at all. As of
+      // migrations/20260824_tracker_owner_scoped_names.sql the index is
+      // (user_id, owner_profile_id, lower(name)) — tracker identity is OWNER +
+      // NAME — so same-named trackers across profiles coexist for real, at the
+      // storage layer and not just in the display name.
       const trackerDisplayName = input.trackerName || "Custom";
       // Duplicate guard for the SAME owner: if an exact-name tracker is already
       // owned by the target (or is an unowned orphan), adopt it instead of making
@@ -8168,7 +8644,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }
         } catch { /* non-fatal */ }
         const { values: nv } = normalizeTrackerEntry(conflictTracker as any, entryValues);
-        return await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        const conflictEntry = await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        await syncHabitsForTrackerLog(conflictEntry, conflictTracker, {
+          userMessage: String((input as any).__userMessage || ""),
+          targetProfileId,
+          activityName: input.trackerName,
+        });
+        return conflictEntry;
       }
 
       // PER-PERSON TRACKERS: each tracker is owned by exactly ONE profile.
@@ -8208,6 +8690,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         // Surface what was auto-created so callers (bulk path, chat UI) can
         // report "created a new X tracker" honestly.
         if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
+        // A habit for this activity may already exist with no tracker to point
+        // at — this is where it adopts the one we just made.
+        await syncHabitsForTrackerLog(entry, newTracker, {
+          userMessage: String((input as any).__userMessage || ""),
+          targetProfileId,
+          activityName: input.trackerName,
+        });
         // Unknown entity (classification ladder exhausted): tell the model to
         // ask ONE concise clarification. The user's answer arrives via
         // update_tracker(changes:{category}), which remembers the mapping.
@@ -8996,79 +9485,32 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return { error: `You asked to pay your ${pretty(wantType)}, but the only matching loan is "${liability.name}" (a ${pretty(gotType)}). I did NOT apply the $${Number(input.amount) || 0} — that would change the wrong balance. Want me to create a ${pretty(wantType)} first, or apply it to ${liability.name}?` };
         }
       }
-      const f = liability.fields || {};
-      const balance = Number(f.currentBalance) || 0;
-      const monthlyRate = (Number(f.annualInterestRate) || 0) / 12;
-      const amount = Number(input.amount) || 0;
-      let principal = input.principal != null ? Number(input.principal) : NaN;
-      let interest = input.interest != null ? Number(input.interest) : NaN;
-      const escrow = Number(input.escrow) || 0;
-      const fees = Number(input.fees) || 0;
-      const cashTowardLoan = amount - escrow - fees;
-      // Auto-split if not provided
-      if (isNaN(principal) && isNaN(interest)) {
-        const intPortion = Math.min(balance * monthlyRate, cashTowardLoan);
-        interest = Math.max(0, intPortion);
-        principal = Math.max(0, cashTowardLoan - interest);
-      } else if (isNaN(principal)) {
-        principal = Math.max(0, cashTowardLoan - (interest || 0));
-      } else if (isNaN(interest)) {
-        interest = Math.max(0, cashTowardLoan - (principal || 0));
-      }
-      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-      // Determine paymentType (model can override)
-      let paymentType: any = input.paymentType || "standard";
-      const monthly = Number(f.monthlyPayment) || 0;
-      if (!input.paymentType) {
-        if (input.principal != null && interest === 0 && principal > 0) paymentType = "extra_principal";
-        else if (Math.max(0, balance - principal) === 0 && amount > 0) paymentType = "payoff";
-        else if (monthly > 0 && Math.abs(amount - monthly) < 1) paymentType = "standard";
-        else if (monthly > 0 && amount < monthly && amount > 0) paymentType = "partial";
-        else if (monthly > 0 && amount > monthly) paymentType = "custom";
-      }
-      // Compute new balance based on payment type
-      let newBalance: number;
-      if (paymentType === "skipped" || paymentType === "deferred") {
-        // No balance change. Force amount/principal/interest to 0 for the row.
-        newBalance = balance;
-        principal = 0; interest = 0;
-      } else if (paymentType === "reversal") {
-        // Add the amount back to the balance.
-        newBalance = balance + amount;
-        principal = -principal; interest = -interest;
-      } else if (paymentType === "payoff") {
-        // Payoff zeroes the balance regardless of how the AI sliced principal/interest.
-        // Adjust the principal portion so it reconciles with the actual balance reduction.
-        principal = balance;
-        interest = Math.max(0, cashTowardLoan - balance);
-        newBalance = 0;
-      } else {
-        newBalance = Math.max(0, balance - principal);
-        // If the balance is within $1 of zero (rounding noise from AI splits), zero it out cleanly.
-        if (newBalance > 0 && newBalance < 1) {
-          principal = principal + newBalance;
-          newBalance = 0;
-        }
-      }
-      const payment = await storage.createLiabilityPayment({
-        liabilityProfileId: liability.id,
-        paymentDate: input.paymentDate || today,
-        amount,
-        principalPortion: principal,
-        interestPortion: interest,
-        fees: fees + escrow,
-        remainingBalanceAfter: newBalance,
-        paymentType,
-        sourceAccount: input.method || null,
-        notes: input.notes || (input.confirmationNumber ? `conf: ${input.confirmationNumber}` : null),
-      } as any);
-      // Update balance on the liability profile
-      await storage.updateProfile(liability.id, {
-        fields: { ...f, currentBalance: newBalance },
-      } as any);
+      // One implementation of "record a payment", shared with
+      // POST /api/liabilities/:id/payments. This tool used to carry its own:
+      // its own monthly-rate split instead of the canonical amortization math,
+      // a write to `currentBalance` only (the liability card, the dashboard and
+      // net worth read `remainingBalance`/`loanBalance` too, so they kept
+      // showing the pre-payment number), no idea that a recurring service bill
+      // has no balance to reduce, and "today" in a hardcoded timezone.
+      const paid = await applyLiabilityPayment(
+        storage,
+        liability,
+        {
+          amount: Number(input.amount) || 0,
+          paymentDate: input.paymentDate || null,
+          principal: input.principal ?? null,
+          interest: input.interest ?? null,
+          escrow: input.escrow ?? null,
+          fees: input.fees ?? null,
+          paymentType: (input.paymentType as any) ?? null,
+          sourceAccount: input.method || null,
+          notes: input.notes || (input.confirmationNumber ? `conf: ${input.confirmationNumber}` : null),
+        },
+        aiUserTimezone(),
+      );
       return {
-        result: { payment, newBalance, principal, interest },
-        actions: [{ type: "create", category: "liability_payment", data: payment }],
+        result: { payment: paid.payment, newBalance: paid.newBalance, principal: paid.principal, interest: paid.interest },
+        actions: [{ type: "create", category: "liability_payment", data: paid.payment }],
       };
     }
 
@@ -10069,24 +10511,56 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       // Also run general auto-link for text-based matching
       await autoLinkToProfiles("habit", habit.id, `${input.name || ""} ${input.forProfile || ""}`, input.forProfile);
-      return await storage.getHabit(habit.id) || habit;
+
+      // ─── HABIT ↔ TRACKER LINK (user directive 2026-08-20) ───────────────
+      // A habit records consistency; its tracker records the measurement.
+      // A MEASURABLE habit ("drink 64 oz water daily", "run 3 miles 3x/week")
+      // gets linked to the tracker that measures it — reusing/expanding an
+      // existing compatible tracker (never a duplicate: "Water" reconnects to
+      // an existing Hydration tracker; a Running habit expands an existing
+      // Exercise tracker) and creating one only when none exists. A
+      // completion-only habit ("make my bed") links to nothing. Logging to
+      // the linked tracker then advances the habit's day progress
+      // (server/habit-completion.ts). NO calendar coupling anywhere in this
+      // flow: the habit's schedule stays internal to the habit system.
+      let linkedTrackerNote: { id: string; name: string; created: boolean } | null = null;
+      try {
+        const allProfs = await storage.getProfiles();
+        const ownerId = targetProfileId || allProfs.find(p => p.type === "self")?.id;
+        // Same resolver the completion pipeline uses (server/habit-completion.ts)
+        // — one answer to "which tracker does this habit belong to?".
+        // fallbackToHabitName stays FALSE here: a habit that measures nothing
+        // gets no tracker at creation. It earns one the first time it is
+        // actually completed.
+        const resolved = await resolveTrackerForHabit(storage, { ...habit, name: habitName }, {
+          hint: typeof (input as any).linkTracker === "string" ? (input as any).linkTracker : undefined,
+          userMessage: habitMsg,
+          ownerProfileId: ownerId,
+          fallbackToHabitName: false,
+        });
+        if (resolved) {
+          await storage.updateHabit(habit.id, { linkedTrackerId: resolved.id } as any);
+          linkedTrackerNote = resolved;
+          logger.info("ai", `Habit "${habitName}" linked to ${resolved.created ? "NEW" : "existing"} tracker "${resolved.name}" (${resolved.id})`);
+        }
+      } catch (linkErr: any) {
+        // The habit itself is saved; a failed link must never fail the create.
+        logger.warn("ai", `Habit↔tracker link for "${habitName}" failed: ${linkErr?.message || linkErr}`);
+      }
+
+      const createdHabit = await storage.getHabit(habit.id) || habit;
+      if (linkedTrackerNote) {
+        (createdHabit as any).__linkedTracker = linkedTrackerNote;
+        (createdHabit as any).__linkedTrackerNote = linkedTrackerNote.created
+          ? `Created the "${linkedTrackerNote.name}" tracker and linked it to this habit — logging to that tracker will also advance the habit's daily progress. Mention BOTH to the user. No calendar events were created (habit schedules never go on the calendar).`
+          : `Linked this habit to the EXISTING "${linkedTrackerNote.name}" tracker (no duplicate created) — logging to that tracker will also advance the habit's daily progress. Mention the link to the user. No calendar events were created (habit schedules never go on the calendar).`;
+      }
+      return createdHabit;
     }
 
     case "checkin_habit": {
       const habits = await storage.getHabits();
-      // HABIT ≠ ACTIVITY LOG (user directive 2026-07-15): a habit is only
-      // checked in when the user EXPLICITLY says so ("mark off my run",
-      // "completed my water habit"). A plain activity report ("I went to the
-      // bathroom at 8:15 AM") must be a tracker entry — previously it matched
-      // ANOTHER PROFILE'S "Go to the bathroom 3x daily" habit and derailed
-      // the whole message into a clarifying question.
       const checkinMsg = String((input as any).__userMessage || "");
-      if (checkinMsg && !hasExplicitHabitCheckinIntent(checkinMsg)) {
-        return {
-          error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
-          code: "NOT_A_HABIT_CHECKIN",
-        };
-      }
       // Scope to the named profile, else to self-owned/unowned habits.
       // NEVER fall back to other profiles' habits — an unqualified message
       // can only ever move the user's own streaks.
@@ -10112,7 +10586,52 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // habit and "check off running" resolves "Run" — but ONLY within the
       // profile-scoped list. The old fall-back to the FULL habit list is gone:
       // it let unqualified messages check in other people's habits.
-      const habit = matchHabitByName(eligible, input.name || "");
+      let habit = matchHabitByName(eligible, input.name || "");
+
+      // ── DOES THE SENTENCE ALREADY SAY THEY DID IT? ──────────────────────
+      // (user directive 2026-08-20) "I walked the dog" with a Walk the Dog
+      // habit on the dashboard is a completion, not a request for permission
+      // to record one. The old rule refused anything without command language
+      // ("mark off…"), which is what left the dashboard reading 0 of 2 after
+      // the user had said they walked the dog.
+      //
+      // The relaxation is narrow on purpose — the 2026-07-15 regression it
+      // must not reintroduce is an activity report checking in SOMEONE ELSE'S
+      // habit. Three things hold here: the candidate list above is already
+      // scoped to the user (or the profile they named); the sentence has to
+      // read as a completion report (not a question, plan, reminder,
+      // negation, or another person's action); and the habit has to be named
+      // strongly enough in the message — see shared/habit-completion-intent.
+      let completionSource: HabitCompletionSource = "chat_explicit";
+      // A question, a denial, or a request to be reminded is never a
+      // completion — not even when it reads like a command. "Did I walk the
+      // dog?" opens with "did", which the command-word detector counts as
+      // "did…done" and would otherwise check the habit in for asking about it.
+      if (checkinMsg && isHardCompletionVeto(checkinMsg)) {
+        return {
+          error: `That message asks about, denies, or plans a habit — it does not report doing one. Do NOT check anything in. Answer the question (or create the reminder) instead.`,
+          code: "NOT_A_HABIT_CHECKIN",
+        };
+      }
+      if (checkinMsg && !hasExplicitHabitCheckinIntent(checkinMsg)) {
+        const inferDate = input.date || getUserToday(aiUserTimezone());
+        const inferred = matchHabitForCompletionReport(eligible, checkinMsg, undefined, {
+          // Duplicate rows with the same name are common in real data; send the
+          // report to one that still has an occurrence left today.
+          prefer: (h) => !habitDayProgress(h as any, inferDate).isComplete,
+        });
+        if (!inferred) {
+          return {
+            error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
+            code: "NOT_A_HABIT_CHECKIN",
+          };
+        }
+        // The message names the habit; trust it over the model's `name`
+        // argument, which is a paraphrase of the same sentence.
+        habit = inferred.habit;
+        completionSource = "chat_inferred";
+      }
+
       if (!habit) {
         // Same rule as complete_task, in reverse: never report absence until
         // every actionable type has been asked. An explicit "habit" in the
@@ -10167,42 +10686,53 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         ? Math.floor(Number((input as any).count))
         : spoken?.all ? before.remaining
         : spoken?.count ?? 1;
-      const toRecord = Math.max(0, Math.min(askedFor, before.remaining));
 
-      if (toRecord === 0) {
+      // ONE PIPELINE: the same call the Habits page and the tracker use. It
+      // clamps to the day's remaining occurrences (so a repeat is a no-op) and
+      // writes the habit's linked tracker record.
+      const done = await completeHabitOccurrence(storage, {
+        habitId: habit.id,
+        date: checkinDate,
+        count: askedFor,
+        source: completionSource,
+      });
+
+      if (done.recorded === 0) {
         return {
           alreadyComplete: true,
           habitId: habit.id,
           name: habit.name,
           date: checkinDate,
-          progress: before,
-          message: `"${habit.name}" is already complete for ${checkinDate} — ${before.completed} of ${before.required} done. Nothing recorded. Tell the user it was already finished; do NOT retry.`,
+          progress: done.progress,
+          message: `"${habit.name}" is already complete for ${checkinDate} — ${done.progress.completed} of ${done.progress.required} done. Nothing recorded (no duplicate was created). Tell the user it was already finished; do NOT retry.`,
         };
       }
 
-      const recorded: any[] = [];
-      for (let i = 0; i < toRecord; i++) {
-        const c = await storage.checkinHabit(habit.id, checkinDate);
-        if (c) recorded.push(c);
-      }
-      const after = habitDayProgress((await storage.getHabit(habit.id)) as any, checkinDate);
+      const after = done.progress;
+      const trackerNote = done.tracker
+        ? ` The linked "${done.tracker.name}" tracker was updated too${done.trackerEntries.length ? "" : " (already had the entry)"} — mention it.`
+        : "";
+      const inferredNote = completionSource === "chat_inferred"
+        ? ` The user's own words said they did it, so this was recorded without asking — do NOT ask whether to mark it off, just report that it is done.`
+        : "";
       return {
         id: habit.id,
         habitId: habit.id,
         name: habit.name,
         date: checkinDate,
-        checkins: recorded,
-        recorded: recorded.length,
+        source: completionSource,
+        recorded: done.recorded,
         // The numbers the reply must quote. A partial day is a real outcome —
         // saying "done" after one of two doses is the thing being fixed.
         completed: after.completed,
         required: after.required,
         percent: after.percent,
         progress: after,
-        currentStreak: (await storage.getHabit(habit.id))?.currentStreak ?? 0,
-        message: after.required > 1
-          ? `Recorded ${recorded.length} completion${recorded.length === 1 ? "" : "s"} of "${habit.name}" — ${after.completed} of ${after.required} done today (${after.percent}%). ${after.isComplete ? "That finishes the day." : `${after.remaining} still to go.`} Report the count and the percent, not just "done".`
-          : `Checked in "${habit.name}" for ${checkinDate}.`,
+        currentStreak: done.currentStreak,
+        tracker: done.tracker,
+        message: (after.required > 1
+          ? `Recorded ${done.recorded} completion${done.recorded === 1 ? "" : "s"} of "${habit.name}" — ${after.completed} of ${after.required} done today (${after.percent}%). ${after.isComplete ? "That finishes the day." : `${after.remaining} still to go.`} Report the count and the percent, not just "done".`
+          : `Checked in "${habit.name}" for ${checkinDate}.`) + trackerNote + inferredNote,
       };
     }
 
@@ -10824,15 +11354,30 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         extractedData: docExtracted,
       }, "document");
       if (!createDocPayload.ok) return { error: createDocPayload.error };
+      // OWNERSHIP BEFORE CREATE (user report 2026-08-22: "Passport document
+      // ownership is corrupted: it lists both Poop and Sarah").
+      //
+      // This used to create the document with no owner and link the named
+      // profile afterwards. Storage fills an EMPTY owner list with the self
+      // profile, so the sequence produced two owners — the account owner from
+      // the fallback, plus the person the document actually belongs to. The
+      // document then showed up on the wrong person's screens and its
+      // expiration counted against the wrong dashboard. Resolving the owner
+      // first means the fallback never fires, which is the same order
+      // create_habit and create_obligation already use.
+      let docProfileId: string | undefined;
+      if (input.forProfile) {
+        const profile = matchProfileByName(await storage.getProfiles(), input.forProfile);
+        if (profile) docProfileId = profile.id;
+      }
       const doc = await storage.createDocument({
         ...createDocPayload.data,
         ...(docExpiry ? { expirationDate: docExpiry } : {}),
+        ...(docProfileId ? { linkedProfiles: [docProfileId] } : {}),
         size: input.content?.length || 0,
       });
-      if (input.forProfile) {
-        const profiles = await storage.getProfiles();
-        const profile = matchProfileByName(profiles, input.forProfile);
-        if (profile) await storage.linkProfileTo(profile.id, "document", doc.id);
+      if (docProfileId) {
+        await storage.linkProfileTo(docProfileId, "document", doc.id).catch(() => { /* junction link is best-effort */ });
       }
       return doc;
     }
@@ -12218,18 +12763,51 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     // --- Income logging ---
     case "log_income": {
       if (!input.amount || !input.source) return { error: "amount and source are required" };
-      const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const todayDate = getUserToday(aiUserTimezone());
+      // RECURRING INCOME (user report 2026-08-22: "recurring freelance income is
+      // unsupported; only one $750 income entry was created"). The income record
+      // has carried a `frequency` column all along and createIncome honours it —
+      // this tool just hardcoded "once", so the assistant truthfully told the
+      // user the app could not do it. It can.
+      const ALLOWED_FREQ = ["once", "weekly", "biweekly", "monthly", "quarterly", "yearly"];
+      const incomeFrequency = ALLOWED_FREQ.includes(String(input.frequency || "").toLowerCase())
+        ? String(input.frequency).toLowerCase()
+        : "once";
+      // OWNERSHIP: income for a named person must land on THAT person, or it is
+      // invisible on their Finance screen and inflates the account owner's.
+      let incomeProfileId: string | undefined;
+      if (input.forProfile) {
+        const targetP = matchProfileByName(await storage.getProfiles(), input.forProfile);
+        if (targetP) incomeProfileId = targetP.id;
+      }
       // P0.3a: validate with the shared insert schema before writing.
       const incomePayload = validateAiPayload(insertIncomeSchema, {
         description: input.source,
         amount: typeof input.amount === "number" ? input.amount : parseFloat(input.amount),
         category: input.category || "salary",
-        frequency: "once",
+        frequency: incomeFrequency,
         date: input.date || todayDate,
+        ...(incomeProfileId ? { linkedProfiles: [incomeProfileId] } : {}),
       }, "income");
       if (!incomePayload.ok) return { error: incomePayload.error };
       const created = await storage.createIncome(incomePayload.data);
-      return { success: true, income: created, message: `Logged $${input.amount} income from ${input.source}` };
+      if (incomeProfileId) {
+        await storage.linkProfileTo(incomeProfileId, "income", created.id).catch(() => { /* non-fatal */ });
+      }
+      const everyLabel: Record<string, string> = {
+        weekly: "every week", biweekly: "every other week", monthly: "every month",
+        quarterly: "every quarter", yearly: "every year",
+      };
+      const recurLabel = everyLabel[incomeFrequency];
+      return {
+        success: true,
+        income: created,
+        frequency: incomeFrequency,
+        forProfile: input.forProfile,
+        message: recurLabel
+          ? `Logged $${input.amount} from ${input.source}${input.forProfile ? ` for ${input.forProfile}` : ""} — recurring ${recurLabel}. Say it is recurring in your reply; do NOT tell the user recurring income is unsupported or that they must log each payment by hand.`
+          : `Logged $${input.amount} income from ${input.source}${input.forProfile ? ` for ${input.forProfile}` : ""}`,
+      };
     }
 
     case "update_income": {
@@ -12368,9 +12946,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return { success: true, message: `Renamed document to "${input.newName}"`, document: { id: updated.id, name: updated.name } };
         }
         case "delete": {
-          const deleted = await storage.deleteDocument(docId);
-          if (!deleted) return { error: "Document not found or could not be deleted" };
-          return { success: true, message: "Document deleted" };
+          // Same lifecycle as the UI delete: derived fields, derived calendar
+          // events, profile back-references, the file, and the cached AI
+          // summaries that quote it all go with the document. See
+          // server/document-deletion.ts. The AI has no confirmation dialog to
+          // offer a choice in, so it takes the default the user's own delete
+          // button defaults to.
+          const outcome = await deleteDocumentEverywhere(storage as any, docId, "cascade");
+          if (!outcome.deleted) return { error: "Document not found or could not be deleted" };
+          const extras: string[] = [];
+          if (outcome.removedFieldCount > 0) extras.push(`${outcome.removedFieldCount} extracted field(s)`);
+          if (outcome.removedEventCount > 0) extras.push(`${outcome.removedEventCount} derived date(s)`);
+          return {
+            success: true,
+            message: extras.length > 0 ? `Document deleted, along with ${extras.join(" and ")}` : "Document deleted",
+          };
         }
         // #3 (2026-06-25): document → profile linkage repair. Previously the
         // ONLY way a document got a profile was the AI-pick at extraction time;
@@ -13138,6 +13728,99 @@ async function buildReportSpec(input: Record<string, any>): Promise<ReportSpec> 
 // ============================================================
 // AUTO-UPDATE GOAL PROGRESS when tracker entries are logged
 // ============================================================
+
+/**
+ * Habit ↔ tracker reconciliation for a logged activity.
+ *
+ * Two jobs, in order:
+ *
+ * 1. ADOPT AN UNLINKED HABIT. The storage layer already advanced any habit
+ *    LINKED to this tracker (server/habit-completion.ts). But a habit created
+ *    before the link existed — or one the user made by hand — has no
+ *    linkedTrackerId, so logging the activity moved nothing. That is the
+ *    reported bug: with a "Walk the Dog" habit on the dashboard, "I just walked
+ *    the dog" wrote a tracker entry and left the habit at 0 of 2. When the
+ *    user's sentence reads as a completion report and a habit in THEIR scope is
+ *    named strongly enough by it, the habit is linked to this tracker (so it is
+ *    canonical from here on) and today's occurrence is completed.
+ *
+ * 2. REPORT IT. The result carries the habits' post-entry day progress so the
+ *    reply says "that also puts your water habit at 2 of 4" instead of silently
+ *    moving a streak the user never hears about — or, worse, asking them to
+ *    repeat themselves as a command.
+ */
+async function syncHabitsForTrackerLog(
+  entry: any,
+  tracker: { id: string; name: string },
+  ctx: { userMessage?: string; targetProfileId?: string; activityName?: string },
+): Promise<void> {
+  if (!entry || typeof entry !== "object" || (entry as any).error) return;
+  try {
+    const tz = aiUserTimezone();
+    const when = entry.timestamp ? new Date(entry.timestamp) : new Date();
+    const dateStr = toLocalDateStr(isNaN(when.getTime()) ? new Date() : when, tz);
+    const message = String(ctx.userMessage || "");
+
+    // ── 1. Adopt ─────────────────────────────────────────────────────────
+    if (message && classifyCompletionReport(message) !== "none") {
+      const allHabits = await storage.getHabits();
+      const allProfiles = await storage.getProfiles();
+      // Same ownership rule as checkin_habit: the user's own habits (or the
+      // profile this entry was logged for). Never another person's.
+      const scopeIds = ctx.targetProfileId ? [ctx.targetProfileId] : [...selfIdsFrom(allProfiles)];
+      const eligible = scopeIds.length > 0
+        ? allHabits.filter(h => passesProfileFilter(h.linkedProfiles, { selectedIds: scopeIds, allProfiles }))
+        : allHabits;
+      // Match against the sentence, and against the activity name as a
+      // fallback for a report worded differently than the habit. The fallback
+      // demands a FULL name match: a "Walking" tracker must not stand in for a
+      // "Walk the Dog" habit, or any recorded walk finishes the dog's.
+      const prefer = { prefer: (h: any) => !habitDayProgress(h, dateStr).isComplete };
+      const byName = ctx.activityName
+        ? matchHabitForCompletionReport(eligible, `${ctx.activityName} done`, "explicit", prefer)
+        : null;
+      const hit = matchHabitForCompletionReport(eligible, message, undefined, prefer)
+        || (byName?.match === "full" ? byName : null);
+      // A habit ALREADY linked to this tracker was advanced by the storage
+      // layer when the entry landed. Completing it again here would turn one
+      // walk into two — the duplicate the user explicitly ruled out.
+      const handledByStorage = !!hit && (hit.habit as any).linkedTrackerId === tracker.id;
+      if (hit && !handledByStorage && !(hit.habit as any).linkedTrackerId) {
+        await storage.updateHabit(hit.habit.id, { linkedTrackerId: tracker.id } as any);
+        logger.info("ai", `Linked existing habit "${hit.habit.name}" to tracker "${tracker.name}" from an activity report`);
+      }
+      if (hit && !handledByStorage) {
+        // The tracker entry already exists — this records the habit side only.
+        const res = await completeHabitOccurrence(storage, {
+          habitId: hit.habit.id,
+          date: dateStr,
+          source: "chat_inferred",
+          skipTrackerWrite: true,
+        });
+        if (res.ok) {
+          entry.habitCompletion = {
+            habitId: res.habitId, name: res.habitName,
+            recorded: res.recorded, completed: res.progress.completed,
+            required: res.progress.required, percent: res.progress.percent,
+          };
+        }
+      }
+    }
+
+    // ── 2. Report ────────────────────────────────────────────────────────
+    const habitsNow = await storage.getHabits();
+    const linked = habitsNow.filter(h => (h as any).linkedTrackerId === tracker.id);
+    if (linked.length === 0) return;
+    const lines = linked.map(h => {
+      const p = habitDayProgress(h as any, dateStr);
+      return `"${h.name}" habit: ${p.label}${p.isComplete ? " — day complete" : ""}`;
+    });
+    entry.habitProgressNote =
+      `This tracker is LINKED to a habit — the entry also advanced its progress for ${dateStr}: ${lines.join("; ")}. ` +
+      `Tell the user the habit moved (e.g. "logged, and that puts your habit at 1 of 2 today"). ` +
+      `NEVER ask them to repeat it as "mark off my habit" — it is already recorded.`;
+  } catch { /* reconciliation is best-effort; the entry itself has landed */ }
+}
 
 async function autoUpdateGoalProgress(trackerId: string, values: Record<string, any>): Promise<void> {
   try {
@@ -14605,9 +15288,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     `Active Tasks: ${tasks.filter(t => t.status !== "done").slice(0, 15).map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
     `Recent Expenses (last 10): ${expenses.slice(-10).map(e => `$${e.amount} - ${e.description} (${e.date?.slice(0,10)})`).join("; ") || "none"}`,
     `Upcoming Events (next 10): ${events.filter(e => new Date(e.date) >= new Date()).slice(0, 10).map(e => `${e.title} on ${e.date}`).join("; ") || "none"}`,
-    `Habits (${habits.length}): ${habits.slice(0, 20).map(h => {
+    // Today's progress rides along so a report of doing one of these ("I
+    // walked the dog") can be checked in and quoted accurately — and so an
+    // already-finished habit is visibly already finished rather than being
+    // "completed" a second time.
+    `Habits (${habits.length}) [today's progress included — a past-tense report of doing one of these completes it; call checkin_habit, do not ask]: ${habits.slice(0, 20).map(h => {
       const hOwner = (h.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name || pid.slice(0,8)).join(",");
-      return `${h.name} (${h.frequency}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
+      const hp = habitDayProgress(h as any, getUserToday(aiUserTimezone()));
+      const today = hp.isScheduled ? `today ${hp.completed}/${hp.required}${hp.isComplete ? " DONE" : ""}` : "not scheduled today";
+      return `${h.name} (${h.frequency}, ${today}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
     }).join("; ") || "none"}`,
     `Obligations (${obligations.length}): ${obligations.filter((o: any) => o.status !== "cancelled").slice(0, 20).map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
     // Assets & vehicles with full field data
@@ -14902,7 +15591,34 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // an inferred read informs the model without overriding its judgement on a
     // message the router only half understood.
     const contentDirective = buildContentRoutingDirective(userMessage);
-    const userTurnText = contentDirective ? `${userMessage}\n\n${contentDirective}` : userMessage;
+
+    // ── WHO IS "SHE"? ────────────────────────────────────────────────────
+    // Resolved deterministically from the conversation, for the same reason
+    // the content route is: the profile rules below are emphatic that picking
+    // an unnamed profile is a data-isolation failure, so left to itself the
+    // model asks "who is 'she'?" one message after the user said "Sarah earns
+    // $750 every Friday". The user DID name them — one turn ago.
+    const referentCandidates: ReferentCandidate[] = [
+      // People and pets answer "she"/"he"/"they".
+      ...(profiles || [])
+        .filter((p: any) => p?.name && ["person", "self", "pet"].includes(String(p.type)))
+        .map((p: any) => ({
+          name: String(p.name),
+          kind: "person" as const,
+          // "Sarah" should match a profile stored as "Sarah Miller".
+          aliases: String(p.name).split(/\s+/).filter((w: string) => w.length >= 3),
+        })),
+      // Bills and subscriptions answer "it" — "it comes out on the 22nd".
+      ...(obligations || [])
+        .filter((o: any) => o?.name)
+        .map((o: any) => ({ name: String(o.name), kind: "thing" as const })),
+    ];
+    const referentDirective = buildReferentDirective(
+      resolveReferent(userMessage, conversationHistory || [], referentCandidates),
+    );
+
+    const directives = [contentDirective, referentDirective].filter(Boolean).join("\n\n");
+    const userTurnText = directives ? `${userMessage}\n\n${directives}` : userMessage;
 
     const lastCarried = messages[messages.length - 1];
     if (lastCarried && lastCarried.role === "user") {

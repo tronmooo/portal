@@ -21,7 +21,9 @@ import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
+import { groupDocumentDates, ruleIdsOf } from "@shared/document-dates";
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
+import { useLiveTotal } from "@/lib/derived-aggregates";
 import { netWorthView, isNetWorthLoaded } from "@/lib/net-worth-view";
 import { computeNowItems, dayLabel, type NowItem } from "@shared/now-rank";
 import {
@@ -734,20 +736,27 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   const showTestDataKpi = useShowTestData();
   const sheet = useMemo(() => netWorthView(financeSnap, showTestDataKpi), [financeSnap, showTestDataKpi]);
   const netWorthLoaded = isNetWorthLoaded(financeSnap);
-  const totalAssetValue = netWorthLoaded
-    ? sheet.totalAssets
-    : filterActive
-      ? 0
-      : allProfiles
-        ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0)
-        : 0;
-  const totalLiabilities = netWorthLoaded
-    ? sheet.totalLiabilities
-    : filterActive
-      ? 0
-      : allProfiles
-        ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0)
-        : 0;
+  const heroDerivedAssets = useMemo(
+    () => (allProfiles ? heroAssetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0) : 0),
+    [allProfiles, heroAssetProfiles],
+  );
+  const heroDerivedLiabilities = useMemo(
+    () => (allProfiles ? heroLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0) : 0),
+    [allProfiles, heroLiabilityProfiles],
+  );
+  const heroEnhancedKey = useMemo(
+    () => ["/api/dashboard-enhanced", filterMode, ...filterIds],
+    [filterMode, filterIds],
+  );
+  // Once the server snapshot has landed it owns the level, and the client walk
+  // supplies only the movement since — so a payment or a revaluation shows on
+  // this tile as soon as the write returns, instead of after the aggregate
+  // recompute. Before it lands, nothing has changed: an active filter still
+  // shows 0 rather than risk a client roll-up that flashes the wrong number.
+  const liveAssets = useLiveTotal(netWorthLoaded ? sheet.totalAssets : undefined, heroDerivedAssets, heroEnhancedKey);
+  const liveLiabilities = useLiveTotal(netWorthLoaded ? sheet.totalLiabilities : undefined, heroDerivedLiabilities, heroEnhancedKey);
+  const totalAssetValue = netWorthLoaded ? liveAssets : filterActive ? 0 : heroDerivedAssets;
+  const totalLiabilities = netWorthLoaded ? liveLiabilities : filterActive ? 0 : heroDerivedLiabilities;
   const netWorth = totalAssetValue - totalLiabilities;
   // P6.1: the stats fallback is safe — /api/stats monthlySpend and
   // /api/dashboard-enhanced totalMonthlySpend are computed from the same
@@ -1095,8 +1104,14 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     return (kpiProfiles.find((p: any) => p.type === "self")?.id) || "";
   }, [filterMode, filterIds, kpiProfiles]);
   const [docSnoozeMap, setDocSnoozeMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
-  const snoozeDoc = (docId: string) => {
-    const next = { ...docSnoozeMap, [docId]: Date.now() + 30 * 86400000 };
+  const snoozeDoc = (docIdOrRow: string | { ruleIds?: string[]; ruleId?: string }) => {
+    // A card can stand for several rules (one record, one day, two kinds of
+    // date). Snoozing only the first left its twin on screen.
+    const ids = typeof docIdOrRow === "string" ? [docIdOrRow] : ruleIdsOf(docIdOrRow as any);
+    if (ids.length === 0) return;
+    const until = Date.now() + 30 * 86400000;
+    const next = { ...docSnoozeMap };
+    for (const id of ids) next[id] = until;
     setDocSnoozeMap(next);
     saveDocSnoozeMap(next);
     toast({ title: "Document snoozed", description: "Hidden from alerts for 30 days" });
@@ -1106,8 +1121,13 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     // honouring a record-id snooze taken before that was true. Keying on the
     // record alone left a dismissed row visible here while the popup and the
     // Executive section both hid it.
-    return (enhanced?.expiringDocuments || [])
-      .filter((d: any) => !docSnoozeMap[d.ruleId] && !docSnoozeMap[d.documentId]);
+    // Grouped to ONE CARD PER RECORD PER DAY, the same way the popup renders
+    // them, so the KPI badge counts what the list shows. Ungrouped, a policy
+    // that expires and takes its premium on one day read as two documents.
+    return groupDocumentDates(
+      (enhanced?.expiringDocuments || [])
+        .filter((d: any) => !docSnoozeMap[d.ruleId] && !docSnoozeMap[d.documentId]),
+    );
   }, [enhanced, docSnoozeMap]);
 
   // BUG-20260530-stats-slow-blank-tiles: when /api/stats is slow (8-12s cold
@@ -1423,7 +1443,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
               <FileWarning className="h-4 w-4 text-amber-500" />
-              Expiring Documents
+              Documents Due & Expiring
               <Badge variant="secondary" className="ml-1 tabular-nums">{visibleDocs.length}</Badge>
             </DialogTitle>
             <DialogDescription className="text-xs">
@@ -1437,7 +1457,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                 if (upcomingCt > 0) parts.push(`${upcomingCt} upcoming`);
                 return parts.length > 0
                   ? `${parts.join(" · ")}. Tap to view, snooze to hide for 30 days.`
-                  : "Documents with upcoming or past expiration dates. Snooze to hide for 30 days.";
+                  : "Documents with an upcoming or past due / expiration date. Snooze to hide for 30 days.";
               })()}
             </DialogDescription>
           </DialogHeader>
@@ -1466,7 +1486,10 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                       <Badge variant="outline" className={`shrink-0 text-xs-tight px-1.5 py-0 h-4 ${
                         expired ? "border-red-500/40 text-red-500" : expiringSoon ? "border-amber-500/40 text-amber-500" : ""
                       }`}>
-                        {expired ? "Expired" : expiringSoon ? "Soon" : "Upcoming"}
+                        {/* A due date is not an expiration — say which. */}
+                        {expired
+                          ? (String(doc.ruleType || "expiration") === "expiration" ? "Expired" : "Overdue")
+                          : expiringSoon ? "Soon" : "Upcoming"}
                       </Badge>
                     </button>
                     <button
@@ -1485,7 +1508,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
               {visibleDocs.length === 0 && (
                 <div className="text-center py-6">
                   <FileText className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-                  <p className="text-xs text-muted-foreground">No expiring documents</p>
+                  <p className="text-xs text-muted-foreground">Nothing due or expiring</p>
                 </div>
               )}
             </div>
@@ -3828,10 +3851,26 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
   // data.totalLiabilities) is the single source of truth for roll-up numbers.
   // It is party_links + parent-residual aware; the client-side walk over
   // allProfiles is parent-only and diverges on co-ownership/wrong-link data.
-  // Prefer the server numbers; fall back to the client walk only for the brief
-  // window before /api/dashboard-enhanced resolves.
-  const totalAssetValue = data?.totalAssetValue ?? (assetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0));
-  const totalLiabilities = data?.totalLiabilities ?? (tileLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0));
+  // The server owns the LEVEL — and still does below. What changed is that the
+  // walk now supplies the DELTA while the server payload is being recomputed,
+  // so a payment or a revaluation moves this tile on the write instead of
+  // several seconds later when ~15 aggregate queries come back. At rest the
+  // delta is zero and this is exactly the server's number. See
+  // lib/derived-aggregates.ts.
+  const derivedAssetValue = useMemo(
+    () => assetProfiles.reduce((s, p) => s + resolveAssetValue(p), 0),
+    [assetProfiles],
+  );
+  const derivedLiabilities = useMemo(
+    () => tileLiabilityProfiles.reduce((s, p) => s + resolveLiabilityBalance(p), 0),
+    [tileLiabilityProfiles],
+  );
+  const enhancedTotalsKey = useMemo(
+    () => ["/api/dashboard-enhanced", filterMode, ...filterIds],
+    [filterMode, filterIds],
+  );
+  const totalAssetValue = useLiveTotal(data?.totalAssetValue, derivedAssetValue, enhancedTotalsKey);
+  const totalLiabilities = useLiveTotal(data?.totalLiabilities, derivedLiabilities, enhancedTotalsKey);
   const netWorth = totalAssetValue - totalLiabilities;
 
   if (!data && !stats) {

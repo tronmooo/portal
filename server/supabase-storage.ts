@@ -49,7 +49,7 @@ import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } fr
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES } from "../shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "../shared/date-rules";
 import { deleteProfileFields, mergeFieldWrite } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
@@ -83,6 +83,7 @@ import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
+import { autoCheckinLinkedHabits } from "./habit-completion";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
   type Profile, type InsertProfile,
@@ -1087,6 +1088,7 @@ export class SupabaseStorage implements IStorage {
       scheduledTime: r.scheduled_time || undefined,
       currentStreak: live.current, longestStreak: Math.max(live.longest, r.longest_streak || 0),
       linkedProfiles: r.linked_profiles || [],
+      linkedTrackerId: r.linked_tracker_id || undefined,
       checkins, createdAt: r.created_at,
     };
   }
@@ -1449,7 +1451,7 @@ export class SupabaseStorage implements IStorage {
     const timeline: TimelineEntry[] = [];
     for (const t of relatedTrackers) {
       for (const e of t.entries) {
-        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: Object.entries(e.values).map(([k, v]) => `${k}: ${v}`).join(", "), data: { ...e.values, computed: e.computed }, timestamp: e.timestamp });
+        timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: Object.entries(e.values).map(([k, v]) => `${k}: ${v}`).join(", "), data: { ...e.values, computed: e.computed, trackerId: t.id }, timestamp: e.timestamp });
       }
     }
     for (const e of relatedExpenses) timeline.push({ id: e.id, type: "expense", title: e.description, description: `$${e.amount} - ${e.category}`, timestamp: e.date });
@@ -2206,6 +2208,41 @@ export class SupabaseStorage implements IStorage {
     return Number(data || 0);
   }
 
+  /**
+   * The per-domain version map (migration 20260825).
+   *
+   * `{ epoch, <domain>: <n>, ... }`. The epoch is in every cache key, so a
+   * write that names no domain — or that an older instance made through the
+   * one-argument RPC — still invalidates everything, which is the pre-migration
+   * behavior and the correct direction to fail in.
+   */
+  async getDataVersions(): Promise<Record<string, number>> {
+    const { data, error } = await this.supabase
+      .from("user_data_versions").select("version,domains")
+      .eq("user_id", this.userId).maybeSingle();
+    if (error) throw error;
+    const domains = (data?.domains && typeof data.domains === "object") ? data.domains as Record<string, unknown> : {};
+    const out: Record<string, number> = { epoch: Number(data?.version || 0) };
+    for (const [k, v] of Object.entries(domains)) {
+      const n = Number(v);
+      if (Number.isFinite(n)) out[k] = n;
+    }
+    return out;
+  }
+
+  async bumpDataVersions(domains: string[] = []): Promise<Record<string, number>> {
+    const { data, error } = await this.supabase
+      .rpc("bump_user_domain_versions", { p_user_id: this.userId, p_domains: domains });
+    if (error) throw error;
+    const map = (data && typeof data === "object") ? data as Record<string, unknown> : {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(map)) {
+      const n = Number(v);
+      if (Number.isFinite(n)) out[k] = n;
+    }
+    return out;
+  }
+
   // ── Shared response cache (migration 20260731_response_cache) ─────────────
   // Cross-INSTANCE warm cache for the handful of expensive aggregations
   // (bootstrap/stats/enhanced/calendar-timeline). The in-memory response cache
@@ -2653,13 +2690,34 @@ export class SupabaseStorage implements IStorage {
     const existing = await this.getTrackers();
     const requestedProfiles = (data as any).linkedProfiles || [];
     const wantedKey = trackerIdentityKey(data.name);
+    // Resolve the owner FIRST: an unspecified owner means the self profile, not
+    // "any owner". Matching any owner is what let one person's log land on
+    // another person's tracker.
+    const selfForDedup = requestedProfiles.length === 0 ? await this.getSelfProfile() : null;
+    const ownerForDedup: string[] = requestedProfiles.length > 0
+      ? requestedProfiles
+      : (selfForDedup ? [selfForDedup.id] : []);
+    // Owner names, for recognising a LEGACY "<Name> - <Owner>" row as the same
+    // tracker. New rows are never named that way, but rows created before
+    // migrations/20260824_tracker_owner_scoped_names.sql are — and a deployment
+    // whose database predates that migration still makes them. Without this,
+    // asking for "Calories" for Bob when "Calories - Bob" already exists would
+    // hand Bob a second tracker.
+    const ownerNamesForDedup = (await Promise.all(
+      ownerForDedup.map(async (pid) => {
+        try { return (await this.getProfile(pid))?.name; } catch { return undefined; }
+      }),
+    )).filter(Boolean) as string[];
     const dup = existing.find(t => {
-      if (!wantedKey || trackerIdentityKey(t.name) !== wantedKey) return false;
-      // If no profile specified, any match is a dup
-      if (requestedProfiles.length === 0) return true;
-      // If profile specified, only match if the existing tracker has the same profile
+      const bare = ownerNamesForDedup.length
+        ? stripTrackerOwnerSuffix(t.name, ownerNamesForDedup)
+        : t.name;
+      if (!wantedKey || trackerIdentityKey(bare) !== wantedKey) return false;
       const existingLp = t.linkedProfiles || [];
-      return requestedProfiles.some((pid: string) => existingLp.includes(pid));
+      // An unowned (orphan) tracker is adoptable by whoever logs to it next.
+      if (existingLp.length === 0) return true;
+      if (ownerForDedup.length === 0) return false;
+      return ownerForDedup.some((pid: string) => existingLp.includes(pid));
     });
     if (dup) return dup;
 
@@ -2672,48 +2730,19 @@ export class SupabaseStorage implements IStorage {
       if (selfProfile) linkedProfiles = [selfProfile.id];
     }
 
-    // NAME DISAMBIGUATION (BUG-20260709-tracker-dupkey): the `trackers` table has
-    // a UNIQUE (user_id, name) index (idx_trackers_name_user WHERE deleted_at IS
-    // NULL). Trackers are keyed by name PER USER, not per profile — so inserting
-    // a tracker whose bare name is already used by ANOTHER profile fails with a
-    // Postgres duplicate-key error (23505). That is exactly what broke logging
-    // "Bill ran 2 miles" / "Bill ate a chicken sandwich": a "Running"/"Calories"
-    // tracker already existed for the Self profile, and createTracker inserted
-    // the bare name instead of a per-profile one. The dedup above already reused
-    // a same-name tracker that belongs to the SAME profile; reaching here means
-    // the name collides with a DIFFERENT profile's tracker. Match the app's
-    // existing convention ("Calories - Bob") by suffixing the target profile's
-    // name, then a numeric counter, until the name is free for this user.
-    const takenNames = new Set(existing.map(t => t.name.toLowerCase()));
-    let finalName = data.name;
-    if (takenNames.has(finalName.toLowerCase())) {
-      let profileSuffix = "";
-      const targetPid = requestedProfiles[0] || linkedProfiles[0];
-      if (targetPid) {
-        try {
-          const p = await this.getProfile(targetPid);
-          if (p?.name) profileSuffix = ` - ${p.name}`;
-        } catch { /* fall through to numeric suffix */ }
-      }
-      const suffixedName = `${data.name}${profileSuffix}`;
-      // If the per-profile tracker already exists for THIS profile (e.g. the AI
-      // passed the bare "Calories" for Bob but "Calories - Bob" already exists),
-      // reuse it instead of spawning "Calories - Bob 2" — the dedup at the top
-      // only compared the bare name, so it missed the suffixed form.
-      if (profileSuffix && targetPid) {
-        const existingForProfile = existing.find(t =>
-          t.name.toLowerCase() === suffixedName.toLowerCase() &&
-          (t.linkedProfiles || []).includes(targetPid));
-        if (existingForProfile) return existingForProfile;
-      }
-      let candidate = suffixedName;
-      let n = 2;
-      while (takenNames.has(candidate.toLowerCase())) {
-        candidate = `${data.name}${profileSuffix} ${n++}`;
-        if (n > 100) { candidate = `${data.name} ${id.slice(0, 4)}`; break; }
-      }
-      finalName = candidate;
-    }
+    // NAME: the tracker keeps the name it was asked for. Trackers are unique on
+    // (user_id, owner_profile_id, lower(name)) — migrations/20260824_tracker_
+    // owner_scoped_names.sql — so identity is OWNER + NAME, not account + name.
+    // Bob's Running and Sarah's Running are two rows both honestly called
+    // "Running", and the dedup above already reused this owner's own tracker if
+    // they had one.
+    //
+    // This is where the old "Calories - Bob" suffix came from: under the former
+    // UNIQUE (user_id, name) index a second profile's tracker was literally
+    // un-insertable, so the name was mangled to make room and the read path
+    // stripped the mangling back off for display. With the index cut at the
+    // right grain, there is nothing to work around.
+    const finalName = data.name;
     // UNIVERSAL ENGINE: never reject a tracker over field shape. Coerce every
     // field to the canonical {name, type} so an AI-supplied field with an odd
     // type ("time", "string", missing) can't fail the insert. Unknown types
@@ -2778,10 +2807,13 @@ export class SupabaseStorage implements IStorage {
         return lp.some((pid: string) => wanted.has(pid));
       });
       if (reusable) return reusable; // race winner already created it → idempotent no-op
-      // Genuine cross-profile name collision (or a soft-deleted row the pre-check
-      // missed): suffix ONCE to make forward progress without a raw 23505.
-      finalName = `${finalName} ${id.slice(0, 4)}`;
-      insertErr = (await insertWithName(finalName)).error;
+      // Not a race we can reuse: under the owner-scoped index a 23505 means THIS
+      // owner already holds this name, and the only rows that fit are ones the
+      // pre-check couldn't see (a soft-deleted row, a replica lag read). Suffix
+      // ONCE with a short id — never the owner's name, which is what produced
+      // "Calories - Bob" — so the write makes progress instead of raising a raw
+      // duplicate-key error at the user.
+      insertErr = (await insertWithName(`${finalName} ${id.slice(0, 4)}`)).error;
     }
     if (insertErr) throw insertErr;
     bustInsightsCacheFor(this.userId); // [P0] tracker set changed → recompute insights
@@ -2957,6 +2989,14 @@ export class SupabaseStorage implements IStorage {
     }
     bustInsightsCacheFor(this.userId); // [P0] new entry → recompute insights
     this.logActivity("tracker", `Logged ${tracker.name}`);
+    // Habit ↔ tracker link: one activity record updates both. Advances any
+    // habit linked to this tracker by one completion for the entry's day
+    // (best-effort — see server/habit-completion.ts). Skipped on the dedup
+    // early-return above (a retried HTTP request must not double-advance) and
+    // when this write IS the mirror of a habit check-in, which would loop.
+    if (!(data as any).__skipHabitSync) {
+      await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: ts, values, timezone: this._timezone });
+    }
     // Return the DATABASE's version of the row, not our intended one.
     return this.rowToTrackerEntry(inserted);
   }
@@ -4516,6 +4556,7 @@ export class SupabaseStorage implements IStorage {
       scheduled_time: (data as any).scheduledTime || null,
       current_streak: 0, longest_streak: 0,
       linked_profiles: linkedProfiles,
+      linked_tracker_id: (data as any).linkedTrackerId || null,
       created_at: now,
     });
     if (error) throw error;
@@ -4582,6 +4623,7 @@ export class SupabaseStorage implements IStorage {
       start_date: merged.startDate || null, end_date: merged.endDate || null,
       time_of_day: merged.timeOfDay || null,
       scheduled_time: merged.scheduledTime || null,
+      linked_tracker_id: merged.linkedTrackerId || null,
     }).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
@@ -6145,6 +6187,12 @@ export class SupabaseStorage implements IStorage {
     // whether DB pushdown is safe (see _dbFilterIds), but we don't want to
     // serialize the wave. await it as the very first thing after Promise.all.
     const profilesPromise = this.getProfiles();
+    // Recent Activity has to be able to show a payment. Started here so the one
+    // bounded, indexed read overlaps the rest of the wave instead of adding to
+    // the critical path.
+    const recentPaymentsPromise = Promise.resolve(
+      (this as any).getRecentLiabilityPayments?.(10),
+    ).catch(() => [] as any[]);
     // Best-effort pushdown: if the caller passed a filter that contains NO
     // self profile, the unified rule reduces to "linked_profiles ∩
     // selection ≠ ∅" — which the GIN-indexed cs.[id] check enforces. When
@@ -6326,6 +6374,17 @@ export class SupabaseStorage implements IStorage {
       jCursor = tzAddDays(jCursor, -1);
     }
 
+    // Payments on liabilities the current filter can see. `linkedProfiles` does
+    // not exist on a payment row — a payment belongs to its liability — so the
+    // scope check follows the liability, exactly like the balance does.
+    const liabilityInScope = (p: Profile) =>
+      !fpIds || fpIds.length === 0 ||
+      fpIds.includes(p.id) ||
+      (!!p.parentProfileId && fpIds.includes(p.parentProfileId));
+    const visibleLiabilityIds = new Set(allProfiles.filter(liabilityInScope).map((p) => p.id));
+    const recentLiabilityPayments = ((await recentPaymentsPromise) || [])
+      .filter((p: any) => p && visibleLiabilityIds.has(p.liabilityProfileId));
+
     const recentJournal = [...filteredJournal].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     const currentMood = recentJournal.length > 0 ? recentJournal[0].mood as MoodLevel : undefined;
 
@@ -6346,6 +6405,14 @@ export class SupabaseStorage implements IStorage {
       weeklyEntries,
       streaks,
       recentActivity: [
+        ...recentLiabilityPayments.map((p: any) => {
+          const liability = allProfiles.find((x) => x.id === p.liabilityProfileId);
+          return {
+            type: 'liability_payment',
+            description: `Paid $${p.amount} — ${liability?.name || 'liability'}`,
+            timestamp: p.createdAt || p.paymentDate,
+          };
+        }),
         ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
           type: 'tracker_entry',
           description: (() => {
@@ -6508,12 +6575,15 @@ export class SupabaseStorage implements IStorage {
       const scopedProfilesForExp = allProfiles.filter(p =>
         matchesProfileEnhanced([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
       for (const rule of rulesFromAll({ profiles: scopedProfilesForExp, documents: filteredDocs })) {
-        // Only things that EXPIRE. `countdownEnabled` is wider than that — it
-        // covers due dates and deadlines too — and only liability profiles have
-        // their payment rules stripped, so an insurance profile's
-        // `premiumDueDate` landed in the Documents-expiring tile reading
-        // "Expired 3d ago". A bill belongs on the bills surface.
-        if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;
+        // Things that EXPIRE anywhere, plus what a DOCUMENT says is DUE.
+        //
+        // Expiry alone was too narrow (user report 2026-08-25): a parking
+        // citation due in 31 days is exactly the "act before this date" record
+        // this tile exists for, and it does not "expire". The source test is
+        // what keeps the old bug fixed — a `premiumDueDate` typed onto an
+        // insurance PROFILE is a bill and still belongs on the bills surface,
+        // so only document-carried due dates join the expiries here.
+        if (!isDocumentAttentionRule(rule)) continue;
         const daysUntil = daysBetweenISO(today, rule.date);
         expiringDocs.push({
           documentId: rule.sourceEntityId,
@@ -6528,6 +6598,11 @@ export class SupabaseStorage implements IStorage {
           expirationDate: rule.date,
           daysUntil,
           ruleId: rule.id,
+          // What KIND of date this is, so every surface can say "Due in 31
+          // days" where it means due and "Expires" where it means expires,
+          // instead of labelling everything an expiration.
+          ruleType: rule.ruleType,
+          ruleSubtype: rule.ruleSubtype,
           // A rule can come from a PROFILE (a passport expiration typed onto a
           // person), and `/documents/<profileId>` is not a page. The rule
           // already knows where its record lives.
@@ -7492,6 +7567,24 @@ export class SupabaseStorage implements IStorage {
       });
     } catch (e) { /* best-effort */ }
     return true;
+  }
+
+  /**
+   * The most recent payments across ALL liabilities.
+   *
+   * Recent Activity is built from tracker entries, completed tasks and
+   * expenses — so recording a payment, one of the most consequential things a
+   * person does in this app, never appeared in it at any latency. That is not a
+   * caching problem and no invalidation would have fixed it: the feed simply
+   * did not read this table. One indexed, bounded query.
+   */
+  async getRecentLiabilityPayments(limit: number = 10): Promise<LiabilityPayment[]> {
+    const { data, error } = await this.supabase.from("liability_payments")
+      .select("*").eq("user_id", this.userId)
+      .order("created_at", { ascending: false })
+      .limit(Math.max(1, Math.min(50, limit)));
+    if (error) throw error;
+    return (data || []).map(r => this.rowToLiabilityPayment(r));
   }
 
   async getLiabilityPayments(liabilityProfileId: string): Promise<LiabilityPayment[]> {

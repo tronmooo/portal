@@ -932,6 +932,42 @@ button, a, [role="button"], .card-lift {
 }
 .bubble-row:active { transform: scale(0.99); }
 
+/* ============================================================
+   EXECUTIVE DASHBOARD GRID — packed, no dead space
+   ============================================================
+   User report 2026-08-20 (screenshot): "there's a lot of empty space in the
+   executive tab… every box should fill in the black stuff no matter how big
+   they each get, they should all stay the same size."
+
+   The grid used to be `items-start`, so every card shrank to its content and
+   the shorter of each pair left a black void running down to the next row.
+   Two rules fix that:
+
+     1. rows STRETCH (the Tailwind default, now that items-start is gone) and
+        each card is h-full — both cards in a row are the same height and each
+        one fills its cell;
+     2. a trailing odd card spans both columns, so the last row is never half
+        empty.
+
+   NO NESTED SCROLL CONTAINER, deliberately. The first version of this bounded
+   each card body with `max-height` + `overflow-y: auto` +
+   `overscroll-behavior: contain`, and the user's next report was that the
+   Executive tab "keeps getting stuck / frozen" when scrolling. That is exactly
+   what those rules do: with the pointer over a card, the wheel scrolls the
+   CARD, and `contain` stops the scroll from chaining on to the page once the
+   card hits its end — and on this tab the cards cover nearly the whole
+   viewport, so the page looks frozen almost everywhere you point.
+
+   The cards do not need it anyway: every list inside them is already capped
+   (slice(0, 4-6) plus a "View all (N)" expander), so a card grows only when
+   the user asks it to. Content bounding belongs in those expanders, not in a
+   scroll region that competes with the page. */
+@media (min-width: 768px) {
+  /* Odd card count → the last one takes the full width instead of leaving a
+     blank cell beside it. */
+  .exec-grid > *:last-child:nth-child(odd) { grid-column: 1 / -1; }
+}
+
 /* Large icon medallion — the coloured circle behind a section's icon. */
 .medallion {
   display: inline-flex;

@@ -31,6 +31,7 @@ const { stubState, stubStorage, aiTasks } = vi.hoisted(() => {
     profiles: new Map<string, any>(),
     documents: new Map<string, any>(),
     expenses: [] as any[],
+    trackers: [] as any[],
   };
   const tasks: string[] = [];
   // Minimal storage stub: the methods confirm-extraction uses are real;
@@ -80,6 +81,27 @@ const { stubState, stubStorage, aiTasks } = vi.hoisted(() => {
     },
     async linkProfileTo() { return undefined; },
     async propagateDocumentToAncestors() { return []; },
+    // Enough tracker storage for the facts-vs-actions tests to be real: a
+    // tracker action that silently no-ops would let the partition regression
+    // pass for the wrong reason.
+    async getTrackers() { return state.trackers; },
+    async createTracker(data: any) {
+      const row = { id: `trk-${state.trackers.length + 1}`, entries: [], ...data };
+      state.trackers.push(row);
+      return row;
+    },
+    async updateTracker(id: string, patch: any) {
+      const t = state.trackers.find((x: any) => x.id === id);
+      if (t) Object.assign(t, patch);
+      return t;
+    },
+    async logEntry(data: any) {
+      const t = state.trackers.find((x: any) => x.id === data.trackerId);
+      if (!t) return undefined;
+      const entry = { id: `e-${(t.entries || []).length + 1}`, ...data };
+      t.entries = [...(t.entries || []), entry];
+      return entry;
+    },
   };
   const storage = new Proxy(impl, {
     get(target, prop) {
@@ -151,6 +173,7 @@ describe("POST /api/chat/confirm-extraction", () => {
     stubState.profiles.clear();
     stubState.documents.clear();
     stubState.expenses.length = 0;
+    stubState.trackers.length = 0;
     aiTasks.length = 0;
     stubState.profiles.set("profile-crv", vehicleProfile());
     stubState.profiles.set("profile-self", { id: "profile-self", name: "Robert", type: "self", fields: {}, tags: [] });
@@ -451,6 +474,136 @@ describe("POST /api/chat/confirm-extraction", () => {
     // Still exactly one expense — the confirm did not mint a twin.
     expect(stubState.expenses).toHaveLength(1);
     expect(data.saved.join("; ")).toContain("skipped duplicate");
+  });
+
+  // ═══ FACTS GET SAVED; ACTIONS GET PERFORMED (2026-08-26) ═══
+  //
+  // Selecting "Append 43,120 mi → Odometer tracker" used to DELETE the reading
+  // from the vehicle: the row was withheld from the data path because an action
+  // claimed it, and the tracker executor writes no profile fields. The fact and
+  // the action are independent now — the row is only withheld when the claiming
+  // action performs that exact field write.
+  it("a selected tracker action logs the entry AND leaves the fact on the profile", async () => {
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        targetProfileId: "profile-crv",
+        confirmedFields: [],
+        createCalendarEvents: [],
+        trackerEntries: [],
+        items: [
+          { id: "i-odo", key: "odometer", label: "Odometer", value: "43120",
+            destination: "entity_field", destinationOptions: ["entity_field", "ignore"],
+            selected: true, source: "field" },
+        ],
+        actions: [
+          { id: "act-track-i-odo", operation: "APPEND", destination: "tracker",
+            destinationOptions: ["tracker"],
+            target: { kind: "tracker", id: null, name: "Odometer" },
+            roles: [], title: "Add to Odometer — 43120 mi", factIds: [], itemIds: ["i-odo"],
+            payload: { trackerName: "Odometer", values: { value: 43120 }, unit: "mi",
+                       category: "custom", date: "2026-08-01", profileId: "profile-crv" },
+            origin: "implied", selected: true, confidence: 0.9, warnings: [],
+            stage: 2, dedupeKey: "k1", savable: true },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+
+    // The FACT is on the vehicle — under the canonical spelling, since this
+    // profile already carries `mileage` and the two are one field.
+    expect(stubState.profiles.get("profile-crv").fields.mileage).toBe(43120);
+    // …and the ACTION ran too: a real tracker with a real entry.
+    const odo = stubState.trackers.find((t: any) => /odometer/i.test(t.name));
+    expect(odo).toBeTruthy();
+    expect(odo.entries).toHaveLength(1);
+    expect(odo.entries[0].values.value).toBe(43120);
+    // The tracker is filed under the value's own category, not "health".
+    expect(odo.category).toBe("custom");
+  });
+
+  it("deselecting the tracker action still saves the fact", async () => {
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        targetProfileId: "profile-crv",
+        confirmedFields: [],
+        createCalendarEvents: [],
+        trackerEntries: [],
+        items: [
+          { id: "i-odo", key: "odometer", label: "Odometer", value: "43120",
+            destination: "entity_field", destinationOptions: ["entity_field", "ignore"],
+            selected: true, source: "field" },
+        ],
+        actions: [
+          { id: "act-track-i-odo", operation: "APPEND", destination: "tracker",
+            destinationOptions: ["tracker"],
+            target: { kind: "tracker", id: null, name: "Odometer" },
+            roles: [], title: "Add to Odometer", factIds: [], itemIds: ["i-odo"],
+            payload: { trackerName: "Odometer", values: { value: 43120 }, unit: "mi" },
+            origin: "implied", selected: false, confidence: 0.9, warnings: [],
+            stage: 2, dedupeKey: "k1", savable: true },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).success).toBe(true);
+    expect(stubState.profiles.get("profile-crv").fields.mileage).toBe(43120);
+    // Nothing was tracked — the user said no to that, and only to that.
+    expect(stubState.trackers).toHaveLength(0);
+  });
+
+  // ═══ THE ASSET-DOCUMENT BUG (2026-08-26): "I press save and none of the
+  // data was saved in the asset profile" ═══
+  //
+  // For a document filed under an asset, suggestDestination routes nearly
+  // every field to `entity_field` / `entity_record` — the designed home for
+  // entity data. The items switch had no case for either, so whenever those
+  // rows travelled as loose items (the reasoner degraded, or the plan's
+  // context action was unticked by a blocking conflict), the route reported
+  // success while writing NOTHING to the asset the user picked.
+  it("saves entity_field / entity_record items to the chosen asset profile", async () => {
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        targetProfileId: "profile-crv",
+        confirmedFields: [],
+        createCalendarEvents: [],
+        trackerEntries: [],
+        // Exactly what the review page sends for an asset document whose
+        // reasoning degraded: loose items, entity destinations, all ticked.
+        items: [
+          { id: "i1", key: "serviceProvider", label: "Service Provider", value: "Oil Changers / Lube N Go", destination: "entity_field", destinationOptions: ["entity_field", "note", "ignore"], selected: true, source: "field" },
+          { id: "i2", key: "oilType", label: "Oil Type", value: "Kendall 0W20 Full Synthetic", destination: "entity_field", destinationOptions: ["entity_field", "note", "ignore"], selected: true, source: "field" },
+          { id: "i3", key: "policyNumber", label: "Policy Number", value: "SPI-24-87654321", destination: "entity_record", destinationOptions: ["entity_record", "note", "ignore"], selected: true, source: "field", group: "insurance" },
+          // An unticked row and an ignore row must still stay off the profile.
+          { id: "i4", key: "naicCode", label: "NAIC Code", value: "12345", destination: "entity_field", destinationOptions: ["entity_field", "ignore"], selected: false, source: "field" },
+          { id: "i5", key: "barcodeValue", label: "Barcode", value: "X999", destination: "ignore", destinationOptions: ["ignore"], selected: true, source: "field" },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.failures).toEqual([]);
+
+    const after = stubState.profiles.get("profile-crv").fields;
+    expect(after.serviceProvider).toBe("Oil Changers / Lube N Go");
+    expect(after.oilType).toBe("Kendall 0W20 Full Synthetic");
+    expect(after.policyNumber).toBe("SPI-24-87654321");
+    expect(after).not.toHaveProperty("naicCode");
+    expect(after).not.toHaveProperty("barcodeValue");
+    // The document keeps the data too — it is the source of truth.
+    const doc = stubState.documents.get("doc-receipt").extractedData;
+    expect(doc.serviceProvider).toBe("Oil Changers / Lube N Go");
   });
 });
 
