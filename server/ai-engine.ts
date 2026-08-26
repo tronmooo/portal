@@ -1859,8 +1859,25 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
     { documentContext: `${input.documentType} ${input.label}`, today: getUserToday() },
   );
 
-  const entityIndex = await buildEntityIndex();
-  const filedUnder = profile ? entityIndex.profiles.find((x) => x.id === profile.id) : undefined;
+  // The index is storage reads and the reasoner is a model call — nothing
+  // about either needs the other, so they run CONCURRENTLY instead of the
+  // index sitting on the critical path in front of the slowest stage. The
+  // reasoner's "filed under" line only needs the profile we already loaded.
+  const entityIndexPromise = buildEntityIndex();
+  // The real await is below, after the reasoner; this interim handler only
+  // stops a rejection during the model call from surfacing as unhandled.
+  entityIndexPromise.catch(() => {});
+
+  // The document was already vision-ingested twice (classifier, extractor).
+  // A third full ingestion for the reasoner is the single largest piece of
+  // duplicated latency on a multi-page PDF — and when extraction produced a
+  // rich row table, the rows plus the classifier's hint carry the content.
+  // The page is only re-sent when extraction came back sparse, where layout
+  // is genuinely all the evidence there is. Overridable for tuning:
+  // SEMANTIC_REASONER_VISION=always|never|auto (default auto).
+  const visionMode = String(process.env.SEMANTIC_REASONER_VISION || "auto").toLowerCase();
+  const resendDocument = visionMode === "always"
+    || (visionMode !== "never" && reviewItems.length < 8);
 
   // The understanding step is the one part of this that can fail for reasons
   // outside the document — no API key, a network fault, a timeout. It must
@@ -1869,6 +1886,7 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
   // own. `reasonAboutDocument` guards its own body, but `getClient()` throws
   // BEFORE it is entered, which is exactly how a missing key turned into a
   // failed upload rather than a degraded review.
+  const tReason = Date.now();
   const reasoned = await (async () => {
     try {
       return await reasonAboutDocument(getClient(), {
@@ -1877,8 +1895,8 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
         documentLabel: input.label,
         domainHint: input.domainHint,
         userMessage: input.userMessage,
-        filedUnder: filedUnder ? `${filedUnder.name} (${filedUnder.type})` : undefined,
-        content: input.content as any,
+        filedUnder: profile ? `${profile.name} (${profile.type})` : undefined,
+        content: resendDocument ? (input.content as any) : undefined,
       });
     } catch (e: any) {
       logger.warn("semantic-reasoner", `unavailable: ${e?.message || e}`);
@@ -1890,6 +1908,9 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
       };
     }
   })();
+  const entityIndex = await entityIndexPromise;
+  const filedUnder = profile ? entityIndex.profiles.find((x) => x.id === profile.id) : undefined;
+  console.log(`[upload-timing] reason=${Date.now() - tReason}ms rows=${reviewItems.length} vision=${resendDocument ? "resent" : "rows-only"} ok=${reasoned.ok}`);
 
   // Planning is pure and deterministic, but a bad envelope must not cost the
   // user their review either.
@@ -2155,6 +2176,7 @@ Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nT
     domainHint: "",
   };
 
+  const tClassify = Date.now();
   try {
     const classifierResp = await getClient().messages.create({
       // Haiku is fast and cheap; we just need a 1-class decision + short hint.
@@ -2203,6 +2225,7 @@ Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nT
       }
     }
     console.log(`[classifier] type=${classification.documentClass} cat=${classification.category} conf=${classification.confidence} dest=${JSON.stringify(classification.destinations)} hint="${classification.domainHint.slice(0, 140)}"`);
+    console.log(`[upload-timing] classify=${Date.now() - tClassify}ms`);
   } catch (e: any) {
     console.error(`[classifier] failed silently — falling back to legacy one-shot extraction: ${e?.message || e}`);
   }
@@ -2262,6 +2285,7 @@ Return only what you actually read. When a value is unreadable or blank, leave t
     // biggest lever for spatially-tricky documents (e.g. a 2-column "due in the
     // future" table). The model reasons about which date lines up with which row
     // before answering, instead of pattern-matching dates onto blank rows.
+    const tExtract = Date.now();
     const response = await getClient().messages.create({
       model: "claude-sonnet-4-6", // Sonnet 4.6 — same model family as Claude app, best vision accuracy
       max_tokens: 8000,
@@ -2277,6 +2301,7 @@ Return only what you actually read. When a value is unreadable or blank, leave t
 
     // With thinking enabled the first block is a thinking block — pick the text block.
     const text = (response.content.find((b: any) => b.type === "text") as any)?.text ?? "{}";
+    console.log(`[upload-timing] extract=${Date.now() - tExtract}ms`);
     console.log(`[extraction] Claude response (first 500 chars): ${text.slice(0, 500)}`);
     let parsed: any;
     try {
@@ -2720,12 +2745,17 @@ ${verifyList}
 For EACH item, check the document carefully: is that exact date actually printed on that item's OWN row? Many rows are intentionally blank (shown as "—" or nothing) and MUST be rejected. Reject any date that was borrowed from a different row, or copied from the document's header/exam/print date. Keep a date only if you can see it printed next to that specific item.
 
 Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely printed on that item's own row. Omit every id you are not certain about.`;
+          // Output is a bare keep-list, so the budgets are sized for the
+          // check, not the document — thinking is serial generation, and every
+          // unused budget token here was pure wall-clock on the upload path.
+          const tVerify = Date.now();
           const vr = await getClient().messages.create({
             model: "claude-sonnet-4-6",
-            max_tokens: 4000,
-            thinking: { type: "enabled", budget_tokens: 2500 },
+            max_tokens: 2500,
+            thinking: { type: "enabled", budget_tokens: 1500 },
             messages: [{ role: "user", content: [...messageContent, { type: "text", text: verifyPrompt }] }],
           });
+          console.log(`[upload-timing] date-verify=${Date.now() - tVerify}ms`);
           const vtext = (vr.content.find((b: any) => b.type === "text") as any)?.text ?? "";
           const vmatch = vtext.match(/\{[\s\S]*\}/);
           if (vmatch) {

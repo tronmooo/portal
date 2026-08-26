@@ -200,6 +200,33 @@ describe("confirm sends the reviewed decisions, exactly once each", () => {
     for (const r of sqft) expect(String(r.value)).toBe("2500");
   });
 
+  it("a re-routed row reaches the payload with the destination the user chose", async () => {
+    const extraction = buildExtraction();
+    // A loose row (no selected action claims it) that can be sent somewhere else.
+    const claimed = new Set(
+      extraction.actionPlan.actions
+        .filter((a: any) => a.selected && a.operation !== "NO_ACTION")
+        .flatMap((a: any) => a.itemIds),
+    );
+    const loose = extraction.items.find(
+      (i: any) => !claimed.has(i.id) && i.destinationOptions.length > 1,
+    );
+    expect(loose).toBeTruthy();
+    const newDest = loose.destinationOptions.find(
+      (d: string) => d !== loose.destination && d !== "ignore",
+    );
+    expect(newDest).toBeTruthy();
+
+    const { onConfirm } = renderScreen(extraction);
+    fireEvent.change(screen.getByTestId(`review-destination-${loose.id}`), { target: { value: newDest } });
+    fireEvent.click(screen.getByTestId("btn-confirm-all"));
+    await vi.waitFor(() => expect(onConfirm).toHaveBeenCalled());
+
+    const sent = (confirmPayload(onConfirm).items ?? []).find((i: any) => i.id === loose.id);
+    expect(sent?.destination).toBe(newDest);
+    expect(sent?.selected).toBe(true);
+  });
+
   it("Skip All leaves without confirming", () => {
     const { onConfirm, onDone } = renderScreen();
     fireEvent.click(screen.getByTestId("btn-skip-all"));

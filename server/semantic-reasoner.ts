@@ -169,6 +169,13 @@ export interface ReasonResult {
 
 const MODEL = () => process.env.ANTHROPIC_REASONER_MODEL || "claude-sonnet-4-6";
 const TIMEOUT_MS = Number(process.env.SEMANTIC_REASONER_TIMEOUT_MS || 60_000);
+// Thinking tokens are generated serially, so the budget is a direct latency
+// ceiling. 2,500 is enough to group rows into recurrences and pick subjects;
+// the old 4,000 mostly bought wall-clock time. Tunable without a deploy.
+const THINKING_BUDGET = () => {
+  const n = Number(process.env.SEMANTIC_REASONER_THINKING || 2_500);
+  return isFinite(n) && n >= 1024 ? Math.round(n) : 2_500;
+};
 
 /**
  * Ask what a document means, and return only the part of the answer that
@@ -232,7 +239,7 @@ ${rowTable}`;
         // Reasoning about which fields belong together is exactly the kind of
         // work thinking helps with — it is how five separate rows become one
         // recurring commitment instead of five independent guesses.
-        thinking: { type: "enabled", budget_tokens: 4000 },
+        thinking: { type: "enabled", budget_tokens: THINKING_BUDGET() },
         messages: [{ role: "user", content }],
       }),
       TIMEOUT_MS,
