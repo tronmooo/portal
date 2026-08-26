@@ -35,6 +35,7 @@
 // =============================================================================
 
 import { parseHeightToCm, parseWeightToKg } from "./estimation-engine";
+import { destinationsForFamily, matchConcept, type EntityFamily } from "./entity-shape";
 
 // ─── Destinations ────────────────────────────────────────────────────────────
 
@@ -58,11 +59,39 @@ export type ExtractionDestination =
   | "note"             // a note artifact linked to the profile
   | "calendar"         // a calendar event
   | "task"             // a to-do
-  | "ignore";          // document metadata / junk — written nowhere
+  | "ignore"           // document metadata / junk — written nowhere
+  // ── Universal destinations (2026-08-25) ────────────────────────────────────
+  // The ten above grew out of ONE document type — a clinic report — and a
+  // property attribute, a policy term, a premium or a mortgagee had nowhere to
+  // land but `profile`, which is why 75 rows of a declarations page arrived
+  // flat on one profile. These are deliberately named for what they DO, not for
+  // any document that produces them: a lease, a deed, a loan statement and an
+  // insurance policy all reach `entity_field` and `obligation`.
+  //
+  // Appended, never reordered: DESTINATION_ORDER below still lists the medical
+  // ten first, so an existing review pane renders exactly as it did.
+  | "entity_field"       // a field on a property/vehicle/asset/liability profile
+  | "entity_record"      // a namespaced group on a profile (`insurance.*`, `loan.*`)
+  | "structured_append"  // a row appended to a JSONB array (coverages, holdings)
+  | "obligation"         // a recurring commitment
+  | "expense"            // a one-off ledger row
+  | "income"             // a one-off or recurring receipt
+  | "relationship_link"  // an edge between two records (owns, insured_by, finances)
+  | "document_attach"    // this document, filed against an entity
+  | "liability_payment"  // a payment recorded against an existing liability
+  | "reference"          // kept on the document ON PURPOSE — must cause nothing
+  // A consequence the engine understood and this app has nowhere to put. It is
+  // shown, with its reason, and Save is disabled — because "this is a refund
+  // and there is no refund record" is real information, and quietly filing it
+  // as income instead would be a lie the user only discovers later.
+  | "unsupported";
 
 export const ALL_DESTINATIONS: readonly ExtractionDestination[] = [
   "profile", "profile_tracker", "tracker", "allergy", "medication",
   "medical_history", "note", "calendar", "task", "ignore",
+  "entity_field", "entity_record", "structured_append", "obligation",
+  "expense", "income", "liability_payment", "relationship_link",
+  "document_attach", "reference", "unsupported",
 ] as const;
 
 /** Human labels for the review UI's group headers and dropdown. */
@@ -77,12 +106,26 @@ export const DESTINATION_LABEL: Record<ExtractionDestination, string> = {
   calendar: "Calendar",
   task: "Task",
   ignore: "Ignore",
+  entity_field: "Entity data",
+  entity_record: "Entity record",
+  structured_append: "Structured list",
+  obligation: "Recurring obligation",
+  expense: "Expense",
+  income: "Income",
+  relationship_link: "Relationship",
+  document_attach: "Attach document",
+  liability_payment: "Payment",
+  reference: "Reference only",
+  unsupported: "No save destination",
 };
 
 /** Display order for the grouped review pane. */
 export const DESTINATION_ORDER: readonly ExtractionDestination[] = [
   "profile", "profile_tracker", "tracker", "allergy", "medication",
   "medical_history", "note", "calendar", "task", "ignore",
+  "entity_record", "entity_field", "structured_append", "obligation",
+  "liability_payment", "expense", "income", "relationship_link",
+  "document_attach", "reference", "unsupported",
 ] as const;
 
 // ─── The unified review item ─────────────────────────────────────────────────
@@ -120,6 +163,29 @@ export interface ExtractionItem {
   date?: string;
   /** Structured payload for allergy/medication/condition/surgery/note items. */
   payload?: Record<string, any>;
+
+  // ── Semantic layer (2026-08-25) ────────────────────────────────────────────
+  // Filled in by shared/extraction-actions.ts AFTER the reasoning stage, never
+  // by `buildExtractionItems` below — which is why every one of them is
+  // optional and why nothing that constructs an ExtractionItem today had to
+  // change. A row that carries none of these behaves exactly as it always has.
+  /** What this fact IS (a fact can be several things at once). */
+  roles?: string[];
+  /** Entity ref of WHO/WHAT it is about. Resolved to a record by the planner. */
+  subjectRef?: string;
+  /** The semantic fact this raw row was read into. */
+  factId?: string;
+  /** Which proposed actions cite this row as evidence. */
+  actionIds?: string[];
+  /** "→ Create recurring obligation" — what the review row prints. */
+  actionLabel?: string;
+  /**
+   * The section of `profile.fields` this belongs in ("insurance", "loan",
+   * "housing"). Set when the field is a concept that lives in one — which is
+   * how an agent's phone number stays attached to the policy on the house
+   * instead of becoming the house's phone number.
+   */
+  group?: string;
 }
 
 // ─── Health metric registry ──────────────────────────────────────────────────
@@ -347,6 +413,13 @@ export interface SuggestInput {
   value?: unknown;
   /** True when the value already parsed as a real calendar date. */
   isDate?: boolean;
+  /**
+   * What the document is filed under. Without it the router behaves exactly as
+   * it did before entity-awareness existed — everything it cannot place goes to
+   * `profile`, which is where every field went when this module was written for
+   * a clinic report.
+   */
+  family?: EntityFamily;
 }
 
 /**
@@ -357,9 +430,38 @@ export interface SuggestInput {
 export function suggestDestination(input: SuggestInput): ExtractionDestination {
   const key = normKey(input.key);
   const label = normKey(input.label ?? input.key);
+  const family = input.family;
+  // A person and a pet have a profile in the sense this module was built for.
+  // Everything else — a house, a car, a debt — has ENTITY data, and calling it
+  // "Profile data" is how eight coverage lines and an agent's phone number
+  // ended up looking like facts about a building.
+  const isPersonal = !family || family === "person" || family === "pet";
+  const fieldHome: ExtractionDestination = isPersonal ? "profile" : "entity_field";
 
   if (!key) return "ignore";
   if (DOC_METADATA_KEYS.has(key) || DOC_METADATA_KEYS.has(label)) return "ignore";
+
+  // A concept this entity already has a name for goes to its own section — an
+  // insurance policy number belongs to the policy on the house, not to the
+  // house. Checked before the medical heuristics below so a non-person entity
+  // never reaches them at all.
+  if (family) {
+    const concept = matchConcept(family, input.key, { insurance: true })
+      ?? matchConcept(family, String(input.label ?? ""), { insurance: true });
+    // A PERSON's recognised concepts stay on their profile. Their sections are
+    // a display grouping the profile page already applies; re-routing blood
+    // type into a nested `health` group would move data every medical surface
+    // reads from the top level.
+    if (concept) return isPersonal ? "profile" : (concept.group ? "entity_record" : fieldHome);
+  }
+
+  // The medical vocabulary applies to living things only.
+  if (!isPersonal) {
+    if (input.isDate || DATE_KEYS.test(key)) return "calendar";
+    if (NARRATIVE_KEYS.test(key) || NARRATIVE_KEYS.test(label)) return "note";
+    if (isProseValue(input.value)) return "note";
+    return fieldHome;
+  }
 
   // A person's own attributes beat every heuristic below: "bloodType: O+" is
   // profile data even though "blood" also appears in Blood Pressure.
@@ -395,10 +497,40 @@ export function isProseValue(value: unknown): boolean {
  * additionally offer the tracker destinations, and structured medical items
  * offer their own homes.
  */
-export function destinationOptionsFor(suggested: ExtractionDestination, hasMeasurement: boolean, hasDate: boolean): ExtractionDestination[] {
-  const opts = new Set<ExtractionDestination>([suggested, "profile", "note", "ignore"]);
+export function destinationOptionsFor(
+  suggested: ExtractionDestination,
+  hasMeasurement: boolean,
+  hasDate: boolean,
+  /**
+   * What the document is filed under. Omit only when it genuinely is not known
+   * — the options then fall back to the permissive set this function always
+   * returned, so nothing that called it before this parameter existed changed.
+   */
+  family?: EntityFamily,
+): ExtractionDestination[] {
+  const opts = new Set<ExtractionDestination>([suggested, "note", "ignore"]);
   if (hasMeasurement) { opts.add("tracker"); opts.add("profile_tracker"); }
   if (hasDate) { opts.add("calendar"); opts.add("task"); }
+
+  if (family) {
+    // ENTITY-AWARE. A house was being offered Allergies, Medications and
+    // Medical history for every field on its insurance policy (screenshot,
+    // 2026-08-26), because this function added them unconditionally — the
+    // destination vocabulary grew out of a clinic report and every document
+    // since had been handed a patient's chart.
+    //
+    // What a field can MEAN depends on what the thing is. A person has a
+    // medical history; a house has an insurance section and a mortgage.
+    for (const d of destinationsForFamily(family)) opts.add(d);
+    // Whatever was suggested stays offered even if the family table does not
+    // list it: the router had a reason, and silently dropping the recommended
+    // option would leave a row with no way back to where it started.
+    opts.add(suggested);
+    return ALL_DESTINATIONS.filter((d) => opts.has(d));
+  }
+
+  // No family known — the pre-entity-aware behaviour, unchanged.
+  opts.add("profile");
   opts.add("allergy");
   opts.add("medication");
   opts.add("medical_history");
@@ -536,6 +668,13 @@ export interface BuildItemsInput {
   followUps?: any[];
   /** "<documentType> <label>" — context for date classification. */
   docContext?: string;
+  /**
+   * The family of the record this document was filed under. Decides which
+   * destinations are even offered and which concepts a field can be — a house
+   * is never offered Allergies, and "Living Area" is recognised as square
+   * footage only when we know we are looking at a property.
+   */
+  family?: EntityFamily;
   /** Normalizer for printed dates. Injected so this module stays dependency-light. */
   normalizeDate?: (v: unknown) => string | null;
 }
@@ -569,19 +708,27 @@ export function buildExtractionItems(input: BuildItemsInput): ExtractionItem[] {
   };
 
   // 1. Every extracted field.
+  const family = input.family;
+  // Only a living thing has health metrics. Matching them on a house turned
+  // "Total Policy Premium" into a tracker candidate more than once.
+  const personal = !family || family === "person" || family === "pet";
+
   for (const f of input.extractedFields || []) {
-    const metric = matchHealthMetric(f.key) ?? matchHealthMetric(f.label);
+    const metric = personal ? (matchHealthMetric(f.key) ?? matchHealthMetric(f.label)) : null;
     const measurement = metric ? parseMeasurement(f.value, metric) : null;
-    const destination = suggestDestination({ key: f.key, label: f.label, value: f.value, isDate: f.isDate });
+    const destination = suggestDestination({ key: f.key, label: f.label, value: f.value, isDate: f.isDate, family });
     const date = f.isDate && input.normalizeDate ? input.normalizeDate(f.value) : null;
+    // The same fact under a third spelling should not become a third field.
+    const concept = family ? matchConcept(family, f.key, { insurance: true })
+      ?? matchConcept(family, f.label, { insurance: true }) : null;
 
     const item: ExtractionItem = {
       id: takeId(`field-${slug(f.key)}`),
-      key: f.key,
+      key: concept?.canonical ?? f.key,
       label: f.label,
       value: f.value,
       destination,
-      destinationOptions: destinationOptionsFor(destination, !!measurement, !!date),
+      destinationOptions: destinationOptionsFor(destination, !!measurement, !!date, family),
       // A field the router sends to the bin is not ticked by default. Everything
       // else keeps the extractor's own selected flag.
       selected: destination === "ignore" ? false : (f.selected ?? true),
@@ -595,6 +742,7 @@ export function buildExtractionItems(input: BuildItemsInput): ExtractionItem[] {
       seenTracker.add(trackerDedupeKey(metric.trackerName));
     }
     if (date) item.date = date;
+    if (concept?.group) item.group = concept.group;
     items.push(item);
   }
 

@@ -44,6 +44,8 @@ import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rena
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
+import type { ProposedAction } from "@shared/extraction-actions";
+import { executeActions } from "./action-executor";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted } from "@shared/profile-field-identity";
 
@@ -94,6 +96,7 @@ interface AuthenticatedRequest extends Request {
 }
 import { computeDocumentDeletionImpact, deleteDocumentEverywhere, parseDeletionMode, repairOrphanedDocumentEvents } from "./document-deletion";
 import { storage } from "./storage";
+import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildNotifications } from "./notification-service";
@@ -2707,6 +2710,12 @@ ${JSON.stringify(ctx, null, 2)}`;
   app.post("/api/chat/confirm-extraction", asyncHandler(async (req, res) => {
     try {
       const { extractionId, targetProfileId, items } = req.body;
+      // The reviewed plan (shared/extraction-actions). Present when the
+      // understanding stage produced one and the user confirmed from the
+      // action review; absent for a chat message rendered from history, or
+      // when reasoning degraded and the pane fell back to per-field routing.
+      const reviewedActions: ProposedAction[] = Array.isArray(req.body?.actions)
+        ? req.body.actions : [];
       let { confirmedFields, createCalendarEvents, trackerEntries } = req.body;
       // The Calendar section's decisions — one per recognised date. See
       // shared/extraction-calendar for why they travel separately from
@@ -2737,6 +2746,16 @@ ${JSON.stringify(ctx, null, 2)}`;
       const taskWrites: Array<{ title: string; dueDate?: string }> = [];
       const ignoredItems: string[] = [];
 
+      // Rows the reviewed plan is already writing. The client partitions the
+      // two lists, but a row reaching BOTH paths would write the same fact
+      // twice — one profile field written by an action and again by the legacy
+      // switch — so the partition is enforced here as well rather than trusted.
+      const claimedByActions = new Set<string>();
+      for (const a of reviewedActions) {
+        if (!a || a.selected === false || a.operation === "NO_ACTION") continue;
+        for (const id of a.itemIds || []) claimedByActions.add(String(id));
+      }
+
       if (Array.isArray(items) && items.length > 0) {
         const fields: Array<{ key: string; value: any }> = [];
         const events: Array<{ field: string; date: string; title: string; category: string }> = [];
@@ -2744,6 +2763,7 @@ ${JSON.stringify(ctx, null, 2)}`;
 
         for (const raw of items as ExtractionItem[]) {
           if (!raw || typeof raw !== "object") continue;
+          if (claimedByActions.has(String(raw.id))) continue;
           const dest = String(raw.destination || "") as ExtractionDestination;
           if (!raw.selected || dest === "ignore") {
             if (raw.label) ignoredItems.push(String(raw.label));
@@ -3613,7 +3633,18 @@ ${JSON.stringify(ctx, null, 2)}`;
         }
       }
 
-      // Create obligation if user confirmed
+      // Recurring bill — UPDATE ONLY, never create.
+      //
+      // This is the pre-plan path: it still runs for a chat message rendered
+      // from history, and whenever the understanding stage degraded. It used to
+      // call storage.createObligation, and in this app that ends in
+      // createProfile({ type: "liability" }) — so confirming a declarations
+      // page would mint a liability beside the house it was filed under.
+      //
+      // Document extraction never creates a profile, asset or liability. The
+      // action path enforces that in three places; this is the fourth, and it
+      // matters precisely because it is the path that runs when the smart one
+      // could not.
       if (req.body.createObligation) {
         try {
           const obl = req.body.createObligation;
@@ -3621,22 +3652,69 @@ ${JSON.stringify(ctx, null, 2)}`;
           if (!isFinite(amt) || amt <= 0) {
             throw new Error("Obligation amount must be a positive number");
           }
-          if (!obl.nextDueDate) {
-            throw new Error("Obligation requires a next due date");
-          }
-          await storage.createObligation({
-            name: obl.name,
-            amount: amt,
-            frequency: obl.frequency || 'monthly',
-            category: canonicalObligationCategory(obl.category || 'general'),
-            nextDueDate: obl.nextDueDate,
-            autopay: false,
-            linkedProfiles: resolvedProfileId ? [resolvedProfileId] : [],
+          // Is there already a bill this describes? Then update it.
+          const priorBills = await storage.getObligations();
+          const match = (priorBills || []).find((o: any) => {
+            const sameName = String(o?.name || "").trim().toLowerCase()
+              === String(obl.name || "").trim().toLowerCase();
+            const sameOwner = resolvedProfileId
+              && ((o?.linkedProfiles || []).includes(resolvedProfileId) || o?.linkedAssetId === resolvedProfileId);
+            return sameName || sameOwner;
           });
-          saved.push(`Created bill: $${amt.toFixed(2)}/${obl.frequency || 'mo'} ${obl.name}`);
+          if (match) {
+            await storage.updateObligation(match.id, {
+              amount: amt,
+              frequency: obl.frequency || "monthly",
+              ...(obl.nextDueDate ? { nextDueDate: obl.nextDueDate } : {}),
+              linkedDocumentId: extractionId,
+            } as any);
+            saved.push(`Updated bill: $${amt.toFixed(2)}/${obl.frequency || "mo"} ${match.name}`);
+          } else {
+            skippedFields.push(
+              `recurring bill "${obl.name}" — a new bill is stored as a liability, and document extraction never creates one`,
+            );
+          }
         } catch (oErr: any) {
-          console.error("Failed to create obligation from extraction:", oErr?.message);
+          console.error("Failed to record obligation from extraction:", oErr?.message);
           failures.push(`obligation: ${oErr?.message || "unknown error"}`);
+        }
+      }
+
+      // ═══ THE REVIEWED PLAN ═══
+      // Runs last, and in stages: entities, then the records that reference
+      // them, then the links between them, then dates. A link needs both ends
+      // to exist, which is why the order is a dependency graph and not a
+      // convention. See server/action-executor.ts.
+      let actionResults: Array<{ actionId: string; status: string; message: string }> = [];
+      if (reviewedActions.length > 0) {
+        const outcome = await executeActions({
+          actions: reviewedActions,
+          documentId: extractionId,
+          documentName: extractionDoc?.name,
+        });
+        actionResults = outcome.results;
+        saved.push(...outcome.saved);
+        failures.push(...outcome.failures);
+
+        // Rows the user chose to keep on the document only. Recorded as
+        // calendar opt-outs so the rule engine stops deriving an entry for
+        // them — the same mechanism the Calendar section already uses, so a
+        // signature date declines to become an event by the same route
+        // whichever pane the decision was made in.
+        if (outcome.calendarOptOuts.length > 0) {
+          try {
+            const doc = await storage.getDocument(extractionId);
+            const data: Record<string, any> = { ...((doc as any)?.extractedData || {}) };
+            const prior: string[] = Array.isArray(data[CALENDAR_OPT_OUT_KEY])
+              ? data[CALENDAR_OPT_OUT_KEY].map((v: any) => String(v)) : [];
+            const next = Array.from(new Set([...prior, ...outcome.calendarOptOuts]));
+            if (next.length !== prior.length) {
+              data[CALENDAR_OPT_OUT_KEY] = next;
+              await storage.updateDocument(extractionId, { extractedData: data });
+            }
+          } catch (e: any) {
+            log.warn(`[confirm-extraction] could not record calendar opt-outs: ${e?.message || e}`);
+          }
         }
       }
 
@@ -3648,7 +3726,8 @@ ${JSON.stringify(ctx, null, 2)}`;
       const attempted = (confirmedFields?.length || 0) + (createCalendarEvents?.length || 0) + (trackerEntries?.length || 0)
         + structuredMedications.length + noteWrites.length + taskWrites.length
         + structuredAllergies.length + structuredConditions.length + structuredSurgeries.length
-        + (req.body.createExpense ? 1 : 0) + (req.body.createObligation ? 1 : 0);
+        + (req.body.createExpense ? 1 : 0) + (req.body.createObligation ? 1 : 0)
+        + reviewedActions.filter((a) => a && a.selected !== false && a.operation !== "NO_ACTION").length;
       if (attempted > 0 && saved.length === 0 && failures.length > 0) {
         return res.status(500).json({
           success: false,
@@ -3667,6 +3746,10 @@ ${JSON.stringify(ctx, null, 2)}`;
           : (failures.length > 0 ? `All steps failed: ${failures.join("; ")}` : "No fields to save"),
         saved,
         failures,
+        // Per-action outcomes. `skipped` here means "not attempted, because
+        // what it depended on failed" — which is the dependency made visible
+        // instead of a cascade of secondary errors burying the one real cause.
+        actionResults,
         // Fields deliberately kept on the document only (metadata/junk) —
         // named so a partial save is visible instead of silently claimed.
         skipped: skippedFields,
@@ -4952,6 +5035,47 @@ ${JSON.stringify(ctx, null, 2)}`;
     const updated = await storage.updateProfile(req.params.id, { avatar: null as any });
     bustCache(`profiles:${uid}`); bustCache(`profile-detail:${uid}:`);
     res.json({ ok: true, profile: updated });
+  }));
+
+  // ---- Dynamic Overview (asset & liability profiles) ----
+  // GET /api/profiles/:id/overview
+  //
+  // Returns the STRUCTURED Overview definition for this entity — sections,
+  // metrics, relationships, attention items, missing-information suggestions —
+  // with every displayed value resolved from canonical storage on this
+  // request. The layout half is reasoned once per structural signature and
+  // cached; the data half is never cached, so an edited balance shows up
+  // immediately and a deleted field disappears immediately.
+  //
+  //   ?refresh=true  re-reason the composition even if the shape is unchanged
+  //   ?ai=0          deterministic composition only (no model call)
+  app.get("/api/profiles/:id/overview", asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const profile = await storage.getProfile(id);
+    if (!profile) return res.status(404).json({ error: "Not found" });
+    if ((profile as any).userId && (profile as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    if (!isOverviewEntity(profile as any)) {
+      // Person / pet / medical profiles keep their own purpose-built Overview.
+      return res.status(409).json({ error: "Not an asset or liability profile" });
+    }
+    try { (storage as any).enableRequestMemo?.(); } catch {}
+    try {
+      const spec = await buildOverviewSpec(storage, id, {
+        refresh: req.query.refresh === "true",
+        allowModel: req.query.ai !== "0",
+      });
+      if (!spec) return res.status(404).json({ error: "Not found" });
+      res.json(spec);
+    } catch (err: any) {
+      log.error("[overview]", err?.message || "unknown error");
+      // A failed composition must never blank the profile page — the client
+      // falls back to its static rendering when this 500s.
+      res.status(500).json({ error: "Failed to build overview" });
+    } finally {
+      try { (storage as any).disableRequestMemo?.(); } catch {}
+    }
   }));
 
   // ---- Profile AI Summary ----

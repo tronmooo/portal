@@ -37,9 +37,6 @@ import {
   Clock,
   Activity as ActivityIcon,
   CreditCard,
-  Home,
-  Car,
-  GraduationCap,
   AlertTriangle,
   Edit,
   User,
@@ -114,6 +111,7 @@ import {
 } from "@shared/liability-calc";
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus, BILL_STATUS_META } from "@shared/liability-status";
+import { DynamicOverview } from "@/components/overview/DynamicOverview";
 
 interface LiabilityProfileLike {
   id: string;
@@ -1204,13 +1202,13 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               />
             </section>
 
-            {/* Subtype-specific overview */}
-            <SubtypeOverview
-              subtype={subtypeRaw}
-              terms={terms}
-              liabilityId={profile.id}
-              onJumpLinked={() => setTab("payments")}
-            />
+            {/* Composed Overview — what this liability IS decides what shows
+                here. The per-subtype snapshot cards (credit card / mortgage /
+                auto loan / student loan) that used to live at this spot were
+                four hardcoded templates; the composition covers the same
+                ground — utilization, linked collateral, escrow, rate, dates —
+                for subtypes nobody has written a template for yet. */}
+            <DynamicOverview profileId={profile.id} />
 
             {/* Payment mechanics + payoff math belong to DEBT (amortizing /
                 one-time), not recurring bills. A bill pays through its Schedule &
@@ -3285,289 +3283,6 @@ function fmtTimeAgo(date: Date): string {
   const diffDay = Math.floor(diffHr / 24);
   return `${diffDay}d ago`;
 }
-
-// ─── Phase 5: Subtype-specific overview blocks ───────────────────────────────
-
-interface SubtypeOverviewProps {
-  subtype: string;
-  terms: ReturnType<typeof readTerms>;
-  liabilityId: string;
-  onJumpLinked: () => void;
-}
-
-function SubtypeOverview({
-  subtype,
-  terms,
-  liabilityId,
-  onJumpLinked,
-}: SubtypeOverviewProps) {
-  if (subtype === "credit_card") {
-    return <CreditCardOverview terms={terms} />;
-  }
-  if (subtype === "mortgage") {
-    return <MortgageOverview terms={terms} liabilityId={liabilityId} onJumpLinked={onJumpLinked} />;
-  }
-  if (subtype === "auto_loan") {
-    return <AutoLoanOverview terms={terms} liabilityId={liabilityId} onJumpLinked={onJumpLinked} />;
-  }
-  if (subtype === "student_loan") {
-    return <StudentLoanOverview terms={terms} />;
-  }
-  return null;
-}
-
-// Credit card: utilization gauge + minimum payment + no fixed term
-function CreditCardOverview({ terms }: { terms: ReturnType<typeof readTerms> }) {
-  const utilizationPct =
-    terms.creditLimit > 0
-      ? Math.min(100, (terms.currentBalance / terms.creditLimit) * 100)
-      : 0;
-  const utilizationStatus =
-    utilizationPct >= 80
-      ? { label: "Very high", color: "text-red-500", bg: "bg-red-500" }
-      : utilizationPct >= 30
-      ? { label: "Watch out", color: "text-orange-500", bg: "bg-orange-500" }
-      : { label: "Healthy", color: "text-emerald-500", bg: "bg-emerald-500" };
-  const availableCredit = Math.max(0, terms.creditLimit - terms.currentBalance);
-  const minPayment = terms.minimumPayment || (terms.currentBalance * 0.02);
-
-  return (
-    <Card data-testid="subtype-credit-card">
-      <CardHeader className="pb-2">
-        <div className="flex items-center gap-2">
-          <CreditCard className="w-4 h-4 text-rose-600" />
-          <CardTitle className="text-base">Credit card snapshot</CardTitle>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {terms.creditLimit > 0 ? (
-          <div data-testid="cc-utilization">
-            <div className="flex items-center justify-between text-sm mb-1">
-              <span className="font-medium">Credit utilization</span>
-              <span className={`font-semibold ${utilizationStatus.color}`}>
-                {utilizationPct.toFixed(1)}% · {utilizationStatus.label}
-              </span>
-            </div>
-            <div className="h-3 w-full rounded-full bg-muted overflow-hidden">
-              <div
-                className={`h-full ${utilizationStatus.bg} transition-all`}
-                style={{ width: `${utilizationPct}%` }}
-              />
-            </div>
-            <div className="flex justify-between text-xs text-muted-foreground mt-1">
-              <span>{fmtUSD(terms.currentBalance)} used</span>
-              <span>{fmtUSD(terms.creditLimit)} limit</span>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-start gap-2 text-xs text-muted-foreground rounded-md border border-dashed p-3">
-            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-            <span>Add a credit limit in Details to see utilization.</span>
-          </div>
-        )}
-
-        <div className="grid grid-cols-3 gap-2">
-          <KpiTile
-            label="Available"
-            value={terms.creditLimit > 0 ? fmtUSDShort(availableCredit) : "—"}
-            testid="cc-available"
-          />
-          <KpiTile
-            label="Min payment"
-            value={fmtUSDShort(minPayment)}
-            testid="cc-min-payment"
-          />
-          <KpiTile
-            label="APR"
-            value={fmtPct(terms.annualRate)}
-            testid="cc-apr"
-          />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Credit cards are revolving — no fixed term. Pay above the minimum to avoid compounding interest.
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
-// Mortgage: property + escrow fields
-function MortgageOverview({
-  terms,
-  liabilityId,
-  onJumpLinked,
-}: {
-  terms: ReturnType<typeof readTerms>;
-  liabilityId: string;
-  onJumpLinked: () => void;
-}) {
-  const linkedAssetsQuery = useQuery<any[]>({
-    queryKey: [`/api/liabilities/${liabilityId}/assets`],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/liabilities/${liabilityId}/assets`);
-      return res.json();
-    },
-    enabled: !!liabilityId,
-  });
-  const property = (linkedAssetsQuery.data || []).find(
-    (a: any) => a.profile?.type === "property" || a.profile?.type === "real_estate",
-  );
-
-  return (
-    <Card data-testid="subtype-mortgage">
-      <CardHeader className="pb-2">
-        <div className="flex items-center gap-2">
-          <Home className="w-4 h-4 text-rose-600" />
-          <CardTitle className="text-base">Mortgage snapshot</CardTitle>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        {property ? (
-          <button
-            type="button"
-            onClick={onJumpLinked}
-            className="w-full text-left rounded-lg border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition"
-            data-testid="mortgage-property-tile"
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-muted-foreground">Linked property</div>
-                <div className="font-medium">{property.profile?.name || "Property"}</div>
-              </div>
-              <ChevronRight className="w-4 h-4 text-muted-foreground" />
-            </div>
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={onJumpLinked}
-            className="w-full text-left rounded-lg border border-dashed px-3 py-2 hover:bg-muted/30 transition"
-            data-testid="mortgage-property-tile-empty"
-          >
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Link2 className="w-4 h-4" />
-              <span className="text-xs">Link the property this mortgage finances →</span>
-            </div>
-          </button>
-        )}
-        <div className="grid md:grid-cols-2 gap-x-6 gap-y-1">
-          <Row label="Property address" value={terms.propertyAddress || "—"} />
-          <Row label="Escrow / month" value={terms.escrowMonthly ? fmtUSD(terms.escrowMonthly) : "—"} />
-          <Row label="Property taxes (yr)" value={terms.propertyTaxes ? fmtUSD(terms.propertyTaxes) : "—"} />
-          <Row label="Homeowners insurance" value={terms.homeownersInsurance ? fmtUSD(terms.homeownersInsurance) : "—"} />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// Auto loan: vehicle tile prominent
-function AutoLoanOverview({
-  terms,
-  liabilityId,
-  onJumpLinked,
-}: {
-  terms: ReturnType<typeof readTerms>;
-  liabilityId: string;
-  onJumpLinked: () => void;
-}) {
-  const linkedAssetsQuery = useQuery<any[]>({
-    queryKey: [`/api/liabilities/${liabilityId}/assets`],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/liabilities/${liabilityId}/assets`);
-      return res.json();
-    },
-    enabled: !!liabilityId,
-  });
-  const vehicle = (linkedAssetsQuery.data || []).find(
-    (a: any) => a.profile?.type === "vehicle",
-  );
-  const vehicleSummary = [terms.vehicleYear, terms.vehicleMake, terms.vehicleModel]
-    .filter(Boolean)
-    .join(" ");
-
-  return (
-    <Card data-testid="subtype-auto-loan">
-      <CardHeader className="pb-2">
-        <div className="flex items-center gap-2">
-          <Car className="w-4 h-4 text-rose-600" />
-          <CardTitle className="text-base">Auto loan snapshot</CardTitle>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        {vehicle ? (
-          <button
-            type="button"
-            onClick={onJumpLinked}
-            className="w-full text-left rounded-lg border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition"
-            data-testid="auto-vehicle-tile"
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-muted-foreground">Linked vehicle</div>
-                <div className="font-medium">{vehicle.profile?.name || vehicleSummary || "Vehicle"}</div>
-              </div>
-              <ChevronRight className="w-4 h-4 text-muted-foreground" />
-            </div>
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={onJumpLinked}
-            className="w-full text-left rounded-lg border border-dashed px-3 py-2 hover:bg-muted/30 transition"
-            data-testid="auto-vehicle-tile-empty"
-          >
-            <div className="flex items-center gap-2 text-muted-foreground">
-              <Link2 className="w-4 h-4" />
-              <span className="text-xs">Link the vehicle this loan financed →</span>
-            </div>
-          </button>
-        )}
-        <div className="grid md:grid-cols-2 gap-x-6 gap-y-1">
-          <Row label="Vehicle" value={vehicleSummary || "—"} />
-          <Row label="VIN" value={terms.vehicleVin || "—"} />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// Student loan: forgiveness fields
-function StudentLoanOverview({ terms }: { terms: ReturnType<typeof readTerms> }) {
-  return (
-    <Card data-testid="subtype-student-loan">
-      <CardHeader className="pb-2">
-        <div className="flex items-center gap-2">
-          <GraduationCap className="w-4 h-4 text-rose-600" />
-          <CardTitle className="text-base">Student loan snapshot</CardTitle>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3 text-sm">
-        <div className="grid md:grid-cols-2 gap-x-6 gap-y-1">
-          <Row
-            label="PSLF eligible"
-            value={
-              terms.pslfEligible ? (
-                <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600">
-                  Yes
-                </Badge>
-              ) : (
-                "No"
-              )
-            }
-          />
-          <Row label="IDR plan" value={terms.idrPlan || "—"} />
-          <Row label="Forgiveness date" value={terms.forgivenessDate ? fmtDate(terms.forgivenessDate) : "—"} />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          PSLF (Public Service Loan Forgiveness) and income-driven repayment plans can dramatically alter your payoff timeline. Track eligibility here.
-        </p>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── Phase 5: Activity timeline tab ──────────────────────────────────────────
 
 interface ActivityEntry {
   id: string;
