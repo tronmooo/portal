@@ -123,6 +123,7 @@ export const insuranceDeclarations: DocumentFixture = {
       { from: "e-property", to: "e-lender", type: "financed_by", confidence: 0.88 },
     ],
     facts: [
+      { id: "f-address", itemIds: ["field-propertyaddress"], label: "Property Address", value: "123 Evergreen Lane, Springfield, CO 80501", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.96 }, volatility: "stable", confidence: 0.96 },
       { id: "f-year", itemIds: ["field-yearbuilt"], label: "Year Built", value: "2018", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.95 }, volatility: "stable", confidence: 0.95 },
       { id: "f-sqft", itemIds: ["field-squarefeet"], label: "Square Feet", value: "2450", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.95 }, volatility: "stable", confidence: 0.94 },
       { id: "f-roof", itemIds: ["field-rooftype"], label: "Roof Type", value: "Composition Single", roles: ["entity_data"], subject: { entityRef: "e-property", confidence: 0.9 }, volatility: "changeable", confidence: 0.9 },

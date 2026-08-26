@@ -715,6 +715,63 @@ describe("proof that something happened", () => {
   });
 });
 
+describe("comparing values that are not numbers", () => {
+  it("does not compare a house number against a zip code", () => {
+    // looseEq used to strip every non-digit and compare what was left, so
+    // "123 Evergreen Lane" (→ 123) and "123 Evergreen Lane, Springfield, CO
+    // 80501" (→ 12380501) read as a contradiction. Any two pieces of prose
+    // containing digits were being compared as arithmetic.
+    const p = plan(insuranceDeclarations);
+    const fields = p.actions.find((a) => a.destination === "entity_field")!;
+    expect(fields.warnings.filter((w) => w.blocking)).toHaveLength(0);
+    expect(fields.selected).toBe(true);
+  });
+
+  it("still catches a genuinely different number", () => {
+    const p = plan({
+      ...insuranceDeclarations,
+      index: {
+        ...insuranceDeclarations.index,
+        profiles: insuranceDeclarations.index.profiles.map((x) =>
+          x.id === "prop-1" ? { ...x, fields: { ...x.fields, yearBuilt: "1998" } } : x),
+      },
+    });
+    const fields = p.actions.find((a) => a.destination === "entity_field")!;
+    expect(fields.warnings.some((w) => w.field === "yearBuilt" && w.blocking)).toBe(true);
+  });
+});
+
+describe("a document filed against the wrong record", () => {
+  it("warns instead of quietly rewriting the house it was filed under", () => {
+    // Picking the wrong destination from a list is easy, and the damage — a
+    // policy for 14 Oak Street overwriting the address, square footage and
+    // mortgage of 123 Evergreen Lane — is found months later, if ever.
+    const p = plan({
+      ...insuranceDeclarations,
+      index: {
+        ...insuranceDeclarations.index,
+        profiles: insuranceDeclarations.index.profiles.map((x) =>
+          x.id === "prop-1" ? { ...x, fields: { ...x.fields, address: "14 Oak Street" } } : x),
+      },
+    });
+    expect(p.warnings.some((w) => w.code === "identity_mismatch")).toBe(true);
+
+    const toProperty = p.actions.filter((a) => a.target.id === "prop-1" || a.payload?.profileId === "prop-1");
+    expect(toProperty.length).toBeGreaterThan(0);
+    for (const a of toProperty) {
+      expect(a.selected, `${a.id} is ticked despite the mismatch`).toBe(false);
+      expect(a.warnings.some((w) => w.code === "stable_field_conflict")).toBe(true);
+    }
+  });
+
+  it("says nothing when the addresses merely differ in form", () => {
+    // "123 Evergreen Ln" stored, "123 Evergreen Lane, Springfield, CO 80501"
+    // printed. A warning here would fire on every correctly-filed document.
+    const p = plan(insuranceDeclarations);
+    expect(p.warnings.some((w) => w.code === "identity_mismatch")).toBe(false);
+  });
+});
+
 describe("summarizeActions", () => {
   it("says what will happen, in counts", () => {
     const s = summarizeActions(plan(insuranceDeclarations).actions);

@@ -38,6 +38,7 @@ import { buildExtractionItems } from "@shared/extraction-destinations";
 import { reasonAboutDocument } from "./semantic-reasoner";
 import { planExtractionActions } from "@shared/extraction-actions";
 import { buildEntityIndex } from "./entity-index";
+import { entityFamily } from "@shared/entity-shape";
 import { aggregateTimeSeries, classifyMetric, pickGranularity, pickChartField, type AggMode } from "@shared/chart-data";
 import { computeRefillSchedule, parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -2846,6 +2847,13 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       clinicalNotes: Array.isArray(parsed.clinicalNotes) ? parsed.clinicalNotes : [],
       followUps: Array.isArray(parsed.followUps) ? parsed.followUps : [],
       docContext: `${parsed.documentType ?? ""} ${parsed.label ?? ""}`,
+      // What the document was filed under decides what its fields can MEAN. A
+      // house is never offered Allergies; "Living Area" is square footage only
+      // once we know we are looking at a property.
+      family: entityFamily(
+        linkedProfileObj?.type ?? (linkedProfileObj as any)?.type_key,
+        (linkedProfileObj as any)?.type_key,
+      ),
       normalizeDate: normalizeDateString,
     });
 

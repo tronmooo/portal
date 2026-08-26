@@ -56,6 +56,10 @@ import { classifyDateField } from "./date-rules";
 import { normalizeDateString } from "./extraction-normalize";
 import { rankByName, sameEntityName } from "./entity-resolution";
 import { trackerIdentityKey } from "./tracker-identity";
+import {
+  entityFamily, destinationsForFamily, canonicalFieldName, matchConcept,
+  identifyingConcepts, identifiersAgree, FAMILY_LABEL, type EntityFamily,
+} from "./entity-shape";
 
 // ─── Operations ──────────────────────────────────────────────────────────────
 
@@ -99,6 +103,8 @@ export interface TargetRef {
   name: string;
   /** Profile type when kind is "profile" — property, person, liability… */
   profileType?: string;
+  /** The registry's finer type key ("mortgage", "boat"), when the record has one. */
+  typeKey?: string;
   /** Namespaced group within `profile.fields` ("insurance", "loan"). */
   group?: string;
   matchConfidence?: number;
@@ -464,6 +470,7 @@ export function resolveEntity(entity: SemanticEntity, index: EntityIndex): Resol
     entityRef: entity.ref,
     profileType: allowed[0],
   };
+  const withType = (p: IndexedProfile) => ({ profileType: p.type, typeKey: p.typeKey });
 
   if (allowed.length === 0) {
     // An issuer or a counterparty. Real, named, and not a record we keep.
@@ -494,7 +501,7 @@ export function resolveEntity(entity: SemanticEntity, index: EntityIndex): Resol
           return {
             matched: true,
             target: {
-              ...base, kind: "profile", id: p.id, name: p.name, profileType: p.type,
+              ...base, kind: "profile", id: p.id, name: p.name, ...withType(p),
               matchConfidence: strongKey ? 0.98 : 0.9,
               matchReason: `${key} exact match`,
             },
@@ -509,7 +516,7 @@ export function resolveEntity(entity: SemanticEntity, index: EntityIndex): Resol
     if (sameEntityName(p.name, entity.name)) {
       return {
         matched: true,
-        target: { ...base, id: p.id, name: p.name, profileType: p.type, matchConfidence: 0.92, matchReason: "name exact" },
+        target: { ...base, id: p.id, name: p.name, ...withType(p), matchConfidence: 0.92, matchReason: "name exact" },
       };
     }
   }
@@ -525,7 +532,7 @@ export function resolveEntity(entity: SemanticEntity, index: EntityIndex): Resol
       matched: conf >= 0.6,
       target: {
         ...base, id: conf >= 0.6 ? best.id : null, name: conf >= 0.6 ? best.name : entity.name,
-        profileType: best.type, matchConfidence: conf,
+        ...withType(best), matchConfidence: conf,
         matchReason: ambiguous ? "several records match this name" : "name similar",
       },
     };
@@ -536,16 +543,43 @@ export function resolveEntity(entity: SemanticEntity, index: EntityIndex): Resol
 
 // ─── Conflict detection ──────────────────────────────────────────────────────
 
+/**
+ * Is this value a NUMBER, rather than prose that happens to contain digits?
+ *
+ * "2,450", "$1,428.00", "5.8%" and "180 lb" are numbers wearing decoration.
+ * "123 Evergreen Lane" is an address. The difference decides whether comparing
+ * them arithmetically means anything at all.
+ */
+function isNumericValue(s: string): boolean {
+  const stripped = s.replace(/[\s,]/g, "");
+  return /^[-+]?[$€£]?\d*\.?\d+\s*(%|[a-z°]{0,6})$/i.test(stripped);
+}
+
 const looseEq = (a: unknown, b: unknown): boolean => {
   if (a === b) return true;
   const sa = String(a ?? "").trim().toLowerCase();
   const sb = String(b ?? "").trim().toLowerCase();
   if (!sa || !sb) return true;                 // an empty side never conflicts
   if (sa === sb) return true;
-  const na = Number(String(a).replace(/[^0-9.-]/g, ""));
-  const nb = Number(String(b).replace(/[^0-9.-]/g, ""));
-  if (isFinite(na) && isFinite(nb) && na !== 0) return Math.abs(na - nb) / Math.abs(na) < 0.005;
-  return alnum(a) === alnum(b);
+  // Numeric comparison, but ONLY for values that ARE numbers.
+  //
+  // This used to strip every non-digit and compare whatever was left, which
+  // turns "123 Evergreen Lane" into 123 and "123 Evergreen Lane, Springfield,
+  // CO 80501" into 12380501 — a house number against a zip code — and reports
+  // the same address as a contradiction. Any two pieces of prose containing
+  // digits were being compared as arithmetic.
+  if (isNumericValue(sa) && isNumericValue(sb)) {
+    const na = Number(sa.replace(/[^0-9.-]/g, ""));
+    const nb = Number(sb.replace(/[^0-9.-]/g, ""));
+    if (isFinite(na) && isFinite(nb) && na !== 0) return Math.abs(na - nb) / Math.abs(na) < 0.005;
+  }
+  if (alnum(a) === alnum(b)) return true;
+  // The same address written two ways is not a conflict. A stored
+  // "123 Evergreen Ln" and a printed "123 Evergreen Lane, Springfield, CO
+  // 80501" are one place, and treating them as a contradiction fires a
+  // blocking warning on every correctly-filed document — which trains a
+  // person to click past the warnings that matter.
+  return identifiersAgree(a, b);
 };
 
 /** Read a field off a profile, looking in nested groups too. */
@@ -662,7 +696,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
   const contextTarget: TargetRef | undefined = contextProfile
     ? {
         kind: "profile", id: contextProfile.id, name: contextProfile.name,
-        profileType: contextProfile.type, matchConfidence: 1,
+        profileType: contextProfile.type, typeKey: contextProfile.typeKey, matchConfidence: 1,
         matchReason: "you filed this document here",
       }
     : undefined;
@@ -730,6 +764,48 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     return { target: t ?? { kind: "none", name: ref, id: null } };
   };
 
+  // ── Is this document even ABOUT the record it was filed under? ───────────
+  //
+  // A person picks the destination before the upload, from a list, in a hurry.
+  // Picking the wrong house is easy, and the consequence — a policy for 14 Oak
+  // Street quietly rewriting the address, square footage and mortgage of 123
+  // Evergreen Lane — is the kind of damage that is discovered months later and
+  // cannot be untangled.
+  //
+  // So the identifiers the document prints are compared against the record it
+  // is filed under BEFORE anything is proposed. A mismatch is a warning on
+  // every write to that record, never a silent correction: the document might
+  // be misfiled, or the record might simply be out of date, and only a person
+  // can tell which.
+  const contextFamily = entityFamily(contextProfile?.type, contextProfile?.typeKey);
+  const identityConflicts: ActionWarning[] = [];
+  if (contextProfile) {
+    const identifying = new Set(identifyingConcepts(contextFamily).map((c) => c.toLowerCase()));
+    for (const fact of semantic.facts) {
+      const concept = matchConcept(contextFamily, fact.label, { insurance: false });
+      if (!concept?.identifying && !identifying.has(String(concept?.canonical ?? "").toLowerCase())) continue;
+      const stored = readField(contextProfile.fields, concept!.canonical, concept!.group);
+      if (stored === undefined || stored === null || String(stored).trim() === "") continue;
+      if (identifiersAgree(stored, fact.value)) continue;
+      identityConflicts.push({
+        code: "stable_field_conflict",
+        blocking: true,
+        field: concept!.canonical,
+        existing: stored,
+        incoming: fact.value,
+        message:
+          `This document's ${fact.label.toLowerCase()} is "${String(fact.value)}", but the ${FAMILY_LABEL[contextFamily]} it is filed under has "${String(stored)}". Check it is the right ${FAMILY_LABEL[contextFamily]} before saving.`,
+      });
+    }
+    if (identityConflicts.length > 0) {
+      warnings.push({
+        code: "identity_mismatch",
+        message:
+          `This document may not be about ${contextProfile.name} — ${identityConflicts.length} identifier${identityConflicts.length === 1 ? "" : "s"} disagree.`,
+      });
+    }
+  }
+
   // Facts already spoken for, so nothing is written twice.
   const claimedFacts = new Set<string>();
   const usedDedupeKeys = new Set<string>();
@@ -769,16 +845,29 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
         `This would create a new ${a.target.profileType || "record"}. Document extraction never creates profiles, assets or liabilities — it only updates the ones you already have.`;
     }
 
+    // A record whose identity is in question does not get written to on a
+    // guess. Every action aimed at it carries the mismatch and starts unticked.
+    const aimedAtContext = identityConflicts.length > 0
+      && contextProfile
+      && (a.target?.id === contextProfile.id || a.payload?.profileId === contextProfile.id);
+    const mergedWarnings = aimedAtContext
+      ? [...identityConflicts, ...(a.warnings ?? [])]
+      : (a.warnings ?? []);
+
     const action: ProposedAction = {
       ...a,
+      warnings: mergedWarnings,
       savable,
       unsupportedCode,
       unsupportedReason,
       writesLabel: a.writesLabel ?? describeWrite(a.destination, a.operation, a.payload, a.target),
+      // Options follow the TARGET's family, not the document's: a policy filed
+      // under a house offers what a house can hold.
       // Nothing that cannot be written is ever ticked. An unsavable row is
       // information, not an instruction.
-      selected: savable ? a.selected : false,
-      destinationOptions: a.destinationOptions ?? defaultOptionsFor(a.destination),
+      selected: savable && !aimedAtContext ? a.selected : false,
+      destinationOptions: a.destinationOptions
+        ?? defaultOptionsFor(a.destination, entityFamily(a.target?.profileType, a.target?.typeKey)),
     };
     actions.push(action);
     for (const fid of action.factIds) claimedFacts.add(fid);
@@ -1134,7 +1223,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     const fields: Record<string, any> = {};
     const w: ActionWarning[] = [];
     for (const f of bucket.facts) {
-      const fieldKey = fieldKeyFor(f, itemById);
+      const fieldKey = fieldKeyFor(f, itemById, entityFamily(bucket.target.profileType, bucket.target.typeKey));
       fields[fieldKey] = f.value;
       const existing = readField(profile?.fields, fieldKey, bucket.group);
       const c = conflictFor(f, existing, fieldKey);
@@ -1798,10 +1887,17 @@ function itemIdsForFacts(doc: SemanticDocument, factIds: string[]): string[] {
  * Only a fact with no row behind it (a derived total) falls back to camel-casing
  * its label.
  */
-function fieldKeyFor(fact: SemanticFact, rows?: Map<string, ExtractionItem>): string {
+function fieldKeyFor(
+  fact: SemanticFact,
+  rows?: Map<string, ExtractionItem>,
+  family?: EntityFamily,
+): string {
   for (const id of fact.itemIds) {
     const key = rows?.get(id)?.key;
-    if (key) return String(key);
+    // Canonicalise the concept: "Square Feet", "Living Area" and "Building
+    // Size" across three documents are ONE field on the house, not three
+    // nearly-identical ones. A concept we have no name for keeps its own key.
+    if (key) return family ? canonicalFieldName(family, String(key), { insurance: true }) : String(key);
   }
   return String(fact.label || fact.id)
     .replace(/[^a-zA-Z0-9 ]/g, " ")
@@ -1816,8 +1912,16 @@ function avg(ns: number[]): number {
   return ns.reduce((a, b) => a + b, 0) / ns.length;
 }
 
-/** Where a row may be re-routed. Notes, reference and ignore are universal. */
-function defaultOptionsFor(d: ExtractionDestination): ExtractionDestination[] {
+/**
+ * Where a row may be re-routed.
+ *
+ * Constrained by what the target ENTITY is: a house is never offered
+ * Allergies, Medications or Medical history. Notes, reference and ignore are
+ * the universal escape hatches, and whatever was suggested always stays on the
+ * list — dropping the recommended option would leave a row with no way back to
+ * where it started.
+ */
+function defaultOptionsFor(d: ExtractionDestination, family?: EntityFamily): ExtractionDestination[] {
   const base: ExtractionDestination[] = ["note", "reference", "ignore"];
   const byDestination: Partial<Record<ExtractionDestination, ExtractionDestination[]>> = {
     obligation: ["obligation", "expense", "income", "calendar", "task"],
@@ -1834,9 +1938,12 @@ function defaultOptionsFor(d: ExtractionDestination): ExtractionDestination[] {
     reference: ["reference", "profile", "entity_field", "calendar", "task", "expense"],
   };
   const primary = byDestination[d] ?? [d];
-  const out: ExtractionDestination[] = [];
-  for (const x of [...primary, ...base]) if (!out.includes(x)) out.push(x);
-  return out;
+  const candidate: ExtractionDestination[] = [];
+  for (const x of [...primary, ...base]) if (!candidate.includes(x)) candidate.push(x);
+  if (!family) return candidate;
+  const allowed = new Set(destinationsForFamily(family));
+  const out = candidate.filter((x) => allowed.has(x) || x === d);
+  return out.length > 0 ? out : candidate;
 }
 
 const GROUP_ORDER: ExtractionDestination[] = [

@@ -60,6 +60,7 @@ export default defineConfig({
       'tests/extraction-normalize.test.ts',
       'tests/extraction-destinations.test.ts',
       'tests/extraction-actions.test.ts',
+      'tests/entity-shape.test.ts',
       'tests/extraction-creates-no-entities.test.ts',
       'tests/semantic-envelope.test.ts',
       'tests/ai-parent-resolution.test.ts',
