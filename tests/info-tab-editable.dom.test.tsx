@@ -158,7 +158,7 @@ describe("identity: name and type", () => {
     expect(wrote("PATCH", "/api/profiles/bob-1")).toBeUndefined();
   });
 
-  it("re-types the record — the fix for 'my truck shows up as a person'", async () => {
+  it("re-types the record between the two kinds this page holds", async () => {
     renderPage();
     await ready();
     // The trigger is a real control, not the static text it used to be.
@@ -169,11 +169,28 @@ describe("identity: name and type", () => {
     // Radix opens on pointerdown; jsdom has no pointer capture, so supply it.
     trigger.focus();
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
-    const option = await screen.findByTestId("info-type-vehicle");
+    const option = await screen.findByTestId("info-type-pet");
     fireEvent.click(option);
 
     await waitFor(() => expect(wrote("PATCH", "/api/profiles/bob-1")).toBeTruthy());
-    expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ type: "vehicle" });
+    expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ type: "pet" });
+  });
+
+  // An Info page is only ever reached for a person-shaped profile — every
+  // other type is dispatched to the per-type detail page. Offering "vehicle"
+  // or "loan" here meant one click could re-type a person into a record this
+  // screen cannot render, which then dropped out of the people list.
+  it("offers only person and pet — no type this page cannot show", async () => {
+    renderPage();
+    await ready();
+    const trigger = screen.getByTestId("info-type");
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    await screen.findByTestId("info-type-pet");
+    expect(screen.getByTestId("info-type-person")).toBeTruthy();
+    for (const t of ["vehicle", "property", "asset", "investment", "account", "loan", "subscription", "medical"]) {
+      expect(screen.queryByTestId(`info-type-${t}`)).toBeNull();
+    }
   });
 
   it("the self profile keeps its type — the app resolves 'me' by it", async () => {

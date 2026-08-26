@@ -255,6 +255,8 @@ export default defineConfig({
       'tests/info-tab-editable.dom.test.tsx',
       'tests/info-tab-ai-parity.test.ts',
       'tests/profile-rename-routes.test.ts',
+      'tests/profile-delete.test.ts',
+      'tests/info-tab-delete.dom.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

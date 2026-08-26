@@ -122,6 +122,31 @@ export function makeFakeStorage(db: FakeDb) {
       return row;
     },
 
+    // A real cascade, in miniature. DELETE /api/profiles/:id is now reachable
+    // from the Info tab, and its whole promise is that the profile's data goes
+    // with it — so the double has to actually remove rows, not answer `true`.
+    // Same rule the storages follow: a row this profile SOLELY owns is
+    // deleted; a co-owned row keeps its place and just loses this owner.
+    deleteProfile: async (pid: string) => {
+      const row = db.profiles.find(p => p.id === pid);
+      if (!row) return false;
+      const owned = (r: any) => Array.isArray(r?.linkedProfiles) && r.linkedProfiles.includes(pid);
+      const sweep = (rows: any[]) => rows.flatMap((r: any) => {
+        if (!owned(r)) return [r];
+        if (r.linkedProfiles.length <= 1) return [];
+        return [{ ...r, linkedProfiles: r.linkedProfiles.filter((x: string) => x !== pid) }];
+      });
+      db.expenses = sweep(db.expenses);
+      db.tasks = sweep(db.tasks);
+      db.events = sweep(db.events);
+      db.documents = sweep(db.documents);
+      db.incomes = sweep(db.incomes);
+      // Child profiles (a person's vehicle, say) cascade too.
+      const children = db.profiles.filter(p => p.parentProfileId === pid).map(p => p.id);
+      db.profiles = db.profiles.filter(p => p.id !== pid && !children.includes(p.id));
+      return true;
+    },
+
     getExpenses: async () => db.expenses,
     createExpense: async (data: any) => {
       const row = { id: id("exp"), createdAt: new Date().toISOString(), ...data };
