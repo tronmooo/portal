@@ -102,6 +102,7 @@ import {
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HistoryTab } from "@/components/ProfileSharedTabs";
+import { DocumentDeleteDialog } from "@/components/DocumentDeleteDialog";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import {
@@ -2982,6 +2983,7 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
   const { toast } = useToast();
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
 
   const docsQuery = useQuery<LiabilityDocument[]>({
     queryKey: [`/api/profiles/${liabilityId}/documents`],
@@ -3016,18 +3018,6 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
     },
     onError: (err: Error) =>
       toast({ title: "Upload failed", description: formatApiError(err), variant: "destructive" }),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: async (docId: string) => {
-      await apiRequest("DELETE", `/api/documents/${docId}`);
-    },
-    onSuccess: () => {
-      toast({ title: "Document deleted" });
-      invalidateDomains("documents", "profiles");
-    },
-    onError: (err: Error) =>
-      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
   });
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -3111,7 +3101,7 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
                 <Button
                   size="icon"
                   variant="ghost"
-                  onClick={() => deleteMutation.mutate(doc.id)}
+                  onClick={() => setDeletingDocId(doc.id)}
                   data-testid={`liability-doc-delete-${doc.id}`}
                 >
                   <Trash2 className="w-4 h-4 text-rose-500" />
@@ -3121,6 +3111,16 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
           </div>
         )}
       </CardContent>
+      {/* Deleting from a liability is the same act as deleting from the
+          Documents page — the shared dialog asks whether the data the document
+          created goes with it, then runs the one cascade. This button used to
+          delete on the spot, with no confirmation at all. */}
+      <DocumentDeleteDialog
+        documentId={deletingDocId}
+        documentName={docs.find((d: any) => d.id === deletingDocId)?.name}
+        onOpenChange={(open) => { if (!open) setDeletingDocId(null); }}
+        onDeleted={() => setDeletingDocId(null)}
+      />
     </Card>
   );
 }

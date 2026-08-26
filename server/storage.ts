@@ -944,7 +944,25 @@ export class MemStorage implements IStorage {
     // storage exists to provide.
     const { fieldsToDelete, fieldPathsToDelete, ...rest } = data as any;
     data = rest;
+    // A null/undefined VALUE inside `fields` is a deletion intent, not data —
+    // the protocol SupabaseStorage speaks (see its updateProfile) and the one
+    // the document-delete cascade uses to take back a field a deleted document
+    // contributed. Without this, that cascade left a literal `null` sitting
+    // where the value had been: the field still rendered, now empty, and the
+    // profile still carried a key whose source no longer existed.
+    const deletionIntents: string[] = [];
+    if (data.fields && typeof data.fields === "object") {
+      const kept: Record<string, any> = {};
+      for (const [k, v] of Object.entries(data.fields as Record<string, any>)) {
+        if (v === null || v === undefined) deletionIntents.push(k);
+        else kept[k] = v;
+      }
+      if (deletionIntents.length > 0) data = { ...data, fields: kept };
+    }
     const updated = { ...p, ...data, updatedAt: new Date().toISOString() };
+    if (deletionIntents.length > 0) {
+      updated.fields = deleteProfileFields(updated.fields || {}, deletionIntents).fields;
+    }
     if ((fieldsToDelete?.length || 0) + (fieldPathsToDelete?.length || 0) > 0) {
       updated.fields = deleteProfileFields(
         { ...(p.fields || {}), ...(data.fields || {}) },

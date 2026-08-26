@@ -760,3 +760,55 @@ export function removeDocumentContributedFields(
   }
   return { fields: out, removed };
 }
+
+/**
+ * Split the fields a document contributed to a profile into the ones it is the
+ * SOLE source of and the ones another document also vouches for.
+ *
+ * `fields._docFields[documentId] = { key: savedValue }` is the provenance blob
+ * confirm-extraction writes. Two documents routinely record the same fact — an
+ * insurance declaration and a title deed both carry the property address — and
+ * before this split a delete took the value away on the strength of one of
+ * them. The rule the user asked for is narrower and correct: deleting a
+ * document removes only its OWN provenance link when the value has another
+ * live source; the value itself goes only when this document was the last one
+ * holding it up.
+ *
+ * "Another source" is matched the way the rest of this module matches fields —
+ * by identity, not by the literal key — and requires the same value, so a
+ * second document recording a DIFFERENT expiration does not keep this one's
+ * alive.
+ *
+ * Pure: reads `fields`, returns new objects.
+ */
+export function splitDocumentContributedFields(
+  fields: Record<string, any> | null | undefined,
+  documentId: string,
+): { exclusive: Record<string, any>; shared: Record<string, any> } {
+  const exclusive: Record<string, any> = {};
+  const shared: Record<string, any> = {};
+  const sources = (fields as any)?._docFields;
+  const recorded = sources && typeof sources === "object" ? sources[documentId] : undefined;
+  if (!recorded || typeof recorded !== "object") return { exclusive, shared };
+
+  for (const [key, savedValue] of Object.entries(recorded as Record<string, any>)) {
+    if (key.startsWith("_")) continue;
+    const identity = fieldIdentity(key);
+    let alsoElsewhere = false;
+    for (const [otherDocId, otherRecorded] of Object.entries(sources as Record<string, any>)) {
+      if (otherDocId === documentId) continue;
+      if (!otherRecorded || typeof otherRecorded !== "object") continue;
+      for (const [otherKey, otherValue] of Object.entries(otherRecorded as Record<string, any>)) {
+        if (otherKey.startsWith("_")) continue;
+        if (fieldIdentity(otherKey) !== identity) continue;
+        if (!looselyEqual(otherValue, savedValue)) continue;
+        alsoElsewhere = true;
+        break;
+      }
+      if (alsoElsewhere) break;
+    }
+    if (alsoElsewhere) shared[key] = savedValue;
+    else exclusive[key] = savedValue;
+  }
+  return { exclusive, shared };
+}
