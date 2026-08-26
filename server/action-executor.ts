@@ -36,7 +36,7 @@ import { canonicalizeProfileFields } from "@shared/profile-field-canon";
 import { mergeFieldWrite, fieldIdentity, fieldValuePersisted } from "@shared/profile-field-identity";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { normalizeTrackerEntry } from "./tracker-normalize";
-import { findIdentityMatches } from "@shared/tracker-identity";
+import { findCompatibleTracker } from "@shared/tracker-identity";
 import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE, type Tracker } from "@shared/schema";
 import { getUserToday, parseUserDateTime } from "@shared/timezone";
 import { applyLiabilityPayment } from "./liability-payments";
@@ -480,20 +480,20 @@ async function appendTrackerEntry(action: ProposedAction, documentId: string): P
   const profileId = action.payload?.profileId ? String(action.payload.profileId) : undefined;
 
   const trackers = await storage.getTrackers();
-  const matches = findIdentityMatches(trackers as any[], name);
+  const unit = String(action.payload?.unit || "");
   let tracker: any = action.payload?.trackerId
     ? (trackers as any[]).find((t) => t.id === action.payload.trackerId)
     : undefined;
+  // ONE resolution ladder, shared with the planner (shared/tracker-identity),
+  // so what the review promised and what gets written cannot disagree: an
+  // owned tracker, then an orphan, never someone else's — and never one whose
+  // unit measures a different KIND of thing.
   if (!tracker) {
-    tracker = profileId
-      ? (matches.find((t: any) => (t.linkedProfiles || []).includes(profileId))
-          ?? matches.find((t: any) => (t.linkedProfiles || []).length === 0))
-      : matches[0];
+    tracker = findCompatibleTracker(trackers as any[], name, { unit, ownerProfileId: profileId }) ?? undefined;
   }
 
   const rawValues = (action.payload?.values && typeof action.payload.values === "object")
     ? action.payload.values : { value: action.payload?.values ?? 0 };
-  const unit = String(action.payload?.unit || "");
 
   let created = false;
   if (!tracker) {
@@ -501,7 +501,11 @@ async function appendTrackerEntry(action: ProposedAction, documentId: string): P
     tracker = await storage.createTracker({
       name,
       unit,
-      category: "health",
+      // The value's own category. Hardcoding "health" filed an odometer and a
+      // property valuation under health; `custom` is what the planner sends for
+      // anything the metric registry does not recognise, and it is visible
+      // (unlike "finance", which shared/hidden-tracker-categories rejects).
+      category: String(action.payload?.category || "health"),
       fields: fieldKeys.length > 0
         ? fieldKeys.map((k, i) => ({ name: k, type: "number" as const, unit, isPrimary: i === 0, options: [] }))
         : [{ name: "value", type: "number" as const, unit, isPrimary: true, options: [] }],

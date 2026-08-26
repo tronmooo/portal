@@ -157,6 +157,8 @@ export default defineConfig({
       'tests/extraction-sections.test.ts',
       'tests/document-dates-group.test.ts',
       'tests/period-deadlines.test.ts',
+      'tests/trackable-values.test.ts',
+      'tests/tracker-actions.test.ts',
       'tests/medical-report-extraction.test.ts',
       'tests/upload-dedupe.test.ts',
       'tests/cache-bust-predicate.test.ts',

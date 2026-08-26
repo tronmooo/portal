@@ -180,6 +180,13 @@ export interface ExtractionItem {
   /** "→ Create recurring obligation" — what the review row prints. */
   actionLabel?: string;
   /**
+   * The record this row's DATA belongs to, resolved by the planner rather than
+   * by whichever profile was picked at upload. Lets the review say
+   * "John Doe → Health" per row, and scopes tracker matching to the right owner.
+   */
+  ownerProfileId?: string;
+  ownerName?: string;
+  /**
    * The section of `profile.fields` this belongs in ("insurance", "loan",
    * "housing"). Set when the field is a concept that lives in one — which is
    * how an agent's phone number stays attached to the policy on the house

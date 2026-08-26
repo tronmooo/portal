@@ -44,7 +44,7 @@ import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rena
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
-import type { ProposedAction } from "@shared/extraction-actions";
+import { itemsClaimedByActions, type ProposedAction } from "@shared/extraction-actions";
 import { executeActions } from "./action-executor";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted } from "@shared/profile-field-identity";
@@ -2750,11 +2750,14 @@ ${JSON.stringify(ctx, null, 2)}`;
       // two lists, but a row reaching BOTH paths would write the same fact
       // twice — one profile field written by an action and again by the legacy
       // switch — so the partition is enforced here as well rather than trusted.
-      const claimedByActions = new Set<string>();
-      for (const a of reviewedActions) {
-        if (!a || a.selected === false || a.operation === "NO_ACTION") continue;
-        for (const id of a.itemIds || []) claimedByActions.add(String(id));
-      }
+      // One rule, defined once (shared/extraction-actions.itemsClaimedByActions):
+      // a row is withheld ONLY when a selected action already performs that
+      // exact write. A tracker/expense/obligation action does not, so its fact
+      // still reaches the profile — "facts get saved; actions get performed".
+      const claimedByActions = itemsClaimedByActions(
+        reviewedActions,
+        Array.isArray(items) ? (items as ExtractionItem[]) : [],
+      );
 
       if (Array.isArray(items) && items.length > 0) {
         const fields: Array<{ key: string; value: any }> = [];
