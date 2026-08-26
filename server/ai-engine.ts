@@ -37,6 +37,7 @@ import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordAc
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { buildExtractionItems } from "@shared/extraction-destinations";
 import { reasonAboutDocument } from "./semantic-reasoner";
+import { emptySemanticDocument } from "@shared/semantic-document";
 import { planExtractionActions } from "@shared/extraction-actions";
 import { buildEntityIndex } from "./entity-index";
 import { entityFamily } from "@shared/entity-shape";
@@ -1787,6 +1788,160 @@ Return only what you actually read. When a value is unreadable or blank, leave t
   };
 }
 
+
+// ─── The review payload, built once for every path that produces one ─────────
+//
+// Two code paths produce an extraction review: a fresh upload, and a re-upload
+// of the same file within the hour, which reuses the existing document rather
+// than making a duplicate.
+//
+// The second one used to return a BARE payload — extractedFields and nothing
+// else. No `items`, so the review pane fell back to its flat FIELD/VALUE table;
+// no `targetProfile`, so the pane defaulted to the self profile and the
+// property the user had actually picked vanished; no family, so a house was
+// offered a patient's chart; and no plan, so none of the understanding work
+// happened at all.
+//
+// It was invisible until someone re-uploaded the same document to check a fix
+// and got the old behaviour back, which looks exactly like a regression. One
+// builder, used by both, is the only way that stays fixed.
+
+interface ReviewPayloadInput {
+  documentId: string;
+  documentName: string;
+  fileName: string;
+  documentType: string;
+  label: string;
+  mimeType: string;
+  extractedFields: any[];
+  /** Everything the extractor produced beyond plain fields. Empty on a re-upload. */
+  parsed?: any;
+  pendingFinancial?: any;
+  targetProfile?: { name: string; id?: string; type?: string; isNew: boolean };
+  /** Raw profile id from the client — may be the picker's "destId,ownerId". */
+  profileId?: string;
+  userMessage?: string;
+  domainHint?: string;
+  /** The page itself, so the reasoner can see layout. */
+  content?: any[];
+  classification?: any;
+}
+
+async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
+  const parsed = input.parsed || {};
+  // The picker sends "destId,ownerId" — destination first. Resolve the first id
+  // that is a real profile.
+  const profile = await (async () => {
+    for (const id of String(input.profileId || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+      const p = await storage.getProfile(id).catch(() => null);
+      if (p) return p;
+    }
+    return null;
+  })();
+  const family = entityFamily(profile?.type, (profile as any)?.type_key);
+
+  const reviewItems = buildExtractionItems({
+    extractedFields: input.extractedFields,
+    trackerEntries: parsed.trackerEntries || [],
+    allergies: Array.isArray(parsed.allergies) ? parsed.allergies : [],
+    medications: Array.isArray(parsed.medications) ? parsed.medications : [],
+    conditions: Array.isArray(parsed.conditions) ? parsed.conditions : [],
+    surgicalHistory: Array.isArray(parsed.surgicalHistory) ? parsed.surgicalHistory : [],
+    clinicalNotes: Array.isArray(parsed.clinicalNotes) ? parsed.clinicalNotes : [],
+    followUps: Array.isArray(parsed.followUps) ? parsed.followUps : [],
+    docContext: `${input.documentType} ${input.label}`,
+    family,
+    normalizeDate: normalizeDateString,
+  });
+
+  const calendarDates: ExtractionDateRow[] = extractionDateRows(
+    input.extractedFields.map((f: any) => ({ key: f.key, label: f.label, value: f.value, selected: f.selected })),
+    { documentContext: `${input.documentType} ${input.label}`, today: getUserToday() },
+  );
+
+  const entityIndex = await buildEntityIndex();
+  const filedUnder = profile ? entityIndex.profiles.find((x) => x.id === profile.id) : undefined;
+
+  // The understanding step is the one part of this that can fail for reasons
+  // outside the document — no API key, a network fault, a timeout. It must
+  // never take the review down with it: the rows, the chosen profile and the
+  // entity-aware routing are all already computed above and are useful on their
+  // own. `reasonAboutDocument` guards its own body, but `getClient()` throws
+  // BEFORE it is entered, which is exactly how a missing key turned into a
+  // failed upload rather than a degraded review.
+  const reasoned = await (async () => {
+    try {
+      return await reasonAboutDocument(getClient(), {
+        rows: reviewItems.map((i) => ({ id: i.id, key: i.key, label: i.label, value: i.value })),
+        documentType: input.documentType,
+        documentLabel: input.label,
+        domainHint: input.domainHint,
+        userMessage: input.userMessage,
+        filedUnder: filedUnder ? `${filedUnder.name} (${filedUnder.type})` : undefined,
+        content: input.content as any,
+      });
+    } catch (e: any) {
+      logger.warn("semantic-reasoner", `unavailable: ${e?.message || e}`);
+      return {
+        ok: false as const,
+        semantic: emptySemanticDocument(input.documentType, ""),
+        report: { ok: false, droppedEntities: [], droppedFacts: [], droppedRelationships: [], droppedRecurrences: [], reasons: [] },
+        degradedReason: "the reasoning step is unavailable right now",
+      };
+    }
+  })();
+
+  // Planning is pure and deterministic, but a bad envelope must not cost the
+  // user their review either.
+  const actionPlan = reasoned.ok
+    ? safePlan({
+        semantic: reasoned.semantic,
+        items: reviewItems,
+        index: entityIndex,
+        context: filedUnder
+          ? { entityId: filedUnder.id, entityType: filedUnder.type, entityName: filedUnder.name }
+          : undefined,
+        primaryProfileId: profile?.id,
+        documentId: input.documentId,
+        documentName: input.documentName,
+        today: getUserToday(),
+      })
+    : undefined;
+
+  return {
+    extractionId: input.documentId,
+    fileName: input.fileName,
+    items: actionPlan ? actionPlan.items : reviewItems,
+    semantic: reasoned.ok ? reasoned.semantic : undefined,
+    actionPlan,
+    semanticDegraded: reasoned.ok ? undefined : reasoned.degradedReason,
+    documentType: input.documentType,
+    label: input.label,
+    extractedFields: input.extractedFields,
+    // The profile the user actually picked — a real id, never the compound
+    // string, so the review pane's select can match it instead of silently
+    // falling back to "me".
+    targetProfile: input.targetProfile
+      ?? (profile ? { name: profile.name, id: profile.id, type: profile.type, isNew: false } : undefined),
+    trackerEntries: parsed.trackerEntries || [],
+    documentPreview: { id: input.documentId, name: input.documentName, mimeType: input.mimeType },
+    pendingFinancial: input.pendingFinancial,
+    calendarDates,
+    documentName: input.documentName,
+    classification: input.classification,
+  };
+}
+
+/** Plan, or degrade to no plan. Never throws. */
+function safePlan(input: Parameters<typeof planExtractionActions>[0]) {
+  try {
+    return planExtractionActions(input);
+  } catch (e: any) {
+    logger.warn("extraction-plan", `planning failed: ${e?.message || e}`);
+    return undefined;
+  }
+}
+
 export async function processFileUpload(
   fileName: string,
   mimeType: string,
@@ -1835,6 +1990,21 @@ export async function processFileUpload(
   // file re-sent within the window short-circuits to the existing document,
   // rebuilding the extraction checklist from its saved extractedData so the
   // confirm-and-save flow still works.
+  /**
+   * The page itself, as a content block the reasoner can look at. Built lazily
+   * because the duplicate-upload branch below needs it BEFORE the classifier
+   * assembles its own copy further down.
+   */
+  const classifierContentForReason = (): any[] => {
+    if (isImage0 || isPdf0) {
+      return [{
+        type: isPdf0 ? "document" : "image",
+        source: { type: "base64", media_type: isPdf0 ? "application/pdf" : mediaType0, data: cleanBase640 },
+      }];
+    }
+    return [];
+  };
+
   const uploadHashTag = `sha256:${createHash("sha256").update(cleanBase640).digest("hex").slice(0, 32)}`;
   try {
     const recentDocs = await storage.getDocuments();
@@ -1860,15 +2030,25 @@ export async function processFileUpload(
         results: [existingUpload],
         documentId: existingUpload.id,
         documentPreview: { id: existingUpload.id, name: existingUpload.name, mimeType: existingUpload.mimeType, data: "" },
-        pendingExtraction: dupFields.length > 0 ? {
-          extractionId: existingUpload.id,
-          fileName,
-          documentType: existingUpload.type || "other",
-          label: existingUpload.name,
-          extractedFields: dupFields,
-          trackerEntries: [],
-          documentPreview: { id: existingUpload.id, name: existingUpload.name, mimeType: existingUpload.mimeType },
-        } : undefined,
+        // Re-uploading the same file must give the SAME review as uploading it
+        // the first time. This used to return extractedFields and nothing else,
+        // which silently dropped the chosen profile, the entity-aware routing
+        // and the whole understanding step — so a re-upload looked like the
+        // feature had been reverted.
+        pendingExtraction: dupFields.length > 0
+          ? await buildReviewPayload({
+              documentId: existingUpload.id,
+              documentName: existingUpload.name,
+              fileName,
+              documentType: existingUpload.type || "other",
+              label: existingUpload.name,
+              mimeType: existingUpload.mimeType,
+              extractedFields: dupFields,
+              profileId,
+              userMessage,
+              content: classifierContentForReason(),
+            })
+          : undefined,
       };
     }
   } catch (dupErr: any) {
@@ -2636,13 +2816,15 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     // The photo's linked profile (from user selection) is the ONLY destination.
     // NO AI matching — the user manually selects where data goes.
     let resolvedTargetProfile: { name: string; id?: string; type?: string; isNew: boolean } | undefined;
-    if (existingProfileId) {
-      // Reuse linkedProfileObj if already fetched above, otherwise fetch
-      const linkedProfile = linkedProfileObj || await storage.getProfile(existingProfileId);
+    if (linkedProfileObj) {
+      // The id must be the RESOLVED profile's, never the raw `existingProfileId`
+      // — the picker sends "destId,ownerId", and putting that compound string
+      // here meant the review pane's profile select could not match any option
+      // and silently fell back to "me", losing the destination the user chose.
       resolvedTargetProfile = {
-        name: linkedProfile?.name || 'Unknown',
-        id: existingProfileId,
-        type: linkedProfile?.type,
+        name: linkedProfileObj.name || 'Unknown',
+        id: linkedProfileObj.id,
+        type: linkedProfileObj.type,
         isNew: false,
       };
     }
@@ -2848,134 +3030,26 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       }
     }
 
-    // ── The review list ──────────────────────────────────────────────────
-    // ONE list, every item carrying its proposed destination, so the review
-    // pane can group by destination and let the user re-route anything before
-    // a single write happens. `extractedFields`, `trackerEntries` and
-    // `pendingFinancial` stay on the payload below exactly as they were, so a
-    // chat message rendered from history keeps working.
-    const reviewItems = buildExtractionItems({
-      extractedFields,
-      trackerEntries: parsed.trackerEntries || [],
-      allergies: Array.isArray(parsed.allergies) ? parsed.allergies : [],
-      medications: Array.isArray(parsed.medications) ? parsed.medications : [],
-      conditions: Array.isArray(parsed.conditions) ? parsed.conditions : [],
-      surgicalHistory: Array.isArray(parsed.surgicalHistory) ? parsed.surgicalHistory : [],
-      clinicalNotes: Array.isArray(parsed.clinicalNotes) ? parsed.clinicalNotes : [],
-      followUps: Array.isArray(parsed.followUps) ? parsed.followUps : [],
-      docContext: `${parsed.documentType ?? ""} ${parsed.label ?? ""}`,
-      // What the document was filed under decides what its fields can MEAN. A
-      // house is never offered Allergies; "Living Area" is square footage only
-      // once we know we are looking at a property.
-      family: entityFamily(
-        linkedProfileObj?.type ?? (linkedProfileObj as any)?.type_key,
-        (linkedProfileObj as any)?.type_key,
-      ),
-      normalizeDate: normalizeDateString,
-    });
-
-    // ── The Calendar section of extraction review ────────────────────────────
-    // Every actionable date in this document, with its type, its countdown and
-    // the decision the user gets to make before confirming. Built here so the
-    // payload is self-describing; the client recomputes it live as dates are
-    // edited, from the same shared module, so the two never disagree.
-    const calendarDates: ExtractionDateRow[] = extractionDateRows(
-      extractedFields.map((f) => ({ key: f.key, label: f.label, value: f.value, selected: f.selected })),
-      {
-        documentContext: `${docType} ${parsed.label || fileName}`,
-        today: new Date().toLocaleDateString("en-CA"),
-      },
-    );
-
-    // ── Understand ───────────────────────────────────────────────────────────
-    // Extraction is not complete when fields have been read off the page. This
-    // is the stage that asks what the document MEANS: who it is about, how the
-    // entities in it relate, which facts are permanent and which are
-    // measurements, what recurs, which dates matter, and what is implied.
-    //
-    // It runs for every document, not as a fallback for ones a table did not
-    // recognise — there is no table. See server/semantic-reasoner.ts.
-    const entityIndex = await buildEntityIndex();
-    const filedUnderProfile = (() => {
-      const id = resolvedTargetProfile?.id || existingProfileId || undefined;
-      return id ? entityIndex.profiles.find((x) => x.id === id) : undefined;
-    })();
-
-    const reasoned = await reasonAboutDocument(getClient(), {
-      rows: reviewItems.map((i) => ({ id: i.id, key: i.key, label: i.label, value: i.value })),
-      documentType: docType,
-      documentLabel: parsed.label || fileName,
-      domainHint: classification.domainHint,
-      filedUnder: filedUnderProfile
-        ? `${filedUnderProfile.name} (${filedUnderProfile.type})`
-        : undefined,
-      userMessage,
-      content: messageContent as any,
-    });
-
-    // ── Infer actions, resolve existing records, validate ────────────────────
-    // Deterministic from here on. The reasoner said what the document means;
-    // this decides what happens, and holds every invariant a model must not be
-    // trusted with — resolution before creation, one recurrence to one record,
-    // the rule engine's last word on dates, conflicts surfaced not applied.
-    const actionPlan = reasoned.ok
-      ? planExtractionActions({
-          semantic: reasoned.semantic,
-          items: reviewItems,
-          index: entityIndex,
-          // The record this document was filed under, chosen by a person before
-          // the upload. It is the immovable context: nothing in the document
-          // may replace it, duplicate it, or cause a second one to be made.
-          context: filedUnderProfile
-            ? {
-                entityId: filedUnderProfile.id,
-                entityType: filedUnderProfile.type,
-                entityName: filedUnderProfile.name,
-              }
-            : undefined,
-          primaryProfileId: resolvedTargetProfile?.id || existingProfileId || undefined,
-          documentId: document.id,
-          documentName: document.name || fileName,
-          // The user's day, not the server's: a date rule computed against a
-          // server in another zone is off by one for half of every day.
-          today: getUserToday(),
-        })
-      : undefined;
-
-    const pendingExtraction = {
-      extractionId: document.id,
+    // ── The review payload ───────────────────────────────────────────────
+    // Built by the SAME function the duplicate-upload branch uses, so the two
+    // paths cannot drift into producing different reviews for one document.
+    const pendingExtraction = await buildReviewPayload({
+      documentId: document.id,
+      documentName: document.name || fileName,
       fileName,
-      items: actionPlan ? actionPlan.items : reviewItems,
-      /** What the document MEANS. Absent when the reasoning stage degraded. */
-      semantic: reasoned.ok ? reasoned.semantic : undefined,
-      /** What will HAPPEN. Absent when there was nothing to reason about. */
-      actionPlan,
-      /**
-       * Set when the reasoning stage could not interpret this document. The
-       * review pane says so out loud and falls back to per-field routing —
-       * an upload is never blocked by the understanding step failing.
-       */
-      semanticDegraded: reasoned.ok ? undefined : reasoned.degradedReason,
-      // Prefer the classifier's class when available — it's more precise than
-      // the extractor's freeform documentType, and gives the UI a stable key
-      // to route on (e.g. "parking_receipt" vs. a one-off phrase).
       documentType: classification.documentClass && classification.documentClass !== "other"
         ? classification.documentClass
         : (parsed.documentType || "other"),
       label: classification.label || parsed.label || fileName,
+      mimeType: document.mimeType,
       extractedFields,
-      targetProfile: resolvedTargetProfile,
-      trackerEntries: parsed.trackerEntries || [],
-      documentPreview: { id: document.id, name: document.name, mimeType: document.mimeType },
+      parsed,
       pendingFinancial,
-      /** Date-related fields, broken out for the review UI's Calendar section. */
-      calendarDates,
-      /** The document this extraction belongs to — shown against each date. */
-      documentName: document.name || fileName,
-      // Surface the classification so the UI can show "I think this is a Parking
-      // Receipt; here's what I'll do." The destinations object tells the UI
-      // which sub-panels (expense, obligation, tracker, calendar) are even
-      // relevant for this doc.
+      targetProfile: resolvedTargetProfile,
+      profileId: existingProfileId,
+      userMessage,
+      domainHint: classification.domainHint,
+      content: messageContent as any,
       classification: {
         documentClass: classification.documentClass,
         category: classification.category,
@@ -2983,7 +3057,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
         summary: classification.summary,
         destinations: classification.destinations,
       },
-    };
+    });
 
     let reply = parsed.summary || `Processed "${fileName}"`;
     if (savedItems.length > 0) {
