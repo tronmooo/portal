@@ -1825,6 +1825,8 @@ interface ReviewPayloadInput {
   /** The page itself, so the reasoner can see layout. */
   content?: any[];
   classification?: any;
+  /** When the upload started — the reasoner adapts to the remaining budget. */
+  startedAt?: number;
 }
 
 async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
@@ -1886,6 +1888,16 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
   // own. `reasonAboutDocument` guards its own body, but `getClient()` throws
   // BEFORE it is entered, which is exactly how a missing key turned into a
   // failed upload rather than a degraded review.
+  // The latency budget ("an upload lands in under 30 seconds"): when the
+  // classifier + extractor have already burned most of it, the reasoner runs
+  // on the fast model instead of losing the whole understanding stage to a
+  // timeout — a validated Haiku answer beats a degraded review every time.
+  // Its deadline is whatever budget remains, floored so a slow-but-alive call
+  // still finishes.
+  const elapsedMs = input.startedAt ? Date.now() - input.startedAt : 0;
+  const budgetMs = Number(process.env.UPLOAD_LATENCY_BUDGET_MS || 30_000);
+  const runFast = elapsedMs > budgetMs / 2;
+  const fastModel = process.env.ANTHROPIC_REASONER_MODEL_FAST || "claude-haiku-4-5-20251001";
   const tReason = Date.now();
   const reasoned = await (async () => {
     try {
@@ -1897,6 +1909,8 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
         userMessage: input.userMessage,
         filedUnder: profile ? `${profile.name} (${profile.type})` : undefined,
         content: resendDocument ? (input.content as any) : undefined,
+        model: runFast ? fastModel : undefined,
+        timeoutMs: input.startedAt ? Math.max(15_000, budgetMs - elapsedMs) : undefined,
       });
     } catch (e: any) {
       logger.warn("semantic-reasoner", `unavailable: ${e?.message || e}`);
@@ -1910,7 +1924,7 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
   })();
   const entityIndex = await entityIndexPromise;
   const filedUnder = profile ? entityIndex.profiles.find((x) => x.id === profile.id) : undefined;
-  console.log(`[upload-timing] reason=${Date.now() - tReason}ms rows=${reviewItems.length} vision=${resendDocument ? "resent" : "rows-only"} ok=${reasoned.ok}`);
+  console.log(`[upload-timing] reason=${Date.now() - tReason}ms rows=${reviewItems.length} vision=${resendDocument ? "resent" : "rows-only"} model=${runFast ? "fast" : "default"} ok=${reasoned.ok}`);
 
   // Planning is pure and deterministic, but a bad envelope must not cost the
   // user their review either.
@@ -1977,6 +1991,10 @@ export async function processFileUpload(
   documentPreview?: { id: string; name: string; mimeType: string; data: string };
   pendingExtraction?: any;
 }> {
+  // Wall-clock for the whole upload. Each stage logs its own [upload-timing]
+  // line; this one is the number the person actually experiences, so a slow
+  // upload names its own bottleneck in the logs instead of being a report.
+  const tUpload = Date.now();
   const actions: ParsedAction[] = [];
   const results: any[] = [];
 
@@ -2176,8 +2194,18 @@ Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nT
     domainHint: "",
   };
 
+  // PERF (2026-08-26, "uploads must land under 30 seconds"): the classifier
+  // used to run to completion BEFORE extraction so its domainHint could steer
+  // the extraction prompt. That serialised the two model calls — 3-6 seconds
+  // of pure addition on every upload — for steering whose real enforcement is
+  // deterministic anyway: the classifier-gate below strips disallowed
+  // trackerEntries after the fact, and expense/obligation creation is gated on
+  // classification.destinations in code, not in the prompt. So both calls now
+  // START TOGETHER; the classifier's answer is awaited right after extraction
+  // parses, in time for every consumer that actually reads it (the date-verify
+  // trigger, the gates, pendingFinancial, the review payload).
   const tClassify = Date.now();
-  try {
+  const classifierPromise: Promise<void> = (async () => {
     const classifierResp = await getClient().messages.create({
       // Haiku is fast and cheap; we just need a 1-class decision + short hint.
       model: process.env.ANTHROPIC_CLASSIFIER_MODEL || "claude-haiku-4-5-20251001",
@@ -2226,29 +2254,25 @@ Return ONLY the JSON object. No prose, no markdown fences.${userMessage ? `\n\nT
     }
     console.log(`[classifier] type=${classification.documentClass} cat=${classification.category} conf=${classification.confidence} dest=${JSON.stringify(classification.destinations)} hint="${classification.domainHint.slice(0, 140)}"`);
     console.log(`[upload-timing] classify=${Date.now() - tClassify}ms`);
-  } catch (e: any) {
+  })().catch((e: any) => {
+    // Same contract as before: a failed classification never fails the upload —
+    // the default "other" classification stands and extraction proceeds alone.
     console.error(`[classifier] failed silently — falling back to legacy one-shot extraction: ${e?.message || e}`);
-  }
+  });
 
   // ============================================================================
-  // STEP 1 — EXTRACTION (informed by classification)
+  // STEP 1 — EXTRACTION (concurrent with classification)
   // ============================================================================
-  // The extraction prompt now receives the classification's domainHint, which
-  // tailors what to look for and how to route it. Document-agnostic accuracy
-  // rules still apply; only the routing guidance is class-specific.
-  const classifierContext = (classification.documentClass !== "other" || classification.domainHint)
-    ? `\n\n=== DOCUMENT ALREADY CLASSIFIED ===\nA prior pass identified this as: ${classification.documentClass} (category: ${classification.category}, confidence ${classification.confidence.toFixed(2)}).\nLabel: ${classification.label}\nSummary: ${classification.summary}\n\nClass-specific guidance (FOLLOW THIS):\n${classification.domainHint}\n\nAllowed destinations for this class:\n- profileFacts:   ${classification.destinations.profileFacts}\n- expense:        ${classification.destinations.expense}\n- obligation:     ${classification.destinations.obligation}\n- calendarEvent:  ${classification.destinations.calendarEvent}\n- trackerEntries: ${classification.destinations.trackerEntries}   <-- if false, return trackerEntries: []\n- asset:          ${classification.destinations.asset}\n=== END CLASSIFIED ===\n`
-    : "";
-
-  // Use Claude vision to analyze the image/document.
   // The instructions are deliberately DOCUMENT-AGNOSTIC: the model identifies
   // what the document is and decides what matters. We do not hardcode document
   // types, field names, or domain rules here — a vaccination record, a lease, a
   // warranty, a lab panel and a bank statement all flow through the same prompt.
+  // The classifier's routing decisions are enforced AFTER extraction by the
+  // deterministic gates below (classifier-gate for trackers, destination gates
+  // for expense/obligation) — enforcement in code, not in a prompt hint.
   const extractionPrompt = `${EXTRACTION_PROMPT_BASE}
 
 ${userMessage ? `User said: "${userMessage}"` : ""}
-${classifierContext}
 Return only what you actually read. When a value is unreadable or blank, leave that field out — but include every field you CAN read.`;
 
   try {
@@ -2270,6 +2294,14 @@ Return only what you actually read. When a value is unreadable or blank, leave t
       messageContent.push({
         type: isPdf ? "document" : "image",
         source: { type: "base64", media_type: isPdf ? "application/pdf" : mediaType, data: cleanBase64 },
+        // PERF: this exact block is re-sent by every follow-up pass below (date
+        // verification, the lab pass, the pet-vaccine pass). Marking it as a
+        // cache breakpoint means those passes read the ALREADY-PROCESSED
+        // document instead of re-ingesting a multi-page PDF from scratch —
+        // vision ingestion, not generation, is what makes a second pass over a
+        // big document expensive. Below the cacheable minimum the field is
+        // ignored, so a one-page image is unaffected.
+        cache_control: { type: "ephemeral" },
       });
     } else {
       // Text files: decode and send as text
@@ -2285,11 +2317,21 @@ Return only what you actually read. When a value is unreadable or blank, leave t
     // biggest lever for spatially-tricky documents (e.g. a 2-column "due in the
     // future" table). The model reasons about which date lines up with which row
     // before answering, instead of pattern-matching dates onto blank rows.
+    // Thinking is generated serially, so this budget is a direct latency
+    // ceiling on the slowest call in the pipeline. 2,000 still lets the model
+    // reason about which date lines up with which row before answering — the
+    // reason the budget exists — while returning several seconds per upload.
+    // Raise it with EXTRACTION_THINKING if a spatially tricky document needs
+    // more; no deploy required.
+    const extractThinking = (() => {
+      const n = Number(process.env.EXTRACTION_THINKING || 2_000);
+      return isFinite(n) && n >= 1024 ? Math.round(n) : 2_000;
+    })();
     const tExtract = Date.now();
     const response = await getClient().messages.create({
       model: "claude-sonnet-4-6", // Sonnet 4.6 — same model family as Claude app, best vision accuracy
       max_tokens: 8000,
-      thinking: { type: "enabled", budget_tokens: 3000 },
+      thinking: { type: "enabled", budget_tokens: extractThinking },
       messages: [{
         role: "user",
         content: [
@@ -2303,6 +2345,10 @@ Return only what you actually read. When a value is unreadable or blank, leave t
     const text = (response.content.find((b: any) => b.type === "text") as any)?.text ?? "{}";
     console.log(`[upload-timing] extract=${Date.now() - tExtract}ms`);
     console.log(`[extraction] Claude response (first 500 chars): ${text.slice(0, 500)}`);
+    // The classifier ran concurrently with extraction; from here on its answer
+    // is read (date-verify trigger, destination gates, the review payload), so
+    // this is where the join belongs. Failure was already swallowed above.
+    await classifierPromise;
     let parsed: any;
     try {
       const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -2733,9 +2779,25 @@ Return ONLY the JSON object, nothing else.`;
       // (10-20s) for a document that has no date table at all. Receipts /
       // expense-classified documents never take the pass, and everything else
       // needs a genuinely table-like number of dated fields (≥4).
+      //
+      // PERF (2026-08-26): ≥4 dated fields alone was still far too broad. An
+      // insurance declarations page prints effective, expiration, payment-due
+      // and signature dates — four legitimate, mostly-distinct dates and no
+      // table at all — and paid the full round-trip on every upload.
+      //
+      // The failure this pass catches is a date SMEARED across rows: one value
+      // copied onto rows that are actually blank. That is visible without the
+      // model — smearing means many dated rows collapse onto few distinct
+      // values. So the pass now runs only when at least half the dated rows
+      // are duplicates of another row (distinct × 2 ≤ total). A vaccine
+      // schedule with 8 dated rows and 2 distinct values still takes it; a
+      // declarations page with 4 rows and 3 distinct values no longer does.
       const isReceiptLike = (classification as any)?.destinations?.expense === true
         || (classification as any)?.category === "Receipt";
-      if (!isReceiptLike && dateEntries.length >= 4) {
+      const distinctDates = new Set(dateEntries.map((e) => e.date)).size;
+      const smeared = distinctDates * 2 <= dateEntries.length;
+      console.log(`[upload-timing] date-verify ${!isReceiptLike && dateEntries.length >= 4 && smeared ? "RUNS" : "skipped"} (dates=${dateEntries.length} distinct=${distinctDates} receiptLike=${isReceiptLike})`);
+      if (!isReceiptLike && dateEntries.length >= 4 && smeared) {
         try {
           const verifyList = dateEntries.map((e, i) => `${i + 1}. id="${e.key}" — "${e.label}" = ${e.date}`).join('\n');
           const verifyPrompt = `Look at the SAME document image again. From it I extracted these dated items:
@@ -3080,6 +3142,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       userMessage,
       domainHint: classification.domainHint,
       content: messageContent as any,
+      startedAt: tUpload,
       classification: {
         documentClass: classification.documentClass,
         category: classification.category,
@@ -3106,6 +3169,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       data: document.fileData,
     };
 
+    console.log(`[upload-timing] TOTAL=${Date.now() - tUpload}ms file="${fileName}"`);
     return { reply, actions, results, documentId: document.id, documentPreview, pendingExtraction };
   } catch (err: any) {
     const errMsg = err?.message || String(err);

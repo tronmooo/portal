@@ -2774,6 +2774,20 @@ ${JSON.stringify(ctx, null, 2)}`;
 
           switch (dest) {
             case "profile":
+            // ═══ THE ASSET-DOCUMENT BUG (2026-08-26) ═══
+            // For a document filed under an asset/vehicle/property/liability,
+            // suggestDestination routes nearly EVERY field to entity_field /
+            // entity_record — that IS the designed home for entity data. This
+            // switch had no case for either, so whenever those rows travelled
+            // as loose items (the reasoner degraded, or the plan's context
+            // action was unticked by an identity conflict), every one of them
+            // fell through and the confirmation reported success while writing
+            // NOTHING to the asset the user picked. They take the same
+            // field-write path as "profile": the write lands on the resolved
+            // target profile — which is exactly the asset the user chose.
+            case "entity_field":
+            case "entity_record":
+            case "structured_append":
               if (raw.key) fields.push({ key: raw.key, value: raw.value });
               break;
 
@@ -2851,6 +2865,14 @@ ${JSON.stringify(ctx, null, 2)}`;
               taskWrites.push({ title: String(payload.title ?? label) || "Follow-up", dueDate: due || undefined });
               break;
             }
+
+            default:
+              // reference / document_attach / unsupported — and any destination
+              // this switch does not write — stay on the document, NAMED in the
+              // response as kept-on-document. A silent fall-through here is how
+              // an asset upload once confirmed "success" while writing nothing.
+              if (label) ignoredItems.push(label);
+              break;
           }
         }
 

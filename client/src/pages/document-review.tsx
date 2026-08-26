@@ -243,9 +243,7 @@ export function DocumentReviewScreen({
   /** Called when the review is over — confirmed or skipped — to leave the page. */
   onDone: (outcome: "confirmed" | "skipped") => void;
 }) {
-  const [items, setItems] = useState<ExtractionItem[]>(
-    () => (extraction.items || []).map((i) => ({ ...i })),
-  );
+  const [items, setItems] = useState<ExtractionItem[]>(() => initialReviewItems(extraction));
   const [actions, setActions] = useState<ProposedAction[]>(
     () => (extraction.actionPlan?.actions ?? []).map((a) => ({ ...a })),
   );
@@ -433,7 +431,7 @@ export function DocumentReviewScreen({
   const handleAutoMap = (on: boolean) => {
     setAutoMap(on);
     if (on) {
-      setItems((extraction.items || []).map((i) => ({ ...i })));
+      setItems(initialReviewItems(extraction));
       setActions((extraction.actionPlan?.actions ?? []).map((a) => ({ ...a })));
     } else {
       let keep: string | null = null;
@@ -1064,7 +1062,14 @@ export function DocumentReviewScreen({
                           variant="outline"
                           className="h-6 px-2.5 text-[11px]"
                           disabled={!a.savable}
-                          onClick={() => setActions((prev) => prev.map((x) => (x.id === a.id ? { ...x, selected: true } : x)))}
+                          onClick={() => {
+                            // Linking anyway is the human decision the blocking
+                            // warning was waiting for: the action AND its
+                            // evidence rows turn on together, so the table and
+                            // the rail never disagree about what will save.
+                            setActions((prev) => prev.map((x) => (x.id === a.id ? { ...x, selected: true } : x)));
+                            setItems((prev) => prev.map((i) => (a.itemIds.includes(i.id) ? { ...i, selected: true } : i)));
+                          }}
                           data-testid={`btn-validation-accept-${a.id}`}
                         >
                           {a.selected ? "Accepted" : "Link Anyway"}
@@ -1161,6 +1166,23 @@ export function DocumentReviewScreen({
 }
 
 // ─── Small pieces ────────────────────────────────────────────────────────────
+
+/**
+ * The review's starting selection. A row whose citing action carries a
+ * BLOCKING warning (an address mismatch, a stable-field conflict) starts
+ * unticked, matching the action the planner already unticked — without this,
+ * the row travelled as a selected loose item and Confirm All wrote the
+ * conflicting value the validation card was still asking about.
+ */
+function initialReviewItems(extraction: PendingExtraction): ExtractionItem[] {
+  const blockedRows = new Set(
+    (extraction.actionPlan?.actions ?? [])
+      .filter((a) => a.warnings.some((w) => w.blocking))
+      .flatMap((a) => a.itemIds),
+  );
+  return (extraction.items || []).map((i) =>
+    blockedRows.has(i.id) ? { ...i, selected: false } : { ...i });
+}
 
 function prettify(s: string | undefined): string {
   return String(s || "document").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
