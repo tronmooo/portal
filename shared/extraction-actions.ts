@@ -681,6 +681,22 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
   const items = input.items.map((i) => ({ ...i }));
   const itemById = new Map(items.map((i) => [i.id, i]));
 
+  // ── Annotate every row with what the reasoner learned about it ────────────
+  // The ExtractionItem interface declares roles/subjectRef/factId as filled in
+  // here, after the reasoning stage — they are what lets the review group rows
+  // by meaning and ownership (shared/extraction-sections) instead of showing
+  // one flat list. A row no fact cites keeps them absent and behaves as it
+  // always has.
+  for (const fact of semantic.facts) {
+    for (const iid of fact.itemIds) {
+      const it = itemById.get(iid);
+      if (!it) continue;
+      it.factId = it.factId ?? fact.id;
+      it.subjectRef = it.subjectRef ?? fact.subject.entityRef;
+      it.roles = Array.from(new Set([...(it.roles ?? []), ...fact.roles]));
+    }
+  }
+
   // ── Resolve every entity once ──
   // ── RULE 1: the parent is the context, and it is never duplicated ────────
   //

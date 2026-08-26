@@ -2788,13 +2788,13 @@ ${JSON.stringify(ctx, null, 2)}`;
               // default instead of their own weight.
               if (raw.key) fields.push({ key: raw.key, value: raw.value });
               if (raw.trackerName && raw.values) {
-                entries.push({ trackerName: raw.trackerName, values: raw.values, unit: raw.unit || "", category: raw.category || "health" });
+                entries.push({ trackerName: raw.trackerName, values: raw.values, unit: raw.unit || "", category: raw.category || "health", date: raw.date });
               }
               break;
 
             case "tracker":
               if (raw.trackerName && raw.values) {
-                entries.push({ trackerName: raw.trackerName, values: raw.values, unit: raw.unit || "", category: raw.category || "health" });
+                entries.push({ trackerName: raw.trackerName, values: raw.values, unit: raw.unit || "", category: raw.category || "health", date: raw.date });
               }
               break;
 
@@ -3465,11 +3465,18 @@ ${JSON.stringify(ctx, null, 2)}`;
             if (normWarnings.length > 0) {
               console.log(`[extraction normalize] ${tracker.name}: ${normWarnings.join("; ")}`);
             }
+            // The measurement's own date when the document printed one — a lab
+            // drawn last week charts on last week. Bare dates anchor at local
+            // noon so the day never rolls across the timezone offset.
+            const entryDate = String(entry.date || "").slice(0, 10);
             await storage.logEntry({
               trackerId: tracker.id,
               values: entryValues,
-              notes: `From document extraction`,
+              notes: `From document extraction (${extractionId})`,
               profileId: resolvedProfileId,
+              timestamp: /^\d{4}-\d{2}-\d{2}$/.test(entryDate)
+                ? parseUserDateTime(entryDate, (storage as any)._timezone).toISOString()
+                : undefined,
             });
             saved.push(`Logged ${humanName}: ${Object.entries(entryValues).map(([k, v]) => `${k}=${v}`).join(", ")}`);
           } catch (tErr: any) {

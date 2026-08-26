@@ -84,16 +84,30 @@ function renderScreen(
 
 const confirmPayload = (onConfirm: any) => onConfirm.mock.calls.at(-1)?.[0];
 
+// Item rows only — the table now also renders section-header <tr>s.
+const itemRows = () =>
+  Array.from(document.querySelectorAll('[data-testid^="review-row-"]'));
+const sectionRows = () =>
+  Array.from(document.querySelectorAll('[data-testid^="review-section-"]'));
+
 describe("the review page shows everything the document produced", () => {
   afterEach(cleanup);
 
   it("renders one table row per extracted item, with the total in the header", () => {
     const extraction = buildExtraction();
     renderScreen(extraction);
-    const rows = within(screen.getByTestId("review-rows")).getAllByRole("row");
-    expect(rows.length).toBe(extraction.items.length);
+    expect(itemRows().length).toBe(extraction.items.length);
     expect(screen.getByTestId("review-extracted-count").textContent)
       .toContain(`(${extraction.items.length} total)`);
+  });
+
+  it("groups the rows into document-driven sections", () => {
+    renderScreen();
+    // An insurance declarations page is not one flat list: dates, policy
+    // details and entity data come out as separate labelled sections.
+    expect(sectionRows().length).toBeGreaterThan(2);
+    const dates = document.querySelector('[data-testid="review-section-dates-deadlines"]');
+    expect(dates?.textContent).toContain("Dates & Deadlines");
   });
 
   it("shows a confidence percentage sourced from the semantic facts", () => {
@@ -126,21 +140,21 @@ describe("the category chips filter without destroying state", () => {
   it("filters to date rows and back to everything", () => {
     const extraction = buildExtraction();
     renderScreen(extraction);
-    const all = within(screen.getByTestId("review-rows")).getAllByRole("row").length;
+    const all = itemRows().length;
 
     fireEvent.click(screen.getByTestId("chip-dates"));
-    const dates = within(screen.getByTestId("review-rows")).getAllByRole("row").length;
+    const dates = itemRows().length;
     expect(dates).toBeGreaterThan(0);
     expect(dates).toBeLessThan(all);
 
     fireEvent.click(screen.getByTestId("chip-all"));
-    expect(within(screen.getByTestId("review-rows")).getAllByRole("row").length).toBe(all);
+    expect(itemRows().length).toBe(all);
   });
 
   it("search narrows by label", () => {
     renderScreen();
     fireEvent.change(screen.getByTestId("input-review-search"), { target: { value: "Policy Number" } });
-    const rows = within(screen.getByTestId("review-rows")).getAllByRole("row");
+    const rows = itemRows();
     expect(rows.length).toBe(1);
     expect(rows[0].textContent).toContain("Policy Number");
   });
@@ -244,15 +258,41 @@ describe("confirm sends the reviewed decisions, exactly once each", () => {
 describe("auto-map is the one switch between proposed and manual", () => {
   afterEach(cleanup);
 
-  it("off deselects everything; on restores the proposed routing", () => {
+  it("off keeps exactly one row — the floor is one, never zero; on restores the routing", () => {
     const extraction = buildExtraction();
     renderScreen(extraction);
     const summary = () => screen.getByTestId("review-selected-summary").textContent || "";
 
     fireEvent.click(screen.getByTestId("switch-auto-map"));
-    expect(summary()).toContain(`0 of ${extraction.items.length} selected`);
+    // Exactly one survivor — rendered as "1 field auto-confirmed" (when it is
+    // high-confidence) or "1 of N selected".
+    expect(summary()).toMatch(/1 (field auto-confirmed|of \d+ selected)/);
 
     fireEvent.click(screen.getByTestId("switch-auto-map"));
-    expect(summary()).not.toContain(`0 of ${extraction.items.length} selected`);
+    expect(summary()).not.toMatch(/^1 (field auto-confirmed|of \d+ selected)/);
+  });
+});
+
+describe("the selection floor: never zero selected", () => {
+  afterEach(cleanup);
+
+  it("refuses to deselect the last remaining selected item", () => {
+    const extraction = buildExtraction();
+    renderScreen(extraction);
+    const summary = () => screen.getByTestId("review-selected-summary").textContent || "";
+
+    // Auto-map off leaves exactly one selected row.
+    const oneSelected = /1 (field auto-confirmed|of \d+ selected)/;
+    fireEvent.click(screen.getByTestId("switch-auto-map"));
+    expect(summary()).toMatch(oneSelected);
+
+    // Skipping that final row is refused — the selection stays at one.
+    const selects = Array.from(
+      document.querySelectorAll('select[data-testid^="review-action-"]'),
+    ) as HTMLSelectElement[];
+    const last = selects.find((s) => s.value === "confirm");
+    expect(last).toBeTruthy();
+    fireEvent.change(last!, { target: { value: "skip" } });
+    expect(summary()).toMatch(oneSelected);
   });
 });

@@ -26,7 +26,7 @@
 // blue profile data · amber dates · green money · purple entities · orange
 // actions · red validation — the same accent-HSL system the dashboard speaks.
 
-import { useState, useEffect, useMemo, useCallback, lazy, Suspense } from "react";
+import { Fragment, useState, useEffect, useMemo, useCallback, lazy, Suspense } from "react";
 import { useRoute, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -53,6 +53,7 @@ import {
   type ExtractionItem, type ExtractionDestination,
 } from "@shared/extraction-destinations";
 import { extractionDateRows, type CalendarDateDecision } from "@shared/extraction-calendar";
+import { groupItemsIntoSections } from "@shared/extraction-sections";
 import type { ProposedAction } from "@shared/extraction-actions";
 import type { SemanticEntity } from "@shared/semantic-document";
 import { CONFIDENCE_HIGH, CONFIDENCE_MEDIUM } from "@shared/semantic-document";
@@ -255,6 +256,7 @@ export function DocumentReviewScreen({
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<RowCategory | "all">("all");
   const [confirming, setConfirming] = useState(false);
+  const { toast } = useToast();
 
   const hasItems = items.length > 0;
   const hasPlan = actions.length > 0;
@@ -374,6 +376,15 @@ export function DocumentReviewScreen({
       i.id === id ? { ...i, destination, selected: destination !== "ignore" } : i
     )));
 
+  /** The floor of one: a review may never reach zero selected candidates.
+   *  (Skip All remains the way to leave without saving — it submits nothing.) */
+  const refuseEmptySelection = () => {
+    toast({
+      title: "At least one item must stay selected",
+      description: "To leave without saving anything, use Skip All instead.",
+    });
+  };
+
   /**
    * Per-row Confirm / Skip. The citing actions follow the evidence: an action
    * stays selected while ANY of its rows is confirmed, and confirming a row
@@ -382,28 +393,57 @@ export function DocumentReviewScreen({
    */
   const setRowChoice = (id: string, choice: "confirm" | "skip") => {
     const nextItems = items.map((i) => (i.id === id ? { ...i, selected: choice === "confirm" } : i));
-    setItems(nextItems);
-    setActions((prev) => prev.map((a) => {
+    const nextActions = actions.map((a) => {
       if (!a.itemIds.includes(id)) return a;
       if (!a.savable || a.operation === "NO_ACTION") return a;
       const anyEvidenceSelected = a.itemIds.some(
         (iid) => nextItems.find((i) => i.id === iid)?.selected,
       );
       return { ...a, selected: anyEvidenceSelected };
-    }));
+    });
+    if (
+      choice === "skip"
+      && nextItems.every((i) => !i.selected)
+      && !nextActions.some((a) => a.selected && a.operation !== "NO_ACTION")
+    ) {
+      refuseEmptySelection();
+      return;
+    }
+    setItems(nextItems);
+    setActions(nextActions);
   };
 
-  const toggleAction = (id: string) =>
-    setActions((prev) => prev.map((a) => (a.id === id ? { ...a, selected: !a.selected } : a)));
+  const toggleAction = (id: string) => {
+    const target = actions.find((a) => a.id === id);
+    const next = actions.map((a) => (a.id === id ? { ...a, selected: !a.selected } : a));
+    if (
+      target?.selected
+      && items.every((i) => !i.selected)
+      && !next.some((a) => a.selected && a.operation !== "NO_ACTION")
+    ) {
+      refuseEmptySelection();
+      return;
+    }
+    setActions(next);
+  };
 
-  /** Auto-map off = nothing pre-confirmed; back on = restore proposed routing. */
+  /** Auto-map off = hand-pick mode; back on = restore the proposed routing.
+   *  Off still keeps the single highest-confidence row — the review's floor
+   *  is one selected item, never zero. */
   const handleAutoMap = (on: boolean) => {
     setAutoMap(on);
     if (on) {
       setItems((extraction.items || []).map((i) => ({ ...i })));
       setActions((extraction.actionPlan?.actions ?? []).map((a) => ({ ...a })));
     } else {
-      setItems((prev) => prev.map((i) => ({ ...i, selected: false })));
+      let keep: string | null = null;
+      let best = -1;
+      for (const i of items) {
+        if (i.destination === "ignore") continue;
+        const c = itemConfidence(i) ?? 0;
+        if (c > best) { best = c; keep = i.id; }
+      }
+      setItems((prev) => prev.map((i) => ({ ...i, selected: i.id === keep })));
       setActions((prev) => prev.map((a) => ({ ...a, selected: false })));
     }
   };
@@ -449,6 +489,16 @@ export function DocumentReviewScreen({
         .some((s) => s.toLowerCase().includes(q));
     });
   }, [items, category, search, catsFor]);
+
+  // Document-driven sections: the same rows, grouped by what the pipeline
+  // understood them to BE — Policy Details, Dates & Deadlines, Measurements,
+  // Contact Information — instead of one flat 75-row list. The vocabulary is
+  // derived from groups, roles and subjects, never from a document-type table
+  // (shared/extraction-sections).
+  const visibleSections = useMemo(
+    () => groupItemsIntoSections(visibleItems, extraction.semantic ?? null),
+    [visibleItems, extraction.semantic],
+  );
 
   const selectedCount = items.filter((i) => i.selected).length;
   const autoConfirmed = items.filter(
@@ -735,7 +785,18 @@ export function DocumentReviewScreen({
                   </tr>
                 </thead>
                 <tbody data-testid="review-rows">
-                  {visibleItems.map((item) => {
+                  {visibleSections.map((section) => (
+                    <Fragment key={section.id}>
+                      <tr data-testid={`review-section-${section.id}`}>
+                        <td colSpan={6} className="px-3 pt-3 pb-1.5 border-b border-border/50">
+                          <span className="micro-label text-muted-foreground">{section.label}</span>
+                          {section.owner && (
+                            <span className="text-[11px] text-muted-foreground"> · {section.owner}</span>
+                          )}
+                          <span className="text-[11px] text-muted-foreground/70 tabular-nums ml-1.5">{section.items.length}</span>
+                        </td>
+                      </tr>
+                      {section.items.map((item) => {
                     const Icon = rowIcon(item);
                     const primary = primaryCategory(item);
                     const iconHsl = primary ? CATEGORY_ACCENT[primary] : ACCENT.teal;
@@ -837,6 +898,15 @@ export function DocumentReviewScreen({
                           {targetName && (
                             <div className="text-[11px] text-muted-foreground truncate max-w-[200px]">{targetName}</div>
                           )}
+                          {item.trackerName && (item.destination === "tracker" || item.destination === "profile_tracker") && (
+                            <div
+                              className="text-[11px] font-medium truncate max-w-[200px]"
+                              style={{ color: `hsl(${ACCENT.green})` }}
+                              data-testid={`review-tracker-hint-${item.id}`}
+                            >
+                              → {item.trackerName} tracker
+                            </div>
+                          )}
                         </td>
                         <td className="px-2 py-2.5">
                           {blocking && item.selected === false ? (
@@ -886,6 +956,8 @@ export function DocumentReviewScreen({
                       </tr>
                     );
                   })}
+                    </Fragment>
+                  ))}
                   {visibleItems.length === 0 && (
                     <tr>
                       <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
