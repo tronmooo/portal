@@ -26,6 +26,7 @@ import {
   loanStatement,
   parkingTicket,
   unrecognizedDocument,
+  autoLoanStatement,
   type DocumentFixture,
 } from "./document-fixtures";
 
@@ -533,6 +534,184 @@ describe("the unknown document still gets reasoned about", () => {
     expect(o.payload.recurrenceEnd).toBe("2027-04-01");
     expect(o.savable).toBe(false);
     expect(o.unsupportedReason).toBeTruthy();
+  });
+});
+
+describe("the worked example — seven consequences, nothing created", () => {
+  const p = plan(autoLoanStatement);
+  const byFact = (id: string) => p.actions.find((a) => a.factIds.includes(id))!;
+
+  it("updates the balance AND appends it to the tracker — one fact, two jobs", () => {
+    const a = byFact("f-balance");
+    expect(a.destination).toBe("profile_tracker");
+    expect(a.payload.fields.currentBalance).toBe(24820);
+    expect(a.payload.trackerId).toBe("trk-bal");
+    expect(a.savable).toBe(true);
+    expect(a.writesLabel).toMatch(/field.*and adds an entry/i);
+  });
+
+  it("finds the loan's existing balance tracker despite the different name", () => {
+    // RULE 2. The statement says "Current Balance", the tracker is called
+    // "Loan Balance" — the same metric under two names. Matching on the name
+    // alone would give this loan a second balance chart.
+    const a = byFact("f-balance");
+    expect(a.operation).toBe("APPEND");
+    expect(a.target.id).toBe("trk-bal");
+  });
+
+  it("records the $612 payment against the loan, not as an expense", () => {
+    const a = byFact("f-paid");
+    expect(a.destination).toBe("liability_payment");
+    expect(a.operation).toBe("RECORD");
+    expect(a.target.id).toBe("liab-ram");
+    expect(a.payload.amount).toBe(612);
+    expect(a.payload.date).toBe("2026-08-08");
+    expect(p.actions.filter((x) => x.destination === "expense")).toHaveLength(0);
+  });
+
+  it("puts the payment terms and the next due date on the loan we already have", () => {
+    const a = byFact("f-monthly");
+    expect(a.destination).toBe("entity_field");
+    expect(a.target.id).toBe("liab-ram");
+    expect(a.payload.fields.monthlyPayment).toBe(612);
+    expect(a.payload.fields.nextDueDate).toBe("2026-09-08");
+    expect(a.payload.fields.maturityDate).toBe("2030-06-08");
+  });
+
+  it("sets ONE lead time rather than a pile of reminder rows", () => {
+    // The app escalates every date through a single attention ladder, so this
+    // is the one genuinely per-record knob: how far out it starts mattering.
+    const a = byFact("f-monthly");
+    expect(a.payload.leadTimeDays).toBe(5);
+    expect(p.actions.filter((x) => x.destination === "task")).toHaveLength(0);
+  });
+
+  it("keeps the statement date as reference and creates no event for it", () => {
+    const a = byFact("f-stmt");
+    expect(a.destination).toBe("reference");
+    expect(a.operation).toBe("NO_ACTION");
+  });
+
+  it("creates NOTHING — not a loan, not a bill, not a second anything", () => {
+    // The richest document in the corpus, and it mints no entity at all.
+    for (const a of p.actions) {
+      if (a.operation !== "CREATE") continue;
+      expect(["profile", "obligation"]).not.toContain(a.target.kind);
+    }
+    expect(p.actions.every((a) => a.savable)).toBe(true);
+  });
+});
+
+describe("money is routed by what KIND it is", () => {
+  const withKind = (kind: string, extraRoles: string[] = []) => plan({
+    ...autoLoanStatement,
+    semantic: {
+      ...autoLoanStatement.semantic,
+      recurrences: [],
+      facts: [{
+        id: "f-x", itemIds: ["field-paymentreceived"], label: "Amount", value: 500,
+        roles: ["financial", ...extraRoles] as any,
+        subject: { entityRef: "e-loan", confidence: 0.9 },
+        volatility: "historical", financialKind: kind as any, confidence: 0.9,
+      }],
+    },
+  });
+
+  it("a payment against a debt is a payment, never an expense", () => {
+    const a = withKind("payment").actions.find((x) => x.factIds.includes("f-x"))!;
+    expect(a.destination).toBe("liability_payment");
+  });
+
+  it("a charge is an expense", () => {
+    const a = withKind("charge").actions.find((x) => x.factIds.includes("f-x"))!;
+    expect(a.destination).toBe("expense");
+  });
+
+  it("a fee is an expense, and says it is a fee", () => {
+    const a = withKind("fee").actions.find((x) => x.factIds.includes("f-x"))!;
+    expect(a.destination).toBe("expense");
+    expect(a.title).toMatch(/fee/i);
+  });
+
+  it("a refund is NOT income, and has nowhere to go", () => {
+    // The failure this prevents: a refund filed as income, inflating earnings
+    // by exactly the amount that came back.
+    const a = withKind("refund").actions.find((x) => x.factIds.includes("f-x"))!;
+    expect(a.destination).toBe("unsupported");
+    expect(a.savable).toBe(false);
+    expect(a.unsupportedCode).toBe("no_record_type");
+    expect(a.unsupportedReason).toMatch(/not income/i);
+  });
+
+  it("a credit and a transfer are neither income nor expense", () => {
+    for (const kind of ["credit", "transfer"]) {
+      const a = withKind(kind).actions.find((x) => x.factIds.includes("f-x"))!;
+      expect(a.destination, kind).toBe("unsupported");
+      expect(a.savable, kind).toBe(false);
+    }
+  });
+
+  it("an estimate never enters the ledger", () => {
+    const a = withKind("estimate").actions.find((x) => x.factIds.includes("f-x"))!;
+    expect(a.destination).toBe("unsupported");
+    expect(a.unsupportedCode).toBe("not_a_ledger_event");
+  });
+
+  it("income is income", () => {
+    const a = withKind("income").actions.find((x) => x.factIds.includes("f-x"))!;
+    expect(a.destination).toBe("income");
+  });
+
+  it("a rate is a field on the record, not a transaction", () => {
+    const a = withKind("rate").actions.find((x) => x.factIds.includes("f-x"))!;
+    expect(a.destination).toBe("entity_field");
+  });
+});
+
+describe("a status the document proves", () => {
+  it("marks the record, and only a record that exists", () => {
+    const p = plan({
+      ...autoLoanStatement,
+      semantic: {
+        ...autoLoanStatement.semantic,
+        recurrences: [],
+        facts: [{
+          id: "f-status", itemIds: ["field-statementdate"], label: "Account Status",
+          value: "PAID", roles: ["status_change"] as any,
+          subject: { entityRef: "e-loan", confidence: 0.92 },
+          volatility: "changeable", status: "paid" as any, confidence: 0.92,
+        }],
+      },
+    });
+    const a = p.actions.find((x) => x.factIds.includes("f-status"))!;
+    expect(a.destination).toBe("entity_field");
+    expect(a.payload.fields.status).toBe("paid");
+    expect(a.target.id).toBe("liab-ram");
+  });
+});
+
+describe("proof that something happened", () => {
+  it("is kept and explained rather than filed as a diary entry", () => {
+    // JournalEntry requires a MoodLevel — it is a mood journal, not a history
+    // log. Filing a service record there would be the wrong record type, which
+    // is worse than saying there isn't one.
+    const p = plan({
+      ...autoLoanStatement,
+      semantic: {
+        ...autoLoanStatement.semantic,
+        recurrences: [],
+        facts: [{
+          id: "f-event", itemIds: ["field-statementdate"], label: "Inspection Completed",
+          value: "Passed", roles: ["event_occurred"] as any,
+          subject: { entityRef: "e-loan", confidence: 0.9 },
+          volatility: "historical", date: "2026-08-01", confidence: 0.9,
+        }],
+      },
+    });
+    const a = p.actions.find((x) => x.factIds.includes("f-event"))!;
+    expect(a.destination).toBe("unsupported");
+    expect(a.unsupportedCode).toBe("no_record_type");
+    expect(a.detail).toMatch(/already happened/);
   });
 });
 

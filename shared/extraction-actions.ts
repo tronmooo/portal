@@ -277,6 +277,8 @@ export interface IndexedTracker {
   name: string;
   unit?: string;
   category?: string;
+  /** Which records this tracker belongs to. Used to scope identity by entity. */
+  linkedProfiles?: string[];
 }
 
 export interface IndexedLink {
@@ -1036,9 +1038,65 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       continue;
     }
 
+    // ── Money: what KIND decides everything ──
+    // An amount alone routes nowhere. $612 on a loan statement is a payment
+    // against the balance, on a repair invoice a charge, on a settlement letter
+    // a refund — three different records, or in one case no record at all.
+    if (roles.includes("financial") && fact.financialKind) {
+      const moneyAction = financialAction(fact, landingFor(fact.subject.entityRef), index, documentId, today, itemById);
+      if (moneyAction) { push(moneyAction); continue; }
+      // `balance` and `rate` fall through deliberately: they are FIELDS on the
+      // record, and a balance is additionally a point in a time series, both of
+      // which the passes below already handle correctly.
+    }
+
+    // ── A status the document says a record is now in ──
+    if (roles.includes("status_change") && fact.status) {
+      push(statusAction(fact, landingFor(fact.subject.entityRef), documentId, itemById));
+      continue;
+    }
+
+    // ── Proof that something already happened ──
+    // A history entry has no home: JournalEntry is a mood journal (it requires
+    // a MoodLevel), and the audit log is private to storage. Rather than file a
+    // service record as a diary entry, say so.
+    if (roles.includes("event_occurred") && !roles.includes("financial") && !roles.includes("measurement")) {
+      push({
+        ...referenceAction(fact, semantic, documentId, itemById),
+        id: `act-happened-${slug(fact.id)}`,
+        destination: "unsupported",
+        title: fact.label,
+        detail: `The document shows this already happened${fact.date ? ` on ${fact.date}` : ""}.`,
+        savable: false,
+        unsupportedCode: "no_record_type",
+        unsupportedReason:
+          "This app has no history record for a past event. It stays on the document, where you can still read it.",
+        writesLabel: "Nothing — no compatible record exists",
+        dedupeKey: stableKey([documentId, "happened", fact.id]),
+      });
+      continue;
+    }
+
     // ── Measurements: a point in a time series ──
     if (roles.includes("measurement")) {
-      push(measurementAction(fact, landingFor(fact.subject.entityRef).target, index, documentId, today));
+      const landing = landingFor(fact.subject.entityRef);
+      const m = measurementAction(fact, landing.target, index, documentId, today);
+      // ONE fact with TWO jobs. A loan balance is the number owed right now —
+      // a field on the liability, which every payoff and net-worth figure reads
+      // — AND a point in its history. Splitting it into two rows would make the
+      // user tick the same fact twice; writing only one of them loses half of
+      // what the statement said.
+      if (fact.financialKind === "balance" && landing.target.kind === "profile" && landing.target.id) {
+        m.destination = "profile_tracker";
+        m.payload = {
+          ...m.payload,
+          profileId: landing.target.id,
+          group: landing.group,
+          fields: { [fieldKeyFor(fact, itemById)]: fact.value },
+        };
+        m.title = `${m.title} · and update the balance on ${landing.target.name}`;
+      }
+      push(m);
       continue;
     }
 
@@ -1257,6 +1315,216 @@ function unresolvedAction(fact: SemanticFact, target: TargetRef, documentId: str
 }
 
 /**
+ * Route a money fact by WHAT KIND of money it is.
+ *
+ * Returns null for the kinds that are genuinely fields on a record — a balance,
+ * a rate — so the caller's field pass handles them, and a balance additionally
+ * reaches the tracker pass as a point in time.
+ *
+ * The three kinds with no home are the reason this function exists at all. A
+ * refund is not income, a credit is not income, and a transfer between the
+ * user's own records is neither income nor an expense. Filing any of them as
+ * one would inflate a number the user relies on, and they would only find out
+ * by wondering why a month looked wrong.
+ */
+function financialAction(
+  fact: SemanticFact,
+  landing: { target: TargetRef; group?: string },
+  index: EntityIndex,
+  documentId: string,
+  today: string,
+  rows: Map<string, ExtractionItem>,
+): PushInput | null {
+  const amount = Number(fact.value);
+  const when = normalizeDateString(fact.date) || today;
+  const target = landing.target;
+  const targetIsLiability = target.kind === "profile" && target.profileType
+    && LIABILITY_PROFILE_TYPES.has(target.profileType);
+  const base = {
+    id: `act-money-${slug(fact.id)}`,
+    roles: fact.roles,
+    factIds: [fact.id],
+    itemIds: [...fact.itemIds],
+    origin: "stated" as const,
+    confidence: fact.confidence,
+    warnings: [] as ActionWarning[],
+    stage: 2 as const,
+  };
+
+  const unsupported = (reason: string, code: UnsupportedReasonCode): PushInput => ({
+    ...base,
+    operation: "NO_ACTION",
+    destination: "unsupported",
+    target: { kind: "none", id: null, name: fact.label },
+    title: `${fact.label} — ${money(amount)}`,
+    detail: `Understood as a ${fact.financialKind}.`,
+    payload: { key: fieldKeyFor(fact, rows), value: fact.value, amount, date: when },
+    selected: false,
+    savable: false,
+    unsupportedCode: code,
+    unsupportedReason: reason,
+    writesLabel: "Nothing — no compatible record exists",
+    dedupeKey: stableKey([documentId, "money", fact.id]),
+  });
+
+  switch (fact.financialKind) {
+    case "payment":
+      // Against a debt, this is a payment — it moves a balance and belongs in
+      // the payment ledger. Filing it as an expense as well would double the
+      // month's outgoings.
+      if (targetIsLiability && target.id) {
+        return {
+          ...base,
+          operation: "RECORD",
+          destination: "liability_payment",
+          target: { kind: "liability_payment", id: target.id, name: target.name },
+          title: `Record payment — ${money(amount)}`,
+          detail: [targetLabel(target), when].filter(Boolean).join(" · "),
+          payload: {
+            liabilityId: target.id, amount, date: when,
+            paymentType: fact.label.toLowerCase().includes("partial") ? "partial" : undefined,
+            _source: { documentId, factIds: [fact.id] },
+          },
+          selected: confidenceTier(fact.confidence) !== "low",
+          dedupeKey: stableKey([documentId, "payment", target.id, fact.id]),
+        };
+      }
+      // Paid to someone who is not a debt of ours — that is a charge.
+      return expenseAction(base, fact, target, amount, when, documentId, "payment");
+
+    case "charge":
+    case "fee":
+      return expenseAction(base, fact, target, amount, when, documentId, fact.financialKind);
+
+    case "income":
+      return {
+        ...base,
+        operation: "CREATE",
+        destination: "income",
+        target: { kind: "income", id: null, name: fact.label },
+        title: `Record income — ${money(amount)}`,
+        detail: [targetLabel(target), when].filter(Boolean).join(" · "),
+        payload: {
+          name: fact.label, amount, date: when,
+          linkedProfileId: target.kind === "profile" ? target.id : undefined,
+          _source: { documentId, factIds: [fact.id] },
+        },
+        selected: confidenceTier(fact.confidence) !== "low",
+        dedupeKey: stableKey([documentId, "income", fact.id]),
+      };
+
+    case "refund":
+      return unsupported(
+        "A refund is not income and not an expense, and this app has no refund record. Filing it as either would move a number you rely on in the wrong direction.",
+        "no_record_type");
+    case "credit":
+      return unsupported(
+        "An account credit is not income, and this app has no credit record. It stays on the document.",
+        "no_record_type");
+    case "transfer":
+      return unsupported(
+        "A transfer between your own records is neither income nor an expense, and this app has no transfer record. Counting it as either would invent money.",
+        "no_record_type");
+    case "estimate":
+      return unsupported(
+        "This is a quote or a projection, not a transaction that happened. It stays on the document rather than entering the ledger.",
+        "not_a_ledger_event");
+
+    // A balance and a rate are FIELDS. Returning null sends them to the field
+    // pass — and a balance also reaches the tracker pass, which is what makes
+    // "append the balance to the Loan Balance tracker" work.
+    case "balance":
+    case "rate":
+    default:
+      return null;
+  }
+}
+
+function expenseAction(
+  base: any,
+  fact: SemanticFact,
+  target: TargetRef,
+  amount: number,
+  when: string,
+  documentId: string,
+  kind: string,
+): PushInput {
+  return {
+    ...base,
+    operation: "CREATE",
+    destination: "expense",
+    target: { kind: "expense", id: null, name: fact.label },
+    title: `${kind === "fee" ? "Record fee" : "Record expense"} — ${money(amount)}`,
+    detail: [targetLabel(target), when].filter(Boolean).join(" · "),
+    payload: {
+      description: fact.label, amount, date: when,
+      category: "general",
+      linkedProfileId: target.kind === "profile" ? target.id : undefined,
+      _source: { documentId, factIds: [fact.id] },
+    },
+    selected: confidenceTier(fact.confidence) !== "low",
+    dedupeKey: stableKey([documentId, "expense", fact.id]),
+  };
+}
+
+/**
+ * The document says an existing record's state is now X.
+ *
+ * Only ever an UPDATE on something that already exists — a status is a fact
+ * about a record, and a record we cannot find has no status to change.
+ */
+function statusAction(
+  fact: SemanticFact,
+  landing: { target: TargetRef; group?: string },
+  documentId: string,
+  rows: Map<string, ExtractionItem>,
+): PushInput {
+  const target = landing.target;
+  const base = {
+    id: `act-status-${slug(fact.id)}`,
+    roles: fact.roles,
+    factIds: [fact.id],
+    itemIds: [...fact.itemIds],
+    origin: "stated" as const,
+    confidence: fact.confidence,
+    warnings: [] as ActionWarning[],
+    stage: 2 as const,
+    dedupeKey: stableKey([documentId, "status", target.id ?? "", fact.id]),
+  };
+  if (!target.id || target.kind !== "profile") {
+    return {
+      ...base,
+      operation: "NO_ACTION",
+      destination: "unsupported",
+      target: { kind: "none", id: null, name: fact.label },
+      title: `Marked ${fact.status}`,
+      detail: fact.label,
+      payload: { status: fact.status },
+      selected: false,
+      savable: false,
+      unsupportedCode: "no_matching_record",
+      unsupportedReason: `No record found to mark ${fact.status}.`,
+      writesLabel: "Nothing — no matching record",
+    };
+  }
+  return {
+    ...base,
+    operation: "UPDATE",
+    destination: "entity_field",
+    target,
+    title: `Mark ${target.name} ${fact.status}`,
+    detail: fact.label,
+    payload: {
+      profileId: target.id,
+      group: landing.group,
+      fields: { status: fact.status },
+      _source: { documentId, factIds: [fact.id] },
+    },
+    selected: confidenceTier(fact.confidence) !== "low",
+  };
+}
+
+/**
  * A measurement becomes a point on a tracker.
  *
  * Tracker IDENTITY is resolved through the same key the rest of the app uses,
@@ -1271,8 +1539,28 @@ function measurementAction(
   documentId: string,
   today: string,
 ): PushInput {
+  // RULE 2 — append to the tracker that already represents this metric rather
+  // than minting another beside it.
+  //
+  // Name identity alone is not enough. A loan statement says "Current Balance"
+  // and the tracker is called "Loan Balance": the same metric under two names,
+  // and matching on the name would create a second balance chart for the same
+  // loan. So the search is scoped by ENTITY first — a tracker already attached
+  // to this record, measuring the same KIND of thing — and falls back to name
+  // identity for everything else.
   const wanted = trackerIdentityKey(fact.label);
-  const existing = index.trackers.find((t) => trackerIdentityKey(t.name) === wanted);
+  const ownedByTarget = target.kind === "profile" && target.id
+    ? index.trackers.filter((t) => (t.linkedProfiles || []).includes(target.id!))
+    : [];
+  const existing =
+    // Exact metric name, on a tracker this record owns.
+    ownedByTarget.find((t) => trackerIdentityKey(t.name) === wanted)
+    // A balance is THE balance of the thing it belongs to; one per record.
+    ?? (fact.financialKind === "balance"
+      ? ownedByTarget.find((t) => /balance/i.test(t.name))
+      : undefined)
+    // Otherwise, name identity anywhere.
+    ?? index.trackers.find((t) => trackerIdentityKey(t.name) === wanted);
   const num = Number(fact.value);
   const value = isFinite(num) ? num : fact.value;
   const when = normalizeDateString(fact.date) || today;
@@ -1451,10 +1739,11 @@ function describeWrite(
     case "income":
       return `Creates an income entry · ${money(Number(p.amount) || 0)}`;
     case "tracker":
-    case "profile_tracker":
       return operation === "APPEND"
         ? `Adds an entry to the ${target?.name} tracker`
         : `Creates a ${target?.name} tracker and its first entry`;
+    case "profile_tracker":
+      return `Updates ${Object.keys(p.fields || {}).length} field(s) and adds an entry to the ${target?.name} tracker`;
     case "calendar":
       return p.derived
         ? `Sets ${p.key} — the reminder follows from the record, no separate event`

@@ -134,6 +134,10 @@ export async function buildEntityIndex(): Promise<EntityIndex> {
       name: String(t.name || ""),
       unit: t.unit ? String(t.unit) : undefined,
       category: t.category ? String(t.category) : undefined,
+      // Which records own it — the planner scopes tracker identity by entity
+      // before it scopes by name, so "Current Balance" finds the loan's
+      // existing "Loan Balance" instead of minting a second chart.
+      linkedProfiles: Array.isArray(t.linkedProfiles) ? t.linkedProfiles : [],
     }));
   } catch (e: any) {
     logger.warn(CAT, `trackers unavailable: ${e?.message || e}`);

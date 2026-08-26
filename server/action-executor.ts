@@ -189,10 +189,30 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
           break;
         }
 
-        case "tracker":
-        case "profile_tracker": {
+        case "tracker": {
           const msg = await appendTrackerEntry(action, input.documentId);
           ok(action, msg);
+          break;
+        }
+
+        case "profile_tracker": {
+          // ONE fact, TWO jobs — a balance is the number owed right now AND a
+          // point in its history. Both writes happen, or the row lied about
+          // what it would do.
+          let fieldMsg = "";
+          if (action.payload?.fields && action.payload?.profileId) {
+            const res = await writeFieldsToProfile(action, input.documentId);
+            if (res.wrote > 0 || res.alreadyApplied) {
+              touched.add(res.profileId);
+              fieldMsg = `Updated ${res.wrote} field${res.wrote === 1 ? "" : "s"} on ${res.profileName}`;
+            } else {
+              failed(action, `fields did not persist to ${res.profileName}: ${res.unsaved.join(", ")}`);
+              if (res.profileId) brokenTargets.add(res.profileId);
+              break;
+            }
+          }
+          const msg = await appendTrackerEntry(action, input.documentId);
+          ok(action, fieldMsg ? `${fieldMsg}; ${msg}` : msg);
           break;
         }
 

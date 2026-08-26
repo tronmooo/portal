@@ -530,6 +530,68 @@ export const unrecognizedDocument: DocumentFixture = {
   },
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// 12. The worked example from the brief.
+//
+// "A statement attached to an existing auto loan could suggest: update balance
+//  to $24,820 · record $612 payment · create monthly $612 payment rule · set
+//  next payment due September 8 · update maturity date to June 8 2030 · add
+//  reminder 3 days before payment · append balance to Loan Balance tracker."
+//
+// Seven consequences from one document, every one of them an update or an
+// append against records that already exist. Nothing here creates an entity —
+// which is the point: this is the richest document in the corpus and it still
+// mints nothing.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const autoLoanStatement: DocumentFixture = {
+  name: "auto loan statement (the worked example)",
+  primaryProfileId: "liab-ram",
+  items: [
+    item("currentBalance", "Current Balance", "24820.00"),
+    item("paymentReceived", "Payment Received", "612.00"),
+    item("paymentDate", "Payment Date", "2026-08-08"),
+    item("monthlyPayment", "Monthly Payment", "612.00"),
+    item("nextPaymentDue", "Next Payment Due", "2026-09-08"),
+    item("maturityDate", "Maturity Date", "2030-06-08"),
+    item("statementDate", "Statement Date", "2026-08-12"),
+  ],
+  index: {
+    ...emptyIndex(),
+    profiles: [profile("liab-ram", "liability", "2025 Dodge Ram Auto Loan", {
+      lender: "Cascade Credit Union", currentBalance: "25432.00", monthlyPayment: "612.00",
+    })],
+    trackers: [{ id: "trk-bal", name: "Loan Balance", unit: "USD", category: "finance", linkedProfiles: ["liab-ram"] }],
+  },
+  semantic: {
+    documentType: "Auto Loan Statement",
+    primarySubject: "e-loan",
+    confidence: 0.94,
+    summary: "Monthly statement for the Dodge Ram auto loan.",
+    entities: [{ ref: "e-loan", kind: "liability", name: "Dodge Ram Auto Loan", identifiers: {}, confidence: 0.93 }],
+    relationships: [],
+    facts: [
+      { id: "f-balance", itemIds: ["field-currentbalance"], label: "Current Balance", value: 24820, roles: ["financial", "measurement", "entity_data"], subject: { entityRef: "e-loan", confidence: 0.94 }, volatility: "changeable", financialKind: "balance", unit: "USD", date: "2026-08-12", confidence: 0.94 },
+      { id: "f-paid", itemIds: ["field-paymentreceived", "field-paymentdate"], label: "Payment Received", value: 612, roles: ["financial", "event_occurred"], subject: { entityRef: "e-loan", confidence: 0.94 }, volatility: "historical", financialKind: "payment", date: "2026-08-08", confidence: 0.94 },
+      { id: "f-monthly", itemIds: ["field-monthlypayment"], label: "Monthly Payment", value: 612, roles: ["financial", "recurring_obligation"], subject: { entityRef: "e-loan", confidence: 0.93 }, volatility: "changeable", financialKind: "charge", confidence: 0.93 },
+      { id: "f-next", itemIds: ["field-nextpaymentdue"], label: "Next Payment Due", value: "2026-09-08", roles: ["recurring_obligation", "actionable_date"], subject: { entityRef: "e-loan", confidence: 0.93 }, volatility: "changeable", reminderDaysBefore: 3, confidence: 0.93 },
+      { id: "f-maturity", itemIds: ["field-maturitydate"], label: "Maturity Date", value: "2030-06-08", roles: ["actionable_date", "entity_data"], subject: { entityRef: "e-loan", confidence: 0.92 }, volatility: "changeable", confidence: 0.92 },
+      { id: "f-stmt", itemIds: ["field-statementdate"], label: "Statement Date", value: "2026-08-12", roles: ["reference_only"], subject: { entityRef: "e-loan", confidence: 0.9 }, volatility: "historical", confidence: 0.9 },
+    ],
+    recurrences: [{
+      id: "r-loan", factIds: ["f-monthly", "f-next"], label: "Auto loan payment",
+      subjectRef: "e-loan", cadence: "monthly", amountPerOccurrence: 612,
+      nextOccurrence: "2026-09-08", endsOn: "2030-06-08", stated: "per_occurrence", confidence: 0.93,
+    }],
+    narrative: [],
+  },
+  expectations: {
+    recurrenceDestination: "entity_field",
+    referenceOnlyItemIds: ["field-statementdate"],
+    destinations: ["entity_field", "liability_payment", "profile_tracker"],
+  },
+};
+
 export const ALL_FIXTURES: DocumentFixture[] = [
   insuranceDeclarations,
   medicalReport,
@@ -542,4 +604,5 @@ export const ALL_FIXTURES: DocumentFixture[] = [
   taxRecord,
   warranty,
   unrecognizedDocument,
+  autoLoanStatement,
 ];

@@ -2870,11 +2870,20 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     //
     // It runs for every document, not as a fallback for ones a table did not
     // recognise — there is no table. See server/semantic-reasoner.ts.
+    const entityIndex = await buildEntityIndex();
+    const filedUnderProfile = (() => {
+      const id = resolvedTargetProfile?.id || existingProfileId || undefined;
+      return id ? entityIndex.profiles.find((x) => x.id === id) : undefined;
+    })();
+
     const reasoned = await reasonAboutDocument(getClient(), {
       rows: reviewItems.map((i) => ({ id: i.id, key: i.key, label: i.label, value: i.value })),
       documentType: docType,
       documentLabel: parsed.label || fileName,
       domainHint: classification.domainHint,
+      filedUnder: filedUnderProfile
+        ? `${filedUnderProfile.name} (${filedUnderProfile.type})`
+        : undefined,
       userMessage,
       content: messageContent as any,
     });
@@ -2884,12 +2893,21 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     // this decides what happens, and holds every invariant a model must not be
     // trusted with — resolution before creation, one recurrence to one record,
     // the rule engine's last word on dates, conflicts surfaced not applied.
-    const entityIndex = await buildEntityIndex();
     const actionPlan = reasoned.ok
       ? planExtractionActions({
           semantic: reasoned.semantic,
           items: reviewItems,
           index: entityIndex,
+          // The record this document was filed under, chosen by a person before
+          // the upload. It is the immovable context: nothing in the document
+          // may replace it, duplicate it, or cause a second one to be made.
+          context: filedUnderProfile
+            ? {
+                entityId: filedUnderProfile.id,
+                entityType: filedUnderProfile.type,
+                entityName: filedUnderProfile.name,
+              }
+            : undefined,
           primaryProfileId: resolvedTargetProfile?.id || existingProfileId || undefined,
           documentId: document.id,
           documentName: document.name || fileName,

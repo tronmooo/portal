@@ -70,6 +70,8 @@ Answer these questions:
 4. HOW ARE THEY RELATED? owns, owes, insures, insured_by, treats, prescribed, pays, covers, issued_by, financed_by, finances, employed_by, held_in, supports, beneficiary_of.
 5. FOR EVERY FACT: what is it, who is it about, and what KIND of thing is it?
 
+THIS DOCUMENT IS ALREADY FILED SOMEWHERE. The record it belongs to was chosen by a person before the upload and it ALREADY EXISTS. Never describe it as something new. If the page names it again — a loan statement repeating the loan's name, a policy repeating the address — that is the SAME record, not a second one. Your job is what the document IMPLIES about records that exist, never which records should exist.
+
 ROLES — a fact may have several:
 - profile_data: persistent information about a person.
 - entity_data: an attribute of an asset, vehicle, property, liability, pet or account.
@@ -79,8 +81,26 @@ ROLES — a fact may have several:
 - actionable_date: a date that requires future awareness.
 - relationship: it establishes a link between entities.
 - narrative: meaningful unstructured prose worth keeping as a note.
+- status_change: the document says an existing record's state is now something — paid, cancelled, renewed, approved, denied, expired, closed, suspended. Put that word in "status".
+- event_occurred: the document is PROOF something already happened — a payment made, an inspection passed, a service performed, a claim filed.
 - document_metadata: issuer, document number, form code, printing information.
 - reference_only: useful, but must cause nothing.
+
+MONEY — every financial fact MUST say what KIND of money it is, in "financialKind". An amount alone cannot be routed, and the wrong guess moves a number the user relies on:
+- charge: a cost incurred — a purchase, repair, premium, service, tax, medical bill.
+- payment: money paid out. Against a debt this reduces a balance; it is NOT a new expense.
+- refund: money coming back. NOT income.
+- credit: an account credit applied. NOT income.
+- transfer: moved between the user's own accounts or records. Neither income nor expense.
+- income: money genuinely earned or received as income.
+- balance: what is owed or held right now. Also mark it "measurement" — a balance is both the current number and a point in its history.
+- rate: an APR, interest rate or percentage.
+- fee: a late fee or penalty — a charge, worth naming as one.
+- estimate: a payoff quote, a projected total, an annualized figure. A CALCULATION, never a transaction.
+
+If you cannot tell which kind an amount is, leave financialKind out and give the fact a low confidence. It will be kept and asked about. Guessing "charge" for a loan payment doubles the user's outgoings for that month.
+
+REMINDERS — when an actionable date deserves advance warning, set "reminderDaysBefore" to ONE number of days. Not a list: this app escalates every date as it approaches, so the only thing worth saying is how far out it starts mattering. A yearly renewal deserves ~30; a monthly bill ~3-5.
 
 VOLATILITY — decide, for every fact, whether the property is expected to change:
 - stable: blood type, VIN, date of birth, year built, parcel number. A different value later is a CONFLICT, not an update.
@@ -107,7 +127,7 @@ Return ONE valid JSON object and nothing else:
   "primarySubject": "<entity ref>",
   "entities": [{"ref":"e1","kind":"person|property|vehicle|pet|asset|liability|account|investment|business|organization","name":"...","identifiers":{"policyNumber":"...","vin":"..."},"role":"insured|lender|issuer|provider|...","confidence":0.0}],
   "relationships": [{"from":"e1","to":"e2","type":"owns","confidence":0.0}],
-  "facts": [{"id":"f1","itemIds":["<extracted row id>"],"label":"...","value":"...","roles":["..."],"subject":{"entityRef":"e1","confidence":0.0},"volatility":"stable|changeable|historical","unit":"...","date":"YYYY-MM-DD","confidence":0.0,"derivedFrom":{"factIds":["f2"],"formula":"f2 × 12"}}],
+  "facts": [{"id":"f1","itemIds":["<extracted row id>"],"label":"...","value":"...","roles":["..."],"subject":{"entityRef":"e1","confidence":0.0},"volatility":"stable|changeable|historical","unit":"...","date":"YYYY-MM-DD","financialKind":"charge|payment|refund|credit|transfer|income|balance|rate|fee|estimate","status":"active|paid|overdue|cancelled|renewed|expired|closed|completed|approved|denied|pending|suspended","reminderDaysBefore":0,"confidence":0.0,"derivedFrom":{"factIds":["f2"],"formula":"f2 × 12"}}],
   "recurrences": [{"id":"r1","factIds":["f1","f2"],"label":"...","subjectRef":"e1","cadence":"daily|weekly|biweekly|monthly|quarterly|semiannual|yearly|per_installment","amountPerOccurrence":0,"annualizedTotal":0,"nextOccurrence":"YYYY-MM-DD","endsOn":"YYYY-MM-DD","stated":"per_occurrence|annual|both","confidence":0.0}],
   "narrative": [{"title":"...","body":"...","subjectRef":"e1"}],
   "confidence": 0.0,
@@ -128,6 +148,12 @@ export interface ReasonInput {
   domainHint?: string;
   /** What the user said when they attached it. */
   userMessage?: string;
+  /**
+   * The record this document was filed under, already chosen by a person. Told
+   * to the reasoner so it describes that record as EXISTING rather than as
+   * something the document introduces.
+   */
+  filedUnder?: string;
   /** The page itself, when we have it — layout carries meaning text loses. */
   content?: Anthropic.MessageParam["content"];
 }
@@ -176,6 +202,9 @@ export async function reasonAboutDocument(
     input.documentType ? `A classifier called this a "${input.documentType}".` : "",
     input.documentLabel ? `Its title looks like "${input.documentLabel}".` : "",
     input.domainHint ? `Hint from the classifier: ${input.domainHint}` : "",
+    input.filedUnder
+      ? `This document is filed under an EXISTING record: ${input.filedUnder}. That record already exists — describe what the document implies about it, never propose it as something new.`
+      : "",
     input.userMessage ? `The user attached it saying: "${input.userMessage}"` : "",
   ].filter(Boolean).join("\n");
 
