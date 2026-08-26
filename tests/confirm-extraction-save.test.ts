@@ -452,6 +452,53 @@ describe("POST /api/chat/confirm-extraction", () => {
     expect(stubState.expenses).toHaveLength(1);
     expect(data.saved.join("; ")).toContain("skipped duplicate");
   });
+
+  // ═══ THE ASSET-DOCUMENT BUG (2026-08-26): "I press save and none of the
+  // data was saved in the asset profile" ═══
+  //
+  // For a document filed under an asset, suggestDestination routes nearly
+  // every field to `entity_field` / `entity_record` — the designed home for
+  // entity data. The items switch had no case for either, so whenever those
+  // rows travelled as loose items (the reasoner degraded, or the plan's
+  // context action was unticked by a blocking conflict), the route reported
+  // success while writing NOTHING to the asset the user picked.
+  it("saves entity_field / entity_record items to the chosen asset profile", async () => {
+    const res = await fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-receipt",
+        targetProfileId: "profile-crv",
+        confirmedFields: [],
+        createCalendarEvents: [],
+        trackerEntries: [],
+        // Exactly what the review page sends for an asset document whose
+        // reasoning degraded: loose items, entity destinations, all ticked.
+        items: [
+          { id: "i1", key: "serviceProvider", label: "Service Provider", value: "Oil Changers / Lube N Go", destination: "entity_field", destinationOptions: ["entity_field", "note", "ignore"], selected: true, source: "field" },
+          { id: "i2", key: "oilType", label: "Oil Type", value: "Kendall 0W20 Full Synthetic", destination: "entity_field", destinationOptions: ["entity_field", "note", "ignore"], selected: true, source: "field" },
+          { id: "i3", key: "policyNumber", label: "Policy Number", value: "SPI-24-87654321", destination: "entity_record", destinationOptions: ["entity_record", "note", "ignore"], selected: true, source: "field", group: "insurance" },
+          // An unticked row and an ignore row must still stay off the profile.
+          { id: "i4", key: "naicCode", label: "NAIC Code", value: "12345", destination: "entity_field", destinationOptions: ["entity_field", "ignore"], selected: false, source: "field" },
+          { id: "i5", key: "barcodeValue", label: "Barcode", value: "X999", destination: "ignore", destinationOptions: ["ignore"], selected: true, source: "field" },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.failures).toEqual([]);
+
+    const after = stubState.profiles.get("profile-crv").fields;
+    expect(after.serviceProvider).toBe("Oil Changers / Lube N Go");
+    expect(after.oilType).toBe("Kendall 0W20 Full Synthetic");
+    expect(after.policyNumber).toBe("SPI-24-87654321");
+    expect(after).not.toHaveProperty("naicCode");
+    expect(after).not.toHaveProperty("barcodeValue");
+    // The document keeps the data too — it is the source of truth.
+    const doc = stubState.documents.get("doc-receipt").extractedData;
+    expect(doc.serviceProvider).toBe("Oil Changers / Lube N Go");
+  });
 });
 
 // ─── The 2026-08-20 report, driven through the real route ────────────────────

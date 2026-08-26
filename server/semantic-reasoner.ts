@@ -121,6 +121,11 @@ CONFIDENCE. Be honest. If you do not know what a value represents, give it a low
 EVERY FACT MUST CITE THE EXTRACTED ROWS IT CAME FROM, by their exact ids, in itemIds. A fact citing no real row will be discarded.
 EVERY FACT MUST NAME A SUBJECT that is one of the entity refs you declared. A fact whose subject you did not declare will be discarded.
 
+BE COMPACT. Every token you emit is time the person waits on this upload.
+- OMIT any key that does not apply. Never emit "unit":"", "date":"", "status":"" or a 0 placeholder just because the shape below shows the key.
+- You do NOT need a fact for every row. A row whose only significance is that it was printed — a form code, a page or barcode number, a layout label, an issuer's internal reference — is kept and shown by the app on its own. Leave it out rather than writing a fact that says nothing.
+- One fact per real-world fact, not per printed row: rows that together state one thing (an amount, its schedule, its next due date) are one fact set feeding one recurrence, exactly as described above.
+
 Return ONE valid JSON object and nothing else:
 {
   "documentType": "<what this is, in its own terms>",
@@ -156,6 +161,11 @@ export interface ReasonInput {
   filedUnder?: string;
   /** The page itself, when we have it — layout carries meaning text loses. */
   content?: Anthropic.MessageParam["content"];
+  /** Model override — the caller downgrades to a faster model when the upload
+   *  has already burned most of its latency budget. */
+  model?: string;
+  /** Deadline override, same reason. */
+  timeoutMs?: number;
 }
 
 export interface ReasonResult {
@@ -168,13 +178,16 @@ export interface ReasonResult {
 }
 
 const MODEL = () => process.env.ANTHROPIC_REASONER_MODEL || "claude-sonnet-4-6";
-const TIMEOUT_MS = Number(process.env.SEMANTIC_REASONER_TIMEOUT_MS || 60_000);
+// A stage that degrades gracefully must not be allowed to dominate the wall
+// clock it degrades to protect: at 60s a single stalled call cost more than
+// the entire rest of the upload. 40s still clears a slow large document.
+const TIMEOUT_MS = Number(process.env.SEMANTIC_REASONER_TIMEOUT_MS || 40_000);
 // Thinking tokens are generated serially, so the budget is a direct latency
-// ceiling. 2,500 is enough to group rows into recurrences and pick subjects;
-// the old 4,000 mostly bought wall-clock time. Tunable without a deploy.
+// ceiling. 2,000 is enough to group rows into recurrences and pick subjects;
+// the original 4,000 mostly bought wall-clock time. Tunable without a deploy.
 const THINKING_BUDGET = () => {
-  const n = Number(process.env.SEMANTIC_REASONER_THINKING || 2_500);
-  return isFinite(n) && n >= 1024 ? Math.round(n) : 2_500;
+  const n = Number(process.env.SEMANTIC_REASONER_THINKING || 2_000);
+  return isFinite(n) && n >= 1024 ? Math.round(n) : 2_000;
 };
 
 /**
@@ -234,7 +247,7 @@ ${rowTable}`;
 
     const response = await withTimeout(
       client.messages.create({
-        model: MODEL(),
+        model: input.model || MODEL(),
         max_tokens: 8000,
         // Reasoning about which fields belong together is exactly the kind of
         // work thinking helps with — it is how five separate rows become one
@@ -242,7 +255,7 @@ ${rowTable}`;
         thinking: { type: "enabled", budget_tokens: THINKING_BUDGET() },
         messages: [{ role: "user", content }],
       }),
-      TIMEOUT_MS,
+      input.timeoutMs ?? TIMEOUT_MS,
     );
 
     const text = (response.content.find((b: any) => b.type === "text") as any)?.text ?? "";
