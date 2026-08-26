@@ -156,6 +156,7 @@ export default defineConfig({
       'tests/document-review.dom.test.tsx',
       'tests/extraction-sections.test.ts',
       'tests/document-dates-group.test.ts',
+      'tests/period-deadlines.test.ts',
       'tests/medical-report-extraction.test.ts',
       'tests/upload-dedupe.test.ts',
       'tests/cache-bust-predicate.test.ts',

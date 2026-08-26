@@ -109,6 +109,10 @@ VOLATILITY — decide, for every fact, whether the property is expected to chang
 
 FACTS ARE NOT ACTIONS. "Premium: $1,672/year" is a financial fact that may justify a recurring obligation. "Signature date: May 20" is a historical fact that justifies nothing at all. Never mark a signature, printing, processing, notarisation or issue date as actionable.
 
+PERIODS ARE DATES NOBODY PRINTED. When the document states a WINDOW — a 90-day return policy, a 12-month warranty, a 30-day notice period, a free trial — and also states the day it counts from, the deadline is real even though the page never prints it. Give the period fact the "actionable_date" role alongside its other roles so it is treated as the deadline it implies rather than as a loose number. Do NOT compute the date yourself; the app does that arithmetic deterministically from the period and the anchor date.
+
+MONEY THAT IS PART OF OTHER MONEY. A subtotal, a tax line, a per-item price and a shipping charge are COMPONENTS of the total on the same document, not separate costs. Report each one honestly with its own financialKind, and the app records the transaction once, on the total — never once per line. Never restate a total as a second charge.
+
 DATES. A date is actionable when it means: due, expires, renews, appointment, deadline, payment, maturity, inspection, a scheduled occurrence, or a required follow-up. It is NOT actionable when it records when the document was created, signed, printed, processed, or when a past transaction or examination happened — unless the document plainly makes it so.
 
 RECURRENCE. Look for it semantically: daily, weekly, monthly, annually, every 6 months, each paycheck, per installment, subscription, renewal, recurring treatment, payment schedule.

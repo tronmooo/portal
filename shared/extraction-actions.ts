@@ -56,6 +56,7 @@ import { classifyDateField } from "./date-rules";
 import { normalizeDateString } from "./extraction-normalize";
 import { rankByName, sameEntityName } from "./entity-resolution";
 import { trackerIdentityKey } from "./tracker-identity";
+import { derivePeriodDeadlines } from "./period-deadlines";
 import {
   entityFamily, destinationsForFamily, canonicalFieldName, matchConcept,
   identifyingConcepts, identifiersAgree, FAMILY_LABEL, type EntityFamily,
@@ -1104,6 +1105,11 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       writesLabel: "Nothing — no compatible record exists",
     });
   }
+  // Which money facts are PARTS of a bigger one on the same document — worked
+  // out before the facts loop, because a component can be read before the
+  // total that subsumes it.
+  const { componentFactIds, total: componentTotal } = componentAmountIds(semantic.facts, claimedFacts);
+
   // ═══ 2. Facts, grouped by where they land ════════════════════════════════
   const fieldBuckets = new Map<string, {
     target: TargetRef; group?: string; facts: SemanticFact[]; roles: Set<SemanticRole>;
@@ -1148,6 +1154,19 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     // against the balance, on a repair invoice a charge, on a settlement letter
     // a refund — three different records, or in one case no record at all.
     if (roles.includes("financial") && fact.financialKind) {
+      // A COMPONENT OF A TOTAL IS NOT ITS OWN EXPENSE.
+      //
+      // A receipt states $75.00 subtotal, $6.19 tax and $81.19 total, and the
+      // reasoner honestly calls all three charges. Filing each one produced
+      // three expenses for a single $81.19 purchase — the "never double-count"
+      // rule broken three ways on the simplest document there is (user report
+      // 2026-08-26). `componentAmountIds` works this out arithmetically, so it
+      // holds for an invoice with six line items and a shipping charge just as
+      // well as for a two-line receipt, without naming "subtotal" or "tax".
+      if (componentFactIds.has(fact.id)) {
+        push(componentAction(fact, componentTotal, documentId, itemById));
+        continue;
+      }
       const moneyAction = financialAction(fact, landingFor(fact.subject.entityRef), index, documentId, today, itemById);
       if (moneyAction) { push(moneyAction); continue; }
       // `balance` and `rate` fall through deliberately: they are FIELDS on the
@@ -1334,6 +1353,56 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       warnings: [],
       stage: 3,
       dedupeKey: stableKey([documentId, "attach", id]),
+    });
+  }
+
+  // ═══ A STATED PERIOD IS A DATE NOBODY PRINTED ═══════════════════════════
+  //
+  // "90-DAY RETURN POLICY" on a receipt bought on the 20th means the 18th of
+  // August, and that computed day is the only thing about the policy anyone
+  // ever acts on. The document states the window, never the deadline, so the
+  // app computes it — for return windows, warranties, trials, grace periods
+  // and notice periods alike (shared/period-deadlines is shape-based, not
+  // receipt-specific).
+  //
+  // The FACT and the ACTION stay separate, exactly as they must: the row keeps
+  // its own value (90), and the deadline it implies becomes its own calendar
+  // action the user can take or leave.
+  for (const derived of derivePeriodDeadlines(
+    items.map((i) => ({ id: i.id, key: i.key, label: i.label, value: i.value, date: i.date })),
+  )) {
+    const row = itemById.get(derived.rowId);
+    const subject = row?.subjectRef ? landingFor(row.subjectRef).target : primaryTarget(semantic, targets);
+    const title = `${derived.label} — ${derived.date}`;
+    // The row now carries the day it implies, so every date-aware surface —
+    // the review's Dates & Deadlines section, the category chips, the calendar
+    // column — sees it as the deadline it is rather than as a loose number.
+    if (row) {
+      row.date = derived.date;
+      row.roles = Array.from(new Set([...(row.roles ?? []), "actionable_date"]));
+    }
+    push({
+      id: `act-deadline-${slug(derived.rowId)}`,
+      operation: "CREATE",
+      destination: "calendar",
+      target: { kind: "event", id: null, name: derived.label },
+      roles: ["actionable_date"],
+      title,
+      detail: `${derived.detail}${subject?.name ? ` · ${subject.name}` : ""}`,
+      factIds: [],
+      itemIds: [derived.rowId],
+      payload: {
+        title: subject?.name ? `${derived.label} — ${subject.name}` : title,
+        date: derived.date,
+        category: "other",
+        _source: { documentId, derivedFrom: derived.rowKey, formula: derived.detail },
+      },
+      origin: "implied",
+      selected: true,
+      confidence: 0.9,
+      warnings: [],
+      stage: 4,
+      dedupeKey: stableKey([documentId, "deadline", derived.label, derived.date]),
     });
   }
 
@@ -1569,6 +1638,99 @@ function expenseAction(
     },
     selected: confidenceTier(fact.confidence) !== "low",
     dedupeKey: stableKey([documentId, "expense", fact.id]),
+  };
+}
+
+/**
+ * The money facts that are PARTS of another money fact on the same document.
+ *
+ * Purely arithmetic, and therefore document-agnostic: within one subject and
+ * one day, if some subset of the charges sums to another charge, that other one
+ * is the total and the subset are its components. A $75 subtotal plus $6.19 tax
+ * makes the $81.19 total; six line items plus shipping make an invoice total;
+ * neither case needs the words "subtotal" or "tax" to appear anywhere.
+ *
+ * Only ever suppresses when a genuine total is found, and never suppresses the
+ * total itself — the safe failure is three expenses, which is what the user
+ * already had, not zero.
+ */
+export function componentAmountIds(
+  facts: readonly SemanticFact[],
+  claimed: ReadonlySet<string> = new Set(),
+): { componentFactIds: Set<string>; total: number | null } {
+  const spendable = new Set(["charge", "fee", "payment"]);
+  const money = facts.filter((f) =>
+    !claimed.has(f.id)
+    && f.roles.includes("financial")
+    && f.financialKind && spendable.has(f.financialKind)
+    && isFinite(Number(f.value)) && Number(f.value) > 0);
+  const componentFactIds = new Set<string>();
+  if (money.length < 3) return { componentFactIds, total: null };
+
+  // Group by what the money is ABOUT and WHEN — two purchases on one statement
+  // are two totals, and merging them would suppress a real expense.
+  const groups = new Map<string, SemanticFact[]>();
+  for (const f of money) {
+    const key = `${f.subject.entityRef}:${normalizeDateString(f.date) || ""}`;
+    const arr = groups.get(key);
+    if (arr) arr.push(f); else groups.set(key, [f]);
+  }
+
+  let total: number | null = null;
+  for (const group of groups.values()) {
+    if (group.length < 3) continue;
+    // Largest first: the total is the one the others add up to.
+    const sorted = [...group].sort((a, b) => Number(b.value) - Number(a.value));
+    for (const candidate of sorted) {
+      const others = group.filter((f) => f.id !== candidate.id);
+      const sum = others.reduce((n, f) => n + Number(f.value), 0);
+      const target = Number(candidate.value);
+      // A cent of tolerance, or a hundredth of a percent on large figures.
+      if (Math.abs(sum - target) <= Math.max(0.011, target * 0.0001)) {
+        for (const f of others) componentFactIds.add(f.id);
+        total = total === null ? target : total;
+        break;
+      }
+    }
+  }
+  return { componentFactIds, total };
+}
+
+/**
+ * A component amount, kept and explained rather than filed as its own expense.
+ *
+ * NO_ACTION keeps it out of the Suggested Actions list — it is not something to
+ * do — while the row still carries what happened to it, so "why is the tax not
+ * an expense?" has a visible answer instead of looking like a dropped field.
+ */
+function componentAction(
+  fact: SemanticFact,
+  total: number | null,
+  documentId: string,
+  rows: Map<string, ExtractionItem>,
+): PushInput {
+  const amount = Number(fact.value);
+  return {
+    id: `act-part-${slug(fact.id)}`,
+    operation: "NO_ACTION",
+    destination: "reference",
+    target: { kind: "none", id: null, name: fact.label },
+    roles: fact.roles,
+    title: `${fact.label} — ${money(amount)}`,
+    detail: total !== null
+      ? `Part of the ${money(total)} total — recorded once, on the total.`
+      : "Part of a larger total — recorded once, on the total.",
+    factIds: [fact.id],
+    itemIds: [...fact.itemIds],
+    payload: { key: fieldKeyFor(fact, rows), value: fact.value, amount },
+    origin: "stated",
+    selected: false,
+    confidence: fact.confidence,
+    warnings: [],
+    stage: 2,
+    savable: false,
+    writesLabel: "Nothing — counted once, on the total",
+    dedupeKey: stableKey([documentId, "part", fact.id]),
   };
 }
 
