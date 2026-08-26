@@ -45,7 +45,7 @@ import { cascadeProfileRename } from "./profile-rename-cascade";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { seriesFromAll } from "@shared/calendar-adapters";
-import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted, removeDocumentContributedFields } from "@shared/profile-field-identity";
+import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted } from "@shared/profile-field-identity";
 
 /** Extract user timezone from request header, with fallback */
 function getTimezone(req: Request): string {
@@ -92,6 +92,7 @@ function applyActiveProfileScope(
 interface AuthenticatedRequest extends Request {
   userId?: string;
 }
+import { computeDocumentDeletionImpact, deleteDocumentEverywhere, parseDeletionMode } from "./document-deletion";
 import { storage } from "./storage";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
@@ -6775,83 +6776,29 @@ Rules:
     bustCache(`caltimeline:${uid_d2}`); bustCache(`activity:${uid_d2}`);
     res.json(updated);
   }));
+  // Impact preview for the delete confirmation: what this document contributed
+  // and what each mode would take with it. Read-only — nothing is deleted here.
+  app.get("/api/documents/:id/delete-impact", asyncHandler(async (req, res) => {
+    const impact = await computeDocumentDeletionImpact(storage as any, req.params.id);
+    if (!impact) return res.status(404).json({ error: "Not found" });
+    res.json(impact);
+  }));
   app.delete("/api/documents/:id", asyncHandler(async (req, res) => {
     // Idempotent: soft-delete succeeds even if already deleted.
-    const docIdToDelete = req.params.id;
-    // CASCADE: remove the profile fields this document's extraction saved, so
-    // a deleted document doesn't leave orphaned data behind on the asset.
-    // Provenance (fields._docFields[docId] = {key: savedValue}) is written by
-    // confirm-extraction; only fields whose CURRENT value still matches what
-    // the document saved are removed — anything the user edited since stays.
-    try {
-      const profilesForCascade = await storage.getProfiles();
-      for (const p of profilesForCascade as any[]) {
-        const sources = p.fields?._docFields;
-        const recorded = (sources && typeof sources === "object") ? sources[docIdToDelete] : undefined;
-        if (!recorded || typeof recorded !== "object") continue;
-        // Match the recorded field on IDENTITY, not on the literal key it was
-        // saved under — see removeDocumentContributedFields.
-        const cascade = removeDocumentContributedFields(p.fields as Record<string, any>, recorded);
-        const nextFields = cascade.fields;
-        // Top-level keys need an explicit null so the storage merge removes
-        // them; nested groups are already rewritten without their entry.
-        const removedKeys = cascade.removed.filter((path) => !path.includes("."));
-        const nextSources: Record<string, any> = { ...sources };
-        delete nextSources[docIdToDelete];
-        // Null markers = deletion intents for the storage merge layer.
-        const patch: Record<string, any> = { ...nextFields };
-        for (const k of removedKeys) patch[k] = null;
-        if (Object.keys(nextSources).length > 0) patch._docFields = nextSources;
-        else { delete patch._docFields; patch._docFields = null; }
-        await storage.updateProfile(p.id, { fields: patch } as any);
-        if (cascade.removed.length > 0) {
-          log.info(`[doc-delete-cascade] ${docIdToDelete} → removed ${cascade.removed.length} field(s) from ${p.name}: ${cascade.removed.join(", ")}`);
-        }
-      }
-    } catch (cascadeErr: any) {
-      // Cascade is best-effort — the delete itself must still succeed.
-      console.error(`[doc-delete-cascade] failed for ${docIdToDelete}: ${cascadeErr?.message || cascadeErr}`);
-    }
-    // CASCADE 2: retire the standalone calendar events that older extractions
-    // wrote for this document's dates.
     //
-    // Those events are the legacy of the second date system: an expiration
-    // saved BOTH as a field on the document and as an independent event with
-    // no link back. Deleting the document left the event behind, still sitting
-    // on the calendar with a date whose source no longer exists — the orphan
-    // the user reported. New extractions no longer write them (the date is
-    // derived from the document instead), so this only ever cleans up history;
-    // it is scoped to events this app auto-created FROM this document, never
-    // to anything the user made themselves.
-    try {
-      const allEvents = await storage.getEvents();
-      for (const ev of allEvents as any[]) {
-        const linked: string[] = Array.isArray(ev.linkedDocuments) ? ev.linkedDocuments : [];
-        const tags: string[] = Array.isArray(ev.tags) ? ev.tags : [];
-        if (!linked.includes(docIdToDelete)) continue;
-        if (!tags.includes("document-extraction")) continue;
-        // `date-rule-uncovered` events go too, deliberately. That tag exists to
-        // stop the DISPLAY-time shadow pass hiding a date nothing else carries;
-        // deletion is a different question, and this cascade's rule — the one
-        // it already applies to profile fields above — is that a document takes
-        // back exactly what it contributed. An auto-created event is
-        // contributed data. Leaving it would be the orphan the user reported.
-        // An event linked to OTHER documents too is not this document's to
-        // delete — unlink and leave it. Deleting on "includes this id" orphaned
-        // events that still belonged to a surviving document.
-        const others = linked.filter((d) => d !== docIdToDelete);
-        if (others.length > 0) {
-          await storage.updateEvent(ev.id, { linkedDocuments: others } as any);
-          log.info(`[doc-delete-cascade] ${docIdToDelete} → unlinked event ${ev.id} (still on ${others.length} document(s))`);
-          continue;
-        }
-        await storage.deleteEvent(ev.id);
-        log.info(`[doc-delete-cascade] ${docIdToDelete} → removed derived event ${ev.id} "${ev.title}"`);
-      }
-    } catch (evErr: any) {
-      console.error(`[doc-delete-cascade] event cleanup failed for ${docIdToDelete}: ${evErr?.message || evErr}`);
-    }
-    await storage.deleteDocument(docIdToDelete);
+    // The whole cascade — provenance-aware field removal, derived events,
+    // profile back-references, the file itself, the cached AI summaries that
+    // quote it — lives in server/document-deletion.ts, so this route, the AI's
+    // manage_document tool and an undo all delete a document the same way. See
+    // that module for why each step is there.
+    //
+    // `?mode=document-only` keeps the extracted data and removes only the
+    // document and every reference to it; the default takes the derived data
+    // too. The client asks the user which, showing the counts from
+    // /delete-impact.
+    const docIdToDelete = req.params.id;
+    const mode = parseDeletionMode(req.query.mode);
+    const outcome = await deleteDocumentEverywhere(storage as any, docIdToDelete, mode, log);
     const uid_d3 = cacheUserKey(req as AuthenticatedRequest);
     // A document carries dates, so deleting one changes the calendar, the
     // upcoming feed and the Important Dates list — not just the document list.
@@ -6859,7 +6806,7 @@ Rules:
     // outlived it on screen.
     bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
     bustCache(`profiles:${uid_d3}`); bustCache(`events:${uid_d3}`); bustCache(`caltimeline:${uid_d3}`); bustCache(`activity:${uid_d3}`);
-    res.json({ success: true });
+    res.json({ success: true, ...outcome });
   }));
   // ---- Re-extract: re-read a stored document and recover missed fields ----
   // No re-upload needed — we re-read the file bytes saved at upload time and

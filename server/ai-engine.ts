@@ -2,6 +2,7 @@ import { logger } from "./logger";
 import { getAnthropicClient } from "./anthropic-client";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
+import { deleteDocumentEverywhere } from "./document-deletion";
 import { storage } from "./storage";
 import {
   createNote, updateNote, deleteNote, listNotes,
@@ -12671,9 +12672,21 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return { success: true, message: `Renamed document to "${input.newName}"`, document: { id: updated.id, name: updated.name } };
         }
         case "delete": {
-          const deleted = await storage.deleteDocument(docId);
-          if (!deleted) return { error: "Document not found or could not be deleted" };
-          return { success: true, message: "Document deleted" };
+          // Same lifecycle as the UI delete: derived fields, derived calendar
+          // events, profile back-references, the file, and the cached AI
+          // summaries that quote it all go with the document. See
+          // server/document-deletion.ts. The AI has no confirmation dialog to
+          // offer a choice in, so it takes the default the user's own delete
+          // button defaults to.
+          const outcome = await deleteDocumentEverywhere(storage as any, docId, "cascade");
+          if (!outcome.deleted) return { error: "Document not found or could not be deleted" };
+          const extras: string[] = [];
+          if (outcome.removedFieldCount > 0) extras.push(`${outcome.removedFieldCount} extracted field(s)`);
+          if (outcome.removedEventCount > 0) extras.push(`${outcome.removedEventCount} derived date(s)`);
+          return {
+            success: true,
+            message: extras.length > 0 ? `Document deleted, along with ${extras.join(" and ")}` : "Document deleted",
+          };
         }
         // #3 (2026-06-25): document → profile linkage repair. Previously the
         // ONLY way a document got a profile was the AI-pick at extraction time;

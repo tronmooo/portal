@@ -24,6 +24,7 @@
 import type { IStorage } from "./storage";
 import type { ChatMutation } from "@shared/schema";
 import { domainsForEntity, endpointForEntity, type Domain } from "@shared/entity-domains";
+import { deleteDocumentEverywhere } from "./document-deletion";
 
 export interface ToolVerification {
   /** Post-write read-back: the record is visible in the database (creates/
@@ -367,7 +368,9 @@ const DELETE_FN: Record<string, (s: AnyStorage, id: string) => Promise<any>> = {
   income: (s, id) => s.deleteIncome(id),
   event: (s, id) => s.deleteEvent(id),
   habit: (s, id) => s.deleteHabit(id),
-  document: (s, id) => s.deleteDocument(id),
+  // Full lifecycle, not the bare row: undoing a document CREATE must also take
+  // back the fields and dates its extraction wrote. See document-deletion.ts.
+  document: (s, id) => deleteDocumentEverywhere(s, id, "cascade").then((r) => r.deleted),
   profile: (s, id) => s.deleteProfile(id),
   obligation: (s, id) => s.deleteObligation(id),
   memory: (s, id) => s.deleteMemory(id),

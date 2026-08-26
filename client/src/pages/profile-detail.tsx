@@ -282,6 +282,7 @@ import { checkProfileRename } from "@shared/profile-rename";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr } from "@shared/timezone";
 import { habitDayProgress } from "@shared/habit-progress";
+import { DocumentDeleteDialog } from "@/components/DocumentDeleteDialog";
 import { useToast } from "@/hooks/use-toast";
 import { ShareButton } from "@/components/DocumentViewer";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
@@ -4387,55 +4388,6 @@ function DocumentsTab({
     },
   });
 
-  // BUG-20260528-mutation-onmutate-rollback: setQueryData moved to onMutate
-  // with snapshot/rollback. See ARCHITECTURE.md §5.3.
-  const deleteMutation = useMutation({
-    mutationFn: async (docId: string) => {
-      await apiRequest("DELETE", `/api/documents/${docId}`);
-    },
-    onMutate: async (docId: string) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/documents"] });
-      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      const prevDocs = queryClient.getQueryData<any[]>(["/api/documents"]);
-      const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
-      queryClient.setQueryData<any[]>(["/api/documents"], (old) => (old || []).filter((d: any) => d.id !== docId));
-      // The profile detail carries documents as `relatedDocuments` (plus a
-      // separate total and the activity timeline). This used to patch
-      // `old.documents`, a key the ProfileDetail shape has never had — so the
-      // optimistic delete silently did nothing and the Info tab kept showing
-      // the deleted document, its count, and its timeline entry.
-      queryClient.setQueryData<any>(["/api/profiles", profileId, "detail"], (old: any) => {
-        if (!old) return old;
-        const kept = (old.relatedDocuments || []).filter((d: any) => d.id !== docId);
-        if (kept.length === (old.relatedDocuments || []).length && !old.timeline) return old;
-        return {
-          ...old,
-          relatedDocuments: kept,
-          ...(typeof old.relatedDocumentsTotal === "number"
-            ? { relatedDocumentsTotal: Math.max(0, old.relatedDocumentsTotal - 1) }
-            : {}),
-          ...(Array.isArray(old.timeline)
-            ? { timeline: old.timeline.filter((t: any) => !(t.type === "document" && t.id === docId)) }
-            : {}),
-        };
-      });
-      return { prevDocs, prevDetail };
-    },
-    onSuccess: () => {
-      // "profiles" as well: the Info tab, the tab counters and the activity
-      // feed all read the profile-detail embed, not the document list.
-      invalidateDomains("documents", "profiles");
-      toast({ title: "Document deleted" });
-      setDeletingDocId(null);
-      onUploaded();
-    },
-    onError: (err: Error, _docId, ctx: any) => {
-      if (ctx?.prevDocs !== undefined) queryClient.setQueryData(["/api/documents"], ctx.prevDocs);
-      if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
-      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
-    },
-  });
-
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) uploadMutation.mutate(file);
@@ -4755,24 +4707,16 @@ function DocumentsTab({
         />
       )}
 
-      <AlertDialog open={!!deletingDocId} onOpenChange={() => setDeletingDocId(null)}>
-        <AlertDialogContent data-testid="dialog-confirm-delete-document">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete document?</AlertDialogTitle>
-            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="button-cancel-delete-document">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deletingDocId && deleteMutation.mutate(deletingDocId)}
-              disabled={deleteMutation.isPending}
-              data-testid="button-confirm-delete-document"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Deleting a document here is the same act as deleting it on the
+          Documents page — same prompt, same cascade, same invalidation. The
+          shared dialog is what makes that true; a local copy is how the two
+          screens came to disagree about whether a document still existed. */}
+      <DocumentDeleteDialog
+        documentId={deletingDocId}
+        documentName={documents.find((d: any) => d.id === deletingDocId)?.name}
+        onOpenChange={(open) => { if (!open) setDeletingDocId(null); }}
+        onDeleted={() => { setDeletingDocId(null); onUploaded(); }}
+      />
     </>
   );
 }

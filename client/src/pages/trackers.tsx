@@ -183,6 +183,7 @@ import {
   ZAxis,
   ComposedChart,
 } from "recharts";
+import { DocumentDeleteDialog } from "@/components/DocumentDeleteDialog";
 import { useToast } from "@/hooks/use-toast";
 
 // ── Chart Color Scheme ─────────────────────────────────────────────────────────
@@ -5869,26 +5870,6 @@ export default function TrackersPage() {
     },
   });
 
-  const docDeleteMutation = useMutation({
-    mutationFn: async (docId: string) => {
-      await apiRequest("DELETE", `/api/documents/${docId}`);
-    },
-    onMutate: async (docId: string) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/documents"] });
-      const prev = queryClient.getQueryData<any[]>(["/api/documents"]);
-      queryClient.setQueryData<any[]>(["/api/documents"], (old) => old?.filter((d: any) => d.id !== docId));
-      return { prev };
-    },
-    onSuccess: () => {
-      toast({ title: "Document deleted" });
-      invalidateDomains("documents", "trackers", "profiles");
-    },
-    onError: (err: Error, _v: any, ctx: any) => {
-      if (ctx?.prev) queryClient.setQueryData(["/api/documents"], ctx.prev);
-      toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" });
-    },
-  });
-
   // Profile-filtered documents (before type filter, so type pills don't disappear)
   const profileFilteredDocs = useMemo(() => allDocuments.filter(d => {
     if (filterMode === "selected" && filterIds.length > 0) {
@@ -7870,31 +7851,16 @@ export default function TrackersPage() {
         onClose={() => setSelectedTrackerId(null)}
       />
 
-      {/* Document delete confirmation */}
-      {docDeleteConfirmId && (() => {
-        const docName = allDocuments.find(d => d.id === docDeleteConfirmId)?.name || "this document";
-        return (
-          <AlertDialog open onOpenChange={(open) => { if (!open) setDocDeleteConfirmId(null); }}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete document?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  <span className="font-medium text-foreground">"{docName}"</span> will be permanently deleted and cannot be recovered.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel onClick={() => setDocDeleteConfirmId(null)}>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
-                  onClick={() => { docDeleteMutation.mutate(docDeleteConfirmId); setDocDeleteConfirmId(null); setExpandedDocId(null); }}
-                >
-                  Delete
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        );
-      })()}
+      {/* Document delete confirmation — the shared, provenance-aware one.
+          It asks whether the data the document created goes with it, and it
+          owns the DELETE and the invalidation, so this page deletes a document
+          exactly the way an asset profile's Documents tab does. */}
+      <DocumentDeleteDialog
+        documentId={docDeleteConfirmId}
+        documentName={allDocuments.find(d => d.id === docDeleteConfirmId)?.name}
+        onOpenChange={(open) => { if (!open) setDocDeleteConfirmId(null); }}
+        onDeleted={() => { setDocDeleteConfirmId(null); setExpandedDocId(null); }}
+      />
 
       {/* Send Dialog removed — now uses native share sheet (Web Share API) */}
 

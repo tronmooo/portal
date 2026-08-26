@@ -161,6 +161,7 @@ export default defineConfig({
       'tests/scope-prefetch-siblings.test.ts',
       'tests/request-memo-reuse.test.ts',
       'tests/documents-page.test.ts',
+      'tests/document-deletion-lifecycle.test.ts',
       'tests/document-open-perf.test.ts',
       'tests/attention.test.ts',
       'tests/executive-sections-router.test.ts',

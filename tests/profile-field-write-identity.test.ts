@@ -245,8 +245,22 @@ describe("the write path stays funnelled through one place", () => {
   });
 
   it("the document-delete cascade matches on identity", () => {
-    const src = repo("server/routes.ts");
+    // The cascade moved out of the route and into the one deletion service
+    // every entry point calls (the DELETE route, the AI's manage_document, an
+    // undo) — but it still has to remove a contributed field by IDENTITY, not
+    // by the literal key it was saved under.
+    const src = repo("server/document-deletion.ts");
     expect(src).toContain("removeDocumentContributedFields(p.fields");
+  });
+
+  it("every document delete goes through that one service", () => {
+    // Three screens deleting a document three slightly different ways is how
+    // the Documents page and an asset profile came to disagree about whether a
+    // document still existed.
+    const routes = repo("server/routes.ts");
+    expect(routes).toContain("deleteDocumentEverywhere(storage as any, docIdToDelete");
+    expect(routes).not.toContain("await storage.deleteDocument(");
+    expect(repo("server/ai-engine.ts")).not.toContain("await storage.deleteDocument(");
   });
 });
 
