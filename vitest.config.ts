@@ -164,6 +164,10 @@ export default defineConfig({
       'tests/document-deletion-lifecycle.test.ts',
       'tests/document-open-perf.test.ts',
       'tests/attention.test.ts',
+      // Dynamic asset & liability Overview composition (2026-08-26).
+      'tests/overview-compose.test.ts',
+      'tests/overview-engine.test.ts',
+      'tests/overview-render.dom.test.tsx',
       'tests/executive-sections-router.test.ts',
       'tests/dashboard-visuals.dom.test.tsx',
       'tests/wellness-popups.dom.test.tsx',

@@ -94,6 +94,7 @@ interface AuthenticatedRequest extends Request {
 }
 import { computeDocumentDeletionImpact, deleteDocumentEverywhere, parseDeletionMode } from "./document-deletion";
 import { storage } from "./storage";
+import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildNotifications } from "./notification-service";
@@ -4952,6 +4953,47 @@ ${JSON.stringify(ctx, null, 2)}`;
     const updated = await storage.updateProfile(req.params.id, { avatar: null as any });
     bustCache(`profiles:${uid}`); bustCache(`profile-detail:${uid}:`);
     res.json({ ok: true, profile: updated });
+  }));
+
+  // ---- Dynamic Overview (asset & liability profiles) ----
+  // GET /api/profiles/:id/overview
+  //
+  // Returns the STRUCTURED Overview definition for this entity — sections,
+  // metrics, relationships, attention items, missing-information suggestions —
+  // with every displayed value resolved from canonical storage on this
+  // request. The layout half is reasoned once per structural signature and
+  // cached; the data half is never cached, so an edited balance shows up
+  // immediately and a deleted field disappears immediately.
+  //
+  //   ?refresh=true  re-reason the composition even if the shape is unchanged
+  //   ?ai=0          deterministic composition only (no model call)
+  app.get("/api/profiles/:id/overview", asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const profile = await storage.getProfile(id);
+    if (!profile) return res.status(404).json({ error: "Not found" });
+    if ((profile as any).userId && (profile as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    if (!isOverviewEntity(profile as any)) {
+      // Person / pet / medical profiles keep their own purpose-built Overview.
+      return res.status(409).json({ error: "Not an asset or liability profile" });
+    }
+    try { (storage as any).enableRequestMemo?.(); } catch {}
+    try {
+      const spec = await buildOverviewSpec(storage, id, {
+        refresh: req.query.refresh === "true",
+        allowModel: req.query.ai !== "0",
+      });
+      if (!spec) return res.status(404).json({ error: "Not found" });
+      res.json(spec);
+    } catch (err: any) {
+      log.error("[overview]", err?.message || "unknown error");
+      // A failed composition must never blank the profile page — the client
+      // falls back to its static rendering when this 500s.
+      res.status(500).json({ error: "Failed to build overview" });
+    } finally {
+      try { (storage as any).disableRequestMemo?.(); } catch {}
+    }
   }));
 
   // ---- Profile AI Summary ----

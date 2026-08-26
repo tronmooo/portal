@@ -523,7 +523,8 @@ function getMaintenanceCost(fields: any): number {
 // there was an inline copy here that could drift from the shared version —
 // removed 2026-05-27.
 import { computeAssetRollup as sharedComputeAssetRollup } from "@shared/asset-rollup";
-import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
+import { resolveAssetValue, resolveLiabilityBalance, isAssetTabProfile, isLiabilityTabProfile } from "@shared/asset-value";
+import { DynamicOverview } from "@/components/overview/DynamicOverview";
 import { isRecurringBill } from "@shared/liability-types";
 function computeAssetRollup(profile: any, descendants: TreeNode[]): AssetRollup {
   // The shared function ignores everything except `fields` and
@@ -3117,7 +3118,68 @@ function formatFieldDisplayValue(fieldKey: string, raw: string): string {
   return raw;
 }
 
-function InfoTab({
+/**
+ * DYNAMIC OVERVIEW (2026-08-26)
+ *
+ * Asset and liability profiles no longer render a per-type field list. Their
+ * Overview is composed server-side from what the entity actually IS — see
+ * shared/overview-compose.ts — and drawn by DynamicOverview. StaticInfoTab
+ * below stays as the renderer for person / pet / medical profiles (whose
+ * Overview is purpose-built) and as the fallback if a composition can't be
+ * fetched, so the page can never end up blank.
+ */
+function InfoTab({ profile, onEdit }: { profile: ProfileDetail; onEdit: () => void }) {
+  const dynamic = isAssetTabProfile(profile as any) || isLiabilityTabProfile(profile as any);
+  const legacy = <StaticInfoTab profile={profile} onEdit={onEdit} />;
+  if (!dynamic) return legacy;
+  return (
+    <DynamicOverview profileId={profile.id} fallback={legacy}>
+      <OverviewEditors profile={profile} />
+    </DynamicOverview>
+  );
+}
+
+/**
+ * The editing affordances that are NOT part of the composed summary: where the
+ * thing physically lives, and what it belongs to. These write relationships,
+ * not display fields, so they stay hand-built and sit under the composition.
+ */
+function OverviewEditors({ profile }: { profile: ProfileDetail }) {
+  const isNestedAsset = NESTED_ASSET_TYPES.includes(profile.type as NestedAssetType);
+  const isNestableLiability = profile.type === "liability" || profile.type === "loan" || profile.type === "subscription";
+  const { data: allProfiles } = useQuery<any[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    enabled: isNestedAsset || isNestableLiability,
+  });
+  const onSaved = () => invalidateDomains("profiles");
+  if (!isNestedAsset && !isNestableLiability) return null;
+  return (
+    <>
+      {isNestedAsset && (
+        <NestedAssetSections
+          profile={profile}
+          allProfiles={allProfiles || []}
+          onSaved={onSaved}
+          mode="location-only"
+        />
+      )}
+      {isNestableLiability && (
+        <Card data-testid="card-liability-belongs-to">
+          <CardContent className="p-3">
+            <BelongsToEditor
+              profile={profile}
+              allProfiles={allProfiles || []}
+              onSaved={onSaved}
+            />
+          </CardContent>
+        </Card>
+      )}
+    </>
+  );
+}
+
+function StaticInfoTab({
   profile,
   onEdit,
 }: {
