@@ -1402,7 +1402,15 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
   }
 
   // ═══ 4. File the document against every subject it is about ══════════════
+  //
+  // Including the record the user picked BY HAND. `targets` is built from the
+  // reasoner's entities, so filing — the one action that needs no reasoning at
+  // all — used to vanish along with the reasoning whenever the understanding
+  // step degraded. The profile someone deliberately filed this under is the
+  // most certain destination on the screen; it does not depend on a model
+  // having named it.
   const attachTo = new Set<string>();
+  if (contextTarget?.kind === "profile" && contextTarget.id) attachTo.add(contextTarget.id);
   for (const t of targets.values()) if (t.kind === "profile" && t.id) attachTo.add(t.id);
   for (const id of attachTo) {
     const p = index.profiles.find((x) => x.id === id);

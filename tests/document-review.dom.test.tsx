@@ -296,3 +296,71 @@ describe("the selection floor: never zero selected", () => {
     expect(summary()).toMatch(oneSelected);
   });
 });
+
+// ─── The rail when the AI stage failed ───────────────────────────────────────
+//
+// USER REPORT (2026-08-26): "I do not see any changes, to the right make a box
+// that's where all the actions go." A 63-field report whose understanding step
+// degraded arrived with actionPlan and semantic both absent, so every block in
+// the rail was gated off and the aside rendered as 320px of blank. The box is
+// the rail's identity — it must state what it is and explain an empty list
+// rather than disappear.
+
+const degradedExtraction = () => ({
+  extractionId: DOC,
+  fileName: "biometric-report.pdf",
+  documentType: "wellness_report",
+  label: "Biometric Screening",
+  extractedFields: [],
+  items: [
+    { id: "r1", key: "facilityPhone", label: "facility Phone", value: "(555) 019-8273",
+      destination: "entity_field", destinationOptions: ["entity_field", "ignore"],
+      selected: true, source: "field" },
+  ],
+  actionPlan: undefined,
+  semantic: undefined,
+  semanticDegraded: "the reasoning step returned malformed output",
+  trackerEntries: [],
+  calendarDates: [],
+  documentName: "biometric-report.pdf",
+}) as any;
+
+describe("the actions rail is a box, always", () => {
+  afterEach(cleanup);
+
+  it("renders the box even when the document produced no actions", () => {
+    renderScreen(degradedExtraction());
+    const rail = screen.getByTestId("review-suggested-actions");
+    expect(rail.textContent).toContain("Suggested Actions");
+    expect(rail.textContent).toContain("(0)");
+  });
+
+  it("says why the list is empty instead of showing nothing", () => {
+    renderScreen(degradedExtraction());
+    expect(screen.getByTestId("review-actions-empty").textContent)
+      .toMatch(/understanding step didn't finish/i);
+  });
+
+  it("puts the degraded notice in the rail, beside the actions it thinned out", () => {
+    renderScreen(degradedExtraction());
+    const notice = screen.getByTestId("review-degraded-notice");
+    expect(notice.textContent).toMatch(/Understanding degraded/i);
+    expect(notice.textContent).toContain("malformed output");
+    // …and inside the rail, not the left-hand document panel.
+    expect(screen.getByTestId("review-actions-rail").contains(notice)).toBe(true);
+  });
+
+  it("shows no confidence bar rather than a 0% one", () => {
+    renderScreen(degradedExtraction());
+    // The plan now always exists, so an empty understanding carries
+    // confidence 0 — which must read as "no score", never as "0% confident".
+    expect(screen.getByTestId("review-doc-info").textContent).not.toContain("Confidence Score");
+  });
+
+  it("a document WITH actions has no empty-state and no degraded notice", () => {
+    renderScreen(buildExtraction());
+    expect(screen.queryByTestId("review-actions-empty")).toBeNull();
+    expect(screen.queryByTestId("review-degraded-notice")).toBeNull();
+    expect(screen.getByTestId("btn-review-all-actions")).toBeTruthy();
+  });
+});
