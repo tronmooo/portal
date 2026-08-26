@@ -38,7 +38,7 @@ import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/c
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { findIdentityMatches } from "@shared/tracker-identity";
 import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE, type Tracker } from "@shared/schema";
-import { getUserToday } from "@shared/timezone";
+import { getUserToday, parseUserDateTime } from "@shared/timezone";
 import { applyLiabilityPayment } from "./liability-payments";
 import { recurrenceToTags } from "@shared/recurrence";
 
@@ -517,11 +517,21 @@ async function appendTrackerEntry(action: ProposedAction, documentId: string): P
   }
 
   const { values } = normalizeTrackerEntry(tracker as any, rawValues);
+  // The measurement's OWN date, when the document printed one — a lab drawn
+  // last Tuesday charts on last Tuesday, not on upload day. Anchored at local
+  // noon (parseUserDateTime) so the calendar day never rolls across the
+  // timezone offset. No date on the payload → the entry stamps now, as before.
+  const when = String(action.payload?.date || "").slice(0, 10);
+  const timestamp = /^\d{4}-\d{2}-\d{2}$/.test(when)
+    ? parseUserDateTime(when, (storage as any)._timezone).toISOString()
+    : undefined;
   await storage.logEntry({
     trackerId: tracker.id,
     values,
-    notes: "From document extraction",
+    // Traceable back to its page: the id is the document id.
+    notes: `From document extraction (${documentId})`,
     profileId,
+    timestamp,
   } as any);
 
   const rendered = Object.entries(values).map(([k, v]) => `${k}=${v}`).join(", ");
