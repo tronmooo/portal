@@ -96,7 +96,8 @@
     "jspdf": "^4.2.1",
     "lucide-react": "^0.453.0",
     "memorystore": "^1.6.7",
-    "mermaid": "^11.14.0",
+    "mermaid": "^11.17.2",
+    "nanoid": "^5.1.16",
     "next-themes": "^0.4.6",
     "opentype.js": "^1.3.5",
     "passport": "^0.7.0",
@@ -116,7 +117,7 @@
     "recharts": "^2.15.2",
     "regexparam": "^3.0.0",
     "remark-gfm": "^4.0.1",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "stripe": "^22.4.0",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
@@ -164,6 +165,10 @@
     },
     "exceljs": {
       "uuid": "^11.1.1"
+    },
+    "nanoid": "^5.1.16",
+    "postcss": {
+      "nanoid": "^3.3.18"
     }
   },
   "optionalDependencies": {
