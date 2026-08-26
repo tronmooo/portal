@@ -9,6 +9,7 @@ import { applyChatMutations } from "@/lib/chat-sync";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { perfMark, perfMeasure, logServerTimings } from "@/lib/perf-marks";
 import { hashNavigate } from "@/lib/hashNavigate";
+import { stashPendingReview } from "@/lib/pending-review";
 import { stopProp } from "@/lib/event-utils";
 import { isInternalDirective } from "@shared/ai-message-kinds";
 import { isInScope, ownerChainForProfile, selfIdsFrom } from "@shared/scope";
@@ -2776,6 +2777,26 @@ export default function ChatPage() {
       }
     },
     onSuccess: (data) => {
+      // A single upload that produced a review goes to the full-screen review
+      // page (#/documents/:id/review) instead of an inline pane squeezed into
+      // a message bubble. The payload travels through lib/pending-review —
+      // stash first, THEN strip it off the transcript message, so the review
+      // is offered in exactly one place and a stale confirm pane can never
+      // resurface from chat history after the page already saved it.
+      const reviewDocId: string | undefined =
+        (data.pendingExtraction?.items?.length || data.pendingExtraction?.extractedFields?.length)
+          ? (data.pendingExtraction.documentPreview?.id || data.documentId || data.pendingExtraction.extractionId)
+          : undefined;
+      if (reviewDocId) {
+        stashPendingReview(reviewDocId, {
+          ...data.pendingExtraction,
+          // Carry the inline binary when the server sent one — the review
+          // page's preview renders instantly instead of re-downloading.
+          documentPreview: data.pendingExtraction.documentPreview
+            ? { ...data.pendingExtraction.documentPreview, data: data.documentPreview?.data || "" }
+            : data.documentPreview,
+        });
+      }
       const assistantMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
@@ -2785,7 +2806,7 @@ export default function ChatPage() {
         results: data.results,
         documentPreview: data.documentPreview,
         documentPreviews: data.documentPreviews,
-        pendingExtraction: data.pendingExtraction,
+        pendingExtraction: reviewDocId ? undefined : data.pendingExtraction,
       };
       setMessages((prev) => [...prev, assistantMsg]);
       // Only NOW release the staged attachment — it stays attached through
@@ -2802,6 +2823,7 @@ export default function ChatPage() {
       });
       setSelectedProfileId("none");
       syncFromResponse(data as any);
+      if (reviewDocId) hashNavigate(`/documents/${reviewDocId}/review`);
     },
     onError: (err: Error) => {
       const isConnectionDrop =

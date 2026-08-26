@@ -153,6 +153,7 @@ export default defineConfig({
       'tests/confirm-extraction-save.test.ts',
       'tests/confirm-extraction-actions.test.ts',
       'tests/extraction-review.dom.test.tsx',
+      'tests/document-review.dom.test.tsx',
       'tests/medical-report-extraction.test.ts',
       'tests/upload-dedupe.test.ts',
       'tests/cache-bust-predicate.test.ts',
