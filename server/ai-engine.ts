@@ -2456,7 +2456,23 @@ Return ONLY the JSON object, nothing else.`;
     // Determine context for smart pre-selection
     const docType = (parsed.documentType || 'other').toLowerCase();
     const isFinanceDoc = /bill|invoice|statement|receipt|payment|insurance|loan|mortgage|tax/i.test(docType);
-    const linkedProfileObj = existingProfileId ? await storage.getProfile(existingProfileId) : null;
+    // `profileId` arrives from the guided destination picker as a COMPOUND
+    // string — "destId,ownerId", destination first (see chat.tsx's picker
+    // contract). Passing it to getProfile whole returns null, so this was
+    // silently resolving to no profile at all whenever the user picked a
+    // destination as well as an owner: `profileType` came back empty, the
+    // vehicle check below never fired, and — once routing became entity-aware
+    // — a house looked like a generic record instead of a property.
+    //
+    // The linking code at the top of this function already splits it the same
+    // way; this is the read path catching up.
+    const linkedProfileObj = await (async () => {
+      for (const id of String(existingProfileId || "").split(",").map((x) => x.trim()).filter(Boolean)) {
+        const p = await storage.getProfile(id).catch(() => null);
+        if (p) return p;
+      }
+      return null;
+    })();
     const profileType = linkedProfileObj?.type || '';
     const isVehicleProfile = profileType === 'vehicle';
 
