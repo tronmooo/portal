@@ -258,41 +258,170 @@ describe("confirm sends the reviewed decisions, exactly once each", () => {
 describe("auto-map is the one switch between proposed and manual", () => {
   afterEach(cleanup);
 
-  it("off keeps exactly one row — the floor is one, never zero; on restores the routing", () => {
+  it("off clears every row; on restores the routing", () => {
     const extraction = buildExtraction();
     renderScreen(extraction);
     const summary = () => screen.getByTestId("review-selected-summary").textContent || "";
 
     fireEvent.click(screen.getByTestId("switch-auto-map"));
-    // Exactly one survivor — rendered as "1 field auto-confirmed" (when it is
-    // high-confidence) or "1 of N selected".
-    expect(summary()).toMatch(/1 (field auto-confirmed|of \d+ selected)/);
+    // Hand-pick mode starts from nothing selected — there is no floor of one.
+    expect(summary()).toMatch(/0 of \d+ field/);
 
     fireEvent.click(screen.getByTestId("switch-auto-map"));
-    expect(summary()).not.toMatch(/^1 (field auto-confirmed|of \d+ selected)/);
+    expect(summary()).not.toMatch(/0 of \d+ field/);
+  });
+
+  it("off leaves the suggested actions alone — fields and actions are separate decisions", () => {
+    const extraction = buildExtraction();
+    renderScreen(extraction);
+    const summary = () => screen.getByTestId("review-selected-summary").textContent || "";
+
+    fireEvent.click(screen.getByTestId("switch-auto-map"));
+    // The rail still carries its selections, so the footer still counts actions.
+    expect(summary()).toMatch(/\d+ action/);
   });
 });
 
-describe("the selection floor: never zero selected", () => {
+// ─── The rail names each action the way the user named it ────────────────────
+//
+// USER REQUEST (2026-08-27): a list of 32 named action types. The engine thinks
+// in destination/operation pairs; the rail has to say "Create recurring
+// calendar rule". And every date under "Dates & Deadlines" in the table must be
+// answered in the rail — including the ones deliberately left unscheduled,
+// which used to be filtered out and so appeared nowhere at all.
+describe("the rail speaks the action vocabulary", () => {
   afterEach(cleanup);
 
-  it("refuses to deselect the last remaining selected item", () => {
+  it("prints the action's kind above its title", () => {
+    const extraction = buildExtraction();
+    renderScreen(extraction);
+    const proposable = extraction.actionPlan.actions.filter((a: any) => a.operation !== "NO_ACTION");
+    expect(proposable.length).toBeGreaterThan(0);
+    const first = proposable[0];
+    expect(first.kindLabel).toBeTruthy();
+    expect(screen.getByTestId(`action-kind-${first.id}`).textContent).toBe(first.kindLabel);
+  });
+
+  it("lists the dates it read but deliberately did not schedule", () => {
+    const extraction = buildExtraction();
+    const kept = extraction.actionPlan.actions.filter(
+      (a: any) => a.operation === "NO_ACTION" && a.destination === "reference" && a.payload?.date,
+    );
+    // The insurance fixture carries at least one informational date (an
+    // effective date). If that ever stops being true this assertion is the
+    // thing that says so, rather than the rail quietly going empty.
+    expect(kept.length).toBeGreaterThan(0);
+    renderScreen(extraction);
+    const box = screen.getByTestId("review-kept-dates");
+    expect(box.textContent).toMatch(/Dates kept, not scheduled/);
+    for (const a of kept) expect(screen.getByTestId(`kept-date-${a.id}`)).toBeTruthy();
+  });
+});
+
+// ─── No selection floor ──────────────────────────────────────────────────────
+//
+// USER REPORT (2026-08-27): "This message should not show up ... especially if
+// you don't want to save anything to the AI extracted [data]." The middle table
+// is "facts to save" and the rail is "things to do because of them"; emptying
+// either one is a legitimate state, so nothing forces a selection any more.
+describe("there is no selection floor", () => {
+  afterEach(cleanup);
+
+  it("the last remaining row can be skipped and reaches zero", () => {
     const extraction = buildExtraction();
     renderScreen(extraction);
     const summary = () => screen.getByTestId("review-selected-summary").textContent || "";
 
-    // Auto-map off leaves exactly one selected row.
-    const oneSelected = /1 (field auto-confirmed|of \d+ selected)/;
-    fireEvent.click(screen.getByTestId("switch-auto-map"));
-    expect(summary()).toMatch(oneSelected);
-
-    // Skipping that final row is refused — the selection stays at one.
-    const selects = Array.from(
+    const selects = () => Array.from(
       document.querySelectorAll('select[data-testid^="review-action-"]'),
     ) as HTMLSelectElement[];
-    const last = selects.find((s) => s.value === "confirm");
-    expect(last).toBeTruthy();
-    fireEvent.change(last!, { target: { value: "skip" } });
-    expect(summary()).toMatch(oneSelected);
+
+    // Skip every confirmed row, one at a time — nothing refuses the last one.
+    for (let guard = 0; guard < 200; guard++) {
+      const next = selects().find((s) => s.value === "confirm");
+      if (!next) break;
+      fireEvent.change(next, { target: { value: "skip" } });
+    }
+    expect(selects().some((s) => s.value === "confirm")).toBe(false);
+    expect(summary()).toMatch(/0 of \d+ field/);
+  });
+
+  it("Confirm All stays enabled with zero fields while an action is selected", () => {
+    const extraction = buildExtraction();
+    renderScreen(extraction);
+
+    fireEvent.click(screen.getByTestId("switch-auto-map"));
+    const summary = screen.getByTestId("review-selected-summary").textContent || "";
+    expect(summary).toMatch(/0 of \d+ field/);
+    expect(summary).toMatch(/\d+ action/);
+    expect((screen.getByTestId("btn-confirm-all") as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+// ─── The rail when the AI stage failed ───────────────────────────────────────
+//
+// USER REPORT (2026-08-26): "I do not see any changes, to the right make a box
+// that's where all the actions go." A 63-field report whose understanding step
+// degraded arrived with actionPlan and semantic both absent, so every block in
+// the rail was gated off and the aside rendered as 320px of blank. The box is
+// the rail's identity — it must state what it is and explain an empty list
+// rather than disappear.
+
+const degradedExtraction = () => ({
+  extractionId: DOC,
+  fileName: "biometric-report.pdf",
+  documentType: "wellness_report",
+  label: "Biometric Screening",
+  extractedFields: [],
+  items: [
+    { id: "r1", key: "facilityPhone", label: "facility Phone", value: "(555) 019-8273",
+      destination: "entity_field", destinationOptions: ["entity_field", "ignore"],
+      selected: true, source: "field" },
+  ],
+  actionPlan: undefined,
+  semantic: undefined,
+  semanticDegraded: "the reasoning step returned malformed output",
+  trackerEntries: [],
+  calendarDates: [],
+  documentName: "biometric-report.pdf",
+}) as any;
+
+describe("the actions rail is a box, always", () => {
+  afterEach(cleanup);
+
+  it("renders the box even when the document produced no actions", () => {
+    renderScreen(degradedExtraction());
+    const rail = screen.getByTestId("review-suggested-actions");
+    expect(rail.textContent).toContain("Suggested Actions");
+    expect(rail.textContent).toContain("(0)");
+  });
+
+  it("says why the list is empty instead of showing nothing", () => {
+    renderScreen(degradedExtraction());
+    expect(screen.getByTestId("review-actions-empty").textContent)
+      .toMatch(/understanding step didn't finish/i);
+  });
+
+  it("puts the degraded notice in the rail, beside the actions it thinned out", () => {
+    renderScreen(degradedExtraction());
+    const notice = screen.getByTestId("review-degraded-notice");
+    expect(notice.textContent).toMatch(/Understanding degraded/i);
+    expect(notice.textContent).toContain("malformed output");
+    // …and inside the rail, not the left-hand document panel.
+    expect(screen.getByTestId("review-actions-rail").contains(notice)).toBe(true);
+  });
+
+  it("shows no confidence bar rather than a 0% one", () => {
+    renderScreen(degradedExtraction());
+    // The plan now always exists, so an empty understanding carries
+    // confidence 0 — which must read as "no score", never as "0% confident".
+    expect(screen.getByTestId("review-doc-info").textContent).not.toContain("Confidence Score");
+  });
+
+  it("a document WITH actions has no empty-state and no degraded notice", () => {
+    renderScreen(buildExtraction());
+    expect(screen.queryByTestId("review-actions-empty")).toBeNull();
+    expect(screen.queryByTestId("review-degraded-notice")).toBeNull();
+    expect(screen.getByTestId("btn-review-all-actions")).toBeTruthy();
   });
 });

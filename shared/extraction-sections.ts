@@ -69,6 +69,26 @@ function titleCase(s: string): string {
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 /**
+ * Does this row belong under "Dates & Deadlines"?
+ *
+ * Shape-first, and exported deliberately: the section heading was decided here
+ * while suggested actions were decided from the reasoner's facts, so a review
+ * could show three rows under "Dates & Deadlines" and an empty actions rail.
+ * The action planner reads the same predicate, so every row the review files as
+ * a date now has an action beside it.
+ */
+export function isDateRow(item: ExtractionItem): boolean {
+  const roles = item.roles ?? [];
+  const keyAndLabel = `${item.key} ${item.label}`;
+  const value = String(item.value ?? "");
+  return (
+    Boolean(item.date) || roles.includes("actionable_date")
+    || item.destination === "calendar"
+    || DATE_VALUE.test(value) || DATE_KEY.test(keyAndLabel)
+  );
+}
+
+/**
  * The section one row belongs in.
  *
  * Order of authority: structured medical sources, then contact/date/measurement
@@ -93,13 +113,7 @@ export function sectionLabelForItem(
     return "Health Information";
   }
   if (CONTACT_KEY.test(keyAndLabel)) return "Contact Information";
-  if (
-    Boolean(item.date) || roles.includes("actionable_date")
-    || item.destination === "calendar"
-    || DATE_VALUE.test(value) || DATE_KEY.test(keyAndLabel)
-  ) {
-    return "Dates & Deadlines";
-  }
+  if (isDateRow(item)) return "Dates & Deadlines";
   if (
     roles.includes("measurement") || Boolean(item.trackerName)
     || item.destination === "tracker" || item.destination === "profile_tracker"

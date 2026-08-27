@@ -32,9 +32,14 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag, Trash2, Loader2 } from "lucide-react";
 import { deleteProfileFields } from "@shared/profile-field-identity";
-import { checkProfileRename, MAX_PROFILE_NAME_LENGTH, PROFILE_TYPES } from "@shared/profile-rename";
+import { checkProfileRename, MAX_PROFILE_NAME_LENGTH } from "@shared/profile-rename";
+import { checkProfileDelete, profileDeleteWarning } from "@shared/profile-delete";
 import { invalidateDomain } from "@/lib/cache-bus";
 import EditableTitle from "@/components/EditableTitle";
 import { stringifyField, previewUnrenderable } from "@/lib/field-display";
@@ -79,6 +84,14 @@ const INFO_TONE = {
   activity: "155 65% 45%",
   journal: "262 70% 62%",
 };
+
+// What kind of record an Info page can hold. This screen is only ever reached
+// for a person-shaped profile — profile-route-dispatch.tsx sends self/person/
+// pet here and every other type to the per-type detail page — so the type
+// picker offers those two and nothing else. Offering "vehicle" or "loan" here
+// let one click re-type a person into a record this page cannot show, which
+// then vanished from the people list on the next render.
+const INFO_PROFILE_TYPES = ["person", "pet"] as const;
 
 function fieldLabel(key: string): string {
   return key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
@@ -241,6 +254,7 @@ function SingleProfileInfo({ id }: { id: string }) {
   const { toast } = useToast();
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [addingField, setAddingField] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newVal, setNewVal] = useState("");
 
@@ -358,6 +372,44 @@ function SingleProfileInfo({ id }: { id: string }) {
     toast({ title: `Now a ${nextType}` });
   };
 
+  // ── Delete this profile ───────────────────────────────────────────────────
+  // The Info tab is where a person or pet is created, renamed, re-typed and
+  // edited — and until now the ONLY thing it could not do was end the record.
+  // A profile added by mistake (or a pet that is no longer part of the
+  // household) had no manual removal at all; the delete existed on the
+  // liability/asset detail pages and nowhere a person could reach it.
+  //
+  // DELETE /api/profiles/:id cascades server-side: everything this profile
+  // solely owns goes with it, and anything co-owned keeps the row and drops
+  // this owner. That is the whole point of the confirmation copy — the user is
+  // told what goes and what stays before the button is live.
+  const deleteProfile = useMutation({
+    mutationFn: async () => {
+      await apiRequest("DELETE", `/api/profiles/${id}`);
+    },
+    onSuccess: async () => {
+      // Drop the row from the cached list first so the switcher, owner badges
+      // and people list don't render a profile the server no longer has while
+      // the refetch is in flight.
+      queryClient.setQueryData(["/api/profiles"], (old: any) =>
+        Array.isArray(old) ? old.filter((p: any) => p?.id !== id) : old);
+      queryClient.setQueryData(["/api/profiles", "lite"], (old: any) =>
+        Array.isArray(old) ? old.filter((p: any) => p?.id !== id) : old);
+      queryClient.removeQueries({ queryKey: ["/api/profiles", id, "detail"] });
+      setConfirmingDelete(false);
+      // The cascade reaches trackers, tasks, events, expenses, documents and
+      // journal entries — every domain — so refresh the lot rather than
+      // guessing which screens held one of this profile's rows.
+      await invalidateDomain("everything");
+      toast({ title: `Deleted ${profile?.name || "profile"}`, description: "The profile and everything it owned have been removed." });
+      navigate("/profiles");
+    },
+    onError: (err: Error) => {
+      setConfirmingDelete(false);
+      toast({ title: "Couldn't delete", description: formatApiError(err), variant: "destructive" });
+    },
+  });
+
   const avatarMutation = useMutation({
     mutationFn: async (payload: { fileData: string; mimeType: string }) => {
       await apiRequest("POST", `/api/profiles/${id}/photo`, payload);
@@ -445,6 +497,8 @@ function SingleProfileInfo({ id }: { id: string }) {
   const documents: any[] = Array.isArray(profile.relatedDocuments) ? profile.relatedDocuments : [];
   const initial = (profile.name || "?").charAt(0).toUpperCase();
   const isSelf = profile.type === "self";
+  // One rule, read by the screen and by DELETE /api/profiles/:id.
+  const deletable = checkProfileDelete(profile);
 
   return (
     <div className="p-4 md:p-6 space-y-5 overflow-y-auto h-full pb-24" data-testid="page-profile-info">
@@ -493,9 +547,9 @@ function SingleProfileInfo({ id }: { id: string }) {
                 {/* A row carrying a type outside the list (an older record, a
                     hand-written import) keeps its own option, so opening the
                     menu never blanks the value it is showing. */}
-                {(PROFILE_TYPES.includes(profile.type as any)
-                  ? PROFILE_TYPES
-                  : [profile.type, ...PROFILE_TYPES]
+                {((INFO_PROFILE_TYPES as readonly string[]).includes(profile.type)
+                  ? INFO_PROFILE_TYPES
+                  : [profile.type, ...INFO_PROFILE_TYPES]
                 ).map((t: string) => (
                   <SelectItem key={t} value={t} className="capitalize text-xs" data-testid={`info-type-${t}`}>{t}</SelectItem>
                 ))}
@@ -662,6 +716,55 @@ function SingleProfileInfo({ id }: { id: string }) {
           </div>
         </Card>
       </div>
+
+      {/* ── Danger zone: delete this profile ──────────────────────────────────
+          Last on the page and visually separated, because it is the one action
+          here that cannot be undone. Hidden for the self profile, which the
+          route refuses to delete for the same reason
+          (shared/profile-delete.ts). */}
+      {deletable.status === "ok" && (
+        <Card className="p-4 border-destructive/40" data-testid="info-danger-zone">
+          <SectionHeading title="Delete profile" icon={Trash2} accent="0 72% 51%" />
+          <p className="text-xs text-muted-foreground max-w-2xl">
+            {profileDeleteWarning(profile.name)}
+          </p>
+          <div className="mt-3">
+            <Button
+              variant="destructive"
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={deleteProfile.isPending}
+              data-testid="info-delete-profile"
+            >
+              {deleteProfile.isPending
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Trash2 className="h-3.5 w-3.5" />}
+              Delete {profile.type === "pet" ? "pet" : "profile"}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      <AlertDialog open={confirmingDelete} onOpenChange={(o) => { if (!deleteProfile.isPending) setConfirmingDelete(o); }}>
+        <AlertDialogContent data-testid="info-delete-confirm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {profile.name}?</AlertDialogTitle>
+            <AlertDialogDescription>{profileDeleteWarning(profile.name)}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteProfile.isPending} data-testid="info-delete-cancel">Keep</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteProfile.isPending}
+              onClick={(e) => { e.preventDefault(); deleteProfile.mutate(); }}
+              data-testid="info-delete-confirm-button"
+            >
+              {deleteProfile.isPending ? "Deleting…" : "Delete everything"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

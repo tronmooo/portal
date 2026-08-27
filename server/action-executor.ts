@@ -37,7 +37,7 @@ import { mergeFieldWrite, fieldIdentity, fieldValuePersisted } from "@shared/pro
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { findCompatibleTracker } from "@shared/tracker-identity";
-import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE, type Tracker } from "@shared/schema";
+import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE, type EventCategory, type Tracker } from "@shared/schema";
 import { getUserToday, parseUserDateTime } from "@shared/timezone";
 import { payBillOccurrence } from "./liability-payments";
 import { recurrenceToTags } from "@shared/recurrence";
@@ -168,24 +168,63 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
           // A date the record carries IS a field write — writing it is what
           // puts the date on the calendar, derived. Only a date with no record
           // behind it needs a standalone event, which is stage 4.
+          //
+          // A BIRTHDAY does both, and that is deliberate (user, 2026-08-27:
+          // "it should create a reoccurring event every year for the birthday
+          // and it should be in the calendar under reoccurring"). The date goes
+          // on the person's record — that is where the app derives their yearly
+          // rule from — AND a yearly event is created so it appears under
+          // Calendar → Recurring & Important. It does not double up, because
+          // seriesFromEvents (shared/calendar-adapters) shadows an event whose
+          // kind is "birthday" and whose linkedProfiles[0] already owns a
+          // birthday rule. The event below is linked to that profile for
+          // exactly that reason.
+          const parts: string[] = [];
+          let didSomething = false;
+
           if (action.payload?.fields && action.payload?.profileId) {
             const res = await writeFieldsToProfile(action, input.documentId);
             if (res.wrote > 0 || res.alreadyApplied) {
               touched.add(res.profileId);
-              ok(action, `${action.title} — ${action.payload.date} on ${res.profileName}`);
+              parts.push(`${action.title} — ${action.payload.date} on ${res.profileName}`);
+              didSomething = true;
             } else {
               failed(action, `${action.title}: date did not persist to ${res.profileName}`);
+              break;
             }
-          } else {
+          }
+
+          const wantsEvent = action.payload?.createEvent === true
+            || !(action.payload?.fields && action.payload?.profileId);
+          if (wantsEvent) {
+            const profileId = action.payload?.profileId ? String(action.payload.profileId) : "";
+            const recurrence = String(action.payload?.recurrence || "none");
             const ev = await storage.createEvent({
               title: String(action.payload?.title || action.title),
               date: String(action.payload?.date),
-              category: "other",
-              tags: ["document-extraction", "date-rule-uncovered"],
+              category: eventCategoryFor(action.payload?.ruleType),
+              recurrence,
+              recurrenceEnd: action.payload?.recurrenceEnd
+                ? String(action.payload.recurrenceEnd)
+                : undefined,
+              linkedProfiles: profileId ? [profileId] : [],
+              tags: [
+                "document-extraction",
+                ...(action.payload?.ruleType ? [`rule:${action.payload.ruleType}`] : []),
+                ...(recurrence !== "none" ? ["recurring"] : []),
+              ],
               linkedDocuments: [input.documentId],
             } as any);
-            ok(action, `Added "${ev.title}" to the calendar`);
+            parts.push(
+              recurrence !== "none"
+                ? `Added "${ev.title}" to the calendar, repeating ${recurrence}`
+                : `Added "${ev.title}" to the calendar`,
+            );
+            didSomething = true;
           }
+
+          if (didSomething) ok(action, parts.join("; "));
+          else skipped(action, `${action.title} — nothing to write`);
           break;
         }
 
@@ -243,14 +282,61 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
 
         case "income": {
           const amount = requireAmount(action.payload?.amount);
+          const label = String(action.payload?.name || action.title);
+          // `description` is what insertIncomeSchema declares (it has no
+          // `source` field), so passing only `source` left extracted income
+          // with an empty description. Both are sent: the schema takes the one
+          // it knows and the other is harmless.
+          const frequency = action.payload?.frequency
+            ? String(action.payload.frequency)
+            : undefined;
           const inc = await storage.createIncome({
-            source: String(action.payload?.name || action.title),
+            description: label,
+            source: label,
             amount,
             date: String(action.payload?.date || today()),
             category: "general",
+            ...(frequency ? { frequency } : {}),
             linkedProfiles: targetId ? [targetId] : [],
           } as any);
-          ok(action, `Recorded income: $${amount.toFixed(2)} ${(inc as any).source}`);
+          ok(
+            action,
+            frequency && frequency !== "once"
+              ? `Recorded recurring income: $${amount.toFixed(2)} ${label} (${frequency})`
+              : `Recorded income: $${amount.toFixed(2)} ${(inc as any).description || label}`,
+          );
+          break;
+        }
+
+        case "journal": {
+          // A dated history entry with nowhere else to go. JournalEntry needs a
+          // MoodLevel and an extracted record has no mood, so it takes the
+          // neutral one — the entry is a record of something that happened, not
+          // a feeling about it.
+          const entry = await storage.createJournalEntry({
+            title: String(action.payload?.title || action.title),
+            content: String(action.payload?.content || action.detail || ""),
+            date: String(action.payload?.date || today()),
+            mood: String(action.payload?.mood || "neutral"),
+            tags: ["document-extraction"],
+            linkedProfiles: targetId ? [targetId] : [],
+            linkedDocuments: [input.documentId],
+          } as any);
+          ok(action, `Saved journal entry: ${(entry as any).title || action.title}`);
+          break;
+        }
+
+        case "habit": {
+          const habit = await storage.createHabit({
+            name: String(action.payload?.name || action.title),
+            frequency: String(action.payload?.frequency || "daily"),
+            ...(action.payload?.targetPerDay
+              ? { targetPerDay: Number(action.payload.targetPerDay) }
+              : {}),
+            ...(action.payload?.startDate ? { startDate: String(action.payload.startDate) } : {}),
+            linkedProfiles: targetId ? [targetId] : [],
+          } as any);
+          ok(action, `Started tracking the habit "${(habit as any).name || action.title}"`);
           break;
         }
 
@@ -623,17 +709,56 @@ async function writeExpense(action: ProposedAction, documentId: string): Promise
     return `Expense $${amount.toFixed(2)} already exists (${(dup as any).description}) — not duplicated`;
   }
 
+  // A charge the document says repeats is stored as one, so the app stops
+  // reading a monthly subscription as a single Tuesday in March.
+  const isRecurring = Boolean(p.isRecurring)
+    || Boolean(p.frequency && String(p.frequency) !== "once");
   const expense = await storage.createExpense({
     description: String(p.description || action.title),
     amount,
     category: canonicalExpenseCategory(String(p.category || "general")),
     vendor: p.vendor ? String(p.vendor) : undefined,
     date,
-    tags: [],
+    ...(isRecurring ? { isRecurring: true } : {}),
+    ...(p.frequency ? { frequency: String(p.frequency) } : {}),
+    tags: isRecurring ? ["recurring"] : [],
     linkedProfiles: owner ? [owner] : [],
   } as any);
   try { await storage.linkProfileTo((expense as any).id, "document", documentId); } catch { /* best effort */ }
-  return `Created expense: $${amount.toFixed(2)} ${(expense as any).description}`;
+  return isRecurring
+    ? `Created recurring expense: $${amount.toFixed(2)} ${(expense as any).description}`
+    : `Created expense: $${amount.toFixed(2)} ${(expense as any).description}`;
+}
+
+/**
+ * The calendar category a date rule belongs to.
+ *
+ * `category: "other"` was hardcoded on every extracted event, so a renewal, a
+ * birthday and a service reminder all arrived colourless and indistinguishable.
+ * The rule type is already computed by `classifyDateField` — this just spends
+ * it.
+ */
+function eventCategoryFor(ruleType: unknown): EventCategory {
+  switch (String(ruleType || "")) {
+    case "birthday":
+    case "anniversary":
+      return "family";
+    case "payment":
+    case "income":
+    case "due":
+      return "finance";
+    case "appointment":
+      return "health";
+    case "expiration":
+    case "renewal":
+    case "cancellation":
+    case "deadline":
+    case "maintenance":
+    case "reminder":
+      return "personal";
+    default:
+      return "other";
+  }
 }
 
 /**

@@ -165,6 +165,38 @@ describe("buildExtractionItems", () => {
   const field = (key: string, value: any, extra: Record<string, any> = {}) =>
     ({ key, label: key, value, selected: true, isDate: false, ...extra });
 
+  it("one fact is one row, whatever the document spells it", () => {
+    // USER REPORT (2026-08-27): the review listed "Birthday 1975-04-12" beside
+    // "date Of Birth 1975-04-12" — one date, two rows. matchConcept already
+    // folds dob/birthday/birthdate onto the canonical `dateOfBirth`, but two
+    // items still carried that same key and that same value.
+    const items = buildExtractionItems({
+      family: "person",
+      extractedFields: [
+        { key: "dateOfBirth", label: "date Of Birth", value: "1975-04-12", selected: true, isDate: true },
+        { key: "birthday", label: "Birthday", value: "1975-04-12", selected: true, isDate: true },
+      ],
+      normalizeDate: normalizeDateString,
+    });
+    const births = items.filter((i) => i.key === "dateOfBirth");
+    expect(births).toHaveLength(1);
+    // The better-written of the two labels survives the merge.
+    expect(births[0].label).toBe("Birthday");
+    expect(births[0].date).toBe("1975-04-12");
+  });
+
+  it("keeps two rows when the values differ, however alike the keys are", () => {
+    const items = buildExtractionItems({
+      family: "person",
+      extractedFields: [
+        { key: "dateOfBirth", label: "date Of Birth", value: "1975-04-12", selected: true, isDate: true },
+        { key: "birthday", label: "Birthday", value: "1980-01-01", selected: true, isDate: true },
+      ],
+      normalizeDate: normalizeDateString,
+    });
+    expect(items.filter((i) => i.key === "dateOfBirth")).toHaveLength(2);
+  });
+
   it("proposes a destination for every row and never duplicates a tracker", () => {
     const items = buildExtractionItems({
       extractedFields: [

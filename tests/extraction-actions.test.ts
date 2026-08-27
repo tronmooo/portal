@@ -691,10 +691,12 @@ describe("a status the document proves", () => {
 });
 
 describe("proof that something happened", () => {
-  it("is kept and explained rather than filed as a diary entry", () => {
-    // JournalEntry requires a MoodLevel — it is a mood journal, not a history
-    // log. Filing a service record there would be the wrong record type, which
-    // is worse than saying there isn't one.
+  it("is offered as a journal entry, unticked — the user decides, not the engine", () => {
+    // JournalEntry requires a MoodLevel, which is why this used to be refused
+    // outright. But the mood was the ONLY thing missing, and "neutral" is an
+    // honest answer for a dated record of something that happened — so the
+    // entry is offered rather than withheld, and it arrives OFF because a diary
+    // entry is never made for someone.
     const p = plan({
       ...autoLoanStatement,
       semantic: {
@@ -709,8 +711,13 @@ describe("proof that something happened", () => {
       },
     });
     const a = p.actions.find((x) => x.factIds.includes("f-event"))!;
-    expect(a.destination).toBe("unsupported");
-    expect(a.unsupportedCode).toBe("no_record_type");
+    expect(a.destination).toBe("journal");
+    expect(a.operation).toBe("CREATE");
+    expect(a.savable).toBe(true);
+    expect(a.selected).toBe(false);
+    expect(a.payload.mood).toBe("neutral");
+    expect(a.payload.date).toBe("2026-08-01");
+    expect(a.kindLabel).toBe("Create journal entry");
     expect(a.detail).toMatch(/already happened/);
   });
 });

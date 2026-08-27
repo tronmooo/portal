@@ -43,6 +43,7 @@ import {
 import { findIdentityMatches } from "@shared/tracker-identity";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
+import { checkProfileDelete } from "@shared/profile-delete";
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
@@ -4953,6 +4954,15 @@ ${JSON.stringify(ctx, null, 2)}`;
     const uid_p3 = cacheUserKey(req as AuthenticatedRequest);
     const existing = await storage.getProfile(req.params.id);
     if (!existing) return res.status(404).json({ error: "Profile not found" });
+    // The Info tab can now delete a person or a pet outright, so this route is
+    // reachable by hand rather than only from code paths that already knew
+    // what they were deleting. shared/profile-delete.ts holds the one rule —
+    // the self profile is not deletable — so the screen and the route refuse
+    // for the same reason and say the same sentence.
+    const deletable = checkProfileDelete(existing);
+    if (deletable.status === "rejected") {
+      return res.status(400).json({ error: deletable.error });
+    }
     const ok = await storage.deleteProfile(req.params.id);
     bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
     if (!ok) {
