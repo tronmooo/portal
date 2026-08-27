@@ -818,10 +818,15 @@ export class SupabaseStorage implements IStorage {
   /** Generic soft-delete restore (deleted_at = null) for entities without a
    *  dedicated restore method. Only tables that soft-delete are mapped. */
   async restoreEntity(entityType: string, id: string): Promise<boolean> {
+    // Documents also need their owners' documents[] arrays re-linked.
+    if (entityType === "document") return this.restoreDocument(id);
+    // NOTE: profile/obligation were listed here, but deleteProfile is a hard
+    // cascade (the RPC) and deleteObligation delegates to it — there is no row
+    // to un-delete, so promising restore for them was a lie that surfaced as
+    // "restore succeeded" toasts over permanently gone data.
     const TABLES: Record<string, string> = {
       task: "tasks", habit: "habits", expense: "expenses", income: "incomes",
-      event: "events", document: "documents", reminder: "reminders",
-      profile: "profiles", obligation: "profiles",
+      event: "events", reminder: "reminders", goal: "goals",
     };
     const table = TABLES[entityType];
     if (!table) return false;
@@ -1309,7 +1314,7 @@ export class SupabaseStorage implements IStorage {
       // profile detail page showed 0 linked items. Use raw `.filter('cs', '[uuid]')`
       // with explicit JSON array syntax instead.
       this.supabase.from("trackers").select("*")
-        .eq("user_id", this.userId).contains("linked_profiles", JSON.stringify([id]))
+        .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
         .then(r => r.data || []),
       this.supabase.from("expenses").select("*")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
@@ -1331,6 +1336,7 @@ export class SupabaseStorage implements IStorage {
       this.supabase.from("journal_entries")
         .select("*")
         .eq("user_id", this.userId)
+        .is("deleted_at", null)
         .contains("linked_profiles", [id])
         .order("created_at", { ascending: false })
         .then(r => r.data || []),
@@ -2611,6 +2617,7 @@ export class SupabaseStorage implements IStorage {
     // time, which is how the same scope produced two different wellness scores
     // (QA report 2026-08-05). Newest first, matching the other list reads.
     let trackersQuery = this.supabase.from("trackers").select("*").eq("user_id", this.userId)
+      .is("deleted_at", null)
       .order("created_at", { ascending: false });
     trackersQuery = this._applyProfileFilter(trackersQuery, profileIds);
     const [trackersResult, entriesResult] = await Promise.all([
@@ -2665,7 +2672,7 @@ export class SupabaseStorage implements IStorage {
 
   async getTracker(id: string): Promise<Tracker | undefined> {
     const [{ data, error }, entriesResult] = await Promise.all([
-      this.supabase.from("trackers").select("*").eq("id", id).eq("user_id", this.userId).single(),
+      this.supabase.from("trackers").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single(),
       this.supabase.from("tracker_entries").select("*").eq("tracker_id", id).eq("user_id", this.userId).is("deleted_at", null).order("timestamp", { ascending: true }),
     ]);
     if (error || !data) return undefined;
@@ -3226,15 +3233,21 @@ export class SupabaseStorage implements IStorage {
   async deleteTask(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this task */
     await this.cleanupEntityLinks("task", id);
-    const { error } = await this.supabase.from("tasks")
-      .update({ deleted_at: new Date().toISOString(), linked_profiles: [] })
-      .eq("id", id).eq("user_id", this.userId);
-    return !error;
+    // Soft delete KEEPS linked_profiles: every task reader filters deleted_at,
+    // so ownership leaks nowhere — and it is what makes restore actually
+    // restore. Clearing owners here (the old behavior) left 1,700+ restored
+    // tasks visible only under "Everyone", invisible in every per-profile
+    // scope, permanently. `.select` so 0 rows matched reports false.
+    const { data, error } = await this.supabase.from("tasks")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   async restoreTask(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("tasks").update({ deleted_at: null }).eq("id", id).eq("user_id", this.userId);
-    return !error;
+    const { data, error } = await this.supabase.from("tasks").update({ deleted_at: null })
+      .eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   /** Recently soft-deleted tasks (newest deletion first) — for restore-by-name. */
@@ -3330,10 +3343,12 @@ export class SupabaseStorage implements IStorage {
   async deleteExpense(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this expense */
     await this.cleanupEntityLinks("expense", id);
-    const { error } = await this.supabase.from("expenses")
-      .update({ deleted_at: new Date().toISOString(), linked_profiles: [] })
-      .eq("id", id).eq("user_id", this.userId);
-    return !error;
+    // Keeps linked_profiles (readers filter deleted_at) so restore returns the
+    // expense to its owner's scope; `.select` so 0 rows reports false.
+    const { data, error } = await this.supabase.from("expenses")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================
@@ -4416,19 +4431,18 @@ export class SupabaseStorage implements IStorage {
     if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
     /* D1: clean up entity_links rows that reference this document */
     await this.cleanupEntityLinks("document", id);
-    // Capture storage_path BEFORE we mutate the row — we need it to remove the
-    // underlying file from the Supabase Storage bucket. Without this, deleted
-    // documents leave their files behind in the bucket forever, silently
-    // accumulating storage cost and potential PII leakage if a stale signed
-    // URL is ever resurfaced.
-    let storagePathToRemove: string | undefined;
+    // A SOFT delete that is actually soft. The old version soft-deleted the
+    // row while destroying the bytes (file_data cleared, Storage blob and
+    // preview removed, owners wiped) — so "restore" produced a zombie: a row
+    // with no file, no owners, and a viewer that couldn't open it, while the
+    // UI called the delete recoverable. Bytes and owners now survive until an
+    // explicit purgeDocument.
     try {
-      // PERF: metadata-only read — this delete path only needs storagePath and
-      // linkedProfiles, never the (blob-downloading) full document.
       const doc = await this.getDocumentMeta(id);
       if (doc) {
-        storagePathToRemove = doc.storagePath;
-        // PERF FIX: was sequential getProfile + update per linked profile.
+        // Take the doc out of each owner's documents[] array; restoreDocument
+        // puts it back (linked_profiles on the row is the canonical side and
+        // is kept).
         await Promise.all(doc.linkedProfiles.map(async pid => {
           try {
             const profile = await this.getProfile(pid);
@@ -4444,30 +4458,73 @@ export class SupabaseStorage implements IStorage {
     } catch (e: any) {
       console.error(`[deleteDocument] Profile cleanup error for ${id}:`, e.message);
     }
-    // FIX 4 Phase 2: profile_documents junction dropped.
-    // Soft delete the document. Clear file_data to remove residual base64 PII
-    // from the row (the underlying Storage blob is removed below). Also clear
-    // linked_profiles so the soft-deleted row's two ownership representations
-    // stay in lockstep with the wiped junction — same pattern as deleteExpense.
-    const { error } = await this.supabase.from("documents").update({ deleted_at: new Date().toISOString(), file_data: '', linked_profiles: [] }).eq("id", id).eq("user_id", this.userId);
+    const { data, error } = await this.supabase.from("documents")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id).eq("user_id", this.userId).select("id");
     if (error) {
       console.error(`[deleteDocument] Supabase error for ${id}:`, error.message);
       return false;
     }
-    // Best-effort: remove the underlying file from Storage. We do this AFTER
-    // the soft-delete succeeds so a transient Storage error never blocks the
-    // user-visible delete. We log but don't fail — the row is already gone.
+    // Honest: 0 rows matched ⇒ false (the old version returned true no matter what).
+    return Array.isArray(data) && data.length > 0;
+  }
+
+  /**
+   * Destroy a document's bytes and row, permanently. The ONLY place allowed
+   * to remove the Storage blob — a soft delete never does. Works on a live or
+   * an already-soft-deleted document.
+   */
+  async purgeDocument(id: string): Promise<boolean> {
+    if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
+    let storagePathToRemove: string | undefined;
+    try {
+      // Direct read, deliberately NOT getDocumentMeta: that filters deleted_at,
+      // and purge's main job is destroying a soft-deleted document's bytes.
+      const { data: row } = await this.supabase.from("documents")
+        .select("storage_path").eq("id", id).eq("user_id", this.userId).maybeSingle();
+      storagePathToRemove = (row as any)?.storage_path || undefined;
+    } catch { /* row lookup below still decides success */ }
+    // Bytes first, then the row: a purge interrupted between the two leaves a
+    // recoverable-looking row with no bytes — exactly the zombie — so remove
+    // the row last only after the blob removal has been attempted.
     if (storagePathToRemove) {
       try {
-        // The derived preview (if one was ever generated) goes with it.
         const { error: rmErr } = await this.supabase.storage.from(DOCUMENTS_BUCKET)
           .remove([storagePathToRemove, `${storagePathToRemove}${PREVIEW_SUFFIX}`]);
-        if (rmErr) console.error(`[deleteDocument] Storage remove failed for ${storagePathToRemove}:`, rmErr.message);
+        if (rmErr) console.error(`[purgeDocument] Storage remove failed for ${storagePathToRemove}:`, rmErr.message);
       } catch (e: any) {
-        console.error(`[deleteDocument] Storage remove exception for ${storagePathToRemove}:`, e.message);
+        console.error(`[purgeDocument] Storage remove exception:`, e.message);
       }
     }
-    return true; // Supabase delete succeeds even if 0 rows matched — that's fine, doc is gone
+    const { data, error } = await this.supabase.from("documents")
+      .delete().eq("id", id).eq("user_id", this.userId).select("id");
+    if (error) {
+      console.error(`[purgeDocument] Supabase error for ${id}:`, error.message);
+      return false;
+    }
+    return Array.isArray(data) && data.length > 0;
+  }
+
+  /** Un-delete a document and put it back in its owners' documents[] arrays. */
+  async restoreDocument(id: string): Promise<boolean> {
+    const { data, error } = await this.supabase.from("documents")
+      .update({ deleted_at: null })
+      .eq("id", id).eq("user_id", this.userId).select("id, linked_profiles");
+    if (error || !Array.isArray(data) || data.length === 0) return false;
+    const owners: string[] = Array.isArray((data[0] as any).linked_profiles) ? (data[0] as any).linked_profiles : [];
+    await Promise.all(owners.map(async pid => {
+      try {
+        const profile = await this.getProfile(pid);
+        if (profile && !profile.documents.includes(id)) {
+          await this.supabase.from("profiles")
+            .update({ documents: [...profile.documents, id] })
+            .eq("id", pid).eq("user_id", this.userId);
+        }
+      } catch (e: any) {
+        console.warn(`[restoreDocument] re-link failed for profile ${pid}:`, e?.message);
+      }
+    }));
+    return true;
   }
 
   async getDocumentsForProfile(profileId: string): Promise<Document[]> {
@@ -4655,19 +4712,22 @@ export class SupabaseStorage implements IStorage {
   async deleteHabit(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this habit */
     await this.cleanupEntityLinks("habit", id);
-    // Cascade delete habit_checkins — they are per-habit metadata with no value once
-    // the habit is gone. Leaving them would orphan rows that show up in analytics /
-    // AI summaries / calendar timeline queries that hit habit_checkins directly.
-    await this.supabase.from("habit_checkins").delete().eq("habit_id", id).eq("user_id", this.userId);
-    // Soft delete the habit row itself — set deleted_at instead of removing it so
-    // restoreHabit still works (the row is recoverable; the checkins are not).
-    const { error } = await this.supabase.from("habits").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
-    return !error;
+    // Soft delete the habit and KEEP its check-ins. The old hard-delete of
+    // habit_checkins made "recoverable" a lie: restore returned an empty habit
+    // with a phantom stored streak and no history. Check-in readers join
+    // through the habits list (which filters deleted_at), so the retained rows
+    // leak nowhere while the habit is deleted — and come back with it.
+    // `.select` so 0 rows matched reports false.
+    const { data, error } = await this.supabase.from("habits")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   async restoreHabit(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("habits").update({ deleted_at: null }).eq("id", id).eq("user_id", this.userId);
-    return !error;
+    const { data, error } = await this.supabase.from("habits").update({ deleted_at: null })
+      .eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   /** Recently soft-deleted habits (newest deletion first) — for restore-by-name. */
@@ -5280,7 +5340,7 @@ export class SupabaseStorage implements IStorage {
   async getArtifacts(profileIds?: string[]): Promise<Artifact[]> {
     return this.memo(`getArtifacts${this._fk(profileIds)}`, async () => {
       // PERF (durable-fix-phase1): DB pushdown via idx_artifacts_linked_profiles_gin.
-      let q = this.supabase.from("artifacts").select("*").eq("user_id", this.userId);
+      let q = this.supabase.from("artifacts").select("*").eq("user_id", this.userId).is("deleted_at", null);
       q = this._applyProfileFilter(q, profileIds);
       const { data, error } = await q;
       if (error) throw error;
@@ -5289,7 +5349,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getArtifact(id: string): Promise<Artifact | undefined> {
-    const { data, error } = await this.supabase.from("artifacts").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("artifacts").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     return this.rowToArtifact(data);
   }
@@ -5438,7 +5498,7 @@ export class SupabaseStorage implements IStorage {
       // PERF (durable-fix-phase1): DB pushdown via idx_journal_entries_linked_profiles_gin.
       // journal_entries.linked_profiles is a PG ARRAY (text[]), not jsonb —
       // see _applyProfileFilter doc for syntax.
-      let q = this.supabase.from("journal_entries").select("*").eq("user_id", this.userId);
+      let q = this.supabase.from("journal_entries").select("*").eq("user_id", this.userId).is("deleted_at", null);
       q = this._applyProfileFilter(q, profileIds, "array");
       const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
@@ -5447,7 +5507,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   private async getJournalEntry(id: string): Promise<JournalEntry | undefined> {
-    const { data, error } = await this.supabase.from("journal_entries").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("journal_entries").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     return this.rowToJournalEntry(data);
   }
@@ -5507,7 +5567,7 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   async getMemories(): Promise<MemoryItem[]> {
     return this.memo("getMemories", async () => {
-      const { data, error } = await this.supabase.from("memories").select("*").eq("user_id", this.userId);
+      const { data, error } = await this.supabase.from("memories").select("*").eq("user_id", this.userId).is("deleted_at", null);
       if (error) throw error;
       return (data || []).map(r => this.rowToMemory(r));
     });
@@ -5735,7 +5795,7 @@ export class SupabaseStorage implements IStorage {
   }
   private async _getGoalsImpl(profileIds?: string[]): Promise<Goal[]> {
     // PERF (durable-fix-phase1): DB pushdown via idx_goals_linked_profiles.
-    let q = this.supabase.from("goals").select("*").eq("user_id", this.userId);
+    let q = this.supabase.from("goals").select("*").eq("user_id", this.userId).is("deleted_at", null);
     q = this._applyProfileFilter(q, profileIds);
     const { data, error } = await q.order("created_at", { ascending: false });
     if (error) throw error;
@@ -5764,7 +5824,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getGoal(id: string): Promise<Goal | undefined> {
-    const { data, error } = await this.supabase.from("goals").select("*").eq("id", id).eq("user_id", this.userId).single();
+    const { data, error } = await this.supabase.from("goals").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     const goal = this.rowToGoal(data);
     if (goal.status === "active") {
@@ -5853,8 +5913,18 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteGoal(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("goals").delete().eq("id", id).eq("user_id", this.userId);
-    return !error;
+    // Soft delete — the column always existed; the delete just never used it,
+    // making goals the one entity that was unrecoverable by accident.
+    const { data, error } = await this.supabase.from("goals")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
+  }
+
+  async restoreGoal(id: string): Promise<boolean> {
+    const { data, error } = await this.supabase.from("goals").update({ deleted_at: null })
+      .eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   /**
@@ -7213,39 +7283,58 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // DELETE ALL USER DATA
   // ============================================================
-  async deleteAllUserData(): Promise<{ deleted: Record<string, number> }> {
+  /** Every user-scoped table, children before parents, PROFILES LAST.
+   *  Exported so tests can diff it against the live schema instead of trusting
+   *  a hand-maintained list nobody re-checks. */
+  static readonly ALL_USER_TABLES: readonly string[] = [
+    // Child / link / bookkeeping tables first
+    "tracker_entries", "habit_checkins", "domain_entries", "entity_links",
+    "event_documents", "extraction_corrections", "liability_payments",
+    "liability_asset_links", "liability_profile_links", "asset_party_links",
+    "ownership_history", "net_worth_snapshots", "loan_amortization",
+    "cashflow_projections", "audit_log", "ai_action_log", "ai_bulk_plans",
+    "undo_log", "user_notifications", "chat_artifacts", "chat_idempotency",
+    "finance_imports", "finance_sync_runs", "financial_transaction_overrides",
+    "financial_transfer_links", "financial_transactions", "financial_accounts",
+    "financial_connections", "stripe_account_holders",
+    // Standalone data tables
+    "expenses", "tasks", "events", "documents", "trackers", "habits",
+    "artifacts", "journal_entries", "memories", "goals", "domains",
+    "incomes", "paychecks",
+    // Settings + caches
+    "preferences", "response_cache", "user_data_versions",
+    // The profile graph LAST — everything above references it. The old list
+    // omitted profiles (and a dozen other tables) entirely, so "delete all my
+    // data" left the user's entire profile graph, payment history and
+    // ownership records behind.
+    "profiles",
+  ];
+
+  async deleteAllUserData(): Promise<{ deleted: Record<string, number>; errors: Record<string, string> }> {
     const deleted: Record<string, number> = {};
+    const errors: Record<string, string> = {};
     const uid = this.userId;
 
-    // Order matters: delete child tables first, then parent tables
-    // FIX 4 Phase 2: profile_<type> junction tables have been dropped.
-    const tables = [
-      // Child tables
-      "tracker_entries", "habit_checkins", "obligation_payments", "domain_entries",
-      "entity_links", "audit_log",
-      // Standalone data tables
-      "expenses", "tasks", "events", "documents", "trackers", "habits",
-      "obligations", "artifacts", "journal_entries", "memories", "goals",
-      "domains", "incomes", "paychecks", "loan_amortization", "cashflow_projections",
-      // Preferences (clears settings but not profile)
-      "preferences",
-    ];
-
-    for (const table of tables) {
+    for (const table of SupabaseStorage.ALL_USER_TABLES) {
       try {
         const { count, error } = await this.supabase
           .from(table)
           .delete({ count: "exact" })
           .eq("user_id", uid);
-        if (!error) {
+        if (error) {
+          // LOUD, per table. The old version silently produced no key at all,
+          // so the response could not distinguish "0 rows" from "table failed"
+          // — for an operation whose whole point is complete erasure.
+          errors[table] = error.message;
+        } else {
           deleted[table] = count || 0;
         }
-      } catch {
-        // Table may not exist — skip silently
+      } catch (e: any) {
+        errors[table] = e?.message || String(e);
       }
     }
 
-    return { deleted };
+    return { deleted, errors };
   }
 
   // ============================================================

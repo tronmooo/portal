@@ -138,7 +138,11 @@ export interface IStorage {
     | undefined>;
   createDocument(data: Partial<InsertDocument> & { name: string; type: string } & Record<string, unknown>): Promise<Document>;
   updateDocument(id: string, data: Partial<Document>): Promise<Document | undefined>;
+  /** SOFT delete: row keeps its bytes and owners; recoverable via restoreDocument. */
   deleteDocument(id: string): Promise<boolean>;
+  /** Destroys the Storage blob and the row, permanently. The only byte-destroyer. */
+  purgeDocument(id: string): Promise<boolean>;
+  restoreDocument(id: string): Promise<boolean>;
   getDocumentsForProfile(profileId: string): Promise<Document[]>;
 
   // Habits
@@ -210,6 +214,7 @@ export interface IStorage {
   createGoal(data: InsertGoal): Promise<Goal>;
   updateGoal(id: string, data: Partial<Goal>): Promise<Goal | undefined>;
   deleteGoal(id: string): Promise<boolean>;
+  restoreGoal(id: string): Promise<boolean>;
 
   // Domains
   getDomains(): Promise<Domain[]>;
@@ -306,7 +311,7 @@ export interface IStorage {
   upsertCashflow(entry: { month: string; week: number; projected_income?: number; projected_expenses?: number; actual_income?: number; actual_expenses?: number }): Promise<any>;
 
   // Bulk delete all user data (preserves profiles)
-  deleteAllUserData(): Promise<{ deleted: Record<string, number> }>;
+  deleteAllUserData(): Promise<{ deleted: Record<string, number>; errors: Record<string, string> }>;
 
   // Finance imports ("Import from ChatGPT") — batch history + undo.
   createFinanceImport(rec: import("./finance-import").FinanceImportRecordInput): Promise<import("./finance-import").FinanceImportRecord>;
@@ -2064,6 +2069,7 @@ export class MemStorage implements IStorage {
     return updated;
   }
   async deleteGoal(id: string): Promise<boolean> { return this.goals.delete(id); }
+  async restoreGoal(_id: string): Promise<boolean> { return false; }
 
   // ---- Domains ----
   async getDomains() { return Array.from(this.domains.values()); }
@@ -2578,6 +2584,8 @@ export class MemStorage implements IStorage {
   async getDeletedTasks(_limit?: number): Promise<Task[]> { return []; }
   async getDeletedHabits(_limit?: number): Promise<Habit[]> { return []; }
   async restoreEntity(_entityType: string, _id: string): Promise<boolean> { return false; }
+  async purgeDocument(id: string): Promise<boolean> { return this.documents.delete(id); }
+  async restoreDocument(_id: string): Promise<boolean> { return false; }
 
   // AI action ledger stubs (in-memory, bounded)
   private aiActionLogStore: import("@shared/schema").AiActionLog[] = [];
@@ -2740,7 +2748,7 @@ export class MemStorage implements IStorage {
   async upsertCashflow(entry: any) { return entry; }
 
   // Bulk delete all user data (in-memory)
-  async deleteAllUserData(): Promise<{ deleted: Record<string, number> }> {
+  async deleteAllUserData(): Promise<{ deleted: Record<string, number>; errors: Record<string, string> }> {
     const deleted: Record<string, number> = {};
     deleted.expenses = this.expenses.size; this.expenses.clear();
     deleted.tasks = this.tasks.size; this.tasks.clear();
@@ -2758,7 +2766,7 @@ export class MemStorage implements IStorage {
     deleted.domainEntries = this.domainEntries.size; this.domainEntries.clear();
     deleted.entityLinks = this.entityLinks.size; this.entityLinks.clear();
     this.preferences.clear();
-    return { deleted };
+    return { deleted, errors: {} };
   }
 
   // Liabilities — stubs (MemStorage is dev-only; no persistence needed).

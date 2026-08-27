@@ -256,6 +256,7 @@ export default defineConfig({
       'tests/bill-entry-point-parity.test.ts',
       'tests/habit-uncomplete-op.test.ts',
       'tests/tracker-entry-ops.test.ts',
+      'tests/delete-restore-honesty.test.ts',
       'tests/profile-rename.test.ts',
       'tests/info-tab-editable.dom.test.tsx',
       'tests/info-tab-ai-parity.test.ts',

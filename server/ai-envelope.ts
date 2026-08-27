@@ -220,9 +220,15 @@ function stripInternal(result: any): any {
 
 const VERBS: Record<string, string> = { create: "Created", update: "Updated", delete: "Deleted" };
 
-/** Entity types whose delete is a recoverable soft delete (deleted_at). */
+/** Entity types whose delete is a recoverable soft delete (deleted_at).
+ *  This set is a PROMISE shown to the user ("recoverable delete") — every
+ *  member's storage delete must genuinely be soft and its restore genuinely
+ *  restore. profile/obligation were listed here while deleteProfile ran a
+ *  hard cascade RPC, so undo was promised and then failed; they are out.
+ *  goal joined when deleteGoal became soft; document's membership became TRUE
+ *  (rather than a claim) when deleteDocument stopped destroying the bytes. */
 export const SOFT_DELETE_TYPES = new Set([
-  "task", "habit", "expense", "income", "event", "document", "profile", "obligation",
+  "task", "habit", "expense", "income", "event", "document", "goal",
 ]);
 
 /**

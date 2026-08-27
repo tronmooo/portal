@@ -6409,6 +6409,15 @@ Rules:
     bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`);
     res.json({ success: true });
   }));
+  // Expenses were the one soft-deleted entity with NO restore route — 6,000+
+  // recoverable rows and no way to recover any of them.
+  app.post("/api/expenses/:id/restore", asyncHandler(async (req, res) => {
+    const ok = await storage.restoreEntity("expense", req.params.id);
+    if (!ok) return res.status(404).json({ error: "Expense not found" });
+    const uid_er = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`expenses:${uid_er}`); bustCache(`stats:${uid_er}`);
+    res.json({ success: true });
+  }));
 
   // ---- Paychecks ----
   app.get("/api/paychecks", asyncHandler(async (req, res) => {
@@ -6905,6 +6914,30 @@ Rules:
     bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
     bustCache(`profiles:${uid_d3}`); bustCache(`events:${uid_d3}`); bustCache(`caltimeline:${uid_d3}`); bustCache(`activity:${uid_d3}`);
     res.json({ success: true, ...outcome });
+  }));
+  // Un-delete a soft-deleted document: the row comes back with its bytes and
+  // owners (the delete keeps both now — the old delete destroyed the blob, so
+  // "restore" produced a file that wouldn't open).
+  app.post("/api/documents/:id/restore", asyncHandler(async (req, res) => {
+    const ok = await storage.restoreDocument(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Document not found" });
+    const uid_dr = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`documents:${uid_dr}`); bustCache(`stats:${uid_dr}`); bustCache(`profile-detail:${uid_dr}:`); bustCache(`profiles:${uid_dr}`);
+    res.json({ success: true });
+  }));
+  // Destroy a document's bytes and row, permanently — the ONLY route that
+  // does. A live document gets the full cascade first so nothing derived is
+  // left pointing at a record that no longer exists.
+  app.post("/api/documents/:id/purge", asyncHandler(async (req, res) => {
+    const meta = await storage.getDocumentMeta(req.params.id).catch(() => undefined);
+    if (meta) {
+      await deleteDocumentEverywhere(storage as any, req.params.id, parseDeletionMode(req.query.mode), log);
+    }
+    const ok = await storage.purgeDocument(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Document not found" });
+    const uid_dp = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`documents:${uid_dp}`); bustCache(`stats:${uid_dp}`); bustCache(`profile-detail:${uid_dp}:`); bustCache(`notifications:${uid_dp}`);
+    res.json({ success: true, purged: true });
   }));
   // ---- Repair: events whose source document is gone ----
   // One-off cleanup for orphans created before the delete cascade existed.
@@ -9273,6 +9306,11 @@ No emojis. No prose outside the JSON.`,
       res.status(500).json({ error: "Failed to delete goal" });
     }
   }));
+  app.post("/api/goals/:id/restore", asyncHandler(async (req, res) => {
+    const ok = await storage.restoreGoal(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Goal not found" });
+    res.json({ success: true });
+  }));
 
   // ---- Entity Links ----
   app.get("/api/entity-links/:type/:id", asyncHandler(async (req, res) => {
@@ -9500,7 +9538,14 @@ No emojis. No prose outside the JSON.`,
       }
       const result = await storage.deleteAllUserData();
       clearAllCache();
-      res.json({ success: true, deleted: result.deleted });
+      const failed = Object.keys((result as any).errors || {});
+      // Erasure is the one operation that must not claim success it can't
+      // prove: any table that errored is named, and success flips off.
+      res.status(failed.length > 0 ? 500 : 200).json({
+        success: failed.length === 0,
+        deleted: result.deleted,
+        ...(failed.length > 0 ? { errors: (result as any).errors } : {}),
+      });
     } catch (err: any) {
       console.error("[api] Delete all data failed:", err.message);
       res.status(500).json({ error: "Failed to delete all data" });
