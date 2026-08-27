@@ -109,12 +109,14 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
 
   // Habit ↔ tracker: one completion writes both sides (server/habit-completion),
   // so either side's write must refresh the other or the ring and the chart
-  // disagree.
-  Habit: { domains: ["habits", "trackers"], endpoint: "/api/habits" },
-  HabitCheckin: { domains: ["habits", "trackers"], endpoint: null },
-  Tracker: { domains: ["trackers", "habits"], endpoint: "/api/trackers" },
-  TrackerEntry: { domains: ["trackers", "habits"], endpoint: null },
-  Entry: { domains: ["trackers", "habits"], endpoint: null },   // logEntry
+  // disagree. Entries and check-ins also drive derive-on-read GOAL progress
+  // (habit_streak / tracker_target / fitness_* goals), so those writes must
+  // refresh goals too — the client bus already did; the server side didn't.
+  Habit: { domains: ["habits", "trackers", "goals"], endpoint: "/api/habits" },
+  HabitCheckin: { domains: ["habits", "trackers", "goals"], endpoint: null },
+  Tracker: { domains: ["trackers", "habits", "goals"], endpoint: "/api/trackers" },
+  TrackerEntry: { domains: ["trackers", "habits", "goals"], endpoint: null },
+  Entry: { domains: ["trackers", "habits", "goals"], endpoint: null },   // logEntry
 
   Obligation: { domains: ["obligations", "liabilities", "expenses"], endpoint: "/api/obligations" },
   Budget: { domains: ["budgets", "expenses"], endpoint: null },

@@ -57,7 +57,8 @@ import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@sha
 import { matchHabitByName } from "@shared/habit-match";
 import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompletionVeto } from "@shared/habit-completion-intent";
 import { resolveReferent, buildReferentDirective, type ReferentCandidate } from "@shared/referent-resolution";
-import { completeHabitOccurrence, resolveTrackerForHabit, type HabitCompletionSource } from "./habit-completion";
+import { completeHabitOccurrence, uncompleteHabitOccurrence, resolveTrackerForHabit, type HabitCompletionSource } from "./habit-completion";
+import { removeTrackerEntry } from "./tracker-entries";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
@@ -1285,10 +1286,26 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     } catch { /* profile fetch failed — keep full list rather than break check-ins */ }
     const habit = matchHabitByName(selfScoped, habitName);
     if (habit) {
-      const checkin = await storage.checkinHabit(habit.id);
-      actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name } });
-      if (checkin) results.push(checkin);
-      return { matched: true, reply: `Checked in "${habit.name}" — ${habit.currentStreak + 1}-day streak.`, actions, results };
+      // THE pipeline, not a raw checkinHabit: the fast lane used to skip the
+      // schedule check and the tracker mirror, and its reply asserted
+      // `currentStreak + 1` from a pre-write snapshot — wrong whenever the day
+      // was already complete or needed more than one completion.
+      const done = await completeHabitOccurrence(storage, {
+        habitId: habit.id, source: "chat_explicit", timezone: aiUserTimezone(),
+      });
+      if (done.ok) {
+        actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name } });
+        results.push({ habitId: habit.id, recorded: done.recorded, progress: done.progress });
+        const reply = done.recorded === 0 && done.alreadyComplete
+          ? `"${habit.name}" was already done for today.`
+          : done.progress.required > 1
+            ? `Checked in "${habit.name}" — ${done.progress.completed} of ${done.progress.required} today.`
+            : `Checked in "${habit.name}" — ${done.currentStreak}-day streak.`;
+        return { matched: true, reply, actions, results };
+      }
+      if (done.reason === "not_scheduled") {
+        return { matched: true, reply: `"${habit.name}" isn't scheduled for today, so I left it unchanged.`, actions, results };
+      }
     }
   }
 
@@ -11862,11 +11879,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
         if (selfProf) { const sh = habits.filter(h => (h.linkedProfiles||[]).includes(selfProf.id)); if (sh.length > 0) eligible = sh; }
       }
-      const habit = matchHabitByName(eligible, input.name || "") ?? matchHabitByName(habits, input.name || "");
+      // No fall-back to the full cross-profile list: checkin_habit removed it
+      // deliberately (the Rex-hijack fix), and undo must obey the same scope —
+      // "undo my vitamins" must never un-check another member's habit.
+      const habit = matchHabitByName(eligible, input.name || "");
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
       const targetDate = input.date || getUserToday(aiUserTimezone());
-      const fullHabit = await storage.getHabit(habit.id);
-      if (!fullHabit) return { error: "Habit not found: " + (input.name || "unknown") };
 
       // ONE OCCURRENCE AT A TIME, same as check-in. Undo removes the LAST
       // completion recorded that day — the one the user just made a mistake on
@@ -11876,18 +11894,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const undoPosition = Number((input as any).occurrence) > 0
         ? Math.floor(Number((input as any).occurrence))
         : parseOccurrencePosition(String((input as any).__userMessage || ""));
-      const checkin = undoPosition
-        ? checkinAtPosition(fullHabit as any, targetDate, undoPosition)
-        : latestCheckinOn(fullHabit as any, targetDate);
-      if (!checkin?.id) {
+      // The inverse pipeline: removes the check-in AND the mirrored tracker
+      // entry (the raw deleteHabitCheckin left the mirror behind, so adherence
+      // kept counting the un-taken dose).
+      const undone = await uncompleteHabitOccurrence(storage, {
+        habitId: habit.id, source: "chat_explicit", date: targetDate,
+        ...(undoPosition ? { position: undoPosition } : {}),
+        timezone: aiUserTimezone(),
+      });
+      if (!undone.ok) {
         return {
           error: undoPosition
             ? `"${habit.name}" has no completion #${undoPosition} recorded on ${targetDate}.`
             : `No check-in found for "${habit.name}" on ${targetDate}`,
         };
       }
-      await storage.deleteHabitCheckin(habit.id, checkin.id);
-      const after = habitDayProgress((await storage.getHabit(habit.id)) as any, targetDate);
+      const after = undone.progress;
       return {
         uncompleted: true,
         id: habit.id,
@@ -11895,7 +11917,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         habitName: habit.name,
         name: habit.name,
         date: targetDate,
-        removedCheckinId: checkin.id,
+        removedCheckinId: undone.removedCheckinId,
         completed: after.completed,
         required: after.required,
         percent: after.percent,
@@ -11967,8 +11989,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const idx = input.entryIndex ?? 0;
       const entry = entries[entries.length - 1 - idx]; // 0 = most recent
       if (!entry) return { error: `No entry found at index ${idx}` };
-      await storage.deleteTrackerEntry(tracker.id, entry.id);
-      return { deleted: true, trackerName: tracker.name, entryId: entry.id, values: entry.values };
+      // One remove operation: also retracts the habit check-in this entry
+      // mirrors, so "delete that entry" can't leave the habit falsely done.
+      const removed = await removeTrackerEntry(storage, { trackerId: tracker.id, entryId: entry.id }, aiUserTimezone());
+      if (!removed.ok) return { error: `Couldn't delete the ${tracker.name} entry` };
+      return { deleted: true, trackerName: tracker.name, entryId: entry.id, values: entry.values, removedHabitCheckinId: removed.removedHabitCheckinId };
     }
 
     case "update_tracker_entry": {
@@ -11995,9 +12020,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const uIdx = input.entryIndex ?? 0;
       const uEntry = uEntries[uEntries.length - 1 - uIdx];
       if (!uEntry) return { error: `No entry found at index ${uIdx}` };
-      // Delete old entry and re-log with new values (storage doesn't have updateTrackerEntry)
-      await storage.deleteTrackerEntry(uTracker.id, uEntry.id);
-      const newEntry = await storage.logEntry({ trackerId: uTracker.id, values: { ...uEntry.values, ...input.values }, notes: uEntry.notes, profileId: uteProfileId });
+      // A real in-place update. This used to be delete + re-log ("storage
+      // doesn't have updateTrackerEntry" — a stale comment; it does), which
+      // minted a new id, reset the timestamp to NOW (wrecking charts and
+      // month-scoped goals), dropped enrichment/mood/tags/forProfile, and
+      // re-fired the habit sync while the delete removed no check-in.
+      const newEntry = await storage.updateTrackerEntry(uTracker.id, uEntry.id, { values: { ...input.values } });
+      if (!newEntry) return { error: `Couldn't update the ${uTracker.name} entry` };
       return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: input.values, newEntry };
     }
 

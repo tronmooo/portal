@@ -2,6 +2,7 @@ import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { autoCheckinLinkedHabits } from "./habit-completion";
+import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
@@ -1207,7 +1208,11 @@ export class MemStorage implements IStorage {
     const tracker = this.trackers.get(data.trackerId);
     if (!tracker) return undefined;
     // Mirror supabase-storage: provenance metadata moves from values into computed.
-    const { _enrichment: enrichmentMeta, ...values } = { ...data.values } as Record<string, any>;
+    const { _enrichment: enrichmentMeta, ...rawValues } = { ...data.values } as Record<string, any>;
+    // Same value gate as SupabaseStorage.logEntry — every write path, one rule.
+    const guard = sanitizeTrackerEntryValues(tracker.fields, rawValues);
+    if (guard.error) throw new Error(guard.error);
+    const values = guard.values;
     const computed = { ...computeSecondaryData(tracker.name, tracker.category, values), ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}) } as any;
     const entry: TrackerEntry = { id: randomUUID(), values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: data.timestamp || new Date().toISOString() };
     tracker.entries.push(entry);

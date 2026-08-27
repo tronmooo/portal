@@ -7,7 +7,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, DEFAULT_TIMEZONE } from "@shared/timezone";
-import { completeHabitOccurrence } from "./habit-completion";
+import { completeHabitOccurrence, uncompleteHabitOccurrence } from "./habit-completion";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { detectMoodFromText } from "@shared/mood-detect";
@@ -26,6 +26,8 @@ import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { registerCacheBuster } from "./cache-bus";
+import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
+import { removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
 import { payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
@@ -5698,98 +5700,26 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     if (!values || typeof values !== "object") {
       return res.status(400).json({ error: "Values required" });
     }
-    // BUG-T02/T03/T04: Coerce values against the tracker's field schema BEFORE
-    // running the meaningful-value / numeric checks. The AI engine (and any chat
-    // path) was logging strings like "Chicken Sandwich" or "running" into
-    // numeric fields; those values would be stored as strings and then crash
-    // any chart/aggregation that called toFixed() on them.
+    // ONE value gate (server/tracker-entry-guard.ts), shared with logEntry in
+    // both storages, so this route, smart-entry, the AI quick-log lanes and
+    // extraction all enforce the same coercion and sanity bounds. Running it
+    // here too turns a rejection into a clean 400 instead of a 500.
     {
       const tracker = await storage.getTracker(req.params.id);
-      if (tracker && Array.isArray(tracker.fields)) {
-        const numericFieldNames = new Set(
-          tracker.fields
-            .filter((f: any) => f && (f.type === "number" || f.type === "integer" || f.type === "decimal"))
-            .map((f: any) => f.name)
-        );
-        for (const k of Object.keys(values)) {
-          if (k === "_notes" || k === "notes" || k === "timestamp") continue;
-          if (!numericFieldNames.has(k)) continue;
-          const raw = (values as any)[k];
-          if (raw == null || raw === "") continue;
-          if (typeof raw === "number") {
-            if (!isFinite(raw)) {
-              return res.status(400).json({ error: `"${k}" must be a number (got ${raw}).` });
-            }
-            continue;
-          }
-          // Strings: try to coerce, but reject if the string isn't numeric.
-          const s = String(raw).trim();
-          // Strip currency, units like "lbs", "mi", but reject if no digit at all.
-          const stripped = s.replace(/[$,\s]/g, "").replace(/[a-zA-Z\/%]+$/g, "");
-          const n = parseFloat(stripped);
-          if (!isFinite(n) || stripped === "" || !/\d/.test(stripped)) {
-            return res.status(400).json({
-              error: `"${k}" expects a number. Received "${s}" — use a numeric value (e.g. 12.5).`,
-              field: k,
-              received: s,
-            });
-          }
-          (values as any)[k] = n;
+      const guard = sanitizeTrackerEntryValues(tracker?.fields, values);
+      if (guard.error) return res.status(400).json({ error: guard.error });
+      for (const k of Object.keys(guard.values)) (values as any)[k] = guard.values[k];
+      // Pet-specific tighter bound — needs profile context the pure guard
+      // deliberately doesn't have.
+      const w = (guard.values as any).weight;
+      if (typeof w === "number" && w > 500 && tracker) {
+        const profiles = await storage.getProfiles();
+        const isPetTracker = (tracker.linkedProfiles || []).some(pid =>
+          profiles.find(pr => pr.id === pid)?.type === "pet");
+        if (isPetTracker) {
+          return res.status(400).json({ error: `Pet weight ${w} lbs is unrealistic. Max: 500 lbs.` });
         }
       }
-    }
-    // Reject entries where all meaningful values are empty/null/undefined
-    const meaningfulKeys = Object.keys(values).filter(k => k !== '_notes' && k !== 'notes' && k !== 'timestamp');
-    const hasAtLeastOneValue = meaningfulKeys.some(k => {
-      const v = values[k];
-      return v !== null && v !== undefined && v !== '' && !(typeof v === 'number' && isNaN(v));
-    });
-    if (meaningfulKeys.length > 0 && !hasAtLeastOneValue) {
-      return res.status(400).json({ error: "At least one value is required. Cannot log an empty entry." });
-    }
-    // Only reject negative values for fields that can't be negative (calories, weight, distance)
-    // Allow negatives for: temperature, elevation, profit/loss, position change
-    const nonNegativeFields = new Set(['calories', 'weight', 'distance', 'duration', 'steps', 'heartRate', 'bpm', 'systolic', 'diastolic']);
-    for (const [k, v] of Object.entries(values)) {
-      if (typeof v === 'number' && v < 0 && nonNegativeFields.has(k)) {
-        return res.status(400).json({ error: `${k} cannot be negative` });
-      }
-    }
-    if (Object.values(values).some((v: any) => typeof v === "number" && isNaN(v))) {
-      return res.status(400).json({ error: "All values must be valid numbers" });
-    }
-    // Sanity bounds — reject obviously impossible values
-    const numericVals = Object.entries(values).filter(([, v]) => typeof v === 'number') as [string, number][];
-    for (const [key, val] of numericVals) {
-      if (key === '_notes') continue;
-      // Weight (human): max 1000 lbs
-      if (key === 'weight' && val > 1000) return res.status(400).json({ error: `Weight ${val} lbs is unrealistic. Max: 1000 lbs.` });
-      // Weight (pet): max 500 lbs — check if the tracker is linked to a pet profile
-      if (key === 'weight' && val > 500 && req.body.trackerId) {
-        const tracker = await storage.getTracker(req.params.id);
-        if (tracker) {
-          const profiles = await storage.getProfiles();
-          const isPetTracker = (tracker.linkedProfiles || []).some(pid => {
-            const p = profiles.find(pr => pr.id === pid);
-            return p?.type === 'pet';
-          });
-          if (isPetTracker) {
-            return res.status(400).json({ error: `Pet weight ${val} lbs is unrealistic. Max: 500 lbs.` });
-          }
-        }
-      }
-      // Blood pressure systolic: max 300
-      if ((key === 'systolic' || key === 'sbp') && val > 300) return res.status(400).json({ error: `Systolic ${val} is unrealistic. Max: 300.` });
-      // Blood pressure diastolic: max 200
-      if ((key === 'diastolic' || key === 'dbp') && val > 200) return res.status(400).json({ error: `Diastolic ${val} is unrealistic. Max: 200.` });
-      // Heart rate: max 250
-      if ((key === 'heartRate' || key === 'bpm' || key === 'pulse') && val > 250) return res.status(400).json({ error: `Heart rate ${val} is unrealistic. Max: 250.` });
-      // Sleep hours: max 24
-      if (key === 'hours' && val > 24) return res.status(400).json({ error: `Sleep ${val} hours is impossible. Max: 24.` });
-      // Calories: max 20000
-      if (key === 'calories' && val > 20000) return res.status(400).json({ error: `${val} calories is unrealistic. Max: 20,000.` });
-      // Generic upper bound: no single numeric value over 100,000
-      if (val > 100000) return res.status(400).json({ error: `Value ${val} for "${key}" exceeds maximum (100,000).` });
     }
     const parsed = insertTrackerEntrySchema.safeParse({ ...req.body, trackerId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
@@ -5827,10 +5757,14 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     res.json(updated);
   }));
   app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
-    const deleted = await storage.deleteTrackerEntry(req.params.id, req.params.entryId);
-    if (!deleted) return res.status(404).json({ error: "Entry not found" });
+    // One remove operation: deletes the entry AND, when it mirrors a habit
+    // completion, the habit check-in it mirrors (otherwise the habit stays
+    // "done" off a record the user just removed).
+    const removed = await removeTrackerEntry(storage, { trackerId: req.params.id, entryId: req.params.entryId }, getTimezone(req), log);
+    if (!removed.ok) return res.status(404).json({ error: "Entry not found" });
     const uid_te2 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_te2}`);
-    res.json({ success: true });
+    if (removed.removedHabitCheckinId) bustCache(`habits:${uid_te2}`);
+    res.json({ success: true, removedHabitCheckinId: removed.removedHabitCheckinId });
   }));
   // Convenience endpoint: delete tracker entry by entry ID only (for chat undo)
   // S2 fix: defense-in-depth ownership check. storage.getTrackers() already filters
@@ -5876,10 +5810,11 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     for (const t of trackers) {
       const entry = (t.entries || []).find((e: any) => e.id === req.params.entryId);
       if (entry) {
-        const deleted = await storage.deleteTrackerEntry(t.id, req.params.entryId);
-        if (deleted) {
+        const removed = await removeTrackerEntry(storage, { trackerId: t.id, entryId: req.params.entryId }, getTimezone(req), log);
+        if (removed.ok) {
           const uid_te3 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_te3}`);
-          return res.json({ success: true });
+          if (removed.removedHabitCheckinId) bustCache(`habits:${uid_te3}`);
+          return res.json({ success: true, removedHabitCheckinId: removed.removedHabitCheckinId });
         }
       }
     }
@@ -7241,11 +7176,17 @@ Rules:
     });
   }));
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
-    const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);
-    if (!ok) return res.status(404).json({ error: "Checkin not found" });
+    // The inverse pipeline: removes the check-in AND its mirrored tracker
+    // entry. The raw deleteHabitCheckin left the mirror behind, so the tracker
+    // chart (and medication adherence) kept counting the un-taken dose.
+    const result = await uncompleteHabitOccurrence(storage, {
+      habitId: req.params.id, checkinId: req.params.checkinId,
+      source: "habit_ui", timezone: getTimezone(req),
+    }, log);
+    if (!result.ok) return res.status(404).json({ error: result.reason === "not_found" ? "Habit not found" : "Checkin not found" });
     const uid_h2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`notifications:${uid_h2}`);
-    res.json({ success: true });
+    res.json({ success: true, removedCheckinId: result.removedCheckinId, removedTrackerEntryIds: result.removedTrackerEntryIds, progress: result.progress });
   }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
     try {

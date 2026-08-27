@@ -84,6 +84,7 @@ import { parseRecurringMeta } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { autoCheckinLinkedHabits } from "./habit-completion";
+import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
 import {
   type Profile, type InsertProfile,
@@ -2908,6 +2909,15 @@ export class SupabaseStorage implements IStorage {
       values = normalizedValues;
     }
 
+    // ONE value gate for every write path (route, smart-entry, AI quick-log
+    // lanes, extraction, habit mirror). The POST route used to be the only
+    // path with bounds, so "log 8000 hours of sleep" stored happily from chat.
+    {
+      const guard = sanitizeTrackerEntryValues(tracker.fields, values);
+      if (guard.error) throw new Error(guard.error);
+      values = guard.values;
+    }
+
     // Dedup check: reject entries with same values logged within 5 minutes.
     // Use a key-sorted canonical form so {a:1,b:2} and {b:2,a:1} dedup the same way.
     // Only deduplicates accidental double-fires (e.g. retried HTTP request) —
@@ -2995,6 +3005,11 @@ export class SupabaseStorage implements IStorage {
     // early-return above (a retried HTTP request must not double-advance) and
     // when this write IS the mirror of a habit check-in, which would loop.
     if (!(data as any).__skipHabitSync) {
+      // NOTE: `this` (the raw instance) rather than the storage proxy, so the
+      // nested checkinHabit/updateHabit writes are NOT individually journaled.
+      // Covered because logEntry's own noun (Entry) maps to the habits domain;
+      // passing the proxy here would resolve through AsyncLocalStorage and
+      // could bind a different instance for direct-instance callers.
       await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: ts, values, timezone: this._timezone });
     }
     // Return the DATABASE's version of the row, not our intended one.
@@ -4600,11 +4615,14 @@ export class SupabaseStorage implements IStorage {
     if (!habit) return false;
     const { error } = await this.supabase.from("habit_checkins").delete().eq("id", checkinId).eq("habit_id", habitId).eq("user_id", this.userId);
     if (error) return false;
-    // Recalculate streaks after deletion
+    // Recalculate streaks after deletion. `longest_streak` is an all-time
+    // record: un-checking today must never lower it (checkinHabit and
+    // MemStorage both guard with Math.max — this path used to be the one
+    // backend that didn't, so an undo could destroy a year-old record).
     const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
     const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone);
     await this.supabase.from("habits").update({
-      current_streak: current, longest_streak: longest,
+      current_streak: current, longest_streak: Math.max(longest, habit.longestStreak || 0),
     }).eq("id", habitId).eq("user_id", this.userId);
     return true;
   }

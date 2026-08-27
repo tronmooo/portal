@@ -35,7 +35,7 @@
 // in server/ai-engine.ts. Nothing in this file touches events or tasks.
 
 import type { Habit, HabitCheckin, TrackerEntry, Tracker } from "@shared/schema";
-import { habitDayProgress, type HabitDayProgress } from "@shared/habit-progress";
+import { habitDayProgress, habitDayCheckins, latestCheckinOn, checkinAtPosition, type HabitDayProgress } from "@shared/habit-progress";
 import { isHabitDueOn } from "@shared/habit-schedule";
 import { toLocalDateStr, getUserToday, zonedTimeToUTC, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { detectHabitMetric, UMBRELLA_TRACKER_NAMES } from "@shared/habit-metric";
@@ -58,14 +58,20 @@ export interface HabitCompletionStorage {
   getHabit(id: string): Promise<Habit | undefined>;
   getHabits(): Promise<Habit[]>;
   checkinHabit(habitId: string, date?: string, value?: number, notes?: string): Promise<HabitCheckin | undefined>;
+  deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean>;
   updateHabit(id: string, data: Partial<Habit>): Promise<Habit | undefined>;
   getTracker(id: string): Promise<Tracker | undefined>;
   getTrackers(): Promise<Tracker[]>;
   createTracker(data: any): Promise<Tracker>;
   updateTracker(id: string, data: Partial<Tracker>): Promise<Tracker | undefined>;
   logEntry(data: any): Promise<TrackerEntry | undefined>;
+  deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean>;
   getProfiles(): Promise<Array<{ id: string; type?: string }>>;
 }
+
+/** Best-effort steps report what they skipped instead of swallowing it. */
+export type HabitLogger = Pick<Console, "warn">;
+const noopLogger: HabitLogger = { warn: () => {} };
 
 export interface CompleteHabitOptions {
   habitId: string;
@@ -220,6 +226,7 @@ export async function resolveTrackerForHabit(
 export async function completeHabitOccurrence(
   storage: HabitCompletionStorage,
   opts: CompleteHabitOptions,
+  logger: HabitLogger = noopLogger,
 ): Promise<HabitCompletionResult> {
   const tz = opts.timezone || DEFAULT_TIMEZONE;
   const date = String(opts.date || getUserToday(tz)).slice(0, 10);
@@ -274,7 +281,10 @@ export async function completeHabitOccurrence(
         await storage.updateHabit(fresh.id, { linkedTrackerId: resolved.id } as any);
         linkedTrackerId = resolved.id;
       }
-    } catch { /* the habit is completed either way */ }
+    } catch (e: any) {
+      // The habit is completed either way — but say what was skipped.
+      logger.warn(`[habit-completion] tracker resolution failed for "${habit.name}":`, e?.message || e);
+    }
   }
 
   if (linkedTrackerId) {
@@ -302,7 +312,9 @@ export async function completeHabitOccurrence(
               await storage.updateTracker(tracker.id, {
                 fields: [...(tracker.fields || []), { name: "completions", type: "number", unit: "×", isPrimary: (tracker.fields || []).length === 0 }],
               } as any);
-            } catch { /* non-fatal: the entry still writes */ }
+            } catch (e: any) {
+              logger.warn(`[habit-completion] adding completions field to "${tracker.name}" failed:`, e?.message || e);
+            }
           }
           const timestamp = date === getUserToday(tz)
             ? new Date().toISOString()
@@ -325,7 +337,11 @@ export async function completeHabitOccurrence(
           }
         }
       }
-    } catch { /* the habit is completed either way */ }
+    } catch (e: any) {
+      // The habit is completed either way — but a silently missing mirror is
+      // how "the ring says done, the chart says nothing" happens. Say so.
+      logger.warn(`[habit-completion] tracker mirror failed for "${habit.name}":`, e?.message || e);
+    }
   }
 
   return {
@@ -341,6 +357,130 @@ export async function completeHabitOccurrence(
     currentStreak: fresh.currentStreak || 0,
     tracker: trackerInfo,
     trackerEntries,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The inverse: un-completing an occurrence
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface UncompleteHabitOptions {
+  habitId: string;
+  source: HabitCompletionSource;
+  /** YYYY-MM-DD. Defaults to today in `timezone`. */
+  date?: string;
+  /** Explicit check-in row to remove. Wins over `position`. */
+  checkinId?: string;
+  /** 1-based position within the day ("undo my first dose"). Default: latest. */
+  position?: number;
+  /** The caller already removed the mirror entry (removeTrackerEntry) — do
+   *  not sweep for another one, or a two-dose day loses both records. */
+  skipTrackerRemoval?: boolean;
+  timezone?: string;
+}
+
+export interface HabitUncompletionResult {
+  ok: boolean;
+  reason?: "not_found" | "no_checkin";
+  habitId: string;
+  habitName: string;
+  date: string;
+  removedCheckinId?: string;
+  /** Mirror tracker entries removed alongside the check-in. */
+  removedTrackerEntryIds: string[];
+  progress: HabitDayProgress;
+  habit?: Habit;
+  currentStreak: number;
+}
+
+/**
+ * Remove one of a habit's check-ins for a day — the exact inverse of
+ * completeHabitOccurrence, which did not exist before: every un-check path
+ * called storage.deleteHabitCheckin directly, so the mirrored tracker entry
+ * survived (medication adherence kept counting the un-taken dose, and
+ * countMirrorEntries then suppressed the mirror on a later re-check-in).
+ *
+ * Never throws. The check-in removal is the essential step; the mirror
+ * removal is best-effort and logged.
+ */
+export async function uncompleteHabitOccurrence(
+  storage: HabitCompletionStorage,
+  opts: UncompleteHabitOptions,
+  logger: HabitLogger = noopLogger,
+): Promise<HabitUncompletionResult> {
+  const tz = opts.timezone || DEFAULT_TIMEZONE;
+  const date = String(opts.date || getUserToday(tz)).slice(0, 10);
+
+  const habit = await storage.getHabit(opts.habitId);
+  if (!habit) {
+    return {
+      ok: false, reason: "not_found", habitId: opts.habitId, habitName: "", date,
+      removedTrackerEntryIds: [], progress: habitDayProgress({} as any, date), currentStreak: 0,
+    };
+  }
+
+  // ── 1. Resolve which check-in to remove ──────────────────────────────────
+  const dayCheckins = habitDayCheckins(habit as any, date);
+  let target: { id?: string } | null = null;
+  if (opts.checkinId) {
+    target = dayCheckins.find((c) => c.id === opts.checkinId)
+      ?? ((habit.checkins || []).find((c: any) => c.id === opts.checkinId) as any)
+      ?? null;
+  } else if (opts.position != null) {
+    target = checkinAtPosition(habit as any, date, opts.position);
+  } else {
+    target = latestCheckinOn(habit as any, date);
+  }
+  if (!target?.id) {
+    return {
+      ok: false, reason: "no_checkin", habitId: habit.id, habitName: habit.name, date,
+      removedTrackerEntryIds: [], progress: habitDayProgress(habit as any, date),
+      currentStreak: habit.currentStreak || 0,
+    };
+  }
+
+  // ── 2. Remove it (streak recompute lives in the storage method) ──────────
+  const deleted = await storage.deleteHabitCheckin(habit.id, target.id);
+  if (!deleted) {
+    return {
+      ok: false, reason: "no_checkin", habitId: habit.id, habitName: habit.name, date,
+      removedTrackerEntryIds: [], progress: habitDayProgress(habit as any, date),
+      currentStreak: habit.currentStreak || 0,
+    };
+  }
+
+  // ── 3. Remove the mirrored tracker entry for the same day ────────────────
+  // Newest-first, one per removed check-in. deleteTrackerEntry has no habit
+  // sync, so there is no recursion to guard against.
+  const removedTrackerEntryIds: string[] = [];
+  const linkedTrackerId = (habit as any).linkedTrackerId as string | undefined;
+  if (linkedTrackerId && !opts.skipTrackerRemoval) {
+    try {
+      const tracker = await storage.getTracker(linkedTrackerId);
+      const mirrors = (tracker?.entries || [])
+        .filter((e) => (e.values as any)?.[HABIT_MIRROR_KEY] === habit.id && dayOf(e.timestamp, tz) === date)
+        .sort((a, b) => String(b.timestamp ?? "").localeCompare(String(a.timestamp ?? "")));
+      const mirror = mirrors[0];
+      if (mirror?.id && tracker) {
+        const gone = await storage.deleteTrackerEntry(tracker.id, mirror.id);
+        if (gone) removedTrackerEntryIds.push(mirror.id);
+      }
+    } catch (e: any) {
+      logger.warn(`[habit-completion] mirror removal failed for "${habit.name}":`, e?.message || e);
+    }
+  }
+
+  const fresh = (await storage.getHabit(habit.id)) || habit;
+  return {
+    ok: true,
+    habitId: habit.id,
+    habitName: habit.name,
+    date,
+    removedCheckinId: target.id,
+    removedTrackerEntryIds,
+    progress: habitDayProgress(fresh as any, date),
+    habit: fresh,
+    currentStreak: fresh.currentStreak || 0,
   };
 }
 
