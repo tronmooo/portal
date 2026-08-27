@@ -376,14 +376,10 @@ export function DocumentReviewScreen({
       i.id === id ? { ...i, destination, selected: destination !== "ignore" } : i
     )));
 
-  /** The floor of one: a review may never reach zero selected candidates.
-   *  (Skip All remains the way to leave without saving — it submits nothing.) */
-  const refuseEmptySelection = () => {
-    toast({
-      title: "At least one item must stay selected",
-      description: "To leave without saving anything, use Skip All instead.",
-    });
-  };
+  /* There is no selection floor. The middle table is "facts to save" and the
+   * rail is "things to do because of them" — two independent panels, so
+   * emptying one of them is a legitimate state. Confirm All stays disabled only
+   * when BOTH are empty, and Skip All is still the explicit way out. */
 
   /**
    * Per-row Confirm / Skip. The citing actions follow the evidence: an action
@@ -401,50 +397,24 @@ export function DocumentReviewScreen({
       );
       return { ...a, selected: anyEvidenceSelected };
     });
-    if (
-      choice === "skip"
-      && nextItems.every((i) => !i.selected)
-      && !nextActions.some((a) => a.selected && a.operation !== "NO_ACTION")
-    ) {
-      refuseEmptySelection();
-      return;
-    }
     setItems(nextItems);
     setActions(nextActions);
   };
 
   const toggleAction = (id: string) => {
-    const target = actions.find((a) => a.id === id);
-    const next = actions.map((a) => (a.id === id ? { ...a, selected: !a.selected } : a));
-    if (
-      target?.selected
-      && items.every((i) => !i.selected)
-      && !next.some((a) => a.selected && a.operation !== "NO_ACTION")
-    ) {
-      refuseEmptySelection();
-      return;
-    }
-    setActions(next);
+    setActions((prev) => prev.map((a) => (a.id === id ? { ...a, selected: !a.selected } : a)));
   };
 
   /** Auto-map off = hand-pick mode; back on = restore the proposed routing.
-   *  Off still keeps the single highest-confidence row — the review's floor
-   *  is one selected item, never zero. */
+   *  Off clears the table so nothing is saved by accident, and leaves the rail
+   *  alone: the suggested actions are a separate decision from the fields. */
   const handleAutoMap = (on: boolean) => {
     setAutoMap(on);
     if (on) {
       setItems(initialReviewItems(extraction));
       setActions((extraction.actionPlan?.actions ?? []).map((a) => ({ ...a })));
     } else {
-      let keep: string | null = null;
-      let best = -1;
-      for (const i of items) {
-        if (i.destination === "ignore") continue;
-        const c = itemConfidence(i) ?? 0;
-        if (c > best) { best = c; keep = i.id; }
-      }
-      setItems((prev) => prev.map((i) => ({ ...i, selected: i.id === keep })));
-      setActions((prev) => prev.map((a) => ({ ...a, selected: false })));
+      setItems((prev) => prev.map((i) => ({ ...i, selected: false })));
     }
   };
 
@@ -501,6 +471,9 @@ export function DocumentReviewScreen({
   );
 
   const selectedCount = items.filter((i) => i.selected).length;
+  const selectedActionCount = actions.filter(
+    (a) => a.selected && a.operation !== "NO_ACTION",
+  ).length;
   const autoConfirmed = items.filter(
     (i) => i.selected && (itemConfidence(i) ?? 0) >= CONFIDENCE_HIGH,
   ).length;
@@ -512,6 +485,16 @@ export function DocumentReviewScreen({
   );
   const suggestedActions = useMemo(
     () => actions.filter((a) => a.operation !== "NO_ACTION"),
+    [actions],
+  );
+  // Dates the engine deliberately does NOT schedule — a report date, a printed-on
+  // date. They used to be filtered out of the rail entirely, so the middle table
+  // could list three rows under "Dates & Deadlines" beside an empty rail with no
+  // explanation. They are listed, named, and plainly marked as doing nothing.
+  const keptDates = useMemo(
+    () => actions.filter(
+      (a) => a.operation === "NO_ACTION" && a.destination === "reference" && Boolean(a.payload?.date),
+    ),
     [actions],
   );
   const entities = extraction.semantic?.entities ?? [];
@@ -969,7 +952,9 @@ export function DocumentReviewScreen({
                 <Check className="h-3.5 w-3.5" />
                 {autoConfirmed > 0
                   ? `${autoConfirmed} field${autoConfirmed === 1 ? "" : "s"} auto-confirmed`
-                  : `${selectedCount} of ${items.length} selected`}
+                  : `${selectedCount} of ${items.length} field${items.length === 1 ? "" : "s"}`}
+                {selectedActionCount > 0
+                  && ` · ${selectedActionCount} action${selectedActionCount === 1 ? "" : "s"}`}
               </span>
               <div className="ml-auto flex items-center gap-2">
                 <Button
@@ -988,9 +973,8 @@ export function DocumentReviewScreen({
                   onClick={() => handleConfirm()}
                   disabled={
                     confirming || (
-                      (hasPlan
-                        ? !actions.some((a) => a.selected && a.operation !== "NO_ACTION")
-                        : selectedCount === 0)
+                      selectedCount === 0
+                      && selectedActionCount === 0
                       && !extraction.pendingFinancial?.expense
                       && !extraction.pendingFinancial?.obligation
                     )
@@ -1122,6 +1106,19 @@ export function DocumentReviewScreen({
                     >
                       <Medallion icon={vis.icon} accent={vis.accent} size="sm" />
                       <div className="min-w-0 flex-1 text-xs leading-snug">
+                        {/* The action's own name, from the app's vocabulary —
+                            "Create recurring calendar rule", "Append value to
+                            existing tracker". The title says what it does to
+                            THIS document; this says which of the named actions
+                            it is. */}
+                        {a.kindLabel && (
+                          <p
+                            className="micro-label text-muted-foreground"
+                            data-testid={`action-kind-${a.id}`}
+                          >
+                            {a.kindLabel}
+                          </p>
+                        )}
                         <p className="font-semibold">{a.title}</p>
                         {a.writesLabel && (
                           <p className="text-[11px] text-muted-foreground truncate">{a.writesLabel}</p>
@@ -1163,6 +1160,33 @@ export function DocumentReviewScreen({
                   </Button>
                 )}
               </div>
+
+            {/* Every date on the page is accounted for. These are the ones the
+                engine read, understood and deliberately did not schedule — so
+                "Dates & Deadlines" in the table can never again sit beside a
+                rail that says nothing about them. */}
+            {keptDates.length > 0 && (
+              <div className="bubble p-3.5 space-y-1" data-testid="review-kept-dates">
+                <h3 className="micro-label text-muted-foreground pb-1">
+                  Dates kept, not scheduled ({keptDates.length})
+                </h3>
+                {keptDates.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center gap-2.5 px-2 py-1.5 opacity-70"
+                    data-testid={`kept-date-${a.id}`}
+                  >
+                    <Medallion icon={CalendarDays} accent={ACCENT.blue} size="sm" />
+                    <div className="min-w-0 flex-1 text-xs leading-snug">
+                      <p className="font-semibold truncate">{a.title}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {a.detail || "Kept on the document · nothing scheduled"}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {entities.length > 0 && (
               <div className="bubble p-3.5 space-y-1" data-testid="review-entities">

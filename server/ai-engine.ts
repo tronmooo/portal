@@ -2902,13 +2902,11 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
           } : {}),
         });
 
-        // dob/dateOfBirth → also expose a birthday alias field
-        if ((key === 'dob' || key === 'dateOfBirth' || /date of birth/i.test(key)) && value) {
-          if (!('birthday' in flat)) {
-            (flat as any)['birthday'] = value;
-            extractedFields.push({ key: 'birthday', label: 'Birthday', value, selected: true, isDate: true, category: 'PERSONAL', suggestedEvent: undefined });
-          }
-        }
+        // NO birthday alias here. `matchConcept` (shared/entity-shape) already
+        // folds dob | birthday | birthdate onto the canonical `dateOfBirth`, so
+        // an alias field only manufactures a second row with the same canonical
+        // key and the same value — which is exactly the duplicate the review
+        // showed ("Birthday 1975-04-12" beside "date Of Birth 1975-04-12").
       }
     }
 

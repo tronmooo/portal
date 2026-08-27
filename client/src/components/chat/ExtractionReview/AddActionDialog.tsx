@@ -11,6 +11,7 @@
 // new action rather than editing an existing one.
 
 import { useMemo, useState } from "react";
+import { ACTION_KIND_LABEL, classifyActionKind } from "@shared/action-kinds";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -87,7 +88,16 @@ export function AddActionDialog({
       ? chosen[0].label
       : `${chosen.length} fields`;
 
+    const kind = classifyActionKind({
+      destination,
+      operation,
+      targetKind: target ? "profile" : (destination === "obligation" ? "obligation" : "none"),
+      profileType: target?.type,
+    });
+
     onAdd({
+      kind,
+      kindLabel: ACTION_KIND_LABEL[kind],
       // `manual-` keeps hand-made ids from ever colliding with planner ids, and
       // the destination is part of the key so the SAME rows can be sent to a
       // second destination — which is the whole point of "also add to…".

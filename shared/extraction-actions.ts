@@ -58,6 +58,13 @@ import { rankByName, sameEntityName } from "./entity-resolution";
 import { trackerIdentityKey } from "./tracker-identity";
 import { derivePeriodDeadlines } from "./period-deadlines";
 import { detectTrackable, isConfidentlyTrackable } from "./trackable-values";
+import { isDateRow } from "./extraction-sections";
+import {
+  type ActionKind,
+  ACTION_KIND_LABEL,
+  DATE_RULE_WORD,
+  classifyActionKind,
+} from "./action-kinds";
 import { findCompatibleTracker } from "./tracker-identity";
 import {
   entityFamily, destinationsForFamily, canonicalFieldName, matchConcept,
@@ -89,6 +96,10 @@ export const OPERATION_LABEL: Record<ActionOperation, string> = {
 export type TargetKind =
   | "profile" | "obligation" | "expense" | "income" | "event" | "task"
   | "tracker" | "note" | "document" | "relationship" | "liability_payment"
+  // Neither is an entity: a journal entry is a dated record of something that
+  // happened, a habit is a repeating practice. Both are ordinary records, so
+  // neither is caught by ENTITY_TARGET_KINDS below.
+  | "journal" | "habit"
   | "none";
 
 /**
@@ -203,6 +214,16 @@ export interface ProposedAction {
    * Shown BEFORE the user saves, so Save is never a surprise.
    */
   writesLabel?: string;
+
+  /**
+   * What KIND of action this is, in the app's own vocabulary — "Create
+   * recurring calendar rule", "Append value to existing tracker". The
+   * destination/operation pair is how the engine thinks; this is what the rail
+   * prints, so the user can see at a glance which of the named actions they are
+   * being offered. See shared/action-kinds.
+   */
+  kind: ActionKind;
+  kindLabel: string;
 }
 
 // ─── The partition: what a row's data owes to the action that cites it ───────
@@ -266,12 +287,14 @@ export function itemsClaimedByActions(
 }
 
 /**
- * What an action builder returns. `destinationOptions`, `savable` and
- * `writesLabel` are filled in by the single `push` gate, so no builder can
- * accidentally declare itself savable — that decision is made in one place.
+ * What an action builder returns. `destinationOptions`, `savable`,
+ * `writesLabel` and the action's `kind`/`kindLabel` are filled in by the single
+ * `push` gate, so no builder can accidentally declare itself savable, or name
+ * itself something the vocabulary does not contain — both decisions are made in
+ * one place.
  */
 export type PushInput =
-  Omit<ProposedAction, "destinationOptions" | "savable" | "writesLabel">
+  Omit<ProposedAction, "destinationOptions" | "savable" | "writesLabel" | "kind" | "kindLabel">
   & {
     destinationOptions?: ExtractionDestination[];
     savable?: boolean;
@@ -941,8 +964,23 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       ? [...identityConflicts, ...(a.warnings ?? [])]
       : (a.warnings ?? []);
 
+    const kind = classifyActionKind({
+      destination: a.destination,
+      operation: a.operation,
+      targetKind: a.target?.kind,
+      profileType: a.target?.profileType,
+      ruleType: a.payload?.ruleType,
+      recurrence: a.payload?.recurrence,
+      periodKind: a.payload?.periodKind,
+      documentExpiration: a.payload?.documentExpiration,
+      fieldKeys: a.payload?.fields ? Object.keys(a.payload.fields) : undefined,
+      savable,
+    });
+
     const action: ProposedAction = {
       ...a,
+      kind,
+      kindLabel: ACTION_KIND_LABEL[kind],
       warnings: mergedWarnings,
       savable,
       unsupportedCode,
@@ -1119,6 +1157,13 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     // shape anyway for "renew the registration", "file the return", "service
     // it again in six months".
     if (!isMoney) {
+      // The duty's own words decide what KIND of repeating thing it is —
+      // "service every 6 months" is a maintenance schedule, "renew annually" a
+      // renewal — using the same classifier every other date goes through, so
+      // the rail names it the way the user named it rather than calling
+      // everything "task".
+      const dutyRule = classifyDateField(p.label, semantic.documentType).ruleType;
+      const taskRecurrence = CADENCE_TO_TASK_RECURRENCE[p.cadence];
       push({
         id: `act-recurrence-${slug(p.id)}`,
         operation: "CREATE",
@@ -1132,7 +1177,8 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
         payload: {
           title: p.label,
           dueDate: nextDue,
-          recurrence: CADENCE_TO_TASK_RECURRENCE[p.cadence],
+          recurrence: taskRecurrence,
+          ruleType: dutyRule,
           recurrenceEnd: normalizeDateString(p.endsOn) || undefined,
           linkedProfileId: subjectId,
           _source: { documentId, factIds: [...p.factIds] },
@@ -1144,6 +1190,38 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
         stage: 2,
         dedupeKey,
       });
+
+      // A DAILY OR WEEKLY practice is a habit, not a to-do list entry that
+      // reappears forever. Offered as an ADDITIONAL use of the same rows — no
+      // factIds, exactly like a tracker suggestion — so "one recurrence, one
+      // action" still holds over facts, and unticked, because which of the two
+      // shapes someone wants is theirs to choose.
+      if (p.cadence === "daily" || p.cadence === "weekly") {
+        push({
+          id: `act-habit-${slug(p.id)}`,
+          operation: "CREATE",
+          destination: "habit",
+          target: { kind: "habit", id: null, name: p.label },
+          roles: ["recurring_obligation"],
+          title: `Habit — ${p.label} (${CADENCE_WORD[p.cadence] || p.cadence})`,
+          detail: `${detail} · a practice you keep, rather than a task that returns`,
+          factIds: [],
+          itemIds: itemIdsForFacts(semantic, p.factIds),
+          payload: {
+            name: p.label,
+            frequency: p.cadence,
+            startDate: nextDue,
+            profileId: subjectId,
+            _source: { documentId, factIds: [...p.factIds] },
+          },
+          origin: "implied",
+          selected: false,
+          confidence: p.confidence,
+          warnings: w,
+          stage: 2,
+          dedupeKey: stableKey([documentId, "habit", p.id]),
+        });
+      }
       continue;
     }
 
@@ -1151,6 +1229,17 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     // Understood, and nowhere to put it. Shown with the reason rather than
     // dropped, and rather than being forced into a record that means something
     // else.
+    //
+    // A SUBSCRIPTION was considered as the home for this and rejected. The
+    // user's rule permits creating anything that is not an asset or a liability
+    // — but this branch fires for every recurring charge with no record behind
+    // it, which is an insurance premium and a rent payment as often as it is a
+    // streaming service, and in this app a subscription is a liability-family
+    // record anyway (ObligationKind "subscription" → createObligation →
+    // createProfile type:"liability"). Filing a homeowners premium as a
+    // "subscription" would be a worse answer than saying plainly that there is
+    // no compatible record and letting the user attach it to the bill they
+    // already have.
     push({
       id: `act-recurrence-${slug(p.id)}`,
       operation: "CREATE",
@@ -1173,6 +1262,49 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       unsupportedReason:
         `A new recurring bill is stored as a liability, and document extraction never creates one. Attach this to an existing bill or liability and it will update that instead.`,
       writesLabel: "Nothing — no compatible record exists",
+    });
+
+    // ── AND the ledger row it can honestly become ──
+    //
+    // "Nowhere to put it" was only ever true of the BILL. The money itself has
+    // a home that is not an entity: a recurring expense (or a recurring
+    // receipt), which records the commitment without minting a liability. It
+    // cites rows and NO facts — the same shape a tracker suggestion uses — so
+    // "one recurrence, one action" still holds over facts, and it arrives
+    // unticked because the bill remains the better answer whenever one exists.
+    const isIncome = p.factIds.some(
+      (fid) => semantic.facts.find((f) => f.id === fid)?.financialKind === "income",
+    );
+    const ledgerFrequency = CADENCE_TO_FREQUENCY[p.cadence] || "monthly";
+    push({
+      id: `act-recurrence-ledger-${slug(p.id)}`,
+      operation: "CREATE",
+      destination: isIncome ? "income" : "expense",
+      target: { kind: isIncome ? "income" : "expense", id: null, name: p.label },
+      roles: ["financial"],
+      title: isIncome
+        ? `Recurring income — ${p.label} · ${money(amount!)} ${cadence}`
+        : `Recurring expense — ${p.label} · ${money(amount!)} ${cadence}`,
+      detail: `${detail} · recorded in the ledger, not as a bill`,
+      factIds: [],
+      itemIds: itemIdsForFacts(semantic, p.factIds),
+      payload: {
+        name: p.label,
+        description: p.label,
+        amount,
+        date: nextDue || today,
+        frequency: ledgerFrequency,
+        isRecurring: true,
+        recurrence: CADENCE_TO_TASK_RECURRENCE[p.cadence],
+        linkedProfileId: subjectId,
+        _source: { documentId, factIds: [...p.factIds] },
+      },
+      origin: "implied",
+      selected: false,
+      confidence: p.confidence,
+      warnings: w,
+      stage: 2,
+      dedupeKey: stableKey([documentId, "ledger", p.id]),
     });
   }
   // Which money facts are PARTS of a bigger one on the same document — worked
@@ -1251,21 +1383,40 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     }
 
     // ── Proof that something already happened ──
-    // A history entry has no home: JournalEntry is a mood journal (it requires
-    // a MoodLevel), and the audit log is private to storage. Rather than file a
-    // service record as a diary entry, say so.
+    //
+    // This used to say "no home" and stop. JournalEntry is a mood journal and a
+    // service record has no mood — but the mood is the only thing missing, and
+    // "neutral" is an honest answer for a dated record of something that
+    // happened. So the entry is OFFERED, unticked: a past event is worth
+    // keeping, and whether it belongs in the journal is the user's call rather
+    // than a decision the engine makes for them by refusing.
     if (roles.includes("event_occurred") && !roles.includes("financial") && !roles.includes("measurement")) {
+      const when = normalizeDateString(fact.date) || normalizeDateString(fact.value) || today;
+      const landing = landingFor(fact.subject.entityRef);
       push({
-        ...referenceAction(fact, semantic, documentId, itemById),
         id: `act-happened-${slug(fact.id)}`,
-        destination: "unsupported",
-        title: fact.label,
+        operation: "CREATE",
+        destination: "journal",
+        target: { kind: "journal", id: null, name: fact.label },
+        roles: fact.roles,
+        title: `Journal entry — ${fact.label}`,
         detail: `The document shows this already happened${fact.date ? ` on ${fact.date}` : ""}.`,
-        savable: false,
-        unsupportedCode: "no_record_type",
-        unsupportedReason:
-          "This app has no history record for a past event. It stays on the document, where you can still read it.",
-        writesLabel: "Nothing — no compatible record exists",
+        factIds: [fact.id],
+        itemIds: [...fact.itemIds],
+        payload: {
+          title: fact.label,
+          content: String(fact.value ?? ""),
+          date: when,
+          mood: "neutral",
+          profileId: landing.target.kind === "profile" ? landing.target.id ?? undefined : undefined,
+          _source: { documentId, factIds: [fact.id] },
+        },
+        origin: "stated",
+        // A diary entry is never made FOR someone.
+        selected: false,
+        confidence: fact.confidence,
+        warnings: [],
+        stage: 2,
         dedupeKey: stableKey([documentId, "happened", fact.id]),
       });
       continue;
@@ -1473,6 +1624,13 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
         title: subject?.name ? `${derived.label} — ${subject.name}` : title,
         date: derived.date,
         category: "other",
+        // A return window and a warranty are expirations — the user's own
+        // filing ("that should be an expiration date as well"), and what makes
+        // the rail name this a warranty/return deadline rather than a bare
+        // calendar event.
+        ruleType: "expiration",
+        periodKind: derived.label,
+        createEvent: true,
         _source: { documentId, derivedFrom: derived.rowKey, formula: derived.detail },
       },
       origin: "implied",
@@ -1482,6 +1640,134 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       stage: 4,
       dedupeKey: stableKey([documentId, "deadline", derived.label, derived.date]),
     });
+  }
+
+  // ═══ EVERY DATE ON THE PAGE IS A SUGGESTED ACTION ═══════════════════════
+  //
+  // The review's "Dates & Deadlines" heading is decided from the ROW's shape
+  // (shared/extraction-sections.isDateRow) while date actions were decided from
+  // the reasoner's FACTS — so a report could list "Birthday 1975-04-12",
+  // "date Of Birth 1975-04-12" and "report Date 2026-06-23" under that heading
+  // with a completely empty actions rail, and every document did that whenever
+  // the understanding step degraded (ai-engine plans with an empty semantic
+  // envelope, so there are no facts at all). This pass reads the same predicate
+  // the heading uses, so the two panels can no longer disagree.
+  //
+  // `classifyDateField` stays the authority on what a date MEANS: an
+  // informational date (a report date, a printed-on date) still produces a
+  // reference row rather than a proposal to schedule anything.
+  {
+    const dateSettled = new Set<string>();
+    const singletonDates = new Set<string>();
+    for (const a of actions) {
+      if (a.destination === "calendar" || a.destination === "reference") {
+        for (const iid of a.itemIds) dateSettled.add(iid);
+      }
+    }
+    for (const item of items) {
+      if (dateSettled.has(item.id)) continue;
+      if (!isDateRow(item)) continue;
+      const iso = normalizeDateString(item.date) || normalizeDateString(item.value);
+      if (!iso) continue;
+
+      const cls = classifyDateField(item.key, semantic.documentType);
+      const ownerTarget = item.subjectRef ? landingFor(item.subjectRef).target : contextTarget;
+      const onRecord = Boolean(ownerTarget && ownerTarget.kind === "profile" && ownerTarget.id);
+      const ownerName = ownerTarget?.name;
+
+      if (!cls.actionable) {
+        // Kept, named, and explicitly not scheduled — see it, ignore it.
+        push({
+          id: `act-datemeta-${slug(item.id)}`,
+          operation: "NO_ACTION",
+          destination: "reference",
+          target: { kind: "none", id: null, name: item.label },
+          roles: (item.roles ?? []) as SemanticRole[],
+          title: `${item.label} — ${iso}`,
+          detail: "Kept on the document · nothing scheduled",
+          factIds: [],
+          itemIds: [item.id],
+          payload: { key: item.key, date: iso, ruleType: cls.ruleType },
+          origin: "implied",
+          selected: false,
+          confidence: 0.9,
+          warnings: [],
+          stage: 4,
+          dedupeKey: stableKey([documentId, "datemeta", item.key, iso]),
+        });
+        continue;
+      }
+
+      // ONE birthday per record, whatever the document calls it. `dob`,
+      // `birthday` and `dateOfBirth` are the same day under three spellings,
+      // and two yearly events for one person is the duplication this whole
+      // pass exists to remove. Mirrors the singleton collapse scanEntityDates
+      // already does at the rule layer (shared/date-rules).
+      if (SINGLETON_RULE_TYPES.has(cls.ruleType)) {
+        const singleton = `${(ownerTarget as TargetRef | undefined)?.id ?? ""}:${cls.ruleType}`;
+        if (singletonDates.has(singleton)) continue;
+        singletonDates.add(singleton);
+      }
+
+      const word = DATE_RULE_WORD[cls.ruleType] ?? "Date";
+      const recurring = cls.recurrence !== "none";
+      // A BIRTHDAY does both, on purpose. The date belongs on the person's
+      // record (that is where the app derives their yearly rule from), AND the
+      // user asked for it to show up as a recurring calendar entry. Creating
+      // both is safe only because seriesFromEvents (shared/calendar-adapters)
+      // shadows an event whose kind is "birthday" and whose linkedProfiles[0]
+      // already owns a birthday rule — which is why the event below must be
+      // linked to that profile and titled so inferKindFromText recognises it.
+      const alsoEvent = recurring || !onRecord;
+      const eventTitle = cls.ruleType === "birthday"
+        ? `🎂 ${ownerName ? `${ownerName}'s ` : ""}Birthday`
+        : `${item.label}${ownerName ? ` — ${ownerName}` : ""}`;
+
+      push({
+        id: `act-daterow-${slug(item.id)}`,
+        operation: onRecord ? "UPDATE" : "CREATE",
+        destination: "calendar",
+        target: onRecord
+          ? { ...(ownerTarget as TargetRef), kind: "profile" }
+          : { kind: "event", id: null, name: item.label },
+        roles: (item.roles ?? []) as SemanticRole[],
+        title: recurring
+          ? `${word} — ${item.label} (every year)`
+          : `${word} — ${item.label}`,
+        detail: [
+          iso,
+          recurring ? `repeats ${cls.recurrence}` : null,
+          onRecord ? `on ${ownerName}` : "standalone reminder",
+        ].filter(Boolean).join(" · "),
+        factIds: [],
+        itemIds: [item.id],
+        payload: {
+          key: item.key,
+          date: iso,
+          ruleType: cls.ruleType,
+          recurrence: cls.recurrence,
+          // The DOCUMENT's own expiry (a passport, a permit, a certificate)
+          // rather than a date about the person it names.
+          documentExpiration: cls.ruleType === "expiration"
+            && ((item.roles ?? []).includes("document_metadata") || /^(document|doc|policy|permit|licen[cs]e|certificate|passport)/i.test(item.key)),
+          profileId: onRecord ? (ownerTarget as TargetRef).id ?? undefined : undefined,
+          group: item.group,
+          derived: onRecord,
+          // Both halves in ONE action: the field write lands on the record, the
+          // event gives the user the recurring entry they asked to see.
+          fields: onRecord ? { [item.key]: iso } : undefined,
+          createEvent: alsoEvent,
+          title: eventTitle,
+          _source: { documentId, itemIds: [item.id] },
+        },
+        origin: "implied",
+        selected: true,
+        confidence: 0.9,
+        warnings: [],
+        stage: 4,
+        dedupeKey: stableKey([documentId, "date", onRecord ? (ownerTarget as TargetRef).id ?? "" : "", item.key, cls.ruleType]),
+      });
+    }
   }
 
   // ═══ EVERY EXTRACTED FACT, EXAMINED FOR A CHART ═════════════════════════
@@ -1629,9 +1915,14 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
  * Destinations that are ACTIONS rather than storage. On the plan path the rail
  * owns every one of them, so an item may not also carry one as its home.
  */
+/** Rule types a record may hold exactly one of, however many spellings of it
+ *  the document prints. */
+const SINGLETON_RULE_TYPES: ReadonlySet<string> = new Set(["birthday", "anniversary"]);
+
 const ACTION_ONLY_DESTINATIONS: ReadonlySet<ExtractionDestination> = new Set([
   "tracker", "profile_tracker", "calendar", "task", "expense", "income",
   "obligation", "liability_payment", "relationship_link", "document_attach",
+  "journal", "habit",
 ]);
 
 /** Where a row's DATA lives once its verb has moved to the actions rail. */
@@ -2100,30 +2391,47 @@ function dateActionFor(
   }
 
   const onRecord = Boolean(landing.target.id && landing.target.kind === "profile");
+  const recurring = cls.recurrence !== "none";
+  const word = DATE_RULE_WORD[cls.ruleType] ?? "Date";
+  // A recurring date needs an EVENT as well as the field, or it is not on the
+  // calendar as a repeating thing at all — a birthday written only to the
+  // profile shows up as one day, once. Everything else keeps the derived-only
+  // behaviour, which is what stops a renewal from existing in two places.
+  const alsoEvent = recurring || !onRecord;
+  const eventTitle = cls.ruleType === "birthday"
+    ? `🎂 ${landing.target.name ? `${landing.target.name}'s ` : ""}Birthday`
+    : `${fact.label} — ${doc.documentType || "document"}`;
   return {
     id: `act-date-${slug(fact.id)}`,
     operation: onRecord ? "UPDATE" : "CREATE",
-    destination: onRecord ? "calendar" : "calendar",
+    destination: "calendar",
     target: onRecord
       ? { ...landing.target, kind: "profile" }
       : { kind: "event", id: null, name: fact.label },
     roles: fact.roles,
-    title: `${cls.ruleType === "expiration" ? "Expiration" : cls.ruleType === "renewal" ? "Renewal" : cls.ruleType === "payment" ? "Payment" : "Date"} rule — ${fact.label}`,
-    detail: onRecord
-      ? `${iso} · derived from ${landing.target.name}, no duplicate event`
-      : `${iso} · standalone reminder`,
+    title: recurring ? `${word} — ${fact.label} (every year)` : `${word} — ${fact.label}`,
+    detail: [
+      iso,
+      recurring ? `repeats ${cls.recurrence}` : null,
+      onRecord ? `on ${landing.target.name}` : "standalone reminder",
+    ].filter(Boolean).join(" · "),
     factIds: [fact.id],
     itemIds: [...fact.itemIds],
     payload: {
       key, date: iso, ruleType: cls.ruleType,
+      recurrence: cls.recurrence,
+      documentExpiration: cls.ruleType === "expiration"
+        && (fact.roles.includes("document_metadata")
+          || /^(document|doc|policy|permit|licen[cs]e|certificate|passport)/i.test(key)),
       profileId: onRecord ? landing.target.id : undefined,
       group: landing.group,
       derived: onRecord,
       // The field write this rule is derived FROM. Writing it is what puts the
-      // date on the calendar; there is no separate event to create, and so
-      // nothing that can fall out of step with the record.
+      // date on the calendar; for a one-off there is no separate event to
+      // create, and so nothing that can fall out of step with the record.
       fields: onRecord ? { [key]: iso } : undefined,
-      title: `${fact.label} — ${doc.documentType || "document"}`,
+      createEvent: alsoEvent,
+      title: eventTitle,
       _source: { documentId, factIds: [fact.id] },
     },
     origin: "implied",
@@ -2204,25 +2512,39 @@ function describeWrite(
     case "liability_payment":
       return `Records a payment of ${money(Number(p.amount) || 0)}${on}, and updates the balance`;
     case "expense":
-      return `Creates an expense · ${money(Number(p.amount) || 0)} · ${p.category || "general"}`;
+      return p.isRecurring || (p.frequency && p.frequency !== "once")
+        ? `Creates a recurring expense · ${money(Number(p.amount) || 0)} · ${p.frequency || "monthly"}`
+        : `Creates an expense · ${money(Number(p.amount) || 0)} · ${p.category || "general"}`;
     case "income":
-      return `Creates an income entry · ${money(Number(p.amount) || 0)}`;
+      return p.frequency && p.frequency !== "once"
+        ? `Creates recurring income · ${money(Number(p.amount) || 0)} · ${p.frequency}`
+        : `Creates an income entry · ${money(Number(p.amount) || 0)}`;
     case "tracker":
       return operation === "APPEND"
         ? `Adds an entry to the ${target?.name} tracker`
         : `Creates a ${target?.name} tracker and its first entry`;
     case "profile_tracker":
       return `Updates ${Object.keys(p.fields || {}).length} field(s) and adds an entry to the ${target?.name} tracker`;
-    case "calendar":
-      return p.derived
-        ? `Sets ${p.key} — the reminder follows from the record, no separate event`
-        : `Creates a calendar event on ${p.date}`;
+    case "calendar": {
+      const repeats = p.recurrence && p.recurrence !== "none" ? ` repeating ${p.recurrence}` : "";
+      if (p.derived && p.createEvent) {
+        return `Sets ${p.key}${on} and adds a calendar entry on ${p.date}${repeats}`;
+      }
+      if (p.derived) {
+        return `Sets ${p.key} — the reminder follows from the record, no separate event`;
+      }
+      return `Creates a calendar event on ${p.date}${repeats}`;
+    }
     case "task":
       return p.recurrence
         ? `Creates a repeating task (${p.recurrence})${p.dueDate ? ` from ${p.dueDate}` : ""}`
         : `Creates a task${p.dueDate ? ` due ${p.dueDate}` : ""}`;
     case "note":
       return `Saves a note${on}`;
+    case "journal":
+      return `Saves a journal entry dated ${p.date || "today"}${on}`;
+    case "habit":
+      return `Starts a habit "${p.name || target?.name || ""}" (${p.frequency || "daily"})`;
     case "relationship_link":
       return `Links two records (${p.type})`;
     case "document_attach":

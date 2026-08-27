@@ -84,14 +84,22 @@ export type ExtractionDestination =
   // shown, with its reason, and Save is disabled — because "this is a refund
   // and there is no refund record" is real information, and quietly filing it
   // as income instead would be a lie the user only discovers later.
-  | "unsupported";
+  | "unsupported"
+  // ── Appended 2026-08-27 ───────────────────────────────────────────────────
+  // Two records the app has always had and extraction could never reach: a
+  // journal entry (a dated thing that happened, with no mood attached to it)
+  // and a habit (a repeating practice a document proposes — "take with food
+  // twice daily", "service every 6 months"). Both are ordinary records, not
+  // entities, so neither collides with rule 1.
+  | "journal"
+  | "habit";
 
 export const ALL_DESTINATIONS: readonly ExtractionDestination[] = [
   "profile", "profile_tracker", "tracker", "allergy", "medication",
   "medical_history", "note", "calendar", "task", "ignore",
   "entity_field", "entity_record", "structured_append", "obligation",
   "expense", "income", "liability_payment", "relationship_link",
-  "document_attach", "reference", "unsupported",
+  "document_attach", "journal", "habit", "reference", "unsupported",
 ] as const;
 
 /** Human labels for the review UI's group headers and dropdown. */
@@ -115,6 +123,8 @@ export const DESTINATION_LABEL: Record<ExtractionDestination, string> = {
   relationship_link: "Relationship",
   document_attach: "Attach document",
   liability_payment: "Payment",
+  journal: "Journal entry",
+  habit: "Habit",
   reference: "Reference only",
   unsupported: "No save destination",
 };
@@ -125,7 +135,7 @@ export const DESTINATION_ORDER: readonly ExtractionDestination[] = [
   "medical_history", "note", "calendar", "task", "ignore",
   "entity_record", "entity_field", "structured_append", "obligation",
   "liability_payment", "expense", "income", "relationship_link",
-  "document_attach", "reference", "unsupported",
+  "document_attach", "journal", "habit", "reference", "unsupported",
 ] as const;
 
 // ─── The unified review item ─────────────────────────────────────────────────
@@ -715,6 +725,20 @@ export function buildExtractionItems(input: BuildItemsInput): ExtractionItem[] {
   };
 
   // 1. Every extracted field.
+  //
+  // One fact, one row. Two spellings of the same field (dob / birthday /
+  // dateOfBirth) collapse onto one canonical key via matchConcept, but that
+  // alone left two ExtractionItems carrying the same key and the same value —
+  // the "Birthday 1975-04-12" beside "date Of Birth 1975-04-12" the review
+  // showed. Rows are therefore also deduped by (canonical key, value), keeping
+  // the better-written label of the two.
+  const byKeyValue = new Map<string, number>();
+  const prettierLabel = (a: string, b: string) => {
+    // A hand-written "Birthday" beats a camel-split "date Of Birth".
+    const artifact = (s: string) => /^[a-z]/.test(s) || / [A-Z] /.test(s);
+    if (artifact(a) && !artifact(b)) return b;
+    return a;
+  };
   const family = input.family;
   // Only a living thing has health metrics. Matching them on a house turned
   // "Total Policy Premium" into a tracker candidate more than once.
@@ -750,6 +774,25 @@ export function buildExtractionItems(input: BuildItemsInput): ExtractionItem[] {
     }
     if (date) item.date = date;
     if (concept?.group) item.group = concept.group;
+
+    const dedupe = `${String(item.key).toLowerCase()}::${String(item.value).trim().toLowerCase()}`;
+    const priorIndex = byKeyValue.get(dedupe);
+    if (priorIndex != null && item.value !== "" && item.value != null) {
+      const prior = items[priorIndex];
+      prior.label = prettierLabel(prior.label, item.label);
+      // The survivor inherits whatever the duplicate knew that it did not.
+      if (!prior.date && item.date) prior.date = item.date;
+      if (!prior.group && item.group) prior.group = item.group;
+      if (!prior.trackerName && item.trackerName) {
+        prior.trackerName = item.trackerName;
+        prior.unit = item.unit;
+        prior.category = item.category;
+        prior.values = item.values;
+      }
+      prior.selected = prior.selected || item.selected;
+      continue;
+    }
+    byKeyValue.set(dedupe, items.length);
     items.push(item);
   }
 
