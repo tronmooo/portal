@@ -27,7 +27,7 @@ import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { registerCacheBuster } from "./cache-bus";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { applyLiabilityPayment } from "./liability-payments";
+import { payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -2145,25 +2145,22 @@ export async function registerRoutes(
                   const f: any = bill.fields || {};
                   const due = readDueDate(f);
                   if (!due || due > windowEnd) continue; // not due within the window
-                  const amount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? 0) || 0;
                   const autopay = f.autopay === true || f.autoPay === true || String(f.autopay ?? "").toLowerCase() === "true";
-                  if (autopay && amount > 0) {
-                    // Auto-log the payment and roll the due date forward.
+                  if (autopay) {
+                    // Already settled (manually or by a prior run)? Never pay twice.
+                    const ov = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences[due] : null;
+                    if (ov?.status === "paid" || ov?.status === "skipped") continue;
+                    // The one pay operation: real occurrence total (not the
+                    // definition's base price), occurrence stamped, due date
+                    // advanced from the occurrence, expense logged.
                     try {
-                      await scoped.createLiabilityPayment({
-                        liabilityProfileId: bill.id,
+                      const paid = await payBillOccurrence(scoped, bill.id, {
+                        occurrenceDate: due,
                         paymentDate: todayISO,
-                        amount,
-                        principalPortion: amount,
-                        interestPortion: 0,
-                        paymentType: "standard",
                         notes: "Autopay",
-                      } as any);
-                      const nextDue = advanceLiabilityDueDate(f, todayISO);
-                      await scoped.updateProfile(bill.id, {
-                        fields: { ...f, dueDate: nextDue, nextDueDate: nextDue, lastPaidDate: todayISO, status: "upcoming" },
+                        source: "autopay",
                       });
-                      autopaid++;
+                      if (paid.ok && paid.amount > 0) autopaid++;
                     } catch { /* per-bill best effort */ }
                   } else {
                     // Non-autopay: surface a timed TASK at the due date, deduped
@@ -4572,12 +4569,8 @@ ${JSON.stringify(ctx, null, 2)}`;
           } catch { /* best-effort — page still renders without owner rows */ }
         }
         const [payments, schedule, assetLinks] = await Promise.all([
-          (storage as any).getLiabilityPayments
-            ? (storage as any).getLiabilityPayments(profileId).catch(() => [] as any[])
-            : Promise.resolve([] as any[]),
-          (storage as any).getLiabilitySchedule
-            ? (storage as any).getLiabilitySchedule(profileId, 12).catch(() => null)
-            : Promise.resolve(null),
+          storage.getLiabilityPayments(profileId).catch(() => [] as any[]),
+          storage.getLiabilitySchedule(profileId, 12).catch(() => null),
           (storage as any).getLiabilityAssetLinks
             ? (storage as any).getLiabilityAssetLinks(profileId).catch(() => [] as any[])
             : Promise.resolve([] as any[]),
@@ -6582,7 +6575,21 @@ Rules:
   }));
 
   app.patch("/api/loans/payment/:id/mark", asyncHandler(async (req, res) => {
+    // Thin adapter over the one pay operation. Marking an amortization row
+    // paid used to flip `loan_amortization.paid` and nothing else — no payment
+    // row, no balance move — a boolean only the cashflow projection read.
     const updated = await storage.markLoanPayment(req.params.id);
+    if (updated?.loan_id) {
+      const paid = await payBillOccurrence(storage, updated.loan_id, {
+        occurrenceDate: String(updated.payment_date || "").slice(0, 10) || null,
+        amount: Number(updated.total_payment) || null,
+        principal: Number(updated.principal_amount) || null,
+        interest: Number(updated.interest_amount) || null,
+        notes: `Amortization payment #${updated.payment_number ?? ""}`.trim(),
+        source: "route",
+      }, getTimezone(req));
+      if (!paid.ok) log.warn("[loans/mark] ledger write failed", paid.reason);
+    }
     const uid_ln2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_ln2}`); bustCache(`cashflow:${uid_ln2}`); bustCache(`profile-detail:${uid_ln2}:`);
     res.json(updated);
@@ -7407,13 +7414,11 @@ Rules:
     if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ error: "Date must be YYYY-MM-DD format" });
     }
-    // Default to obligation's own amount if none provided
     const uid_o3 = cacheUserKey(req as AuthenticatedRequest);
-    if (amount === undefined || amount === null) {
-      const ob = await storage.getObligation(req.params.id);
-      if (!ob) return res.status(404).json({ error: "Obligation not found" });
-      amount = ob.amount;
-    }
+    // This route is the bills surface — loans/cards have their own payment
+    // form. payBillOccurrence itself accepts any liability, so keep the guard.
+    const ob = await storage.getObligation(req.params.id);
+    if (!ob) return res.status(404).json({ error: "Obligation not found" });
     // Idempotency window: ignore identical pay request within 8s
     const dedupeKey = `${uid_o3}:${req.params.id}`;
     const last = recentPayments.get(dedupeKey);
@@ -7433,8 +7438,23 @@ Rules:
       const cutoff = Date.now() - 30000;
       for (const [k, v] of recentPayments) if (v.at < cutoff) recentPayments.delete(k);
     }
-    const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
-    if (!payment) return res.status(404).json({ error: "Obligation not found" });
+    // The one pay operation. Leaving `amount` undefined lets it settle the
+    // occurrence's REAL total (base + charges / posted actual); `date` is the
+    // payment date the caller chose — previously validated and then silently
+    // dropped on the floor.
+    const result = await payBillOccurrence(storage, req.params.id, {
+      amount: amount ?? null,
+      paymentDate: date || null,
+      method,
+      confirmationNumber,
+      source: "route",
+    }, getTimezone(req));
+    if (!result.ok) return res.status(404).json({ error: "Obligation not found" });
+    // Same response shape payObligation produced, so existing callers keep working.
+    const payment = {
+      id: result.payment?.id, amount: result.amount,
+      date: result.payment?.paymentDate, method, confirmationNumber,
+    };
     recentPayments.set(dedupeKey, { at: Date.now(), payment });
     bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
     res.status(201).json(payment);
@@ -7448,31 +7468,18 @@ Rules:
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const ob = await storage.getObligation(req.params.id);
     if (!ob) return res.status(404).json({ error: "Obligation not found" });
-    if (!ob.payments || ob.payments.length === 0) {
-      return res.status(404).json({ error: "No payments to undo" });
-    }
-    // Pick the most recent payment (by createdAt if available, else by date).
-    const sorted = [...ob.payments].sort((a, b) => {
-      const ak = (a.createdAt || a.date || "");
-      const bk = (b.createdAt || b.date || "");
-      return bk.localeCompare(ak);
-    });
-    const latest = sorted[0];
-    // Payments now live in liability_payments (obligations retired) — a bill's
-    // payment history is projected from there.
-    const { error } = await (storage as any).supabase
-      .from("liability_payments")
-      .delete()
-      .eq("id", latest.id)
-      .eq("user_id", uid);
-    if (error) {
-      console.error("[api] undo payment failed:", error.message);
-      return res.status(500).json({ error: "Failed to undo payment" });
+    // The full inverse: payment row deleted, occurrence stamp cleared, due date
+    // rolled back, account credited, logged expense retracted. This used to be
+    // a raw supabase row delete that reached around the storage proxy — no
+    // write journal, no reversal of anything the pay wrote.
+    const result = await unpayBillOccurrence(storage, req.params.id, { source: "route" }, getTimezone(req));
+    if (!result.ok) {
+      return res.status(404).json({ error: result.reason === "no_payment" ? "No payments to undo" : "Obligation not found" });
     }
     // Also clear the dedupe entry so the user can immediately re-pay.
     recentPayments.delete(`${uid}:${req.params.id}`);
     bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`); bustCache(`notifications:${uid}`);
-    res.json({ success: true, deletedPaymentId: latest.id });
+    res.json({ success: true, deletedPaymentId: result.deletedPaymentId });
   }));
 
   app.delete("/api/obligations/:id", asyncHandler(async (req, res) => {
@@ -7559,9 +7566,16 @@ Rules:
     const parsed = parseOccId(req.params.occId);
     if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
     let result;
-    if (status === "done") result = await (storage as any).payOccurrence(parsed.liabilityId, parsed.date, { amount: actualAmount, method });
-    else if (status === "skipped") result = await (storage as any).skipOccurrence(parsed.liabilityId, parsed.date);
-    else result = await (storage as any).getLiabilitySchedule(parsed.liabilityId); // pending/late = no-op read
+    if (status === "done") {
+      const paid = await payBillOccurrence(storage, parsed.liabilityId, {
+        occurrenceDate: parsed.date, amount: actualAmount ?? null, method, source: "shim",
+      }, getTimezone(req));
+      result = paid.ok ? await storage.getLiabilitySchedule(parsed.liabilityId) : null;
+    } else if (status === "skipped") {
+      result = await storage.skipOccurrence(parsed.liabilityId, parsed.date);
+    } else {
+      result = await storage.getLiabilitySchedule(parsed.liabilityId); // pending/late = no-op read
+    }
     if (!result) return res.status(404).json({ error: "Bill not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7573,7 +7587,7 @@ Rules:
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(newDueAt || ""))) return res.status(400).json({ error: "newDueAt must be YYYY-MM-DD" });
     const parsed = parseOccId(req.params.occId);
     if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
-    const result = await (storage as any).rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
+    const result = await storage.rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
     if (!result) return res.status(404).json({ error: "Bill not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7582,7 +7596,7 @@ Rules:
   // ---- Recurring-liability schedule & per-occurrence operations ----
   app.get("/api/liabilities/:id/schedule", asyncHandler(async (req, res) => {
     const months = Math.min(36, Math.max(1, Number(req.query.months) || 12));
-    const result = await (storage as any).getLiabilitySchedule(req.params.id, months);
+    const result = await storage.getLiabilitySchedule(req.params.id, months);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     res.json(result);
   }));
@@ -7592,8 +7606,12 @@ Rules:
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const { amount, method, paymentDate, accountId } = req.body || {};
     if (amount !== undefined && (typeof amount !== "number" || amount < 0)) return res.status(400).json({ error: "amount must be a non-negative number" });
-    const result = await (storage as any).payOccurrence(req.params.id, req.params.date, { amount, method, paymentDate, accountId });
-    if (!result) return res.status(404).json({ error: "Recurring liability not found" });
+    const paid = await payBillOccurrence(storage, req.params.id, {
+      occurrenceDate: req.params.date, amount: amount ?? null,
+      method, paymentDate, accountId, source: "occurrence_route",
+    }, getTimezone(req));
+    if (!paid.ok) return res.status(404).json({ error: "Recurring liability not found" });
+    const result = await storage.getLiabilitySchedule(req.params.id);
     bustBillCaches(uid);
     res.json(result);
   }));
@@ -7601,7 +7619,7 @@ Rules:
   app.post("/api/liabilities/:id/occurrences/:date/skip", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
-    const result = await (storage as any).skipOccurrence(req.params.id, req.params.date);
+    const result = await storage.skipOccurrence(req.params.id, req.params.date);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7614,10 +7632,10 @@ Rules:
     let result;
     if (movedTo !== undefined) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(movedTo))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
-      result = await (storage as any).rescheduleOccurrence(req.params.id, req.params.date, movedTo);
+      result = await storage.rescheduleOccurrence(req.params.id, req.params.date, movedTo);
     }
     if (amount !== undefined || notes !== undefined) {
-      result = await (storage as any).setOccurrenceFields(req.params.id, req.params.date, { amount, notes });
+      result = await storage.setOccurrenceFields(req.params.id, req.params.date, { amount, notes });
     }
     // Estimated vs actual are separate, on purpose. Writing the estimate must
     // never masquerade as the bill having posted, and writing the actual must
@@ -7625,12 +7643,12 @@ Rules:
     if (estimatedAmount !== undefined) {
       const n = estimatedAmount === null ? null : Number(estimatedAmount);
       if (n !== null && (!Number.isFinite(n) || n < 0)) return res.status(400).json({ error: "estimatedAmount must be a non-negative number or null" });
-      result = await (storage as any).setOccurrenceEstimate(req.params.id, req.params.date, n);
+      result = await storage.setOccurrenceEstimate(req.params.id, req.params.date, n);
     }
     if (actualAmount !== undefined) {
       const n = actualAmount === null ? null : Number(actualAmount);
       if (n !== null && (!Number.isFinite(n) || n < 0)) return res.status(400).json({ error: "actualAmount must be a non-negative number or null" });
-      result = await (storage as any).setOccurrenceActual(req.params.id, req.params.date, n);
+      result = await storage.setOccurrenceActual(req.params.id, req.params.date, n);
     }
     if (!result) return res.status(404).json({ error: "Recurring liability not found (or nothing to change)" });
     bustBillCaches(uid);
@@ -7647,7 +7665,7 @@ Rules:
     const { amount, kind, label, date, notes } = req.body || {};
     const n = Number(amount);
     if (!Number.isFinite(n) || n === 0) return res.status(400).json({ error: "amount must be a non-zero number" });
-    const result = await (storage as any).addOccurrenceCharge(req.params.id, req.params.date, {
+    const result = await storage.addOccurrenceCharge(req.params.id, req.params.date, {
       amount: n, kind, label, date, notes, source: "user",
     });
     if (!result) return res.status(404).json({ error: "Liability not found" });
@@ -7658,7 +7676,7 @@ Rules:
   app.delete("/api/liabilities/:id/occurrences/:date/charges/:chargeId", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
-    const result = await (storage as any).removeOccurrenceCharge(req.params.id, req.params.date, req.params.chargeId);
+    const result = await storage.removeOccurrenceCharge(req.params.id, req.params.date, req.params.chargeId);
     if (!result) return res.status(404).json({ error: "Liability not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7668,7 +7686,7 @@ Rules:
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const { until } = req.body || {};
     if (until !== undefined && until !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(until))) return res.status(400).json({ error: "until must be YYYY-MM-DD" });
-    const result = await (storage as any).pauseLiability(req.params.id, until || undefined);
+    const result = await storage.pauseLiability(req.params.id, until || undefined);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7676,7 +7694,7 @@ Rules:
 
   app.post("/api/liabilities/:id/resume", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    const result = await (storage as any).resumeLiability(req.params.id);
+    const result = await storage.resumeLiability(req.params.id);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7741,7 +7759,7 @@ Rules:
     }
     if (newBalance != null && !Number.isFinite(Number(newBalance))) return res.status(400).json({ error: "newBalance must be a number" });
     if (delta != null && !Number.isFinite(Number(delta))) return res.status(400).json({ error: "delta must be a number" });
-    const updated = await (storage as any).adjustAccountBalance(req.params.id, {
+    const updated = await storage.adjustAccountBalance(req.params.id, {
       newBalance, delta, date, reason, source: "user",
     });
     if (!updated) return res.status(404).json({ error: "Account not found" });
@@ -8431,7 +8449,19 @@ Rules:
             const created = await storage.createObligation({ name: o.name, amount: o.amount, frequency: o.frequency, category: o.category, nextDueDate: o.nextDueDate, autopay: o.autopay, notes: o.notes });
             if (o.payments) {
               for (const p of o.payments) {
-                await tryImport("obligationPayments", `${o.name} payment`, () => storage.payObligation(created.id, p.amount, p.method, p.confirmationNumber));
+                // Restoring HISTORY: raw ledger rows only, deliberately not
+                // payBillOccurrence — an import must not advance due dates,
+                // debit accounts, or log fresh expenses for old payments.
+                await tryImport("obligationPayments", `${o.name} payment`, () => storage.createLiabilityPayment({
+                  liabilityProfileId: created.id,
+                  paymentDate: String(p.date || p.paymentDate || getUserToday(getTimezone(req))).slice(0, 10),
+                  amount: Number(p.amount) || 0,
+                  principalPortion: Number(p.amount) || 0,
+                  interestPortion: 0,
+                  paymentType: "standard",
+                  sourceAccount: p.method || null,
+                  notes: p.confirmationNumber ? `Confirmation ${p.confirmationNumber}` : null,
+                } as any));
               }
             }
           });
@@ -10049,19 +10079,24 @@ No emojis. No prose outside the JSON.`,
     // principal/interest split AND the resulting balance, and it owns them in
     // exactly one place (server/liability-payments.ts) so a payment recorded
     // through chat produces the same row as one recorded through this form.
-    // The client used to compute the split and ship it, but a field-name
-    // mismatch silently dropped it to $0 and stale client balances caused drift.
-    const result = await applyLiabilityPayment(
-      storage,
-      liability,
-      {
-        amount: parsed.data.amount,
-        paymentDate: (parsed.data as any).paymentDate,
-        fees: (parsed.data as any).fees ?? 0,
-        notes: (parsed.data as any).notes ?? null,
-      },
-      getTimezone(req),
-    );
+    // The occurrence stamp and due-date policy ride along too — this form used
+    // to skip both, so a bill paid here still showed unpaid on its schedule.
+    const d: any = parsed.data;
+    const occurrenceDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.occurrenceDate || ""))
+      ? String(req.body.occurrenceDate) : null;
+    const result = await payBillOccurrence(storage, req.params.id, {
+      amount: d.amount,
+      paymentDate: d.paymentDate,
+      occurrenceDate,
+      principal: d.principalPortion || null,
+      interest: d.interestPortion || null,
+      fees: d.fees ?? null,
+      paymentType: d.paymentType && d.paymentType !== "standard" ? d.paymentType : null,
+      method: d.sourceAccount ?? null,
+      notes: d.notes ?? null,
+      source: "route",
+    }, getTimezone(req));
+    if (!result.ok) return res.status(result.reason === "payment_failed" ? 500 : 404).json({ error: "Payment failed" });
     res.json(result.payment);
   }));
   app.patch("/api/liability-payments/:id", asyncHandler(async (req, res) => {
@@ -10070,9 +10105,15 @@ No emojis. No prose outside the JSON.`,
     res.json(row);
   }));
   app.delete("/api/liability-payments/:id", asyncHandler(async (req, res) => {
-    const ok = await storage.deleteLiabilityPayment(req.params.id);
-    if (!ok) return res.status(404).json({ error: "Payment not found" });
-    res.json({ success: true });
+    // Full inverse, not a bare row delete: occurrence stamp cleared, due date
+    // rolled back, debt balance restored, account credited, expense retracted.
+    const row = await storage.getLiabilityPayment(req.params.id);
+    if (!row) return res.status(404).json({ error: "Payment not found" });
+    const result = await unpayBillOccurrence(storage, (row as any).liabilityProfileId, {
+      paymentId: req.params.id, source: "route",
+    }, getTimezone(req));
+    if (!result.ok) return res.status(404).json({ error: "Payment not found" });
+    res.json({ success: true, ...{ deletedPaymentId: result.deletedPaymentId } });
   }));
 
   // ============================================================

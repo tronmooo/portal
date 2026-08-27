@@ -67,9 +67,12 @@ describe("recording a liability payment — one implementation", () => {
     expect(viaChat.payment.remainingBalanceAfter).toBe(viaForm.payment.remainingBalanceAfter);
   });
 
-  it("logs a recurring bill and rolls its due date instead of inventing a balance", async () => {
+  it("logs a recurring bill without inventing a balance — and without touching series state", async () => {
     // A phone bill is not debt. The AI path had no idea and would reduce a
-    // "balance" that does not exist.
+    // "balance" that does not exist. Series state (due-date advance,
+    // lastPaidDate, occurrence stamp) is payBillOccurrence's job now — this
+    // ledger core records the row and nothing else, so one due-date policy
+    // exists instead of three.
     const bill = {
       id: "bill-1", name: "Phone", type: "liability", type_key: "phone_plan",
       fields: { amount: 80, frequency: "monthly", dueDate: "2026-08-01" },
@@ -79,8 +82,7 @@ describe("recording a liability payment — one implementation", () => {
     expect(out.recurring).toBe(true);
     expect(out.payment.principalPortion).toBe(80);
     expect(out.payment.interestPortion).toBe(0);
-    expect(out.liability.fields.nextDueDate).not.toBe("2026-08-01");
-    expect(out.liability.fields.lastPaidDate).toBeTruthy();
+    expect(storage.writes.filter((w: any[]) => w[0] === "updateProfile")).toHaveLength(0);
   });
 
   it("honors an explicit payment type", async () => {
@@ -102,11 +104,13 @@ describe("recording a liability payment — one implementation", () => {
 
   it("leaves no second implementation behind in the AI engine", () => {
     // A source-text guard: the point of the extraction is that the tool cannot
-    // drift back into doing its own arithmetic.
+    // drift back into doing its own arithmetic. The tool now calls the full
+    // entry-point-facing operation, not the ledger core directly.
     const src = readFileSync(resolve(__dirname, "../server/ai-engine.ts"), "utf8");
     const tool = src.slice(src.indexOf('case "add_liability_payment"'));
     const body = tool.slice(0, tool.indexOf('case "link_liability_asset"'));
-    expect(body).toContain("applyLiabilityPayment");
+    expect(body).toContain("payBillOccurrence");
+    expect(body).not.toContain("applyLiabilityPayment");
     expect(body).not.toContain("America/Los_Angeles");
     expect(body).not.toMatch(/monthlyRate/);
   });

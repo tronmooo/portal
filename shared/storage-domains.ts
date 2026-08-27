@@ -39,6 +39,7 @@ const VERB_OPS: Record<string, "create" | "update" | "delete"> = {
   update: "update", set: "update", upsert: "update", mark: "update", toggle: "update",
   link: "update", checkin: "update", confirm: "update", pay: "update", restore: "update",
   ensure: "update", copy: "update", migrate: "update", propagate: "update", repair: "update",
+  skip: "update", adjust: "update", pause: "update", resume: "update", reschedule: "update",
 };
 
 /**
@@ -132,6 +133,23 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
   },
   LoanPayment: { domains: ["liabilities", "obligations"], endpoint: null },
   LoanSchedule: { domains: ["liabilities", "obligations"], endpoint: null },
+
+  // Per-occurrence bill state lives ON the liability profile row
+  // (fields.occurrences), so a write ripples wherever a liability-profile
+  // write does, plus the bill surfaces. These were unmapped — every
+  // occurrence write (paying a bill!) degraded to "everything" and nuked all
+  // 21 client domains plus the version epoch.
+  Occurrence: { domains: ["liabilities", "obligations", "expenses", "profiles"], endpoint: null },
+  OccurrenceOverride: { domains: ["liabilities", "obligations", "expenses", "profiles"], endpoint: null },
+  OccurrenceFields: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  OccurrenceEstimate: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  OccurrenceActual: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  OccurrenceCharge: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  // pauseLiability / resumeLiability
+  Liability: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  // adjustAccountBalance — an account IS a profile row; money moving also
+  // touches the finance surfaces.
+  AccountBalance: { domains: [...PROFILE_DOMAINS, "expenses"], endpoint: null },
   LiabilityAssetLink: { domains: PROFILE_DOMAINS, endpoint: null },
   LiabilityProfileLink: { domains: PROFILE_DOMAINS, endpoint: null },
   LiabilityOwnerLink: { domains: PROFILE_DOMAINS, endpoint: null },

@@ -4887,32 +4887,11 @@ export class SupabaseStorage implements IStorage {
     return this.getObligation(id);
   }
 
-  async payObligation(obligationId: string, amount: number, method?: string, confirmationNumber?: string, date?: string): Promise<ObligationPayment | undefined> {
-    const p = await this.getProfile(obligationId);
-    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return undefined;
-    const today = date || getUserToday(this._timezone);
-    // Log the payment against the liability (single source of truth). Recurring
-    // bills carry no permanent balance, so the whole amount is principal.
-    const payment: any = await this.createLiabilityPayment({
-      liabilityProfileId: obligationId,
-      paymentDate: today,
-      amount,
-      principalPortion: amount,
-      interestPortion: 0,
-      fees: 0,
-      paymentType: "standard",
-      sourceAccount: method || null,
-      notes: confirmationNumber ? `Confirmation ${confirmationNumber}` : null,
-    } as any);
-    // Advance the next due date by one cycle and mark upcoming.
-    const f: any = p.fields || {};
-    const nextDue = advanceLiabilityDueDate(f, today);
-    await this.updateProfile(obligationId, {
-      fields: { dueDate: nextDue, nextDueDate: nextDue, lastPaidDate: today, status: "upcoming" },
-    } as any);
-    this.logActivity("obligation", `Paid ${p.name}: $${amount}`);
-    return { id: payment?.id || randomUUID(), amount, date: today, method, confirmationNumber };
-  }
+  // NOTE: payObligation lived here until the pay paths were unified. It dated
+  // every payment "today", advanced the due date unconditionally anchored on
+  // today, and never stamped the occurrence — one of six divergent
+  // implementations of "this bill got paid". All entry points now call
+  // payBillOccurrence (server/liability-payments.ts).
 
   async deleteObligation(id: string): Promise<boolean> {
     const p = await this.getProfile(id);
@@ -4998,8 +4977,10 @@ export class SupabaseStorage implements IStorage {
     };
   }
 
-  /** Merge a per-occurrence override into fields.occurrences (shallow-replaced). */
-  private async _patchOccurrence(id: string, date: string, patch: Record<string, any>): Promise<any> {
+  /** Merge a per-occurrence override into fields.occurrences (shallow-replaced).
+   *  A key set to null in `patch` is REMOVED — this is how unpayBillOccurrence
+   *  clears a paid stamp without touching the rest of the period's history. */
+  async updateOccurrenceOverride(id: string, date: string, patch: Record<string, any>): Promise<any> {
     const p = await this.getProfile(id);
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const f: any = p.fields || {};
@@ -5019,12 +5000,6 @@ export class SupabaseStorage implements IStorage {
     return (occ && typeof occ === "object" ? occ[String(date).slice(0, 10)] : null) || null;
   }
 
-  /** The definition's per-period base amount, normalized across families. */
-  private _definitionAmount(p: any): number {
-    const df = deriveScheduleFields(p.fields || {}, (p as any).type_key ?? (p as any).typeKey, getUserToday(this._timezone));
-    return liabilityAmount({ id: p.id, fields: df });
-  }
-
   /**
    * File a usage / credits / fee charge against ONE billing period.
    *
@@ -5041,7 +5016,7 @@ export class SupabaseStorage implements IStorage {
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const occDate = String(date).slice(0, 10);
     const next = addCharge(this._occurrenceOverride(p, occDate), charge as any);
-    const result = await this._patchOccurrence(id, occDate, { charges: next.charges });
+    const result = await this.updateOccurrenceOverride(id, occDate, { charges: next.charges });
     this.logActivity("obligation", `Added ${charge.kind || "charge"} of $${charge.amount} to ${p.name} ${occDate}`);
     return result;
   }
@@ -5051,7 +5026,7 @@ export class SupabaseStorage implements IStorage {
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const occDate = String(date).slice(0, 10);
     const next = removeCharge(this._occurrenceOverride(p, occDate), chargeId);
-    return this._patchOccurrence(id, occDate, { charges: next.charges });
+    return this.updateOccurrenceOverride(id, occDate, { charges: next.charges });
   }
 
   /** What we EXPECT this period to cost. Never touches other periods. */
@@ -5060,7 +5035,7 @@ export class SupabaseStorage implements IStorage {
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const occDate = String(date).slice(0, 10);
     const next = setEstimate(this._occurrenceOverride(p, occDate), amount);
-    return this._patchOccurrence(id, occDate, {
+    return this.updateOccurrenceOverride(id, occDate, {
       estimatedAmount: next.estimatedAmount ?? null,
     });
   }
@@ -5074,7 +5049,7 @@ export class SupabaseStorage implements IStorage {
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const occDate = String(date).slice(0, 10);
     const next = setActual(this._occurrenceOverride(p, occDate), amount);
-    const result = await this._patchOccurrence(id, occDate, {
+    const result = await this.updateOccurrenceOverride(id, occDate, {
       actualAmount: next.actualAmount ?? null,
       postedAt: next.postedAt ?? null,
     });
@@ -5082,72 +5057,14 @@ export class SupabaseStorage implements IStorage {
     return result;
   }
 
-  /** Mark one occurrence paid: writes a payment row + stamps the override. */
-  async payOccurrence(
-    id: string,
-    date: string,
-    opts: { amount?: number; method?: string; paymentDate?: string; accountId?: string } = {},
-  ): Promise<any> {
-    const p = await this.getProfile(id);
-    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
-    const f: any = p.fields || {};
-    const occDate = String(date).slice(0, 10);
-    const payDate = opts.paymentDate || occDate;
-    // The amount owed for THIS period, resolved through the billing model —
-    // base + this period's charges, or the posted actual if the bill landed.
-    // A usage-based bill paid without an explicit amount must settle its real
-    // total ($42), not the definition's base ($20).
-    const money = resolveOccurrenceAmount(
-      this._definitionAmount(p),
-      this._occurrenceOverride(p, occDate),
-      resolveBillingModel(p as any),
-    );
-    const amount = opts.amount != null ? Number(opts.amount) : money.current;
-    const account = opts.accountId ? await this.getProfile(opts.accountId) : null;
-    const payment: any = await this.createLiabilityPayment({
-      liabilityProfileId: id, paymentDate: payDate, amount,
-      principalPortion: amount, interestPortion: 0, fees: 0,
-      paymentType: "standard",
-      sourceAccount: account?.name || opts.method || null,
-    } as any);
-    // Stamp the override AND, if this was the current due date, advance the series.
-    // `actualAmount` is set here because a paid bill IS a posted bill: this is
-    // the moment the period stops being a forecast and becomes history.
-    const occ: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
-    occ[occDate] = {
-      ...(occ[occDate] || {}),
-      status: "paid", paymentId: payment?.id, amount,
-      actualAmount: amount, paidAmount: amount,
-      postedAt: new Date().toISOString(),
-      ...(account ? { accountId: account.id } : {}),
-    };
-    const patch: any = { occurrences: occ };
-    const curDue = String(f.dueDate ?? f.nextDueDate ?? "").slice(0, 10);
-    if (curDue === occDate) {
-      const nextDue = advanceLiabilityDueDate(f, occDate);
-      patch.dueDate = nextDue; patch.nextDueDate = nextDue; patch.status = "upcoming";
-    }
-    patch.lastPaidDate = payDate;
-    await this.updateProfile(id, { fields: patch } as any);
-    // Money paid from an account leaves that account. Without this the bill is
-    // "paid" while the balance it was paid from never moves, and the Finance
-    // tab shows two numbers that disagree about the same event.
-    if (account && isAccountProfile(account)) {
-      await this.adjustAccountBalance(account.id, {
-        delta: isDebtAccount(account) ? amount : -amount,
-        date: payDate,
-        reason: `Payment — ${p.name} ${occDate}`,
-        source: "payment",
-        linkedRecordId: payment?.id || id,
-      });
-    }
-    this.logActivity("obligation", `Paid ${p.name} occurrence ${occDate}: $${amount}`);
-    return this.getLiabilitySchedule(id);
-  }
+  // NOTE: payOccurrence lived here until the pay paths were unified. Its
+  // side-effect set (occurrence stamp + conditional advance + account debit,
+  // but no debt-balance move and no expense) now lives in payBillOccurrence
+  // (server/liability-payments.ts), which every entry point calls.
 
   async skipOccurrence(id: string, date: string): Promise<any> {
     const occDate = String(date).slice(0, 10);
-    const result = await this._patchOccurrence(id, occDate, { status: "skipped", paymentId: null });
+    const result = await this.updateOccurrenceOverride(id, occDate, { status: "skipped", paymentId: null });
     // If skipping the current due date, advance so the next occurrence becomes due.
     const p = await this.getProfile(id);
     const f: any = p?.fields || {};
@@ -5160,14 +5077,14 @@ export class SupabaseStorage implements IStorage {
   }
 
   async rescheduleOccurrence(id: string, date: string, newDate: string): Promise<any> {
-    return this._patchOccurrence(id, String(date).slice(0, 10), { movedTo: String(newDate).slice(0, 10) });
+    return this.updateOccurrenceOverride(id, String(date).slice(0, 10), { movedTo: String(newDate).slice(0, 10) });
   }
 
   async setOccurrenceFields(id: string, date: string, patch: { amount?: number; notes?: string }): Promise<any> {
     const clean: Record<string, any> = {};
     if (patch.amount != null) clean.amount = Number(patch.amount);
     if (patch.notes !== undefined) clean.notes = patch.notes || null;
-    return this._patchOccurrence(id, String(date).slice(0, 10), clean);
+    return this.updateOccurrenceOverride(id, String(date).slice(0, 10), clean);
   }
 
   async pauseLiability(id: string, until?: string): Promise<any> {
@@ -7593,6 +7510,13 @@ export class SupabaseStorage implements IStorage {
       .order("payment_date", { ascending: false });
     if (error) throw error;
     return (data || []).map(r => this.rowToLiabilityPayment(r));
+  }
+
+  async getLiabilityPayment(id: string): Promise<LiabilityPayment | undefined> {
+    const { data, error } = await this.supabase.from("liability_payments")
+      .select("*").eq("id", id).eq("user_id", this.userId).maybeSingle();
+    if (error || !data) return undefined;
+    return this.rowToLiabilityPayment(data);
   }
 
   async createLiabilityPayment(data: InsertLiabilityPayment): Promise<LiabilityPayment> {

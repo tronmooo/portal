@@ -12,6 +12,9 @@ import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
+import { generateSchedule } from "@shared/liability-schedule";
+import { addCharge, removeCharge } from "@shared/liability-billing";
+import { applyBalanceAdjustment, isAccountProfile } from "@shared/finance-accounts";
 
 // Per-request storage context — eliminates the global userId race condition (C-1)
 // Auth middleware runs storage within this context so all downstream code
@@ -150,8 +153,31 @@ export interface IStorage {
   getObligation(id: string): Promise<Obligation | undefined>;
   createObligation(data: InsertObligation): Promise<Obligation>;
   updateObligation(id: string, data: Partial<Obligation>): Promise<Obligation | undefined>;
-  payObligation(obligationId: string, amount: number, method?: string, confirmationNumber?: string): Promise<ObligationPayment | undefined>;
   deleteObligation(id: string): Promise<boolean>;
+  // NOTE: payObligation was retired — paying anything goes through
+  // payBillOccurrence (server/liability-payments.ts), the one operation every
+  // entry point shares. It had its own advance policy (unconditional, anchored
+  // on today) and no occurrence stamp, which is why a bill paid from the
+  // dashboard and the same bill paid from its schedule card disagreed.
+
+  // Recurring-liability schedule + per-occurrence state. Promoted onto the
+  // interface (they were SupabaseStorage-only, reachable via `(storage as any)`)
+  // so typing, the write journal, and the noun coverage test all see them.
+  getLiabilitySchedule(id: string, months?: number): Promise<any | null>;
+  updateOccurrenceOverride(id: string, date: string, patch: Record<string, any>): Promise<any>;
+  skipOccurrence(id: string, date: string): Promise<any>;
+  rescheduleOccurrence(id: string, date: string, newDate: string): Promise<any>;
+  setOccurrenceFields(id: string, date: string, patch: { amount?: number; notes?: string }): Promise<any>;
+  setOccurrenceEstimate(id: string, date: string, amount: number | null): Promise<any>;
+  setOccurrenceActual(id: string, date: string, amount: number | null): Promise<any>;
+  addOccurrenceCharge(id: string, date: string, charge: { amount: number; kind?: string; label?: string; date?: string; notes?: string; source?: any }): Promise<any>;
+  removeOccurrenceCharge(id: string, date: string, chargeId: string): Promise<any>;
+  pauseLiability(id: string, until?: string): Promise<any>;
+  resumeLiability(id: string): Promise<any>;
+  adjustAccountBalance(id: string, input: {
+    newBalance?: number | null; delta?: number | null; date?: string | null;
+    reason?: string | null; source?: any; linkedRecordId?: string | null;
+  }): Promise<any | undefined>;
 
   // Artifacts
   getArtifacts(profileIds?: string[]): Promise<Artifact[]>;
@@ -302,6 +328,7 @@ export interface IStorage {
   ensureLiabilityOwnerLink(id: string): Promise<void>;
 
   getLiabilityPayments(liabilityProfileId: string): Promise<import("@shared/schema").LiabilityPayment[]>;
+  getLiabilityPayment(id: string): Promise<import("@shared/schema").LiabilityPayment | undefined>;
   createLiabilityPayment(data: import("@shared/schema").InsertLiabilityPayment): Promise<import("@shared/schema").LiabilityPayment>;
   updateLiabilityPayment(id: string, data: Partial<import("@shared/schema").InsertLiabilityPayment>): Promise<import("@shared/schema").LiabilityPayment | undefined>;
   deleteLiabilityPayment(id: string): Promise<boolean>;
@@ -1822,27 +1849,102 @@ export class MemStorage implements IStorage {
     this.logActivity("obligation", `Updated obligation: ${updated.name}`);
     return updated;
   }
-  async payObligation(obligationId: string, amount: number, method?: string, confirmationNumber?: string): Promise<ObligationPayment | undefined> {
-    const ob = this.obligations.get(obligationId);
-    if (!ob) return undefined;
-    const payment: ObligationPayment = { id: randomUUID(), amount, date: new Date().toISOString(), method, confirmationNumber };
-    ob.payments.push(payment);
-    // Advance next due date
-    const nextDue = parseLocalDate(ob.nextDueDate);
-    switch (ob.frequency) {
-      case "weekly": nextDue.setDate(nextDue.getDate() + 7); break;
-      case "biweekly": nextDue.setDate(nextDue.getDate() + 14); break;
-      // Clamped so a bill due on the 31st rolls to the 30th/28th rather than
-      // overflowing into the next month and losing its day-of-month forever.
-      case "monthly": nextDue.setTime(addMonthsClamped(nextDue, 1).getTime()); break;
-      case "quarterly": nextDue.setTime(addMonthsClamped(nextDue, 3).getTime()); break;
-      case "yearly": nextDue.setTime(addYearsClamped(nextDue, 1).getTime()); break;
-    }
-    ob.nextDueDate = nextDue.toLocaleDateString('en-CA');
-    this.logActivity("obligation", `Paid ${ob.name}: $${amount}`);
-    return payment;
-  }
   async deleteObligation(id: string) { return this.obligations.delete(id); }
+
+  // ---- Recurring-liability occurrence state (parity surface) ----
+  // Same stored shape as SupabaseStorage (profile.fields.occurrences) so the
+  // canonical pay/unpay operation behaves identically against both backends.
+  private _memPatchOccurrence(id: string, date: string, patch: Record<string, any>): any {
+    const p: any = this.profiles.get(id);
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
+    const f: any = p.fields || {};
+    const occDate = String(date).slice(0, 10);
+    const occ: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
+    const merged = { ...(occ[occDate] || {}), ...patch };
+    for (const k of Object.keys(merged)) if (merged[k] === null) delete merged[k];
+    occ[occDate] = merged;
+    p.fields = { ...f, occurrences: occ };
+    this.profiles.set(id, p);
+    return this.getLiabilitySchedule(id);
+  }
+  async getLiabilitySchedule(id: string, _months = 12): Promise<any | null> {
+    const p: any = this.profiles.get(id);
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
+    // Minimal parity shape: the occurrence window. The Supabase view adds
+    // payment history and settings this in-memory backend has no rows for.
+    const today = getUserToday(DEFAULT_TIMEZONE);
+    return {
+      id: p.id, name: p.name,
+      occurrences: generateSchedule({ id: p.id, fields: p.fields || {} }, [], { todayISO: today }),
+      payments: [],
+    };
+  }
+  async updateOccurrenceOverride(id: string, date: string, patch: Record<string, any>): Promise<any> {
+    return this._memPatchOccurrence(id, date, patch);
+  }
+  async skipOccurrence(id: string, date: string): Promise<any> {
+    return this._memPatchOccurrence(id, date, { status: "skipped", paymentId: null });
+  }
+  async rescheduleOccurrence(id: string, date: string, newDate: string): Promise<any> {
+    return this._memPatchOccurrence(id, date, { movedTo: String(newDate).slice(0, 10) });
+  }
+  async setOccurrenceFields(id: string, date: string, patch: { amount?: number; notes?: string }): Promise<any> {
+    const clean: Record<string, any> = {};
+    if (patch.amount != null) clean.amount = Number(patch.amount);
+    if (patch.notes !== undefined) clean.notes = patch.notes || null;
+    return this._memPatchOccurrence(id, date, clean);
+  }
+  async setOccurrenceEstimate(id: string, date: string, amount: number | null): Promise<any> {
+    return this._memPatchOccurrence(id, date, { estimatedAmount: amount ?? null });
+  }
+  async setOccurrenceActual(id: string, date: string, amount: number | null): Promise<any> {
+    return this._memPatchOccurrence(id, date, {
+      actualAmount: amount ?? null,
+      postedAt: amount != null ? new Date().toISOString() : null,
+    });
+  }
+  async addOccurrenceCharge(id: string, date: string, charge: { amount: number; kind?: string; label?: string; date?: string; notes?: string; source?: any }): Promise<any> {
+    const p: any = this.profiles.get(id);
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
+    const occDate = String(date).slice(0, 10);
+    const existing = ((p.fields || {}).occurrences || {})[occDate] || null;
+    const next = addCharge(existing, charge as any);
+    return this._memPatchOccurrence(id, occDate, { charges: next.charges });
+  }
+  async removeOccurrenceCharge(id: string, date: string, chargeId: string): Promise<any> {
+    const p: any = this.profiles.get(id);
+    if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
+    const occDate = String(date).slice(0, 10);
+    const existing = ((p.fields || {}).occurrences || {})[occDate] || null;
+    const next = removeCharge(existing, chargeId);
+    return this._memPatchOccurrence(id, occDate, { charges: next.charges });
+  }
+  async pauseLiability(id: string, until?: string): Promise<any> {
+    const p: any = this.profiles.get(id);
+    if (!p) return null;
+    p.fields = { ...(p.fields || {}), paused: true, pausedUntil: until ? String(until).slice(0, 10) : undefined, status: "paused" };
+    this.profiles.set(id, p);
+    return this.getLiabilitySchedule(id);
+  }
+  async resumeLiability(id: string): Promise<any> {
+    const p: any = this.profiles.get(id);
+    if (!p) return null;
+    p.fields = { ...(p.fields || {}), paused: false, pausedUntil: undefined, status: "upcoming" };
+    this.profiles.set(id, p);
+    return this.getLiabilitySchedule(id);
+  }
+  async adjustAccountBalance(id: string, input: {
+    newBalance?: number | null; delta?: number | null; date?: string | null;
+    reason?: string | null; source?: any; linkedRecordId?: string | null;
+  }): Promise<any | undefined> {
+    const p: any = this.profiles.get(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    const today = getUserToday(DEFAULT_TIMEZONE);
+    const { fields } = applyBalanceAdjustment(p, input, today);
+    p.fields = { ...(p.fields || {}), ...fields };
+    this.profiles.set(id, p);
+    return p;
+  }
 
   // ---- Artifacts ----
   async getArtifacts() { return Array.from(this.artifacts.values()); }
@@ -2678,6 +2780,7 @@ export class MemStorage implements IStorage {
   async recordOwnershipHistory(_entry: any): Promise<any> { return { id: "mem", changedAt: new Date().toISOString(), ..._entry }; }
   async deleteOwnershipHistoryEntry(_id: string) { return false; }
   async getLiabilityPayments(_id: string) { return []; }
+  async getLiabilityPayment(_id: string) { return undefined; }
   async createLiabilityPayment(_data: any): Promise<any> { throw new Error("MemStorage: liability payments not implemented"); }
   async updateLiabilityPayment(_id: string, _data: any): Promise<any> { return undefined; }
   async deleteLiabilityPayment(_id: string) { return false; }
