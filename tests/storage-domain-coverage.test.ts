@@ -8,8 +8,30 @@ import {
   STORAGE_INFRA_METHODS,
 } from "@shared/storage-domains";
 import type { Domain } from "@shared/entity-domains";
+import { SupabaseStorage } from "../server/supabase-storage";
+import { MemStorage } from "../server/storage";
 
-/** Every method declared on the IStorage interface. */
+/**
+ * Every method CALLABLE at runtime, from both backends' prototypes — not the
+ * IStorage interface text. The interface-only version of this scan is the
+ * hole that let the whole occurrence surface (payOccurrence and friends,
+ * reachable via `(storage as any)`) stay unmapped for months: every bill
+ * payment degraded to the "everything" domain and nuked all client caches,
+ * and this file's own comment claimed that couldn't happen.
+ */
+function storageRuntimeMethods(): string[] {
+  const names = new Set<string>();
+  for (const proto of [SupabaseStorage.prototype, MemStorage.prototype]) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (name === "constructor" || name.startsWith("_")) continue;
+      const desc = Object.getOwnPropertyDescriptor(proto, name);
+      if (typeof desc?.value === "function") names.add(name);
+    }
+  }
+  return [...names];
+}
+
+/** Kept for the interface-drift check below. */
 function storageInterfaceMethods(): string[] {
   const src = readFileSync(resolve(__dirname, "../server/storage.ts"), "utf8");
   const start = src.indexOf("export interface IStorage {");
@@ -39,18 +61,22 @@ function busDomains(): Set<string> {
 }
 
 describe("storage method → domain coverage", () => {
-  const methods = storageInterfaceMethods();
+  const methods = storageRuntimeMethods();
 
-  it("finds the storage interface", () => {
-    expect(methods.length).toBeGreaterThan(100);
+  it("enumerates the real runtime surface", () => {
+    expect(methods.length).toBeGreaterThan(150);
     expect(methods).toContain("createLiabilityPayment");
+    // The methods the interface-text scan could never see.
+    expect(methods).toContain("updateOccurrenceOverride");
+    expect(methods).toContain("adjustAccountBalance");
   });
 
-  it("classifies every write-shaped method on IStorage", () => {
-    // The guarantee this file exists for: adding a write to the storage
-    // interface without saying what it changes fails here, instead of shipping
-    // a mutation whose effects never reach a screen. The failure message names
-    // the noun to add to STORAGE_NOUN_TARGETS.
+  it("classifies every write-shaped method callable at runtime", () => {
+    // The guarantee this file exists for: adding a write method to EITHER
+    // storage class without saying what it changes fails here, instead of
+    // shipping a mutation whose effects never reach a screen (or one that
+    // degrades to "everything" and invalidates the whole app). The failure
+    // message names the noun to add to STORAGE_NOUN_TARGETS.
     const unmapped: string[] = [];
     for (const name of methods) {
       if (STORAGE_INFRA_METHODS.has(name)) continue;
@@ -59,6 +85,14 @@ describe("storage method → domain coverage", () => {
       if (!STORAGE_NOUN_TARGETS[parsed.noun]) unmapped.push(`${name} (noun: ${parsed.noun})`);
     }
     expect(unmapped).toEqual([]);
+  });
+
+  it("declares every interface method too (interface ⊆ runtime)", () => {
+    const runtime = new Set(methods);
+    // Optional interface methods (name?(...)) may be missing from MemStorage;
+    // everything else declared must exist on at least one backend.
+    const missing = storageInterfaceMethods().filter(m => !runtime.has(m));
+    expect(missing).toEqual([]);
   });
 
   it("only expands to domains the cache bus can actually invalidate", () => {

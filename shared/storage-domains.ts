@@ -150,8 +150,14 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
   // pauseLiability / resumeLiability
   Liability: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
   // adjustAccountBalance — an account IS a profile row; money moving also
-  // touches the finance surfaces.
+  // touches the finance surfaces. create/updateAccount are profile writes in
+  // account clothing and ripple the same way.
   AccountBalance: { domains: [...PROFILE_DOMAINS, "expenses"], endpoint: null },
+  Account: { domains: [...PROFILE_DOMAINS, "expenses"], endpoint: null },
+  // ensureAutoOwnerLink — background ownership self-heal on profile writes.
+  AutoOwnerLink: { domains: PROFILE_DOMAINS, endpoint: null },
+  // logActivity — the activity feed the dashboard renders.
+  Activity: { domains: ["dashboard"], endpoint: null },
   LiabilityAssetLink: { domains: PROFILE_DOMAINS, endpoint: null },
   LiabilityProfileLink: { domains: PROFILE_DOMAINS, endpoint: null },
   LiabilityOwnerLink: { domains: PROFILE_DOMAINS, endpoint: null },
