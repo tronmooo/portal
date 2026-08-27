@@ -39,6 +39,7 @@ const VERB_OPS: Record<string, "create" | "update" | "delete"> = {
   update: "update", set: "update", upsert: "update", mark: "update", toggle: "update",
   link: "update", checkin: "update", confirm: "update", pay: "update", restore: "update",
   ensure: "update", copy: "update", migrate: "update", propagate: "update", repair: "update",
+  skip: "update", adjust: "update", pause: "update", resume: "update", reschedule: "update",
 };
 
 /**
@@ -108,12 +109,14 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
 
   // Habit ↔ tracker: one completion writes both sides (server/habit-completion),
   // so either side's write must refresh the other or the ring and the chart
-  // disagree.
-  Habit: { domains: ["habits", "trackers"], endpoint: "/api/habits" },
-  HabitCheckin: { domains: ["habits", "trackers"], endpoint: null },
-  Tracker: { domains: ["trackers", "habits"], endpoint: "/api/trackers" },
-  TrackerEntry: { domains: ["trackers", "habits"], endpoint: null },
-  Entry: { domains: ["trackers", "habits"], endpoint: null },   // logEntry
+  // disagree. Entries and check-ins also drive derive-on-read GOAL progress
+  // (habit_streak / tracker_target / fitness_* goals), so those writes must
+  // refresh goals too — the client bus already did; the server side didn't.
+  Habit: { domains: ["habits", "trackers", "goals"], endpoint: "/api/habits" },
+  HabitCheckin: { domains: ["habits", "trackers", "goals"], endpoint: null },
+  Tracker: { domains: ["trackers", "habits", "goals"], endpoint: "/api/trackers" },
+  TrackerEntry: { domains: ["trackers", "habits", "goals"], endpoint: null },
+  Entry: { domains: ["trackers", "habits", "goals"], endpoint: null },   // logEntry
 
   Obligation: { domains: ["obligations", "liabilities", "expenses"], endpoint: "/api/obligations" },
   Budget: { domains: ["budgets", "expenses"], endpoint: null },
@@ -132,6 +135,29 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
   },
   LoanPayment: { domains: ["liabilities", "obligations"], endpoint: null },
   LoanSchedule: { domains: ["liabilities", "obligations"], endpoint: null },
+
+  // Per-occurrence bill state lives ON the liability profile row
+  // (fields.occurrences), so a write ripples wherever a liability-profile
+  // write does, plus the bill surfaces. These were unmapped — every
+  // occurrence write (paying a bill!) degraded to "everything" and nuked all
+  // 21 client domains plus the version epoch.
+  Occurrence: { domains: ["liabilities", "obligations", "expenses", "profiles"], endpoint: null },
+  OccurrenceOverride: { domains: ["liabilities", "obligations", "expenses", "profiles"], endpoint: null },
+  OccurrenceFields: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  OccurrenceEstimate: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  OccurrenceActual: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  OccurrenceCharge: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  // pauseLiability / resumeLiability
+  Liability: { domains: ["liabilities", "obligations", "profiles"], endpoint: null },
+  // adjustAccountBalance — an account IS a profile row; money moving also
+  // touches the finance surfaces. create/updateAccount are profile writes in
+  // account clothing and ripple the same way.
+  AccountBalance: { domains: [...PROFILE_DOMAINS, "expenses"], endpoint: null },
+  Account: { domains: [...PROFILE_DOMAINS, "expenses"], endpoint: null },
+  // ensureAutoOwnerLink — background ownership self-heal on profile writes.
+  AutoOwnerLink: { domains: PROFILE_DOMAINS, endpoint: null },
+  // logActivity — the activity feed the dashboard renders.
+  Activity: { domains: ["dashboard"], endpoint: null },
   LiabilityAssetLink: { domains: PROFILE_DOMAINS, endpoint: null },
   LiabilityProfileLink: { domains: PROFILE_DOMAINS, endpoint: null },
   LiabilityOwnerLink: { domains: PROFILE_DOMAINS, endpoint: null },

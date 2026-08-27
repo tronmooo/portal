@@ -7,7 +7,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, DEFAULT_TIMEZONE } from "@shared/timezone";
-import { completeHabitOccurrence } from "./habit-completion";
+import { completeHabitOccurrence, uncompleteHabitOccurrence } from "./habit-completion";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { detectMoodFromText } from "@shared/mood-detect";
@@ -26,8 +26,10 @@ import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { registerCacheBuster } from "./cache-bus";
+import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
+import { removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { applyLiabilityPayment } from "./liability-payments";
+import { payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -2146,25 +2148,22 @@ export async function registerRoutes(
                   const f: any = bill.fields || {};
                   const due = readDueDate(f);
                   if (!due || due > windowEnd) continue; // not due within the window
-                  const amount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? 0) || 0;
                   const autopay = f.autopay === true || f.autoPay === true || String(f.autopay ?? "").toLowerCase() === "true";
-                  if (autopay && amount > 0) {
-                    // Auto-log the payment and roll the due date forward.
+                  if (autopay) {
+                    // Already settled (manually or by a prior run)? Never pay twice.
+                    const ov = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences[due] : null;
+                    if (ov?.status === "paid" || ov?.status === "skipped") continue;
+                    // The one pay operation: real occurrence total (not the
+                    // definition's base price), occurrence stamped, due date
+                    // advanced from the occurrence, expense logged.
                     try {
-                      await scoped.createLiabilityPayment({
-                        liabilityProfileId: bill.id,
+                      const paid = await payBillOccurrence(scoped, bill.id, {
+                        occurrenceDate: due,
                         paymentDate: todayISO,
-                        amount,
-                        principalPortion: amount,
-                        interestPortion: 0,
-                        paymentType: "standard",
                         notes: "Autopay",
-                      } as any);
-                      const nextDue = advanceLiabilityDueDate(f, todayISO);
-                      await scoped.updateProfile(bill.id, {
-                        fields: { ...f, dueDate: nextDue, nextDueDate: nextDue, lastPaidDate: todayISO, status: "upcoming" },
+                        source: "autopay",
                       });
-                      autopaid++;
+                      if (paid.ok && paid.amount > 0) autopaid++;
                     } catch { /* per-bill best effort */ }
                   } else {
                     // Non-autopay: surface a timed TASK at the due date, deduped
@@ -4573,12 +4572,8 @@ ${JSON.stringify(ctx, null, 2)}`;
           } catch { /* best-effort — page still renders without owner rows */ }
         }
         const [payments, schedule, assetLinks] = await Promise.all([
-          (storage as any).getLiabilityPayments
-            ? (storage as any).getLiabilityPayments(profileId).catch(() => [] as any[])
-            : Promise.resolve([] as any[]),
-          (storage as any).getLiabilitySchedule
-            ? (storage as any).getLiabilitySchedule(profileId, 12).catch(() => null)
-            : Promise.resolve(null),
+          storage.getLiabilityPayments(profileId).catch(() => [] as any[]),
+          storage.getLiabilitySchedule(profileId, 12).catch(() => null),
           (storage as any).getLiabilityAssetLinks
             ? (storage as any).getLiabilityAssetLinks(profileId).catch(() => [] as any[])
             : Promise.resolve([] as any[]),
@@ -5715,98 +5710,26 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     if (!values || typeof values !== "object") {
       return res.status(400).json({ error: "Values required" });
     }
-    // BUG-T02/T03/T04: Coerce values against the tracker's field schema BEFORE
-    // running the meaningful-value / numeric checks. The AI engine (and any chat
-    // path) was logging strings like "Chicken Sandwich" or "running" into
-    // numeric fields; those values would be stored as strings and then crash
-    // any chart/aggregation that called toFixed() on them.
+    // ONE value gate (server/tracker-entry-guard.ts), shared with logEntry in
+    // both storages, so this route, smart-entry, the AI quick-log lanes and
+    // extraction all enforce the same coercion and sanity bounds. Running it
+    // here too turns a rejection into a clean 400 instead of a 500.
     {
       const tracker = await storage.getTracker(req.params.id);
-      if (tracker && Array.isArray(tracker.fields)) {
-        const numericFieldNames = new Set(
-          tracker.fields
-            .filter((f: any) => f && (f.type === "number" || f.type === "integer" || f.type === "decimal"))
-            .map((f: any) => f.name)
-        );
-        for (const k of Object.keys(values)) {
-          if (k === "_notes" || k === "notes" || k === "timestamp") continue;
-          if (!numericFieldNames.has(k)) continue;
-          const raw = (values as any)[k];
-          if (raw == null || raw === "") continue;
-          if (typeof raw === "number") {
-            if (!isFinite(raw)) {
-              return res.status(400).json({ error: `"${k}" must be a number (got ${raw}).` });
-            }
-            continue;
-          }
-          // Strings: try to coerce, but reject if the string isn't numeric.
-          const s = String(raw).trim();
-          // Strip currency, units like "lbs", "mi", but reject if no digit at all.
-          const stripped = s.replace(/[$,\s]/g, "").replace(/[a-zA-Z\/%]+$/g, "");
-          const n = parseFloat(stripped);
-          if (!isFinite(n) || stripped === "" || !/\d/.test(stripped)) {
-            return res.status(400).json({
-              error: `"${k}" expects a number. Received "${s}" — use a numeric value (e.g. 12.5).`,
-              field: k,
-              received: s,
-            });
-          }
-          (values as any)[k] = n;
+      const guard = sanitizeTrackerEntryValues(tracker?.fields, values);
+      if (guard.error) return res.status(400).json({ error: guard.error });
+      for (const k of Object.keys(guard.values)) (values as any)[k] = guard.values[k];
+      // Pet-specific tighter bound — needs profile context the pure guard
+      // deliberately doesn't have.
+      const w = (guard.values as any).weight;
+      if (typeof w === "number" && w > 500 && tracker) {
+        const profiles = await storage.getProfiles();
+        const isPetTracker = (tracker.linkedProfiles || []).some(pid =>
+          profiles.find(pr => pr.id === pid)?.type === "pet");
+        if (isPetTracker) {
+          return res.status(400).json({ error: `Pet weight ${w} lbs is unrealistic. Max: 500 lbs.` });
         }
       }
-    }
-    // Reject entries where all meaningful values are empty/null/undefined
-    const meaningfulKeys = Object.keys(values).filter(k => k !== '_notes' && k !== 'notes' && k !== 'timestamp');
-    const hasAtLeastOneValue = meaningfulKeys.some(k => {
-      const v = values[k];
-      return v !== null && v !== undefined && v !== '' && !(typeof v === 'number' && isNaN(v));
-    });
-    if (meaningfulKeys.length > 0 && !hasAtLeastOneValue) {
-      return res.status(400).json({ error: "At least one value is required. Cannot log an empty entry." });
-    }
-    // Only reject negative values for fields that can't be negative (calories, weight, distance)
-    // Allow negatives for: temperature, elevation, profit/loss, position change
-    const nonNegativeFields = new Set(['calories', 'weight', 'distance', 'duration', 'steps', 'heartRate', 'bpm', 'systolic', 'diastolic']);
-    for (const [k, v] of Object.entries(values)) {
-      if (typeof v === 'number' && v < 0 && nonNegativeFields.has(k)) {
-        return res.status(400).json({ error: `${k} cannot be negative` });
-      }
-    }
-    if (Object.values(values).some((v: any) => typeof v === "number" && isNaN(v))) {
-      return res.status(400).json({ error: "All values must be valid numbers" });
-    }
-    // Sanity bounds — reject obviously impossible values
-    const numericVals = Object.entries(values).filter(([, v]) => typeof v === 'number') as [string, number][];
-    for (const [key, val] of numericVals) {
-      if (key === '_notes') continue;
-      // Weight (human): max 1000 lbs
-      if (key === 'weight' && val > 1000) return res.status(400).json({ error: `Weight ${val} lbs is unrealistic. Max: 1000 lbs.` });
-      // Weight (pet): max 500 lbs — check if the tracker is linked to a pet profile
-      if (key === 'weight' && val > 500 && req.body.trackerId) {
-        const tracker = await storage.getTracker(req.params.id);
-        if (tracker) {
-          const profiles = await storage.getProfiles();
-          const isPetTracker = (tracker.linkedProfiles || []).some(pid => {
-            const p = profiles.find(pr => pr.id === pid);
-            return p?.type === 'pet';
-          });
-          if (isPetTracker) {
-            return res.status(400).json({ error: `Pet weight ${val} lbs is unrealistic. Max: 500 lbs.` });
-          }
-        }
-      }
-      // Blood pressure systolic: max 300
-      if ((key === 'systolic' || key === 'sbp') && val > 300) return res.status(400).json({ error: `Systolic ${val} is unrealistic. Max: 300.` });
-      // Blood pressure diastolic: max 200
-      if ((key === 'diastolic' || key === 'dbp') && val > 200) return res.status(400).json({ error: `Diastolic ${val} is unrealistic. Max: 200.` });
-      // Heart rate: max 250
-      if ((key === 'heartRate' || key === 'bpm' || key === 'pulse') && val > 250) return res.status(400).json({ error: `Heart rate ${val} is unrealistic. Max: 250.` });
-      // Sleep hours: max 24
-      if (key === 'hours' && val > 24) return res.status(400).json({ error: `Sleep ${val} hours is impossible. Max: 24.` });
-      // Calories: max 20000
-      if (key === 'calories' && val > 20000) return res.status(400).json({ error: `${val} calories is unrealistic. Max: 20,000.` });
-      // Generic upper bound: no single numeric value over 100,000
-      if (val > 100000) return res.status(400).json({ error: `Value ${val} for "${key}" exceeds maximum (100,000).` });
     }
     const parsed = insertTrackerEntrySchema.safeParse({ ...req.body, trackerId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
@@ -5844,10 +5767,14 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     res.json(updated);
   }));
   app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
-    const deleted = await storage.deleteTrackerEntry(req.params.id, req.params.entryId);
-    if (!deleted) return res.status(404).json({ error: "Entry not found" });
+    // One remove operation: deletes the entry AND, when it mirrors a habit
+    // completion, the habit check-in it mirrors (otherwise the habit stays
+    // "done" off a record the user just removed).
+    const removed = await removeTrackerEntry(storage, { trackerId: req.params.id, entryId: req.params.entryId }, getTimezone(req), log);
+    if (!removed.ok) return res.status(404).json({ error: "Entry not found" });
     const uid_te2 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_te2}`);
-    res.json({ success: true });
+    if (removed.removedHabitCheckinId) bustCache(`habits:${uid_te2}`);
+    res.json({ success: true, removedHabitCheckinId: removed.removedHabitCheckinId });
   }));
   // Convenience endpoint: delete tracker entry by entry ID only (for chat undo)
   // S2 fix: defense-in-depth ownership check. storage.getTrackers() already filters
@@ -5893,10 +5820,11 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     for (const t of trackers) {
       const entry = (t.entries || []).find((e: any) => e.id === req.params.entryId);
       if (entry) {
-        const deleted = await storage.deleteTrackerEntry(t.id, req.params.entryId);
-        if (deleted) {
+        const removed = await removeTrackerEntry(storage, { trackerId: t.id, entryId: req.params.entryId }, getTimezone(req), log);
+        if (removed.ok) {
           const uid_te3 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_te3}`);
-          return res.json({ success: true });
+          if (removed.removedHabitCheckinId) bustCache(`habits:${uid_te3}`);
+          return res.json({ success: true, removedHabitCheckinId: removed.removedHabitCheckinId });
         }
       }
     }
@@ -6491,6 +6419,15 @@ Rules:
     bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`);
     res.json({ success: true });
   }));
+  // Expenses were the one soft-deleted entity with NO restore route — 6,000+
+  // recoverable rows and no way to recover any of them.
+  app.post("/api/expenses/:id/restore", asyncHandler(async (req, res) => {
+    const ok = await storage.restoreEntity("expense", req.params.id);
+    if (!ok) return res.status(404).json({ error: "Expense not found" });
+    const uid_er = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`expenses:${uid_er}`); bustCache(`stats:${uid_er}`);
+    res.json({ success: true });
+  }));
 
   // ---- Paychecks ----
   app.get("/api/paychecks", asyncHandler(async (req, res) => {
@@ -6592,7 +6529,21 @@ Rules:
   }));
 
   app.patch("/api/loans/payment/:id/mark", asyncHandler(async (req, res) => {
+    // Thin adapter over the one pay operation. Marking an amortization row
+    // paid used to flip `loan_amortization.paid` and nothing else — no payment
+    // row, no balance move — a boolean only the cashflow projection read.
     const updated = await storage.markLoanPayment(req.params.id);
+    if (updated?.loan_id) {
+      const paid = await payBillOccurrence(storage, updated.loan_id, {
+        occurrenceDate: String(updated.payment_date || "").slice(0, 10) || null,
+        amount: Number(updated.total_payment) || null,
+        principal: Number(updated.principal_amount) || null,
+        interest: Number(updated.interest_amount) || null,
+        notes: `Amortization payment #${updated.payment_number ?? ""}`.trim(),
+        source: "route",
+      }, getTimezone(req));
+      if (!paid.ok) log.warn("[loans/mark] ledger write failed", paid.reason);
+    }
     const uid_ln2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_ln2}`); bustCache(`cashflow:${uid_ln2}`); bustCache(`profile-detail:${uid_ln2}:`);
     res.json(updated);
@@ -6974,6 +6925,30 @@ Rules:
     bustCache(`profiles:${uid_d3}`); bustCache(`events:${uid_d3}`); bustCache(`caltimeline:${uid_d3}`); bustCache(`activity:${uid_d3}`);
     res.json({ success: true, ...outcome });
   }));
+  // Un-delete a soft-deleted document: the row comes back with its bytes and
+  // owners (the delete keeps both now — the old delete destroyed the blob, so
+  // "restore" produced a file that wouldn't open).
+  app.post("/api/documents/:id/restore", asyncHandler(async (req, res) => {
+    const ok = await storage.restoreDocument(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Document not found" });
+    const uid_dr = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`documents:${uid_dr}`); bustCache(`stats:${uid_dr}`); bustCache(`profile-detail:${uid_dr}:`); bustCache(`profiles:${uid_dr}`);
+    res.json({ success: true });
+  }));
+  // Destroy a document's bytes and row, permanently — the ONLY route that
+  // does. A live document gets the full cascade first so nothing derived is
+  // left pointing at a record that no longer exists.
+  app.post("/api/documents/:id/purge", asyncHandler(async (req, res) => {
+    const meta = await storage.getDocumentMeta(req.params.id).catch(() => undefined);
+    if (meta) {
+      await deleteDocumentEverywhere(storage as any, req.params.id, parseDeletionMode(req.query.mode), log);
+    }
+    const ok = await storage.purgeDocument(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Document not found" });
+    const uid_dp = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`documents:${uid_dp}`); bustCache(`stats:${uid_dp}`); bustCache(`profile-detail:${uid_dp}:`); bustCache(`notifications:${uid_dp}`);
+    res.json({ success: true, purged: true });
+  }));
   // ---- Repair: events whose source document is gone ----
   // One-off cleanup for orphans created before the delete cascade existed.
   // Dry run by default — pass ?apply=true to actually remove them. Uses the
@@ -7244,11 +7219,17 @@ Rules:
     });
   }));
   app.delete("/api/habits/:id/checkin/:checkinId", asyncHandler(async (req, res) => {
-    const ok = await storage.deleteHabitCheckin(req.params.id, req.params.checkinId);
-    if (!ok) return res.status(404).json({ error: "Checkin not found" });
+    // The inverse pipeline: removes the check-in AND its mirrored tracker
+    // entry. The raw deleteHabitCheckin left the mirror behind, so the tracker
+    // chart (and medication adherence) kept counting the un-taken dose.
+    const result = await uncompleteHabitOccurrence(storage, {
+      habitId: req.params.id, checkinId: req.params.checkinId,
+      source: "habit_ui", timezone: getTimezone(req),
+    }, log);
+    if (!result.ok) return res.status(404).json({ error: result.reason === "not_found" ? "Habit not found" : "Checkin not found" });
     const uid_h2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`notifications:${uid_h2}`);
-    res.json({ success: true });
+    res.json({ success: true, removedCheckinId: result.removedCheckinId, removedTrackerEntryIds: result.removedTrackerEntryIds, progress: result.progress });
   }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {
     try {
@@ -7417,13 +7398,11 @@ Rules:
     if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return res.status(400).json({ error: "Date must be YYYY-MM-DD format" });
     }
-    // Default to obligation's own amount if none provided
     const uid_o3 = cacheUserKey(req as AuthenticatedRequest);
-    if (amount === undefined || amount === null) {
-      const ob = await storage.getObligation(req.params.id);
-      if (!ob) return res.status(404).json({ error: "Obligation not found" });
-      amount = ob.amount;
-    }
+    // This route is the bills surface — loans/cards have their own payment
+    // form. payBillOccurrence itself accepts any liability, so keep the guard.
+    const ob = await storage.getObligation(req.params.id);
+    if (!ob) return res.status(404).json({ error: "Obligation not found" });
     // Idempotency window: ignore identical pay request within 8s
     const dedupeKey = `${uid_o3}:${req.params.id}`;
     const last = recentPayments.get(dedupeKey);
@@ -7443,8 +7422,23 @@ Rules:
       const cutoff = Date.now() - 30000;
       for (const [k, v] of recentPayments) if (v.at < cutoff) recentPayments.delete(k);
     }
-    const payment = await storage.payObligation(req.params.id, amount, method, confirmationNumber);
-    if (!payment) return res.status(404).json({ error: "Obligation not found" });
+    // The one pay operation. Leaving `amount` undefined lets it settle the
+    // occurrence's REAL total (base + charges / posted actual); `date` is the
+    // payment date the caller chose — previously validated and then silently
+    // dropped on the floor.
+    const result = await payBillOccurrence(storage, req.params.id, {
+      amount: amount ?? null,
+      paymentDate: date || null,
+      method,
+      confirmationNumber,
+      source: "route",
+    }, getTimezone(req));
+    if (!result.ok) return res.status(404).json({ error: "Obligation not found" });
+    // Same response shape payObligation produced, so existing callers keep working.
+    const payment = {
+      id: result.payment?.id, amount: result.amount,
+      date: result.payment?.paymentDate, method, confirmationNumber,
+    };
     recentPayments.set(dedupeKey, { at: Date.now(), payment });
     bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
     res.status(201).json(payment);
@@ -7458,31 +7452,18 @@ Rules:
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const ob = await storage.getObligation(req.params.id);
     if (!ob) return res.status(404).json({ error: "Obligation not found" });
-    if (!ob.payments || ob.payments.length === 0) {
-      return res.status(404).json({ error: "No payments to undo" });
-    }
-    // Pick the most recent payment (by createdAt if available, else by date).
-    const sorted = [...ob.payments].sort((a, b) => {
-      const ak = (a.createdAt || a.date || "");
-      const bk = (b.createdAt || b.date || "");
-      return bk.localeCompare(ak);
-    });
-    const latest = sorted[0];
-    // Payments now live in liability_payments (obligations retired) — a bill's
-    // payment history is projected from there.
-    const { error } = await (storage as any).supabase
-      .from("liability_payments")
-      .delete()
-      .eq("id", latest.id)
-      .eq("user_id", uid);
-    if (error) {
-      console.error("[api] undo payment failed:", error.message);
-      return res.status(500).json({ error: "Failed to undo payment" });
+    // The full inverse: payment row deleted, occurrence stamp cleared, due date
+    // rolled back, account credited, logged expense retracted. This used to be
+    // a raw supabase row delete that reached around the storage proxy — no
+    // write journal, no reversal of anything the pay wrote.
+    const result = await unpayBillOccurrence(storage, req.params.id, { source: "route" }, getTimezone(req));
+    if (!result.ok) {
+      return res.status(404).json({ error: result.reason === "no_payment" ? "No payments to undo" : "Obligation not found" });
     }
     // Also clear the dedupe entry so the user can immediately re-pay.
     recentPayments.delete(`${uid}:${req.params.id}`);
     bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`); bustCache(`notifications:${uid}`);
-    res.json({ success: true, deletedPaymentId: latest.id });
+    res.json({ success: true, deletedPaymentId: result.deletedPaymentId });
   }));
 
   app.delete("/api/obligations/:id", asyncHandler(async (req, res) => {
@@ -7569,9 +7550,16 @@ Rules:
     const parsed = parseOccId(req.params.occId);
     if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
     let result;
-    if (status === "done") result = await (storage as any).payOccurrence(parsed.liabilityId, parsed.date, { amount: actualAmount, method });
-    else if (status === "skipped") result = await (storage as any).skipOccurrence(parsed.liabilityId, parsed.date);
-    else result = await (storage as any).getLiabilitySchedule(parsed.liabilityId); // pending/late = no-op read
+    if (status === "done") {
+      const paid = await payBillOccurrence(storage, parsed.liabilityId, {
+        occurrenceDate: parsed.date, amount: actualAmount ?? null, method, source: "shim",
+      }, getTimezone(req));
+      result = paid.ok ? await storage.getLiabilitySchedule(parsed.liabilityId) : null;
+    } else if (status === "skipped") {
+      result = await storage.skipOccurrence(parsed.liabilityId, parsed.date);
+    } else {
+      result = await storage.getLiabilitySchedule(parsed.liabilityId); // pending/late = no-op read
+    }
     if (!result) return res.status(404).json({ error: "Bill not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7583,7 +7571,7 @@ Rules:
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(newDueAt || ""))) return res.status(400).json({ error: "newDueAt must be YYYY-MM-DD" });
     const parsed = parseOccId(req.params.occId);
     if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
-    const result = await (storage as any).rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
+    const result = await storage.rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
     if (!result) return res.status(404).json({ error: "Bill not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7592,7 +7580,7 @@ Rules:
   // ---- Recurring-liability schedule & per-occurrence operations ----
   app.get("/api/liabilities/:id/schedule", asyncHandler(async (req, res) => {
     const months = Math.min(36, Math.max(1, Number(req.query.months) || 12));
-    const result = await (storage as any).getLiabilitySchedule(req.params.id, months);
+    const result = await storage.getLiabilitySchedule(req.params.id, months);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     res.json(result);
   }));
@@ -7602,8 +7590,12 @@ Rules:
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const { amount, method, paymentDate, accountId } = req.body || {};
     if (amount !== undefined && (typeof amount !== "number" || amount < 0)) return res.status(400).json({ error: "amount must be a non-negative number" });
-    const result = await (storage as any).payOccurrence(req.params.id, req.params.date, { amount, method, paymentDate, accountId });
-    if (!result) return res.status(404).json({ error: "Recurring liability not found" });
+    const paid = await payBillOccurrence(storage, req.params.id, {
+      occurrenceDate: req.params.date, amount: amount ?? null,
+      method, paymentDate, accountId, source: "occurrence_route",
+    }, getTimezone(req));
+    if (!paid.ok) return res.status(404).json({ error: "Recurring liability not found" });
+    const result = await storage.getLiabilitySchedule(req.params.id);
     bustBillCaches(uid);
     res.json(result);
   }));
@@ -7611,7 +7603,7 @@ Rules:
   app.post("/api/liabilities/:id/occurrences/:date/skip", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
-    const result = await (storage as any).skipOccurrence(req.params.id, req.params.date);
+    const result = await storage.skipOccurrence(req.params.id, req.params.date);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7624,10 +7616,10 @@ Rules:
     let result;
     if (movedTo !== undefined) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(movedTo))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
-      result = await (storage as any).rescheduleOccurrence(req.params.id, req.params.date, movedTo);
+      result = await storage.rescheduleOccurrence(req.params.id, req.params.date, movedTo);
     }
     if (amount !== undefined || notes !== undefined) {
-      result = await (storage as any).setOccurrenceFields(req.params.id, req.params.date, { amount, notes });
+      result = await storage.setOccurrenceFields(req.params.id, req.params.date, { amount, notes });
     }
     // Estimated vs actual are separate, on purpose. Writing the estimate must
     // never masquerade as the bill having posted, and writing the actual must
@@ -7635,12 +7627,12 @@ Rules:
     if (estimatedAmount !== undefined) {
       const n = estimatedAmount === null ? null : Number(estimatedAmount);
       if (n !== null && (!Number.isFinite(n) || n < 0)) return res.status(400).json({ error: "estimatedAmount must be a non-negative number or null" });
-      result = await (storage as any).setOccurrenceEstimate(req.params.id, req.params.date, n);
+      result = await storage.setOccurrenceEstimate(req.params.id, req.params.date, n);
     }
     if (actualAmount !== undefined) {
       const n = actualAmount === null ? null : Number(actualAmount);
       if (n !== null && (!Number.isFinite(n) || n < 0)) return res.status(400).json({ error: "actualAmount must be a non-negative number or null" });
-      result = await (storage as any).setOccurrenceActual(req.params.id, req.params.date, n);
+      result = await storage.setOccurrenceActual(req.params.id, req.params.date, n);
     }
     if (!result) return res.status(404).json({ error: "Recurring liability not found (or nothing to change)" });
     bustBillCaches(uid);
@@ -7657,7 +7649,7 @@ Rules:
     const { amount, kind, label, date, notes } = req.body || {};
     const n = Number(amount);
     if (!Number.isFinite(n) || n === 0) return res.status(400).json({ error: "amount must be a non-zero number" });
-    const result = await (storage as any).addOccurrenceCharge(req.params.id, req.params.date, {
+    const result = await storage.addOccurrenceCharge(req.params.id, req.params.date, {
       amount: n, kind, label, date, notes, source: "user",
     });
     if (!result) return res.status(404).json({ error: "Liability not found" });
@@ -7668,7 +7660,7 @@ Rules:
   app.delete("/api/liabilities/:id/occurrences/:date/charges/:chargeId", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
-    const result = await (storage as any).removeOccurrenceCharge(req.params.id, req.params.date, req.params.chargeId);
+    const result = await storage.removeOccurrenceCharge(req.params.id, req.params.date, req.params.chargeId);
     if (!result) return res.status(404).json({ error: "Liability not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7678,7 +7670,7 @@ Rules:
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const { until } = req.body || {};
     if (until !== undefined && until !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(until))) return res.status(400).json({ error: "until must be YYYY-MM-DD" });
-    const result = await (storage as any).pauseLiability(req.params.id, until || undefined);
+    const result = await storage.pauseLiability(req.params.id, until || undefined);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7686,7 +7678,7 @@ Rules:
 
   app.post("/api/liabilities/:id/resume", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    const result = await (storage as any).resumeLiability(req.params.id);
+    const result = await storage.resumeLiability(req.params.id);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
     res.json(result);
@@ -7751,7 +7743,7 @@ Rules:
     }
     if (newBalance != null && !Number.isFinite(Number(newBalance))) return res.status(400).json({ error: "newBalance must be a number" });
     if (delta != null && !Number.isFinite(Number(delta))) return res.status(400).json({ error: "delta must be a number" });
-    const updated = await (storage as any).adjustAccountBalance(req.params.id, {
+    const updated = await storage.adjustAccountBalance(req.params.id, {
       newBalance, delta, date, reason, source: "user",
     });
     if (!updated) return res.status(404).json({ error: "Account not found" });
@@ -8441,7 +8433,19 @@ Rules:
             const created = await storage.createObligation({ name: o.name, amount: o.amount, frequency: o.frequency, category: o.category, nextDueDate: o.nextDueDate, autopay: o.autopay, notes: o.notes });
             if (o.payments) {
               for (const p of o.payments) {
-                await tryImport("obligationPayments", `${o.name} payment`, () => storage.payObligation(created.id, p.amount, p.method, p.confirmationNumber));
+                // Restoring HISTORY: raw ledger rows only, deliberately not
+                // payBillOccurrence — an import must not advance due dates,
+                // debit accounts, or log fresh expenses for old payments.
+                await tryImport("obligationPayments", `${o.name} payment`, () => storage.createLiabilityPayment({
+                  liabilityProfileId: created.id,
+                  paymentDate: String(p.date || p.paymentDate || getUserToday(getTimezone(req))).slice(0, 10),
+                  amount: Number(p.amount) || 0,
+                  principalPortion: Number(p.amount) || 0,
+                  interestPortion: 0,
+                  paymentType: "standard",
+                  sourceAccount: p.method || null,
+                  notes: p.confirmationNumber ? `Confirmation ${p.confirmationNumber}` : null,
+                } as any));
               }
             }
           });
@@ -9312,6 +9316,11 @@ No emojis. No prose outside the JSON.`,
       res.status(500).json({ error: "Failed to delete goal" });
     }
   }));
+  app.post("/api/goals/:id/restore", asyncHandler(async (req, res) => {
+    const ok = await storage.restoreGoal(req.params.id);
+    if (!ok) return res.status(404).json({ error: "Goal not found" });
+    res.json({ success: true });
+  }));
 
   // ---- Entity Links ----
   app.get("/api/entity-links/:type/:id", asyncHandler(async (req, res) => {
@@ -9539,7 +9548,14 @@ No emojis. No prose outside the JSON.`,
       }
       const result = await storage.deleteAllUserData();
       clearAllCache();
-      res.json({ success: true, deleted: result.deleted });
+      const failed = Object.keys((result as any).errors || {});
+      // Erasure is the one operation that must not claim success it can't
+      // prove: any table that errored is named, and success flips off.
+      res.status(failed.length > 0 ? 500 : 200).json({
+        success: failed.length === 0,
+        deleted: result.deleted,
+        ...(failed.length > 0 ? { errors: (result as any).errors } : {}),
+      });
     } catch (err: any) {
       console.error("[api] Delete all data failed:", err.message);
       res.status(500).json({ error: "Failed to delete all data" });
@@ -10059,19 +10075,24 @@ No emojis. No prose outside the JSON.`,
     // principal/interest split AND the resulting balance, and it owns them in
     // exactly one place (server/liability-payments.ts) so a payment recorded
     // through chat produces the same row as one recorded through this form.
-    // The client used to compute the split and ship it, but a field-name
-    // mismatch silently dropped it to $0 and stale client balances caused drift.
-    const result = await applyLiabilityPayment(
-      storage,
-      liability,
-      {
-        amount: parsed.data.amount,
-        paymentDate: (parsed.data as any).paymentDate,
-        fees: (parsed.data as any).fees ?? 0,
-        notes: (parsed.data as any).notes ?? null,
-      },
-      getTimezone(req),
-    );
+    // The occurrence stamp and due-date policy ride along too — this form used
+    // to skip both, so a bill paid here still showed unpaid on its schedule.
+    const d: any = parsed.data;
+    const occurrenceDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.occurrenceDate || ""))
+      ? String(req.body.occurrenceDate) : null;
+    const result = await payBillOccurrence(storage, req.params.id, {
+      amount: d.amount,
+      paymentDate: d.paymentDate,
+      occurrenceDate,
+      principal: d.principalPortion || null,
+      interest: d.interestPortion || null,
+      fees: d.fees ?? null,
+      paymentType: d.paymentType && d.paymentType !== "standard" ? d.paymentType : null,
+      method: d.sourceAccount ?? null,
+      notes: d.notes ?? null,
+      source: "route",
+    }, getTimezone(req));
+    if (!result.ok) return res.status(result.reason === "payment_failed" ? 500 : 404).json({ error: "Payment failed" });
     res.json(result.payment);
   }));
   app.patch("/api/liability-payments/:id", asyncHandler(async (req, res) => {
@@ -10080,9 +10101,15 @@ No emojis. No prose outside the JSON.`,
     res.json(row);
   }));
   app.delete("/api/liability-payments/:id", asyncHandler(async (req, res) => {
-    const ok = await storage.deleteLiabilityPayment(req.params.id);
-    if (!ok) return res.status(404).json({ error: "Payment not found" });
-    res.json({ success: true });
+    // Full inverse, not a bare row delete: occurrence stamp cleared, due date
+    // rolled back, debt balance restored, account credited, expense retracted.
+    const row = await storage.getLiabilityPayment(req.params.id);
+    if (!row) return res.status(404).json({ error: "Payment not found" });
+    const result = await unpayBillOccurrence(storage, (row as any).liabilityProfileId, {
+      paymentId: req.params.id, source: "route",
+    }, getTimezone(req));
+    if (!result.ok) return res.status(404).json({ error: "Payment not found" });
+    res.json({ success: true, ...{ deletedPaymentId: result.deletedPaymentId } });
   }));
 
   // ============================================================

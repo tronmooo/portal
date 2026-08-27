@@ -39,7 +39,7 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { findCompatibleTracker } from "@shared/tracker-identity";
 import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE, type EventCategory, type Tracker } from "@shared/schema";
 import { getUserToday, parseUserDateTime } from "@shared/timezone";
-import { applyLiabilityPayment } from "./liability-payments";
+import { payBillOccurrence } from "./liability-payments";
 import { recurrenceToTags } from "@shared/recurrence";
 
 const CAT = "action-executor";
@@ -764,7 +764,7 @@ function eventCategoryFor(ruleType: unknown): EventCategory {
 /**
  * Record a payment against an existing liability.
  *
- * Delegates to `applyLiabilityPayment` (server/liability-payments.ts) rather
+ * Delegates to `payBillOccurrence` (server/liability-payments.ts) rather
  * than writing the payment row here, because that function does the part this
  * one must not get wrong: it splits the amount into principal and interest with
  * the canonical amortization math, moves the balance, and advances the due date
@@ -795,9 +795,13 @@ async function writeLiabilityPayment(action: ProposedAction, documentId: string)
     if (dup) return `Payment of $${amount.toFixed(2)} from this document is already recorded`;
   } catch { /* the check is an optimisation; a missing reader must not block the write */ }
 
-  const result = await applyLiabilityPayment(storage, liability, {
+  const result = await payBillOccurrence(storage, liabilityId, {
     amount,
     paymentDate: p.date ? String(p.date) : null,
+    // A statement documents a PAST payment — the payment date names the period
+    // it settled, and the op's conditional advance means a historical date
+    // never rolls the live series forward.
+    occurrenceDate: p.date ? String(p.date) : null,
     principal: typeof p.principal === "number" ? p.principal : null,
     interest: typeof p.interest === "number" ? p.interest : null,
     escrow: typeof p.escrow === "number" ? p.escrow : null,
@@ -806,7 +810,9 @@ async function writeLiabilityPayment(action: ProposedAction, documentId: string)
     // the scheduled amount is not a malformed standard payment.
     paymentType: p.paymentType ? String(p.paymentType) as any : null,
     notes: `From document extraction`,
+    source: "extraction",
   });
+  if (!result.ok) throw new Error(`payment on ${(liability as any).name} failed`);
 
   try {
     await storage.updateLiabilityPayment?.((result.payment as any)?.id, { documentId } as any);

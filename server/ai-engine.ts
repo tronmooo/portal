@@ -57,7 +57,8 @@ import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@sha
 import { matchHabitByName } from "@shared/habit-match";
 import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompletionVeto } from "@shared/habit-completion-intent";
 import { resolveReferent, buildReferentDirective, type ReferentCandidate } from "@shared/referent-resolution";
-import { completeHabitOccurrence, resolveTrackerForHabit, type HabitCompletionSource } from "./habit-completion";
+import { completeHabitOccurrence, uncompleteHabitOccurrence, resolveTrackerForHabit, type HabitCompletionSource } from "./habit-completion";
+import { removeTrackerEntry } from "./tracker-entries";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
@@ -105,7 +106,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
-import { applyLiabilityPayment } from "./liability-payments";
+import { payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
@@ -202,7 +203,7 @@ async function resolveBillByName(
       error: `I couldn't find a bill matching "${rawName}".${names.length ? ` Your bills: ${names.join(", ")}.` : " You haven't added any recurring bills yet."} Tell me which one, or ask me to add it first — I won't create a duplicate on a guess.`,
     };
   }
-  const schedule = await (storage as any).getLiabilitySchedule(bill.id, 24);
+  const schedule = await storage.getLiabilitySchedule(bill.id, 24);
   if (!schedule) return { error: `"${bill.name}" doesn't have a billing schedule to attach charges to.` };
   return { bill, schedule };
 }
@@ -1285,10 +1286,26 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     } catch { /* profile fetch failed — keep full list rather than break check-ins */ }
     const habit = matchHabitByName(selfScoped, habitName);
     if (habit) {
-      const checkin = await storage.checkinHabit(habit.id);
-      actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name } });
-      if (checkin) results.push(checkin);
-      return { matched: true, reply: `Checked in "${habit.name}" — ${habit.currentStreak + 1}-day streak.`, actions, results };
+      // THE pipeline, not a raw checkinHabit: the fast lane used to skip the
+      // schedule check and the tracker mirror, and its reply asserted
+      // `currentStreak + 1` from a pre-write snapshot — wrong whenever the day
+      // was already complete or needed more than one completion.
+      const done = await completeHabitOccurrence(storage, {
+        habitId: habit.id, source: "chat_explicit", timezone: aiUserTimezone(),
+      });
+      if (done.ok) {
+        actions.push({ type: "checkin_habit", category: "habit", data: { habitName: habit.name } });
+        results.push({ habitId: habit.id, recorded: done.recorded, progress: done.progress });
+        const reply = done.recorded === 0 && done.alreadyComplete
+          ? `"${habit.name}" was already done for today.`
+          : done.progress.required > 1
+            ? `Checked in "${habit.name}" — ${done.progress.completed} of ${done.progress.required} today.`
+            : `Checked in "${habit.name}" — ${done.currentStreak}-day streak.`;
+        return { matched: true, reply, actions, results };
+      }
+      if (done.reason === "not_scheduled") {
+        return { matched: true, reply: `"${habit.name}" isn't scheduled for today, so I left it unchanged.`, actions, results };
+      }
     }
   }
 
@@ -9494,15 +9511,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
       // One implementation of "record a payment", shared with
-      // POST /api/liabilities/:id/payments. This tool used to carry its own:
-      // its own monthly-rate split instead of the canonical amortization math,
-      // a write to `currentBalance` only (the liability card, the dashboard and
-      // net worth read `remainingBalance`/`loanBalance` too, so they kept
-      // showing the pre-payment number), no idea that a recurring service bill
-      // has no balance to reduce, and "today" in a hardcoded timezone.
-      const paid = await applyLiabilityPayment(
+      // POST /api/liabilities/:id/payments: payBillOccurrence. This tool used
+      // to carry its own monthly-rate split, then it shared only the ledger
+      // core — the occurrence stamp and due-date policy still diverged from
+      // the schedule card's path. Now the whole side-effect set is shared.
+      const paid = await payBillOccurrence(
         storage,
-        liability,
+        liability.id,
         {
           amount: Number(input.amount) || 0,
           paymentDate: input.paymentDate || null,
@@ -9511,11 +9526,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           escrow: input.escrow ?? null,
           fees: input.fees ?? null,
           paymentType: (input.paymentType as any) ?? null,
-          sourceAccount: input.method || null,
+          method: input.method || null,
           notes: input.notes || (input.confirmationNumber ? `conf: ${input.confirmationNumber}` : null),
+          source: "ai",
         },
         aiUserTimezone(),
       );
+      if (!paid.ok) return { error: `Couldn't record the payment on ${liability.name}` };
       return {
         result: { payment: paid.payment, newBalance: paid.newBalance, principal: paid.principal, interest: paid.interest },
         actions: [{ type: "create", category: "liability_payment", data: paid.payment }],
@@ -10930,7 +10947,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const obligations = await storage.getObligations();
       const ob = obligations.find(o => o.name.toLowerCase().includes((input.name || "").toLowerCase()));
       if (!ob) return { error: "Obligation not found: " + (input.name || "unknown") };
-      // An explicit amount wins; otherwise leave it undefined so payOccurrence
+      // An explicit amount wins; otherwise leave it undefined so the pay operation
       // settles the month's REAL total (base + that month's usage charges). For
       // a usage-based bill `ob.amount` is only the base price, so defaulting to
       // it here would under-pay a $42 bill by $22.
@@ -10951,40 +10968,48 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // forMonth/dueDate, keep the default behavior (oldest open occurrence).
       const forMonth = input.forMonth ? String(input.forMonth).trim() : undefined;
       const dueDate = input.dueDate ? String(input.dueDate).trim() : undefined;
-      if (forMonth || dueDate || sourceAccount) {
-        // Pay a SPECIFIC occurrence (generated on the fly — no occurrence table).
-        const sched = await (storage as any).getLiabilitySchedule(ob.id, 24);
-        if (!sched) return storage.payObligation(ob.id, statedAmount ?? ob.amount, input.method, input.confirmationNumber);
-        const occs: any[] = sched.occurrences || [];
+      // Resolve WHICH occurrence, then pay through the ONE operation. This
+      // tool used to route to two different implementations depending on
+      // phrasing ("pay my internet bill" vs "pay August's internet bill"),
+      // with two different side-effect sets.
+      let occurrenceDate: string | null = null;
+      let label = "next";
+      if (forMonth || dueDate) {
+        const sched = await storage.getLiabilitySchedule(ob.id, 24);
+        const occs: any[] = sched?.occurrences || [];
         const open = occs.filter(o => o.status !== "paid" && o.status !== "skipped");
-        let target: any; let label: string;
+        let target: any;
         if (dueDate && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
           label = dueDate;
           target = open.find(o => o.date === dueDate || o.effectiveDate === dueDate);
         } else if (forMonth && /^\d{4}-\d{2}$/.test(forMonth)) {
           label = forMonth;
           target = open.find(o => o.date.slice(0, 7) === forMonth);
-        } else if (!forMonth && !dueDate) {
-          // No month named, but an account was: pay the oldest open occurrence
-          // through the occurrence path so the account is actually debited.
-          target = open[0];
-          label = target?.date ?? "next";
         } else {
           return { error: `Couldn't read the target date "${forMonth || dueDate}". Use YYYY-MM (month) or YYYY-MM-DD (exact day).` };
         }
         if (!target) {
           return { error: `No unpaid occurrence found for ${ob.name} in ${label}. Open occurrences: ${open.length ? open.map(o => o.date).join(", ") : "none"}.` };
         }
-        const result = await (storage as any).payOccurrence(ob.id, target.date, {
-          amount: statedAmount, method: input.method,
-          ...(sourceAccount ? { accountId: sourceAccount.id } : {}),
-        });
-        return {
-          ...(result || {}), _paidMonth: label,
-          ...(sourceAccount ? { paidFrom: sourceAccount.name } : {}),
-        };
+        occurrenceDate = target.date;
+        label = target.date;
       }
-      return storage.payObligation(ob.id, statedAmount ?? ob.amount, input.method, input.confirmationNumber);
+      const paidResult = await payBillOccurrence(storage, ob.id, {
+        occurrenceDate,
+        amount: statedAmount ?? null,
+        method: input.method,
+        confirmationNumber: input.confirmationNumber,
+        ...(sourceAccount ? { accountId: sourceAccount.id } : {}),
+        source: "ai",
+      }, aiUserTimezone());
+      if (!paidResult.ok) return { error: `Couldn't record the payment on ${ob.name}` };
+      const schedule = await storage.getLiabilitySchedule(ob.id);
+      return {
+        ...(schedule || {}),
+        paid: { amount: paidResult.amount, occurrence: paidResult.occurrenceDate, paymentId: paidResult.payment?.id },
+        _paidMonth: occurrenceDate ? label : paidResult.occurrenceDate,
+        ...(sourceAccount ? { paidFrom: sourceAccount.name } : {}),
+      };
     }
 
     // ── Variable / usage-based liabilities ──────────────────────────────────
@@ -11007,7 +11032,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       const amount = Number(input.amount);
       if (!Number.isFinite(amount) || amount === 0) return { error: "Charge amount must be a non-zero number." };
-      const result = await (storage as any).addOccurrenceCharge(bill.id, target.date, {
+      const result = await storage.addOccurrenceCharge(bill.id, target.date, {
         amount, kind: input.kind || "usage", label: input.label, source: "ai",
       });
       const after = (result?.occurrences || []).find((o: any) => o.date === target.date);
@@ -11037,8 +11062,8 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!Number.isFinite(amount) || amount < 0) return { error: "Amount must be a non-negative number." };
       const mode = String(input.mode || "actual").toLowerCase() === "estimate" ? "estimate" : "actual";
       const result = mode === "estimate"
-        ? await (storage as any).setOccurrenceEstimate(bill.id, target.date, amount)
-        : await (storage as any).setOccurrenceActual(bill.id, target.date, amount);
+        ? await storage.setOccurrenceEstimate(bill.id, target.date, amount)
+        : await storage.setOccurrenceActual(bill.id, target.date, amount);
       return {
         updated: true, liability: bill.name, liabilityId: bill.id,
         period: target.date.slice(0, 7), dueDate: target.effectiveDate,
@@ -11060,7 +11085,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const existing = findAccount(profiles, name);
       if (existing && String(existing.name).toLowerCase() === name.toLowerCase()) {
         if (input.balance != null) {
-          const moved = await (storage as any).adjustAccountBalance(existing.id, {
+          const moved = await storage.adjustAccountBalance(existing.id, {
             newBalance: Number(input.balance), source: "ai", reason: "Balance from chat",
           });
           return { updated: true, existing: true, account: moved, note: `${existing.name} already exists — updated its balance instead of creating a duplicate.` };
@@ -11099,7 +11124,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.newBalance == null && input.delta == null) {
         return { error: "Tell me the new balance, or how much it changed by." };
       }
-      const updated = await (storage as any).adjustAccountBalance(account.id, {
+      const updated = await storage.adjustAccountBalance(account.id, {
         newBalance: input.newBalance, delta: input.delta,
         date: input.date, reason: input.reason, source: "ai",
       });
@@ -11652,15 +11677,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Series actions operate on the EXISTING bill + its generated calendar
       // series — they never create a new record.
       if (input.resume === true) {
-        const r = await (storage as any).resumeLiability(match.id);
+        const r = await storage.resumeLiability(match.id);
         return { updated: true, action: "resumed", obligation: r };
       }
       if (input.pause === true) {
-        const r = await (storage as any).pauseLiability(match.id, input.pauseUntil);
+        const r = await storage.pauseLiability(match.id, input.pauseUntil);
         return { updated: true, action: "paused", pausedUntil: input.pauseUntil || null, obligation: r };
       }
       if (input.skip) {
-        const sched = await (storage as any).getLiabilitySchedule(match.id, 24);
+        const sched = await storage.getLiabilitySchedule(match.id, 24);
         const occs: any[] = sched?.occurrences || [];
         const open = occs.filter(o => o.status !== "paid" && o.status !== "skipped");
         let target: any;
@@ -11669,13 +11694,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         else if (/^\d{4}-\d{2}-\d{2}$/.test(skipStr)) target = open.find(o => o.date === skipStr || o.effectiveDate === skipStr);
         else if (/^\d{4}-\d{2}$/.test(skipStr)) target = open.find(o => o.date.slice(0, 7) === skipStr);
         if (!target) return { error: `No upcoming ${match.name} payment to skip${open.length ? ` — next open: ${open.slice(0, 3).map(o => o.date).join(", ")}` : ""}.` };
-        const r = await (storage as any).skipOccurrence(match.id, target.date);
+        const r = await storage.skipOccurrence(match.id, target.date);
         return { updated: true, action: "skipped", skipped: target.date, obligation: r };
       }
       // Occurrence-level ops: one-time reschedule or amount/notes override for a
       // SINGLE occurrence, leaving the recurring series untouched.
       if (input.rescheduleTo || input.occurrenceAmount != null || input.occurrenceNotes) {
-        const sched = await (storage as any).getLiabilitySchedule(match.id, 24);
+        const sched = await storage.getLiabilitySchedule(match.id, 24);
         const occs: any[] = sched?.occurrences || [];
         const open = occs.filter(o => o.status !== "paid" && o.status !== "skipped");
         const sel = String(input.occurrenceDate || "next").trim().toLowerCase();
@@ -11687,7 +11712,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (input.rescheduleTo) {
           const to = String(input.rescheduleTo).slice(0, 10);
           if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return { error: `rescheduleTo must be YYYY-MM-DD (got "${input.rescheduleTo}")` };
-          const r = await (storage as any).rescheduleOccurrence(match.id, target.date, to);
+          const r = await storage.rescheduleOccurrence(match.id, target.date, to);
           return { updated: true, action: "rescheduled", from: target.date, to, obligation: r };
         }
         const patch: any = {};
@@ -11697,7 +11722,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           patch.amount = amt;
         }
         if (input.occurrenceNotes) patch.notes = String(input.occurrenceNotes);
-        const r = await (storage as any).setOccurrenceFields(match.id, target.date, patch);
+        const r = await storage.setOccurrenceFields(match.id, target.date, patch);
         return { updated: true, action: "occurrence_override", date: target.date, ...patch, obligation: r };
       }
 
@@ -11728,13 +11753,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!match) return { error: `No bill found matching "${input.billName}"` };
       const payments = (match as any).payments || [];
       if (payments.length === 0) return { error: `${match.name} has no recorded payments to undo` };
-      // Most recent by createdAt (fallback: payment date) — same semantics as
-      // DELETE /api/obligations/:id/last-payment.
-      const latest = payments.slice().sort((a: any, b: any) =>
-        String(b.createdAt || b.date || "").localeCompare(String(a.createdAt || a.date || "")))[0];
-      const ok = await storage.deleteLiabilityPayment(latest.id);
-      if (!ok) return { error: `Couldn't remove the last payment on ${match.name}` };
-      return { undone: true, bill: match.name, amount: latest.amount, date: latest.date || latest.paymentDate, message: `Removed the last payment ($${latest.amount}) on ${match.name} — it now shows unpaid.` };
+      // Full inverse via the one operation — same semantics as
+      // DELETE /api/obligations/:id/last-payment: row deleted, occurrence
+      // stamp cleared, due date rolled back, expense retracted.
+      const undone = await unpayBillOccurrence(storage, match.id, { source: "ai" }, aiUserTimezone());
+      if (!undone.ok) return { error: `Couldn't remove the last payment on ${match.name}` };
+      return { undone: true, bill: match.name, amount: undone.deletedAmount, date: undone.deletedPaymentDate, message: `Removed the last payment ($${undone.deletedAmount}) on ${match.name} — it now shows unpaid.` };
     }
 
     case "update_liability_payment":
@@ -11767,8 +11791,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const target = candidates.slice().sort((a: any, b: any) =>
         String(b.createdAt || b.paymentDate || "").localeCompare(String(a.createdAt || a.paymentDate || "")))[0];
       if (name === "delete_liability_payment") {
-        const ok = await storage.deleteLiabilityPayment(target.id);
-        if (!ok) return { error: `Couldn't delete the ${liability.name} payment` };
+        // Full inverse via the one operation, not a bare row delete.
+        const undone = await unpayBillOccurrence(storage, liability.id, { paymentId: target.id, source: "ai" }, aiUserTimezone());
+        if (!undone.ok) return { error: `Couldn't delete the ${liability.name} payment` };
         return { deleted: true, liability: liability.name, amount: target.amount, date: target.paymentDate };
       }
       const allowed = ["amount", "paymentDate", "notes"] as const;
@@ -11862,11 +11887,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
         if (selfProf) { const sh = habits.filter(h => (h.linkedProfiles||[]).includes(selfProf.id)); if (sh.length > 0) eligible = sh; }
       }
-      const habit = matchHabitByName(eligible, input.name || "") ?? matchHabitByName(habits, input.name || "");
+      // No fall-back to the full cross-profile list: checkin_habit removed it
+      // deliberately (the Rex-hijack fix), and undo must obey the same scope —
+      // "undo my vitamins" must never un-check another member's habit.
+      const habit = matchHabitByName(eligible, input.name || "");
       if (!habit) return { error: "Habit not found: " + (input.name || "unknown") };
       const targetDate = input.date || getUserToday(aiUserTimezone());
-      const fullHabit = await storage.getHabit(habit.id);
-      if (!fullHabit) return { error: "Habit not found: " + (input.name || "unknown") };
 
       // ONE OCCURRENCE AT A TIME, same as check-in. Undo removes the LAST
       // completion recorded that day — the one the user just made a mistake on
@@ -11876,18 +11902,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const undoPosition = Number((input as any).occurrence) > 0
         ? Math.floor(Number((input as any).occurrence))
         : parseOccurrencePosition(String((input as any).__userMessage || ""));
-      const checkin = undoPosition
-        ? checkinAtPosition(fullHabit as any, targetDate, undoPosition)
-        : latestCheckinOn(fullHabit as any, targetDate);
-      if (!checkin?.id) {
+      // The inverse pipeline: removes the check-in AND the mirrored tracker
+      // entry (the raw deleteHabitCheckin left the mirror behind, so adherence
+      // kept counting the un-taken dose).
+      const undone = await uncompleteHabitOccurrence(storage, {
+        habitId: habit.id, source: "chat_explicit", date: targetDate,
+        ...(undoPosition ? { position: undoPosition } : {}),
+        timezone: aiUserTimezone(),
+      });
+      if (!undone.ok) {
         return {
           error: undoPosition
             ? `"${habit.name}" has no completion #${undoPosition} recorded on ${targetDate}.`
             : `No check-in found for "${habit.name}" on ${targetDate}`,
         };
       }
-      await storage.deleteHabitCheckin(habit.id, checkin.id);
-      const after = habitDayProgress((await storage.getHabit(habit.id)) as any, targetDate);
+      const after = undone.progress;
       return {
         uncompleted: true,
         id: habit.id,
@@ -11895,7 +11925,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         habitName: habit.name,
         name: habit.name,
         date: targetDate,
-        removedCheckinId: checkin.id,
+        removedCheckinId: undone.removedCheckinId,
         completed: after.completed,
         required: after.required,
         percent: after.percent,
@@ -11967,8 +11997,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const idx = input.entryIndex ?? 0;
       const entry = entries[entries.length - 1 - idx]; // 0 = most recent
       if (!entry) return { error: `No entry found at index ${idx}` };
-      await storage.deleteTrackerEntry(tracker.id, entry.id);
-      return { deleted: true, trackerName: tracker.name, entryId: entry.id, values: entry.values };
+      // One remove operation: also retracts the habit check-in this entry
+      // mirrors, so "delete that entry" can't leave the habit falsely done.
+      const removed = await removeTrackerEntry(storage, { trackerId: tracker.id, entryId: entry.id }, aiUserTimezone());
+      if (!removed.ok) return { error: `Couldn't delete the ${tracker.name} entry` };
+      return { deleted: true, trackerName: tracker.name, entryId: entry.id, values: entry.values, removedHabitCheckinId: removed.removedHabitCheckinId };
     }
 
     case "update_tracker_entry": {
@@ -11995,9 +12028,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const uIdx = input.entryIndex ?? 0;
       const uEntry = uEntries[uEntries.length - 1 - uIdx];
       if (!uEntry) return { error: `No entry found at index ${uIdx}` };
-      // Delete old entry and re-log with new values (storage doesn't have updateTrackerEntry)
-      await storage.deleteTrackerEntry(uTracker.id, uEntry.id);
-      const newEntry = await storage.logEntry({ trackerId: uTracker.id, values: { ...uEntry.values, ...input.values }, notes: uEntry.notes, profileId: uteProfileId });
+      // A real in-place update. This used to be delete + re-log ("storage
+      // doesn't have updateTrackerEntry" — a stale comment; it does), which
+      // minted a new id, reset the timestamp to NOW (wrecking charts and
+      // month-scoped goals), dropped enrichment/mood/tags/forProfile, and
+      // re-fired the habit sync while the delete removed no check-in.
+      const newEntry = await storage.updateTrackerEntry(uTracker.id, uEntry.id, { values: { ...input.values } });
+      if (!newEntry) return { error: `Couldn't update the ${uTracker.name} entry` };
       return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: input.values, newEntry };
     }
 
