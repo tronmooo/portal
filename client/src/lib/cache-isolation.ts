@@ -100,3 +100,23 @@ export function selectHydratableEntries(
     purge: false,
   };
 }
+
+/**
+ * Restored entries that must keep their PERSISTED timestamp instead of being
+ * stamped fresh at hydration time.
+ *
+ * hydrateQueryCache seeds restored data as fresh so a launch doesn't fan out
+ * into ~20 background refetches. That is right for lists whose pages mount on
+ * navigation, and wrong for the profile lists: the hub profile switcher and the
+ * filter chip live in the shell, mount once, and never remount — and
+ * refetchOnWindowFocus / refetchOnReconnect are off. Stamped fresh, their
+ * restored rows were never re-asked for, so a profile created after the
+ * snapshot was taken was invisible in those menus for the whole session
+ * (2026-08-27, "where is Bob Robertson"). Keeping the real age costs one small
+ * background refetch on mount.
+ *
+ * Matches both ["/api/profiles"] and its ["/api/profiles", "lite"] sibling.
+ */
+export function keepsPersistedAge(queryKey: unknown): boolean {
+  return String((queryKey as any)?.[0] || "") === "/api/profiles";
+}

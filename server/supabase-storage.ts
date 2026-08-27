@@ -1584,6 +1584,7 @@ export class SupabaseStorage implements IStorage {
         .eq("user_id", this.userId)
         .eq("type", data.type)
         .ilike("name", data.name.trim())
+        .is("deleted_at", null)
         .limit(1);
       if (rows && rows.length > 0) {
         const existing = await this.getProfile(rows[0].id);

@@ -12,6 +12,35 @@ export interface BootstrapSeedEntry {
 }
 
 /**
+ * Project full profile rows onto the shape `/api/profiles/lite` returns
+ * (server/supabase-storage.ts getProfilesLite). Keeping the projection here —
+ * rather than seeding the heavy rows verbatim — means the persisted snapshot
+ * carries the switcher's list for a few hundred bytes instead of duplicating
+ * every jsonb column it never reads.
+ */
+function liteProfiles(profiles: unknown): unknown {
+  if (!Array.isArray(profiles)) return undefined;
+  return profiles.map((p: any) => ({
+    id: p?.id,
+    type: p?.type,
+    type_key: p?.type_key,
+    name: p?.name,
+    avatar: p?.avatar,
+    fields: {},
+    tags: [],
+    notes: "",
+    documents: [],
+    linkedTrackers: [],
+    linkedExpenses: [],
+    linkedTasks: [],
+    linkedEvents: [],
+    parentProfileId: p?.parentProfileId,
+    createdAt: p?.createdAt,
+    updatedAt: p?.updatedAt,
+  }));
+}
+
+/**
  * Build the [key, data] seed pairs from a bootstrap payload for a given scope.
  * Only pairs whose data is present (not null/undefined) are returned, so a
  * partial bootstrap never clobbers a slot with an empty value.
@@ -32,6 +61,15 @@ export function bootstrapSeedEntries(
   add(k("/api/stats"), b.stats);
   add(k("/api/dashboard-enhanced"), b.enhanced);
   add(["/api/profiles"], b.profiles);
+  // The profile switcher and the filter chip read the SAME rows under the
+  // ["/api/profiles", "lite"] key (they call /api/profiles/lite for a slim
+  // projection). Seeding only the full key left that sibling untouched: on a
+  // restored session the bootstrap refetch — the ONE designated refresher —
+  // healed every list except the people list, so a profile created after the
+  // snapshot was taken ("create a profile for Bob Robertson") never appeared
+  // in the switcher, on any page, for the whole session. b.profiles is the
+  // unscoped, complete list, and the lite shape is a strict subset of it.
+  add(["/api/profiles", "lite"], liteProfiles(b.profiles));
   add(k("/api/incomes", "hero"), b.incomes);
   add(k("/api/incomes"), b.incomes);
   add(k("/api/budgets/summary", month, "hero"), b.budgetSummary);

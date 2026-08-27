@@ -143,3 +143,37 @@ describe("server cache busts name a user", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// ─── The slim profile list must be busted with the full one ────────────────
+// 2026-08-27 ("where is Bob Robertson"): /api/profiles/lite caches under the
+// prefix "profiles-lite:", which does NOT start with "profiles:". So neither
+// the write middleware's prefix sweep nor any per-route bustCache(`profiles:…`)
+// ever reached it — the list behind the hub profile switcher was the one
+// profile cache a write left standing.
+describe("profile list caches are busted in pairs", () => {
+  const src = fs.readFileSync(path.resolve(__dirname, "../server/routes.ts"), "utf8");
+
+  it("sweeps profiles-lite: on every write", () => {
+    const start = src.indexOf("const USER_CACHE_PREFIXES = [");
+    expect(start).toBeGreaterThan(-1);
+    const list = src.slice(start, src.indexOf("];", start));
+    expect(list).toContain('"profiles:"');
+    expect(list).toContain('"profiles-lite:"');
+  });
+
+  it("busts both prefixes from the one helper the routes call", () => {
+    const start = src.indexOf("function bustProfileCaches(");
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\n}", start));
+    expect(body).toContain("bustCache(`profiles:${uid}`)");
+    expect(body).toContain("bustCache(`profiles-lite:${uid}`)");
+  });
+
+  it("leaves no route busting the full list without its lite sibling", () => {
+    // Every per-route site must go through the helper, so a new one can't
+    // reintroduce the half-bust.
+    const halfBusts = [...src.matchAll(/bustCache\(`profiles:\$\{[A-Za-z0-9_]+\}`\)/g)]
+      .filter((m) => src.slice(Math.max(0, m.index! - 200), m.index!).indexOf("function bustProfileCaches(") === -1);
+    expect(halfBusts).toEqual([]);
+  });
+});

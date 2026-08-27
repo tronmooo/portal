@@ -142,3 +142,40 @@ describe("projectBootstrapShell", () => {
     expect(shell.expenses).toHaveLength(1);
   });
 });
+
+// ── The people list the hub switcher reads ──────────────────────────────────
+// 2026-08-27 user report ("where is Bob Robertson"): a profile created through
+// chat existed in the database, carried its uploaded document, and was still
+// absent from the profile switcher. The switcher and the filter chip read
+// ["/api/profiles", "lite"], which nothing here seeded — so the one bootstrap
+// refetch that heals a restored session healed every list except the people
+// list, and those menus, which mount once in the shell and never remount, kept
+// showing the pre-create roster.
+describe("bootstrapSeedEntries — profiles lite", () => {
+  it("seeds the lite key the profile switcher reads", () => {
+    const b = {
+      profiles: [
+        { id: "self-1", type: "self", name: "Poop", fields: { a: 1 }, documents: [{ id: "d" }] },
+        { id: "bob-1", type: "person", name: "Bob Robertson", avatar: "http://x/y.png" },
+      ],
+    };
+    const entries = bootstrapSeedEntries(b, "everyone", [], MONTH);
+    const lite = entries.find(
+      (e) => e.key.length === 2 && e.key[0] === "/api/profiles" && e.key[1] === "lite",
+    );
+    expect(lite).toBeDefined();
+    const rows = lite!.data as any[];
+    expect(rows.map((r) => r.id)).toEqual(["self-1", "bob-1"]);
+    expect(rows.map((r) => r.name)).toContain("Bob Robertson");
+    expect(rows[1].avatar).toBe("http://x/y.png");
+    // Slim projection: the heavy jsonb columns the switcher never reads must
+    // not ride along into the persisted snapshot.
+    expect(rows[0].fields).toEqual({});
+    expect(rows[0].documents).toEqual([]);
+  });
+
+  it("leaves the lite key unseeded when the payload carries no profiles", () => {
+    const entries = bootstrapSeedEntries({ stats: { net: 1 } }, "everyone", [], MONTH);
+    expect(entries.some((e) => e.key[1] === "lite")).toBe(false);
+  });
+});

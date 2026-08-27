@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   decodeSessionUserId,
+  keepsPersistedAge,
   selectHydratableEntries,
   type PersistedBlob,
 } from "../client/src/lib/cache-isolation";
@@ -114,5 +115,26 @@ describe("selectHydratableEntries — cross-account isolation", () => {
 
     expect(res.entries).toHaveLength(0);
     expect(persisted).toBeNull(); // A's data is gone, cannot resurface
+  });
+});
+
+// ── Which restored entries keep their real age ──────────────────────────────
+// hydrateQueryCache stamps restored data fresh so a launch doesn't fan out into
+// ~20 refetches. The profile lists are the exception: their readers (hub
+// profile switcher, filter chip) live in the shell, mount once and never
+// remount, and focus/reconnect refetching is off — stamped fresh, they would
+// never re-ask for the people list in that session.
+describe("keepsPersistedAge", () => {
+  it("keeps the age of both profile-list keys", () => {
+    expect(keepsPersistedAge(["/api/profiles"])).toBe(true);
+    expect(keepsPersistedAge(["/api/profiles", "lite"])).toBe(true);
+  });
+
+  it("does not hold back the lists whose pages remount on navigation", () => {
+    expect(keepsPersistedAge(["/api/expenses", "everyone"])).toBe(false);
+    expect(keepsPersistedAge(["/api/stats", "everyone"])).toBe(false);
+    expect(keepsPersistedAge(["/api/profiles/lite"])).toBe(false);
+    expect(keepsPersistedAge(undefined)).toBe(false);
+    expect(keepsPersistedAge([])).toBe(false);
   });
 });

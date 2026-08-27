@@ -1,5 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
-import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
+import { decodeSessionUserId, keepsPersistedAge, selectHydratableEntries } from "./cache-isolation";
 import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
 import { getProfileFilterSnapshot } from "./profileFilter";
 import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
@@ -651,6 +651,17 @@ export function hydrateQueryCache(): void {
     // everything else is seeded fresh. When that single bootstrap refetch
     // lands, seedDashboardCaches overwrites all dependent keys with fresh
     // rows — so staleness is bounded by one round trip, not by the blob age.
+    //
+    // The profile lists are the ONE exception to "seed everything fresh", and
+    // they earned it (2026-08-27, "where is Bob Robertson"): the profile
+    // switcher and the filter chip mount once, inside the shell, and never
+    // remount — and refetchOnWindowFocus/refetchOnReconnect are off. Stamping
+    // their restored rows fresh meant a people list up to MAX_AGE_MS old was
+    // never re-asked for in that session, so a profile added after the snapshot
+    // was taken simply did not exist as far as those menus were concerned. They
+    // are two of the smallest payloads we persist, so letting them keep their
+    // real age (→ one background refetch on mount when stale) costs a few
+    // hundred bytes of traffic and makes the people list honest.
     const seededAt = Date.now();
     let bootstrapEntry: { k: any; d: any; t: number } | null = null;
     for (const entry of entries) {
@@ -658,7 +669,8 @@ export function hydrateQueryCache(): void {
       const existing = queryClient.getQueryData(entry.k as any);
       if (existing !== undefined) continue;
       const isBootstrap = Array.isArray(entry.k) && entry.k[0] === "/api/dashboard-bootstrap";
-      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: isBootstrap ? entry.t : seededAt });
+      const keepAge = isBootstrap || keepsPersistedAge(entry.k);
+      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: keepAge ? entry.t : seededAt });
       if (isBootstrap) {
         bootstrapEntry = entry as { k: any; d: any; t: number };
       }
@@ -684,7 +696,11 @@ export function hydrateQueryCache(): void {
       // slots (never clobber a fresher restore).
       for (const { key, data } of bootstrapSeedEntries(bootstrapEntry.d, mode, ids, month)) {
         if (queryClient.getQueryData(key as any) !== undefined) continue;
-        queryClient.setQueryData(key as any, data, { updatedAt: seededAt });
+        // Same rule as above: a profile list seeded out of a day-old bootstrap
+        // blob must carry that blob's age, or the switcher goes right back to
+        // never refetching.
+        const at = keepsPersistedAge(key) ? bootstrapEntry.t : seededAt;
+        queryClient.setQueryData(key as any, data, { updatedAt: at });
       }
     }
   } catch {

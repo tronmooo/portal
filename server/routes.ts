@@ -723,6 +723,11 @@ function clearAllCache(): void {
 const USER_CACHE_PREFIXES = [
   "stats:", "enhanced:", "bootstrap:", "bootstrap-raw:", "profile-bootstrap:", "profile-detail:",
   "profiles:", "trackers:", "tasks:", "expenses:", "events:", "habits:",
+  // "profiles-lite:" does NOT start with "profiles:", so the slim list the
+  // profile switcher and the filter chip read was the one profile cache no
+  // write ever busted on the writing instance — a profile created through chat
+  // could stay absent from those menus for the key's full TTL.
+  "profiles-lite:",
   "obligations:", "journal:", "documents:", "goals:", "insights:",
   "insights-data:", "activity:", "ai-digest:", "artifacts:", "notifications:",
   "cashflow:", "calendar:",
@@ -1059,6 +1064,14 @@ function bustCache(prefix: string): void {
   for (const key of responseCache.keys()) {
     if (key.startsWith(prefix)) responseCache.delete(key);
   }
+}
+// The profile list is cached under TWO prefixes — "profiles:" (full rows) and
+// "profiles-lite:" (the slim projection the hub switcher and filter chip read).
+// The second does not start with the first, so every per-route
+// bustCache("profiles:" + uid) left it behind. Bust them together, always.
+function bustProfileCaches(uid: string): void {
+  bustCache(`profiles:${uid}`);
+  bustCache(`profiles-lite:${uid}`);
 }
 // Bust relevant caches after any write operation
 function bustAllCaches(): void {
@@ -4733,7 +4746,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     }
 
     const created = await storage.createProfile(parsed.data);
-    bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`profile-detail:${uid_p1}:`);
+    bustProfileCaches(uid_p1); bustCache(`stats:${uid_p1}`); bustCache(`profile-detail:${uid_p1}:`);
 
     // Auto-ownership now lives in a single place: storage.createProfile resolves
     // the owning party from the parent chain (resolveAutoOwner) and links it at
@@ -4945,7 +4958,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     }
     // `enhanced:` with no uid dropped here: it cleared the dashboard of every
     // user on this instance, and bustUserCaches() already covers this one.
-    bustCache(`profiles:${uid_p2}`); bustCache(`stats:${uid_p2}`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);
+    bustProfileCaches(uid_p2); bustCache(`stats:${uid_p2}`); bustCache(`profile-detail:${uid_p2}:`); bustCache(`cashflow:${uid_p2}`);
     // Invalidate the cached AI summary so it regenerates on next read. Stored
     // as a preference (profile_ai_<id>) with a 2h TTL — without this, edits to
     // fields like mileage / currentValue won't be reflected in the AI summary
@@ -4969,7 +4982,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       return res.status(400).json({ error: deletable.error });
     }
     const ok = await storage.deleteProfile(req.params.id);
-    bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
+    bustProfileCaches(uid_p3); bustCache(`stats:${uid_p3}`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
     if (!ok) {
       // Cascade had partial failures or the final row delete failed.
       // Surface as 500 so the client can show a real error instead of a
@@ -5001,7 +5014,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         } catch { /* non-critical */ }
       }
       const uid_pl1 = cacheUserKey(req as AuthenticatedRequest);
-      bustCache(`profiles:${uid_pl1}`); bustCache(`profile-detail:${uid_pl1}:`); bustCache(`stats:${uid_pl1}`); bustCache(`${entityType}s:${uid_pl1}`);
+      bustProfileCaches(uid_pl1); bustCache(`profile-detail:${uid_pl1}:`); bustCache(`stats:${uid_pl1}`); bustCache(`${entityType}s:${uid_pl1}`);
       res.json({ ok: true });
     } catch (err: any) {
       console.error("[profile-link]", err?.message || err);
@@ -5013,7 +5026,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const { entityType, entityId } = req.body;
     await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
     const uid_pl2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`profiles:${uid_pl2}`); bustCache(`profile-detail:${uid_pl2}:`); bustCache(`stats:${uid_pl2}`); bustCache(`${entityType}s:${uid_pl2}`);
+    bustProfileCaches(uid_pl2); bustCache(`profile-detail:${uid_pl2}:`); bustCache(`stats:${uid_pl2}`); bustCache(`${entityType}s:${uid_pl2}`);
     res.json({ ok: true });
   }));
 
@@ -5065,7 +5078,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const avatarUrl = `${pub.publicUrl}?t=${Date.now()}`;
     const updated = await storage.updateProfile(req.params.id, { avatar: avatarUrl });
     const uid_pp = photoUserId;
-    bustCache(`profiles:${uid_pp}`); bustCache(`profile-detail:${uid_pp}:`);
+    bustProfileCaches(uid_pp); bustCache(`profile-detail:${uid_pp}:`);
     res.json({ avatar: avatarUrl, profile: updated });
   }));
 
@@ -5075,7 +5088,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const uid = (req as AuthenticatedRequest).userId;
     if (!uid) return res.status(401).json({ error: "Unauthorized" });
     const updated = await storage.updateProfile(req.params.id, { avatar: null as any });
-    bustCache(`profiles:${uid}`); bustCache(`profile-detail:${uid}:`);
+    bustProfileCaches(uid); bustCache(`profile-detail:${uid}:`);
     res.json({ ok: true, profile: updated });
   }));
 
@@ -6971,7 +6984,7 @@ Rules:
     // Omitting the calendar bust here is why a deleted licence's expiration
     // outlived it on screen.
     bustCache(`documents:${uid_d3}`); bustCache(`stats:${uid_d3}`); bustCache(`profile-detail:${uid_d3}:`); bustCache(`notifications:${uid_d3}`);
-    bustCache(`profiles:${uid_d3}`); bustCache(`events:${uid_d3}`); bustCache(`caltimeline:${uid_d3}`); bustCache(`activity:${uid_d3}`);
+    bustProfileCaches(uid_d3); bustCache(`events:${uid_d3}`); bustCache(`caltimeline:${uid_d3}`); bustCache(`activity:${uid_d3}`);
     res.json({ success: true, ...outcome });
   }));
   // ---- Repair: events whose source document is gone ----
