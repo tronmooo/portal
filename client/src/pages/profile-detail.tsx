@@ -12861,6 +12861,23 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
   const [notes, setNotes] = useState(currentNotes);
   const [isEditing, setIsEditing] = useState(false);
 
+  // SAVED NOTES — the Note records linked to this profile, the same list the
+  // person Info tab already shows (client/src/pages/profile-info.tsx). Without
+  // it this card rendered only `profile.notes`, the free-text scratchpad, so a
+  // note created from chat ("make a note for John that …") saved correctly and
+  // appeared nowhere on the profile it was filed under.
+  const { data: savedNotes = [] } = useQuery<any[]>({
+    queryKey: ["/api/notes", profileId],
+    queryFn: async () => (await apiRequest("GET", `/api/notes?profileId=${encodeURIComponent(profileId)}`)).json(),
+    enabled: !!profileId,
+    staleTime: 30_000,
+  });
+  const removeNote = useMutation({
+    mutationFn: async (noteId: string) => { await apiRequest("DELETE", `/api/notes/${noteId}`); },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/notes"] }),
+    onError: (err: Error) => toast({ title: "Failed to delete note", description: formatApiError(err), variant: "destructive" }),
+  });
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("PATCH", `/api/profiles/${profileId}`, { notes });
@@ -12914,13 +12931,33 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
           <div className="rounded-lg border bg-muted/30 p-4 text-sm whitespace-pre-wrap min-h-[100px]">
             {currentNotes}
           </div>
-        ) : (
+        ) : savedNotes.length === 0 ? (
           <div className="rounded-lg border border-dashed p-8 text-center">
             <FileText className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No notes yet</p>
             <Button size="sm" variant="outline" className="mt-3 h-7 text-xs gap-1" onClick={() => setIsEditing(true)}>
               <Pencil className="h-3 w-3" /> Add Notes
             </Button>
+          </div>
+        ) : null}
+        {savedNotes.length > 0 && (
+          <div className={`space-y-3 ${currentNotes || isEditing ? "mt-4 border-t pt-4" : ""}`} data-testid="notes-tab-saved">
+            {savedNotes.map((n: any) => (
+              <div key={n.id} className="group flex items-start justify-between gap-2 rounded-lg border bg-muted/20 p-3" data-testid={`saved-note-${n.id}`}>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{n.title}</p>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{n.content}</p>
+                </div>
+                <button
+                  onClick={() => removeNote.mutate(n.id)}
+                  className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0"
+                  aria-label={`Delete note ${n.title}`}
+                  data-testid={`button-delete-note-${n.id}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
       </CardContent>

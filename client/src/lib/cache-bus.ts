@@ -307,7 +307,14 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
         return k0.startsWith("/api/habits") || k0.startsWith("/api/trackers") || k0.startsWith("/api/profiles");
       };
     case "artifacts":
-      return (q) => String(q.queryKey?.[0] || "").startsWith("/api/artifacts");
+      // NOTES LIVE HERE TOO. A note is an artifact row, but the profile Info
+      // tab reads it from ["/api/notes", profileId] — so a note created in
+      // chat saved correctly and stayed invisible on the profile until a hard
+      // reload (user report, 2026-08-20: "it did not create a note for him").
+      return (q) => {
+        const k0 = String(q.queryKey?.[0] || "");
+        return k0.startsWith("/api/artifacts") || k0.startsWith("/api/notes");
+      };
     case "everything":
       // Invalidate every /api/* query the app has — used by AI chat
       // because Claude can mutate literally any domain in one turn.

@@ -34,6 +34,10 @@ export interface OperationOutcome {
   entityId?: string;
   trackerName?: string;
   createdTracker?: { id: string; name: string };
+  /** The noun for the row actually written ("person", "asset", "note") — the
+   *  grounded summary speaks this instead of the intent table's entity, which
+   *  calls every profile row an "asset". */
+  entityLabel?: string;
   /** Compact human-readable summary of what was recorded ("duration 60, method blunt, at 8:15 AM"). */
   detail?: string;
   /** Which chat turn produced this operation. The client renders an operation

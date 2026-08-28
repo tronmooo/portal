@@ -10,6 +10,7 @@ import {
 } from "./content-service";
 import { findActionableTime } from "@shared/temporal-rules";
 import { classifyContent, routeContent, checkContentRouting, isStructured, type ContentClassification } from "@shared/content-routing";
+import { profileNounLower } from "@shared/entity-nouns";
 import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate } from "@shared/nutrition-shaped";
@@ -62,7 +63,7 @@ import { removeTrackerEntry } from "./tracker-entries";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
-import { parseTurnIntent, parseTurnPlan, parseDailyTarget, parseDurationDays, isActionable, type ParsedIntent, type TurnIntentPlan } from "@shared/ai-intent";
+import { parseTurnIntent, parseTurnPlan, parseDailyTarget, parseDurationDays, isActionable, detectCorrection, type ParsedIntent, type TurnIntentPlan } from "@shared/ai-intent";
 import {
   checkToolAgainstIntent,
   isStaleTurnReplay,
@@ -6031,7 +6032,7 @@ CRITICAL ROUTING RULES (NEVER VIOLATE):
 - "My blood type is X" or personal health info (allergies, height, weight, etc.) → ALWAYS update_profile on the self/Me profile with fields: { bloodType: "O+" } (or the appropriate field). NEVER use save_memory for profile-level data. Same for any profile: "Mom's blood type", "Max's breed".
 - ANY concrete personal ATTRIBUTE of a person (self or a named person) → ALWAYS update_profile on that profile with a fields entry, NEVER save_memory. This includes sizes and measurements (shoe/foot size, shirt/pant/dress/ring/hat sizes, height, weight, inseam, waist, chest), physical attributes (eye color, hair color), IDs/numbers (license, passport, SSN-last4, member numbers), and contact/identity details. Examples: "I have size 12 feet" → update_profile name:"Me" changes:{ fields:{ shoeSize: "12" } }; "my shirt size is L" → fields:{ shirtSize: "L" }; "my ring size is 9" → fields:{ ringSize: "9" }. Pick a short, clear camelCase field key that matches the attribute.
 - EXPLICIT "save to my info" — when the user says "save this to my info", "add this to my info tab", "put this in my info", "keep this in my profile", or similar → ALWAYS update_profile with a fields entry on the referenced profile (default to self/Me when unspecified). NEVER use save_memory for these; the Info tab reads profile fields.
-- "X's birthday is Y" → ALWAYS do BOTH: (1) update_profile with name: "X" and changes: { fields: { birthday: "Y" } } — if the profile doesn't exist, it will be auto-created. (2) create_event with title: "🎂 X's Birthday", date: Y (with correct year), recurrence: "yearly". Do NOT ask for confirmation. Just do it.
+- "X's birthday is Y" → ONE call: update_profile with name: "X" and changes: { fields: { birthday: "Y" } }. If the profile doesn't exist it is auto-created. Do NOT ask for confirmation, and do NOT also call create_event: a birthday on a profile is ALREADY a yearly calendar entry — the Date Rule engine derives it, and a hand-made "🎂 X's Birthday" event is discarded as a duplicate. A birthday recurs every year by definition; the user never has to say "repeat yearly". Confirm it back as recurring, e.g. "Birthday set to April 7 — it'll show on the calendar every year."
 - save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event. If a fact is a concrete attribute of a person (a size, measurement, number, physical trait, contact detail), it is profile-level data → use update_profile, not save_memory.
 - "save a note that X" / "remember that X" for a HOUSEHOLD/OBJECT fact (a door code, wifi password, locker combo, where something is stored) → create_note, NOT journal_entry and NOT save_memory. Journal entries are dated diary text; a code or reference fact is a NOTE, and when it belongs to a person or thing pass forProfile so it lands on that profile. save_memory stays for ABSTRACT preferences that belong to no profile ("I prefer window seats").
 - QUOTED CONTENT BOUNDARIES (CRITICAL for multi-action messages): when an instruction embeds quoted text ('add a journal entry saying "..."', 'create a note that says "..."'), the quoted content ENDS at the closing quotation mark. Everything AFTER the closing quote is a NEW instruction you must still execute — never absorb trailing commands into the journal/note content, and never stop processing the message after the quoted item. Re-scan the whole message and execute EVERY requested action.
@@ -11245,10 +11246,22 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         ? String(input.entryDate).slice(0, 10)
         : todayDate;
 
+      // WHO IS THIS ENTRY ABOUT?
+      //
+      // "Journal entry for John: He seemed much happier today." used to land on
+      // the USER's own profile whenever the model forgot `forProfile` — the
+      // fallback below stamps `self`. `create_note` never had that bug because
+      // it reads the owner out of the text itself (resolveNoteProfile), so a
+      // journal entry now resolves the same way. Still undefined for a genuine
+      // self entry, which is the correct answer.
+      const journalOwner = await resolveForProfile(
+        input.forProfile,
+        `${input.forProfile || ""} ${input.content || ""}`.trim(),
+      );
       let targetProfile: any = null;
-      if (input.forProfile) {
+      if (journalOwner) {
         const profiles = await storage.getProfiles();
-        targetProfile = matchProfileByName(profiles, input.forProfile);
+        targetProfile = matchProfileByName(profiles, journalOwner);
       }
 
       const { entry, appended } = await upsertJournalEntry(storage, {
@@ -13940,23 +13953,53 @@ async function directLinkToProfile(entityType: string, entityId: string, forProf
 // A8 fix: collect ALL profile mentions in free text. Returns up to N matches
 // in mention order (after long-name preference) so callers can decide whether
 // to split or surface a disambiguation question.
-async function resolveAllForProfiles(text: string): Promise<string[]> {
+/**
+ * Which of these profiles does the text name? Pure, so it can be tested
+ * against a fixed cast (see tests/chat-routing-regressions.test.ts) rather
+ * than a database.
+ *
+ * Longest name first, so "Mary Jane" wins over "Mary" when both exist.
+ */
+export function namedProfilesIn(text: string, profiles: Array<{ name: string; type?: string }>): string[] {
   if (!text) return [];
-  const profiles = await storage.getProfiles();
   const candidates = profiles
     .filter(p => p.type !== 'self' && p.name.length >= 2)
     .sort((a, b) => b.name.length - a.name.length);
   const lc = text.toLowerCase();
+
+  // PEOPLE GO BY THEIR FIRST NAME. The profile is "John Hancock"; the user
+  // types "John". Matching only the full name meant a message naming two
+  // people read as naming one — and the entry filed silently under whichever
+  // one happened to be written out in full.
+  //
+  // A first name is only an alias when exactly ONE profile answers to it. Two
+  // Janes and the shorthand is genuinely ambiguous, which is the answer.
+  const firstNameCount = new Map<string, number>();
+  for (const p of candidates) {
+    const first = p.name.trim().split(/\s+/)[0].toLowerCase();
+    if (first.length >= 3) firstNameCount.set(first, (firstNameCount.get(first) ?? 0) + 1);
+  }
+
   const found: string[] = [];
   for (const p of candidates) {
-    const pn = p.name.toLowerCase();
-    const pnEsc = pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Word-boundary check so "Max" doesn't pick up "Maxwell".
-    if (new RegExp(`(^|\\b)${pnEsc}(\\b|$)`).test(lc)) {
-      if (!found.includes(p.name)) found.push(p.name);
+    const first = p.name.trim().split(/\s+/)[0].toLowerCase();
+    const aliases = [p.name.toLowerCase()];
+    if (firstNameCount.get(first) === 1 && first !== p.name.toLowerCase()) aliases.push(first);
+    for (const alias of aliases) {
+      const esc = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Word-boundary check so "Max" doesn't pick up "Maxwell".
+      if (new RegExp(`(^|\\b)${esc}(\\b|$)`).test(lc)) {
+        if (!found.includes(p.name)) found.push(p.name);
+        break;
+      }
     }
   }
   return found;
+}
+
+async function resolveAllForProfiles(text: string): Promise<string[]> {
+  if (!text) return [];
+  return namedProfilesIn(text, await storage.getProfiles());
 }
 
 // Scan text for profile names when forProfile wasn't explicitly set
@@ -13978,6 +14021,198 @@ async function resolveForProfile(forProfile: string | undefined, text: string): 
  * fall back to the primary profile: a note about Robert filed under Sarah is
  * the profile-leak the isolation rules exist to prevent.
  */
+/**
+ * Profile-row writes — the tools whose result row carries the `type` that
+ * decides whether the user is looking at a person, a pet or a truck.
+ */
+const PROFILE_ROW_TOOLS = new Set(["create_profile", "update_profile", "create_liability", "revalue_asset"]);
+
+/**
+ * The noun for what was ACTUALLY written, for the grounded summary.
+ *
+ * `shared/ai-tool-routing` maps every profile tool to the intent entity
+ * `asset` on purpose — assets and profiles share a table and the routing gate
+ * treats them as interchangeable. That is right for gating and wrong for
+ * speaking, and it is why the chat answered 'Updated asset "John Hancock".'
+ * about a person. Returns undefined when the row says nothing useful, leaving
+ * the old wording in place.
+ */
+export function writtenEntityNoun(toolName: string, result: any): string | undefined {
+  if (toolName === "create_note" || toolName === "update_note") return "note";
+  if (!PROFILE_ROW_TOOLS.has(toolName)) return undefined;
+  return profileNounLower(result?.type) ?? undefined;
+}
+
+/**
+ * CORRECTIONS ASK BEFORE THEY WRITE.
+ *
+ * User report, 2026-08-20: after "My QA phone bill is $86.50 every month on
+ * the 15th", the follow-up "Actually make that $92." changed nothing and the
+ * user was asked whether they wanted a SECOND bill. Two things were wrong: the
+ * correction parsed as a create (fixed in shared/ai-intent `detectCorrection`),
+ * and the user never got the one question that would have settled it —
+ * "Do you want me to change the QA Phone Bill from $86.50 to $92?"
+ *
+ * So a correction that resolves to a real record and a real field change is
+ * held for one round-trip: the model is handed the record's name, the stored
+ * value and the new one, and must ask. The user's "yes" is not a correction,
+ * so the next turn writes.
+ *
+ * Returns null — write immediately — whenever there is nothing concrete to
+ * confirm: not a correction, not an update, no matching row, or no value that
+ * actually differs. Confirming a change we cannot describe would be worse than
+ * silence.
+ */
+const CORRECTION_SKIP_KEYS = new Set([
+  "name", "title", "id", "forProfile", "trackerName", "query", "key", "confirm", "plan_id",
+]);
+
+/** Fields whose numbers are dollars, so the question can show them as dollars. */
+const MONEY_FIELDS = new Set([
+  "amount", "value", "currentValue", "balance", "currentBalance", "monthlyPayment",
+  "price", "cost", "total", "minimumPayment", "creditLimit",
+]);
+
+/** "$86.50" / "$92" — cents only when the number has them. */
+function formatMoneyForAsk(n: number): string {
+  return `$${n.toFixed(2).replace(/\.00$/, "")}`;
+}
+
+export function correctionConfirmation(
+  toolName: string,
+  input: Record<string, any>,
+  userMessage: string,
+  beforeRows: any[] | null,
+): { directive: string; userMessage: string } | null {
+  if (!detectCorrection(userMessage).isCorrection) return null;
+  if (toolOperation(toolName) !== "update") return null;
+  if (!Array.isArray(beforeRows) || beforeRows.length === 0) return null;
+
+  const label = toolTargetLabel(input);
+  if (!label) return null;
+  const wanted = label.trim().toLowerCase();
+  const row = beforeRows.find((r: any) =>
+    [r?.name, r?.title, r?.description].some((v) => typeof v === "string" && v.trim().toLowerCase() === wanted));
+  if (!row) return null;
+
+  // Flatten one level of `changes` / `changes.fields`, which is how the
+  // profile and obligation tools carry their edits.
+  const flat: Record<string, any> = { ...input };
+  for (const nest of [input.changes, input.changes?.fields, input.fields]) {
+    if (nest && typeof nest === "object" && !Array.isArray(nest)) Object.assign(flat, nest);
+  }
+
+  const diffs: string[] = [];
+  for (const [k, v] of Object.entries(flat)) {
+    if (k.startsWith("_") || CORRECTION_SKIP_KEYS.has(k)) continue;
+    if (v === null || v === undefined || typeof v === "object") continue;
+    if (!(k in row)) continue;
+    const before = (row as any)[k];
+    if (before === null || before === undefined || typeof before === "object") continue;
+    if (String(before).trim() === String(v).trim()) continue;
+    // "from $86.50 to $92" — the user's own units. A bare "amount from 86.5"
+    // is the same fact stated worse, and the question exists to be answered at
+    // a glance.
+    const money = MONEY_FIELDS.has(k) && Number.isFinite(Number(before)) && Number.isFinite(Number(v));
+    const show = (x: any) => (money ? formatMoneyForAsk(Number(x)) : String(x));
+    // `amount` needs no naming — "change the QA Phone Bill from $86.50 to $92"
+    // already says what changed.
+    const field = k === "amount" ? "" : `${k} `;
+    diffs.push(`${field}from ${show(before)} to ${show(v)}`);
+  }
+  if (diffs.length === 0) return null;
+
+  const rowName = String(row.name || row.title || row.description || label);
+  return {
+    directive:
+      `Hold this write and ASK FIRST. The user's message is a correction, so confirm the exact change before making it. ` +
+      `Ask, in one sentence and using these values verbatim: "Do you want me to change the ${rowName} ${diffs.join(", and ")}?" ` +
+      `Make NO tool call this turn. If they confirm, call ${toolName} again on the next turn and it will go through.`,
+    userMessage: `Do you want me to change the ${rowName} ${diffs.join(", and ")}?`,
+  };
+}
+
+/**
+ * WHOSE record is this? — enforced, not merely suggested.
+ *
+ * User report, 2026-08-20: "Journal entry for John: He seemed much happier
+ * today." was filed under the USER's own profile and the card read "YOU".
+ *
+ * The router already knew: `routeContent()` returns `profileHint: "John"` for
+ * that exact sentence. But the hint only reached the model as prose advice
+ * ("[ROUTER] Named person(s): John. Pass forProfile"), and when the model
+ * omitted `forProfile`, `journal_entry` stamped the `self` profile. `create_note`
+ * never had this bug because it resolves the owner from the text itself.
+ *
+ * So the hint is applied to the tool input instead of hoped for. Only when the
+ * message names exactly ONE person: two names is a genuine ambiguity, and the
+ * model's own choice beats a coin flip.
+ */
+const PROFILE_SCOPED_TOOLS = new Set([
+  "journal_entry", "append_journal_entry",
+  "create_note", "update_note",
+  "create_task", "create_event",
+]);
+
+export function ownershipHintFor(toolName: string, input: Record<string, any>, userMessage: string): string | null {
+  if (!PROFILE_SCOPED_TOOLS.has(toolName)) return null;
+  if (typeof input?.forProfile === "string" && input.forProfile.trim()) return null;
+  const hints = Array.from(new Set(
+    routeContent(userMessage).actions.map((a) => a.profileHint).filter((h): h is string => !!h),
+  ));
+  return hints.length === 1 ? hints[0] : null;
+}
+
+/**
+ * The same question, asked of the whole message against the profiles that
+ * actually exist.
+ *
+ * The router reads owners out of the shapes it knows — "for John", "note for
+ * Jane", "Sarah's phone". Two phrasings slip past it, and both matter:
+ *
+ *   "add a task to call Mike, note that he prefers text"
+ *        the person is named in a SIBLING clause, and the note itself only
+ *        says "he" — so the note landed on nobody.
+ *
+ *   "Journal entry about John and Sarah's argument"
+ *        the router saw the possessive "Sarah's" and missed John entirely, so
+ *        a genuinely ambiguous entry filed silently under one of them.
+ *
+ * Scanning the message against real profile rows fixes both, and cannot invent
+ * a person: `resolveAllForProfiles` only matches names that exist. Two matches
+ * is an ambiguity and returns null — the model's own choice beats a coin flip,
+ * and a wrong owner is the profile leak the isolation rules exist to prevent.
+ *
+ * Falls back to the router's hint when NO profile matches, because the person
+ * may not have a row yet ("note for Jane" before Jane exists).
+ */
+export function ownershipHintFrom(
+  toolName: string,
+  input: Record<string, any>,
+  userMessage: string,
+  profiles: Array<{ name: string; type?: string }>,
+): string | null {
+  if (!PROFILE_SCOPED_TOOLS.has(toolName)) return null;
+  if (typeof input?.forProfile === "string" && input.forProfile.trim()) return null;
+  const named = namedProfilesIn(userMessage, profiles);
+  if (named.length === 1) return named[0];
+  if (named.length > 1) return null;
+  return ownershipHintFor(toolName, input, userMessage);
+}
+
+async function resolveOwnershipHint(
+  toolName: string,
+  input: Record<string, any>,
+  userMessage: string,
+): Promise<string | null> {
+  try {
+    return ownershipHintFrom(toolName, input, userMessage, await storage.getProfiles());
+  } catch {
+    // No storage (a cold start) — the router's read of the message still stands.
+    return ownershipHintFor(toolName, input, userMessage);
+  }
+}
+
 /**
  * The router's read of one message, phrased for the model.
  *
@@ -15964,6 +16199,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           if (validation.warnings.length > 0) {
             logger.info("ai", `Validation warnings for ${toolUse.name}: ${validation.warnings.join(", ")}`);
           }
+          // OWNERSHIP. When the message names exactly one person and the model
+          // left `forProfile` empty, fill it in — the router already knew whose
+          // record this is, and hoping the model passes it on is how "Journal
+          // entry for John" ended up on the user's own profile.
+          const ownershipHint = await resolveOwnershipHint(toolUse.name, validation.normalized as Record<string, any>, userMessage);
+          if (ownershipHint) {
+            (validation.normalized as Record<string, any>).forProfile = ownershipHint;
+            logger.info("ai", `[turn ${turnId.slice(0, 8)}] ownership: ${toolUse.name} forProfile <- "${ownershipHint}" (from message)`);
+          }
           // A2 fix: thread userId so dedup map is scoped per-user.
           // Round-5 fabrication guard: thread the original user message so
           // create_profile (and any other guarded tool) can compare requested
@@ -15974,6 +16218,22 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const beforeRows = READ_ONLY_TOOLS.has(toolUse.name)
             ? null
             : await captureBeforeRows(toolUse.name, turnVerifyCtx);
+          // A correction states a new value for something already written.
+          // Confirm the exact change before making it, once, with both values.
+          const confirmFirst = READ_ONLY_TOOLS.has(toolUse.name)
+            ? null
+            : correctionConfirmation(toolUse.name, inputWithCtx, userMessage, beforeRows);
+          if (confirmFirst) {
+            logger.info("ai", `[turn ${turnId.slice(0, 8)}] correction: holding ${toolUse.name} for confirmation`);
+            toolResults.push({
+              type: "tool_result" as const,
+              tool_use_id: toolUse.id,
+              content: JSON.stringify({ error: confirmFirst.directive, code: "confirm_correction" }),
+              is_error: true,
+            });
+            emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: confirmFirst.userMessage });
+            continue;
+          }
           const tExecStart = Date.now();
           const rawResult = await executeTool(toolUse.name, inputWithCtx, userId);
           const execMs = Date.now() - tExecStart;
@@ -16072,6 +16332,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 // from a bare "I took a Tylenol" — the input alone can't
                 // label the card). Tool-resolved values override raw input.
                 ...((result as any)?._displayData || {}),
+                // THE ROW'S OWN TYPE. `inp` for update_profile is {name,
+                // changes} and carries no type, so the card could only ever
+                // read "Update Profile" while the prose said "asset" (user
+                // report, 2026-08-20). Take it from what was written.
+                ...(PROFILE_ROW_TOOLS.has(toolUse.name) && (result as any)?.type
+                  ? { type: (result as any).type }
+                  : {}),
                 _entityId: entityId || undefined,
                 // Deep-link + badge metadata for the chat action card.
                 ...(ownerInfo ? { _ownerName: ownerInfo.name, _ownerProfileId: ownerInfo.id } : {}),
@@ -16147,6 +16414,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               tool: toolUse.name,
               status: isSuccess ? (wasDeduped ? "deduped" : "ok") : "failed",
               error: userFacingError,
+              // The noun the grounded summary will speak. Without it every
+              // profile tool reads as "asset" via the intent table, which is
+              // how a person came back as 'Updated asset "John Hancock"'.
+              entityLabel: isSuccess ? writtenEntityNoun(toolUse.name, result) : undefined,
               entityId: isSuccess ? (entityId || undefined) : undefined,
               trackerName: inp.trackerName ? String(inp.trackerName) : undefined,
               createdTracker: isSuccess && (result as any)?.__createdTracker?.id ? (result as any).__createdTracker : undefined,
@@ -16530,6 +16801,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         status: op.status,
         entityId: op.entityId,
         raw: op.raw,
+        entityLabel: op.entityLabel,
       }));
       const claimCheck = checkClaims({
         reply: finalReply,
@@ -16757,9 +17029,10 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   append_journal_entry: "journal_entry",
   update_journal: "update_entity",
   delete_journal: "delete_entity",
-  // Notes. Stored as artifacts, so the undoable action card is the artifact
-  // one — the chat UI already knows how to undo that.
-  create_note: "create_artifact",
+  // Notes. Stored as artifacts, but a note is not an artifact to the user —
+  // "Create Artifact" on a note for John (user report, 2026-08-20) named the
+  // table instead of the thing. The chat UI knows how to undo a note by id.
+  create_note: "create_note",
   update_note: "update_entity",
   delete_note: "delete_entity",
   // Goals

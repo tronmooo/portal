@@ -64,7 +64,7 @@ export interface ParsedAction {
     // Creates / logs (undoable in the chat UI)
     | "create_profile" | "create_tracker" | "log_entry" | "create_task" | "log_expense"
     | "create_event" | "create_goal" | "create_habit" | "create_obligation"
-    | "journal_entry" | "create_artifact" | "save_memory" | "create_liability"
+    | "journal_entry" | "create_artifact" | "create_note" | "save_memory" | "create_liability"
     | "add_liability_payment" | "log_income" | "log_paycheck"
     // State changes
     | "complete_task" | "delete_task" | "complete_event" | "checkin_habit" | "uncomplete_habit"
