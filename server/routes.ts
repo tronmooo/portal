@@ -2297,10 +2297,13 @@ export async function registerRoutes(
       return res.status(429).json({ error: "Too many uploads. Please wait." });
     }
     try {
-      const { fileName, mimeType, fileData, message, profileId } = req.body;
+      const { fileName, mimeType, fileData, message, profileId, discardImage } = req.body;
       if (!fileData || !fileName) {
         return res.status(400).json({ error: "fileName and fileData (base64) required" });
       }
+      // Extract-only: read the file for its data, keep nothing. The bytes are
+      // never written to Storage or the database — see processFileUpload.
+      const discardUploadImage = discardImage === true || discardImage === "true";
       // Debug: log what we received
       console.log(`[Upload] File: ${fileName}, MIME: ${mimeType}, base64 length: ${fileData?.length}, first 40 chars: ${fileData?.slice(0, 40)}`);
       // File size validation: 10MB max (base64 is ~33% larger than binary)
@@ -2316,7 +2319,7 @@ export async function registerRoutes(
       if (!ALLOWED_MIMES.includes(mimeType)) {
         return res.status(415).json({ error: `Unsupported file type: ${mimeType}. Allowed: images, PDF, plain text, Word.` });
       }
-      const result = await processFileUpload(fileName, mimeType, fileData, message, profileId);
+      const result = await processFileUpload(fileName, mimeType, fileData, message, profileId, { discardImage: discardUploadImage });
       res.json(result);
     } catch (err: any) {
       log.error("[Upload]", err?.message || "unknown error");
@@ -2331,7 +2334,8 @@ export async function registerRoutes(
       return res.status(429).json({ error: "Too many uploads. Please wait." });
     }
     try {
-      const { files, message } = req.body;
+      const { files, message, discardImage } = req.body;
+      const discardBatchImages = discardImage === true || discardImage === "true";
       if (!files || !Array.isArray(files) || files.length === 0) {
         return res.status(400).json({ error: "files array required" });
       }
@@ -2377,7 +2381,8 @@ export async function registerRoutes(
             mimeType || "image/jpeg",
             fileData,
             message,
-            profileId !== "none" ? profileId : undefined
+            profileId !== "none" ? profileId : undefined,
+            { discardImage: discardBatchImages || file.discardImage === true }
           );
 
           // Determine which profile it was linked to

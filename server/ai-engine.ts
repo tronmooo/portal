@@ -1844,6 +1844,8 @@ interface ReviewPayloadInput {
   classification?: any;
   /** When the upload started — the reasoner adapts to the remaining budget. */
   startedAt?: number;
+  /** Extract-only upload: no bytes were kept, so the review pane has no preview to show. */
+  imageDiscarded?: boolean;
 }
 
 async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
@@ -1986,7 +1988,7 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
     targetProfile: input.targetProfile
       ?? (profile ? { name: profile.name, id: profile.id, type: profile.type, isNew: false } : undefined),
     trackerEntries: parsed.trackerEntries || [],
-    documentPreview: { id: input.documentId, name: input.documentName, mimeType: input.mimeType },
+    documentPreview: { id: input.documentId, name: input.documentName, mimeType: input.mimeType, imageDiscarded: input.imageDiscarded === true },
     pendingFinancial: input.pendingFinancial,
     calendarDates,
     documentName: input.documentName,
@@ -2009,7 +2011,8 @@ export async function processFileUpload(
   mimeType: string,
   base64Data: string,
   userMessage?: string,
-  profileId?: string
+  profileId?: string,
+  options?: { discardImage?: boolean }
 ): Promise<{
   reply: string;
   actions: ParsedAction[];
@@ -2024,6 +2027,19 @@ export async function processFileUpload(
   const tUpload = Date.now();
   const actions: ParsedAction[] = [];
   const results: any[] = [];
+
+  // ── EXTRACT-ONLY MODE ("don't keep my photo") ──────────────────────────────
+  // When the user ticks "Extract data, don't keep the photo", the bytes are
+  // used for this request and then dropped on the floor: they are handed to
+  // the extraction model in memory, but NOTHING is written to the documents
+  // bucket and no base64 lands in the database. The document row still exists
+  // — the extracted fields need a home, and the confirm-and-save flow keys off
+  // its id — it just carries no image.
+  const discardImage = options?.discardImage === true;
+  // What gets persisted as the file body. Empty string means createDocument
+  // skips the Storage upload entirely (see supabase-storage.createDocument).
+  const persistedFileData = discardImage ? "" : base64Data;
+  const discardTag = "image-discarded";
 
   // ============================================================================
   // STEP 0 — AI CLASSIFICATION (pre-extraction routing)
@@ -2090,8 +2106,14 @@ export async function processFileUpload(
           value: unwrapDup(v),
           selected: true,
         }));
+      // Honesty about the earlier copy. The dedupe guard reuses the document
+      // from the first upload, and if THAT upload kept the file, a stored copy
+      // still exists — ticking "don't keep it" now cannot un-save it. Say so
+      // rather than letting the reply imply nothing was stored.
+      const dupHasStoredFile =
+        !!existingUpload.storagePath || String(existingUpload.fileData || "").length > 10;
       return {
-        reply: `"${fileName}" is the same file you just uploaded — using the existing document "${existingUpload.name}" instead of creating a duplicate.${dupFields.length > 0 ? " Review the extracted fields below to save them to a profile." : ""}`,
+        reply: `"${fileName}" is the same file you just uploaded — using the existing document "${existingUpload.name}" instead of creating a duplicate.${dupFields.length > 0 ? " Review the extracted fields below to save them to a profile." : ""}${discardImage && dupHasStoredFile ? ` Heads up: the earlier upload kept a copy of this file, so it's still stored — delete that document if you want it gone.` : ""}`,
         actions: [],
         results: [existingUpload],
         documentId: existingUpload.id,
@@ -2113,6 +2135,7 @@ export async function processFileUpload(
               profileId,
               userMessage,
               content: classifierContentForReason(),
+              imageDiscarded: discardImage && !dupHasStoredFile,
             })
           : undefined,
       };
@@ -2571,14 +2594,19 @@ Return ONLY the JSON object, nothing else.`;
       return linkedProfiles.some((pid: string) => d.linkedProfiles.includes(pid));
     });
     if (existingDoc) {
-      // Update existing document instead of creating a duplicate
+      // Update existing document instead of creating a duplicate.
+      //
+      // In extract-only mode `fileData` is left OUT of the patch rather than
+      // written as "". A file the user previously chose to keep must not be
+      // erased just because this upload was extract-only — we simply add
+      // nothing to it.
       document = await storage.updateDocument(existingDoc.id, {
         mimeType,
-        fileData: base64Data,
+        ...(discardImage ? {} : { fileData: base64Data }),
         extractedData: parsed.extractedData || {},
         linkedProfiles: Array.from(new Set([...existingDoc.linkedProfiles, ...linkedProfiles])),
-        tags: Array.from(new Set([...(existingDoc.tags || []), parsed.documentType || "uploaded", uploadHashTag])),
-      });
+        tags: Array.from(new Set([...(existingDoc.tags || []), parsed.documentType || "uploaded", uploadHashTag, ...(discardImage ? [discardTag] : [])])),
+      } as any);
       console.log(`[Upload] Updated existing document "${docName}" (${existingDoc.id}) instead of creating duplicate`);
     } else {
       // P0.3a: validate the model-derived parts (name/type from the extraction
@@ -2588,10 +2616,10 @@ Return ONLY the JSON object, nothing else.`;
         name: docName,
         type: parsed.documentType || "other",
         mimeType,
-        fileData: base64Data,
+        fileData: persistedFileData,
         extractedData: parsed.extractedData || {},
         linkedProfiles,
-        tags: [parsed.documentType || "uploaded", uploadHashTag],
+        tags: [parsed.documentType || "uploaded", uploadHashTag, ...(discardImage ? [discardTag] : [])],
       }, "document");
       if (docPayload.ok) {
         document = await storage.createDocument(docPayload.data);
@@ -2601,10 +2629,10 @@ Return ONLY the JSON object, nothing else.`;
           name: String(fileName),
           type: "other",
           mimeType,
-          fileData: base64Data,
+          fileData: persistedFileData,
           extractedData: {},
           linkedProfiles,
-          tags: ["uploaded", uploadHashTag],
+          tags: ["uploaded", uploadHashTag, ...(discardImage ? [discardTag] : [])],
         });
       }
     }
@@ -3168,6 +3196,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       domainHint: classification.domainHint,
       content: messageContent as any,
       startedAt: tUpload,
+      imageDiscarded: discardImage,
       classification: {
         documentClass: classification.documentClass,
         category: classification.category,
@@ -3185,7 +3214,9 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       const profileName = (await storage.getProfile(existingProfileId))?.name;
       reply += `\n\n\ud83d\udcce Linked to ${profileName || "profile"}.`;
     }
-    reply += `\n\nDocument saved. Say "open ${parsed.label || fileName}" anytime to view it.`;
+    reply += discardImage
+      ? `\n\n\ud83d\udd12 The photo itself was not kept \u2014 it was read for extraction and discarded. Only the fields above were saved.`
+      : `\n\nDocument saved. Say "open ${parsed.label || fileName}" anytime to view it.`;
 
     const documentPreview = {
       id: document.id,
@@ -3201,14 +3232,17 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
     console.error("File extraction error:", errMsg);
     console.error("File extraction stack:", err?.stack);
     // Still store the document even if AI fails
+    // Extraction failed. In extract-only mode the photo is STILL not kept —
+    // a failed extraction is not permission to store the image the user asked
+    // us not to store. The row records that the upload happened, nothing more.
     const document = await storage.createDocument({
       name: fileName,
       type: "other",
       mimeType,
-      fileData: base64Data,
+      fileData: persistedFileData,
       extractedData: {},
       linkedProfiles: profileId ? profileId.split(",").filter(Boolean) : [],
-      tags: ["uploaded", uploadHashTag],
+      tags: ["uploaded", uploadHashTag, ...(discardImage ? [discardTag] : [])],
     });
     const documentPreview = {
       id: document.id,
@@ -3217,7 +3251,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       data: document.fileData,
     };
     // Provide a more informative error message
-    let reply = `Saved "${fileName}"`;
+    let reply = discardImage ? `Read "${fileName}" (photo not kept)` : `Saved "${fileName}"`;
     if (errMsg.includes('Could not process image') || errMsg.includes('invalid_image') || errMsg.includes('too large')) {
       reply += ` but the image couldn't be processed (it may be too large or in an unsupported format). You can link it to a profile manually.`;
     } else if (errMsg.includes('rate_limit') || errMsg.includes('429')) {

@@ -197,7 +197,17 @@ export interface ChatMessage {
     }>;
     targetProfile?: { name: string; id?: string; type?: string; isNew?: boolean };
     trackerEntries?: Array<{ trackerName: string; values: Record<string, any> }>;
-    documentPreview?: { id: string; name: string; mimeType: string; data: string };
+    documentPreview?: {
+      id: string;
+      name: string;
+      mimeType: string;
+      data: string;
+      /**
+       * Extract-only upload: the file was read for extraction and never
+       * stored, so there are no bytes to preview — anywhere.
+       */
+      imageDiscarded?: boolean;
+    };
     pendingFinancial?: any;
     /**
      * The review list: ONE row per extracted fact, each carrying the destination

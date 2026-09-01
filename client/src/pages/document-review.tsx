@@ -571,6 +571,9 @@ export function DocumentReviewScreen({
   // ── Preview ────────────────────────────────────────────────────────────────
   const previewMime = extraction.documentPreview?.mimeType ?? "application/pdf";
   const inlineData = extraction.documentPreview?.data || undefined;
+  // Extract-only upload: the file was read and dropped, so there is nothing to
+  // fetch for a preview. Say that plainly instead of showing an empty frame.
+  const imageDiscarded = extraction.documentPreview?.imageDiscarded === true;
   const confidenceScore = understanding?.confidence ?? extraction.semantic?.confidence;
 
   const chips: Array<{ id: RowCategory | "all"; label: string; count: number; accent: string }> = [
@@ -618,6 +621,7 @@ export function DocumentReviewScreen({
                 mimeType={previewMime}
                 inlineData={inlineData}
                 fileName={extraction.fileName}
+                imageDiscarded={imageDiscarded}
               />
             </SectionErrorBoundary>
 
@@ -1286,14 +1290,17 @@ function MiniPreview({
   mimeType,
   inlineData,
   fileName,
+  imageDiscarded,
 }: {
   documentId: string;
   mimeType: string;
   inlineData?: string;
   fileName: string;
+  imageDiscarded?: boolean;
 }) {
   const kind = classifyDocument(mimeType);
-  const { url, blob, error } = useDocumentBlobUrl(documentId, mimeType, inlineData);
+  // Nothing was stored, so don't ask the server for bytes that don't exist.
+  const { url, blob, error } = useDocumentBlobUrl(documentId, mimeType, imageDiscarded ? undefined : inlineData, !imageDiscarded);
   const [, navigate] = useLocation();
   const [zoom, setZoom] = useState(1);
   const kindLabel = kind === "pdf" ? "PDF Document" : kind === "image" ? "Image" : "Document";
@@ -1317,7 +1324,14 @@ function MiniPreview({
           <h3 className="micro-label text-muted-foreground">Document Preview</h3>
         </div>
         <div className="mt-2 h-56 overflow-auto bg-muted/30 relative">
-          {error || (!url && !blob) ? (
+          {imageDiscarded ? (
+            <div className="h-full flex flex-col items-center justify-center gap-1.5 px-4 text-center text-muted-foreground" data-testid="review-preview-discarded">
+              <FileText className="h-8 w-8" />
+              <p className="text-[11px] leading-tight max-w-[220px]">
+                This file wasn't kept. It was read once to pull the fields below, then discarded.
+              </p>
+            </div>
+          ) : error || (!url && !blob) ? (
             <div className="h-full flex items-center justify-center text-muted-foreground">
               <FileText className="h-8 w-8" />
             </div>

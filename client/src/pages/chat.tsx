@@ -652,6 +652,9 @@ interface AttachmentPanelProps {
   onSaveOnly?: () => void;
   isSending: boolean;
   onSmartFill?: () => void;
+  /** Extract-only: read the file, save the fields, keep no copy of the image. */
+  discardImage: boolean;
+  onDiscardImageChange: (v: boolean) => void;
 }
 
 // ── Guided destination picker ────────────────────────────────────────────────
@@ -867,6 +870,8 @@ function AttachmentPanel({
   onSaveOnly,
   isSending,
   onSmartFill,
+  discardImage,
+  onDiscardImageChange,
 }: AttachmentPanelProps) {
   const isImage = attachment.mimeType.startsWith("image/");
   const isPdf = attachment.mimeType === "application/pdf";
@@ -988,6 +993,31 @@ function AttachmentPanel({
               </div>
             </Button>
 
+            {/* Extract-only. Scoped to the extraction button above: it changes
+                what happens to the FILE, not to the fields. "Save to Profile"
+                is the whole point of keeping the file, so the option would be
+                a contradiction there. */}
+            <label
+              className="flex items-start gap-2.5 rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5 cursor-pointer"
+              data-testid="label-discard-image"
+            >
+              <Checkbox
+                checked={discardImage}
+                onCheckedChange={(v) => onDiscardImageChange(v === true)}
+                disabled={actionsDisabled}
+                className="mt-0.5"
+                data-testid="checkbox-discard-image"
+              />
+              <span className="min-w-0">
+                <span className="block text-xs font-medium leading-tight">
+                  Don't keep the {isImage ? "photo" : "file"} &mdash; extract only
+                </span>
+                <span className="block text-[11px] text-muted-foreground leading-tight mt-0.5">
+                  The {isImage ? "photo" : "file"} is read once for extraction and never stored. Only the fields you confirm are saved.
+                </span>
+              </span>
+            </label>
+
             {/* 3. SMART FILL — only for forms (PDF/image) */}
             {(isPdf || isImage) && onSmartFill && (
               <Button
@@ -1031,6 +1061,9 @@ interface BatchAttachmentPanelProps {
   isSending: boolean;
   processedCount: number;
   onSmartFill?: (index: number) => void;
+  /** Extract-only: read the files, save the fields, keep no copies. */
+  discardImage: boolean;
+  onDiscardImageChange: (v: boolean) => void;
 }
 
 function BatchAttachmentPanel({
@@ -1047,6 +1080,8 @@ function BatchAttachmentPanel({
   isSending,
   processedCount,
   onSmartFill,
+  discardImage,
+  onDiscardImageChange,
 }: BatchAttachmentPanelProps) {
   return (
     <div className="px-4 pb-3" data-testid="batch-attachment-panel">
@@ -1215,6 +1250,28 @@ function BatchAttachmentPanel({
               data-testid="input-batch-note"
             />
           </div>
+
+          {/* Extract-only — applies to every file in the batch. */}
+          <label
+            className="flex items-start gap-2.5 rounded-xl border border-border/70 bg-muted/30 px-3 py-2.5 cursor-pointer"
+            data-testid="label-batch-discard-image"
+          >
+            <Checkbox
+              checked={discardImage}
+              onCheckedChange={(v) => onDiscardImageChange(v === true)}
+              disabled={isSending}
+              className="mt-0.5"
+              data-testid="checkbox-batch-discard-image"
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-medium leading-tight">
+                Don't keep these files &mdash; extract only
+              </span>
+              <span className="block text-[11px] text-muted-foreground leading-tight mt-0.5">
+                Each file is read once for extraction and never stored. Only the fields you confirm are saved.
+              </span>
+            </span>
+          </label>
 
           {/* Upload All button */}
           <Button
@@ -2426,6 +2483,12 @@ export default function ChatPage() {
   const composerRef = useRef<ChatComposerHandle>(null);
   const [composerEmpty, setComposerEmpty] = useState(true);
   const [attachmentNote, setAttachmentNote] = useState("");
+  // Extract-only: read the file for its data, then throw the image away. The
+  // server never writes the bytes to Storage or the database, so the extracted
+  // fields are saved and the photo isn't kept anywhere. Off by default, and it
+  // resets after every send — a privacy choice is made per upload, never
+  // silently inherited by the next one.
+  const [discardImage, setDiscardImage] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeArtifact, setActiveArtifact] = useState<any>(null);
@@ -2758,6 +2821,7 @@ export default function ChatPage() {
       fileData: string;
       profileId?: string;
       message?: string;
+      discardImage?: boolean;
     }) => {
       // "Load failed" (iOS) / "Failed to fetch" = the connection died mid-
       // transfer, common on cellular. The server dedupes re-uploads by content
@@ -2822,6 +2886,7 @@ export default function ChatPage() {
         return [];
       });
       setSelectedProfileId("none");
+      setDiscardImage(false);
       syncFromResponse(data as any);
       if (reviewDocId) hashNavigate(`/documents/${reviewDocId}/review`);
     },
@@ -2891,6 +2956,7 @@ export default function ChatPage() {
     mutationFn: async (payload: {
       files: Array<{ fileName: string; mimeType: string; fileData: string; profileId?: string }>;
       message?: string;
+      discardImage?: boolean;
     }) => {
       // Same connection-drop auto-retry as the single-file path — safe
       // because the server dedupes identical files by content hash.
@@ -2989,6 +3055,7 @@ export default function ChatPage() {
       });
       pendingBatchAttachmentsRef.current = [];
       setAttachments([]);
+      setDiscardImage(false);
     },
   });
 
@@ -3236,6 +3303,7 @@ export default function ChatPage() {
       setAttachments([]);
       setSelectedProfileId("none");
       setAttachmentNote("");
+      setDiscardImage(false);
       return;
     }
 
@@ -3261,12 +3329,18 @@ export default function ChatPage() {
       fileData: attData,
       profileId: profileToSend,
       message: note || undefined,
+      discardImage: discardImage || undefined,
     });
 
     // Deliberately NOT clearing the attachment here — it's released in the
     // mutation's onSuccess. If the connection drops mid-upload the photo
     // stays staged so the user can just tap Send again instead of re-taking
     // it. Only the note clears (it's already posted as the user message).
+    //
+    // The extract-only choice is deliberately NOT reset here either: if the
+    // upload fails the photo stays staged for a retry, and that retry must
+    // carry the same "don't keep it" decision. It resets when the attachment
+    // is actually released, in onSuccess.
     setAttachmentNote("");
   };
 
@@ -3315,6 +3389,7 @@ export default function ChatPage() {
     setAttachments([]);
     setSelectedProfileId("none");
     setAttachmentNote("");
+    setDiscardImage(false);
   };
 
   // Batch upload: send using batch endpoint
@@ -3341,6 +3416,7 @@ export default function ChatPage() {
         profileId: att.profileId !== "none" ? att.profileId : undefined,
       })),
       message: note || undefined,
+      discardImage: discardImage || undefined,
     });
 
     // Capture attachments in a ref so onSettled can revoke URLs and clear state
@@ -3359,7 +3435,9 @@ export default function ChatPage() {
       setBatchProcessedCount((prev) => Math.min(prev + 1, currentAttachmentCount));
     }, 2000);
 
-    // Clear the note immediately; attachments will be cleared in onSettled after mutation completes
+    // Clear the note immediately; attachments (and the extract-only choice,
+    // which a retry must keep) are cleared in onSettled after the mutation
+    // completes successfully.
     setSelectedProfileId("none");
     setAttachmentNote("");
   };
@@ -3702,11 +3780,14 @@ export default function ChatPage() {
             setAttachments([]);
             setSelectedProfileId("none");
             setAttachmentNote("");
+            setDiscardImage(false);
           }}
           note={attachmentNote}
           onNoteChange={setAttachmentNote}
           onSend={handleAttachmentSend}
           onSaveOnly={handleSaveOnly}
+          discardImage={discardImage}
+          onDiscardImageChange={setDiscardImage}
           isSending={uploadMutation.isPending || saveOnlyMutation.isPending}
           onSmartFill={() => {
             const a = attachments[0];
@@ -3735,6 +3816,8 @@ export default function ChatPage() {
           note={attachmentNote}
           onNoteChange={setAttachmentNote}
           onSend={handleBatchSend}
+          discardImage={discardImage}
+          onDiscardImageChange={setDiscardImage}
           isSending={batchUploadMutation.isPending}
           processedCount={batchProcessedCount}
           onSmartFill={(idx) => {
