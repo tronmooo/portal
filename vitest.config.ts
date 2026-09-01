@@ -165,6 +165,8 @@ export default defineConfig({
       'tests/medical-report-extraction.test.ts',
       'tests/upload-dedupe.test.ts',
       'tests/upload-discard-image.test.ts',
+      'tests/upload-discard-image-route.test.ts',
+      'tests/upload-discard-image.dom.test.tsx',
       'tests/cache-bust-predicate.test.ts',
       'tests/recover-wedged-queries.test.ts',
       'tests/resume-refresh.test.ts',

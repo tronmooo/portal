@@ -857,7 +857,10 @@ function GuidedDestinationPicker({
   );
 }
 
-function AttachmentPanel({
+// Exported for tests/upload-discard-image.dom.test.tsx: the extract-only
+// checkbox is a privacy promise, and a promise made in the UI deserves to be
+// exercised through the UI rather than assumed from the props type.
+export function AttachmentPanel({
   attachment,
   profiles,
   profilesLoading,
