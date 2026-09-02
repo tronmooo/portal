@@ -931,3 +931,32 @@ describe("D111: payment and adjustment dates are validated as calendar days", ()
     expect((await h.api("POST", `/api/accounts/${ACCT_ID}/adjust`, { delta: 1, date: "2026-13-45" })).status).toBe(400);
   });
 });
+
+// D112/D113 — malformed bodies: a JSON string body was a 500 with the
+// parser's message; a non-string title threw inside sanitize; captures
+// PATCH accepted an array.
+describe("D112/D113: malformed bodies are 400s", () => {
+  it("a JSON string body, an array title and an array capture patch answer 400", async () => {
+    h = await boot({ profiles: [SELF] }, (storage) => { storage.updateCapture = async () => ({ id: "c1" }); });
+    const raw = async (m: string, p: string, body: string) => {
+      const r = await fetch(`http://127.0.0.1:${(h as any).port ?? ""}${p}`, { method: m, headers: { "Content-Type": "application/json" }, body }).catch(() => null);
+      return r;
+    };
+    const s = await h.api("POST", "/api/artifacts", { type: "note", title: ["a"], content: "x" });
+    expect(s.status).toBe(400);
+    expect((await h.api("PATCH", "/api/captures/c1", [] as any)).status).toBe(400);
+    // a bare JSON string body: the harness's api() stringifies, so "text" arrives as the JSON string "text"
+    const t = await h.api("POST", "/api/tasks", "text" as any);
+    expect(t.status).toBe(400);
+    expect(t.data?.error).toBe("Invalid JSON body");
+    const n = await h.api("POST", "/api/tasks", 42 as any);
+    expect(n.status).toBe(400);
+  });
+  it("a value the column cannot hold is a 400, a bad uuid stays a 404", async () => {
+    h = await boot({}, (storage) => {
+      storage.updateIncome = async (_id: string, patch: any) => { if (patch.amount === 7) throw { code: "22P02", message: 'invalid input syntax for type numeric: "abc"' }; throw { code: "22P02", message: 'invalid input syntax for type uuid: "x"' }; };
+    });
+    expect((await h.api("PATCH", "/api/incomes/i1", { amount: 7 })).status).toBe(400);
+    expect((await h.api("PATCH", "/api/incomes/i1", { amount: 8 })).status).toBe(404);
+  });
+});

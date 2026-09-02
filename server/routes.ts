@@ -1144,7 +1144,11 @@ function htmlEscape(input: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
-function sanitize(input: string): string {
+function sanitize(input: unknown): string {
+  // A non-string (an array or object where a title was expected) is not
+  // text to clean; returning "" lets the schema reject it as empty instead
+  // of `.replace` throwing halfway through the handler (a 500).
+  if (typeof input !== "string") return "";
   return input
     .replace(/javascript:/gi, '')
     .replace(/on\w+\s*=/gi, '')
@@ -1230,8 +1234,12 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
         // answer as an unknown id — not a server error.
         const pgCode = String(err?.code || err?.details?.code || "");
         const msg = String(err?.message || "");
-        if (pgCode === "22P02" || /invalid input syntax for type uuid/i.test(msg)) {
+        if (/invalid input syntax for type uuid/i.test(msg)) {
           res.status(404).json({ error: "Not found" });
+        } else if (pgCode === "22P02" || pgCode === "22003" || pgCode === "42804" || /invalid input syntax for type|out of range for type|malformed array literal/i.test(msg)) {
+          // A value the column cannot hold (text where a number goes, an
+          // object where text goes) is the caller's bad request.
+          res.status(400).json({ error: "Invalid value for a field" });
         } else if (pgCode === "23505" || /duplicate key value violates unique constraint/i.test(msg)) {
           // A uniqueness rule (one journal entry per day, one Self, …) is the
           // caller's conflict, not a server fault.
@@ -10852,7 +10860,10 @@ No emojis. No prose outside the JSON.`,
 
   app.patch("/api/captures/:id", asyncHandler(async (req, res) => {
     if (!storage.updateCapture) return res.status(501).json({ error: "Captures not supported" });
-    const updated = await storage.updateCapture(req.params.id, req.body || {});
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+      return res.status(400).json({ error: "Request body must be a JSON object" });
+    }
+    const updated = await storage.updateCapture(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
   }));
@@ -10879,12 +10890,22 @@ No emojis. No prose outside the JSON.`,
     res.status(404).json({ error: `No API route for ${req.method} ${req.path}` });
   });
 
-  // Global async error handler — catches unhandled promise rejections from route handlers
+  // Global error handler — body-parser rejections (a JSON string or bare
+  // number as the body, malformed JSON, a body over the size limit) carry a
+  // 4xx status and are the caller's fault: they used to come back as 500
+  // with the parser's own message. Everything else stays a generic 500 so
+  // internal details never leak.
   app.use((err: any, _req: any, res: any, _next: any) => {
-    console.error(`[API Error]`, err?.message || err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: err?.message || "Internal server error" });
+    const status = Number(err?.statusCode || err?.status);
+    if (res.headersSent) return;
+    if (err?.type === "entity.parse.failed" || (Number.isInteger(status) && status >= 400 && status < 500)) {
+      res.status(Number.isInteger(status) && status >= 400 && status < 500 ? status : 400).json({
+        error: err?.type === "entity.parse.failed" ? "Invalid JSON body" : (err?.type === "entity.too.large" ? "Request body too large" : (err?.expose ? err.message : "Bad request")),
+      });
+      return;
     }
+    console.error(`[API Error]`, err?.message || err);
+    res.status(500).json({ error: "Internal server error" });
   });
 
   return httpServer;
