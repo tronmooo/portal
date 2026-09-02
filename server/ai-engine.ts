@@ -15583,6 +15583,18 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       return `${t.name} (${t.category}, owner:${ownerNames || "unlinked"}, ${t.entries.length} entries${last ? `, latest: ${JSON.stringify(last.values).slice(0,60)}` : ""})`;
     }).join("; ") || "none"}`,
     `Active Tasks: ${tasks.filter(t => t.status !== "done").slice(0, 15).map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
+    // Recently completed tasks ride along so "actually I haven't done that
+    // yet, reopen it" can find the record. With only active tasks listed the
+    // model concluded the task did not exist and offered to create a new one.
+    (() => {
+      const cutoff = Date.now() - 7 * 86400000;
+      const recent = tasks
+        .filter(t => t.status === "done" && (!(t as any).completedAt || new Date((t as any).completedAt).getTime() >= cutoff))
+        .slice(-10);
+      return recent.length
+        ? `Recently Completed Tasks (last 7 days — to reopen one call update_task with changes:{status:"todo"}): ${recent.map(t => t.title).join("; ")}`
+        : "";
+    })(),
     `Recent Expenses (last 10): ${expenses.slice(-10).map(e => `$${e.amount} - ${e.description} (${e.date?.slice(0,10)})`).join("; ") || "none"}`,
     // NEXT OCCURRENCE, not base date: a daily stand-up anchored last month is
     // upcoming every day, and used to be invisible here ("no upcoming events
