@@ -1243,7 +1243,9 @@ export const insertGoalSchema = z.object({
   target: z.number(),
   unit: z.string(),
   startValue: z.number().optional(),
-  deadline: z.string().optional(),
+  // A real calendar day or blank (no deadline); "next month" used to be stored
+  // and every goal card then showed "Invalid Date" for its countdown.
+  deadline: calendarDayOrBlank.optional(),
   trackerId: z.string().optional(),
   habitId: z.string().optional(),
   category: z.string().optional(),

@@ -9487,7 +9487,7 @@ No emojis. No prose outside the JSON.`,
     {
       const parsed = insertGoalSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
-      req.body = { ...req.body, ...parsed.data };
+      req.body = withoutUndefined({ ...req.body, ...parsed.data });
     }
     if (req.body.title !== undefined) {
       if (typeof req.body.title !== "string" || !req.body.title.trim()) return res.status(400).json({ error: "Goal title must be a non-empty string" });

@@ -289,3 +289,19 @@ describe("D93: habit scheduledTime accepts '' as clear", () => {
     expect(insertHabitSchema.partial().safeParse({ scheduledTime: "9am" }).success).toBe(false);
   });
 });
+
+// D94 — goal deadlines took any string (create and edit).
+import { insertGoalSchema } from "../shared/schema";
+describe("D94: a goal deadline is a real calendar day or blank", () => {
+  const base = { title: "g", type: "custom" as const, target: 1, unit: "x" };
+  it("accepts a day, a timestamp's day and blank; rejects free text and impossible days", () => {
+    expect(insertGoalSchema.parse({ ...base, deadline: "2026-12-31" }).deadline).toBe("2026-12-31");
+    expect(insertGoalSchema.parse({ ...base, deadline: "2026-12-31T08:00:00.000Z" }).deadline).toBe("2026-12-31");
+    expect(insertGoalSchema.parse({ ...base, deadline: "" }).deadline).toBeUndefined();
+    expect(insertGoalSchema.parse({ ...base }).deadline).toBeUndefined();
+    for (const bad of ["next month", "someday", "2026-13-45", "2026-02-30"]) {
+      expect(insertGoalSchema.safeParse({ ...base, deadline: bad }).success, bad).toBe(false);
+      expect(insertGoalSchema.partial().safeParse({ deadline: bad }).success, `partial ${bad}`).toBe(false);
+    }
+  });
+});
