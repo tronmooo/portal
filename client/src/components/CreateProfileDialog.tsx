@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import type { ProfileType, InsertProfile } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 
 function FieldRow({
@@ -117,8 +118,9 @@ export function CreateProfileDialog({
       return res.json();
     },
     onSuccess: (created: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      // Any registry type can be created here, assets and liabilities
+      // included, so net worth, the bootstrap seed and the roll-ups move too.
+      void invalidateDomains("profiles", "assets", "liabilities", "dashboard");
       toast({ title: `"${name}" profile created`, description: selectedTypeDef?.label || selectedTypeKey });
       try { onCreated?.({ id: created?.id, name: created?.name || name, type: created?.type || "" }); } catch {}
       handleClose();

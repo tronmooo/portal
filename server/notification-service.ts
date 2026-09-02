@@ -7,7 +7,7 @@
 // client filters by set membership. Caching and the profile filter stay in the
 // route — this module is pure "compute the list".
 import type { IStorage } from "./storage";
-import { getUserToday } from "@shared/timezone";
+import { getUserToday, parseLocalDate } from "@shared/timezone";
 import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "@shared/recurring-dates";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
@@ -86,9 +86,12 @@ function daysDiff(dateA: Date, dateB: Date): number {
  */
 export async function buildNotifications(storage: IStorage, notifTz: string): Promise<AppNotification[]> {
   const notifications: AppNotification[] = [];
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // "Today" in the USER's zone (notifTz), not the server clock: at 5 PM
+  // Pacific the server's UTC day had already rolled, so a task due today read
+  // "was due 1 day ago" and tomorrow's bill read "due today".
   const todayStr = getUserToday(notifTz);
+  const today = parseLocalDate(todayStr);
+  today.setHours(0, 0, 0, 0);
 
   // PERF (2026-05-31): fetch every list this endpoint needs in parallel.
   const [documents, profiles, tasks, obligations, habits] = await Promise.all([

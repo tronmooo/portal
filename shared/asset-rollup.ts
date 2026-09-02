@@ -81,10 +81,14 @@ function extractBaseValue(fields: Record<string, any>): number {
 function extractBaseLoans(fields: Record<string, any>): number {
   if (!fields || typeof fields !== "object") return 0;
   const namespaces = ["", "finance", "loan", "loans"];
-  const keys = ["remainingBalance", "remaining_balance", "loanBalance", "loan_balance", "balance"];
+  const keys = ["remainingBalance", "remaining_balance", "loanBalance", "loan_balance"];
   const paths: string[] = [];
   for (const ns of namespaces) {
     for (const k of keys) paths.push(ns ? `${ns}.${k}` : k);
+    // A bare `balance` is the asset's own value (extractBaseValue reads it);
+    // it is a loan only under an explicit loan namespace. Reading it on both
+    // sides rolled a $5,000 checking account up to a net value of $0.
+    if (ns === "loan" || ns === "loans") paths.push(`${ns}.balance`);
   }
   return firstPositive(fields, paths);
 }

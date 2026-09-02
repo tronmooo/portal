@@ -331,7 +331,7 @@ export async function renderFilledPdf(originalBase64: string, fields: FillFieldI
 
   // 2) Always append a "Smart Fill — Filled Fields" summary page so every value is
   // visible and auditable, regardless of whether AcroForm fills succeeded.
-  const page = pdfDoc.addPage();
+  let page = pdfDoc.addPage();
   const { width, height } = page.getSize();
   const margin = 50;
   let y = height - margin;
@@ -365,9 +365,10 @@ export async function renderFilledPdf(originalBase64: string, fields: FillFieldI
 
   const draw = (label: string, value: string) => {
     if (y < margin + rowH) {
-      const next = pdfDoc.addPage();
-      const sz = next.getSize();
-      y = sz.height - margin;
+      // Continue on the NEW page — drawing kept targeting the first page,
+      // overprinting its rows and leaving each overflow page blank.
+      page = pdfDoc.addPage();
+      y = page.getSize().height - margin;
     }
     const labelTxt = label.length > 38 ? label.slice(0, 37) + "…" : label;
     const valueTxt = value.length > 60 ? value.slice(0, 59) + "…" : value;
@@ -388,9 +389,8 @@ export async function renderFilledPdf(originalBase64: string, fields: FillFieldI
 
   // Footer
   if (y < margin + 30) {
-    const next = pdfDoc.addPage();
-    const sz = next.getSize();
-    y = sz.height - margin;
+    page = pdfDoc.addPage();
+    y = page.getSize().height - margin;
   }
   y -= 12;
   page.drawText("Review before submitting. The original PDF is preserved unchanged.", {

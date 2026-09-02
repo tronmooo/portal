@@ -607,7 +607,7 @@ export function calculateMonthlyComparison(
     incomeChangePct[c] = percentChange(curIncome[c] ?? 0, prevIncome[c] ?? 0);
   }
 
-  const today = opts.today ?? new Date().toISOString().slice(0, 10);
+  const today = opts.today ?? new Date().toLocaleDateString("en-CA"); // local day: UTC's is already tomorrow after ~5 PM Pacific
   return {
     current: { ...cur, spending: curSpend, income: curIncome },
     previous: { ...prev, spending: prevSpend, income: prevIncome },

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
+import { formatListDate } from "@/lib/format";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -111,16 +113,11 @@ function typeIconBg(type: UnifiedArtifact["type"]) {
 
 // ─── Date formatting ─────────────────────────────────────────
 function formatDate(dateStr: string) {
+  // Calendar-day relative label (lib/format): the rolling-24h version called
+  // an 11 PM save "Today" at 1 AM the next morning.
   if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return dateStr;
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffDays = Math.floor(diffMs / 86400000);
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: d.getFullYear() !== now.getFullYear() ? "numeric" : undefined });
+  if (isNaN(new Date(dateStr).getTime())) return dateStr;
+  return formatListDate(dateStr);
 }
 
 // ─── Mood emoji helper ───────────────────────────────────────
@@ -773,11 +770,10 @@ export default function ArtifactsPage() {
       if (ctx?.prev && ctx?.key) qc.setQueryData(ctx.key, ctx.prev);
     },
     onSettled: (_d, _e, item) => {
-      qc.invalidateQueries({ queryKey: item?.isArtifact ? ["/api/artifacts"] : ["/api/documents"] });
-      qc.invalidateQueries({ queryKey: ["/api/stats"] });
-      // Dashboard "Recent" / artifacts widgets read from /api/dashboard-enhanced —
-      // include it so the deleted row disappears from the dashboard too.
-      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Whole domain: a deleted document must also leave the owner's Info tab
+      // embed, the calendar/date-rules and the bell; the dashboard widgets
+      // read /api/dashboard-enhanced.
+      void invalidateDomains(item?.isArtifact ? "artifacts" : "documents", "dashboard");
     },
     onSuccess: () => { setPendingDelete(null); },
   });

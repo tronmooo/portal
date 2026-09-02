@@ -252,8 +252,13 @@ export function frequencyToRecurrence(frequency: unknown): string {
   switch (String(frequency ?? "").toLowerCase().replace(/[\s_]+/g, "-")) {
     case "daily": return "daily";
     case "weekly": return "weekly";
-    case "biweekly": case "bi-weekly": return "biweekly";
+    case "biweekly": case "bi-weekly": case "fortnightly": case "every-2-weeks": case "every-other-week": return "biweekly";
     case "monthly": return "monthly";
+    // Multi-month cadences the engine expands natively (shared/recurring-dates).
+    // These fell to the monthly default, so the calendar showed 12 payments a
+    // year for a bill the finance total counted twice.
+    case "bimonthly": case "bi-monthly": case "every-2-months": case "every-other-month": return "bimonthly";
+    case "semiannual": case "semi-annual": case "semiannually": case "semi-annually": case "biannual": case "biannually": case "every-6-months": return "semiannual";
     case "yearly": case "annual": case "annually": return "yearly";
     // The engine has no native quarterly step; a quarterly bill is expanded as
     // monthly and thinned by the caller, so we keep it explicit rather than

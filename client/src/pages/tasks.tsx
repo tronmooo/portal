@@ -11,7 +11,8 @@ import { MetricCard } from "@/components/ui/metric-card";
 const TASKS_ACCENT = "262 70% 62%";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { formatStoredDate, farFutureWarning } from "@/lib/dates";
@@ -735,9 +736,10 @@ export default function TasksPage() {
                       }
                     }}
                     onSwipeRight={async () => {
-                      const tomorrow = new Date();
-                      tomorrow.setDate(tomorrow.getDate() + 1);
-                      const dateStr = tomorrow.toISOString().slice(0, 10);
+                      // Tomorrow in the user's zone: the UTC slice was already a
+                      // day ahead after ~5 PM Pacific, so "snooze to tomorrow"
+                      // landed two days out.
+                      const dateStr = tzAddDays(getUserToday(BROWSER_TIMEZONE), 1);
                       // Optimistic update: set dueDate immediately
                       await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
                       const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });

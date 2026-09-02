@@ -5,6 +5,8 @@
  * Shared between client and server so both compute identical numbers.
  */
 
+import { addMonthsISO } from "./date-math";
+
 export interface LiabilityTerms {
   /** Remaining principal balance today. Required. */
   currentBalance: number;
@@ -38,6 +40,8 @@ export interface AmortizationResult {
   payoffDate: string;
   payoffMonths: number;
   monthlyPayment: number;
+  /** True when the payment does not cover the interest, so no payoff exists. */
+  neverAmortizes?: boolean;
 }
 
 const SAFETY_MAX_PERIODS = 600; // 50 years — prevent runaways
@@ -78,10 +82,12 @@ export function computeAmortizedPayment(balance: number, annualRate: number, mon
   return (balance * r) / (1 - Math.pow(1 + r, -months));
 }
 
+// Month arithmetic clamped to month end and anchored on the first payment's
+// day (shared/date-math). Raw setUTCMonth overflowed: a Jan 31 first payment
+// produced Mar 3 for the second and drifted the whole schedule.
 function addMonthsIso(iso: string, n: number): string {
-  const d = new Date(iso + "T00:00:00Z");
-  d.setUTCMonth(d.getUTCMonth() + n);
-  return d.toISOString().slice(0, 10);
+  const anchorDay = Number(iso.slice(8, 10)) || undefined;
+  return addMonthsISO(iso, n, anchorDay);
 }
 
 /** Build a complete amortization schedule for the given terms. */
@@ -93,7 +99,7 @@ export function buildAmortization(terms: LiabilityTerms): AmortizationResult {
   const firstDate =
     terms.firstPaymentDate && /^\d{4}-\d{2}-\d{2}$/.test(terms.firstPaymentDate)
       ? terms.firstPaymentDate
-      : new Date().toISOString().slice(0, 10);
+      : new Date().toLocaleDateString("en-CA"); // local calendar day, not UTC's
 
   let payment = Number(terms.monthlyPayment) || 0;
   if (!payment || payment <= 0) {
@@ -105,8 +111,13 @@ export function buildAmortization(terms: LiabilityTerms): AmortizationResult {
   let remaining = balance;
   let cumulativeInterest = 0;
 
+  let neverAmortizes = false;
   for (let i = 1; i <= SAFETY_MAX_PERIODS && remaining > 0.005; i++) {
     const interest = remaining * monthlyRate;
+    // A payment that doesn't cover the interest never pays the loan off. Stop
+    // BEFORE emitting a row: the old check ran after the push, so such a loan
+    // reported "pays off in 1 month" with a negative-principal row.
+    if (payment + extra <= interest) { neverAmortizes = true; break; }
     let principal = payment - interest;
     let extraApplied = extra;
 
@@ -138,16 +149,13 @@ export function buildAmortization(terms: LiabilityTerms): AmortizationResult {
     });
 
     if (remaining <= 0.005) break;
-    // Safety: if payment doesn't cover interest, loan never pays off
-    if (payment <= interest) {
-      break;
-    }
   }
 
   const last = rows[rows.length - 1];
   const totalPaid = rows.reduce((s, r) => s + r.payment, 0);
 
   return {
+    neverAmortizes,
     rows,
     totalInterest: cumulativeInterest,
     totalPaid,
@@ -202,6 +210,8 @@ export interface LiabilitySummary {
   remainingMonths: number;
   payoffDate: string;
   totalRemainingInterest: number;
+  /** Payment does not cover interest — no payoff date exists. */
+  neverAmortizes?: boolean;
 }
 
 export function summarizeLiability(params: {
@@ -232,5 +242,6 @@ export function summarizeLiability(params: {
     remainingMonths: amo.payoffMonths,
     payoffDate: amo.payoffDate,
     totalRemainingInterest: amo.totalInterest,
+    neverAmortizes: amo.neverAmortizes,
   };
 }

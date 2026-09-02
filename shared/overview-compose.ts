@@ -138,7 +138,10 @@ export function monthlyEquivalent(amount: number, frequency?: string | null): nu
       : /week/.test(f) ? "weekly"
       : /day|daily/.test(f) ? "daily"
       : /quarter/.test(f) ? "quarterly"
-      : /semi|half.?year|6 ?month/.test(f) ? "semiannual"
+      // semi-MONTHLY must be tested before the semi-ANNUAL pattern: a bare
+      // /semi/ sent a $1,000 semi-monthly payment to /6 instead of ×2.
+      : /semi.?month|twice.?(a.?)?month/.test(f) ? "semimonthly"
+      : /semi.?ann|half.?year|6 ?month/.test(f) ? "semiannual"
       : /year|annual/.test(f) ? "annual"
       : "monthly";
   return toMonthlyAmount(amount, canonical);
@@ -436,7 +439,7 @@ function buildAttention(
         : days === 0
           ? `${v.label} is today`
           : `${v.label} in ${days} day${days === 1 ? "" : "s"}`,
-      date: d.toISOString().slice(0, 10),
+      date: d.toLocaleDateString("en-CA"), // toDate() parsed LOCAL noon; toISOString shifted it a day east of UTC+12
       daysUntil: days,
       sourceReference: v.sourceReference,
     });
@@ -452,7 +455,7 @@ function buildAttention(
       severity: days < 0 ? "critical" : days <= 14 ? "warning" : "info",
       title: days < 0 ? `${o.name} is overdue` : days === 0 ? `${o.name} due today` : `${o.name} due in ${days} days`,
       detail: o.autopay ? "Autopay is on" : undefined,
-      date: d.toISOString().slice(0, 10),
+      date: d.toLocaleDateString("en-CA"),
       daysUntil: days,
     });
   }

@@ -1,3 +1,4 @@
+import { parseLocalDate } from "@/lib/format";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useLocation } from "wouter";
 import {
@@ -396,13 +397,13 @@ export function CommandSearch() {
   const expenseSubtitle = (e: Expense) =>
     e.amount != null ? `$${e.amount}${e.category ? ` · ${e.category}` : ""}` : e.category ?? "Expense";
   const eventSubtitle = (e: CalendarEvent) =>
-    e.startDate ? new Date(e.startDate).toLocaleDateString() : e.category ?? "Event";
+    e.startDate ? (parseLocalDate(e.startDate)?.toLocaleDateString() ?? e.startDate) : e.category ?? "Event";
   const documentSubtitle = (d: Document) =>
     [d.type, d.status].filter(Boolean).join(" · ") || "Document";
   const habitSubtitle = (h: Habit) =>
     h.currentStreak != null ? `${h.currentStreak} day streak` : h.frequency ?? "Habit";
   const journalSubtitle = (j: JournalEntry) =>
-    j.date ? new Date(j.date).toLocaleDateString() : j.mood ?? "Journal Entry";
+    j.date ? (parseLocalDate(j.date)?.toLocaleDateString() ?? j.date) : j.mood ?? "Journal Entry";
   const obligationSubtitle = (o: Obligation) =>
     o.amount != null ? `$${o.amount}${o.category ? ` · ${o.category}` : ""}` : o.category ?? "Obligation";
   const artifactSubtitle = (a: Artifact) => a.type ?? "Artifact";

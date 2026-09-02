@@ -68,6 +68,11 @@ export function resolveAssetValue(input: any): number {
   const vehicle = fields.vehicle || {};
   const vehicles = fields.vehicles || {};
   const investment = fields.investment || {};
+  // A `loan` profile's balance-like keys are the DEBT, not an asset value. It
+  // is in the asset set because it may also carry the financed asset's market
+  // value (currentValue etc.), but falling back to `balance` here added the
+  // debt to assets as well — a $20k car loan netted to $0 instead of −$20k.
+  const isLoan = input && typeof input === "object" && "fields" in input && String((input as any).type) === "loan";
 
   const candidates: any[] = [
     fields.currentValue, fields.current_value, housing.currentValue, housing.current_value, other.currentValue, other.current_value,
@@ -78,8 +83,8 @@ export function resolveAssetValue(input: any): number {
     fields.cost, other.cost,
     fields.amount, other.amount,
     fields.price, other.price,
-    fields.balance, finance.balance, finance.currentValue, finance.current_value, finance.value, finance.marketValue, finance.market_value,
-    fields.accountBalance, finance.accountBalance, finance.account_balance,
+    ...(isLoan ? [] : [fields.balance, finance.balance]), finance.currentValue, finance.current_value, finance.value, finance.marketValue, finance.market_value,
+    ...(isLoan ? [] : [fields.accountBalance, finance.accountBalance, finance.account_balance]),
     vehicle.purchasePrice, vehicle.purchase_price, vehicle.currentValue, vehicle.current_value, vehicle.value,
     vehicles.purchasePrice, vehicles.purchase_price, vehicles.currentValue, vehicles.current_value, vehicles.value,
     investment.balance, investment.value, investment.currentValue, investment.current_value,

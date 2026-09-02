@@ -234,7 +234,7 @@ export async function generateWeeklyReview(storage: any, profileIds?: string[]):
   // Habit streaks
   const habitSummary = (habits as any[]).map((h: any) => ({
     name: h.name,
-    streak: h.streak || 0,
+    streak: h.currentStreak ?? h.streak ?? 0, // Habit has currentStreak; `streak` never existed, so this section never rendered
   })).filter(h => h.streak > 0).sort((a, b) => b.streak - a.streak).slice(0, 5);
 
   // ── AI narrative intro ──

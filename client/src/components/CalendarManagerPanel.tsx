@@ -23,6 +23,7 @@ import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { formatApiError } from "@/lib/formatError";
 import { addMonthsClamped } from "@shared/date-math";
 import { useToast } from "@/hooks/use-toast";
@@ -53,15 +54,11 @@ const KIND_ICON: Record<ObligationKind, any> = {
 };
 
 function invalidateAll() {
-  queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
+  // Cache bus for the domains (covers date-rules, insights, the persisted
+  // bootstrap seed and other tabs); the two keys no domain owns stay explicit.
+  void invalidateDomains("obligations", "events", "tasks", "dashboard");
   queryClient.invalidateQueries({ queryKey: ["/api/obligation-occurrences"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
   queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-  queryClient.invalidateQueries({ queryKey: ["/api/notifications"] });
 }
 
 function isoDay(d: Date = new Date()): string {

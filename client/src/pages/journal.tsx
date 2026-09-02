@@ -2,7 +2,9 @@ import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
+import { parseLocalDate } from "@/lib/format";
 import { getFilterLabel } from "@/lib/profileFilter";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -266,6 +268,9 @@ export default function JournalPage() {
   const saveFreeEntry = async (finalize = false) => {
     if (!freeText.trim() || freeSavingRef.current) {
       if (finalize && !freeText.trim()) toast({ title: "Write something first", variant: "destructive" });
+      // The Save button used to do nothing while the debounced autosave was
+      // in flight; say so instead of looking dead.
+      else if (finalize) toast({ title: "Still saving…", description: "Try again in a moment." });
       return;
     }
     freeSavingRef.current = true;
@@ -436,8 +441,11 @@ export default function JournalPage() {
 
   // 7-day mood strip
   const last7: { date: string; mood?: MoodLevel }[] = [];
+  // Entry dates are written in the browser's zone (en-CA), so walk back from
+  // the same "today" — the UTC slice left today's dot dark after ~5 PM Pacific.
+  const todayLocal = getUserToday(BROWSER_TIMEZONE);
   for (let i = 6; i >= 0; i--) {
-    const dateStr = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+    const dateStr = tzAddDays(todayLocal, -i);
     const entry = entries.find(e => e.date === dateStr);
     last7.push({ date: dateStr, mood: entry?.mood });
   }
@@ -464,7 +472,7 @@ export default function JournalPage() {
         {last7.map((day, i) => {
           const cfg = day.mood ? MOOD_CONFIG[day.mood] : null;
           const MIcon = cfg?.icon || Meh;
-          const dayLabel = new Date(day.date).toLocaleDateString("en-US", { weekday: "short" }).slice(0, 2);
+          const dayLabel = (parseLocalDate(day.date) ?? new Date()).toLocaleDateString("en-US", { weekday: "short" }).slice(0, 2);
           return (
             <div key={i} className="flex flex-col items-center gap-1">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center ${cfg ? cfg.bg : "bg-muted"}`}>

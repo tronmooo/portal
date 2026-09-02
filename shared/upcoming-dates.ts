@@ -342,8 +342,15 @@ function rollRecurrence(rawISO: string, pattern: string | undefined, todayStr: s
       case "weekly": next.setDate(next.getDate() + 7); break;
       case "biweekly": next.setDate(next.getDate() + 14); break;
       case "monthly": next.setTime(addMonthsClamped(start, step, anchorDay).getTime()); break;
+      case "bimonthly": next.setTime(addMonthsClamped(start, step * 2, anchorDay).getTime()); break;
+      case "quarterly": next.setTime(addMonthsClamped(start, step * 3, anchorDay).getTime()); break;
+      case "semiannual": case "semiannually": case "biannual":
+        next.setTime(addMonthsClamped(start, step * 6, anchorDay).getTime()); break;
       case "yearly": next.setTime(addYearsClamped(start, step, anchorDay).getTime()); break;
-      default: next.setDate(next.getDate() + 1);
+      // Unknown cadence: step monthly, the same default the calendar adapters
+      // use. Falling through to DAILY made a quarterly HOA fee read "due
+      // today" every single day.
+      default: next.setTime(addMonthsClamped(start, step, anchorDay).getTime());
     }
   };
   let safety = 4000;

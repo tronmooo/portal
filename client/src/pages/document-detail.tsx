@@ -3,6 +3,7 @@ import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { getUserToday } from "@shared/timezone";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -732,7 +733,10 @@ export default function DocumentDetailPage() {
     },
     onSuccess: (updated) => {
       queryClient.setQueryData(["/api/documents", id], updated);
-      queryClient.invalidateQueries({ queryKey: ["/api/documents"] });
+      // The documents domain also covers the owner's profile embed, the
+      // calendar/date-rules (an expiration is a date) and the notification
+      // bell — a bare /api/documents bust left all of them on the old value.
+      void invalidateDomains("documents");
       toast({ title: "Saved", description: "Document updated" });
     },
     onError: (_err, _vars, ctx) => {

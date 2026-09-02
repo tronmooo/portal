@@ -30,6 +30,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CreateProfileDialog } from "@/components/CreateProfileDialog";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 
 type CreateKind =
@@ -220,8 +221,9 @@ function QuickTaskDialog({ open, onClose }: { open: boolean; onClose: () => void
       return { prev };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      // Cache bus (ARCHITECTURE §1.4): calendar, date-rules, notifications and
+      // the persisted bootstrap seed all derive from tasks.
+      void invalidateDomains("tasks");
       toast({ title: "Task created" });
     },
     onError: (err, _v, ctx) => {
@@ -303,9 +305,9 @@ function QuickBillDialog({ open, onClose }: { open: boolean; onClose: () => void
       return { prev };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/obligations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar"] });
+      // "/api/calendar" matched no query (the live key is /api/calendar/timeline),
+      // so a bill added here never reached the calendar. Use the cache bus.
+      void invalidateDomains("obligations", "dashboard");
       toast({ title: "Bill added" });
     },
     onError: (err, _v, ctx) => {
@@ -408,7 +410,7 @@ function QuickTrackerDialog({ open, onClose }: { open: boolean; onClose: () => v
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"] });
+      void invalidateDomains("trackers");
       toast({ title: "Tracker created" });
       onClose();
     },

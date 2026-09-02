@@ -111,6 +111,8 @@ import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/ha
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries } from "@shared/series-detect";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
+import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue } from "@shared/asset-value";
+import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
 import { parseQuickRun, parseQuickSleep, parseQuickWeight, buildTurnRecap, type RecapOp } from "@shared/quick-log";
@@ -6605,7 +6607,10 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
         normalized.dueDate = undefined;
       }
       if (!normalized.priority) normalized.priority = "medium";
-      const validPriorities = ["low", "medium", "high", "urgent"];
+      // insertTaskSchema only accepts low|medium|high; "urgent" used to pass
+      // this check and then fail the whole create_task in zod.
+      if (normalized.priority === "urgent" || normalized.priority === "critical") normalized.priority = "high";
+      const validPriorities = ["low", "medium", "high"];
       if (!validPriorities.includes(normalized.priority)) {
         warnings.push(`Priority "${normalized.priority}" is not valid — defaulting to "medium"`);
         normalized.priority = "medium";
@@ -7446,11 +7451,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Without this guard, the user's $400k house gets clobbered with a
       // Redfin estimate and the recursive net-worth rollup is wrong by
       // tens of thousands of dollars.
-      const userProvidedValue = Number(
-        (finalFields as any).currentValue ?? (finalFields as any).purchasePrice ??
-        (finalFields as any).value ?? (finalFields as any).balance ??
-        (finalFields as any).amount ?? (finalFields as any).cost ?? (finalFields as any).price ?? 0,
-      ) > 0;
+      // Canonical resolver: the inline key list missed marketValue,
+      // estimatedValue and every nested/snake_case path, so a value stored
+      // there was clobbered by the estimate this guard exists to prevent.
+      const userProvidedValue = sharedAssetValue({ type: _autoValType, fields: finalFields }) > 0;
       if (userProvidedValue) {
         logger.info("ai", `Skipping auto-valuation for "${input.name}" — user provided an exact value`);
         return newProfile;
@@ -7465,7 +7469,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
               valuationMethod: valuation.method,
               valuationConfidence: valuation.confidence,
               valuationRange: valuation.details,
-              valuationDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+              valuationDate: getUserToday(aiUserTimezone()),
             },
           });
           logger.info("ai", `Auto-valued "${input.name}" at $${valuation.estimatedValue} (${valuation.confidence})`);
@@ -10008,9 +10012,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const liabilities = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
       const summarize = async (lp: any) => {
         const f = lp.fields || {};
-        const currentBalance = Number(f.currentBalance) || 0;
+        // Canonical resolvers (ARCHITECTURE §3.1): the profile page writes
+        // `balance` and `interestRate` (a percent), which the inline reads
+        // missed — the chat then reported the debt as $0 / paid off.
+        const currentBalance = sharedLiabilityBalance(lp);
         const monthlyPayment = Number(f.monthlyPayment) || 0;
-        const annualRate = Number(f.annualInterestRate) || 0;
+        const annualRate = sharedAnnualRate(f);
         let payments: any[] = [];
         try { payments = await storage.getLiabilityPayments(lp.id); } catch { /* noop */ }
         const totalPaidPrincipal = payments.reduce((s: number, p: any) => s + (Number(p.principalPortion) || 0), 0);
@@ -15515,7 +15522,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       ]);
       return `Liabilities (${liabProfiles.length}): ${liabProfiles.map((l: any, idx: number) => {
         const f = l.fields || {};
-        const bal = Number(f.currentBalance) || 0;
+        const bal = sharedLiabilityBalance(l);
+        const apr = sharedAnnualRate(f); // normalized fraction (6.5 → 0.065)
         const status = bal === 0 ? "PAID-OFF" : "active";
         const subtype = l.type_key || "other";
         // Searchable keywords helps the model fuzzy-match casual phrasings ("boat", "sea ray", "my dad's loan").
@@ -15527,7 +15535,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         if (f.propertyAddress) keywords.push(String(f.propertyAddress));
         const details = [
           `bal: $${bal.toFixed(2)}`,
-          f.annualInterestRate ? `apr: ${(Number(f.annualInterestRate) * 100).toFixed(2)}%` : null,
+          apr > 0 ? `apr: ${(apr * 100).toFixed(2)}%` : null,
           f.monthlyPayment ? `mo: $${f.monthlyPayment}` : null,
           f.dueDay ? `due: ${f.dueDay}` : null,
         ].filter(Boolean).join(', ');
@@ -16735,8 +16743,22 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         throw new Error('chat_artifacts write requires authenticated context');
       }
       try {
-        await (storage as any).supabase.from('chat_artifacts').upsert({
-          id: artifact.id,
+        // The id comes from the MODEL (the prompt asks it to invent one) and
+        // this client runs under the service-role key, so a bare upsert on a
+        // colliding id would overwrite ANOTHER user's artifact — title, data
+        // and user_id reassigned. Look the id up first; anything that is not
+        // ours (or not id-shaped) gets a fresh server-generated id.
+        const sb = (storage as any).supabase;
+        let artifactId = String(artifact.id || "");
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(artifactId)) artifactId = "";
+        if (artifactId) {
+          const { data: existingArtifact } = await sb.from('chat_artifacts').select('user_id').eq('id', artifactId).maybeSingle();
+          if (existingArtifact && existingArtifact.user_id !== artifactUserId) artifactId = "";
+        }
+        if (!artifactId) artifactId = `art_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+        artifact.id = artifactId;
+        await sb.from('chat_artifacts').upsert({
+          id: artifactId,
           user_id: artifactUserId,
           profile_id: artifact.profile_id || selfProfileId,
           type: artifact.type,
@@ -17322,8 +17344,9 @@ export async function extractReceipt(
       .slice(0, 20) : undefined,
   };
 
-  // Default date to today if missing.
-  if (!out.date) out.date = new Date().toISOString().slice(0, 10);
+  // Default date to today in the USER's zone if missing — UTC's today is
+  // already tomorrow for an evening receipt in the Americas.
+  if (!out.date) out.date = getUserToday(aiUserTimezone());
 
   return out;
 }
