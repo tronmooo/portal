@@ -260,6 +260,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Two-tab and stale-window probes on the merged build (Playwright)
+An expense added in tab A appeared in tab B's Finance list without a reload (BroadcastChannel replay) and a task completed in A moved B's Tasks header live; B's SPEND · MTD tile stayed at its old figure until its next mount because a sibling tab only marks the snapshot query stale (deliberate: "otherwise five open tabs refetch everything"). A write made outside the browser (API / another device) is not visible to an already-open tab until its query passes the 3-minute `staleTime` or a mutation in that tab invalidates the domain (`refetchOnWindowFocus` is off by design; return-to-app has one recovery path). Both are documented choices in queryClient.ts; noted, not changed. The "5 vs 6 completed after reload" seen in the first pass was this window, not a data problem: the server had 6 throughout.
+
 ### Merged with the performance branch (3b52be4)
 `origin/main` had taken a 47-file performance branch (one refetch per write, scope-safe query URLs, full-by-default lists); merged cleanly, tsc clean, 4436 tests green, pushed to main. The probe battery re-run on the merged build (s8–s27) found no interaction: every remaining probe failure was a known by-design item, a probe expectation, or the stale car id in s9 (the seed's car was recreated after s15). The crawl of the merged build found the four "[object Object]" accounts (D116, sweep residue) and nothing else.
 
