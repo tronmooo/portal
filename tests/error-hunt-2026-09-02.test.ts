@@ -243,3 +243,39 @@ describe("D85/D86: schema calendar days", () => {
     expect(insertObligationSchema.safeParse({ name: "b", amount: 1, nextDueDate: "2026-09-05", recurrenceEnd: "never" }).success).toBe(false);
   });
 });
+
+// D88 — scope membership ignored ancestry: a bill linked to the user's car
+// (parent: Self) vanished from the Self view's bills list and cash flow.
+import { passesProfileFilter } from "../shared/profile-filter";
+import { ownerCandidatesForProfile, withAncestorOwnerIds, isInScope } from "../shared/scope";
+describe("D88: an item linked to something you own is in your scope", () => {
+  const SELF = { id: "self", type: "self" };
+  const LINDA = { id: "linda", type: "person" };
+  const CAR = { id: "car", type: "vehicle", parentProfileId: "self" };
+  const LINDA_CAR = { id: "lcar", type: "vehicle", parentProfileId: "linda" };
+  const POLICY = { id: "policy", type: "liability", parentProfileId: "lcar" };
+  const ALL = [SELF, LINDA, CAR, LINDA_CAR, POLICY];
+  it("passesProfileFilter walks the parent chain of each linked profile", () => {
+    expect(passesProfileFilter(["car"], { selectedIds: ["self"], allProfiles: ALL })).toBe(true);
+    expect(passesProfileFilter(["car"], { selectedIds: ["linda"], allProfiles: ALL })).toBe(false);
+    // two levels: Linda's car's insurance policy is Linda's
+    expect(passesProfileFilter(["policy"], { selectedIds: ["linda"], allProfiles: ALL })).toBe(true);
+    expect(passesProfileFilter(["policy"], { selectedIds: ["self"], allProfiles: ALL })).toBe(false);
+    // unchanged: an unlinked item is Self's, a person-linked one is theirs
+    expect(passesProfileFilter([], { selectedIds: ["self"], allProfiles: ALL })).toBe(true);
+    expect(passesProfileFilter(["linda"], { selectedIds: ["self"], allProfiles: ALL })).toBe(false);
+    // a lite profile list without parents degrades to the old direct rule
+    expect(passesProfileFilter(["car"], { selectedIds: ["self"], allProfiles: [{ id: "self", type: "self" }, { id: "car", type: "vehicle" }] })).toBe(false);
+  });
+  it("ownerCandidatesForProfile includes every ancestor when given the profile list", () => {
+    expect(ownerCandidatesForProfile(POLICY, null, null, ALL)).toEqual(["policy", "lcar", "linda"]);
+    expect(ownerCandidatesForProfile(POLICY, null, null)).toEqual(["policy", "lcar"]);
+    expect(isInScope(ownerCandidatesForProfile(POLICY, null, null, ALL), { selectedIds: ["linda"], selfIds: new Set() }, "out_of_scope")).toBe(true);
+  });
+  it("withAncestorOwnerIds is cycle-safe and keeps unknown ids", () => {
+    const loop = [{ id: "a", parentProfileId: "b" }, { id: "b", parentProfileId: "a" }];
+    expect(withAncestorOwnerIds(["a"], loop)).toEqual(["a", "b"]);
+    expect(withAncestorOwnerIds(["ghost", "a"], loop)).toEqual(["ghost", "a", "b"]);
+    expect(withAncestorOwnerIds(["x"], [])).toEqual(["x"]);
+  });
+});

@@ -690,7 +690,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   const matchesProfileFilter = (p: any): boolean => {
     if (filterMode === "everyone" || filterIds.length === 0) return true;
     return isInScope(
-      ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks),
+      ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks, allProfiles),
       { selectedIds: filterIds, selfIds: emptySelfIds },
       "out_of_scope",
     );

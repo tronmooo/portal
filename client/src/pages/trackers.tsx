@@ -5636,7 +5636,7 @@ export default function TrackersPage() {
     if (filterMode === "everyone") return true;
     if (filterIds.length === 0) return true;
     return isInScope(
-      ownerCandidatesForProfile({ id: assetId, parentProfileId: parentId ?? null }, assetPartyLinks, null),
+      ownerCandidatesForProfile({ id: assetId, parentProfileId: parentId ?? null }, assetPartyLinks, null, profiles),
       { selectedIds: filterIds, selfIds: emptySelfIds },
       "out_of_scope",
     );
@@ -5645,7 +5645,7 @@ export default function TrackersPage() {
     if (filterMode === "everyone") return true;
     if (filterIds.length === 0) return true;
     return isInScope(
-      ownerCandidatesForProfile({ id: liabId, parentProfileId: parentId ?? null }, null, liabilityProfileLinks),
+      ownerCandidatesForProfile({ id: liabId, parentProfileId: parentId ?? null }, null, liabilityProfileLinks, profiles),
       { selectedIds: filterIds, selfIds: emptySelfIds },
       "out_of_scope",
     );

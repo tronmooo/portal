@@ -892,7 +892,7 @@ export default function FinancePage() {
       // Canonical ownership candidates (id, parent, linked co-owners) — the
       // inline parent-only check hid a subscription owned through a linked party.
       return isInScope(
-        ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks),
+        ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks, profiles),
         { selectedIds: filterIds, selfIds: emptySelfIds },
         "out_of_scope",
       );

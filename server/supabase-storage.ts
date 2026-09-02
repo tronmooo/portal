@@ -6721,7 +6721,7 @@ export class SupabaseStorage implements IStorage {
       habitCompletionRate,
       totalObligations: obligations.length,
       upcomingObligations: upcomingObs.length,
-      monthlyObligationTotal: Math.round(monthlyObTotal),
+      monthlyObligationTotal: monthlyObTotal,
       journalStreak,
       currentMood,
       totalArtifacts: artifacts.length,
@@ -7026,7 +7026,7 @@ export class SupabaseStorage implements IStorage {
         totalMonthlySpend, lastMonthTotal,
         spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : (totalMonthlySpend > 0 ? 100 : 0),
         spendByCategory, upcomingBills,
-        monthlyObligationTotal: Math.round(monthlyObligationTotal),
+        monthlyObligationTotal,
         totalAssetValue: (() => {
           // Asset profiles: vehicles, real estate, investments, accounts, generic assets, even loans
           // (a loan profile may carry the asset's market value separately from its remaining balance).

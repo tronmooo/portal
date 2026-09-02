@@ -15638,21 +15638,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       storage.getLiabilityProfileLinks().catch(() => [] as any[]),
     ]);
     const selectedSet = new Set(profileFilterIds);
-    const byId = new Map(allProfiles.map((p: any) => [p.id, p]));
     const selfIds = selfIdsFrom(allProfiles);
     const profileInScope = (p: any): boolean => {
       if (selectedSet.has(p.id)) return true;
-      // Descendant of a selected profile (walk the parent chain)?
-      const seen = new Set<string>();
-      let parentId: string | undefined = p.parentProfileId;
-      while (parentId && !seen.has(parentId)) {
-        if (selectedSet.has(parentId)) return true;
-        seen.add(parentId);
-        parentId = (byId.get(parentId) as any)?.parentProfileId;
-      }
-      // Co-owned by a selected profile (asset_party_links / liability_profile_links)?
+      // Descendant of a selected profile (the whole parent chain) or co-owned
+      // by one (asset_party_links / liability_profile_links)?
       return isInScope(
-        ownerCandidatesForProfile(p, allAssetLinks as any, allLiabLinks as any),
+        ownerCandidatesForProfile(p, allAssetLinks as any, allLiabLinks as any, allProfiles as any),
         { selectedIds: profileFilterIds, selfIds },
         "out_of_scope",
       );

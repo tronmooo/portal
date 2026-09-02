@@ -709,3 +709,23 @@ describe("D86: a bill's due date must be a real calendar day on create and edit"
     expect(created.data.nextDueDate).toBe("2026-09-20");
   });
 });
+
+// D88 — the server's scoped lists share the rule: the car's insurance bill
+// is listed under Self because the car is Self's.
+describe("D88: GET /api/obligations?profileIds=self lists bills owned through the user's car", () => {
+  it("includes the vehicle-linked bill and still excludes another person's", async () => {
+    h = await boot({
+      profiles: [SELF, MIKE, { id: "car-1", type: "vehicle", name: "Honda", parentProfileId: SELF.id }],
+      obligations: [
+        { id: "obl-ins", name: "Car insurance", amount: 118, frequency: "monthly", nextDueDate: "2026-09-22", status: "active", linkedProfiles: ["car-1"] },
+        { id: "obl-net", name: "Internet", amount: 60, frequency: "monthly", nextDueDate: "2026-09-05", status: "active", linkedProfiles: [SELF.id] },
+        { id: "obl-mike", name: "Mike's gym", amount: 40, frequency: "monthly", nextDueDate: "2026-09-10", status: "active", linkedProfiles: [MIKE.id] },
+      ],
+    });
+    const r = await h.api("GET", `/api/obligations?profileIds=${SELF.id}`);
+    expect(r.status).toBe(200);
+    expect(r.data.map((o: any) => o.name).sort()).toEqual(["Car insurance", "Internet"]);
+    const m = await h.api("GET", `/api/obligations?profileIds=${MIKE.id}`);
+    expect(m.data.map((o: any) => o.name)).toEqual(["Mike's gym"]);
+  });
+});
