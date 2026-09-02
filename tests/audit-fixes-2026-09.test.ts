@@ -600,3 +600,16 @@ describe("task and event input validation", () => {
     expect(insertEventSchema.safeParse({ title: "x", date: "2026-09-10", time: "19:00", recurrenceEnd: "" }).success).toBe(true);
   });
 });
+
+// ── D53: an explicit "every N days" outranks a generic cadence word ──
+describe("detectRecurrenceFreq precedence", () => {
+  it("'daily Water the ferns every 3 days' is every-3-days, not daily", async () => {
+    const { detectRecurrenceFreq } = await import("../shared/recurrence");
+    expect(detectRecurrenceFreq("daily Water the ferns every 3 days")).toBe("every-3-days");
+    expect(detectRecurrenceFreq("weekly Deep clean every 2 weeks")).toBe("biweekly");
+    expect(detectRecurrenceFreq("weekly Deep clean every 3 weeks")).toBe("every-3-weeks");
+    expect(detectRecurrenceFreq("every 1 day take vitamins")).toBe("daily");
+    expect(detectRecurrenceFreq("daily stretch")).toBe("daily");
+    expect(detectRecurrenceFreq("mow the lawn weekly")).toBe("weekly");
+  });
+});

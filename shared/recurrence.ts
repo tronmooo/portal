@@ -128,6 +128,15 @@ export function detectRecurrenceFreq(text: string): string | undefined {
   if (!s.trim()) return undefined;
   const everyNDays = s.match(/every (\d+) days?/);
   const everyNWeeks = s.match(/every (\d+) weeks?/);
+  // An explicit interval is the most specific statement in the text and wins
+  // over a generic cadence word. The engine feeds this `${recurrence} ${title}`,
+  // and the model's enum has no "every 3 days" — it sends recurrence:"daily"
+  // with the interval in the title, which used to encode as recur:daily and
+  // respawn the chore the next morning.
+  if (everyNDays && +everyNDays[1] > 1) return `every-${everyNDays[1]}-days`;
+  // "every 2 weeks" keeps the legacy biweekly token the rest of the app reads.
+  if (everyNWeeks && +everyNWeeks[1] === 2) return "biweekly";
+  if (everyNWeeks && +everyNWeeks[1] > 2) return `every-${everyNWeeks[1]}-weeks`;
   if (/\bdaily\b|every day|each day/.test(s)) return "daily";
   if (/\bweekdays?\b|every weekday|mon(day)?(\s*[-–to]+\s*)fri(day)?/.test(s)) return "weekdays";
   if (/\bbiweekly\b|every (other|2|two) weeks/.test(s)) return "biweekly";
