@@ -113,6 +113,7 @@ import { groupMaterializedSeries } from "@shared/series-detect";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
+import { parseQuickRun, parseQuickSleep, parseQuickWeight, buildTurnRecap, type RecapOp } from "@shared/quick-log";
 import { shouldUseFrontDoor, runFrontDoorDiag } from "./chat-frontdoor";
 import {
   EXTRACT_ACTIONS_TOOL,
@@ -1034,9 +1035,64 @@ interface FastPathResult {
    *  bytes via GET /api/documents/:id/file, so the reply never carries base64. */
   documentPreview?: { id: string; name: string; mimeType: string; data: string };
   documentPreviews?: Array<{ id: string; name: string; mimeType: string; data: string }>;
+  /** Verified write manifest (same shape the tool loop emits), so the client
+   *  patches the new row into its cache instead of blanket-invalidating. */
+  mutations?: ChatMutation[];
 }
 
-async function tryFastPath(message: string): Promise<FastPathResult> {
+// ─── Quick-log lanes write through the canonical executor ───────────────────
+//
+// 2026-09-01 report ("ran 2 miles" confirmed in chat, missing from the
+// Running history): the regex lanes below used to write straight to storage
+// against the FIRST tracker whose name matched — with no idea who owned it.
+// The user had three "Running" trackers (their own, Jane's, Sarah's) and the
+// entry landed in Sarah's. Every lane now goes through log_tracker_entry: the
+// same per-profile tracker resolution (pickTrackerForLog), estimation engine,
+// normalization, dedup, habit sync, read-back verification and undo ledger the
+// model path gets — the lane only saves the model round-trip, never accuracy.
+async function quickLogEntry(
+  trackerName: string,
+  values: Record<string, any>,
+  message: string,
+  category: ParsedAction["category"],
+  userId?: string,
+): Promise<{ entry: any; action: ParsedAction; mutation: ChatMutation | null } | null> {
+  const input = { trackerName, values, __userMessage: message };
+  const raw = await executeTool("log_tracker_entry", input, userId);
+  if (!raw || (raw as any).error) return null;
+  invalidateContextCache(userId);
+  const ctx = buildTurnVerifyContext(storage);
+  let result: any = raw;
+  try { result = await finalizeToolResult("log_tracker_entry", "log_entry", input, raw, ctx); } catch { /* verification is best-effort; the write itself already read back */ }
+  if (!result || result.error) return null;
+  const deduped = result.deduped === true;
+  if (!deduped) {
+    try { await recordActionLog(ctx, "log_tracker_entry", "log_entry", input, result, null); } catch { /* ledger is best-effort */ }
+  }
+  const action: ParsedAction = {
+    type: "log_entry",
+    category,
+    data: {
+      trackerName,
+      ...values,
+      ...((raw as any)?._displayData || {}),
+      ...(raw?.id ? { _entityId: raw.id } : {}),
+      ...(raw?.trackerId ? { _trackerId: raw.trackerId } : {}),
+    },
+  };
+  return { entry: raw, action, mutation: deduped ? null : buildChatMutation("log_tracker_entry", result, raw) };
+}
+
+/** Trackers the quick lanes may consider ambiguous: only the user's own (or
+ *  unowned) ones — another profile's same-named tracker is not a candidate. */
+function ownTrackers<T extends { linkedProfiles?: string[] | null }>(trackers: T[], selfId: string | undefined): T[] {
+  return trackers.filter((t) => {
+    const linked = t.linkedProfiles || [];
+    return linked.length === 0 || (!!selfId && linked.includes(selfId));
+  });
+}
+
+async function tryFastPath(message: string, userId?: string): Promise<FastPathResult> {
   const lower = message.toLowerCase().trim();
   const actions: ParsedAction[] = [];
   const results: any[] = [];
@@ -1314,25 +1370,27 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   // dropping dates, and preventing multi-action handling. Removed intentionally.
   // The AI handles expenses, tasks, reminders, and complex commands with full intelligence.
 
-  // ---- Quick weight log: "weight 183", "183 lbs" ----
-  const weightMatch = lower.match(/^(?:weight\s+)?(\d{2,3}(?:\.\d{1,2})?)\s*(?:lbs?|pounds?)?$/);
-  if (weightMatch && !lower.includes("track")) {
-    const weight = parseFloat(weightMatch[1]);
-    if (weight > 80 && weight < 500) {
-      const trackers = await storage.getTrackers();
-      // Bail to AI if multiple weight trackers exist (ambiguous). Whole-word
-      // match only: "Weighted Pull-Ups" is NOT a weight tracker, so its
-      // existence must neither absorb the log nor force a bail.
-      const weightTrackers = trackers.filter(t => trackerNameContains(t.name, "weight"));
-      if (weightTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
-      const weightTracker = weightTrackers[0] || trackers.find(t => t.name.toLowerCase() === "weight");
-      if (weightTracker) {
-        const weightProfiles = await storage.getProfiles();
-        const selfProfile = weightProfiles.find(p => p.type === "self");
-        const weightSelfId = selfProfile?.id;
-        const entry = await storage.logEntry({ trackerId: weightTracker.id, values: { weight }, profileId: weightSelfId });
-        actions.push({ type: "log_entry", category: "health", data: { trackerName: "weight", weight } });
-        if (entry) results.push(entry);
+  // ---- Quick weight: "weight 183", "I weigh 182.5", "183 lbs" ----
+  // A bare number only counts when a weight tracker already exists; an
+  // explicit "weight …" may auto-create one (same as the model would).
+  {
+    const trackers = await storage.getTrackers();
+    const weightProfiles = await storage.getProfiles();
+    const selfProfile = weightProfiles.find(p => p.type === "self");
+    const selfId = selfProfile?.id;
+    // Whole-word match only: "Weighted Pull-Ups" is NOT a weight tracker.
+    const weightTrackers = ownTrackers(trackers.filter(t => trackerNameContains(t.name, "weight")), selfId);
+    const parsed = parseQuickWeight(message, { allowBare: weightTrackers.length > 0 });
+    if (parsed && !lower.includes("track")) {
+      // Two differently-named weight trackers of the user's own → let the
+      // model pick. (Another profile's "Weight" no longer forces a bail.)
+      const names = new Set(weightTrackers.map(t => t.name.trim().toLowerCase()));
+      if (names.size > 1) return { matched: false, reply: "", actions: [], results: [] };
+      const { weight } = parsed;
+      const q = await quickLogEntry(weightTrackers[0]?.name || "Weight", { weight }, message, "health", userId);
+      if (q) {
+        actions.push(q.action);
+        results.push(q.entry);
         // Bug #24: BMI was hardcoded to 5'10". Now compute it ONLY when the
         // self profile actually has a height stored, in inches or cm. We
         // accept several common shapes the profile may store: a numeric
@@ -1379,6 +1437,7 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
           matched: true,
           reply: `Logged weight: ${weight} lbs${bmi ? ` (BMI: ${bmi})` : ""}`,
           actions, results,
+          ...(q.mutation ? { mutations: [q.mutation] } : {}),
         };
       }
     }
@@ -1388,9 +1447,9 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
   //      120 over 80", "bp 130 over 85 pulse 72" ----
   // Blood pressure is ONE measurement with two components. We accept "/" OR the
   // word "over" as the separator, allow filler words between the keyword and the
-  // reading ("is a", "was", "of"), and — critically — find-or-CREATE a single
-  // "Blood Pressure" tracker so a reading never gets split into two incomplete
-  // systolic/diastolic trackers.
+  // reading ("is a", "was", "of"). The executor find-or-creates a single
+  // "Blood Pressure" tracker for the user (never a split systolic/diastolic
+  // pair) and peels a pulse into its own Heart Rate entry.
   const bpMatch = lower.match(
     /\b(?:bp|blood\s*pressure)\b[^0-9]{0,12}?(\d{2,3})\s*(?:\/|\s+over\s+)\s*(\d{2,3})(?:[^0-9]{0,8}?(?:pulse|hr|heart\s*rate)[^0-9]{0,4}(\d{2,3}))?/,
   );
@@ -1399,77 +1458,70 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
     // Sanity bounds so "blood pressure log from 2010" style noise can't log junk.
     if (sys >= 60 && sys <= 260 && dia >= 30 && dia <= 200 && sys > dia) {
       const trackers = await storage.getTrackers();
-      // Bail to AI only if MULTIPLE complete BP trackers exist (genuinely ambiguous).
-      // A lone "Systolic Blood Pressure"/"Diastolic Blood Pressure" split tracker
-      // should NOT count — we want to consolidate into one "Blood Pressure".
-      const bpTrackers = trackers.filter(t => {
+      const selfId = (await storage.getProfiles()).find(p => p.type === "self")?.id;
+      // Bail to AI only if MULTIPLE complete BP trackers of the user's own
+      // exist (genuinely ambiguous). A lone "Systolic Blood Pressure"/
+      // "Diastolic Blood Pressure" split tracker should NOT count.
+      const bpTrackers = ownTrackers(trackers.filter(t => {
         const n = t.name.toLowerCase();
         return n.includes("blood pressure") && !n.includes("systolic") && !n.includes("diastolic");
-      });
+      }), selfId);
       if (bpTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
-      const bpProfiles = await storage.getProfiles();
-      const bpSelfId = bpProfiles.find(p => p.type === "self")?.id;
       const values: Record<string, any> = { systolic: sys, diastolic: dia };
       if (pulse) values.pulse = pulse;
-
-      const bpTracker = bpTrackers[0];
-      let entry: any;
-      if (bpTracker) {
-        entry = await storage.logEntry({ trackerId: bpTracker.id, values, profileId: bpSelfId });
-      } else {
-        // No unified BP tracker — create one (with both fields) and log.
-        entry = await executeTool("log_tracker_entry", { trackerName: "Blood Pressure", values, __userMessage: message });
-        if (entry && (entry as any).error) entry = null;
-      }
-      if (entry) {
-        results.push(entry);
-        actions.push({ type: "log_entry", category: "health", data: { trackerName: "blood pressure", ...values } });
-        const cat = entry?.computed?.bloodPressureCategory || "";
-        return { matched: true, reply: `Logged BP: ${sys}/${dia}${pulse ? ` pulse ${pulse}` : ""}${cat ? ` — ${cat.replace(/_/g, " ")}` : ""}`, actions, results };
+      const q = await quickLogEntry(bpTrackers[0]?.name || "Blood Pressure", values, message, "health", userId);
+      if (q) {
+        results.push(q.entry);
+        actions.push(q.action);
+        const cat = q.entry?.computed?.bloodPressureCategory || "";
+        return {
+          matched: true,
+          reply: `Logged BP: ${sys}/${dia}${pulse ? ` pulse ${pulse}` : ""}${cat ? ` — ${cat.replace(/_/g, " ")}` : ""}`,
+          actions, results,
+          ...(q.mutation ? { mutations: [q.mutation] } : {}),
+        };
       }
     }
   }
 
-  // ---- Quick sleep: "slept 7 hours", "sleep 8.5" ----
-  const sleepMatch = lower.match(/^(?:slept?|sleep)\s+(\d+(?:\.\d)?)\s*(?:hours?|hrs?)?/);
-  if (sleepMatch) {
-    const hours = parseFloat(sleepMatch[1]);
+  // ---- Quick sleep: "slept 7 hours", "I slept 6.5 hrs last night" ----
+  const sleep = parseQuickSleep(message);
+  if (sleep) {
     const trackers = await storage.getTrackers();
-    const sleepTrackers = trackers.filter(t => t.name.toLowerCase().includes("sleep"));
-    if (sleepTrackers.length > 1) return { matched: false, reply: "", actions: [], results: [] };
-    const sleepTracker = sleepTrackers[0] || trackers.find(t => t.name.toLowerCase() === "sleep");
-    if (sleepTracker) {
-      const sleepProfiles = await storage.getProfiles();
-      const sleepSelfId = sleepProfiles.find(p => p.type === "self")?.id;
-      const entry = await storage.logEntry({ trackerId: sleepTracker.id, values: { hours }, profileId: sleepSelfId });
-      actions.push({ type: "log_entry", category: "health", data: { trackerName: "sleep", hours } });
-      if (entry) results.push(entry);
-      const quality = entry?.computed?.sleepQuality || "";
-      return { matched: true, reply: `Logged sleep: ${hours} hours${quality ? ` (${quality} quality)` : ""}`, actions, results };
+    const selfId = (await storage.getProfiles()).find(p => p.type === "self")?.id;
+    const sleepTrackers = ownTrackers(trackers.filter(t => t.name.toLowerCase().includes("sleep")), selfId);
+    const names = new Set(sleepTrackers.map(t => t.name.trim().toLowerCase()));
+    if (names.size > 1) return { matched: false, reply: "", actions: [], results: [] };
+    const q = await quickLogEntry(sleepTrackers[0]?.name || "Sleep", { hours: sleep.hours }, message, "health", userId);
+    if (q) {
+      actions.push(q.action);
+      results.push(q.entry);
+      const quality = q.entry?.computed?.sleepQuality || "";
+      return {
+        matched: true,
+        reply: `Logged sleep: ${sleep.hours} hours${quality ? ` (${quality} quality)` : ""}`,
+        actions, results,
+        ...(q.mutation ? { mutations: [q.mutation] } : {}),
+      };
     }
   }
 
-  // ---- Quick run: "ran 3 miles in 25:00", "ran 2.5mi" ----
-  const runMatch = lower.match(/^(?:ran|run|jogged?)\s+(\d+(?:\.\d+)?)\s*(?:mi(?:les?)?|km)?\s*(?:in\s+(\d{1,2}:\d{2}(?::\d{2})?))?/);
-  if (runMatch) {
-    const distance = parseFloat(runMatch[1]);
-    const duration = runMatch[2] || undefined;
-    const trackers = await storage.getTrackers();
-    const runTracker = trackers.find(t => t.name.toLowerCase() === "running");
-    if (runTracker) {
-      const values: Record<string, any> = { distance };
-      if (duration) values.duration = duration;
-      const runProfiles = await storage.getProfiles();
-      const runSelfId = runProfiles.find(p => p.type === "self")?.id;
-      const entry = await storage.logEntry({ trackerId: runTracker.id, values, profileId: runSelfId });
-      actions.push({ type: "log_entry", category: "fitness", data: { trackerName: "running", ...values } });
-      if (entry) results.push(entry);
-      const c = entry?.computed;
-      let detail = `Logged: ${distance} mi run`;
-      if (c?.pace) detail += ` (${c.pace} pace)`;
-      if (c?.caloriesBurned) detail += ` (~${c.caloriesBurned} cal)`;
-      if (c?.heartRateZone) detail += ` — ${c.heartRateZone.replace("_", " ")} zone`;
-      return { matched: true, reply: detail, actions, results };
+  // ---- Quick run: "ran 2 miles", "I ran 3.1 mi in 28:30", "jogged 5 km" ----
+  // Distance only (plus an optional time) — the estimation engine derives
+  // pace/steps/calories with provenance, exactly as on the model path.
+  const run = parseQuickRun(message);
+  if (run) {
+    const q = await quickLogEntry("Running", run.values, message, "fitness", userId);
+    if (q) {
+      actions.push(q.action);
+      results.push(q.entry);
+      const est = String(q.entry?.estimateNote || "").replace(/^derived\/estimated[^:]*:\s*/i, "").trim();
+      return {
+        matched: true,
+        reply: `Logged: ${run.label} run${est ? ` (${est})` : ""}`,
+        actions, results,
+        ...(q.mutation ? { mutations: [q.mutation] } : {}),
+      };
     }
   }
 
@@ -1536,8 +1588,6 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
           trackers.find(t => t.name.trim().toLowerCase() === "mood") ||
           trackers.find(t => (t as any).category === "mental" && /\bmood\b/.test(t.name.toLowerCase())) ||
           trackers.find(t => /\bmood\b/.test(t.name.toLowerCase()));
-        const selfId = (await storage.getProfiles()).find(p => p.type === "self")?.id;
-
         if (moodTracker) {
           // Map onto the tracker's actual fields so we extend an existing
           // "Mood" tracker instead of bolting on duplicate columns.
@@ -1556,11 +1606,19 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
             if (label) values.mood = label;
             if (rating !== undefined) values.rating = rating;
           }
-          const entry = await storage.logEntry({ trackerId: moodTracker.id, values, profileId: selfId });
-          if (entry) results.push(entry);
-          actions.push({ type: "log_entry", category: "mental", data: { trackerName: moodTracker.name, ...values } });
-          const human = [rating !== undefined ? `${rating}/10` : null, label].filter(Boolean).join(" · ");
-          return { matched: true, reply: `Logged to your ${moodTracker.name} tracker${human ? `: ${human}` : ""}.`, actions, results };
+          const q = await quickLogEntry(moodTracker.name, values, message, "mental", userId);
+          if (q) {
+            results.push(q.entry);
+            actions.push(q.action);
+            const human = [rating !== undefined ? `${rating}/10` : null, label].filter(Boolean).join(" · ");
+            return {
+              matched: true,
+              reply: `Logged to your ${moodTracker.name} tracker${human ? `: ${human}` : ""}.`,
+              actions, results,
+              ...(q.mutation ? { mutations: [q.mutation] } : {}),
+            };
+          }
+          // Executor refused (e.g. ambiguous) — fall through so the AI can take a shot.
         }
 
         // No Mood tracker yet — create one and log via the robust executor
@@ -1568,12 +1626,17 @@ async function tryFastPath(message: string): Promise<FastPathResult> {
         const createValues: Record<string, any> = {};
         if (label) createValues.mood = label;
         if (rating !== undefined) createValues.rating = rating;
-        const created = await executeTool("log_tracker_entry", { trackerName: "Mood", values: createValues, __userMessage: message });
-        if (created && !(created as any).error) {
-          results.push(created);
-          actions.push({ type: "log_entry", category: "mental", data: { trackerName: "Mood", ...createValues } });
+        const created = await quickLogEntry("Mood", createValues, message, "mental", userId);
+        if (created) {
+          results.push(created.entry);
+          actions.push(created.action);
           const human = [rating !== undefined ? `${rating}/10` : null, label].filter(Boolean).join(" · ");
-          return { matched: true, reply: `Created a Mood tracker and logged${human ? `: ${human}` : ""}.`, actions, results };
+          return {
+            matched: true,
+            reply: `Created a Mood tracker and logged${human ? `: ${human}` : ""}.`,
+            actions, results,
+            ...(created.mutation ? { mutations: [created.mutation] } : {}),
+          };
         }
         // Creation failed — fall through so the AI can take a shot.
       }
@@ -15216,7 +15279,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // FAST-PATH: Quick logging (weight, BP, sleep, mood, run, expense)
   // These bypass the AI entirely for instant response times.
   try {
-    const fp = await tryFastPath(userMessage);
+    const fp = await tryFastPath(userMessage, userId);
     if (fp.matched) {
       // Pass lazy document previews through — they used to be dropped here,
       // which forced the doc branch to inline base64 into the reply text path.
@@ -15225,11 +15288,20 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // action types are enough to name the domains that changed. Without this
       // every "mood good" fell back to invalidating the client's ENTIRE cache.
       const fpDomains = domainsForActionTypes(fp.actions.map((a) => a?.type));
+      // Stamp the turn identity on the cards, as the tool loop does, so the
+      // client renders them under exactly this message.
+      const fpActions = fp.actions.map((a) => ({
+        ...a,
+        data: { ...(a.data || {}), _turnId: turnId, ...(sourceMessageId ? { _sourceMessageId: sourceMessageId } : {}) },
+      }));
       return {
-        reply: fp.reply, actions: fp.actions, results: fp.results,
-        ...(fpDomains.length > 0
-          ? { mutations: [{ op: "update" as const, entityType: null, domains: fpDomains, tool: "fast-path" }] }
-          : {}),
+        reply: fp.reply, actions: fpActions, results: fp.results,
+        turnId, sourceMessageId,
+        ...(fp.mutations && fp.mutations.length > 0
+          ? { mutations: fp.mutations }
+          : fpDomains.length > 0
+            ? { mutations: [{ op: "update" as const, entityType: null, domains: fpDomains, tool: "fast-path" }] }
+            : {}),
         ...(fp.documentPreview ? { documentPreview: fp.documentPreview } : {}),
         ...(fp.documentPreviews?.length ? { documentPreviews: fp.documentPreviews } : {}),
         meta: { timings: { aiMs: Date.now() - turnStartedAt, tools: [] } },
@@ -15879,6 +15951,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // create_obligation keys on name+amount+frequency+profile) — those are
       // fine and stay. The loop-level gate was the over-eager one and is gone.
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
+      const opsBeforeRound = allOperations.length;
+      const resultsBeforeRound = allResults.length;
       for (const toolUse of toolUses) {
         // Safety limit: stop executing tools if we've hit the per-message cap
         if (totalToolCalls >= MAX_TOOL_CALLS) {
@@ -16216,6 +16290,54 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // Add assistant response + tool results to messages for next iteration
       messages.push({ role: "assistant", content: response.content });
       messages.push({ role: "user", content: toolResults });
+
+      // ── DETERMINISTIC RECAP (latency, 2026-09-01) ─────────────────────────
+      // After a round of plain writes the model's ONLY remaining job is to say
+      // "Logged it." — one more full round-trip (system prompt + 120 tools +
+      // transcript) for a sentence the server can write from the operation
+      // outcomes, and write more honestly (no invented numbers, estimates
+      // labelled as estimates). Skip that round when, and only when:
+      //   · every tool this round was a whitelisted WRITE and every one
+      //     succeeded (or deduped) — a failure needs the model to recover;
+      //   · the round covered at least as many actions as the message's own
+      //     clause count, so a model that emitted one call for a two-clause
+      //     message still gets its next round to log the rest;
+      //   · no result asks for a follow-up (categoryNote) and the model's own
+      //     text this round asked nothing.
+      // AI_CHAT_MODEL_RECAP=1 restores the model-written recap.
+      {
+        const roundOps = allOperations.slice(opsBeforeRound);
+        const roundResults = allResults.slice(resultsBeforeRound);
+        const roundText = response.content.filter((b): b is Anthropic.Messages.TextBlock => b.type === "text").map((b) => b.text).join("");
+        const eligible =
+          process.env.AI_CHAT_MODEL_RECAP !== "1"
+          && toolUses.length > 0
+          && toolUses.every((t) => RECAP_SAFE_WRITE_TOOLS.has(t.name))
+          && roundOps.length === toolUses.length
+          && roundOps.every((o) => o.status === "ok" || o.status === "deduped")
+          && roundOps.filter((o) => o.status === "ok").length >= Math.max(1, countActionClauses(userMessage))
+          && roundResults.every((r) => !(r as any)?.categoryNote)
+          && !/\?/.test(roundText);
+        if (eligible) {
+          const inputsByIndex = toolUses.map((t) => (t.input || {}) as Record<string, any>);
+          const recapOps: RecapOp[] = roundOps.map((o, idx) => {
+            const r = roundResults[idx] as any;
+            const inp = inputsByIndex[idx] || {};
+            return {
+              status: o.status,
+              tool: o.tool,
+              label: String(r?._displayData?.trackerName || o.trackerName || o.raw || o.tool),
+              detail: summarizeOpDetail(inp) || undefined,
+              estimateNote: typeof r?.estimateNote === "string" ? r.estimateNote : undefined,
+              createdTrackerName: o.createdTracker?.name,
+              error: o.error,
+            };
+          });
+          textReply = buildTurnRecap(recapOps);
+          logger.info("ai", `[turn ${turnId.slice(0, 8)}] deterministic recap after ${toolUses.length} write(s) — skipped the model's recap round`);
+          break;
+        }
+      }
     }
 
     // Bug #48: track tool-level failures from this entire chat turn so we can
@@ -16682,6 +16804,15 @@ export const READ_ONLY_TOOLS = new Set<string>([
   "get_spending_breakdown", "get_account_balances",
   // Manual accounts — a pure read over the user's own account profiles.
   "get_accounts",
+]);
+
+// Write tools whose success needs no model follow-up: the outcome IS the
+// reply. Anything that reads, previews, asks, or chains (bulk previews,
+// merges, undo, document tools) stays out so the model keeps its next round.
+const RECAP_SAFE_WRITE_TOOLS = new Set<string>([
+  "log_tracker_entry", "log_medication_dose", "create_expense", "log_income",
+  "create_task", "create_event", "create_reminder", "checkin_habit",
+  "journal_entry", "create_note",
 ]);
 
 // Every WRITE tool → a typed ParsedAction so the chat UI shows it as a real
