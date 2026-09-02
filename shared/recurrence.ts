@@ -214,3 +214,28 @@ export function humanSummary(rule: RecurrenceRule, dueDate?: string): string {
   if (rule.paused) s = "Paused · " + s;
   return s;
 }
+
+/**
+ * What completing a recurring task spawns: the next occurrence's due date and
+ * the tags the new row carries, or null when the series has ended (its
+ * `runtil:` passed, its `rcount:` used up) or the task does not repeat.
+ *
+ * ONE definition for the server. The storage used to hand-roll the step with
+ * a four-cadence switch: `every-N-weeks`, `weekdays`, `yearly`, `weekly:1,3,5`
+ * spawned nothing (the chore vanished after its first completion), `runtil:`
+ * and `rcount:` were ignored (the chore outlived its end), and a monthly step
+ * off the 31st drifted (see shared/date-math.ts).
+ */
+export function nextRecurringTaskSpawn(
+  prev: { dueDate?: string | null; tags?: string[] | null },
+  todayISO?: string,
+): { dueDate: string; tags: string[] } | null {
+  const tags = Array.isArray(prev.tags) ? prev.tags.map(String) : [];
+  const rule = withAnchorDay(parseRecurrence(tags), prev.dueDate || undefined);
+  if (!rule.freq || !rule.unit) return null;
+  const base = String(prev.dueDate || todayISO || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return null;
+  const next = advance(base, rule);
+  if (seriesEnded(rule, next)) return null;
+  return { dueDate: next, tags: recurrenceToTags({ ...rule, done: rule.done + 1 }, tags) };
+}

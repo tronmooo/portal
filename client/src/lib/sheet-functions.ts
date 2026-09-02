@@ -15,6 +15,7 @@
 //
 // Names match exactly (case-insensitive); fuzzy match falls back to substring.
 
+import { localTodayISO } from "@/lib/dates";
 import { useEffect, useMemo, useState } from "react";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -183,6 +184,6 @@ export function buildSheetFunctions(snap: Snapshot): Record<string, (...args: an
       return Math.floor(ms / (1000 * 60 * 60 * 24));
     },
 
-    TODAY_ISO: () => new Date().toISOString().slice(0, 10),
+    TODAY_ISO: () => localTodayISO(),
   };
 }

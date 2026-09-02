@@ -14,7 +14,7 @@ import { stopProp, stopPropAndDefault } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
+import { invalidateDomain, invalidateDomains, patchQueries } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
@@ -5375,13 +5375,18 @@ function TrackerDetailDialog({
       if (!tracker) return;
       await apiRequest("DELETE", `/api/trackers/${tracker.id}`);
     },
+    // The page reads ["/api/trackers", filterMode, ...filterIds]; an exact-key
+    // patch of the bare ["/api/trackers"] slot hit nothing, so the row stayed
+    // until the refetch and a failed delete had nothing to roll back.
+    // patchQueries reaches every scoped variant and restores exactly those.
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: ["/api/trackers"] });
-      const prev = qc.getQueryData<any[]>(["/api/trackers"]);
-      if (tracker) {
-        qc.setQueryData<any[]>(["/api/trackers"], (old) => old?.filter((t: any) => t.id !== tracker.id));
-      }
-      return { prev };
+      const id = tracker?.id;
+      const restore = id
+        ? patchQueries(["/api/trackers"], (old) =>
+            Array.isArray(old) ? old.filter((t: any) => t.id !== id) : undefined)
+        : () => {};
+      return { restore };
     },
     onSuccess: () => {
       invalidateDomain("trackers");
@@ -5389,7 +5394,7 @@ function TrackerDetailDialog({
       onClose();
     },
     onError: (err: Error, _v: void, ctx: any) => {
-      if (ctx?.prev) qc.setQueryData(["/api/trackers"], ctx.prev);
+      ctx?.restore?.();
       toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" });
     },
   });

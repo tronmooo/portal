@@ -78,9 +78,13 @@ export function localDayOf(
 export function addDays(dateStr: string, days: number): string {
   const d = parseLocalDate(dateStr);
   d.setDate(d.getDate() + days);
-  // Return using ISO slice — safe here because we're using noon UTC and only
-  // computing the calendar date (not time), so there's no risk of day shift.
-  return d.toISOString().slice(0, 10);
+  // parseLocalDate reads the date as HOST-local noon, so it must be formatted
+  // back in host-local time too. Formatting via toISOString() read the UTC
+  // date instead, which is a different calendar day whenever the host's
+  // offset is at least 12 hours (Auckland in summer, Kiritimati, Samoa):
+  // "tomorrow" came back as today, "yesterday" as two days ago. Servers run
+  // in UTC and never noticed; browsers in those zones did.
+  return d.toLocaleDateString('en-CA');
 }
 
 /**

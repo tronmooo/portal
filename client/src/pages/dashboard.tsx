@@ -1,10 +1,12 @@
+import { localTodayISO } from "@/lib/dates";
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
-import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
+import { invalidateDomain, invalidateDomains, patchQueries, dropUpcomingBillFromDashboard } from "@/lib/cache-bus";
+import { withFullLimit } from "@/lib/list-limit";
 import { parseMoney } from "@/lib/utils";
 import { categoryTheme } from "@/lib/category-theme";
 import { MetricCard } from "@/components/ui/metric-card";
@@ -1661,7 +1663,7 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
   // plus the server's per-metric 7-day trend.
   const { data: habitsRaw } = useQuery<any>({
     queryKey: ["/api/habits", filterMode, ...filterIds, "trends"],
-    queryFn: () => apiRequest("GET", `/api/habits${leading}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/habits${leading}`)).then(r => r.json()).catch(() => []),
     staleTime: 60_000,
   });
   const { data: trackersRaw } = useQuery<any>({
@@ -1861,9 +1863,15 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
   // back from the context; onSettled lets the cache bus reconcile from server.
   const enhancedKey = ["/api/dashboard-enhanced", filterMode, ...filterIds];
   const statsKey = ["/api/stats", filterMode, ...filterIds];
+  // `acted` hides a row the moment its button is pressed. It is a UI-only
+  // veil over the optimistic cache patch, so a FAILED request has to lift it
+  // again — otherwise the row stays hidden behind a success toast while the
+  // bill is still unpaid (audit 2026-09-02 item 6). The success toast waits
+  // for the server: the request can fail.
+  const unact = (key: string) => setActed(s => { if (!s.has(key)) return s; const n = new Set(s); n.delete(key); return n; });
   const completeTask = useMutation({
-    mutationFn: (id: string) => apiRequest("PATCH", `/api/tasks/${id}`, { status: "done" }),
-    onMutate: async (id: string) => {
+    mutationFn: ({ id }: { id: string; key: string; title: string }) => apiRequest("PATCH", `/api/tasks/${id}`, { status: "done" }),
+    onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
       await queryClient.cancelQueries({ queryKey: enhancedKey });
       await queryClient.cancelQueries({ queryKey: statsKey });
@@ -1889,10 +1897,12 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
         old ? { ...old, activeTasks: Math.max(0, Number(old.activeTasks || 0) - 1) } : old);
       return { prevTasks, prevEnhanced, prevStats };
     },
-    onError: (_e, _id, ctx: any) => {
-      ctx?.prevTasks?.forEach(([key, data]: [any, any]) => queryClient.setQueryData(key, data));
+    onSuccess: (_d, { title }) => toast({ title: `"${title}" completed` }),
+    onError: (_e, { key }, ctx: any) => {
+      ctx?.prevTasks?.forEach(([k, data]: [any, any]) => queryClient.setQueryData(k, data));
       if (ctx?.prevEnhanced !== undefined) queryClient.setQueryData(enhancedKey, ctx.prevEnhanced);
       if (ctx?.prevStats !== undefined) queryClient.setQueryData(statsKey, ctx.prevStats);
+      unact(key);
       toast({ title: "Couldn't complete task", variant: "destructive" });
     },
     // Single consolidated invalidation: the bus fans out to /api/tasks,
@@ -1900,29 +1910,20 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
     onSettled: () => { invalidateDomain("tasks"); },
   });
   const payBill = useMutation({
-    mutationFn: (id: string) => apiRequest("POST", `/api/obligations/${id}/pay`, {}),
-    onMutate: async (id: string) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
-      await queryClient.cancelQueries({ queryKey: enhancedKey });
-      const prevObligations = queryClient.getQueriesData<any[]>({ queryKey: ["/api/obligations"] });
-      const prevEnhanced = queryClient.getQueryData<any>(enhancedKey);
+    mutationFn: ({ id }: { id: string; key: string; title: string }) => apiRequest("POST", `/api/obligations/${id}/pay`, {}),
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/dashboard-enhanced"] });
       // The Now queue + Bills sections read enhanced.financeSnapshot.upcomingBills;
-      // drop the paid bill there so the row clears instantly.
-      queryClient.setQueryData<any>(enhancedKey, (old: any) => {
-        if (!old?.financeSnapshot?.upcomingBills) return old;
-        return {
-          ...old,
-          financeSnapshot: {
-            ...old.financeSnapshot,
-            upcomingBills: old.financeSnapshot.upcomingBills.filter((b: any) => b.id !== id),
-          },
-        };
-      });
-      return { prevObligations, prevEnhanced };
+      // drop the paid bill there (every scoped variant) so the row clears
+      // instantly. The /api/obligations entity lists are left alone — the
+      // obligation is still live, it just advanced to its next due date.
+      const restore = dropUpcomingBillFromDashboard(id);
+      return { restore };
     },
-    onError: (_e, _id, ctx: any) => {
-      ctx?.prevObligations?.forEach(([key, data]: [any, any]) => queryClient.setQueryData(key, data));
-      if (ctx?.prevEnhanced !== undefined) queryClient.setQueryData(enhancedKey, ctx.prevEnhanced);
+    onSuccess: (_d, { title }) => toast({ title: `"${title}" marked paid` }),
+    onError: (_e, { key }, ctx: any) => {
+      ctx?.restore?.();
+      unact(key);
       toast({ title: "Couldn't mark bill paid", variant: "destructive" });
     },
     // Single consolidated invalidation (obligations + stats + enhanced +
@@ -1933,12 +1934,10 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
   const doAction = (it: NowItem) => {
     if (it.action === "complete") {
       setActed(s => new Set(s).add(it.key));
-      completeTask.mutate(it.sourceId);
-      toast({ title: `"${it.title}" completed` });
+      completeTask.mutate({ id: it.sourceId, key: it.key, title: it.title });
     } else if (it.action === "pay") {
       setActed(s => new Set(s).add(it.key));
-      payBill.mutate(it.sourceId);
-      toast({ title: `"${it.title}" marked paid` });
+      payBill.mutate({ id: it.sourceId, key: it.key, title: it.title });
     } else {
       navigate(it.href);
     }
@@ -2071,7 +2070,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     try {
       const newDate = new Date();
       newDate.setDate(newDate.getDate() + 7);
-      await apiRequest("PATCH", `/api/tasks/${taskId}`, { dueDate: newDate.toISOString().slice(0, 10) });
+      await apiRequest("PATCH", `/api/tasks/${taskId}`, { dueDate: newDate.toLocaleDateString("en-CA") });
       invalidateDomain("tasks");
       toast({ title: `"${task?.title || "Task"}" snoozed`, description: `Moved to ${newDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}` });
     } catch {
@@ -2106,7 +2105,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
       const newDate = new Date();
       newDate.setDate(newDate.getDate() + 7);
       await apiRequest("PATCH", `/api/obligations/${billId}`, {
-        nextDueDate: newDate.toISOString().slice(0, 10),
+        nextDueDate: newDate.toLocaleDateString("en-CA"),
       });
       // Same fan-out as handleBillPay above (bus + the two keys it lacks).
       invalidateDomain("obligations");
@@ -2431,11 +2430,11 @@ function KeyFindingsSection({
   });
   const { data: obligations = [] } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then(r => r.json()).catch(() => []),
   });
   const { data: habits = [] } = useQuery<any[]>({
     queryKey: ["/api/habits", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/habits${profileParam}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/habits${profileParam}`)).then(r => r.json()).catch(() => []),
   });
   const { data: enhancedData } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
@@ -2727,15 +2726,16 @@ function ObligationsSection({ data }: { data: any[] }) {
 
   const payMutation = useMutation({
     mutationFn: ({ id, name, amount }: { id: string; name?: string; amount?: number }) => apiRequest("POST", `/api/obligations/${id}/pay`),
-    // Optimistic: remove the bill from the visible bills list immediately so the
-    // "Mark Paid" tap feels instant. Reconcile from server in onSettled.
+    // Optimistic: this section renders enhanced.financeSnapshot.upcomingBills,
+    // so that is what gets patched (same helper as the Now queue's payBill).
+    // The old patch filtered the /api/obligations entity lists instead —
+    // which never updated this section AND removed a still-live obligation
+    // from every other consumer of those lists. Reconcile from server in
+    // onSettled.
     onMutate: async ({ id }) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
-      const prev = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
-      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
-        Array.isArray(old) ? old.filter((b: any) => b.id !== id) : old
-      );
-      return { prev };
+      await queryClient.cancelQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      const restore = dropUpcomingBillFromDashboard(id);
+      return { restore };
     },
     onSuccess: (_data, variables) => {
       toast({ title: `"${variables.name || "Bill"}" marked paid`, description: variables.amount ? `$${variables.amount.toFixed(2)} payment recorded` : undefined });
@@ -2743,9 +2743,7 @@ function ObligationsSection({ data }: { data: any[] }) {
     },
     onError: (_err, variables, context: any) => {
       // Roll back optimistic removal
-      if (context?.prev) {
-        for (const [key, value] of context.prev) queryClient.setQueryData(key, value);
-      }
+      context?.restore?.();
       toast({ title: `Failed to mark "${variables.name || "bill"}" as paid`, variant: "destructive" });
     },
     onSettled: () => {
@@ -2758,23 +2756,26 @@ function ObligationsSection({ data }: { data: any[] }) {
   const deleteMutation = useMutation({
     mutationFn: ({ id, name }: { id: string; name?: string }) => apiRequest("DELETE", `/api/obligations/${id}`),
     onMutate: async (variables) => {
-      // Optimistic removal so the row disappears instantly. Snapshot every
-      // observed query under ["/api/obligations", ...] so we can roll back
-      // if the server rejects the delete (e.g. 404 from a stale duplicate).
+      // Optimistic removal so the row disappears instantly — from the bills
+      // aggregate this section renders AND from every ["/api/obligations", ...]
+      // entity list (a delete really does remove the obligation). Both are
+      // snapshotted so a rejected delete (e.g. 404 from a stale duplicate)
+      // rolls back cleanly.
       await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
-      const snapshots = queryClient.getQueriesData({ queryKey: ["/api/obligations"] });
-      queryClient.setQueriesData({ queryKey: ["/api/obligations"] }, (old: any) =>
-        Array.isArray(old) ? old.filter((item: any) => item.id !== variables.id) : old
+      await queryClient.cancelQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      const restoreLists = patchQueries(["/api/obligations"], (old: any) =>
+        Array.isArray(old) ? old.filter((item: any) => item.id !== variables.id) : undefined
       );
-      return { snapshots };
+      const restoreBills = dropUpcomingBillFromDashboard(variables.id);
+      return { restore: () => { restoreBills(); restoreLists(); } };
     },
     onSuccess: (_data, variables) => {
       toast({ title: `"${variables.name || "Obligation"}" deleted` });
       setSelectedBill(null);
     },
     onError: (_err, variables, ctx: any) => {
-      // Restore each observed cache snapshot we captured in onMutate.
-      ctx?.snapshots?.forEach(([key, data]: [any, any]) => queryClient.setQueryData(key, data));
+      // Restore every cache slot the optimistic removal touched.
+      ctx?.restore?.();
       toast({ title: `Failed to delete "${variables.name || "obligation"}"`, variant: "destructive" });
     },
     onSettled: () => {
@@ -3008,7 +3009,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
   const goalsKey = goalsQueryKey(ids);
   const { data: goals = [], isPending: isLoading, error: goalsError } = useQuery<GoalItem[]>({
     queryKey: goalsKey,
-    queryFn: () => apiRequest("GET", `/api/goals${profileParam}`).then(r => r.json()),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/goals${profileParam}`)).then(r => r.json()),
     // BUG-20260530-filter-stale-stats-leak: during a filter swap, react-query
     // was returning the previous filter's goals (e.g. Test's Hawaii Savings,
     // QAMULTI389053) while looking at Craig (who has none). Forcing undefined
@@ -3545,19 +3546,22 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
   const deleteMutation = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/budgets/${id}?month=${month}`),
     onMutate: async (id) => {
+      // The live key is ["/api/budgets", month, filterMode, ...filterIds]; an
+      // exact-key read of ["/api/budgets", month] was an empty slot, so the
+      // row never left optimistically and a failed delete had nothing to
+      // restore. Prefix patch reaches every scoped variant.
       await queryClient.cancelQueries({ queryKey: ["/api/budgets", month] });
-      const prev = queryClient.getQueryData(["/api/budgets", month]);
-      queryClient.setQueryData(["/api/budgets", month], (old: any) =>
-        old ? { ...old, budgets: (old.budgets || []).filter((b: any) => b.id !== id) } : old
+      const restore = patchQueries(["/api/budgets", month], (old: any) =>
+        old?.budgets ? { ...old, budgets: old.budgets.filter((b: any) => b.id !== id) } : undefined
       );
-      return { prev };
+      return { restore };
     },
     onSuccess: () => {
       refetch(); invalidateDomains("budgets", "dashboard");
       toast({ title: "Budget deleted" });
     },
     onError: (_e, _v, ctx: any) => {
-      if (ctx?.prev) queryClient.setQueryData(["/api/budgets", month], ctx.prev);
+      ctx?.restore?.();
       toast({ title: "Failed to delete budget", variant: "destructive" });
     },
   });
@@ -3753,7 +3757,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
   });
   const { data: allObligations } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then(r => r.json()),
   });
 
   const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
@@ -4651,12 +4655,12 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
   const { data: tasks = [] } = useQuery<any[]>({
     queryKey: ["/api/tasks", filterMode, ...filterIds],
     enabled: ready,
-    queryFn: () => apiRequest("GET", `/api/tasks${profileParam}`).then(r => r.json()),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/tasks${profileParam}`)).then(r => r.json()),
   });
   const { data: obligations = [] } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
     enabled: ready,
-    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then(r => r.json()),
   });
   // (Removed 2026-08-09: a /api/reminders query feeding this list. "Remind me
   // to take evening medication" is a TASK with a due time now, and `tasks`
@@ -5678,12 +5682,12 @@ export default function DashboardPage() {
   const sharedProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: sharedEvents = [] } = useQuery<any[]>({
     queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/events${sharedProfileParam}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/events${sharedProfileParam}`)).then(r => r.json()).catch(() => []),
     enabled: bootstrapSettled && filterMode !== "everyone",
   });
   const { data: sharedGoalsRaw } = useQuery<any>({
     queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
-    queryFn: () => apiRequest("GET", `/api/goals${sharedProfileParam}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/goals${sharedProfileParam}`)).then(r => r.json()).catch(() => []),
     enabled: bootstrapSettled && filterMode !== "everyone",
   });
   const sharedGoals = useMemo(
@@ -5732,7 +5736,7 @@ export default function DashboardPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `portol-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `portol-backup-${localTodayISO()}.json`;
       a.click();
       URL.revokeObjectURL(url);
       toast({ title: "Export complete", description: `Backed up ${data.profiles?.length || 0} profiles, ${data.trackers?.length || 0} trackers, ${data.tasks?.length || 0} tasks.` });

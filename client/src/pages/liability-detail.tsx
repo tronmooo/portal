@@ -6,6 +6,7 @@
  * documents OCR, calendar auto-events, and subtype-specific UI on top of this.
  */
 
+import { localTodayISO } from "@/lib/dates";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -890,7 +891,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     open: false,
     preset: "minimum",
     amount: "",
-    paymentDate: new Date().toISOString().slice(0, 10),
+    paymentDate: localTodayISO(),
     notes: "",
   });
 
@@ -905,7 +906,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       open: true,
       preset,
       amount: initial,
-      paymentDate: new Date().toISOString().slice(0, 10),
+      paymentDate: localTodayISO(),
       notes: "",
     });
   }
@@ -1679,7 +1680,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         open: false,
         preset: s.preset,
         amount: "",
-        paymentDate: new Date().toISOString().slice(0, 10),
+        paymentDate: localTodayISO(),
         notes: "",
       })}>
         <DialogContent data-testid="payment-dialog">

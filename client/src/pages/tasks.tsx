@@ -14,6 +14,7 @@ import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
 import { invalidateDomain } from "@/lib/cache-bus";
+import { withFullLimit } from "@/lib/list-limit";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { formatStoredDate, farFutureWarning } from "@/lib/dates";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -583,7 +584,10 @@ export default function TasksPage() {
     : "/api/tasks";
   const { data: tasks, isLoading, error, refetch } = useQuery<Task[]>({
     queryKey: ["/api/tasks", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", taskUrl).then(r => r.json()),
+    // Whole set: the route pages at 100 rows by default (server paginate()),
+    // which left every task past the newest hundred off this page while the
+    // dashboard tile still counted it.
+    queryFn: () => apiRequest("GET", withFullLimit(taskUrl)).then(r => r.json()),
   });
 
   // Profiles are needed for the unified filter rule below (it must know which

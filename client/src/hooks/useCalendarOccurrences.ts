@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { seriesFromAll, filterSeriesByProfiles } from "@shared/calendar-adapters";
 import { scopedKey } from "@shared/query-keys";
+import { withFullLimit } from "@/lib/list-limit";
 import { onlyRulesAndImportantDates } from "@shared/calendar-occurrences";
 import {
   buildCalendarOccurrences,
@@ -89,31 +90,32 @@ export function useCalendarOccurrences(
   // unscoped slot so the common "everyone" scope hits the bootstrap seed.
   const events = useQuery<any[]>({
     queryKey: [...scopedKey("/api/events", "everyone", [])],
-    queryFn: () => get("/api/events"),
+    queryFn: () => get(withFullLimit("/api/events")),
   });
   const profiles = useQuery<any>({ queryKey: ["/api/profiles"] });
   const obligations = useQuery<any[]>({
     queryKey: [...scopedKey("/api/obligations", mode, kIds)],
-    queryFn: () => get(`/api/obligations${profileParam}`),
+    queryFn: () => get(withFullLimit(`/api/obligations${profileParam}`)),
   });
   const tasks = useQuery<any[]>({
     queryKey: [...scopedKey("/api/tasks", mode, kIds)],
-    queryFn: () => get(`/api/tasks${profileParam}`),
+    queryFn: () => get(withFullLimit(`/api/tasks${profileParam}`)),
   });
   const documents = useQuery<any[]>({
     queryKey: [...scopedKey("/api/documents", mode, kIds)],
     // `limit` explicitly: the route defaults to 100 newest, so on a large
     // account the oldest documents derived no rules — their expirations never
     // reached this screen and their legacy extraction events stopped being
-    // recognised as copies.
-    queryFn: () => get(`/api/documents${profileParam}${profileParam ? "&" : "?"}limit=1000`),
+    // recognised as copies. (Same for events/obligations/tasks above — a series
+    // whose source row fell off the first page simply never appeared.)
+    queryFn: () => get(withFullLimit(`/api/documents${profileParam}`)),
   });
   // Recurring income. Without this the paycheck adapter existed and ran
   // nowhere: "I get paid every other Friday" was in the finance tables and on
   // no calendar surface at all.
   const incomes = useQuery<any[]>({
     queryKey: [...scopedKey("/api/incomes", mode, kIds)],
-    queryFn: () => get(`/api/incomes${profileParam}`),
+    queryFn: () => get(withFullLimit(`/api/incomes${profileParam}`)),
   });
 
   // Stable empty fallbacks: a fresh [] per render defeated every useMemo

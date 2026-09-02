@@ -269,17 +269,45 @@ export async function completeHabitOccurrence(
   const trackerEntries: TrackerEntry[] = [];
   let trackerInfo: { id: string; name: string | null } | null = null;
   let linkedTrackerId = (fresh as any).linkedTrackerId as string | undefined;
+  // Reading the tracker pulls its whole entry history, so only do it when a
+  // mirror entry might actually be written. The tracker-sourced path — the
+  // hot one, since it runs on EVERY tracker entry — skips the read entirely
+  // and reports the id alone; its caller already has the tracker in hand.
+  const mayWrite = !opts.skipTrackerWrite && recorded > 0;
+  let tracker: Tracker | undefined;
+  let trackerReadFailed = false;
+
+  // A link that points at a tracker that no longer exists is no link at all.
+  // deleteTracker used to leave habits.linked_tracker_id dangling, and this
+  // path then read `undefined`, wrote no mirror, and never re-linked — the
+  // ring said done and the chart said nothing, forever. Treat the dangling id
+  // as "no tracker yet" so the resolver below gives the habit a live one.
+  // (A read that THROWS is a transient failure, not a dangling link: keep the
+  // link and skip the mirror rather than re-pointing the habit elsewhere.)
+  if (linkedTrackerId && mayWrite) {
+    try {
+      tracker = await storage.getTracker(linkedTrackerId);
+    } catch (e: any) {
+      trackerReadFailed = true;
+      logger.warn(`[habit-completion] tracker read failed for "${habit.name}":`, e?.message || e);
+    }
+    if (!tracker && !trackerReadFailed) {
+      logger.warn(`[habit-completion] "${habit.name}" was linked to tracker ${linkedTrackerId}, which no longer exists — re-linking`);
+      linkedTrackerId = undefined;
+    }
+  }
 
   // No tracker yet? Give it one, so a completion always leaves a record on the
   // tracker side too ("manual habit completion = habit completion + tracker
   // entry"). Reuses a compatible existing tracker before creating anything —
   // the same resolver habit creation uses, so the two cannot disagree.
-  if (!linkedTrackerId && !opts.skipTrackerWrite && recorded > 0 && opts.ensureTracker !== false) {
+  if (!linkedTrackerId && mayWrite && opts.ensureTracker !== false) {
     try {
       const resolved = await resolveTrackerForHabit(storage, fresh, { fallbackToHabitName: true });
       if (resolved) {
         await storage.updateHabit(fresh.id, { linkedTrackerId: resolved.id } as any);
         linkedTrackerId = resolved.id;
+        tracker = undefined; // fetched fresh below
       }
     } catch (e: any) {
       // The habit is completed either way — but say what was skipped.
@@ -288,15 +316,10 @@ export async function completeHabitOccurrence(
   }
 
   if (linkedTrackerId) {
-    // Reading the tracker pulls its whole entry history, so only do it when a
-    // mirror entry might actually be written. The tracker-sourced path — the
-    // hot one, since it runs on EVERY tracker entry — skips the read entirely
-    // and reports the id alone; its caller already has the tracker in hand.
-    const mayWrite = !opts.skipTrackerWrite && recorded > 0;
-    if (!mayWrite) {
+    if (!mayWrite || trackerReadFailed) {
       trackerInfo = { id: linkedTrackerId, name: null };
     } else try {
-      const tracker = await storage.getTracker(linkedTrackerId);
+      if (!tracker) tracker = await storage.getTracker(linkedTrackerId);
       if (tracker) {
         trackerInfo = { id: tracker.id, name: tracker.name };
         const already = countMirrorEntries(tracker, habit.id, date, tz);
@@ -332,6 +355,13 @@ export async function completeHabitOccurrence(
               // Recursion stop: this write must not come back around and
               // check the habit in again.
               __skipHabitSync: true,
+              // The 2nd and 3rd mirror of a "twice/thrice daily" habit carry
+              // the same values as the 1st, moments apart — exactly the shape
+              // logEntry's accidental-double-fire dedup swallows. It handed
+              // back the FIRST row's id, so a 2× habit had one mirror entry
+              // and the un-check then deleted the only one. Each check-in is
+              // a deliberate, distinct record: bypass the dedup.
+              __skipDedupe: true,
             });
             if (entry) trackerEntries.push(entry);
           }

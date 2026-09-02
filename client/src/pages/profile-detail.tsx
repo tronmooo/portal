@@ -27,7 +27,7 @@ import { isAccountProfile, accountKindMeta, accountKindOf } from "@shared/financ
 import { Pill } from "@/components/dashboard/visuals";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
-import { isPast, parseDate, relativeDayLabel, daysFromToday } from "@/lib/dates";
+import { isPast, isUpcoming, parseDate, relativeDayLabel, daysFromToday, localTodayISO, localDaysFromNowISO, formatLocalDate } from "@/lib/dates";
 import {
   type TrackerMetricDefinition,
   classifyMetricValue,
@@ -278,7 +278,8 @@ import {
 import { Slider } from "@/components/ui/slider";
 import type { ProfileDetail, Profile, Document, TimelineEntry, Tracker } from "@shared/schema";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { invalidateDomains } from "@/lib/cache-bus";
+import { invalidateDomains, patchQueries, patchProfileDetailList, composeRestores } from "@/lib/cache-bus";
+import { useResyncedState } from "@/hooks/useResyncedState";
 import { checkProfileRename } from "@shared/profile-rename";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
@@ -1312,14 +1313,15 @@ const MAINT_RE = /maintenance|service|repair|warranty|filter|oil change|cleaning
 
 // Default date helper: today + N days → "YYYY-MM-DD"
 function daysFromNow(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  return localDaysFromNowISO(n);
 }
 
-// Difference in whole days: target - now (positive = future)
+// Difference in whole calendar days: target - today (positive = future).
+// Bare "YYYY-MM-DD" values are read as LOCAL days (lib/dates), so a warranty
+// that expires today says "today", not "1 day ago". NaN for junk (callers
+// treat NaN like "no date").
 function daysDiff(dateStr: string): number {
-  return Math.round((new Date(dateStr).getTime() - Date.now()) / 86400000);
+  return daysFromToday(dateStr) ?? NaN;
 }
 
 function formatRelDays(n: number): string {
@@ -2050,7 +2052,7 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
             <span>Confidence: {lookupResult.confidence}</span>
             <span>Source: {lookupResult.method}</span>
             {lookupResult.valuationDate && (
-              <span>Valued: {new Date(lookupResult.valuationDate).toLocaleDateString()}</span>
+              <span>Valued: {formatLocalDate(lookupResult.valuationDate)}</span>
             )}
             {lookupResult.previousValue > 0 && lookupResult.previousValue !== lookupResult.value && (
               <span>
@@ -3558,9 +3560,10 @@ function StaticInfoTab({
         const startDate = profile.fields?.startDate;
         const renewalDate = profile.fields?.renewalDate;
         const subStatus = (profile.fields?.status as string || "active").toLowerCase();
-        const monthsActive = startDate ? Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / (30.44 * 86400000))) : 0;
+        const startMs = parseDate(startDate)?.getTime();
+        const monthsActive = startMs ? Math.max(0, Math.floor((Date.now() - startMs) / (30.44 * 86400000))) : 0;
         const totalPaid = cost * monthsActive;
-        const daysUntilRenewal = renewalDate ? Math.ceil((new Date(renewalDate).getTime() - Date.now()) / 86400000) : null;
+        const daysUntilRenewal = renewalDate ? daysFromToday(renewalDate) : null;
         const statusColor = subStatus === "active" ? "bg-green-500/15 text-green-400" : subStatus === "paused" ? "bg-amber-500/15 text-amber-400" : "bg-red-500/15 text-red-400";
         return (
           <Card className="p-3" data-testid="card-subscription-insights">
@@ -4144,7 +4147,7 @@ function ProductivityHubTab({
                       </div>
                       {due && (
                         <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
-                          {new Date(due).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                          {formatLocalDate(due, { month: "short", day: "numeric" })}
                         </span>
                       )}
                     </CardContent>
@@ -4192,7 +4195,9 @@ function ProductivityHubTab({
             <div className="space-y-1.5">
               {reminders.slice(0, 30).map((t: any) => {
                 const due = t.dueDate || t.dueAt || t.due_at;
-                const overdue = due && new Date(due).getTime() < Date.now();
+                // Strictly before today's LOCAL midnight — a reminder due today is
+                // not overdue, and a bare date is not UTC midnight (lib/dates).
+                const overdue = isPast(due);
                 return (
                   <Card key={t.id} data-testid={`hub-reminder-${t.id}`}>
                     <CardContent className="py-2 px-3 flex items-center justify-between gap-2">
@@ -4201,7 +4206,7 @@ function ProductivityHubTab({
                         <p className="text-xs font-medium truncate">{t.title || t.name || "Untitled"}</p>
                       </div>
                       <span className={`text-[11px] shrink-0 tabular-nums ${overdue ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>
-                        {new Date(due).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                        {formatLocalDate(due, { month: "short", day: "numeric" })}
                       </span>
                     </CardContent>
                   </Card>
@@ -4253,7 +4258,7 @@ function ProductivityHubTab({
                         <p className="text-xs font-medium capitalize">{j.mood || "entry"}</p>
                       </div>
                       <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
-                        {new Date(j.date || j.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                        {formatLocalDate(j.date || j.createdAt, { month: "short", day: "numeric" })}
                       </span>
                     </div>
                     {j.content && <p className="text-xs text-muted-foreground line-clamp-2">{j.content}</p>}
@@ -4873,7 +4878,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const [expAmount, setExpAmount] = useState("");
   const [expCategory, setExpCategory] = useState("general");
   const [expVendor, setExpVendor] = useState("");
-  const [expDate, setExpDate] = useState(new Date().toISOString().slice(0, 10));
+  const [expDate, setExpDate] = useState(localTodayISO());
   const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(null);
   // 2026-06-11 redesign: the full expense list is collapsed by default.
   // Summary stat cards + by-category breakdown render unconditionally;
@@ -5135,7 +5140,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       toast({ title: `$${Number(expAmount).toFixed(2)} expense added`, description: saved });
       setShowAddExpense(false);
       setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor("");
-      setExpDate(new Date().toISOString().slice(0, 10));
+      setExpDate(localTodayISO());
       invalidateDomains("profiles", "expenses");
       onChanged();
     },
@@ -5201,13 +5206,13 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     setExpAmount(String(expense.amount));
     setExpCategory(expense.category || "general");
     setExpVendor(expense.vendor || "");
-    setExpDate(expense.date?.slice(0, 10) || new Date().toISOString().slice(0, 10));
+    setExpDate(expense.date?.slice(0, 10) || localTodayISO());
     setEditingExpense(expense);
   }
 
   function openAdd() {
     setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor("");
-    setExpDate(new Date().toISOString().slice(0, 10));
+    setExpDate(localTodayISO());
     setShowAddExpense(true);
   }
 
@@ -5219,9 +5224,11 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
   // ── obligation urgency helper ──────────────────────────────────
   function obligationUrgency(ob: ProfileDetail["relatedObligations"][number]): "overdue" | "soon" | "ok" {
-    if (!ob.nextDueDate) return "ok";
-    const due = new Date(ob.nextDueDate);
-    const diffDays = (due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+    // Calendar-day distance (lib/dates): a bill due TODAY is "soon", not
+    // "overdue" — `new Date("YYYY-MM-DD")` is UTC midnight, already in the past
+    // for every US user by the time they wake up.
+    const diffDays = daysFromToday(ob.nextDueDate);
+    if (diffDays === null) return "ok";
     if (diffDays < 0) return "overdue";
     if (diffDays <= 7) return "soon";
     return "ok";
@@ -5438,7 +5445,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                             <p className="text-sm font-medium truncate">{expense.description}</p>
                             <div className="flex items-center gap-1.5 mt-0.5">
                               <span className="text-xs text-muted-foreground">
-                                {new Date(expense.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                                {formatLocalDate(expense.date, { month: "short", day: "numeric", year: "numeric" })}
                               </span>
                               {expense.category && (
                                 <Badge variant="secondary" className="text-xs px-1.5 py-0">{expense.category}</Badge>
@@ -5871,7 +5878,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       {/* Add Expense Dialog */}
       <Dialog open={showAddExpense} onOpenChange={(open) => {
         setShowAddExpense(open);
-        if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(new Date().toISOString().slice(0, 10)); }
+        if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(localTodayISO()); }
       }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-add-expense">
           <DialogHeader>
@@ -5939,7 +5946,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       </Dialog>
 
       {/* Edit Expense Dialog */}
-      <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(new Date().toISOString().slice(0, 10)); } setEditingExpense(open ? editingExpense : null); }}>
+      <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(localTodayISO()); } setEditingExpense(open ? editingExpense : null); }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-edit-expense">
           <DialogHeader>
             <DialogTitle>Edit Expense</DialogTitle>
@@ -6162,26 +6169,32 @@ function TrackerCard_Profile({
     mutationFn: async (entryId: string) => {
       await apiRequest("DELETE", `/api/trackers/${tracker.id}/entries/${entryId}`);
     },
-    onSuccess: (_data, entryId) => {
-      queryClient.setQueriesData({ queryKey: ["/api/trackers"] }, (old: any) =>
-        Array.isArray(old) ? old.map((t: any) => t.id === tracker.id
-          ? { ...t, entries: (t.entries || []).filter((e: any) => e.id !== entryId) }
-          : t
-        ) : old
+    // Optimistic: drop the entry from every trackers list AND the profile
+    // detail embed (`relatedTrackers` — the field the page renders; the old
+    // patch wrote `trackers`, which the payload doesn't have, so the row
+    // lingered until the refetch). Snapshot both for rollback.
+    onMutate: async (entryId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const dropEntry = (t: any) => t.id === tracker.id
+        ? { ...t, entries: (t.entries || []).filter((e: any) => e.id !== entryId) }
+        : t;
+      const restore = composeRestores(
+        patchQueries(["/api/trackers"], (old) => Array.isArray(old) ? old.map(dropEntry) : undefined),
+        patchProfileDetailList(profileId, "relatedTrackers", (list) => list.map(dropEntry)),
       );
-      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
-        if (!old?.trackers) return old;
-        return { ...old, trackers: old.trackers.map((t: any) => t.id === tracker.id
-          ? { ...t, entries: (t.entries || []).filter((e: any) => e.id !== entryId) }
-          : t
-        )};
-      });
+      return { restore };
+    },
+    onSuccess: () => {
       toast({ title: "Entry deleted" });
       setDeleteEntryId(null);
       invalidateDomains("profiles", "trackers");
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _id, ctx: any) => {
+      ctx?.restore?.();
+      toast({ title: "Failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   const trackerStyle = trackerStyleFor(tracker.category);
@@ -6529,40 +6542,46 @@ function TrackersTab({
     mutationFn: async (trackerId: string) => {
       await apiRequest("POST", `/api/profiles/${profileId}/unlink`, { entityType: "tracker", entityId: trackerId });
     },
-    onSuccess: (_data, trackerId) => {
-      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
-        if (!old?.trackers) return old;
-        return { ...old, trackers: old.trackers.filter((t: any) => t.id !== trackerId) };
-      });
+    onMutate: async (trackerId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const restore = patchProfileDetailList(profileId, "relatedTrackers", (list) => list.filter((t: any) => t.id !== trackerId));
+      return { restore };
+    },
+    onSuccess: () => {
       toast({ title: "Tracker unlinked" });
       setUnlinkTrackerId(null);
       invalidateDomains("profiles", "trackers");
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _id, ctx: any) => {
+      ctx?.restore?.();
+      toast({ title: "Failed", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   const deleteTrackerMutation = useMutation({
     mutationFn: async (trackerId: string) => {
       await apiRequest("DELETE", `/api/trackers/${trackerId}`);
     },
-    onSuccess: (_data, trackerId) => {
-      queryClient.setQueryData(["/api/trackers"], (old: any[]) =>
-        old?.filter((t: any) => t.id !== trackerId) || []
+    onMutate: async (trackerId: string) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/trackers"] });
+      await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      const restore = composeRestores(
+        patchQueries(["/api/trackers"], (old) => Array.isArray(old) ? old.filter((t: any) => t.id !== trackerId) : undefined),
+        patchProfileDetailList(profileId, "relatedTrackers", (list) => list.filter((t: any) => t.id !== trackerId)),
       );
-      queryClient.setQueriesData({ queryKey: ["/api/trackers"] }, (old: any) =>
-        Array.isArray(old) ? old.filter((t: any) => t.id !== trackerId) : old
-      );
-      queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
-        if (!old?.trackers) return old;
-        return { ...old, trackers: old.trackers.filter((t: any) => t.id !== trackerId) };
-      });
+      return { restore };
+    },
+    onSuccess: () => {
       toast({ title: "Tracker deleted" });
       setDeleteTrackerId(null);
       invalidateDomains("profiles", "trackers");
       onChanged();
     },
-    onError: (err: Error) => toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" }),
+    onError: (err: Error, _id, ctx: any) => {
+      ctx?.restore?.();
+      toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" });
+    },
   });
 
   const logEntryMutation = useMutation({
@@ -7890,28 +7909,25 @@ function TasksTab({
     // so the checkbox/UI snaps without waiting for the network round trip.
     onMutate: async ({ taskId, status }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      const prev = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
-      if (prev) {
-        queryClient.setQueryData(["/api/profiles", profileId, "detail"], {
-          ...prev,
-          tasks: Array.isArray(prev.tasks)
-            ? prev.tasks.map((t: any) => t.id === taskId ? { ...t, status } : t)
-            : prev.tasks,
-        });
-      }
-      // Same for the bare /api/tasks list — cover all variant keys.
-      queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
-        Array.isArray(old) ? old.map((t: any) => t.id === taskId ? { ...t, status } : t) : old
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const flip = (t: any) => t.id === taskId ? { ...t, status } : t;
+      // The page renders the `relatedTasks` embed (the old patch wrote a
+      // `tasks` field the payload doesn't have, so nothing flipped until the
+      // refetch). Every /api/tasks variant is patched too; ONE restore covers
+      // every slot touched.
+      const restore = composeRestores(
+        patchProfileDetailList(profileId, "relatedTasks", (list) => list.map(flip)),
+        patchQueries(["/api/tasks"], (old) => Array.isArray(old) ? old.map(flip) : undefined),
       );
-      return { prev };
+      return { restore };
     },
     onSuccess: (_data, variables) => {
       toast({ title: variables.status === "done" ? `"${variables.title || "Task"}" completed` : `"${variables.title || "Task"}" reopened` });
       onChanged();
     },
     onError: (err: Error, variables, context: any) => {
-      // Roll back the optimistic update on failure
-      if (context?.prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], context.prev);
+      // Roll back every slot the optimistic update touched
+      context?.restore?.();
       toast({ title: `Failed to update "${variables.title || "task"}"`, description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
@@ -7954,17 +7970,11 @@ function TasksTab({
     onMutate: async ({ id }: { id: string; title?: string }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
       await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      // Snapshot all /api/tasks query slots since we use setQueriesData
-      const prevTasksAll = queryClient.getQueriesData<any>({ queryKey: ["/api/tasks"] });
-      const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
-      queryClient.setQueriesData({ queryKey: ["/api/tasks"] }, (old: any) =>
-        Array.isArray(old) ? old.filter((t: any) => t.id !== id) : old
+      const restore = composeRestores(
+        patchQueries(["/api/tasks"], (old) => Array.isArray(old) ? old.filter((t: any) => t.id !== id) : undefined),
+        patchProfileDetailList(profileId, "relatedTasks", (list) => list.filter((t: any) => t.id !== id)),
       );
-      queryClient.setQueryData<any>(["/api/profiles", profileId, "detail"], (old: any) => {
-        if (!old?.tasks) return old;
-        return { ...old, tasks: old.tasks.filter((t: any) => t.id !== id) };
-      });
-      return { prevTasksAll, prevDetail };
+      return { restore };
     },
     onSuccess: (_data, variables) => {
       toast({ title: `"${variables.title || "Task"}" deleted` });
@@ -7973,10 +7983,7 @@ function TasksTab({
       onChanged();
     },
     onError: (err: Error, _vars, ctx: any) => {
-      if (ctx?.prevTasksAll) {
-        for (const [key, val] of ctx.prevTasksAll) queryClient.setQueryData(key, val);
-      }
-      if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
+      ctx?.restore?.();
       toast({ title: "Failed", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -8092,9 +8099,9 @@ function TasksTab({
                         </span>
                       )}
                       {task.dueDate && (
-                        <span className={`text-xs flex items-center gap-1 ${new Date(task.dueDate) < new Date() && !isDone ? "text-red-500" : "text-muted-foreground"}`}>
+                        <span className={`text-xs flex items-center gap-1 ${isPast(task.dueDate) && !isDone ? "text-red-500" : "text-muted-foreground"}`}>
                           <Calendar className="h-3 w-3" />
-                          {new Date(task.dueDate).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                          {formatLocalDate(task.dueDate, { month: "short", day: "numeric" })}
                         </span>
                       )}
                     </div>
@@ -8793,10 +8800,9 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
   // Wave 13: Paid-to-date stats. If a startDate is set, infer how many months
   // have elapsed and split the schedule into paid vs remaining.
   const monthsElapsed = (() => {
-    if (!startDate) return 0;
-    const start = new Date(startDate);
+    const start = parseDate(startDate);
+    if (!start) return 0;
     const now = new Date();
-    if (isNaN(start.getTime())) return 0;
     const months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
     return Math.max(0, Math.min(schedule.length, months));
   })();
@@ -8823,11 +8829,14 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
       // Compute next due date: same day-of-month as startDate, next occurrence.
       const due = (() => {
         const today = new Date();
-        const ref = startDate ? new Date(startDate) : today;
+        // parseDate pins a date-only string to local noon; `new Date("YYYY-MM-DD")`
+        // is UTC midnight, whose local getDate() is the PREVIOUS day west of
+        // Greenwich, so a loan that started on the 15th got a bill on the 14th.
+        const ref = (startDate && parseDate(startDate)) || today;
         const day = ref.getDate();
         const next = new Date(today.getFullYear(), today.getMonth(), day);
         if (next <= today) next.setMonth(next.getMonth() + 1);
-        return next.toISOString().slice(0, 10);
+        return next.toLocaleDateString("en-CA");
       })();
       const billName = `${profile.name || lender || "Loan"} payment`;
       await apiRequest("POST", "/api/obligations", {
@@ -9340,7 +9349,7 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
           if (schedule.length <= 15) return schedule;
           return [...schedule.slice(0, 12), null as any, ...schedule.slice(-3)];
         })();
-        const startDateObj = startDate ? new Date(startDate) : null;
+        const startDateObj = parseDate(startDate);
         return (
           <Card className="p-4">
             <div className="flex items-center justify-between mb-2">
@@ -9426,12 +9435,12 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
   const { toast } = useToast();
   const f = profile.fields || {};
   const endDate = f.warrantyEndDate || f.warranty;
-  const isActive = endDate ? new Date(endDate) > new Date() : false;
+  const isActive = isUpcoming(endDate); // valid through the expiry day, local time
   const claims = (profile.relatedExpenses || []).filter((e: any) => (e.category || "").toLowerCase().includes("warranty"));
   const [showAdd, setShowAdd] = useState(false);
   const [claimDesc, setClaimDesc] = useState("");
   const [claimAmt, setClaimAmt] = useState("");
-  const [claimDate, setClaimDate] = useState(new Date().toISOString().slice(0, 10));
+  const [claimDate, setClaimDate] = useState(localTodayISO());
   const addClaimMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/expenses", { description: claimDesc || "Warranty Claim", amount: Number(claimAmt), date: claimDate, category: "warranty_claim", linkedProfiles: [profileId] });
@@ -9521,7 +9530,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
   const [showAdd, setShowAdd] = useState(false);
   const [redDesc, setRedDesc] = useState("");
   const [redPts, setRedPts] = useState("");
-  const [redDate, setRedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [redDate, setRedDate] = useState(localTodayISO());
   const addRedemptionMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/expenses", { description: redDesc || "Rewards Redemption", amount: Number(redPts), date: redDate, category: "rewards_redemption", linkedProfiles: [profileId] });
@@ -9578,7 +9587,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
             <div key={r.id} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
               <div className="min-w-0 flex-1">
                 <span className="text-xs">{r.description || "Redemption"}</span>
-                <span className="text-xs text-muted-foreground ml-2">{r.date ? new Date(r.date).toLocaleDateString() : ""}</span>
+                <span className="text-xs text-muted-foreground ml-2">{formatLocalDate(r.date)}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium tabular-nums">{r.amount ? formatCurrency(Number(r.amount)) : "—"}</span>
@@ -9796,7 +9805,7 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
               <p className="text-[11px] text-muted-foreground"><span className="font-medium text-foreground/80">Based on:</span> {factors.join(" · ")}</p>
             )}
             {f.valuationDate && (
-              <p className="text-[11px] text-muted-foreground">Valued {new Date(f.valuationDate).toLocaleDateString()}{f.valuationMethod ? ` · ${f.valuationMethod}` : ""}</p>
+              <p className="text-[11px] text-muted-foreground">Valued {formatLocalDate(f.valuationDate)}{f.valuationMethod ? ` · ${f.valuationMethod}` : ""}</p>
             )}
           </CardContent>
         </Card>
@@ -9848,7 +9857,7 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
   const { toast } = useToast();
   const appraisals: { date: string; value: string; source: string }[] = (() => { try { return Array.isArray(fields.appraisals) ? fields.appraisals : JSON.parse(fields.appraisals || "[]"); } catch { return []; } })();
   const [showAdd, setShowAdd] = useState(false);
-  const [aDate, setADate] = useState(new Date().toISOString().slice(0, 10));
+  const [aDate, setADate] = useState(localTodayISO());
   const [aValue, setAValue] = useState("");
   const [aSource, setASource] = useState("");
   const saveMutation = useMutation({
@@ -9881,7 +9890,7 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
               {a.source && <span className="text-xs text-muted-foreground ml-2">{a.source}</span>}
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground tabular-nums">{a.date ? new Date(a.date).toLocaleDateString() : ""}</span>
+              <span className="text-xs text-muted-foreground tabular-nums">{formatLocalDate(a.date)}</span>
               <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-appraisal-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
             </div>
           </div>
@@ -9903,7 +9912,7 @@ function LinkedSubsTab({ profile }: { profile: any }) {
     { key: "cost", label: "Cost", width: "100px", align: "right", render: (s) => <span className="tabular-nums">{s.fields?.cost ? formatCurrency(Number(s.fields.cost)) : "—"}</span> },
     { key: "frequency", label: "Frequency", width: "100px", render: (s) => s.fields?.frequency || "monthly" },
     { key: "category", label: "Category", width: "120px", render: (s) => s.fields?.category || "—" },
-    { key: "renewal", label: "Next Renewal", width: "120px", render: (s) => s.fields?.renewalDate ? new Date(s.fields.renewalDate).toLocaleDateString() : "—" },
+    { key: "renewal", label: "Next Renewal", width: "120px", render: (s) => formatLocalDate(s.fields?.renewalDate) || "—" },
   ];
 
   return (
@@ -10941,7 +10950,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
 
   const [showRecord, setShowRecord] = useState(false);
   const [payAmt, setPayAmt] = useState("");
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [payDate, setPayDate] = useState(localTodayISO());
 
   const recordMutation = useMutation({
     mutationFn: async () => {
@@ -11655,7 +11664,7 @@ function CostOfOwnershipCard({ profile }: { profile: any }) {
   const twelveMonthsAgo = new Date(now); twelveMonthsAgo.setMonth(now.getMonth() - 12);
 
   const trailing12 = expenses.filter(e => {
-    const d = e?.date ? new Date(e.date) : null;
+    const d = parseDate(e?.date);
     return d && d >= twelveMonthsAgo && d <= now;
   });
   const trailing12Total = trailing12.reduce((s, e) => s + (Number(e.amount) || 0), 0);
@@ -12377,7 +12386,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
   const [showAddPayment, setShowAddPayment] = useState(false);
   const [payDesc, setPayDesc] = useState("");
   const [payAmount, setPayAmount] = useState("");
-  const [payDate, setPayDate] = useState(new Date().toISOString().slice(0, 10));
+  const [payDate, setPayDate] = useState(localTodayISO());
   const [payCategory, setPayCategory] = useState("subscription");
 
   const f = profile.fields || {};
@@ -12407,7 +12416,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
     onSuccess: () => {
       toast({ title: `$${Number(payAmount).toFixed(2)} payment recorded` });
       setShowAddPayment(false);
-      setPayDesc(""); setPayAmount(""); setPayDate(new Date().toISOString().slice(0, 10));
+      setPayDesc(""); setPayAmount(""); setPayDate(localTodayISO());
       invalidateDomains("profiles", "expenses");
       onChanged();
     },
@@ -12425,7 +12434,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
       const recurrence = validRecurrence.includes(freq) ? freq : "monthly";
       await apiRequest("POST", "/api/events", {
         title: `\u{1F4B0} ${profile.name} billing`,
-        date: f.renewalDate || new Date().toISOString().slice(0, 10),
+        date: f.renewalDate || localTodayISO(),
         category: "finance",
         linkedProfiles: [profileId],
         recurrence,
@@ -12544,7 +12553,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
       </Card>
 
       {/* Add Payment Dialog */}
-      <Dialog open={showAddPayment} onOpenChange={(open) => { if (!open) { setPayDesc(""); setPayAmount(""); setPayDate(new Date().toISOString().slice(0, 10)); setPayCategory("subscription"); } setShowAddPayment(open); }}>
+      <Dialog open={showAddPayment} onOpenChange={(open) => { if (!open) { setPayDesc(""); setPayAmount(""); setPayDate(localTodayISO()); setPayCategory("subscription"); } setShowAddPayment(open); }}>
         <DialogContent className="max-w-sm" data-testid="dialog-add-payment">
           <DialogHeader>
             <DialogTitle className="text-sm">Add Payment</DialogTitle>
@@ -12576,7 +12585,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
             </div>
           </div>
           <DialogFooter>
-            <Button size="sm" className="h-8 text-xs" onClick={() => createPaymentMutation.mutate()} disabled={!payAmount || parseFloat(payAmount) <= 0 || new Date(payDate) > new Date() || createPaymentMutation.isPending} data-testid="button-submit-payment">
+            <Button size="sm" className="h-8 text-xs" onClick={() => createPaymentMutation.mutate()} disabled={!payAmount || parseFloat(payAmount) <= 0 || (daysFromToday(payDate) ?? 0) > 0 || createPaymentMutation.isPending} data-testid="button-submit-payment">
               {createPaymentMutation.isPending ? "Saving..." : "Add Payment"}
             </Button>
           </DialogFooter>
@@ -12610,7 +12619,7 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
     .filter(e => monthKeyOf(e.date).slice(0, 4) === currentYear)
     .reduce((sum, e) => sum + (e.amount || 0), 0);
 
-  const startDate = f.startDate ? new Date(f.startDate) : null;
+  const startDate = parseDate(f.startDate);
   const monthsSinceStart = startDate ? Math.max(1, Math.floor((Date.now() - startDate.getTime()) / (30.44 * 86400000))) : 0;
   const lifetimeEstimate = expenses.length > 0
     ? expenses.reduce((sum, e) => sum + (e.amount || 0), 0)
@@ -12721,8 +12730,11 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
 
 function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: ProfileDetail; profileId: string; onChanged: () => void }) {
   const { toast } = useToast();
-  const [notes, setNotes] = useState(profile.notes || "");
   const [isEditingNotes, setIsEditingNotes] = useState(false);
+  // Re-seeded on profile change: this tab instance is reused across profile
+  // ids, so a once-only useState seed carried profile A's notes into B's
+  // save (audit 2026-09-02 item 7).
+  const [notes, setNotes] = useResyncedState(profile.notes || "", profileId, isEditingNotes);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const f = profile.fields || {};
@@ -12830,7 +12842,7 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
                     <FileText className="h-3 w-3 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
                       <p className="text-xs font-medium truncate">{doc.name}</p>
-                      <p className="text-xs text-muted-foreground">{doc.type}{doc.expirationDate ? ` · Exp: ${new Date(doc.expirationDate).toLocaleDateString()}` : ""}</p>
+                      <p className="text-xs text-muted-foreground">{doc.type}{doc.expirationDate ? ` · Exp: ${formatLocalDate(doc.expirationDate)}` : ""}</p>
                     </div>
                   </div>
                 </div>
@@ -12875,8 +12887,10 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
 
 function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId: string; currentNotes: string; updatedAt?: string; onChanged: () => void }) {
   const { toast } = useToast();
-  const [notes, setNotes] = useState(currentNotes);
   const [isEditing, setIsEditing] = useState(false);
+  // Re-seeded when the profile id (or its saved notes, while not editing)
+  // changes — see useResyncedState and SubscriptionDetailsTab above.
+  const [notes, setNotes] = useResyncedState(currentNotes, profileId, isEditing);
 
   const saveMutation = useMutation({
     mutationFn: async () => {

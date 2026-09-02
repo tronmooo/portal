@@ -40,6 +40,32 @@ const VERB_OPS: Record<string, "create" | "update" | "delete"> = {
   link: "update", checkin: "update", confirm: "update", pay: "update", restore: "update",
   ensure: "update", copy: "update", migrate: "update", propagate: "update", repair: "update",
   skip: "update", adjust: "update", pause: "update", resume: "update", reschedule: "update",
+  merge: "update", unmerge: "update",
+};
+
+/**
+ * METHOD-level overrides — consulted before the noun map.
+ *
+ * The noun rule is right for a method that writes one kind of row. It is
+ * wrong for a method whose ONE row-write cascades across every table:
+ * deleteProfile runs delete_profile_cascade(), which soft-deletes (or unlinks)
+ * expenses, tasks, habits, trackers, events, documents, goals, incomes,
+ * journal entries and artifacts — yet "Profile" classified it as a profile
+ * write, so every version-stamped shared response cache built from those
+ * tables (expenses:, trackers:, obligations:, incomes:, caltimeline:, stats:,
+ * enhanced:) kept serving the pre-delete lists. Anything that fans out across
+ * tables belongs here, mapped to "everything".
+ */
+export const STORAGE_METHOD_TARGETS: Record<string, StorageTarget> = {
+  // Cascades through the RPC into every owned table.
+  deleteProfile: { domains: ["everything"], endpoint: "/api/profiles" },
+  // A bill IS a liability profile row: deleteObligation delegates to deleteProfile.
+  deleteObligation: { domains: ["everything"], endpoint: "/api/obligations" },
+  // server/merge-profiles.ts re-points every record's owners, moves child
+  // profiles, and archives the source — reported to the journal under these
+  // names since its writes go straight to supabase-js.
+  mergeProfiles: { domains: ["everything"], endpoint: null },
+  unmergeProfiles: { domains: ["everything"], endpoint: null },
 };
 
 /**
@@ -206,6 +232,8 @@ export function targetForStorageMethod(name: string): StorageWriteTarget | null 
   const parsed = parseStorageMethod(name);
   if (!parsed) return null;
   const op = VERB_OPS[parsed.verb];
+  const override = STORAGE_METHOD_TARGETS[name];
+  if (override) return { op, noun: parsed.noun, ...override };
   const target = STORAGE_NOUN_TARGETS[parsed.noun];
   if (!target) {
     return { op, noun: parsed.noun, domains: ["everything"], endpoint: null };

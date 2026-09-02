@@ -24,6 +24,9 @@ import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
+import { useProfileScope, profileScopeParam } from "@/hooks/useProfileScope";
+import { scopedKey } from "@shared/query-keys";
+import { withFullLimit } from "@/lib/list-limit";
 import { formatApiError } from "@/lib/formatError";
 import { addMonthsClamped } from "@shared/date-math";
 import { useToast } from "@/hooks/use-toast";
@@ -801,14 +804,26 @@ type AnyItem =
 function ManageList({ filter, onClose }: { filter: string; onClose: () => void }) {
   const { toast } = useToast();
   const [, setLocation] = useLocation();
+  // The Manage tab lives under the toolbar profile filter like every other
+  // list in the app. It used to read the bare ["/api/obligations"] /
+  // ["/api/events"] / ["/api/tasks"] slots — no ?profileIds — so with Jane
+  // selected it still listed everyone's bills, events and tasks. Same
+  // scoped key + URL the pages build (tasks.tsx / useCalendarOccurrences),
+  // and the full-list limit so a large account is not cut at 100 rows.
+  const scope = useProfileScope();
+  const profileParam = profileScopeParam(scope);
+  const kIds = scope.mode === "selected" ? scope.selectedIds : [];
   const { data: obligations = [] } = useQuery<Obligation[]>({
-    queryKey: ["/api/obligations"], queryFn: () => apiRequest("GET", "/api/obligations").then(r => r.json()),
+    queryKey: [...scopedKey("/api/obligations", scope.mode, kIds)],
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then(r => r.json()),
   });
   const { data: events = [] } = useQuery<any[]>({
-    queryKey: ["/api/events"], queryFn: () => apiRequest("GET", "/api/events").then(r => r.json()),
+    queryKey: [...scopedKey("/api/events", scope.mode, kIds)],
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/events${profileParam}`)).then(r => r.json()),
   });
   const { data: tasks = [] } = useQuery<any[]>({
-    queryKey: ["/api/tasks"], queryFn: () => apiRequest("GET", "/api/tasks").then(r => r.json()),
+    queryKey: [...scopedKey("/api/tasks", scope.mode, kIds)],
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/tasks${profileParam}`)).then(r => r.json()),
   });
 
   const deleteObligation = useMutation<any, Error, string, { prev: [readonly unknown[], unknown][] }>({

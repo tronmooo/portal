@@ -86,6 +86,10 @@ export function taskOccurrenceDates(
   const out: string[] = [];
   if (base >= windowStart && base <= windowEnd && visible(base)) out.push(base);
   if (!rule.freq || !rule.unit) return out;
+  // A COMPLETED occurrence of a repeating task is history: completing it
+  // spawned the next dated row, which carries the series from here. Projecting
+  // the done row too put every future date on the calendar twice.
+  if (String(task?.status || "") === "done") return out;
 
   // `rcount:` counts occurrences of the whole series, and `rdone:` records how
   // many are already behind it, so the budget left is what remains from the

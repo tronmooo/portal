@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
 
 // ---- Shared Supabase client (PERF) ----
 // One client per (url, key) pair per warm container. The Supabase SDK keeps
@@ -46,6 +46,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
   return _sharedClient;
 }
 import { getUserToday, getUserCurrentMonth, parseLocalDate, toLocalDateStr, localDayOf, addDays as tzAddDays, DEFAULT_TIMEZONE } from "../shared/timezone";
+import { nextRecurringTaskSpawn } from "../shared/recurrence";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
@@ -79,7 +80,7 @@ import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-owne
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
-import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
+import { advanceLiabilityDueDatePatch } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
@@ -373,11 +374,7 @@ function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1,
     .reverse();
   if (completeDates.length === 0) return { current: 0, longest: 0 };
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: timezone });
-  function addDays(dateStr: string, days: number): string {
-    const d = new Date(dateStr + 'T12:00:00');
-    d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
-  }
+  const addDays = tzAddDays;
   const yesterdayStr = addDays(todayStr, -1);
   let current = 0;
   if (completeDates[0] === todayStr || completeDates[0] === yesterdayStr) {
@@ -635,6 +632,20 @@ export function capProfileDetailLists(input: {
 // SUPABASE STORAGE IMPLEMENTATION
 // ============================================================
 
+/** Postgres 23505 through supabase-js (a PK/unique clash on insert). */
+function isUniqueViolationError(e: any): boolean {
+  const code = String(e?.code || e?.details?.code || "");
+  return code === "23505" || /duplicate key value/i.test(String(e?.message || ""));
+}
+
+/** Fold any liability lifecycle word into the obligation status enum. */
+export function canonicalObligationStatus(raw: unknown): "active" | "paused" | "cancelled" {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (v === "paused") return "paused";
+  if (v === "cancelled" || v === "canceled") return "cancelled";
+  return "active";
+}
+
 export class SupabaseStorage implements IStorage {
   private supabase: SupabaseClient;
   private userId: string;
@@ -832,6 +843,46 @@ export class SupabaseStorage implements IStorage {
     if (error) throw error;
   }
 
+  /**
+   * ONE owner check for every restore path. The profile-delete cascade
+   * (migrations/009_delete_profile_cascade.sql) only touches LIVE rows
+   * (`deleted_at IS NULL`), so a row that was already in the bin when its
+   * only owner was deleted keeps that owner's id. Restoring it later revived a
+   * row whose linked_profiles pointed at nothing — visible in no scope, not
+   * even "Everyone" (the orphan rule needs an EMPTY owner list for that).
+   *
+   * Called with the row the restore just un-deleted: drops owner ids that no
+   * longer resolve to a live profile; if none survive, the row falls back to
+   * the self profile (or to unowned when there is none). Ownership writes go
+   * through the single writer (setOwners) like every other owner change.
+   * Returns the owner list the row ends up with. Never throws — restoring the
+   * row is the essential step; re-owning it is best-effort and logged.
+   */
+  private async _reownRestoredRow(entityType: OwnedEntityType | null, id: string, row: any): Promise<string[]> {
+    const owners: string[] = Array.isArray(row?.linked_profiles)
+      ? row.linked_profiles.filter((x: unknown): x is string => typeof x === "string")
+      : [];
+    if (!entityType || owners.length === 0) return owners;
+    try {
+      // Live profiles only (the lite read filters deleted_at), straight from
+      // the DB rather than the request memo, so a profile deleted earlier in
+      // this same request is already gone here.
+      const live = new Set((await this.getProfilesLite()).map(p => p.id));
+      const kept = owners.filter(pid => live.has(pid));
+      if (kept.length === owners.length) return owners;
+      let next = kept;
+      if (next.length === 0) {
+        const self = await this.getSelfProfile();
+        next = self ? [self.id] : [];
+      }
+      await this.applyOwnershipPatch(entityType, id, next);
+      return next;
+    } catch (e: any) {
+      console.warn(`[restore] could not re-own ${entityType} ${id}: ${e?.message || e}`);
+      return owners;
+    }
+  }
+
   /** Generic soft-delete restore (deleted_at = null) for entities without a
    *  dedicated restore method. Only tables that soft-delete are mapped. */
   async restoreEntity(entityType: string, id: string): Promise<boolean> {
@@ -847,12 +898,19 @@ export class SupabaseStorage implements IStorage {
     };
     const table = TABLES[entityType];
     if (!table) return false;
+    // `select("*")` rather than naming linked_profiles: reminders carry no
+    // owner column, and the restore must not fail on the column list.
     const { data, error } = await this.supabase.from(table)
       .update({ deleted_at: null })
       .eq("id", id).eq("user_id", this.userId)
-      .select("id");
+      .select("*");
     if (error) throw error;
-    return Array.isArray(data) && data.length > 0;
+    const ok = Array.isArray(data) && data.length > 0;
+    if (ok) {
+      const owned = (entityType in OWNERSHIP_TABLES) ? (entityType as OwnedEntityType) : null;
+      await this._reownRestoredRow(owned, id, data[0]);
+    }
+    return ok;
   }
 
   // ============================================================
@@ -1022,9 +1080,12 @@ export class SupabaseStorage implements IStorage {
     };
   }
 
-  private rowToTrackerEntry(r: any): TrackerEntry {
+  /** `trackerId` rides along (the column is always selected) so a by-id read
+   *  says which tracker owns the entry — the by-id entry routes no longer have
+   *  to scan a wide entry window to find the parent. */
+  private rowToTrackerEntry(r: any): TrackerEntry & { trackerId: string } {
     return {
-      id: r.id, values: r.entry_values || {}, computed: r.computed || {},
+      id: r.id, trackerId: r.tracker_id, values: r.entry_values || {}, computed: r.computed || {},
       notes: r.notes || undefined, mood: r.mood || undefined,
       tags: r.tags || undefined, forProfile: r.for_profile || undefined,
       profileId: r.profile_id || undefined,
@@ -2949,31 +3010,56 @@ export class SupabaseStorage implements IStorage {
       values = guard.values;
     }
 
+    // W4-4: honor an explicit entry timestamp when the caller supplies one
+    // (already parsed to ISO upstream); otherwise stamp NOW().
+    const ts = data.timestamp || new Date().toISOString();
+
     // Dedup check: reject entries with same values logged within 5 minutes.
     // Use a key-sorted canonical form so {a:1,b:2} and {b:2,a:1} dedup the same way.
     // Only deduplicates accidental double-fires (e.g. retried HTTP request) —
     // intentional re-logs of the same value within 5 min are the trade-off.
-    const canonicalize = (obj: any): string => {
-      if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return JSON.stringify(obj);
-      const sortedKeys = Object.keys(obj).sort();
-      const out: Record<string, any> = {};
-      for (const k of sortedKeys) out[k] = obj[k];
-      return JSON.stringify(out);
-    };
-    const newCanonical = canonicalize(values);
-    const recentEntries = await this.supabase
-      .from("tracker_entries")
-      .select("id, entry_values, timestamp")
-      .eq("tracker_id", data.trackerId)
-      .eq("user_id", this.userId)
-      .is("deleted_at", null)
-      .gte("timestamp", new Date(Date.now() - 5 * 60 * 1000).toISOString())
-      .order("timestamp", { ascending: false })
-      .limit(5);
-    if (recentEntries.data) {
-      const existing = recentEntries.data.find(e => canonicalize(e.entry_values) === newCanonical);
-      if (existing) {
-        return this.rowToTrackerEntry(existing);
+    //
+    // The window is centred on the ENTRY's own timestamp, not the wall clock:
+    // "also 180 for yesterday" is a backdated entry whose only near neighbour
+    // is yesterday's, and it must not be swallowed by today's identical row.
+    // The lower bound is applied by the query; the upper bound is checked on
+    // the rows (PostgREST filters compose, but keeping one filter here keeps
+    // the query shape every storage double already scripts).
+    //
+    // `__skipDedupe` is the internal marker the habit mirror sets (alongside
+    // `__skipHabitSync`): the 2nd and 3rd mirror of a "twice daily" habit are
+    // identical rows moments apart BY DESIGN, and swallowing them handed back
+    // the first row's id — so the un-check later deleted the only mirror.
+    const DEDUP_WINDOW_MS = 5 * 60 * 1000;
+    const tsMs = Date.parse(ts);
+    if (!(data as any).__skipDedupe && Number.isFinite(tsMs)) {
+      const canonicalize = (obj: any): string => {
+        if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return JSON.stringify(obj);
+        const sortedKeys = Object.keys(obj).sort();
+        const out: Record<string, any> = {};
+        for (const k of sortedKeys) out[k] = obj[k];
+        return JSON.stringify(out);
+      };
+      const newCanonical = canonicalize(values);
+      // A backdated entry's neighbours sit just AFTER the window's start, so
+      // walk forward from it; a live entry's neighbours are the newest rows.
+      const backdated = tsMs < Date.now() - DEDUP_WINDOW_MS;
+      const recentEntries = await this.supabase
+        .from("tracker_entries")
+        .select("id, entry_values, timestamp")
+        .eq("tracker_id", data.trackerId)
+        .eq("user_id", this.userId)
+        .is("deleted_at", null)
+        .gte("timestamp", new Date(tsMs - DEDUP_WINDOW_MS).toISOString())
+        .order("timestamp", { ascending: backdated })
+        .limit(5);
+      if (recentEntries.data) {
+        const existing = recentEntries.data.find(e =>
+          Date.parse(e.timestamp) <= tsMs + DEDUP_WINDOW_MS
+          && canonicalize(e.entry_values) === newCanonical);
+        if (existing) {
+          return this.rowToTrackerEntry(existing);
+        }
       }
     }
 
@@ -2983,9 +3069,6 @@ export class SupabaseStorage implements IStorage {
       ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}),
     };
     const id = randomUUID();
-    // W4-4: honor an explicit entry timestamp when the caller supplies one
-    // (already parsed to ISO upstream); otherwise stamp NOW().
-    const ts = data.timestamp || new Date().toISOString();
     // AUTHORITATIVE WRITE + READ-BACK (production audit 2026-07-29, blocker #2).
     //
     // This method used to `.insert()` and then return an entry object built
@@ -3054,7 +3137,7 @@ export class SupabaseStorage implements IStorage {
    * (production audit 2026-07-29, blocker #2). Returns undefined when the row
    * does not exist, belongs to someone else, or has been soft-deleted.
    */
-  async getTrackerEntry(entryId: string): Promise<TrackerEntry | undefined> {
+  async getTrackerEntry(entryId: string): Promise<(TrackerEntry & { trackerId: string }) | undefined> {
     const { data, error } = await this.supabase
       .from("tracker_entries")
       .select()
@@ -3082,6 +3165,22 @@ export class SupabaseStorage implements IStorage {
     const { data: existing, error: fetchErr } = await this.supabase.from("tracker_entries")
       .select("*").eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId).maybeSingle();
     if (fetchErr || !existing) return undefined;
+    let tracker: Tracker | undefined;
+    try { tracker = await this.getTracker(trackerId); } catch { tracker = undefined; }
+    // The SAME unit gate and value gate logEntry runs, on the patched values.
+    // An edit used to skip both, so the entry form stored "80 kg" as a bare 80
+    // in a pounds tracker and "8000 hours" of sleep from a PATCH that the POST
+    // path would have refused. Gate the patch (not the whole merged row) so a
+    // legacy row with an out-of-range value elsewhere can still be corrected
+    // one field at a time. Throws the same error shape logEntry throws, so the
+    // route maps it to a 400.
+    let patchValues = patch.values;
+    if (patchValues && typeof patchValues === "object" && tracker) {
+      const normalized = normalizeTrackerEntry(tracker as any, patchValues).values;
+      const guard = sanitizeTrackerEntryValues(tracker.fields, normalized);
+      if (guard.error) throw new Error(guard.error);
+      patchValues = guard.values;
+    }
     // Merge values JSONB AND honor deletion intents — same reason as updateProfile.
     // Without this, secondary metrics logged in error could never be cleared from
     // a tracker entry (e.g. accidentally logged `diastolic` on a single-value
@@ -3092,7 +3191,7 @@ export class SupabaseStorage implements IStorage {
     // failed with a column error → the route returned "404 Entry not found".
     const mergedValues = mergeAndApplyDeletes(
       existing.entry_values || {},
-      patch.values,
+      patchValues,
       patch.valuesToDelete
     );
     const update: any = { entry_values: mergedValues };
@@ -3103,7 +3202,6 @@ export class SupabaseStorage implements IStorage {
     // Recompute derived/computed data from the new values so badges (BP
     // category, sleep quality, pace, calories, etc.) stay correct after an edit.
     try {
-      const tracker = await this.getTracker(trackerId);
       if (tracker) {
         update.computed = {
           ...computeSecondaryData(tracker.name, tracker.category, mergedValues),
@@ -3132,7 +3230,16 @@ export class SupabaseStorage implements IStorage {
     /* D1: clean up entity_links rows that reference this tracker */
     await this.cleanupEntityLinks("tracker", id);
     const { error } = await this.supabase.from("trackers").delete().eq("id", id).eq("user_id", this.userId);
-    if (!error) bustInsightsCacheFor(this.userId); // [P0] tracker removed → recompute insights
+    if (!error) {
+      bustInsightsCacheFor(this.userId); // [P0] tracker removed → recompute insights
+      // A habit that mirrored into this tracker must not keep pointing at it:
+      // completeHabitOccurrence read the dangling id, found no tracker, wrote
+      // no mirror and — because the link was "set" — never resolved a new one.
+      const { error: unlinkErr } = await this.supabase.from("habits")
+        .update({ linked_tracker_id: null })
+        .eq("linked_tracker_id", id).eq("user_id", this.userId);
+      if (unlinkErr) console.warn(`[deleteTracker] could not clear habits.linked_tracker_id for ${id}: ${unlinkErr.message}`);
+    }
     return !error;
   }
 
@@ -3160,7 +3267,11 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createTask(data: InsertTask): Promise<Task> {
-    const id = randomUUID();
+    // A caller may supply the row id (the recurring-task spawn derives one
+    // from the series, so two concurrent completions collide on the primary
+    // key instead of inserting two clones).
+    const suppliedId = (data as any).id;
+    const id = typeof suppliedId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(suppliedId) ? suppliedId : randomUUID();
     const now = new Date().toISOString();
     // Auto-link to self profile if no profiles specified
     let linkedProfiles = data.linkedProfiles || [];
@@ -3227,31 +3338,65 @@ export class SupabaseStorage implements IStorage {
     return this.getTask(id);
   }
 
-  /** Create the next instance of a recurring task with its due date advanced. */
-  private async spawnNextRecurringTask(prev: Task, freq: string): Promise<void> {
-    const base = prev.dueDate ? new Date(prev.dueDate.slice(0, 10) + "T00:00:00") : new Date();
-    const next = new Date(base);
-    const everyMatch = freq.match(/^every-(\d+)-days$/);
-    if (everyMatch) next.setDate(next.getDate() + parseInt(everyMatch[1], 10));
-    else if (freq === "daily") next.setDate(next.getDate() + 1);
-    else if (freq === "weekly") next.setDate(next.getDate() + 7);
-    else if (freq === "biweekly") next.setDate(next.getDate() + 14);
-    else if (freq === "monthly") {
-      const day = next.getDate();
-      const last = new Date(next.getFullYear(), next.getMonth() + 2, 0).getDate();
-      next.setMonth(next.getMonth() + 1, Math.min(day, last));
-    } else return; // unknown cadence — do nothing
-    const nextDue = next.toLocaleDateString("en-CA");
-    await this.createTask({
-      title: prev.title,
+  /**
+   * Create the next instance of a recurring task with its due date advanced.
+   *
+   * The cadence step is shared/recurrence's — ONE rule for the task's tags.
+   * The hand-rolled step this replaces knew daily/weekly/biweekly/monthly/
+   * every-N-days only, so `every-N-weeks`, `weekdays`, `yearly` spawned
+   * nothing (the chore vanished after its first completion), `runtil:` /
+   * `rcount:` were ignored (the chore outlived its end), the monthly step
+   * drifted off the 31st, and an undated task stepped from the HOST's clock.
+   * `_freq` is kept for the caller's signature; the rule is read from the tags.
+   */
+  private async spawnNextRecurringTask(prev: Task, _freq: string): Promise<void> {
+    const next = nextRecurringTaskSpawn(
+      { dueDate: prev.dueDate, tags: prev.tags },
+      getUserToday(this._timezone),
+    );
+    if (!next) return; // not recurring, or the series has reached its end
+    // IDEMPOTENT. The spawn fires on every todo → done transition, so
+    // un-checking and re-checking the same chore produced a SECOND clone for
+    // the same next date (live repro 2026-09-02). If the next occurrence —
+    // same title, same owners, same due date — already exists as a live task,
+    // it IS the series' next row; don't create another. Read the DB directly
+    // rather than the request-memoized getTasks(), which can predate the first
+    // spawn inside the same AI turn.
+    const sameTitle = (t: unknown) => String(t || "").trim().toLowerCase() === String(prev.title || "").trim().toLowerCase();
+    const ownersKey = (ids: unknown) => (Array.isArray(ids) ? ids.map(String) : []).sort().join(",");
+    const { data: siblings, error: sibErr } = await this.supabase.from("tasks")
+      .select("id, title, linked_profiles")
+      .eq("user_id", this.userId).is("deleted_at", null)
+      .eq("due_date", next.dueDate);
+    if (sibErr) throw sibErr;
+    const alreadySpawned = (siblings || []).some((r: any) =>
+      r.id !== prev.id && sameTitle(r.title) && ownersKey(r.linked_profiles) === ownersKey(prev.linkedProfiles));
+    if (alreadySpawned) return;
+    // Two completions racing past the read above (a double tap, two tabs)
+    // both saw no sibling. The clone's id is derived from the series row and
+    // the next date, so the second insert hits the primary key and is dropped
+    // instead of becoming a duplicate.
+    const seriesCloneId = (() => {
+      const h = createHash("sha1").update(`recurring-clone:${prev.id}:${next.dueDate}`).digest("hex");
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${((parseInt(h.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0")}${h.slice(18, 20)}-${h.slice(20, 32)}`;
+    })();
+    try {
+      await this.createTask({
+        id: seriesCloneId,
+        title: prev.title,
       description: prev.description || undefined,
       priority: prev.priority,
-      dueDate: nextDue,
+      dueDate: next.dueDate,
       // The next instance keeps the same hour — a 9 AM chore is 9 AM every week.
       dueTime: prev.dueTime || undefined,
-      tags: prev.tags || [],
-      linkedProfiles: prev.linkedProfiles || [],
-    } as any);
+        // Carries the series forward: rdone incremented, anchor pinned.
+        tags: next.tags,
+        linkedProfiles: prev.linkedProfiles || [],
+      } as any);
+    } catch (e: any) {
+      if (isUniqueViolationError(e)) return; // the other completion won
+      throw e;
+    }
   }
 
   async deleteTask(id: string): Promise<boolean> {
@@ -3270,8 +3415,10 @@ export class SupabaseStorage implements IStorage {
 
   async restoreTask(id: string): Promise<boolean> {
     const { data, error } = await this.supabase.from("tasks").update({ deleted_at: null })
-      .eq("id", id).eq("user_id", this.userId).select("id");
-    return !error && Array.isArray(data) && data.length > 0;
+      .eq("id", id).eq("user_id", this.userId).select("id, linked_profiles");
+    const ok = !error && Array.isArray(data) && data.length > 0;
+    if (ok) await this._reownRestoredRow("task", id, data![0]);
+    return ok;
   }
 
   /** Recently soft-deleted tasks (newest deletion first) — for restore-by-name. */
@@ -3326,7 +3473,10 @@ export class SupabaseStorage implements IStorage {
       id, user_id: this.userId, amount: data.amount, category: data.category || "general",
       description: data.description, vendor: data.vendor || null,
       is_recurring: data.isRecurring || false, linked_profiles: [],
-      tags: data.tags || [], date: data.date || now,
+      // A missing date is TODAY in the user's zone. `now` is a UTC instant,
+      // whose calendar date is tomorrow for every US user from late afternoon
+      // and yesterday for every user east of Greenwich in the morning.
+      tags: data.tags || [], date: data.date || getUserToday(this._timezone),
       source: (data as any).source || "manual", created_at: now,
     });
     if (error) throw error;
@@ -3387,13 +3537,17 @@ export class SupabaseStorage implements IStorage {
       q = this._applyProfileFilter(q, profileIds, "array");
       const { data, error } = await q;
       if (error) throw error;
-      return (data || []).map(r => ({
-        id: r.id, description: r.description, amount: Number(r.amount),
-        category: r.category || "salary", frequency: r.frequency || "monthly",
-        date: r.date || undefined, linkedProfiles: r.linked_profiles || [],
-        tags: r.tags || [], deletedAt: r.deleted_at, createdAt: r.created_at,
-      }));
+      return (data || []).map(r => this.rowToIncome(r));
     });
+  }
+
+  private rowToIncome(r: any): Income {
+    return {
+      id: r.id, description: r.description, amount: Number(r.amount),
+      category: r.category || "salary", frequency: r.frequency || "monthly",
+      date: r.date || undefined, linkedProfiles: r.linked_profiles || [],
+      tags: r.tags || [], deletedAt: r.deleted_at, createdAt: r.created_at,
+    } as Income;
   }
 
   async createIncome(data: InsertIncome): Promise<Income> {
@@ -3436,8 +3590,14 @@ export class SupabaseStorage implements IStorage {
     if (data.linkedProfiles !== undefined) {
       await this.applyOwnershipPatch("income", id, data.linkedProfiles);
     }
-    const all = await this.getIncomes();
-    return all.find(i => i.id === id);
+    // Read the row back BY ID (the updateTask / updateExpense pattern), never
+    // out of getIncomes(): that list is request-memoized, so inside an AI turn
+    // it still held the PRE-update rows and the client patched its list with
+    // the stale values the tool had just replaced.
+    const { data: row, error: readErr } = await this.supabase.from("incomes").select("*")
+      .eq("id", id).eq("user_id", this.userId).is("deleted_at", null).maybeSingle();
+    if (readErr || !row) return undefined;
+    return this.rowToIncome(row);
   }
 
   async deleteIncome(id: string): Promise<boolean> {
@@ -3797,9 +3957,13 @@ export class SupabaseStorage implements IStorage {
       // projected across the window instead of appearing once on its stored due
       // date. Without the projection "every Tuesday at 9 AM" occupied one
       // Tuesday and the rest of the year was blank.
+      // An undated task sits on the day it was CREATED — in the user's zone.
+      // createdAt is a UTC instant, so `slice(0, 10)` put an evening task on
+      // tomorrow for every negative-offset user.
+      const createdDay = task.dueDate ? null : localDayOf(rawDate, this._timezone);
       const taskDates = task.dueDate
         ? taskOccurrenceDates({ dueDate: task.dueDate, tags: task.tags, status: task.status }, startDate, endDate, { todayISO: rdTodayISO })
-        : (rawDate.slice(0, 10) >= startDate && rawDate.slice(0, 10) <= endDate ? [rawDate.slice(0, 10)] : []);
+        : (createdDay && createdDay >= startDate && createdDay <= endDate ? [createdDay] : []);
       const isSeries = taskRepeats(task as any);
       for (const d of taskDates) {
         items.push({
@@ -3887,37 +4051,9 @@ export class SupabaseStorage implements IStorage {
     // if a future view wants them, but the calendar tab does not.
 
     // ── Dedup: remove events that duplicate an obligation on the same date ──
-    // Build a set of obligation fingerprints (normalized title + date)
-    const obligationFingerprints = new Set<string>();
-    for (const item of items) {
-      if (item.type === "obligation") {
-        // Normalize: strip emoji, $amounts, and extra whitespace for matching
-        const normTitle = item.title.replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]/g, "").replace(/\s*[\u2014-]\s*\$[\d.]+/, "").replace(/\s+/g, " ").trim().toLowerCase();
-        obligationFingerprints.add(`${normTitle}::${item.date}`);
-      }
-    }
-    // Filter out events that match an obligation's fingerprint
-    const dedupedItems = items.filter(item => {
-      if (item.type !== "event") return true; // Keep non-events
-      const normTitle = item.title.replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]/g, "").replace(/\s*[\u2014-]\s*\$[\d.]+/, "").replace(/\s+/g, " ").trim().toLowerCase();
-      const fp = `${normTitle}::${item.date}`;
-      // Also check if event title contains any obligation name
-      for (const ofp of obligationFingerprints) {
-        const [oName] = ofp.split("::");
-        if (normTitle.includes(oName) && item.date === ofp.split("::")[1]) return false;
-      }
-      return !obligationFingerprints.has(fp);
-    });
-    // Also dedup obligations with same name+date (keep only first)
-    const seenObligations = new Set<string>();
-    const finalItems = dedupedItems.filter(item => {
-      if (item.type === "obligation") {
-        const key = `${item.title}::${item.date}`;
-        if (seenObligations.has(key)) return false;
-        seenObligations.add(key);
-      }
-      return true;
-    });
+    // Whole-name matches only, and same-date obligations keyed by their source
+    // row — see dedupCalendarTimelineItems for what the old substring match did.
+    const finalItems = dedupCalendarTimelineItems(items);
     items.length = 0;
     items.push(...finalItems);
 
@@ -4535,7 +4671,9 @@ export class SupabaseStorage implements IStorage {
       .update({ deleted_at: null })
       .eq("id", id).eq("user_id", this.userId).select("id, linked_profiles");
     if (error || !Array.isArray(data) || data.length === 0) return false;
-    const owners: string[] = Array.isArray((data[0] as any).linked_profiles) ? (data[0] as any).linked_profiles : [];
+    // Owners that no longer exist are dropped BEFORE re-linking, so the doc
+    // lands in a live profile's documents[] rather than in nobody's.
+    const owners = await this._reownRestoredRow("document", id, data[0]);
     await Promise.all(owners.map(async pid => {
       try {
         const profile = await this.getProfile(pid);
@@ -4804,8 +4942,9 @@ export class SupabaseStorage implements IStorage {
 
   async restoreHabit(id: string): Promise<boolean> {
     const { data, error } = await this.supabase.from("habits").update({ deleted_at: null })
-      .eq("id", id).eq("user_id", this.userId).select("id, linked_tracker_id");
+      .eq("id", id).eq("user_id", this.userId).select("id, linked_tracker_id, linked_profiles");
     const ok = !error && Array.isArray(data) && data.length > 0;
+    if (ok) await this._reownRestoredRow("habit", id, data![0]);
     const trackerId = ok ? (data![0] as any)?.linked_tracker_id : null;
     if (trackerId) {
       // Revive the mirror tracker retired WITH this habit (matching stamp).
@@ -4886,7 +5025,11 @@ export class SupabaseStorage implements IStorage {
       category: String(f.category ?? "general"),
       nextDueDate: nextDueDate || "",
       autopay: f.autopay === true || f.autoPay === true,
-      status: String(f.status ?? "active"),
+      // The obligation surface speaks active | paused | cancelled; the
+      // liability fields also carry lifecycle words ("upcoming", "overdue",
+      // written by the pay path). Echoing those back made an edit form that
+      // round-trips the record fail validation with a 400.
+      status: canonicalObligationStatus(f.status),
       kind: kind as any,
       leadTimeDays: 3,
       autoLogExpense: false,
@@ -4949,11 +5092,17 @@ export class SupabaseStorage implements IStorage {
   /** Find an existing liability profile that IS this one (same normalized name,
    *  same owner) so create becomes an idempotent upsert — one liability = one
    *  profile, no matter how many times / ways it's created. */
-  private async resolveExistingLiability(name: string, ownerId: string | undefined, all?: Profile[]): Promise<Profile | undefined> {
+  private async resolveExistingLiability(
+    name: string,
+    ownerId: string | undefined,
+    all?: Profile[],
+    opts: { billShellsOnly?: boolean } = {},
+  ): Promise<Profile | undefined> {
     const target = this.normLiabilityName(name);
     if (!target) return undefined;
     const profiles = all || await this.getProfiles();
-    const isLiab = (p: any) => p.type === "liability" || p.type === "loan";
+    const isLiab = (p: any) => (p.type === "liability" || p.type === "loan")
+      && (!opts.billShellsOnly || isRecurringBillShell(p));
     // Same owner first; then a self/orphan-owned shell of the same name.
     const selfId = profiles.find(p => p.type === "self")?.id;
     return profiles.find((p: any) => isLiab(p) && this.normLiabilityName(p.name) === target && p.parentProfileId === ownerId)
@@ -4998,11 +5147,24 @@ export class SupabaseStorage implements IStorage {
       ...(data.notes ? { notes: data.notes } : {}),
     };
 
-    // IDEMPOTENT UPSERT — one liability = one profile. If a liability with this
-    // normalized name already exists for the owner (a create_liability shell, a
-    // prior create, or a re-run), UPDATE it into this recurring bill and return
-    // it instead of inserting a duplicate.
-    const existing = await this.resolveExistingLiability(rawName, parent);
+    // IDEMPOTENT UPSERT — one liability = one profile. If a RECURRING BILL (or
+    // a bare liability shell with no type_key yet — a create_liability shell,
+    // a prior create, a re-run) with this normalized name already exists for
+    // the owner, UPDATE it into this recurring bill and return it instead of
+    // inserting a duplicate.
+    //
+    // Only bill shells qualify. The match used to accept ANY liability of the
+    // same name, so "Car Loan payment" (normalized: "car loan") UPDATED the
+    // amortizing "Car Loan" into a recurring bill — type_key overwritten, the
+    // loan dropped out of net worth, its amortization replaced by a monthly
+    // shell. A loan, credit card or one-time debt of the same name is a
+    // different thing: it keeps its identity, and the bill is created as a
+    // separate profile that records which liability it pays
+    // (fields.linkedLiabilityId), so the two stay related without merging.
+    const profiles = await this.getProfiles();
+    const existing = await this.resolveExistingLiability(rawName, parent, profiles, { billShellsOnly: true });
+    const paysFor = existing ? undefined : await this.resolveExistingLiability(rawName, parent, profiles);
+    if (paysFor) billFields.linkedLiabilityId = paysFor.id;
     if (existing) {
       await this.updateProfile(existing.id, {
         name: rawName,
@@ -5243,8 +5405,7 @@ export class SupabaseStorage implements IStorage {
     const p = await this.getProfile(id);
     const f: any = p?.fields || {};
     if (String(f.dueDate ?? f.nextDueDate ?? "").slice(0, 10) === occDate) {
-      const nextDue = advanceLiabilityDueDate(f, occDate);
-      await this.updateProfile(id, { fields: { dueDate: nextDue, nextDueDate: nextDue } } as any);
+      await this.updateProfile(id, { fields: advanceLiabilityDueDatePatch(f, occDate) } as any);
       return this.getLiabilitySchedule(id);
     }
     return result;
@@ -6019,8 +6180,10 @@ export class SupabaseStorage implements IStorage {
 
   async restoreGoal(id: string): Promise<boolean> {
     const { data, error } = await this.supabase.from("goals").update({ deleted_at: null })
-      .eq("id", id).eq("user_id", this.userId).select("id");
-    return !error && Array.isArray(data) && data.length > 0;
+      .eq("id", id).eq("user_id", this.userId).select("id, linked_profiles");
+    const ok = !error && Array.isArray(data) && data.length > 0;
+    if (ok) await this._reownRestoredRow("goal", id, data![0]);
+    return ok;
   }
 
   /**
@@ -6036,9 +6199,14 @@ export class SupabaseStorage implements IStorage {
     goal: Goal,
     lookup?: { trackerById: Map<string, Tracker>; habitById: Map<string, Habit> },
   ): Promise<number> {
-    const now = new Date();
-    const thisMonth = now.getMonth();
-    const thisYear = now.getFullYear();
+    // "This month" is the USER's month (getStats does the same). The server
+    // runs in UTC, so getMonth() on the host rolled to next month at 5 pm
+    // Pacific on the last day, and `new Date("YYYY-MM-DD")` on a date-only
+    // expense read as UTC midnight — the 1st landed in the previous month for
+    // every negative-offset user.
+    const thisMonthKey = getUserCurrentMonth(this._timezone);
+    const inThisMonth = (v: string | Date | null | undefined) =>
+      (localDayOf(v, this._timezone) || "").slice(0, 7) === thisMonthKey;
     const resolveTracker = async (id: string): Promise<Tracker | undefined> => {
       const fromList = lookup?.trackerById.get(id);
       if (fromList && fromList.entries.length > 0) return fromList;
@@ -6067,29 +6235,22 @@ export class SupabaseStorage implements IStorage {
         if (!goal.trackerId) return goal.current;
         const tracker = await resolveTracker(goal.trackerId);
         if (!tracker) return goal.current;
-        const entries = tracker.entries.filter(e => {
-          const d = new Date(e.timestamp);
-          return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
-        });
+        const entries = tracker.entries.filter(e => inThisMonth(e.timestamp));
         return entries.reduce((sum, e) => sum + (parseFloat(e.values.distance || e.computed?.distanceMiles || "0")), 0);
       }
       case "fitness_frequency": {
         if (!goal.trackerId) return goal.current;
         const tracker = await resolveTracker(goal.trackerId);
         if (!tracker) return goal.current;
-        return tracker.entries.filter(e => {
-          const d = new Date(e.timestamp);
-          return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
-        }).length;
+        return tracker.entries.filter(e => inThisMonth(e.timestamp)).length;
       }
       case "spending_limit": {
         if (!goal.category) return goal.current;
         const expenses = await this.getExpenses();
-        return expenses.filter(e => {
-          const d = new Date(e.date);
-          return d.getMonth() === thisMonth && d.getFullYear() === thisYear &&
-            e.category.toLowerCase() === (goal.category || "").toLowerCase();
-        }).reduce((sum, e) => sum + e.amount, 0);
+        return expenses.filter(e =>
+          inThisMonth(e.date) &&
+          e.category.toLowerCase() === (goal.category || "").toLowerCase(),
+        ).reduce((sum, e) => sum + e.amount, 0);
       }
       case "tracker_target": {
         if (!goal.trackerId) return goal.current;
@@ -6433,7 +6594,7 @@ export class SupabaseStorage implements IStorage {
     const daysSinceMonday = (dow + 6) % 7; // Mon=0, Tue=1, ... Sun=6
     const weekStart = new Date(todayLocal);
     weekStart.setDate(weekStart.getDate() - daysSinceMonday);
-    const weekStartStr = weekStart.toISOString().slice(0, 10);
+    const weekStartStr = weekStart.toLocaleDateString('en-CA');
     const todayCompleted = allActiveHabits.filter(h => {
       if (h.frequency === "daily") return habitDayProgress(h as any, todayStr2).isComplete;
       // weekly: completed if any checkin exists this week
@@ -6756,9 +6917,10 @@ export class SupabaseStorage implements IStorage {
       const todayStr = getUserToday(this._timezone); // the user's zone, not a hardcoded one
       let dailyTotal: number | undefined;
       if (isHydration) {
-        dailyTotal = t.entries
-          .filter(e => e.timestamp.startsWith(todayStr))
-          .reduce((s, e) => s + (Number(e.values[primaryField.name]) || 0), 0);
+        // The entry timestamp is a UTC instant; compare its calendar day in
+        // the user's zone, not its ISO prefix (which is the UTC day — every
+        // glass logged after 5 pm Pacific counted toward TOMORROW).
+        dailyTotal = hydrationDailyTotal(t.entries, primaryField.name, todayStr, this._timezone);
       }
       healthSnapshot.push({ trackerId: t.id, name: t.name, category: t.category, unit: primaryField.unit || t.unit || '', latestValue: latest, average: Math.round(avg * 10) / 10, trend: trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat', trendValue: Math.round(Math.abs(trend) * 10) / 10, entryCount: recent.length, lastEntry: recent[recent.length - 1]?.timestamp, dailyTotal });
     }
@@ -6778,7 +6940,10 @@ export class SupabaseStorage implements IStorage {
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
     const upcomingBills = allObligations.filter(o => isUpcomingBill(o, now)).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {
-      const daysUntil = Math.ceil((new Date(o.nextDueDate).getTime() - now.getTime()) / 86400000);
+      // Whole calendar days between the user's today and the due DATE — no
+      // instants. `new Date("YYYY-MM-DD")` is UTC midnight, so a bill due
+      // today read as "overdue" from 5 pm Pacific onward.
+      const daysUntil = calendarDaysUntil(o.nextDueDate, today, this._timezone);
       return {
         id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil,
         autopay: o.autopay, category: o.category,
@@ -7199,21 +7364,29 @@ export class SupabaseStorage implements IStorage {
   }
 
   async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>): Promise<void> {
-    const { data: existing } = await this.supabase.from("preferences")
+    // Every Supabase error is thrown. The three budget writers (this, addBudget,
+    // updateBudget — which both funnel here) used to discard `error`, so a
+    // failed write answered success and the UI showed a cap the DB never got.
+    // The routes map a thrown error to a 500 like every other storage write.
+    const { data: existing, error: readErr } = await this.supabase.from("preferences")
       .select("id")
       .eq("user_id", this.userId)
       .eq("key", `budget:${month}`)
       .maybeSingle();
+    if (readErr) throw readErr;
     if (existing) {
-      await this.supabase.from("preferences")
+      const { error } = await this.supabase.from("preferences")
         .update({ value: JSON.stringify(budgets) })
-        .eq("id", existing.id);
+        .eq("id", existing.id)
+        .eq("user_id", this.userId);
+      if (error) throw error;
     } else {
-      await this.supabase.from("preferences").insert({
+      const { error } = await this.supabase.from("preferences").insert({
         user_id: this.userId,
         key: `budget:${month}`,
         value: JSON.stringify(budgets),
       });
+      if (error) throw error;
     }
   }
 
@@ -7284,7 +7457,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async confirmPaycheck(id: string, actual_amount?: number): Promise<any> {
-    const update: any = { confirmed: true, received_date: new Date().toISOString().slice(0, 10) };
+    const update: any = { confirmed: true, received_date: getUserToday(this._timezone) };
     if (actual_amount != null) update.actual_amount = actual_amount;
     const { data, error } = await this.supabase.from('paychecks').update(update)
       .eq('id', id).eq('user_id', this.userId).select().single();
@@ -8425,4 +8598,85 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("finance_imports").update(patch).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
   }
+}
+
+// ─── Pure helpers (exported for tests) ──────────────────────────────────────
+
+/**
+ * A liability row createObligation may turn INTO a recurring bill: one that
+ * already is a recurring bill, or a bare shell with no type_key yet. A loan,
+ * credit card or one-time debt is a different thing and must never be
+ * converted by a same-named bill.
+ */
+export function isRecurringBillShell(p: { type_key?: string | null; typeKey?: string | null } | null | undefined): boolean {
+  const tk = (p as any)?.type_key ?? (p as any)?.typeKey;
+  return !tk || isRecurringBill(tk);
+}
+
+/**
+ * The identity a calendar title is compared by: emoji, a trailing "— $amount"
+ * and a trailing bill/payment/due word stripped, whitespace collapsed, lower
+ * case. "💧 Water Bill — $42" and "Water" are the same bill; "Water polo" is not.
+ */
+export function calendarTitleKey(title: string | null | undefined): string {
+  return String(title || "")
+    .replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]|[☀-➿]/g, "")
+    .replace(/\s*[—-]\s*\$[\d.,]+/, "")
+    .replace(/\s+/g, " ").trim().toLowerCase()
+    .replace(/^pay\s+/, "")
+    .replace(/\s+(bill|payment|due)$/, "");
+}
+
+/**
+ * Calendar dedup: an event that duplicates a bill on the bill's due date is
+ * dropped, and one bill row yields one item per date.
+ *
+ * Matching is by WHOLE normalized title. The substring test it replaces
+ * (`eventTitle.includes(billName)`) removed "Parent-teacher conference" on
+ * Rent's due date and "Water polo" on the Water bill's, and the obligation
+ * pass keyed on title+date so two different bills that share a name ("Phone"
+ * for two people) collapsed into one. Obligations key on sourceId (the
+ * liability row) instead.
+ */
+export function dedupCalendarTimelineItems<T extends { type: string; title: string; date: string; sourceId?: string | null }>(items: T[]): T[] {
+  const obligationKeys = new Set<string>();
+  for (const item of items) {
+    if (item.type === "obligation") obligationKeys.add(`${calendarTitleKey(item.title)}::${item.date}`);
+  }
+  const seenObligations = new Set<string>();
+  return items.filter(item => {
+    if (item.type === "event") {
+      return !obligationKeys.has(`${calendarTitleKey(item.title)}::${item.date}`);
+    }
+    if (item.type === "obligation") {
+      const key = `${item.sourceId || calendarTitleKey(item.title)}::${item.date}`;
+      if (seenObligations.has(key)) return false;
+      seenObligations.add(key);
+    }
+    return true;
+  });
+}
+
+/**
+ * Whole calendar days from `todayISO` (the user's today) to a due date —
+ * negative when past, 0 when due today. Computed on the two date strings, so
+ * no instant (and no UTC-midnight reading of a date-only string) is involved.
+ * NaN when the due date is unparseable.
+ */
+export function calendarDaysUntil(dueDate: string | Date | null | undefined, todayISO: string, timezone: string = DEFAULT_TIMEZONE): number {
+  const due = localDayOf(dueDate, timezone);
+  if (!due || !/^\d{4}-\d{2}-\d{2}$/.test(todayISO)) return Number.NaN;
+  return Math.round((Date.parse(`${due}T00:00:00Z`) - Date.parse(`${todayISO}T00:00:00Z`)) / 86400000);
+}
+
+/** Sum of a field over the entries whose calendar day IN `timezone` is `todayISO`. */
+export function hydrationDailyTotal(
+  entries: ReadonlyArray<{ timestamp: string; values: Record<string, any> }>,
+  fieldName: string,
+  todayISO: string,
+  timezone: string = DEFAULT_TIMEZONE,
+): number {
+  return entries
+    .filter(e => localDayOf(e.timestamp, timezone) === todayISO)
+    .reduce((s, e) => s + (Number(e.values?.[fieldName]) || 0), 0);
 }

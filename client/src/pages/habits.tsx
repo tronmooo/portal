@@ -5,6 +5,7 @@ import { stopProp } from "@/lib/event-utils";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
+import { withFullLimit } from "@/lib/list-limit";
 import { getFilterLabel } from "@/lib/profileFilter";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
@@ -433,7 +434,7 @@ export default function HabitsPage() {
 
   const { data: allHabits = [], isLoading, error, refetch } = useQuery<Habit[]>({
     queryKey: ["/api/habits", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/habits${profileParam}`).then(r => r.json()),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/habits${profileParam}`)).then(r => r.json()),
   });
 
   // Client-side profile filter — the canonical rule (shared/profile-filter.ts):

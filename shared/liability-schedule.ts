@@ -232,8 +232,14 @@ export function liabilityAmount(liability: Liabilityish): number {
 /** Anchor date the series is generated from. */
 function seriesAnchor(liability: Liabilityish): string | null {
   const f = liability.fields || {};
-  const a = clip(f.firstPaymentDate ?? f.dueDate ?? f.nextDueDate ?? f.due_date ?? f.next_due_date ?? f.renewalDate);
-  return ISO_RE.test(a) ? a : null;
+  // The first spelling that PARSES — the same rule as resolveLiabilityDueDate.
+  // `??` does not skip an empty string, so a cleared firstPaymentDate ("")
+  // used to short-circuit the chain and the bill emitted no series at all.
+  for (const v of [f.firstPaymentDate, f.dueDate, f.nextDueDate, f.due_date, f.next_due_date, f.renewalDate]) {
+    const a = clip(v);
+    if (ISO_RE.test(a)) return a;
+  }
+  return null;
 }
 
 /**

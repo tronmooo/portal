@@ -14,7 +14,7 @@
 // answering one question. Both callers now land here.
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
-import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
+import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
 import { deriveScheduleFields, liabilityAmount } from "@shared/liability-schedule";
@@ -411,8 +411,9 @@ export async function payBillOccurrence(
     const extra: Record<string, any> = { lastPaidDate: paymentDate };
     let advanced: string | null = null;
     if (curDue && curDue === occurrenceDate) {
-      advanced = advanceLiabilityDueDate(f, occurrenceDate);
-      extra.dueDate = advanced; extra.nextDueDate = advanced; extra.status = "upcoming";
+      const adv = advanceLiabilityDueDatePatch(f, occurrenceDate);
+      advanced = adv.dueDate;
+      Object.assign(extra, adv, { status: "upcoming" });
     }
     try {
       const claim = await claimFn.call(storage, liabilityId, occurrenceDate, stamp, extra);
@@ -484,10 +485,9 @@ export async function payBillOccurrence(
     };
     const patch: any = { occurrences: occ, lastPaidDate: paymentDate };
     if (curDue && curDue === occurrenceDate) {
-      nextDueDate = advanceLiabilityDueDate(f, occurrenceDate);
-      patch.dueDate = nextDueDate;
-      patch.nextDueDate = nextDueDate;
-      patch.status = "upcoming";
+      const adv = advanceLiabilityDueDatePatch(f, occurrenceDate);
+      nextDueDate = adv.dueDate;
+      Object.assign(patch, adv, { status: "upcoming" });
       dueDateAdvanced = true;
     }
     await storage.updateProfile(liabilityId, { fields: patch } as any);

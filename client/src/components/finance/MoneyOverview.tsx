@@ -18,6 +18,7 @@ import {
   BarChart3, Target, Landmark, TrendingDown, Sparkles, type LucideIcon,
 } from "lucide-react";
 import { dayLabel } from "@shared/now-rank";
+import { UPCOMING_BILL_WINDOW_DAYS } from "@shared/obligation-windows";
 import { Medallion } from "@/components/dashboard/visuals";
 import { SectionHeading } from "@/components/ui/section-heading";
 
@@ -137,7 +138,11 @@ export function MoneyOverview(props: {
   spendTrendPct?: number | null;  // spend vs last month %
   incomeMtd?: number;
   budgets: Array<{ category: string; limit: number; spent: number }>;
-  bills: MoneyBill[];             // already filtered to the next N days
+  // The upcoming-bill window (shared/obligation-windows UPCOMING_BILL_WINDOW_DAYS)
+  // exactly as the dashboard tile and the BillsDuePopup receive it. ONE list:
+  // the KPI count, the card rows and the popup rows are the same array
+  // (ARCHITECTURE §10.1 — tile count equals popup row count).
+  bills: MoneyBill[];
   spendByCategory?: Record<string, number>;
   // Multi-month cash-flow trend for the trend chart (oldest→newest).
   cashTrend?: Array<{ month: string; inflow: number; outflow: number; net: number }>;
@@ -330,9 +335,9 @@ export function MoneyOverview(props: {
       {/* Bills + Balance sheet */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Card className="p-4" data-testid="money-bills">
-          <SectionHeading title="Bills · next 14d" icon={Receipt} accent="25 90% 58%" count={bills.length} />
+          <SectionHeading title={`Bills · next ${UPCOMING_BILL_WINDOW_DAYS}d`} icon={Receipt} accent="25 90% 58%" count={bills.length} />
           {bills.length === 0 ? (
-            <EmptyState tone="good" icon={Receipt} label="You're clear for 14 days"
+            <EmptyState tone="good" icon={Receipt} label={`You're clear for ${UPCOMING_BILL_WINDOW_DAYS} days`}
               hint="Nothing due between now and then." />
           ) : (
             <div className="space-y-1.5">

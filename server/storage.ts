@@ -1296,7 +1296,12 @@ export class MemStorage implements IStorage {
     this.logActivity("tracker", `Deleted entry from tracker: ${tracker.name}`);
     return true;
   }
-  async deleteTracker(id: string) { return this.trackers.delete(id); }
+  async deleteTracker(id: string) {
+    const gone = this.trackers.delete(id);
+    // Parity with SupabaseStorage: a habit must not keep a dangling link.
+    if (gone) for (const h of this.habits.values()) if ((h as any).linkedTrackerId === id) (h as any).linkedTrackerId = undefined;
+    return gone;
+  }
   async migrateUnlinkedTrackersToSelf(): Promise<number> {
     const self = await this.getSelfProfile();
     if (!self) return 0;

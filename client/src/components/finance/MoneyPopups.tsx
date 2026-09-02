@@ -1,4 +1,5 @@
 import { parseLocalDate } from "@/lib/format";
+import { parseDate } from "@/lib/dates";
 // ── MoneyPopups — one bespoke drill-down per Money KPI card (2026-07) ─────────
 // Before this file, five different cards (Cash Flow, Spend, Income, Bills Due,
 // Savings Rate + the Cash Flow Overview "View") all opened the SAME CashFlowPopup,
@@ -428,8 +429,11 @@ export function IncomePopup({
 // ═════════════════════════════════════════════════════════════════════════════
 
 function DueChip({ dueDate }: { dueDate?: string }) {
-  const d = dueDate ? new Date(dueDate) : null;
-  const ok = d && !isNaN(d.getTime());
+  // parseDate pins a bare "YYYY-MM-DD" to local noon; `new Date(dueDate)` read
+  // it as UTC midnight and the chip showed the day BEFORE the due date for
+  // every negative-offset user.
+  const d = parseDate(dueDate);
+  const ok = !!d;
   return (
     <div className="w-10 shrink-0 rounded-lg border border-border overflow-hidden text-center">
       <div className="micro-label bg-red-500/80 text-white py-0.5">

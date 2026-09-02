@@ -1,3 +1,4 @@
+import { localTodayISO, formatLocalDate } from "@/lib/dates";
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
@@ -1139,9 +1140,11 @@ export default function FinancePage() {
           }))
           .filter((b: { limit: number }) => b.limit > 0);
 
-        const bills14 = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : [])
-          .filter((b: any) => typeof b.daysUntil === "number" && b.daysUntil <= 14)
-          .slice(0, 8);
+        // ONE list for the Bills Due KPI, the Bills card and the BillsDuePopup it
+        // opens: the server's 30-day upcomingBills window, untrimmed. The KPI used
+        // to count a 14-day / 8-row slice while the popup listed the full window,
+        // so the tile said "3" and the popup showed 7 (ARCHITECTURE §10.1).
+        const upcomingBillsList = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : []) as any[];
 
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
 
@@ -1152,7 +1155,7 @@ export default function FinancePage() {
         const breached = budgetRows.filter(b => b.spent > b.limit);
         for (const b of breached.slice(0, 2)) alerts.push({ id: `budget-${b.category}`, tone: "warn", text: `${b.category[0].toUpperCase()}${b.category.slice(1)} spending is over budget (${Math.round((b.spent / b.limit) * 100)}%).`, onClick: () => setFinancePopup("budget") });
         if (savingsRate != null && savingsRate >= 15) alerts.push({ id: "savings", tone: "pos", text: `Great job — you're saving ${savingsRate}% of income this month.` });
-        const soonBill = bills14.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
+        const soonBill = upcomingBillsList.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
         if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
 
         // Multi-month cash-flow trend (last 6 months) — shared helper so the
@@ -1161,7 +1164,7 @@ export default function FinancePage() {
         // Per-KPI mini-chart series.
         const spendSeries = cashTrend.map(c => c.outflow);
         const incomeSeries = cashTrend.map(c => c.inflow);
-        const billsSeries = bills14.map((b: any) => Number(b.amount) || 0);
+        const billsSeries = upcomingBillsList.map((b: any) => Number(b.amount) || 0);
 
         return (
           <MoneyOverview
@@ -1176,7 +1179,7 @@ export default function FinancePage() {
             spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
             incomeMtd={monthlyIncome}
             budgets={budgetRows}
-            bills={bills14}
+            bills={upcomingBillsList}
             spendByCategory={spendByCat}
             cashTrend={cashTrend}
             spendSeries={spendSeries}
@@ -1474,7 +1477,7 @@ export default function FinancePage() {
             </div>
             <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
             {/* U11: prevent picking a future date for an already-incurred expense */}
-            <div><Label>Date</Label><Input type="date" max={new Date().toISOString().slice(0,10)} value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
+            <div><Label>Date</Label><Input type="date" max={localTodayISO()} value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
             {/* Round-6 fix (BUG-017): Edit Expense was missing the Profile field that Add Expense already had.
                 Match parity so re-assigning is possible without delete+recreate. */}
             <div><Label>Profile</Label>
@@ -1587,7 +1590,7 @@ export default function FinancePage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{pc.source}</p>
                       <p className="text-[11px] text-muted-foreground">
-                        Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                        Expected {formatLocalDate(pc.expected_date, { month: 'short', day: 'numeric', year: 'numeric' })}
                       </p>
                     </div>
                     <span className="text-xs font-bold tabular-nums">{formatMoney(pc.actual_amount || pc.amount)}</span>
@@ -1603,8 +1606,8 @@ export default function FinancePage() {
                 detail={
                   <div className="space-y-2 pt-1">
                     <p className="text-[11px] text-muted-foreground">
-                      Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
-                      {pc.confirmed && pc.received_date && <> · Received {new Date(pc.received_date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</>}
+                      Expected {formatLocalDate(pc.expected_date, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
+                      {pc.confirmed && pc.received_date && <> · Received {formatLocalDate(pc.received_date, { month: 'long', day: 'numeric', year: 'numeric' })}</>}
                     </p>
                     <div className="flex items-center gap-2">
                       {!pc.confirmed && !isFuture && (
@@ -1646,7 +1649,7 @@ export default function FinancePage() {
                 <Input type="number" inputMode="decimal" step="0.01" min="0" max="999999999" placeholder="0.00" value={newPaycheck.amount} onChange={e => setNewPaycheck(p => ({ ...p, amount: e.target.value }))} data-testid="input-paycheck-amount" /></div>
               {/* U12: paycheck is expected/future income — disallow past dates */}
               <div><Label className="text-xs">Expected Date <span className="text-destructive">*</span></Label>
-                <Input type="date" min={new Date().toISOString().slice(0,10)} value={newPaycheck.expectedDate} onChange={e => setNewPaycheck(p => ({ ...p, expectedDate: e.target.value }))} data-testid="input-paycheck-date" /></div>
+                <Input type="date" min={localTodayISO()} value={newPaycheck.expectedDate} onChange={e => setNewPaycheck(p => ({ ...p, expectedDate: e.target.value }))} data-testid="input-paycheck-date" /></div>
             </div>
             <Button className="w-full" onClick={() => {
               if (!newPaycheck.source.trim() || !newPaycheck.amount || parseFloat(newPaycheck.amount) <= 0 || !newPaycheck.expectedDate) return;
@@ -1689,7 +1692,7 @@ export default function FinancePage() {
                       <p className="text-xs font-medium truncate">{inc.description}</p>
                       <p className="text-[11px] text-muted-foreground capitalize">
                         {inc.frequency || 'monthly'}
-                        {inc.date ? ` · ${new Date(inc.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                        {inc.date ? ` · ${formatLocalDate(inc.date, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
                       </p>
                     </div>
                     <span className="text-xs font-bold tabular-nums">{formatMoney(Number(inc.amount || 0))}</span>
@@ -1700,7 +1703,7 @@ export default function FinancePage() {
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <Badge variant="secondary" className="capitalize">{inc.category || 'income'}</Badge>
                       <span className="text-muted-foreground capitalize">{inc.frequency || 'monthly'}</span>
-                      {inc.date && <span className="text-muted-foreground">{new Date(inc.date).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}</span>}
+                      {inc.date && <span className="text-muted-foreground">{formatLocalDate(inc.date, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}</span>}
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={stopProp(() => setEditingIncome(inc))} data-testid={`btn-edit-income-${inc.id}`}><Pencil className="h-3 w-3" /> Edit</Button>
@@ -1963,7 +1966,7 @@ export default function FinancePage() {
                           <tr key={p.id}
                             className={` ${p.paid ? 'bg-green-500/5 text-muted-foreground' : ''} ${isCurrent ? 'bg-primary/10 font-medium' : ''}`}>
                             <td className="px-2 py-1">{p.payment_number}</td>
-                            <td className="px-2 py-1">{new Date(p.payment_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}</td>
+                            <td className="px-2 py-1">{formatLocalDate(p.payment_date, { month: 'short', day: 'numeric', year: '2-digit' })}</td>
                             <td className="px-2 py-1 text-right tabular-nums">${p.principal_amount?.toFixed(0)}</td>
                             <td className="px-2 py-1 text-right tabular-nums">${p.interest_amount?.toFixed(0)}</td>
                             <td className="px-2 py-1 text-right tabular-nums font-medium">${p.total_payment?.toFixed(0)}</td>
