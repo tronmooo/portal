@@ -6,7 +6,14 @@ import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
 import { applyChatMutations } from "@/lib/chat-sync";
-import { invalidateDomain } from "@/lib/cache-bus";
+import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
+
+// Cache-bus domain for an AI result card's entity endpoint (expenses, tasks,
+// obligations, events, ...). Unknown endpoints fall back to the broad bust.
+function domainForEndpoint(ep: string): any {
+  const known = new Set(["expenses", "tasks", "obligations", "events", "trackers", "habits", "goals", "documents", "journal", "incomes", "profiles", "artifacts"]);
+  return known.has(ep) ? ep : "everything";
+}
 import { perfMark, perfMeasure, logServerTimings } from "@/lib/perf-marks";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stashPendingReview } from "@/lib/pending-review";
@@ -1371,9 +1378,7 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
       result.title = editName; result.name = editName; result.description = editName;
       result.amount = parseFloat(editAmount) || result.amount;
       result.date = editDate || result.date;
-      queryClient.invalidateQueries({ queryKey: [`/api/${endpoint}`] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      void invalidateDomains(domainForEndpoint(endpoint), "dashboard");
       toast({ title: "Updated" });
       setEditing(false);
     } catch { toast({ title: "Failed to update", variant: "destructive" }); }
@@ -1403,10 +1408,10 @@ function ConfirmationCard({ name, type, amount, date, profile, warnings, entityI
       });
       return;
     }
-    // Surgical invalidation — only the affected entity + dashboard rollups
-    queryClient.invalidateQueries({ queryKey: [`/api/${endpoint}`] });
-    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+    // Cache bus: the entity's whole domain (calendar, budgets, date-rules,
+    // the persisted bootstrap seed) — a 3-key bust left those stale and the
+    // deleted row came back on the next launch.
+    void invalidateDomains(domainForEndpoint(endpoint), "dashboard");
   };
 
   return (
@@ -2176,10 +2181,7 @@ const MessageRow = memo(function MessageRow({
                             queryClient.setQueriesData({ queryKey: [`/api/${ep}`] }, (old: any) =>
                               Array.isArray(old) ? old.filter((item: any) => item?.id !== entityId) : old
                             );
-                            // Surgical invalidation — affected list + dashboard rollups
-                            queryClient.invalidateQueries({ queryKey: [`/api/${ep}`] });
-                            queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                            queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                            void invalidateDomains(domainForEndpoint(ep), "dashboard");
                             toast({
                               title: `Deleted: ${entityTitle || actionLabel(action.type, action.data)}`,
                               description: `Removed from ${whoFor}'s ${trackerName || 'data'}`,
@@ -2242,9 +2244,7 @@ const MessageRow = memo(function MessageRow({
                               // the rename itself does (see buildChatMutation).
                               await invalidateDomain("everything");
                             } else {
-                              queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-                              queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-                              queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+                              void invalidateDomains("profiles", "dashboard");
                             }
                             toast({
                               title: "Reverted",

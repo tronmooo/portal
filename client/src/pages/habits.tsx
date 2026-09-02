@@ -6,6 +6,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { getFilterLabel } from "@/lib/profileFilter";
+import { passesProfileFilter } from "@shared/profile-filter";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -435,13 +436,11 @@ export default function HabitsPage() {
     queryFn: () => apiRequest("GET", `/api/habits${profileParam}`).then(r => r.json()),
   });
 
-  // Client-side profile filter
-  // Habits with empty linkedProfiles (null or []) show for ALL profiles (backward compat)
+  // Client-side profile filter — the canonical rule (shared/profile-filter.ts):
+  // an unlinked habit belongs to Self, so it shows under a Self selection and
+  // not under every other person's view as the old inline check did.
   const habits = filterMode === "selected" && filterIds.length > 0
-    ? allHabits.filter(h => {
-        const lp = h.linkedProfiles || [];
-        return lp.length === 0 || lp.some(id => filterIds.includes(id));
-      })
+    ? allHabits.filter(h => passesProfileFilter(h.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles as any[] }))
     : allHabits;
 
   const handleCreate = (force?: boolean) => {

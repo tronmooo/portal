@@ -11,6 +11,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { parseLocalDate } from "@/lib/format";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useToast } from "@/hooks/use-toast";
@@ -272,7 +273,9 @@ export default function WellnessPage() {
     const { name, dose } = splitDose(o.name);
     return {
       id: o.id, name, dose: dose || (o.fields?.dose as string | undefined),
-      time: o.nextDueDate ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BROWSER_TIMEZONE }) : undefined,
+      // Only a value that carries a clock time has one to show; a date-only
+      // nextDueDate used to render a fabricated "5:00 PM" (UTC midnight, local).
+      time: o.nextDueDate && /T\d|:/.test(String(o.nextDueDate)) ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BROWSER_TIMEZONE }) : undefined,
       taken: takenToday(o),
     };
   });
@@ -288,7 +291,9 @@ export default function WellnessPage() {
     .slice(0, 6)
     .map((o: any) => ({
       id: o.id, title: o.name,
-      date: new Date(o.nextDueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: BROWSER_TIMEZONE }),
+      // parseLocalDate: a date-only value is local midnight, not UTC midnight
+      // (which showed the previous day in the Americas).
+      date: (parseLocalDate(o.nextDueDate) ?? new Date(o.nextDueDate)).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
       time: /T\d|:/.test(o.nextDueDate) ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BROWSER_TIMEZONE }) : undefined,
     }));
 
@@ -298,7 +303,7 @@ export default function WellnessPage() {
     .slice(0, 6)
     .map((d: any) => ({
       id: d.id, name: d.title || d.name,
-      date: (d.expirationDate || d.createdAt) ? new Date(d.expirationDate || d.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: BROWSER_TIMEZONE }) : undefined,
+      date: (d.expirationDate || d.createdAt) ? (parseLocalDate(d.expirationDate || d.createdAt) ?? new Date(d.expirationDate || d.createdAt)).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : undefined,
     }));
 
   // Conditions + allergies from the scoped person/self profiles' fields.

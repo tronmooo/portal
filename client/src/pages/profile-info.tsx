@@ -40,7 +40,7 @@ import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, B
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { checkProfileRename, MAX_PROFILE_NAME_LENGTH } from "@shared/profile-rename";
 import { checkProfileDelete, profileDeleteWarning } from "@shared/profile-delete";
-import { invalidateDomain } from "@/lib/cache-bus";
+import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import EditableTitle from "@/components/EditableTitle";
 import { stringifyField, previewUnrenderable } from "@/lib/field-display";
 import { SectionHeading } from "@/components/ui/section-heading";
@@ -285,8 +285,9 @@ function SingleProfileInfo({ id }: { id: string }) {
     mutationFn: async (body: any) => { await apiRequest("PATCH", `/api/profiles/${id}`, body); },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // A profile OWNS dates (birthday, anniversary, licence expiry): the
+      // profiles domain busts the calendar, date-rules and notifications too.
+      void invalidateDomains("profiles");
     },
     onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
@@ -315,8 +316,7 @@ function SingleProfileInfo({ id }: { id: string }) {
       try {
         await apiRequest("PATCH", `/api/profiles/${id}`, { fieldsToDelete: [key] });
         queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "none" });
+        void invalidateDomains("profiles");
       } catch (err: any) {
         if (prev !== undefined) queryClient.setQueryData(["/api/profiles", id, "detail"], prev);
         toast({ title: "Failed to remove", description: formatApiError(err), variant: "destructive" });
@@ -417,7 +417,7 @@ function SingleProfileInfo({ id }: { id: string }) {
     onSuccess: () => {
       toast({ title: "Photo updated" });
       queryClient.invalidateQueries({ queryKey: ["/api/profiles", id, "detail"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/profiles"] });
+      void invalidateDomains("profiles");
     },
     onError: (err: Error) => toast({ title: "Failed to update photo", description: formatApiError(err), variant: "destructive" }),
   });

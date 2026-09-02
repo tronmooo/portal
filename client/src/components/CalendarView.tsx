@@ -1418,7 +1418,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
             {viewMode === "day"
               ? viewDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
               : viewMode === "week"
-                ? `Week of ${new Date(viewDate.getTime() - viewDate.getDay() * 86400000).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                ? `Week of ${(() => { const s = new Date(viewDate); s.setDate(s.getDate() - s.getDay()); return s.toLocaleDateString("en-US", { month: "short", day: "numeric" }); })()}`
                 : fmtMonthYear(viewYear, viewMonth)}
           </h2>
           <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7" data-testid="btn-next-month" aria-label="Next month">

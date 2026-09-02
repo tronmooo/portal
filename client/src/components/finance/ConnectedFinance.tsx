@@ -32,7 +32,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getUserToday, getUserCurrentMonth, addDays as tzAddDays } from "@shared/timezone";
 import { formatMinor, minorToMajor } from "@shared/money";
 import {
   ACCOUNT_TYPE_LABEL, ACCOUNT_SUBCATEGORY_LABEL, financeErrorMessage, isDebtAccount,
@@ -98,21 +99,21 @@ function accountLabel(a: FinancialAccountRecord): string {
   return a.lastFour ? `${name} ••${a.lastFour}` : name;
 }
 
+// The user's month/day, not UTC's: on the last evening of a month in the
+// Americas the UTC value already pointed "This month" at an empty next month.
 function currentMonth(): string {
-  return new Date().toISOString().slice(0, 10).slice(0, 7);
+  return getUserCurrentMonth(BROWSER_TIMEZONE);
 }
 
 type RangeKey = "month" | "30d" | "90d" | "year";
 
 function rangeBounds(range: RangeKey): { startDate: string; endDate: string } {
-  const today = new Date();
-  const endDate = today.toISOString().slice(0, 10);
+  const endDate = getUserToday(BROWSER_TIMEZONE);
   if (range === "month") {
     return { startDate: `${currentMonth()}-01`, endDate };
   }
   const days = range === "30d" ? 30 : range === "90d" ? 90 : 365;
-  const start = new Date(today.getTime() - days * 86_400_000);
-  return { startDate: start.toISOString().slice(0, 10), endDate };
+  return { startDate: tzAddDays(endDate, -days), endDate };
 }
 
 // ── Root ────────────────────────────────────────────────────────────────────

@@ -7,7 +7,8 @@ import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { GoalsSection } from "@/pages/dashboard";
 import { goalsQueryKey } from "@shared/query-keys";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getUserToday, localDayOf, parseLocalDate } from "@shared/timezone";
 
 export default function GoalsPage() {
   // Single source of truth: read the active scope reactively instead of
@@ -34,7 +35,10 @@ export default function GoalsPage() {
       if (status === "completed" || pct >= 100) { completed++; continue; }
       if (status === "abandoned") continue;
       active++; pctSum += pct; pctCount++;
-      const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - now) / 86400000) : null;
+      // Calendar days in the user's zone: new Date("YYYY-MM-DD") is UTC
+      // midnight, which put a goal due TODAY in the Overdue tile all day.
+      const deadlineDay = localDayOf(g.deadline, BROWSER_TIMEZONE);
+      const daysLeft = deadlineDay ? Math.round((parseLocalDate(deadlineDay).getTime() - parseLocalDate(getUserToday(BROWSER_TIMEZONE)).getTime()) / 86400000) : null;
       if (daysLeft != null && daysLeft < 0 && pct < 100) overdue++;
       else if (daysLeft != null && daysLeft <= 14 && pct < 50) atRisk++;
     }

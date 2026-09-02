@@ -33,6 +33,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme, COLOR_PRESETS } from "@/components/theme-provider";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 
 function PWAInstallCard() {
@@ -41,11 +42,15 @@ function PWAInstallCard() {
 
   useEffect(() => {
     const handler = (e: Event) => { e.preventDefault(); setDeferredPrompt(e); };
+    const onInstalled = () => setInstalled(true);
     window.addEventListener('beforeinstallprompt', handler);
-    window.addEventListener('appinstalled', () => setInstalled(true));
+    window.addEventListener('appinstalled', onInstalled);
     // Check if already installed
     if (window.matchMedia('(display-mode: standalone)').matches) setInstalled(true);
-    return () => window.removeEventListener('beforeinstallprompt', handler);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
   }, []);
 
   if (installed || !deferredPrompt) return null;
@@ -392,9 +397,9 @@ export default function SettingsPage() {
       if (result.error) throw new Error(result.error);
       setLastCsvImport(new Date().toLocaleString());
       toast({ title: "Bank CSV imported", description: `${result.imported} expenses created, ${result.skipped} skipped.` });
-      queryClient.invalidateQueries({ queryKey: ["/api/expenses"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // N new expenses: budgets, cashflow, insights and the bootstrap seed
+      // all move with them (expenses domain).
+      void invalidateDomains("expenses");
     } catch (err: any) {
       toast({ title: "CSV import failed", description: err.message, variant: "destructive" });
     } finally {
