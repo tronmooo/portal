@@ -2,6 +2,7 @@ import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
 import { parseLocalDate } from "@/lib/format";
@@ -67,9 +68,11 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
       toast({ title: "Failed to delete entry", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // One bus call instead of three direct invalidations: the "journal"
+      // domain already expands to stats and the dashboard aggregates, and the
+      // bus drops this call when the response's write manifest just did the
+      // same work (otherwise every save refetched the journal list twice).
+      invalidateDomain("journal");
     },
   });
 
@@ -291,7 +294,7 @@ export default function JournalPage() {
         if (j?.id) setDraftId(j.id);
       }
       setLastSavedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
-      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
+      invalidateDomain("journal");
       if (finalize) {
         toast({ title: draftId ? "Entry updated" : "Entry saved" });
         resetForm();
@@ -396,9 +399,11 @@ export default function JournalPage() {
       toast({ title: "Failed to update journal entry", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // One bus call instead of three direct invalidations: the "journal"
+      // domain already expands to stats and the dashboard aggregates, and the
+      // bus drops this call when the response's write manifest just did the
+      // same work (otherwise every save refetched the journal list twice).
+      invalidateDomain("journal");
     },
   });
 
@@ -433,9 +438,11 @@ export default function JournalPage() {
       toast({ title: "Failed to create journal entry", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/journal"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // One bus call instead of three direct invalidations: the "journal"
+      // domain already expands to stats and the dashboard aggregates, and the
+      // bus drops this call when the response's write manifest just did the
+      // same work (otherwise every save refetched the journal list twice).
+      invalidateDomain("journal");
     },
   });
 

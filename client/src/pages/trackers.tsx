@@ -3164,10 +3164,14 @@ function EntryEditor({
         if (old && typeof old === "object" && old.id === tracker.id) return patchTracker(old);
         return old;
       });
+      // The row already shows the new values; the form has nothing left to
+      // say. Closing here (not on success) is what makes Save feel instant —
+      // the form used to sit open for the whole server round trip. A rejected
+      // save rolls the row back and says so in a toast.
+      onClose();
       return { prev };
     },
     onSuccess: () => {
-      onClose();
       toast({ title: "Entry updated" });
     },
     onError: (err: Error, _vars, context) => {
