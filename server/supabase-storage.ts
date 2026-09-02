@@ -80,12 +80,12 @@ import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequenc
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDate } from "../shared/liability-recurrence";
-import { parseRecurringMeta } from "../shared/recurring-dates";
+import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { autoCheckinLinkedHabits } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
-import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill } from "../shared/obligation-windows";
+import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation } from "../shared/obligation-windows";
 
 // PostgREST `.or()` filters are built by string concatenation, so a value
 // containing `,` `(` `)` or `.` breaks out of its operand and appends
@@ -4725,25 +4725,65 @@ export class SupabaseStorage implements IStorage {
     return this.getHabit(id);
   }
 
+  /**
+   * The tracker a habit mirrors its check-ins into, when that tracker holds
+   * NOTHING but this habit's mirror entries (an auto-created one). A tracker
+   * the user logs to directly is theirs and must survive the habit.
+   */
+  private async habitMirrorTrackerId(habitId: string, linkedTrackerId: string | null | undefined): Promise<string | null> {
+    if (!linkedTrackerId) return null;
+    const { data: entries } = await this.supabase.from("tracker_entries").select("values")
+      .eq("tracker_id", linkedTrackerId).eq("user_id", this.userId).limit(500);
+    const own = (entries || []).every((e: any) => (e?.values as any)?.["_habitId"] === habitId);
+    return own ? linkedTrackerId : null;
+  }
+
   async deleteHabit(id: string): Promise<boolean> {
     /* D1: clean up entity_links rows that reference this habit */
     await this.cleanupEntityLinks("habit", id);
+    // Read the link before the row is hidden: the habit's mirror tracker (if
+    // it is purely a mirror) is retired with it. Otherwise a deleted habit
+    // kept showing up on the Trackers page under its own name, with its
+    // check-ins, as if it still existed.
+    const { data: habitRow } = await this.supabase.from("habits").select("linked_tracker_id")
+      .eq("id", id).eq("user_id", this.userId).maybeSingle();
+    const mirrorId = await this.habitMirrorTrackerId(id, habitRow?.linked_tracker_id);
     // Soft delete the habit and KEEP its check-ins. The old hard-delete of
     // habit_checkins made "recoverable" a lie: restore returned an empty habit
     // with a phantom stored streak and no history. Check-in readers join
     // through the habits list (which filters deleted_at), so the retained rows
     // leak nowhere while the habit is deleted — and come back with it.
     // `.select` so 0 rows matched reports false.
+    const deletedAt = new Date().toISOString();
     const { data, error } = await this.supabase.from("habits")
-      .update({ deleted_at: new Date().toISOString() })
+      .update({ deleted_at: deletedAt })
       .eq("id", id).eq("user_id", this.userId).select("id");
-    return !error && Array.isArray(data) && data.length > 0;
+    const ok = !error && Array.isArray(data) && data.length > 0;
+    if (ok && mirrorId) {
+      // Same timestamp on the tracker and its entries, so restore can revive
+      // exactly this retirement and nothing deleted separately before it.
+      await this.supabase.from("trackers").update({ deleted_at: deletedAt }).eq("id", mirrorId).eq("user_id", this.userId);
+      await this.supabase.from("tracker_entries").update({ deleted_at: deletedAt }).eq("tracker_id", mirrorId).eq("user_id", this.userId).is("deleted_at", null);
+      bustInsightsCacheFor(this.userId);
+    }
+    return ok;
   }
 
   async restoreHabit(id: string): Promise<boolean> {
     const { data, error } = await this.supabase.from("habits").update({ deleted_at: null })
-      .eq("id", id).eq("user_id", this.userId).select("id");
-    return !error && Array.isArray(data) && data.length > 0;
+      .eq("id", id).eq("user_id", this.userId).select("id, linked_tracker_id");
+    const ok = !error && Array.isArray(data) && data.length > 0;
+    const trackerId = ok ? (data![0] as any)?.linked_tracker_id : null;
+    if (trackerId) {
+      // Revive the mirror tracker retired WITH this habit (matching stamp).
+      const { data: tr } = await this.supabase.from("trackers").select("deleted_at").eq("id", trackerId).eq("user_id", this.userId).maybeSingle();
+      if (tr?.deleted_at) {
+        await this.supabase.from("trackers").update({ deleted_at: null }).eq("id", trackerId).eq("user_id", this.userId);
+        await this.supabase.from("tracker_entries").update({ deleted_at: null }).eq("tracker_id", trackerId).eq("user_id", this.userId).eq("deleted_at", tr.deleted_at);
+        bustInsightsCacheFor(this.userId);
+      }
+    }
+    return ok;
   }
 
   /** Recently soft-deleted habits (newest deletion first) — for restore-by-name. */
@@ -6377,8 +6417,10 @@ export class SupabaseStorage implements IStorage {
     // BUG-20260528-monthly-multipliers: previously used truncated 4.33/2.17.
     // Now uses exact fractions via shared toMonthlyAmount so this total
     // matches the Finance page and dashboard-enhanced.
+    // Same status rule as getDashboardEnhanced (a paused bill costs nothing
+    // this month) — the tile and the popup used to disagree by the paused amount.
     const monthlyObTotal = obligations.reduce(
-      (s, o) => s + toMonthlyAmount(o.amount, o.frequency),
+      (s, o) => isActiveObligation(o) ? s + toMonthlyAmount(o.amount, o.frequency) : s,
       0,
     );
 
@@ -6671,7 +6713,7 @@ export class SupabaseStorage implements IStorage {
       const trend = values.length >= 2 ? (values[values.length - 1] - values[0]) : 0;
       // For hydration trackers, calculate today's total
       const isHydration = t.name.toLowerCase().includes('hydration') || t.name.toLowerCase().includes('water');
-      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const todayStr = getUserToday(this._timezone); // the user's zone, not a hardcoded one
       let dailyTotal: number | undefined;
       if (isHydration) {
         dailyTotal = t.entries
@@ -6712,11 +6754,13 @@ export class SupabaseStorage implements IStorage {
     // (the hero tile now renders Out from this same number — user report: tile
     // said "Out $0" while the popup said "Out $1,020").
     const monthlyObligationTotal = allObligations.reduce(
-      (s, o) => (o.status === "paused" || o.status === "cancelled") ? s : s + toMonthlyAmount(o.amount, o.frequency),
+      (s, o) => isActiveObligation(o) ? s + toMonthlyAmount(o.amount, o.frequency) : s,
       0,
     );
 
-    const overdueTasks = allTasks.filter(t => { if (t.status === 'done' || !t.dueDate) return false; return new Date(t.dueDate) < now; }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
+    // Calendar days in the user's zone: `new Date("YYYY-MM-DD") < now` listed a
+    // task due TODAY as overdue on the dashboard widget for the whole day.
+    const overdueTasks = allTasks.filter(t => { if (t.status === 'done' || !t.dueDate) return false; const dueDay = localDayOf(t.dueDate, this._timezone); return !!dueDay && dueDay < today; }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
 
     // BUG-NW-2/3 fix (2026-06-03): build asset / liability breakdown arrays here
     // so the Net Worth popup never recomputes its own per-row math. The popup
@@ -6766,7 +6810,9 @@ export class SupabaseStorage implements IStorage {
     }
     liabilityBreakdown.sort((a, b) => b.value - a.value);
 
-    const todaysEvents = allEvents.filter(e => e.date === today).map(e => ({ id: e.id, title: e.title, time: e.time, endTime: e.endTime, category: e.category, location: e.location }));
+    // A recurring event happens today when today is one of its occurrences,
+    // not only on the day it was created (a daily standup never appeared).
+    const todaysEvents = allEvents.filter(e => eventOccursOn(e as any, today)).map(e => ({ id: e.id, title: e.title, time: e.time, endTime: e.endTime, category: e.category, location: e.location }));
 
     return {
       expiringDocuments: expiringDocs.filter(d => d.status !== 'ok'),

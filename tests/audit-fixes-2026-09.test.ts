@@ -195,3 +195,52 @@ describe("frequency vocabulary agrees across engines", () => {
     expect(nextAnnual("2030-05-01", "2026-09-02")).toBe("2030-05-01");
   });
 });
+
+// ── Round 3: found by driving the deployed app ──────────────────────────────
+import { eventOccursOn } from "../shared/recurring-dates";
+import { isActiveObligation } from "../shared/obligation-windows";
+import { sanitizeTrackerEntryValues } from "../server/tracker-entry-guard";
+
+describe("eventOccursOn", () => {
+  it("a one-off matches only its own date", () => {
+    expect(eventOccursOn({ date: "2026-09-01", recurrence: "none" }, "2026-09-01")).toBe(true);
+    expect(eventOccursOn({ date: "2026-09-01", recurrence: "none" }, "2026-09-02")).toBe(false);
+  });
+  it("a daily series created long ago occurs today (the dashboard's Today list showed it only on its creation day)", () => {
+    expect(eventOccursOn({ date: "2024-01-08", recurrence: "daily" }, "2026-09-01")).toBe(true);
+    expect(eventOccursOn({ date: "2024-01-08", recurrence: "weekly" }, "2026-09-07")).toBe(true);  // both Mondays
+    expect(eventOccursOn({ date: "2024-01-08", recurrence: "weekly" }, "2026-09-08")).toBe(false);
+    expect(eventOccursOn({ date: "2020-01-31", recurrence: "monthly" }, "2026-09-30")).toBe(true);
+  });
+  it("honours skips, pauses and the recurrence end", () => {
+    expect(eventOccursOn({ date: "2024-01-08", recurrence: "daily", tags: ["rd:skip:2026-09-01"] } as any, "2026-09-01")).toBe(false);
+    expect(eventOccursOn({ date: "2024-01-08", recurrence: "daily", tags: ["rd:paused"] } as any, "2026-09-01")).toBe(false);
+    expect(eventOccursOn({ date: "2024-01-08", recurrence: "daily", recurrenceEnd: "2026-08-31" }, "2026-09-01")).toBe(false);
+  });
+});
+
+describe("isActiveObligation", () => {
+  it("excludes paused and cancelled, includes everything else", () => {
+    expect(isActiveObligation({ status: "paused" })).toBe(false);
+    expect(isActiveObligation({ status: "cancelled" })).toBe(false);
+    expect(isActiveObligation({ status: "active" })).toBe(true);
+    expect(isActiveObligation({})).toBe(true);
+  });
+});
+
+describe("tracker entry guard: numeric-by-name keys", () => {
+  it("rejects a non-numeric value under a well-known numeric key even when the tracker does not declare it", () => {
+    const r = sanitizeTrackerEntryValues([{ name: "value", type: "number" }], { weight: "abc" });
+    expect(r.error).toMatch(/weight/);
+  });
+  it("still coerces a numeric string with a unit suffix", () => {
+    const r = sanitizeTrackerEntryValues([{ name: "value", type: "number" }], { weight: "176 lbs" });
+    expect(r.error).toBeUndefined();
+    expect(r.values.weight).toBe(176);
+  });
+  it("leaves free-text keys alone", () => {
+    const r = sanitizeTrackerEntryValues([{ name: "mood", type: "text" }], { mood: "great" });
+    expect(r.error).toBeUndefined();
+    expect(r.values.mood).toBe("great");
+  });
+});

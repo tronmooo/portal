@@ -21,6 +21,16 @@ export interface UpcomingBillCheckInput {
 }
 
 /**
+ * A paused or cancelled obligation costs nothing this month: it belongs in
+ * neither the upcoming-bill list nor the monthly-obligations total. ONE rule
+ * for both, so the KPI tile and the popup never disagree.
+ */
+export function isActiveObligation(o: { status?: string | null } | null | undefined): boolean {
+  const s = o?.status;
+  return s !== "paused" && s !== "cancelled";
+}
+
+/**
  * Returns true if the obligation belongs in the upcoming-bill window: due
  * within UPCOMING_BILL_WINDOW_DAYS (overdue bills included — they are still
  * owed) and not paused or cancelled.
@@ -31,7 +41,7 @@ export interface UpcomingBillCheckInput {
  */
 export function isUpcomingBill(o: UpcomingBillCheckInput, now: Date = new Date()): boolean {
   if (!o?.nextDueDate) return false;
-  if (o.status === "paused" || o.status === "cancelled") return false;
+  if (!isActiveObligation(o)) return false;
   const due = new Date(o.nextDueDate);
   if (Number.isNaN(due.getTime())) return false;
   const daysUntil = Math.ceil((due.getTime() - now.getTime()) / MS_PER_DAY);

@@ -324,7 +324,10 @@ export async function payBillOccurrence(
   const curDue = readDueDate(f);
   const occurrenceDate =
     String(input.occurrenceDate || curDue || input.paymentDate || todayISO).slice(0, 10);
-  const paymentDate = String(input.paymentDate || occurrenceDate).slice(0, 10);
+  // Default the payment date to the occurrence's due date only when that day
+  // has arrived; paying a future bill early is money that left TODAY. The old
+  // default dated "Mark paid" on a bill due next week as next week's expense.
+  const paymentDate = String(input.paymentDate || (occurrenceDate > todayISO ? todayISO : occurrenceDate)).slice(0, 10);
 
   // ONE amount resolver for every entry point: the occurrence's real total —
   // base + this period's charges, or the posted actual — through the billing

@@ -29,6 +29,15 @@ const NON_NEGATIVE = new Set([
 ]);
 
 const NUMERIC_TYPES = new Set(["number", "integer", "decimal"]);
+
+// Keys that are numeric by nature whatever the tracker declares. An entry
+// may carry keys the tracker's field list doesn't name (AI lanes, legacy
+// shapes); without this, `{ weight: "abc" }` stored happily on a tracker
+// whose declared field is `value`, and every chart that read it crashed.
+const KNOWN_NUMERIC_KEYS = new Set([
+  "weight", "calories", "caloriesBurned", "distance", "steps", "heartRate", "bpm", "pulse",
+  "systolic", "diastolic", "sbp", "dbp", "hours", "glucose", "temperature", "reps", "sets",
+]);
 const META_KEYS = new Set(["_notes", "notes", "timestamp"]);
 
 /**
@@ -52,7 +61,7 @@ export function sanitizeTrackerEntryValues(
   );
   for (const k of Object.keys(values)) {
     if (META_KEYS.has(k) || k.startsWith("_")) continue;
-    if (!numericFieldNames.has(k)) continue;
+    if (!numericFieldNames.has(k) && !KNOWN_NUMERIC_KEYS.has(k)) continue;
     const raw = values[k];
     if (raw == null || raw === "") continue;
     if (typeof raw === "number") {

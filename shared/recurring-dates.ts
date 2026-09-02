@@ -274,6 +274,29 @@ export interface RecurringEventLike {
  * year's the "next"). Returns null when the series is paused, archived, or has
  * ended.
  */
+/**
+ * True when a (possibly recurring) event has an occurrence on `dateISO`.
+ * Honours the series' paused/archived flags, per-date skips and the
+ * recurrence end. A one-off matches only its own date. Use this wherever a
+ * surface asks "what happens today" — filtering `e.date === today` shows a
+ * recurring event only on the day it was created.
+ */
+export function eventOccursOn(ev: RecurringEventLike, dateISO: string): boolean {
+  const base = String(ev.date || "").slice(0, 10);
+  if (!DATE_RE.test(base) || !DATE_RE.test(dateISO)) return false;
+  if (!ev.recurrence || ev.recurrence === "none") return base === dateISO;
+  const meta = parseRecurringMeta(ev.tags);
+  if (meta.paused || meta.archived) return false;
+  if (meta.skippedDates.includes(dateISO)) return false;
+  if (ev.recurrenceEnd && dateISO > ev.recurrenceEnd) return false;
+  return expandRecurrenceDates(base, ev.recurrence, {
+    recurrenceEnd: ev.recurrenceEnd || undefined,
+    windowStart: dateISO,
+    windowEnd: dateISO,
+    cap: 8,
+  }).includes(dateISO);
+}
+
 export function nextOccurrence(ev: RecurringEventLike, todayISO: string): string | null {
   const meta = parseRecurringMeta(ev.tags);
   if (meta.paused || meta.archived) return null;
