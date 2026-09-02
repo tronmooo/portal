@@ -3925,19 +3925,19 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
             <p className="text-xs text-muted-foreground">Spending</p>
             {/* Color discipline: spending = amber, never red. Red is reserved for
                 overdue/breach states only. */}
-            <p className="text-sm font-bold tabular-nums text-amber-500">${monthlySpend.toLocaleString()}</p>
+            <p className="text-sm font-bold tabular-nums text-amber-500">{formatMoneyRound(monthlySpend)}</p>
             <p className="text-xs-tight text-muted-foreground">{monthExpenses.length} this month</p>
           </button>
           <button data-testid="fw-drill-income" onClick={() => setDrill("income")} className="bubble p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Income</p>
-            <p className="text-sm font-bold tabular-nums text-green-500">${monthlyIncome.toLocaleString()}</p>
+            <p className="text-sm font-bold tabular-nums text-green-500">{formatMoneyRound(monthlyIncome)}</p>
             <p className="text-xs-tight text-muted-foreground">{(incomes || []).length} sources</p>
           </button>
           <button data-testid="fw-drill-cashflow" onClick={() => setDrill("cashflow")} className="bubble p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
             <p className="text-xs text-muted-foreground">Cash Flow</p>
             {/* Negative cash flow uses amber (warning), not red (overdue). */}
             <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-amber-500"}`}>
-              {cashFlow >= 0 ? "+" : ""}${cashFlow.toLocaleString()}
+              {cashFlow >= 0 ? "+" : ""}{formatMoneyRound(cashFlow)}
             </p>
             <p className="text-xs-tight text-muted-foreground">income - spending</p>
           </button>
@@ -4060,7 +4060,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
         open={drill === "income"}
         onClose={() => setDrill(null)}
         title="Income Sources"
-        total={`$${monthlyIncome.toLocaleString()}/mo`}
+        total={`${formatMoneyRound(monthlyIncome)}/mo`}
         items={(incomes || []).slice().sort((a: any, b: any) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime() || (b.description || '').localeCompare(a.description || '')).map((i: any) => ({
           label: i.description,
           value: `$${i.amount.toLocaleString()}`,
@@ -4085,7 +4085,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
         title="Cash Flow Breakdown"
         total={`${filteredCashFlow >= 0 ? "+" : "-"}$${Math.abs(filteredCashFlow).toLocaleString()}`}
         items={[
-          { label: "Total Income", value: `+$${monthlyIncome.toLocaleString()}`, sub: `${(incomes || []).length} sources`, category: "income" },
+          { label: "Total Income", value: `+${formatMoneyRound(monthlyIncome)}`, sub: `${(incomes || []).length} sources`, category: "income" },
           { label: "Total Spending", value: `-$${filteredSpend.toLocaleString()}`, sub: `${monthExpenses.length} expenses`, category: "expense" },
           // Round-6 fix (BUG-019): previously summed raw o.amount, but obligations have
           // varying frequencies (weekly, biweekly, quarterly, yearly). A weekly $50 obligation

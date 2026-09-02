@@ -1158,6 +1158,11 @@ function sanitize(input: string): string {
     .slice(0, 10000);
 }
 
+/** The same object without the keys whose value is undefined. */
+function withoutUndefined<T extends Record<string, any>>(obj: T): T {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T;
+}
+
 // Date validation helper
 function isValidDateStr(d: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime());
@@ -6488,7 +6493,9 @@ Rules:
     {
       const parsed = insertExpenseSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
-      req.body = { ...req.body, ...parsed.data };
+      // A blank date input parses to undefined ("not given"); drop it rather
+      // than hand storage a patch that names the column with nothing in it.
+      req.body = withoutUndefined({ ...req.body, ...parsed.data });
     }
     if (req.body.amount !== undefined) {
       if (typeof req.body.amount !== "number") return res.status(400).json({ error: "Expense amount must be a positive number" });
@@ -7499,7 +7506,7 @@ Rules:
     {
       const parsed = insertObligationSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
-      req.body = { ...req.body, ...parsed.data };
+      req.body = withoutUndefined({ ...req.body, ...parsed.data });
     }
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Obligation name must be a non-empty string" });

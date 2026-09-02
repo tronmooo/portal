@@ -7,6 +7,7 @@ import {
 } from "../shared/liability-recurrence";
 import { generateSchedule } from "../shared/liability-schedule";
 import { localTodayISO, localDaysFromNowISO } from "../client/src/lib/dates";
+import { insertExpenseSchema, insertObligationSchema } from "../shared/schema";
 
 // D54 — a monthly bill due on the 31st drifted to the 28th after one payment
 // in a short month (Jan 31 → Feb 28 → Mar 28 → Apr 28), while the calendar,
@@ -217,5 +218,28 @@ describe("D81: recurrence tags are internal, not labels", () => {
     for (const t of ["chore", "recurring", "rpaused-thing", "home"]) expect(isRecurrenceTag(t), t).toBe(false);
     expect(userTags(["chore", "recur:weekly", "rdone:2", "home"])).toEqual(["chore", "home"]);
     expect(userTags(undefined)).toEqual([]);
+  });
+});
+
+// D85/D86 — the calendar-day rule on the shared insert schemas.
+describe("D85/D86: schema calendar days", () => {
+  it("expense date: blank is absent, a timestamp keeps its day, free text fails", () => {
+    expect(insertExpenseSchema.parse({ amount: 1, description: "x" }).date).toBeUndefined();
+    expect(insertExpenseSchema.parse({ amount: 1, description: "x", date: "" }).date).toBeUndefined();
+    expect(insertExpenseSchema.parse({ amount: 1, description: "x", date: " 2026-09-10 " }).date).toBe("2026-09-10");
+    expect(insertExpenseSchema.parse({ amount: 1, description: "x", date: "2026-09-10T23:30:00.000Z" }).date).toBe("2026-09-10");
+    for (const bad of ["yesterdayish", "2026-13-45", "2026-9-1", "09/10/2026"]) {
+      expect(insertExpenseSchema.safeParse({ amount: 1, description: "x", date: bad }).success, bad).toBe(false);
+    }
+  });
+  it("bill nextDueDate is required and must be a real day; recurrenceEnd may be blank", () => {
+    expect(insertObligationSchema.safeParse({ name: "b", amount: 1 }).success).toBe(false);
+    expect(insertObligationSchema.safeParse({ name: "b", amount: 1, nextDueDate: "next week" }).success).toBe(false);
+    expect(insertObligationSchema.safeParse({ name: "b", amount: 1, nextDueDate: "" }).success).toBe(false);
+    const ok = insertObligationSchema.parse({ name: "b", amount: 1, nextDueDate: "2026-09-05T00:00:00Z", recurrenceEnd: "" });
+    expect(ok.nextDueDate).toBe("2026-09-05");
+    expect(ok.recurrenceEnd).toBeUndefined();
+    expect(insertObligationSchema.parse({ name: "b", amount: 1, nextDueDate: "2026-09-05", recurrenceEnd: "2027-01-31" }).recurrenceEnd).toBe("2027-01-31");
+    expect(insertObligationSchema.safeParse({ name: "b", amount: 1, nextDueDate: "2026-09-05", recurrenceEnd: "never" }).success).toBe(false);
   });
 });

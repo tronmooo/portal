@@ -657,3 +657,55 @@ describe("D78: a malformed id is Not found, not Internal server error", () => {
     expect((await h.api("PATCH", "/api/incomes/not-a-uuid", { amount: 5 })).status).toBe(404);
   });
 });
+
+// D85 — PATCH /api/expenses/:id took any string as `date`; "yesterdayish" and
+// "2026-13-45" reached the date column and came back as 500s. The create route
+// only ran `new Date()` on it, so the same words made a 400 there and a 500
+// here. One rule now lives on insertExpenseSchema for both.
+describe("D85: an expense date must be a real calendar day on create and edit", () => {
+  it("answers 400 for a non-date, 400 for an impossible day, and keeps the day of a timestamp", async () => {
+    h = await boot({ expenses: [{ id: "exp-1", amount: 12, description: "Coffee", category: "food", date: "2026-09-01", tags: [] }] });
+    for (const bad of ["yesterdayish", "2026-13-45", "2026-09-31"]) {
+      const r = await h.api("PATCH", "/api/expenses/exp-1", { date: bad });
+      expect(r.status, bad).toBe(400);
+      const c = await h.api("POST", "/api/expenses", { amount: 5, description: "Tea", date: bad });
+      expect(c.status, `create ${bad}`).toBe(400);
+    }
+    expect(h.db.expenses[0].date).toBe("2026-09-01");
+    const ts = await h.api("PATCH", "/api/expenses/exp-1", { date: "2026-09-10T00:00:00.000Z" });
+    expect(ts.status).toBe(200);
+    expect(h.db.expenses[0].date).toBe("2026-09-10");
+    // A form's blank date input means "leave it alone", not "set it to nothing".
+    expect((await h.api("PATCH", "/api/expenses/exp-1", { date: "", amount: 13 })).status).toBe(200);
+    expect(h.db.expenses[0].date).toBe("2026-09-10");
+    expect(h.db.expenses[0].amount).toBe(13);
+  });
+});
+
+// D86 — a bill's nextDueDate was `z.string()`, so "next week" was stored as
+// the schedule anchor on both create and edit; the bill then had no derivable
+// occurrences and showed "Invalid Date" everywhere it was listed.
+describe("D86: a bill's due date must be a real calendar day on create and edit", () => {
+  it("rejects free text on POST and PATCH, keeps the day of a timestamp", async () => {
+    const updates: any[] = [];
+    h = await boot({ obligations: [{ id: "obl-1", name: "Internet", amount: 60, frequency: "monthly", nextDueDate: "2026-09-05", status: "active" }] },
+      (storage, db) => {
+        storage.updateObligation = async (rid: string, patch: any) => {
+          const row = db.obligations.find(o => o.id === rid);
+          if (!row) return undefined;
+          updates.push(patch); Object.assign(row, patch); return row;
+        };
+      });
+    for (const bad of ["next week", "2026-13-45", "not-a-date"]) {
+      expect((await h.api("PATCH", "/api/obligations/obl-1", { nextDueDate: bad })).status, bad).toBe(400);
+      expect((await h.api("POST", "/api/obligations", { name: "Water", amount: 20, nextDueDate: bad })).status, `create ${bad}`).toBe(400);
+    }
+    expect(updates).toHaveLength(0);
+    expect(h.db.obligations).toHaveLength(1);
+    expect((await h.api("PATCH", "/api/obligations/obl-1", { nextDueDate: "2026-10-05T07:00:00.000Z" })).status).toBe(200);
+    expect(updates[0]?.nextDueDate).toBe("2026-10-05");
+    const created = await h.api("POST", "/api/obligations", { name: "Water", amount: 20, nextDueDate: "2026-09-20" });
+    expect(created.status).toBe(201);
+    expect(created.data.nextDueDate).toBe("2026-09-20");
+  });
+});

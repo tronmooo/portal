@@ -22,6 +22,7 @@
 // "Taken", managed recurring dates get "Done". Popups are the same components
 // the dashboard KPI tiles use.
 import { sumMonthlyIncome } from "@shared/obligation-windows";
+import { localDayOf } from "@shared/timezone";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -718,7 +719,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     return Math.round((new Date(`${t}T12:00:00`).getTime() - new Date(`${todayStr}T12:00:00`).getTime()) / 86400000);
   };
   const overdueTasks = pending.filter((t: any) => (daysFromToday(t.dueDate) ?? 1) < 0);
-  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
+  // The completion stamp is a UTC instant; "today" is the browser's calendar
+  // day. Slicing the instant compared UTC's date with the user's, so a chore
+  // finished this morning east of Greenwich (or last night in the US) read
+  // as "0 completed today".
+  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && localDayOf(t.completedAt || t.updatedAt || null, BROWSER_TIMEZONE) === todayStr).length;
   const sortedPending = pending.slice().sort((a: any, b: any) =>
     (daysFromToday(a.dueDate) ?? 9e9) - (daysFromToday(b.dueDate) ?? 9e9));
 

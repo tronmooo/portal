@@ -19,6 +19,7 @@ import {
 } from "../client/src/lib/cache-bus";
 import { formatLocalDate, daysFromToday, isPast, localTodayISO } from "../client/src/lib/dates";
 import { FULL_LIST_LIMIT, withFullLimit } from "../client/src/lib/list-limit";
+import { formatMoneyRound } from "../client/src/lib/format";
 
 const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, "..", rel), "utf8");
 const qc = queryClient as QueryClient;
@@ -244,5 +245,24 @@ describe("item 11: list pages pass the full-list limit", () => {
     for (const f of ["client/src/pages/dashboard.tsx", "client/src/pages/tasks.tsx", "client/src/pages/habits.tsx", "client/src/pages/wellness.tsx"]) {
       expect(read(f)).not.toMatch(/queryKey:\s*\[[^\]]*limit/);
     }
+  });
+});
+
+// D87 — the hub KPI strip rounded -23.5 to "-$23" (Math.round rounds toward
+// +∞) while the hero card counted up Math.round(Math.abs(n)) = 24. Same
+// number, two dollar figures on one screen. Rounding the magnitude fixes both
+// tiles at the one formatter; the wellness strip printed "$-23.5" outright.
+describe("D87: one rounding rule for every money tile", () => {
+  it("rounds the magnitude, so negatives round away from zero", () => {
+    expect(formatMoneyRound(-23.5)).toBe("-$24");
+    expect(formatMoneyRound(23.5)).toBe("$24");
+    expect(formatMoneyRound(-0.4)).toBe("$0");
+    expect(formatMoneyRound(-1234.5)).toBe("-$1,235");
+    expect(formatMoneyRound(null)).toBe("$0");
+  });
+  it("the wellness strip no longer prints a raw signed number after the dollar sign", () => {
+    const src = read("client/src/pages/dashboard.tsx");
+    expect(src).not.toMatch(/\$\{cashFlow\.toLocaleString\(\)\}/);
+    expect(src).not.toMatch(/\$\{monthly(Spend|Income)\.toLocaleString\(\)\}/);
   });
 });

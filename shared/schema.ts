@@ -702,13 +702,48 @@ export const LARGE_TRANSACTION_AMOUNT = 1_000_000; // $1 million
 export const TRANSACTION_TOO_LARGE_MESSAGE =
   `Amount must be less than $${MAX_TRANSACTION_AMOUNT.toLocaleString("en-US")}. Check for a typo or a stray zero.`;
 
+/** HH:MM, 24-hour. Rejects "9am", "25:00" and other things that aren't a time. */
+export const CLOCK_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** YYYY-MM-DD with a real month and day. Rejects "not-a-date" and "2026-13-45"
+ *  before they reach a date column and come back as a 500. */
+export const ISO_DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+/**
+ * True for a YYYY-MM-DD that exists on the calendar. The regex alone lets
+ * "2026-09-31" and "2026-02-30" through, and a date column rejects those
+ * with "date/time field value out of range" — a 500 for a typo.
+ */
+export function isCalendarDay(s: string): boolean {
+  if (!ISO_DAY_RE.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
+}
+/** A calendar day, or "" to clear the field. */
+const isoDayOrEmpty = z.string().refine((v) => v === "" || isCalendarDay(v), "Use YYYY-MM-DD");
+/**
+ * A calendar day for a `date` column. A client that round-trips a row may
+ * send the day as a full timestamp ("2026-09-10T00:00:00.000Z"); the day part
+ * is kept, the way the date column itself would cast it. Anything else that
+ * is not a real YYYY-MM-DD ("next week", "2026-13-45") is a validation error
+ * here rather than a 500 from Postgres (expenses.date) or a bill whose
+ * schedule can never be derived (liability fields.dueDate is free text).
+ * Blank means "not given" so a form's empty date input reads as absent.
+ */
+const calendarDay = z.string().trim()
+  .transform((s) => (/^\d{4}-\d{2}-\d{2}T/.test(s) ? s.slice(0, 10) : s))
+  .pipe(z.string().refine(isCalendarDay, "Use YYYY-MM-DD"));
+/** An optional calendar day; "" (an empty date input) means "not given". */
+const calendarDayOrBlank = z.union([z.literal(""), calendarDay]).transform((v) => (v === "" ? undefined : v));
+/** A clock time, or "" to clear the field. */
+const clockTimeOrEmpty = z.string().refine((v) => v === "" || CLOCK_TIME_RE.test(v), "Use HH:MM (24-hour)");
+
 export const insertObligationSchema = z.object({
   name: z.string().min(1),
   amount: z.number().nonnegative("Amount must be 0 or positive").max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE),
   frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"]).default("monthly"),
   category: z.string().default("general"),
   kind: z.enum(["bill","subscription","loan_payment","medication","maintenance","appointment","habit","doc_expiration","task"]).default("bill"),
-  nextDueDate: z.string(),
+  nextDueDate: calendarDay,
   autopay: z.boolean().default(false),
   status: z.enum(["active", "paused", "cancelled"]).optional(),
   notes: z.string().optional(),
@@ -718,7 +753,7 @@ export const insertObligationSchema = z.object({
   linkedAssetId: z.string().uuid().optional().nullable(),
   linkedLiabilityId: z.string().uuid().optional().nullable(),
   linkedDocumentId: z.string().uuid().optional().nullable(),
-  recurrenceEnd: z.string().optional(),
+  recurrenceEnd: calendarDayOrBlank.optional(),
   currency: z.string().optional(),
   icon: z.string().optional(),
   /**
@@ -922,16 +957,6 @@ export interface Task {
   updatedAt?: string;
 }
 
-/** HH:MM, 24-hour. Rejects "9am", "25:00" and other things that aren't a time. */
-export const CLOCK_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-/** YYYY-MM-DD with a real month and day. Rejects "not-a-date" and "2026-13-45"
- *  before they reach a date column and come back as a 500. */
-export const ISO_DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-/** A calendar day, or "" to clear the field. */
-const isoDayOrEmpty = z.string().refine((v) => v === "" || ISO_DAY_RE.test(v), "Use YYYY-MM-DD");
-/** A clock time, or "" to clear the field. */
-const clockTimeOrEmpty = z.string().refine((v) => v === "" || CLOCK_TIME_RE.test(v), "Use HH:MM (24-hour)");
-
 export const insertTaskSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
@@ -969,7 +994,7 @@ export const insertExpenseSchema = z.object({
   description: z.string().min(1, "Description must be non-empty"),
   vendor: z.string().optional(),
   isRecurring: z.boolean().optional(),
-  date: z.string().optional(),
+  date: calendarDayOrBlank.optional(),
   tags: z.array(z.string()).optional().default([]),
   linkedProfiles: z.array(z.string()).optional().default([]),
 });
@@ -1082,7 +1107,7 @@ export interface CalendarEvent {
 
 export const insertEventSchema = z.object({
   title: z.string().min(1),
-  date: z.string().regex(ISO_DAY_RE, "Use YYYY-MM-DD"),
+  date: z.string().refine(isCalendarDay, "Use YYYY-MM-DD"),
   time: clockTimeOrEmpty.optional(),
   endTime: clockTimeOrEmpty.optional(),
   endDate: isoDayOrEmpty.optional(),
