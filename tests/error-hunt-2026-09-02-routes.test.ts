@@ -766,3 +766,17 @@ describe("D97: two identical bill creates arriving together insert once", () => 
     expect((await h.api("POST", "/api/obligations", body)).status).toBe(201);
   });
 });
+
+// D98 — an unknown /api path fell through to the SPA shell with 200.
+describe("D98: unknown API paths are 404 JSON for every method", () => {
+  it("answers 404 JSON and leaves real routes alone", async () => {
+    h = await boot({ profiles: [SELF] });
+    for (const [m, p] of [["GET", "/api/profiles/self-1/restore"], ["POST", "/api/profiles/self-1/restore"], ["DELETE", "/api/liabilities/x/payments/y"], ["PATCH", "/api/nope"]] as const) {
+      const r = await h.api(m, p, m === "GET" ? undefined : {});
+      expect(r.status, `${m} ${p}`).toBe(404);
+      expect(typeof r.data?.error, `${m} ${p} body`).toBe("string");
+      expect(r.headers["content-type"] || "").toMatch(/json/);
+    }
+    expect((await h.api("GET", "/api/profiles")).status).toBe(200);
+  });
+});

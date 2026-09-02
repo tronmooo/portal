@@ -10769,6 +10769,14 @@ No emojis. No prose outside the JSON.`,
   // exempted from bearer auth in server/auth.ts and authenticates by signature.
   registerFinanceRoutes(app);
 
+  // Unknown API paths are 404 JSON, never the SPA shell. Without this the
+  // static fallback answered `POST /api/profiles/:id/restore` (no such
+  // route) with 200 + index.html, so a client believed a restore, an undo
+  // or a typo'd call had succeeded when nothing happened.
+  app.all(/^\/api(\/|$)/, (req: any, res: any) => {
+    res.status(404).json({ error: `No API route for ${req.method} ${req.path}` });
+  });
+
   // Global async error handler — catches unhandled promise rejections from route handlers
   app.use((err: any, _req: any, res: any, _next: any) => {
     console.error(`[API Error]`, err?.message || err);
