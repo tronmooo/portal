@@ -173,6 +173,9 @@ Sent 22 bad PATCH bodies across expenses, tasks, events, obligations, goals, hab
 ### UI interaction pass 2 (Playwright, production build)
 Pay from the dashboard's Needs-attention row (two-tap Confirm): one payment row, due date advanced a month, the row left the list and stayed gone after reload, the auto-logged expense appeared in MTD spend. Habit segment on /habits: check-in wrote one checkin (streak 1), the second tap removed it (0), the state survived reload. Delete a task on /tasks then Undo in the toast: the row came back, the server row was restored (same id), no duplicate after reload. No console errors, no failed requests. Integrity after the pass: no orphan checkins, no payments without a liability profile.
 
+### Budget probe (s10) and tracker pass (Playwright) — verified working
+Budgets: create, no duplicate on re-post of the same category, PATCH validation (non-numeric, negative, blank category, non-string notes → 400), a person-scoped budget hidden under Self and shown under that person, the household budget hidden under the person, copy-to-next-month copies each once and a repeat copy does not duplicate, user B sees and can delete nothing. Trackers: a weight entry logged from the tracker page appears in the entry list, on the server (ascending by timestamp on both endpoints; every "latest" reader sorts or takes the last element), and on the dashboard after reload; the number input refuses letters. The car profile page lists its insurance bill; Linda's page shows only her data.
+
 ### Not a bug / by design (noted)
 - Paying the same bill twice within 8 s is folded into one payment (D29's rule); the probe waits 9 s between real payments.
 - `DELETE /api/expenses|tasks|incomes/:id` are deliberately idempotent and answer 200 for an id that does not exist for this user (nothing is deleted, nothing leaks); the other entity deletes answer 404.
