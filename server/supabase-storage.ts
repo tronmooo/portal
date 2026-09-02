@@ -4681,6 +4681,20 @@ export class SupabaseStorage implements IStorage {
       value: value ?? null, notes: notes || null, timestamp: ts,
     });
     if (error) throw error;
+    // Reconcile the day AFTER the insert: the read-then-insert above cannot see
+    // a concurrent check-in (two taps, two tabs, two lambdas), so a daily
+    // habit ended up with two rows for one day. Whoever runs this deletes the
+    // surplus beyond targetPerDay, oldest rows win, and a caller whose row
+    // lost gets the surviving row back — one day, one truth, from any path.
+    let returned: HabitCheckin = { id, date: checkinDate, value, notes, timestamp: ts };
+    const { data: dayRows } = await this.supabase.from("habit_checkins").select("id, date, value, notes, timestamp")
+      .eq("habit_id", habitId).eq("user_id", this.userId).eq("date", checkinDate)
+      .order("timestamp", { ascending: true }).order("id", { ascending: true });
+    if (Array.isArray(dayRows) && dayRows.length > maxPerDay) {
+      const surplus = dayRows.slice(maxPerDay).map((r: any) => r.id);
+      await this.supabase.from("habit_checkins").delete().in("id", surplus).eq("user_id", this.userId);
+      if (surplus.includes(id)) returned = this.rowToHabitCheckin(dayRows[maxPerDay - 1]);
+    }
     // Recalculate streaks (with targetPerDay support)
     const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
     const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone);
@@ -4688,7 +4702,7 @@ export class SupabaseStorage implements IStorage {
       current_streak: current, longest_streak: Math.max(longest, habit.longestStreak),
     }).eq("id", habitId).eq("user_id", this.userId);
     this.logActivity("habit", `Checked in: ${habit.name}`);
-    return { id, date: checkinDate, value, notes, timestamp: ts };
+    return returned;
   }
 
   async deleteHabitCheckin(habitId: string, checkinId: string): Promise<boolean> {
@@ -7700,6 +7714,49 @@ export class SupabaseStorage implements IStorage {
     return (data || []).map(r => this.rowToLiabilityPayment(r));
   }
 
+  /**
+   * Compare-and-set claim of one bill occurrence: stamps `occurrences[date]`
+   * (merged over the FRESH row) plus `extraFields`, but only while that
+   * occurrence is not already paid. A concurrent second payer gets
+   * "already-paid" and the occurrence map as it stands, including the
+   * winner's paymentId. Returns the pre-claim occurrences on success so a
+   * failed ledger write can release the claim.
+   */
+  async claimBillOccurrence(
+    liabilityId: string,
+    occurrenceDate: string,
+    stamp: Record<string, any>,
+    extraFields: Record<string, any>,
+  ): Promise<{ status: "claimed" | "already-paid"; occurrences: Record<string, any> }> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(occurrenceDate)) throw new Error("occurrenceDate must be YYYY-MM-DD");
+    const { data: fresh, error: readErr } = await this.supabase.from("profiles").select("fields")
+      .eq("id", liabilityId).eq("user_id", this.userId).maybeSingle();
+    if (readErr) throw readErr;
+    if (!fresh) throw new Error("Liability not found");
+    const f = (fresh.fields && typeof fresh.fields === "object") ? fresh.fields as Record<string, any> : {};
+    const prior: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {};
+    if (prior[occurrenceDate]?.status === "paid") return { status: "already-paid", occurrences: prior };
+    const occurrences = { ...prior, [occurrenceDate]: { ...(prior[occurrenceDate] || {}), ...stamp } };
+    // Same field-merge rule updateProfile applies, so identity/supersession
+    // bookkeeping stays consistent with every other write to this row.
+    const merged = mergeFieldWrite(f, { ...extraFields, occurrences }).fields;
+    const statusPath = `fields->occurrences->${occurrenceDate}->>status`;
+    const { data, error } = await this.supabase.from("profiles")
+      .update({ fields: merged, updated_at: new Date().toISOString() })
+      .eq("id", liabilityId).eq("user_id", this.userId)
+      .or(`${statusPath}.is.null,${statusPath}.neq.paid`)
+      .select("id");
+    if (error) throw error;
+    if (Array.isArray(data) && data.length > 0) {
+      bustInsightsCacheFor(this.userId);
+      return { status: "claimed", occurrences: prior };
+    }
+    // Lost the race: read back the winner's stamp.
+    const { data: again } = await this.supabase.from("profiles").select("fields").eq("id", liabilityId).eq("user_id", this.userId).maybeSingle();
+    const occ = (again?.fields as any)?.occurrences;
+    return { status: "already-paid", occurrences: (occ && typeof occ === "object") ? occ : prior };
+  }
+
   async getLiabilityPayments(liabilityProfileId: string): Promise<LiabilityPayment[]> {
     const { data, error } = await this.supabase.from("liability_payments")
       .select("*").eq("user_id", this.userId).eq("liability_profile_id", liabilityProfileId)
@@ -7717,7 +7774,10 @@ export class SupabaseStorage implements IStorage {
 
   async createLiabilityPayment(data: InsertLiabilityPayment): Promise<LiabilityPayment> {
     const now = new Date().toISOString();
-    const id = randomUUID();
+    // A caller may preset the id (payBillOccurrence stamps the occurrence with
+    // it BEFORE inserting the row, so a concurrent duplicate can be detected).
+    const presetId = (data as any).id;
+    const id = typeof presetId === "string" && /^[0-9a-f-]{36}$/i.test(presetId) ? presetId : randomUUID();
     const row = {
       id, user_id: this.userId,
       liability_profile_id: data.liabilityProfileId,

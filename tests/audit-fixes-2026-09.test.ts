@@ -323,3 +323,49 @@ describe("bank CSV import parsing", () => {
     expect(expenseDedupeKey({ date: "2026-09-01", amount: 42.5, description: "Amazon, Inc" })).toBe(expenseDedupeKey({ date: "2026-09-01T00:00:00Z", amount: 42.5, description: "AMAZON, INC " }));
   });
 });
+
+import { payBillOccurrence } from "../server/liability-payments";
+describe("payBillOccurrence: concurrent payers settle one occurrence once", () => {
+  function makeStorage(opts: { claimResult: "claimed" | "already-paid" }) {
+    const bill: any = { id: "L1", name: "Water", type: "liability", type_key: "utility", parentProfileId: "self", fields: { frequency: "monthly", dueDate: "2026-09-01", nextDueDate: "2026-09-01", monthlyAmount: 40, category: "utilities" } };
+    const payments: any[] = [{ id: "winner-1", liabilityProfileId: "L1", paymentDate: "2026-09-01", amount: 40 }];
+    const expenses: any[] = [];
+    const claims: any[] = [];
+    const storage: any = {
+      getProfile: async (id: string) => (id === "L1" ? bill : null),
+      getProfiles: async () => [bill],
+      updateProfile: async (_id: string, patch: any) => { bill.fields = { ...bill.fields, ...(patch.fields || {}) }; return bill; },
+      createLiabilityPayment: async (d: any) => { const row = { id: d.id || "new-id", ...d }; payments.push(row); return row; },
+      getLiabilityPayments: async () => payments,
+      createExpense: async (e: any) => { const row = { id: `e${expenses.length + 1}`, ...e }; expenses.push(row); return row; },
+      claimBillOccurrence: async (id: string, date: string, stamp: any, extra: any) => {
+        claims.push({ id, date, stamp, extra });
+        if (opts.claimResult === "already-paid") return { status: "already-paid", occurrences: { [date]: { status: "paid", paymentId: "winner-1" } } };
+        bill.fields = { ...bill.fields, ...extra, occurrences: { [date]: stamp } };
+        return { status: "claimed", occurrences: {} };
+      },
+    };
+    return { storage, payments, expenses, claims, bill };
+  }
+  it("winner: claims first, ledger row carries the stamped id, one expense, due date advanced", async () => {
+    const s = makeStorage({ claimResult: "claimed" });
+    const r = await payBillOccurrence(s.storage, "L1", { source: "route" }, "America/Los_Angeles");
+    expect(r.ok).toBe(true);
+    expect(r.deduped).toBeFalsy();
+    expect(s.claims.length).toBe(1);
+    expect(r.payment.id).toBe(s.claims[0].stamp.paymentId);
+    expect(s.expenses.length).toBe(1);
+    expect(r.dueDateAdvanced).toBe(true);
+    expect(s.bill.fields.dueDate).toBe("2026-10-01");
+  });
+  it("loser: no ledger row, no expense, answers with the winner's payment", async () => {
+    const s = makeStorage({ claimResult: "already-paid" });
+    const before = s.payments.length;
+    const r = await payBillOccurrence(s.storage, "L1", { source: "route" }, "America/Los_Angeles");
+    expect(r.ok).toBe(true);
+    expect(r.deduped).toBe(true);
+    expect(r.payment?.id).toBe("winner-1");
+    expect(s.payments.length).toBe(before);
+    expect(s.expenses.length).toBe(0);
+  });
+});

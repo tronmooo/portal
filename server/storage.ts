@@ -62,6 +62,8 @@ export interface IStorage {
   getProfileDetail(id: string): Promise<ProfileDetail | undefined>;
   createProfile(data: InsertProfile): Promise<Profile>;
   updateProfile(id: string, data: Partial<Profile>): Promise<Profile | undefined>;
+  /** Optional compare-and-set claim of a bill occurrence (see SupabaseStorage). */
+  claimBillOccurrence?(liabilityId: string, occurrenceDate: string, stamp: Record<string, any>, extraFields: Record<string, any>): Promise<{ status: "claimed" | "already-paid"; occurrences: Record<string, any> }>;
   deleteProfile(id: string): Promise<boolean>;
   linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void>;
   unlinkProfileFrom(profileId: string, entityType: string, entityId: string): Promise<void>;

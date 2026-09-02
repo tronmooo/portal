@@ -21,6 +21,7 @@ import { deriveScheduleFields, liabilityAmount } from "@shared/liability-schedul
 import { isAccountProfile, isDebtAccount } from "@shared/finance-accounts";
 import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
 import type { IStorage } from "./storage";
+import { randomUUID } from "crypto";
 
 type PaymentLogger = Pick<Console, "warn" | "error">;
 
@@ -31,6 +32,8 @@ export type LiabilityPaymentType =
 
 export interface LiabilityPaymentInput {
   amount: number;
+  /** Preset ledger row id (lets a caller stamp the occurrence before inserting the row). */
+  id?: string | null;
   paymentDate?: string | null;
   /** Explicit split. Omit to let the canonical amortization math decide. */
   principal?: number | null;
@@ -101,6 +104,7 @@ export async function applyLiabilityPayment(
   // call something a recurring bill while net worth still counted it as debt.
   if (isRecurringBill((liability as any).type_key ?? (liability as any).typeKey)) {
     const payment = await storage.createLiabilityPayment({
+      ...(input.id ? { id: input.id } : {}),
       liabilityProfileId: liability.id,
       paymentDate,
       amount,
@@ -176,6 +180,7 @@ export async function applyLiabilityPayment(
   }
 
   const payment = await storage.createLiabilityPayment({
+    ...(input.id ? { id: input.id } : {}),
     liabilityProfileId: liability.id,
     paymentDate,
     amount,
@@ -255,6 +260,8 @@ export interface PayBillStep {
 
 export interface PayBillResult {
   ok: boolean;
+  /** Another request settled this occurrence first; `payment` is THAT row. */
+  deduped?: boolean;
   reason?: "not_found" | "not_liability" | "payment_failed";
   payment?: any;
   liability?: any;
@@ -342,10 +349,59 @@ export async function payBillOccurrence(
 
   const account: any = input.accountId ? await storage.getProfile(input.accountId) : null;
 
+  // ── 0. claim the occurrence (compare-and-set) ───────────────────────────
+  // Two requests for the same occurrence — a double tap, two tabs, two
+  // lambdas — each read the bill unpaid and each wrote a ledger row and an
+  // expense (the due date advanced once, the money counted twice). The
+  // occurrence stamp is now written FIRST, conditioned on the occurrence not
+  // already being paid; the loser sees 0 rows and answers with the winner's
+  // payment. Storages without the CAS (tests, in-memory) keep the old order.
+  const paymentId = randomUUID();
+  let dueDateAdvanced = false;
+  let nextDueDate: string | null = null;
+  let claimed = false;
+  let priorOccurrences: Record<string, any> | null = null;
+  const claimFn = (storage as any).claimBillOccurrence as
+    | ((id: string, date: string, stamp: Record<string, any>, extra: Record<string, any>) => Promise<{ status: "claimed" | "already-paid"; occurrences: Record<string, any> }>)
+    | undefined;
+  if (typeof claimFn === "function") {
+    const stamp = {
+      status: "paid", paymentId, amount, actualAmount: amount, paidAmount: amount,
+      postedAt: new Date().toISOString(), ...(account ? { accountId: account.id } : {}),
+    };
+    const extra: Record<string, any> = { lastPaidDate: paymentDate };
+    let advanced: string | null = null;
+    if (curDue && curDue === occurrenceDate) {
+      advanced = advanceLiabilityDueDate(f, occurrenceDate);
+      extra.dueDate = advanced; extra.nextDueDate = advanced; extra.status = "upcoming";
+    }
+    try {
+      const claim = await claimFn.call(storage, liabilityId, occurrenceDate, stamp, extra);
+      if (claim.status === "already-paid") {
+        const winnerId = claim.occurrences?.[occurrenceDate]?.paymentId;
+        const payments = await storage.getLiabilityPayments(liabilityId).catch(() => [] as any[]);
+        const winner = payments.find((p: any) => p.id === winnerId) || payments[0] || null;
+        return {
+          ok: true, deduped: true, payment: winner, liability, occurrenceDate,
+          amount: winner?.amount ?? amount, recurring, dueDateAdvanced: false, nextDueDate: null,
+          accountAdjusted: false, expenseId: null, steps: [{ step: "series_state", ok: true }],
+        };
+      }
+      claimed = true;
+      priorOccurrences = claim.occurrences;
+      dueDateAdvanced = !!advanced;
+      nextDueDate = advanced;
+      steps.push({ step: "series_state", ok: true });
+    } catch (e: any) {
+      logger.warn(`[payBillOccurrence] occurrence claim failed for ${liability.name}, using legacy order:`, e?.message || e);
+    }
+  }
+
   // ── 1. ledger (+ balance for debt) ──────────────────────────────────────
   let ledger: LiabilityPaymentResult;
   try {
     ledger = await applyLiabilityPayment(storage, liability, {
+      id: paymentId,
       amount,
       paymentDate,
       principal: input.principal ?? null,
@@ -360,14 +416,22 @@ export async function payBillOccurrence(
   } catch (e: any) {
     steps.push({ step: "ledger", ok: false, error: e?.message || String(e) });
     logger.error(`[payBillOccurrence] ledger write failed for ${liability.name}:`, e?.message || e);
+    if (claimed) {
+      // Release the claim so the occurrence is payable again (best effort).
+      try {
+        await storage.updateProfile(liabilityId, { fields: {
+          occurrences: priorOccurrences || {}, dueDate: curDue, nextDueDate: curDue,
+          lastPaidDate: f.lastPaidDate ?? null,
+        } } as any);
+      } catch { /* the stamp stays; unpay can clear it */ }
+    }
     return fail("payment_failed");
   }
   const payment = ledger.payment;
 
   // ── 2. series state: occurrence stamp + conditional advance, ONE write ──
-  let dueDateAdvanced = false;
-  let nextDueDate: string | null = null;
-  try {
+  // (legacy order, only when the storage has no compare-and-set claim)
+  if (!claimed) try {
     const occ: Record<string, any> =
       (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
     occ[occurrenceDate] = {
