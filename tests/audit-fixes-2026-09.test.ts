@@ -565,3 +565,24 @@ describe("matchHabitForCompletionReport with a named subject", () => {
     expect(matchHabitForCompletionReport(habits, "John flossed today", undefined, { subjectNames: ["Smoke Child"] })).toBeNull();
   });
 });
+
+// ── D48: bulk-delete date bounds apply to the record's own date ──
+describe("deriveBulkSet date bounds", () => {
+  it("on_date keeps only that day's expenses; before_date reads the expense date, not createdAt", async () => {
+    const { deriveBulkSet, entityDate } = await import("../server/bulk-actions");
+    const rows = [
+      { id: "a", description: "Snack A", date: "2026-09-02", createdAt: "2026-09-02T10:00:00Z" },
+      { id: "b", description: "Snack B", date: "2026-09-02", createdAt: "2026-09-02T11:00:00Z" },
+      { id: "c", description: "Snack C", date: "2026-09-01", createdAt: "2026-09-02T12:00:00Z" }, // typed today, about yesterday
+    ];
+    const storage: any = { getExpenses: async () => rows, getProfiles: async () => [] };
+    const on = await deriveBulkSet(storage, { operation: "delete", entity_types: ["expense"], on_date: "2026-09-02" } as any);
+    expect(on.idsByType.expense.sort()).toEqual(["a", "b"]);
+    const before = await deriveBulkSet(storage, { operation: "delete", entity_types: ["expense"], before_date: "2026-09-02" } as any);
+    expect(before.idsByType.expense).toEqual(["c"]);
+    const after = await deriveBulkSet(storage, { operation: "delete", entity_types: ["expense"], after_date: "2026-09-02" } as any);
+    expect(after.idsByType.expense.sort()).toEqual(["a", "b"]);
+    expect(entityDate("task", { dueDate: "2026-09-05", createdAt: "2026-09-01T00:00:00Z" })).toBe("2026-09-05");
+    expect(entityDate("task", { createdAt: "2026-09-01T00:00:00Z" })).toBe("2026-09-01");
+  });
+});

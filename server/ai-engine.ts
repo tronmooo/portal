@@ -4920,14 +4920,16 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "preview_bulk_action",
-    description: "PHASE 1 of a bulk delete — 'delete all my test tasks', 'clear out everything for the Demo profile', 'remove all expenses containing lunch from before June'. Derives the affected set and returns a PREVIEW (counts + sample names + plan_id). NOTHING is deleted in this phase. ALWAYS use this (never loop single deletes) when the user asks to delete multiple records by a filter. Requires at least one bound: name_contains, profile_name, or before_date.",
+    description: "PHASE 1 of a bulk delete — 'delete all my test tasks', 'clear out everything for the Demo profile', 'remove all expenses containing lunch from before June', 'delete all my expenses from today'. Derives the affected set and returns a PREVIEW (counts + sample names + plan_id). NOTHING is deleted in this phase. ALWAYS use this (never loop single deletes) when the user asks to delete multiple records by a filter. Requires at least one bound: name_contains, profile_name, before_date, after_date, or on_date. Date bounds apply to the record's OWN date (expense date, task due date, event date). 'from today' → on_date; 'this week' → after_date (+ before_date); NEVER substitute a name filter for a date the user gave.",
     input_schema: {
       type: "object" as const,
       properties: {
         entity_types: { type: "array", items: { type: "string" }, description: "Record types to scan (task, expense, income, event, habit, tracker, goal, journal, memory, artifact, reminder, document, paycheck). Omit to scan all common types." },
         name_contains: { type: "string", description: "Only records whose name/title contains this text (case-insensitive)" },
         profile_name: { type: "string", description: "Only records owned by this profile" },
-        before_date: { type: "string", description: "Only records created before this date (YYYY-MM-DD)" },
+        before_date: { type: "string", description: "Only records dated before this date (YYYY-MM-DD, exclusive) — the record's own date (expense date, task due date, event date), else its creation date" },
+        after_date: { type: "string", description: "Only records dated on or after this date (YYYY-MM-DD, inclusive)" },
+        on_date: { type: "string", description: "Only records dated exactly this date (YYYY-MM-DD) — 'from today', 'yesterday's'" },
         include_profile: { type: "boolean", description: "Also delete the profile itself (full cascade). Only with profile_name." },
       },
       required: [],
@@ -12535,6 +12537,8 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         name_contains: input.name_contains ? String(input.name_contains) : undefined,
         profile_name: input.profile_name ? String(input.profile_name) : undefined,
         before_date: input.before_date ? String(input.before_date) : undefined,
+        after_date: input.after_date ? String(input.after_date) : undefined,
+        on_date: input.on_date ? String(input.on_date) : undefined,
         include_profile: input.include_profile === true,
       });
     }

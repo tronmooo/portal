@@ -393,7 +393,7 @@ import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { validateTransactionAmount } from "@shared/quick-add";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
 import { generateSmartInsights } from "./insights-engine";
-import { requireAdmin, resolveUserFromRequest } from "./auth";
+import { requireAdmin, resolveUserFromRequest, isUniqueViolation } from "./auth";
 
 const isProd = process.env.NODE_ENV === "production";
 const log = {
@@ -7226,11 +7226,21 @@ Rules:
     }
     const parsed = insertHabitSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    let newHabit = await storage.createHabit(parsed.data);
-    // Apply linkedProfiles if provided (not part of insert schema)
-    if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0) {
-      const updated = await storage.updateHabit(newHabit.id, { linkedProfiles: req.body.linkedProfiles });
-      if (updated) newHabit = updated;
+    // The owner goes in WITH the insert. Creating first (auto-linked to self)
+    // and re-linking afterwards inserted every habit as the user's own for an
+    // instant — and under the owner-scoped unique name key that instant is
+    // exactly where a child's "Floss" collided with the parent's.
+    const linkedProfiles = Array.isArray(req.body.linkedProfiles)
+      ? (req.body.linkedProfiles as any[]).filter((x) => typeof x === "string" && x.length > 0)
+      : [];
+    let newHabit: Awaited<ReturnType<typeof storage.createHabit>>;
+    try {
+      newHabit = await storage.createHabit({ ...parsed.data, ...(linkedProfiles.length > 0 ? { linkedProfiles } : {}) } as any);
+    } catch (e: any) {
+      if (isUniqueViolation(e)) {
+        return res.status(409).json({ error: `A habit named "${parsed.data.name}" already exists for that profile.`, code: "DUPLICATE_HABIT" });
+      }
+      throw e;
     }
     const uid_h3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h3}`); bustCache(`stats:${uid_h3}`); bustCache(`notifications:${uid_h3}`);

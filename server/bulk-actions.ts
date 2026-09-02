@@ -19,8 +19,16 @@ export interface BulkCriteria {
   profile_name?: string;
   /** Case-insensitive substring the record's name/title must contain. */
   name_contains?: string;
-  /** Only records created before this date (YYYY-MM-DD). */
+  /** Only records dated before this date (YYYY-MM-DD, exclusive) — the
+   *  record's OWN date (an expense's date, a task's due date, an event's
+   *  date), falling back to when it was created. */
   before_date?: string;
+  /** Only records dated on/after this date (YYYY-MM-DD, inclusive). */
+  after_date?: string;
+  /** Only records dated exactly this date (YYYY-MM-DD). "From today" is
+   *  on_date=today — it used to have no expressible form, so the model fell
+   *  back to a name filter and deleted yesterday's rows too. */
+  on_date?: string;
   /** Also delete the profile itself (full cascade) after its records. */
   include_profile?: boolean;
 }
@@ -53,6 +61,24 @@ function hashIds(idsByType: Record<string, string[]>): string {
   return createHash("sha256").update(flat).digest("hex").slice(0, 32);
 }
 
+/**
+ * The date a record is ABOUT, as YYYY-MM-DD: an expense's/income's/journal
+ * entry's date, an event's date, a task's due date; else when it was created.
+ * Date bounds in a bulk delete apply to this, not to the row's creation time —
+ * "delete my expenses from before June" means June's expenses, whenever they
+ * were typed in.
+ */
+export function entityDate(type: string, r: any): string {
+  const t = normalize(type);
+  const own =
+    t === "task" ? (r.dueDate ?? null)
+    : t === "event" ? (r.date ?? null)
+    : (r.date ?? r.paymentDate ?? r.dueDate ?? null);
+  const raw = own ?? r.createdAt ?? r.timestamp ?? "";
+  const s = String(raw || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+}
+
 /** Derive the affected id set for the criteria. Pure read. */
 export async function deriveBulkSet(
   storage: IStorage,
@@ -75,6 +101,8 @@ export async function deriveBulkSet(
 
   const needle = criteria.name_contains ? normalize(criteria.name_contains) : "";
   const before = criteria.before_date ? String(criteria.before_date).slice(0, 10) : "";
+  const after = criteria.after_date ? String(criteria.after_date).slice(0, 10) : "";
+  const on = criteria.on_date ? String(criteria.on_date).slice(0, 10) : "";
   const idsByType: Record<string, string[]> = {};
   const namesByType: Record<string, string[]> = {};
 
@@ -88,7 +116,13 @@ export async function deriveBulkSet(
       : null;
     const hits = rows.filter((r: any) => {
       if (needle && !normalize(getEntityName(type, r)).includes(needle)) return false;
-      if (before && String(r.createdAt || r.date || "").slice(0, 10) >= before) return false;
+      if (before || after || on) {
+        const d = entityDate(type, r);
+        if (!d) return false;
+        if (before && d >= before) return false;
+        if (after && d < after) return false;
+        if (on && d !== on) return false;
+      }
       if (filterCtx && !passesProfileFilter(r.linkedProfiles || [], filterCtx as any)) return false;
       return true;
     });
@@ -103,7 +137,7 @@ export async function deriveBulkSet(
 /** Phase 1: derive + persist the plan; returns the human preview. NO deletes. */
 export async function planBulkAction(storage: IStorage, criteria: BulkCriteria): Promise<any> {
   if (criteria.operation !== "delete") return { error: `Unsupported bulk operation "${criteria.operation}".` };
-  if (!criteria.name_contains && !criteria.profile_name && !criteria.before_date) {
+  if (!criteria.name_contains && !criteria.profile_name && !criteria.before_date && !criteria.after_date && !criteria.on_date) {
     return { error: "Refusing an unbounded bulk delete — give me a name filter, a profile, or a date cutoff." };
   }
   const { idsByType, namesByType, profileId, error } = await deriveBulkSet(storage, criteria);
