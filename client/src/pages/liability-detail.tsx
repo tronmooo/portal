@@ -492,12 +492,25 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       }
       if (tTerm !== "") fields.remainingTermMonths = num(tTerm);
       if (tMonthly !== "") fields.monthlyPayment = num(tMonthly);
-      if (tDueDay !== "") {
+      // Due day, first payment and lender: a blanked input is a request to
+      // REMOVE the term, and a null clears the key server-side (the bill
+      // editor below relies on the same rule). Skipping blanks left the old
+      // due day standing after "Loan terms saved" — the calendar kept a due
+      // date the user had just deleted. Blank stays a no-op for a term that
+      // was never stored, so an untouched editor writes nothing. (Money terms
+      // above keep skip-on-blank: a $0 balance opens as a blank input, and
+      // clearing it must not resurrect the original balance.)
+      const clearOrSet = (key: string, raw: string, stored: boolean, value: any) => {
+        if (raw.trim() === "") { if (stored) fields[key] = null; return; }
+        if (value !== undefined) fields[key] = value;
+      };
+      {
         const d = num(tDueDay);
-        if (d != null && d >= 1 && d <= 31) fields.dueDay = d;
+        clearOrSet("dueDay", tDueDay, f2.dueDay != null, d != null && d >= 1 && d <= 31 ? d : undefined);
       }
-      if (tFirstPayment !== "") fields.firstPaymentDate = tFirstPayment;
-      if (tLender !== "") fields.lender = tLender;
+      clearOrSet("firstPaymentDate", tFirstPayment, f2.firstPaymentDate != null,
+        /^\d{4}-\d{2}-\d{2}$/.test(tFirstPayment.trim()) ? tFirstPayment.trim() : undefined);
+      clearOrSet("lender", tLender, f2.lender != null, tLender.trim());
       await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
     },
     onSuccess: () => {

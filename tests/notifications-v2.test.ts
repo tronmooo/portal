@@ -2,7 +2,7 @@
 // Custom (persisted) rows merge into the computed bell list under the
 // 'custom:' id namespace, and notification_prefs mutes filter the output.
 import { describe, it, expect } from "vitest";
-import { buildNotifications, NOTIFICATION_PREFS_PREF } from "../server/notification-service";
+import { buildNotifications, NOTIFICATION_PREFS_PREF, DISMISSED_NOTIFICATIONS_PREF } from "../server/notification-service";
 
 function stubStorage(overrides: Record<string, any> = {}): any {
   const prefs = new Map<string, string>();
@@ -86,5 +86,27 @@ describe("buildNotifications — notification_prefs mutes", () => {
     storage._prefs.set(NOTIFICATION_PREFS_PREF, "{not json");
     const list = await buildNotifications(storage, "America/New_York");
     expect(list.some((n) => n.type === "task_overdue")).toBe(true);
+  });
+});
+
+// D34: dismissal is applied at the source, not only in the bell's own filter.
+// The chat read the unfiltered list and called a just-dismissed notification
+// "currently active".
+describe("buildNotifications — dismissed ids", () => {
+  it("drops a dismissed computed notification and keeps the rest", async () => {
+    const storage = stubStorage({
+      getTasks: async () => [OVERDUE_TASK, { ...OVERDUE_TASK, id: "t2", title: "Renew tags" }],
+    });
+    let list = await buildNotifications(storage, "America/New_York");
+    expect(list.map((n) => n.id).sort()).toEqual(["task-overdue-t1", "task-overdue-t2"]);
+    storage._prefs.set(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(["task-overdue-t1"]));
+    list = await buildNotifications(storage, "America/New_York");
+    expect(list.map((n) => n.id)).toEqual(["task-overdue-t2"]);
+  });
+  it("a malformed preference dismisses nothing", async () => {
+    const storage = stubStorage({ getTasks: async () => [OVERDUE_TASK] });
+    storage._prefs.set(DISMISSED_NOTIFICATIONS_PREF, "{not json");
+    const list = await buildNotifications(storage, "America/New_York");
+    expect(list.length).toBe(1);
   });
 });

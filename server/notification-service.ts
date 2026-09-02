@@ -437,7 +437,29 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     ? deduped.filter((n) => !mutedSev.has(n.severity) && !mutedTypes.has(n.type))
     : deduped;
 
+  // --- Dismissed ids drop out here, for EVERY reader ---
+  // The bell and the dashboard each re-applied the `dismissed_notifications`
+  // preference client-side, and nothing else did: the assistant read the
+  // same list and told the user a notification they had just dismissed was
+  // "currently active". One filter, at the source, so the bell, the briefing,
+  // the chat and the dismiss tool agree on what is showing. (Custom rows are
+  // stamped dismissed_at in their own table and never enter the list.)
+  const dismissed = await readDismissedNotificationIds(storage);
+  const visible = dismissed.size > 0 ? filtered.filter((n) => !dismissed.has(n.id)) : filtered;
+
   // Sort: critical first, then warning, then info
-  filtered.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
-  return filtered;
+  visible.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+  return visible;
+}
+
+/** The ids the user has dismissed from the bell (JSON string array pref). */
+export async function readDismissedNotificationIds(storage: IStorage): Promise<Set<string>> {
+  try {
+    const raw = await storage.getPreference(DISMISSED_NOTIFICATIONS_PREF);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.filter((x: unknown): x is string => typeof x === "string") : []);
+  } catch {
+    return new Set();
+  }
 }

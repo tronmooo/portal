@@ -15546,6 +15546,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       return `${h.name} (${h.frequency}, ${today}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
     }).join("; ") || "none"}`,
     `Obligations (${obligations.length}): ${obligations.filter((o: any) => o.status !== "cancelled").slice(0, 20).map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
+    // The bell, as the user sees it: the same computed list the notification
+    // endpoint serves, already minus dismissed ids and muted categories. With
+    // no such line the model answered "do I have any notifications?" from the
+    // overdue items above — and listed one the user had just dismissed.
+    await (async () => {
+      try {
+        const bell = await buildNotifications(storage, aiUserTimezone());
+        return `Bell notifications (${bell.length}) [this IS the notification bell; dismissed ones are already excluded — answer notification questions from this line only]: ${bell.slice(0, 12).map(n => `${n.severity}: ${n.title}${n.message ? ` — ${String(n.message).slice(0, 80)}` : ""}`).join("; ") || "none (the bell is clear)"}`;
+      } catch { return ""; }
+    })(),
     // Assets & vehicles with full field data
     (() => {
       const assetProfiles = profiles.filter((p: any) => ['vehicle', 'asset', 'investment', 'property'].includes(p.type));
