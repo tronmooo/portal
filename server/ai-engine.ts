@@ -15603,7 +15603,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           recurringBill && (f.amount ?? f.monthlyAmount ?? f.monthlyCost) != null ? `amount: $${f.amount ?? f.monthlyAmount ?? f.monthlyCost}/${f.frequency || "month"}` : null,
           // The next due date, stated explicitly — with only "mo: $2,200" the
           // model guessed "due today" for a mortgage that has no due date set.
-          recurringBill ? `due: ${billDue || "not set"}` : (f.dueDay ? `due day: ${f.dueDay}` : (sharedReadDueDate(f) ? `due: ${sharedReadDueDate(f)}` : "due: not set")),
+          recurringBill ? `due: ${billDue || "not set"}` : (f.dueDay ? `due day: ${f.dueDay}` : (sharedReadDueDate(f) ? `due: ${sharedReadDueDate(f)}` : "due: NONE RECORDED — never present a due date or 'due today' for this one")),
         ].filter(Boolean).join(', ');
         // Ownership: "Self 50%, Tom 50%" — always state percentages explicitly.
         const partyLinks = allPartyLinks[idx] || [];
