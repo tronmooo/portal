@@ -227,6 +227,10 @@ export default function JournalPage() {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
+
+  // Co-ownership widens a person's scope to the assets they co-own (shared/profile-filter).
+
+  const { data: scopePartyLinks = [] } = useQuery<any[]>({ queryKey: ["/api/asset-party-links"], queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()), staleTime: 5 * 60_000 });
   // Default a new entry's profile to the ACTIVE scope (the profile the user is
   // working in), not unconditionally "me".
   const activeCreateProfileId = useActiveCreateProfileId(profiles);
@@ -254,6 +258,7 @@ export default function JournalPage() {
         passesProfileFilter((e as any).linkedProfiles, {
           selectedIds: filterIds,
           allProfiles: profiles.map(p => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
+          assetPartyLinks: scopePartyLinks,
         })
       )
     : allEntries;

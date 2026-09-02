@@ -808,6 +808,8 @@ export default function ArtifactsPage() {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
+  // Co-ownership widens a person's scope to the assets they co-own (shared/profile-filter).
+  const { data: scopePartyLinks = [] } = useQuery<any[]>({ queryKey: ["/api/asset-party-links"], queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()), staleTime: 5 * 60_000 });
 
   const profileMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -878,6 +880,7 @@ export default function ArtifactsPage() {
     const ctx = {
       selectedIds: filterIds,
       allProfiles: profiles.map(p => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
+      assetPartyLinks: scopePartyLinks,
     };
     return allItems.filter(item => passesProfileFilter(item.source?.linkedProfiles, ctx));
   }, [allItems, filterMode, filterIds, profiles]);

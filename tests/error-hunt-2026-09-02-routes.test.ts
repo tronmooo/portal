@@ -730,6 +730,67 @@ describe("D88: GET /api/obligations?profileIds=self lists bills owned through th
   });
 });
 
+// D120 — the bills route ignored co-ownership: Linda co-owns the car, its
+// fuel showed under her (expenses widen by asset_party_links) but its
+// insurance bill did not.
+describe("D120: GET /api/obligations?profileIds=<co-owner> lists bills of a co-owned car", () => {
+  const LINDA = { id: "linda-1", type: "person", name: "Linda" };
+  const CAR = { id: "car-1", type: "vehicle", name: "Honda", parentProfileId: SELF.id };
+  const bills = [
+    { id: "obl-ins", name: "Car insurance", amount: 118, frequency: "monthly", nextDueDate: "2026-09-22", status: "active", linkedProfiles: ["car-1"] },
+    { id: "obl-net", name: "Internet", amount: 60, frequency: "monthly", nextDueDate: "2026-09-05", status: "active", linkedProfiles: [SELF.id] },
+  ];
+  it("includes the co-owned car's bill for the party and still excludes Self's own", async () => {
+    h = await boot({ profiles: [SELF, LINDA, CAR], obligations: bills }, (storage) => {
+      storage.getAssetPartyLinks = async () => [{ id: "apl-1", assetProfileId: "car-1", partyProfileId: "linda-1", ownershipPercentage: 50 }];
+    });
+    const r = await h.api("GET", `/api/obligations?profileIds=${LINDA.id}`);
+    expect(r.status).toBe(200);
+    expect(r.data.map((o: any) => o.name)).toEqual(["Car insurance"]);
+    const s = await h.api("GET", `/api/obligations?profileIds=${SELF.id}`);
+    expect(s.data.map((o: any) => o.name).sort()).toEqual(["Car insurance", "Internet"]);
+  });
+  it("without a party link the car's bill stays off the other person's list", async () => {
+    h = await boot({ profiles: [SELF, LINDA, CAR], obligations: bills });
+    const r = await h.api("GET", `/api/obligations?profileIds=${LINDA.id}`);
+    expect(r.data).toEqual([]);
+  });
+});
+
+// D120 (documents) — the documents list pushes a raw containment filter to
+// the database for a self-free selection, so the owner chain and
+// co-ownership never applied there: the car's registration was missing
+// under Linda (co-owner) and under Mike (owner of a nested pet).
+describe("D120: GET /api/documents?profileIds=<person> reaches documents through the owner chain and co-ownership", () => {
+  const LINDA = { id: "linda-1", type: "person", name: "Linda" };
+  const CAR = { id: "car-1", type: "vehicle", name: "Honda", parentProfileId: SELF.id };
+  const DOG = { id: "dog-1", type: "pet", name: "Rex", parentProfileId: MIKE.id };
+  const docs = [
+    { id: "doc-reg", name: "Car registration", type: "registration", linkedProfiles: ["car-1"], createdAt: "2026-09-01T00:00:00Z" },
+    { id: "doc-vet", name: "Rex vaccination", type: "medical", linkedProfiles: ["dog-1"], createdAt: "2026-09-01T00:00:00Z" },
+    { id: "doc-pass", name: "Passport", type: "id", linkedProfiles: [SELF.id], createdAt: "2026-09-01T00:00:00Z" },
+  ];
+  it("a co-owner sees the car's document; an owner sees the nested pet's", async () => {
+    h = await boot({ profiles: [SELF, MIKE, LINDA, CAR, DOG], documents: docs }, (storage) => {
+      storage.getAssetPartyLinks = async () => [{ id: "apl-1", assetProfileId: "car-1", partyProfileId: "linda-1", ownershipPercentage: 50 }];
+    });
+    const l = await h.api("GET", `/api/documents?profileIds=${LINDA.id}`);
+    expect(l.status).toBe(200);
+    expect(l.data.map((d: any) => d.name)).toEqual(["Car registration"]);
+    const m = await h.api("GET", `/api/documents?profileIds=${MIKE.id}`);
+    expect(m.data.map((d: any) => d.name)).toEqual(["Rex vaccination"]);
+    // A paged request stays on the pushdown and still widens.
+    const paged = await h.api("GET", `/api/documents?profileIds=${MIKE.id}&limit=10`);
+    expect(paged.data.map((d: any) => d.name)).toEqual(["Rex vaccination"]);
+    expect(paged.headers["x-total-count"]).toBe("1");
+  });
+  it("without a party link the car's document stays off the other person's list", async () => {
+    h = await boot({ profiles: [SELF, MIKE, LINDA, CAR, DOG], documents: docs });
+    const l = await h.api("GET", `/api/documents?profileIds=${LINDA.id}`);
+    expect(l.data).toEqual([]);
+  });
+});
+
 // D97 — the bill-create dedupe was written only after the insert finished,
 // so two identical creates arriving together both inserted.
 describe("D97: two identical bill creates arriving together insert once", () => {

@@ -439,3 +439,66 @@ describe("D115: profile money fields are finite, bounded numbers", () => {
     expect(validateProfileMoneyFields(undefined)).toBeNull();
   });
 });
+
+// D120 — only expenses widened a person's selection with the assets they
+// co-own (asset_party_links); bills, tasks, events, documents and the
+// timeline used the bare selection, so the co-owned car's insurance was
+// missing under the co-owner while its fuel showed.
+import { passesProfileFilter, effectiveSelection, pushdownSelection } from "../shared/profile-filter";
+describe("D120: co-ownership widens every scoped list, not just expenses", () => {
+  const SELF_P = { id: "self", type: "self" };
+  const LINDA_P = { id: "linda", type: "person" };
+  const CAR_P = { id: "car-1", type: "vehicle", parentProfileId: "self" };
+  const allProfiles = [SELF_P, LINDA_P, CAR_P];
+  const links = [{ assetProfileId: "car-1", partyProfileId: "linda" }];
+
+  it("an item linked to the car passes for a co-owner party", () => {
+    expect(passesProfileFilter(["car-1"], { selectedIds: ["linda"], allProfiles, assetPartyLinks: links })).toBe(true);
+  });
+  it("without the party link the co-owner does not see the car's items", () => {
+    expect(passesProfileFilter(["car-1"], { selectedIds: ["linda"], allProfiles })).toBe(false);
+    expect(passesProfileFilter(["car-1"], { selectedIds: ["linda"], allProfiles, assetPartyLinks: [] })).toBe(false);
+  });
+  it("the owner still sees the car through the parent chain and the widening never leaks a person's own items", () => {
+    expect(passesProfileFilter(["car-1"], { selectedIds: ["self"], allProfiles, assetPartyLinks: links })).toBe(true);
+    expect(passesProfileFilter(["self"], { selectedIds: ["linda"], allProfiles, assetPartyLinks: links })).toBe(false);
+  });
+  it("effectiveSelection adds only co-owned assets and leaves an empty selection empty", () => {
+    expect(effectiveSelection({ selectedIds: ["linda"], allProfiles, assetPartyLinks: links }).sort()).toEqual(["car-1", "linda"]);
+    expect(effectiveSelection({ selectedIds: ["linda"], allProfiles })).toEqual(["linda"]);
+    expect(effectiveSelection({ selectedIds: [], allProfiles, assetPartyLinks: links })).toEqual([]);
+    // A person is never treated as an asset even if a link names them.
+    expect(effectiveSelection({ selectedIds: ["linda"], allProfiles, assetPartyLinks: [{ assetProfileId: "self", partyProfileId: "linda" }] })).toEqual(["linda"]);
+  });
+});
+
+describe("D120: pushdownSelection is the containment-side form of the same rule", () => {
+  const profiles = [
+    { id: "self", type: "self" },
+    { id: "mike", type: "person" },
+    { id: "linda", type: "person" },
+    { id: "car-1", type: "vehicle", parentProfileId: "self" },
+    { id: "dog-1", type: "pet", parentProfileId: "mike" },
+    { id: "policy-1", type: "document", parentProfileId: "dog-1" },
+  ];
+  const links = [{ assetProfileId: "car-1", partyProfileId: "linda" }];
+  it("adds every descendant of the selection and the co-owned assets", () => {
+    expect(pushdownSelection({ selectedIds: ["mike"], allProfiles: profiles }).sort()).toEqual(["dog-1", "mike", "policy-1"]);
+    expect(pushdownSelection({ selectedIds: ["linda"], allProfiles: profiles, assetPartyLinks: links }).sort()).toEqual(["car-1", "linda"]);
+    expect(pushdownSelection({ selectedIds: [], allProfiles: profiles })).toEqual([]);
+  });
+  it("agrees with passesProfileFilter on every linked row", () => {
+    const rows = [["car-1"], ["dog-1"], ["policy-1"], ["self"], ["mike"], ["linda"], ["car-1", "mike"]];
+    for (const selected of [["mike"], ["linda"], ["self"], ["linda", "mike"]]) {
+      const ctx = { selectedIds: selected, allProfiles: profiles, assetPartyLinks: links };
+      const push = new Set(pushdownSelection(ctx));
+      for (const linked of rows) {
+        expect(linked.some((id) => push.has(id)), `${selected} / ${linked}`).toBe(passesProfileFilter(linked, ctx));
+      }
+    }
+  });
+  it("survives a parent cycle", () => {
+    const cyc = [{ id: "a", type: "person", parentProfileId: "b" }, { id: "b", type: "pet", parentProfileId: "a" }];
+    expect(pushdownSelection({ selectedIds: ["a"], allProfiles: cyc }).sort()).toEqual(["a", "b"]);
+  });
+});

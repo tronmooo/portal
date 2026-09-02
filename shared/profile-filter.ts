@@ -20,6 +20,7 @@
 // scope checks can no longer drift apart on the core question.
 
 import { isInScope, selfIdsFrom, withAncestorOwnerIds } from "./scope";
+import { ownedAssetIds, type AssetPartyLinkLike } from "./cost-of-ownership";
 
 export interface ProfileLike {
   id: string;
@@ -36,6 +37,57 @@ export interface ProfileFilterContext {
    * used, so callers can pass a slimmer shape if they want.
    */
   allProfiles: Pick<ProfileLike, "id" | "type" | "parentProfileId">[];
+  /**
+   * Co-ownership (asset_party_links). With these, selecting a person also
+   * selects the assets that person owns or co-owns, so the car's bill, tasks
+   * and documents show for its co-owner the way its expenses always did.
+   */
+  assetPartyLinks?: ReadonlyArray<AssetPartyLinkLike> | null;
+}
+
+/**
+ * The selection widened with the assets the selected people own (parent
+ * chain) or co-own (party links). Only expenses used to get this widening
+ * (shared/cost-of-ownership); every scoped list now does.
+ */
+export function effectiveSelection(ctx: ProfileFilterContext): string[] {
+  const ids = ctx.selectedIds || [];
+  if (ids.length === 0) return ids;
+  const owned = ownedAssetIds(ids, ctx.allProfiles as any, (ctx.assetPartyLinks || []) as any);
+  if (owned.size === 0) return ids;
+  return Array.from(new Set([...ids, ...owned]));
+}
+
+/**
+ * The selection as a DB containment filter can use it: every profile whose
+ * ancestor-or-self is in the effective selection. `passesProfileFilter`
+ * widens each row's LINKED ids with their ancestors before matching; a
+ * pushed-down `linked_profiles && ids` filter cannot, so the same rule is
+ * expressed from the other side — widen the SELECTION with its descendants.
+ * The two agree on every row (some linked id has an ancestor-or-self in the
+ * selection ⇔ some linked id is in this closure), except the orphan rule,
+ * which pushdown callers keep on the fetch-all path.
+ */
+export function pushdownSelection(ctx: ProfileFilterContext): string[] {
+  const base = effectiveSelection(ctx);
+  if (base.length === 0) return base;
+  const out = new Set(base);
+  const children = new Map<string, string[]>();
+  for (const p of ctx.allProfiles || []) {
+    if (!p || typeof p.id !== "string" || !p.parentProfileId) continue;
+    const arr = children.get(p.parentProfileId);
+    if (arr) arr.push(p.id); else children.set(p.parentProfileId, [p.id]);
+  }
+  const stack = [...base];
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    for (const kid of children.get(cur) || []) {
+      if (out.has(kid)) continue; // cycle-safe
+      out.add(kid);
+      stack.push(kid);
+    }
+  }
+  return Array.from(out);
 }
 
 /**
@@ -78,7 +130,7 @@ export function passesProfileFilter(
   );
   return isInScope(
     linked,
-    { selectedIds: ctx.selectedIds, selfIds: selfIdsFrom(ctx.allProfiles) },
+    { selectedIds: effectiveSelection(ctx), selfIds: selfIdsFrom(ctx.allProfiles) },
     "belongs_to_self",
   );
 }

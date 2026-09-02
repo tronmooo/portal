@@ -50,7 +50,7 @@ function chainClient(respond: (table: string, op: string, payload?: any) => any 
     for (const op of ["select", "update", "insert", "upsert", "delete"]) {
       chain[op] = (payload?: any) => { if (op !== "select" || rec.op === "select") { if (op !== "select") { rec.op = op; rec.payload = payload; } } return chain; };
     }
-    for (const f of ["eq", "is", "gte", "lte", "in", "not", "order", "limit", "ilike", "contains"]) {
+    for (const f of ["eq", "is", "gte", "lte", "in", "not", "order", "limit", "ilike", "contains", "or", "range"]) {
       chain[f] = (...args: any[]) => { rec.filters.push([f, args]); return chain; };
     }
     const result = () => Promise.resolve(respond(table, rec.op, rec.payload));
@@ -905,5 +905,55 @@ describe("D119: a recurring bill on a settled occurrence maps to its next unsett
     expect(s.liabilityToObligation(bill({ "2026-09-04": { status: "paid" } })).nextDueDate).toBe("2026-10-04");
     expect(s.liabilityToObligation(bill({ "2026-09-04": { status: "paid" }, "2026-10-04": { status: "skipped" } })).nextDueDate).toBe("2026-11-04");
     expect(s.liabilityToObligation(bill({})).nextDueDate).toBe("2026-09-04");
+  });
+});
+
+// D120 (pushdown) — every person-scoped list fetch pushed `linked_profiles
+// @> [id]` down with the RAW selection, so the car's tasks, documents, bills
+// and events never reached the JS filter that knows about the owner chain
+// (D88) and co-ownership (D120). The storage now widens the ids once.
+describe("D120: containment pushdowns match the owner chain and co-ownership", () => {
+  const profiles = [
+    { id: "self", type: "self", name: "Me" },
+    { id: "mike", type: "person", name: "Mike" },
+    { id: "linda", type: "person", name: "Linda" },
+    { id: "car-1", type: "vehicle", name: "Honda", parentProfileId: "self" },
+    { id: "dog-1", type: "pet", name: "Rex", parentProfileId: "mike" },
+  ];
+  const links = [{ id: "apl-1", assetProfileId: "car-1", partyProfileId: "linda", ownershipPercentage: 50 }];
+  function scoped() {
+    const { client, calls } = chainClient(() => ({ data: [], error: null, count: 0 }));
+    const s = bareStorage({ supabase: client, getProfilesLite: async () => profiles, getAssetPartyLinks: async () => links });
+    const orClause = (table: string) => {
+      const c = calls.find((x) => x.table === table);
+      const f = c?.filters.find(([k]) => k === "or");
+      return f ? String(f[1][0]) : undefined;
+    };
+    return { s, calls, orClause };
+  }
+  it("a co-owner's task/document/event/bill fetch also matches the co-owned car", async () => {
+    const { s, orClause } = scoped();
+    await s.getTasks(["linda"]);
+    await s.getDocuments(["linda"]);
+    await s.getDocumentsPage({ profileIds: ["linda"], limit: 10 });
+    await s.getEvents(["linda"]);
+    for (const t of ["tasks", "documents", "events"]) {
+      expect(orClause(t), t).toBe('linked_profiles.cs.["linda"],linked_profiles.cs.["car-1"]');
+    }
+  });
+  it("an owner's fetch reaches a nested pet; the array-column tables use the array literal", async () => {
+    const { s, orClause } = scoped();
+    await s.getExpenses(["mike"]);
+    expect(orClause("expenses")).toBe('linked_profiles.cs.["mike"],linked_profiles.cs.["dog-1"]');
+    await s.getJournalEntries(["mike"]);
+    expect(orClause("journal_entries")).toBe("linked_profiles.cs.{mike},linked_profiles.cs.{dog-1}");
+  });
+  it("no filter stays unfiltered and a self-only selection is unchanged", async () => {
+    const { s, orClause, calls } = scoped();
+    await s.getTasks();
+    expect(orClause("tasks")).toBeUndefined();
+    expect(calls.some((c) => c.table === "profiles" || c.table === "asset_party_links")).toBe(false);
+    await s.getGoals(["mike", "linda"]);
+    expect(orClause("goals")!.split(",").sort()).toEqual(['linked_profiles.cs.["car-1"]', 'linked_profiles.cs.["dog-1"]', 'linked_profiles.cs.["linda"]', 'linked_profiles.cs.["mike"]']);
   });
 });

@@ -95,6 +95,9 @@ function TaskDialog({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
+
+  // Co-ownership widens a person's scope to the assets they co-own (shared/profile-filter).
+
   // Default the new task's profile to whichever profile is ACTIVE in the global
   // scope (the one the user is working in) — not unconditionally "me". Creating
   // a task while "Jane" is selected must link it to Jane so it stays visible.
@@ -605,6 +608,7 @@ export default function TasksPage() {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
+  const { data: scopePartyLinks = [] } = useQuery<any[]>({ queryKey: ["/api/asset-party-links"], queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()), staleTime: 5 * 60_000 });
 
   // Apply profile filter client-side (must be before early returns — Rules of Hooks).
   // P2.4 remediation: use the unified passesProfileFilter rule
@@ -616,6 +620,7 @@ export default function TasksPage() {
     const ctx = {
       selectedIds: filterIds,
       allProfiles: allProfiles.map(p => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
+      assetPartyLinks: scopePartyLinks,
     };
     return (tasks || []).filter(t => passesProfileFilter(t.linkedProfiles, ctx));
   }, [tasks, filterMode, filterIds, allProfiles]);

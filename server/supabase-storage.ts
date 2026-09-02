@@ -53,7 +53,7 @@ import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "../shared/date-rules";
 import { deleteProfileFields, mergeFieldWrite } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
-import { passesProfileFilter } from "../shared/profile-filter";
+import { passesProfileFilter, effectiveSelection, pushdownSelection } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
 import { selfIdsFrom, isInScope, withAncestorOwnerIds } from "../shared/scope";
 import { calculateStreak as sharedCalculateStreak } from "../shared/streak";
@@ -732,6 +732,28 @@ export class SupabaseStorage implements IStorage {
    *   "malformed array literal" (regression caught in production after the
    *   first deploy of Phase 1).
    */
+  /**
+   * The ids a containment pushdown must match. `passesProfileFilter` (the
+   * correctness authority every list is re-filtered with) reaches a row
+   * through its linked profiles' OWNER CHAIN (D88: the car's bill is Self's)
+   * and through CO-OWNERSHIP (D120: Linda's share of the car), but
+   * `linked_profiles @> [id]` only sees the raw id — so a person-scoped
+   * fetch silently dropped the car's tasks, documents, bills and events
+   * before the JS filter ever saw them. shared/profile-filter.pushdownSelection
+   * is the same rule written from the selection's side (descendants +
+   * co-owned assets); with it the pushdown and the JS pass agree on every
+   * row except the orphan rule, which callers keep on the fetch-all path.
+   * Empty/undefined (no filter) is passed through untouched.
+   */
+  private async pushdownIds(profileIds?: string[]): Promise<string[] | undefined> {
+    if (!profileIds || profileIds.length === 0) return profileIds;
+    const [allProfiles, assetPartyLinks] = await Promise.all([
+      this.memo("getProfilesLite", () => this.getProfilesLite()).catch(() => [] as Profile[]),
+      this.getAssetPartyLinks().catch(() => [] as any[]),
+    ]);
+    return pushdownSelection({ selectedIds: profileIds, allProfiles: allProfiles as any, assetPartyLinks: assetPartyLinks as any });
+  }
+
   private _applyProfileFilter<Q extends { or: (clause: string) => Q }>(
     q: Q,
     profileIds?: string[],
@@ -2703,7 +2725,7 @@ export class SupabaseStorage implements IStorage {
     let trackersQuery = this.supabase.from("trackers").select("*").eq("user_id", this.userId)
       .is("deleted_at", null)
       .order("created_at", { ascending: false });
-    trackersQuery = this._applyProfileFilter(trackersQuery, profileIds);
+    trackersQuery = this._applyProfileFilter(trackersQuery, await this.pushdownIds(profileIds));
     const [trackersResult, entriesResult] = await Promise.all([
       trackersQuery,
       this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).gte("timestamp", cutoff).is("deleted_at", null).order("timestamp", { ascending: true }),
@@ -3258,7 +3280,7 @@ export class SupabaseStorage implements IStorage {
       // PERF (durable-fix-phase1): DB pushdown via idx_tasks_linked_profiles_gin.
       let q = this.supabase
         .from("tasks").select("*").eq("user_id", this.userId).is("deleted_at", null);
-      q = this._applyProfileFilter(q, profileIds);
+      q = this._applyProfileFilter(q, await this.pushdownIds(profileIds));
       const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToTask(r));
@@ -3489,7 +3511,7 @@ export class SupabaseStorage implements IStorage {
       // PERF (durable-fix-phase1): DB pushdown via idx_expenses_linked_profiles_gin.
       let q = this.supabase
         .from("expenses").select("*").eq("user_id", this.userId).is("deleted_at", null);
-      q = this._applyProfileFilter(q, profileIds);
+      q = this._applyProfileFilter(q, await this.pushdownIds(profileIds));
       const { data, error } = await q.order("date", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToExpense(r));
@@ -3583,7 +3605,7 @@ export class SupabaseStorage implements IStorage {
       // incomes.linked_profiles is a PG ARRAY (text[]), not jsonb — see
       // _applyProfileFilter doc for the syntax difference.
       let q = this.supabase.from("incomes").select("*").eq("user_id", this.userId).is("deleted_at", null);
-      q = this._applyProfileFilter(q, profileIds, "array");
+      q = this._applyProfileFilter(q, await this.pushdownIds(profileIds), "array");
       const { data, error } = await q;
       if (error) throw error;
       return (data || []).map(r => this.rowToIncome(r));
@@ -3664,7 +3686,7 @@ export class SupabaseStorage implements IStorage {
       // PERF (durable-fix-phase1): DB pushdown via idx_events_linked_profiles_gin.
       let q = this.supabase
         .from("events").select("*").eq("user_id", this.userId).is("deleted_at", null);
-      q = this._applyProfileFilter(q, profileIds);
+      q = this._applyProfileFilter(q, await this.pushdownIds(profileIds));
       const { data, error } = await q.order("date", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToEvent(r));
@@ -3770,13 +3792,17 @@ export class SupabaseStorage implements IStorage {
     // hid orphans from every individual calendar.)
     const filterActive = !!(profileIds && profileIds.length > 0);
     const _selfIds = selfIdsFrom(profiles);
+    // A person's selection also covers the assets they own or co-own
+    // (shared/profile-filter.effectiveSelection), like every other list.
+    const timelineLinks = filterActive ? await this.getAssetPartyLinks().catch(() => [] as any[]) : [];
+    const timelineSelection = filterActive ? effectiveSelection({ selectedIds: profileIds!, allProfiles: profiles as any, assetPartyLinks: timelineLinks as any[] }) : [];
     const matchesProfile = (linked: string[] | null | undefined) => {
       if (!filterActive) return true;
       // Owner chain, same as passesProfileFilter: the car's insurance bill and
       // the "Bill due" task linked to a bill (parent: Self) are Self's.
       return isInScope(
         withAncestorOwnerIds(Array.isArray(linked) ? linked.filter((x): x is string => typeof x === "string" && !!x) : [], profiles as any),
-        { selectedIds: profileIds!, selfIds: _selfIds },
+        { selectedIds: timelineSelection, selfIds: _selfIds },
         "belongs_to_self",
       );
     };
@@ -4216,7 +4242,7 @@ export class SupabaseStorage implements IStorage {
         .select(DOCUMENT_LIST_COLUMNS)
         .eq("user_id", this.userId)
         .is("deleted_at", null);
-      q = this._applyProfileFilter(q, profileIds);
+      q = this._applyProfileFilter(q, await this.pushdownIds(profileIds));
       const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToDocument({ ...r, file_data: "" }));
@@ -4249,7 +4275,7 @@ export class SupabaseStorage implements IStorage {
       .select(DOCUMENT_LIST_COLUMNS, { count: "exact" })
       .eq("user_id", this.userId)
       .is("deleted_at", null);
-    q = this._applyProfileFilter(q, opts?.profileIds);
+    q = this._applyProfileFilter(q, await this.pushdownIds(opts?.profileIds));
     let ranged: any = q.order("created_at", { ascending: false });
     const offset = Math.max(opts?.offset ?? 0, 0);
     if (opts?.limit != null) {
@@ -4792,7 +4818,7 @@ export class SupabaseStorage implements IStorage {
     return this.memo(`getHabits${this._fk(profileIds)}`, async () => {
       // PERF (durable-fix-phase1): DB pushdown via idx_habits_linked_profiles.
       let habitsQuery = this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null);
-      habitsQuery = this._applyProfileFilter(habitsQuery, profileIds);
+      habitsQuery = this._applyProfileFilter(habitsQuery, await this.pushdownIds(profileIds));
       // Fetch habits and checkins in 2 parallel queries (not N+1).
       // [PERF 2026-07-31] Checkins are windowed to the last 400 days — the
       // table grows forever and was fetched IN FULL on every dashboard
@@ -5664,7 +5690,7 @@ export class SupabaseStorage implements IStorage {
     return this.memo(`getArtifacts${this._fk(profileIds)}`, async () => {
       // PERF (durable-fix-phase1): DB pushdown via idx_artifacts_linked_profiles_gin.
       let q = this.supabase.from("artifacts").select("*").eq("user_id", this.userId).is("deleted_at", null);
-      q = this._applyProfileFilter(q, profileIds);
+      q = this._applyProfileFilter(q, await this.pushdownIds(profileIds));
       const { data, error } = await q;
       if (error) throw error;
       return (data || []).map(r => this.rowToArtifact(r));
@@ -5822,7 +5848,7 @@ export class SupabaseStorage implements IStorage {
       // journal_entries.linked_profiles is a PG ARRAY (text[]), not jsonb —
       // see _applyProfileFilter doc for syntax.
       let q = this.supabase.from("journal_entries").select("*").eq("user_id", this.userId).is("deleted_at", null);
-      q = this._applyProfileFilter(q, profileIds, "array");
+      q = this._applyProfileFilter(q, await this.pushdownIds(profileIds), "array");
       const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
       return (data || []).map(r => this.rowToJournalEntry(r));
@@ -6119,7 +6145,7 @@ export class SupabaseStorage implements IStorage {
   private async _getGoalsImpl(profileIds?: string[]): Promise<Goal[]> {
     // PERF (durable-fix-phase1): DB pushdown via idx_goals_linked_profiles.
     let q = this.supabase.from("goals").select("*").eq("user_id", this.userId).is("deleted_at", null);
-    q = this._applyProfileFilter(q, profileIds);
+    q = this._applyProfileFilter(q, await this.pushdownIds(profileIds));
     const { data, error } = await q.order("created_at", { ascending: false });
     if (error) throw error;
     const goals = (data || []).map(r => this.rowToGoal(r));
@@ -6558,7 +6584,8 @@ export class SupabaseStorage implements IStorage {
     // Use the unified rule (shared/profile-filter.ts) so server stats agree
     // with the client's Finance/Calendar views — see getDashboardEnhanced for
     // the full rationale.
-    const filterCtxStats = { selectedIds: fpIds || [], allProfiles };
+    const statsAssetLinks = await this.getAssetPartyLinks().catch(() => [] as any[]);
+    const filterCtxStats = { selectedIds: fpIds || [], allProfiles, assetPartyLinks: statsAssetLinks as any[] };
     const matchesProfile = (linkedProfiles: string[]) =>
       passesProfileFilter(linkedProfiles, filterCtxStats);
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
@@ -6568,7 +6595,7 @@ export class SupabaseStorage implements IStorage {
     // assets the selected person owns/contains. Each expense is still a single
     // row counted once. Only widens when a person filter is active.
     const ownedAssetSet = (fpIds && fpIds.length)
-      ? ownedAssetIds(fpIds, allProfiles as any, await this.getAssetPartyLinks().catch(() => [] as any[]))
+      ? ownedAssetIds(fpIds, allProfiles as any, statsAssetLinks as any[])
       : new Set<string>();
     const expenseScopeIds = (fpIds && ownedAssetSet.size > 0)
       ? Array.from(new Set([...fpIds, ...ownedAssetSet]))
@@ -6863,7 +6890,7 @@ export class SupabaseStorage implements IStorage {
     // selecting the same Me filter — the client was including orphan
     // expenses (no linkedProfiles) under the self profile while the server
     // silently dropped them.
-    const filterCtx = { selectedIds: fpIds || [], allProfiles };
+    const filterCtx = { selectedIds: fpIds || [], allProfiles, assetPartyLinks: allAssetLinks as any[] };
     const matchesProfileEnhanced = (linkedProfiles: string[]) =>
       passesProfileFilter(linkedProfiles, filterCtx);
     const allTrackers = rawTrackers.filter(t => matchesProfileEnhanced(t.linkedProfiles));

@@ -816,6 +816,7 @@ export default function FinancePage() {
   const filterCtx = useMemo(() => ({
     selectedIds: filterMode === "everyone" ? [] : filterIds,
     allProfiles: (profiles || []).map((p: any) => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
+    assetPartyLinks: assetPartyLinks || [],
   }), [filterMode, filterIds, profiles]);
   const showTestData = useShowTestData();
   const profileFiltered = useMemo(

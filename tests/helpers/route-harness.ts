@@ -19,6 +19,7 @@ import type { AddressInfo } from "net";
 import { requestStorageContext } from "../../server/storage";
 import { registerRoutes } from "../../server/routes";
 import { deleteProfileFields } from "../../shared/profile-field-identity";
+import { pushdownSelection } from "../../shared/profile-filter";
 
 /** Every row the fake keeps, so assertions can read what the route wrote. */
 export interface FakeDb {
@@ -221,6 +222,21 @@ export function makeFakeStorage(db: FakeDb) {
     // downloads the object out of Supabase Storage and base64-encodes it), so
     // it counts its calls — /api/documents/:id must never reach for it.
     getDocuments: async () => db.documents.map(d => ({ ...d, fileData: "" })),
+    // Mirrors SupabaseStorage.getDocumentsPage: containment on the selection
+    // widened by SupabaseStorage.pushdownIds (owner chain + co-ownership; no
+    // orphan rule) — see shared/profile-filter.pushdownSelection.
+    getDocumentsPage: async function (this: any, opts?: { profileIds?: string[]; limit?: number; offset?: number }) {
+      const raw = (opts?.profileIds || []).filter(Boolean);
+      const linksRes = raw.length > 0 ? await this?.getAssetPartyLinks?.() : [];
+      const ids = raw.length > 0
+        ? pushdownSelection({ selectedIds: raw, allProfiles: db.profiles, assetPartyLinks: Array.isArray(linksRes) ? linksRes : [] })
+        : raw;
+      let all = db.documents.map(d => ({ ...d, fileData: "" }));
+      if (ids.length > 0) all = all.filter((d: any) => (d.linkedProfiles || []).some((x: string) => ids.includes(x)));
+      const offset = Math.max(opts?.offset ?? 0, 0);
+      const rows = opts?.limit != null ? all.slice(offset, offset + Math.max(opts.limit, 1)) : all.slice(offset);
+      return { rows, total: all.length };
+    },
     getDocument: async (rid: string) => {
       db.getDocumentCalls++;
       return db.documents.find(d => d.id === rid);

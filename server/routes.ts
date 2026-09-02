@@ -1303,8 +1303,13 @@ async function filterByProfileScope<T>(
   const allProfiles: Array<{ id: string; type?: string }> =
     getCached(`profiles:${uid}`) ||
     await ((storage as any).getProfilesLite?.() ?? storage.getProfiles());
+  // Co-ownership widens a person's selection to the assets they co-own
+  // (shared/profile-filter.effectiveSelection) — the bills route used to
+  // hide the co-owned car's insurance while the expenses route showed its
+  // fuel.
+  const assetPartyLinks = await (storage.getAssetPartyLinks?.() ?? Promise.resolve([])).catch(() => [] as any[]);
   return items.filter((item: any) =>
-    passesProfileFilter(item?.linkedProfiles, { selectedIds: ids, allProfiles })
+    passesProfileFilter(item?.linkedProfiles, { selectedIds: ids, allProfiles, assetPartyLinks })
   );
 }
 
@@ -6954,6 +6959,8 @@ Rules:
       // PUSHDOWN: everyone-mode, or a selection with no self profile. One
       // Supabase round-trip returns just the page (metadata only, created_at
       // desc) plus the exact total — no full-table fetch, no in-Node slice.
+      // The storage widens the ids with the owner chain and co-ownership
+      // (SupabaseStorage.pushdownIds) so this agrees with filterByProfileScope.
       const { rows, total } = await storage.getDocumentsPage({
         profileIds: docFilterIds.length > 0 ? docFilterIds : undefined,
         limit,
