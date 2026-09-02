@@ -7729,32 +7729,39 @@ export class SupabaseStorage implements IStorage {
     extraFields: Record<string, any>,
   ): Promise<{ status: "claimed" | "already-paid"; occurrences: Record<string, any> }> {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(occurrenceDate)) throw new Error("occurrenceDate must be YYYY-MM-DD");
-    const { data: fresh, error: readErr } = await this.supabase.from("profiles").select("fields")
-      .eq("id", liabilityId).eq("user_id", this.userId).maybeSingle();
-    if (readErr) throw readErr;
-    if (!fresh) throw new Error("Liability not found");
-    const f = (fresh.fields && typeof fresh.fields === "object") ? fresh.fields as Record<string, any> : {};
-    const prior: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {};
-    if (prior[occurrenceDate]?.status === "paid") return { status: "already-paid", occurrences: prior };
-    const occurrences = { ...prior, [occurrenceDate]: { ...(prior[occurrenceDate] || {}), ...stamp } };
-    // Same field-merge rule updateProfile applies, so identity/supersession
-    // bookkeeping stays consistent with every other write to this row.
-    const merged = mergeFieldWrite(f, { ...extraFields, occurrences }).fields;
-    const statusPath = `fields->occurrences->${occurrenceDate}->>status`;
-    const { data, error } = await this.supabase.from("profiles")
-      .update({ fields: merged, updated_at: new Date().toISOString() })
-      .eq("id", liabilityId).eq("user_id", this.userId)
-      .or(`${statusPath}.is.null,${statusPath}.neq.paid`)
-      .select("id");
-    if (error) throw error;
-    if (Array.isArray(data) && data.length > 0) {
-      bustInsightsCacheFor(this.userId);
-      return { status: "claimed", occurrences: prior };
+    // Optimistic concurrency on the row's updated_at: read the row, write the
+    // merged fields only if nobody else has written the row since. A JSON-path
+    // condition on the occurrence status was tried first and did not hold
+    // under concurrent updates in production; a scalar version token does.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const { data: fresh, error: readErr } = await this.supabase.from("profiles").select("fields, updated_at")
+        .eq("id", liabilityId).eq("user_id", this.userId).maybeSingle();
+      if (readErr) throw readErr;
+      if (!fresh) throw new Error("Liability not found");
+      const f = (fresh.fields && typeof fresh.fields === "object") ? fresh.fields as Record<string, any> : {};
+      const prior: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {};
+      if (prior[occurrenceDate]?.status === "paid") return { status: "already-paid", occurrences: prior };
+      const occurrences = { ...prior, [occurrenceDate]: { ...(prior[occurrenceDate] || {}), ...stamp } };
+      // Same field-merge rule updateProfile applies, so identity/supersession
+      // bookkeeping stays consistent with every other write to this row.
+      const merged = mergeFieldWrite(f, { ...extraFields, occurrences }).fields;
+      const now = new Date().toISOString();
+      let q = this.supabase.from("profiles")
+        .update({ fields: merged, updated_at: now })
+        .eq("id", liabilityId).eq("user_id", this.userId);
+      q = fresh.updated_at == null ? q.is("updated_at", null) : q.eq("updated_at", fresh.updated_at);
+      const { data, error } = await q.select("id");
+      if (error) throw error;
+      if (Array.isArray(data) && data.length > 0) {
+        bustInsightsCacheFor(this.userId);
+        return { status: "claimed", occurrences: prior };
+      }
+      // Someone wrote the row between our read and our write — re-read: if
+      // that write paid this occurrence we lost; otherwise retry the claim.
     }
-    // Lost the race: read back the winner's stamp.
     const { data: again } = await this.supabase.from("profiles").select("fields").eq("id", liabilityId).eq("user_id", this.userId).maybeSingle();
     const occ = (again?.fields as any)?.occurrences;
-    return { status: "already-paid", occurrences: (occ && typeof occ === "object") ? occ : prior };
+    return { status: "already-paid", occurrences: (occ && typeof occ === "object") ? occ : {} };
   }
 
   async getLiabilityPayments(liabilityProfileId: string): Promise<LiabilityPayment[]> {
