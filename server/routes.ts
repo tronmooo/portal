@@ -7439,9 +7439,12 @@ Rules:
   // Key = userId:obligationId; cleared after 8s.
   // Value is the payment the first request recorded, so a deduped retry can
   // answer with the real row instead of a bare acknowledgement.
-  const recentPayments = new Map<string, { at: number; payment: unknown }>();
+  const recentPayments = new Map<string, { at: number; payment: any; inflight?: Promise<any> }>();
   app.post("/api/obligations/:id/pay", asyncHandler(async (req, res) => {
-    let { amount, method, confirmationNumber, date } = req.body;
+    let { amount, method, confirmationNumber, date, accountId } = req.body;
+    if (accountId !== undefined && accountId !== null && typeof accountId !== "string") {
+      return res.status(400).json({ error: "accountId must be a string" });
+    }
     if (amount !== undefined && (typeof amount !== "number" || amount <= 0)) {
       return res.status(400).json({ error: "Payment amount must be a positive number" });
     }
@@ -7454,20 +7457,18 @@ Rules:
     // form. payBillOccurrence itself accepts any liability, so keep the guard.
     const ob = await storage.getObligation(req.params.id);
     if (!ob) return res.status(404).json({ error: "Obligation not found" });
-    // Idempotency window: ignore identical pay request within 8s
+    // Same-instance duplicate within 8 s: share the FIRST request's outcome.
+    // Previously a duplicate that arrived while the first was still in flight
+    // got `{ok:true,deduped:true}` with no row (the UI had nothing to render).
+    // Awaiting the in-flight promise answers both taps with the same payment.
+    // Cross-instance duplicates are handled inside payBillOccurrence.
     const dedupeKey = `${uid_o3}:${req.params.id}`;
     const last = recentPayments.get(dedupeKey);
     if (last && Date.now() - last.at < 8000) {
-      // Answer with the payment the first request recorded, not a bare
-      // acknowledgement. `{ok:true,deduped:true}` carries no row, so the caller
-      // had nothing to render and fell back to waiting for a refetch — on the
-      // exact interaction (an impatient double-tap) where the UI already felt
-      // slow.
-      const prior = last.payment;
+      const prior = last.payment ?? (last.inflight ? await last.inflight.catch(() => null) : null);
       if (prior && typeof prior === "object") return res.status(200).json({ ...(prior as object), deduped: true });
       return res.status(200).json({ ok: true, deduped: true });
     }
-    recentPayments.set(dedupeKey, { at: Date.now(), payment: null });
     // Clean old entries occasionally to bound memory
     if (recentPayments.size > 500) {
       const cutoff = Date.now() - 30000;
@@ -7477,22 +7478,30 @@ Rules:
     // occurrence's REAL total (base + charges / posted actual); `date` is the
     // payment date the caller chose — previously validated and then silently
     // dropped on the floor.
-    const result = await payBillOccurrence(storage, req.params.id, {
-      amount: amount ?? null,
-      paymentDate: date || null,
-      method,
-      confirmationNumber,
-      source: "route",
-    }, getTimezone(req));
-    if (!result.ok) return res.status(404).json({ error: "Obligation not found" });
-    // Same response shape payObligation produced, so existing callers keep working.
-    const payment = {
-      id: result.payment?.id, amount: result.amount,
-      date: result.payment?.paymentDate, method, confirmationNumber,
-      // True when another request settled this occurrence first — the row
-      // above is THAT payment, so the caller renders one payment, not two.
-      ...(result.deduped ? { deduped: true } : {}),
-    };
+    const inflight = (async () => {
+      const result = await payBillOccurrence(storage, req.params.id, {
+        amount: amount ?? null,
+        paymentDate: date || null,
+        // Pay-from-account: the occurrence route honoured accountId, this one
+        // silently dropped it, so the source account's balance never moved.
+        accountId: accountId || null,
+        method,
+        confirmationNumber,
+        source: "route",
+      }, getTimezone(req));
+      if (!result.ok) return null;
+      // Same response shape payObligation produced, so existing callers keep working.
+      return {
+        id: result.payment?.id, amount: result.amount,
+        date: result.payment?.paymentDate, method, confirmationNumber,
+        // True when another request settled this occurrence first — the row
+        // above is THAT payment, so the caller renders one payment, not two.
+        ...(result.deduped ? { deduped: true } : {}),
+      };
+    })();
+    recentPayments.set(dedupeKey, { at: Date.now(), payment: null, inflight });
+    const payment = await inflight;
+    if (!payment) { recentPayments.delete(dedupeKey); return res.status(404).json({ error: "Obligation not found" }); }
     recentPayments.set(dedupeKey, { at: Date.now(), payment });
     bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
     res.status(201).json(payment);
@@ -10077,6 +10086,7 @@ No emojis. No prose outside the JSON.`,
       res.json(row);
     } catch (err: any) {
       if (isOwnershipOverflow(err)) return res.status(400).json({ error: OWNERSHIP_OVERFLOW_MSG });
+      if (isUniqueViolation(err)) return res.status(409).json({ error: ALREADY_LINKED_MSG });
       throw err;
     }
   }));
@@ -10217,6 +10227,11 @@ No emojis. No prose outside the JSON.`,
   };
   const OWNERSHIP_OVERFLOW_MSG =
     "Total ownership would exceed 100%. Lower an existing owner's share first, then add the co-owner.";
+  // Postgres unique violation: the party is already linked to this item. A
+  // second POST used to surface as a bare 500; the honest answer is 409 with
+  // a pointer to the edit path.
+  const isUniqueViolation = (err: any): boolean => String(err?.code || "") === "23505" || /duplicate key/i.test(String(err?.message || ""));
+  const ALREADY_LINKED_MSG = "This person is already an owner here. Edit their existing share instead of adding a second link.";
 
   app.post("/api/asset-party-links", asyncHandler(async (req, res) => {
     const parsed = insertAssetPartyLinkSchema.safeParse(req.body);
@@ -10231,6 +10246,7 @@ No emojis. No prose outside the JSON.`,
       res.json(row);
     } catch (err: any) {
       if (isOwnershipOverflow(err)) return res.status(400).json({ error: OWNERSHIP_OVERFLOW_MSG });
+      if (isUniqueViolation(err)) return res.status(409).json({ error: ALREADY_LINKED_MSG });
       throw err;
     }
   }));
