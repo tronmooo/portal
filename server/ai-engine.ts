@@ -16134,7 +16134,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             if (READ_ONLY_TOOLS.has(toolUse.name)) return null;
             const input = (toolUse.input || {}) as Record<string, any>;
             const label = toolTargetLabel(input);
-            if (label && isStaleTurnReplay(input, userMessage, priorUserMessages)) {
+            // A replayed CREATE makes a duplicate record; a replayed delete or
+            // pay does damage too. An UPDATE that names a record from an
+            // earlier message is not replay, it is how every correction works
+            // ("oops, it was actually $45"): the record is named back there
+            // by definition, and the write is verified against the database
+            // afterwards. Gating updates refused the correction outright.
+            if (label && toolOperation(toolUse.name) !== "update" && isStaleTurnReplay(input, userMessage, priorUserMessages)) {
               return staleReplayViolation(toolUse.name, label);
             }
             // One request creates ONE record: a second create of the same

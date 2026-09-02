@@ -525,6 +525,14 @@ const ANAPHORA: RegExp[] = [
   /\b(?:i\s+)?just\s+(?:made|created|added|did|logged)\b/,
   /\b(?:previous|earlier|last\s+one|same\s+(?:one|thing|as))\b/,
   /\byou\s+(?:just\s+)?(?:made|created|added|logged|said)\b/,
+  // A CORRECTION of the previous turn: "oops, it was actually $45 not $38",
+  // "I meant Friday", "make it 3 miles", "should be 182". The record it
+  // points at was named in the earlier message, never in this one — which
+  // is exactly the shape the stale-replay gate treats as replay, so it
+  // refused every correction of an amount, a date or a name.
+  /\b(?:actually|instead|oops|whoops|my\s+(?:bad|mistake)|correction|i\s+meant|meant\s+to\s+say)\b/,
+  /\b(?:it|that|this)\s+(?:was|is|should\s+(?:be|have\s+been)|costs?|cost)\b/,
+  /\bnot\s+\$?\d/,
 ];
 
 /**

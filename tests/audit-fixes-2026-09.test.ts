@@ -496,3 +496,28 @@ describe("search covers events and documents", () => {
     expect((await s.search("passport")).some((h: any) => h._type === "document" && h.id === doc.id)).toBe(true);
   });
 });
+
+// ── D38: a correction of the previous turn is not a stale replay ──
+describe("stale-replay gate vs corrections", () => {
+  it("a correction that names nothing new is a back-reference, not replay", async () => {
+    const { isStaleTurnReplay, toolOperation } = await import("../shared/ai-tool-routing");
+    const { hasBackReference } = await import("../shared/ai-intent");
+    const prior = ["I spent $38 on lunch at Panera yesterday"];
+    for (const msg of [
+      "oops, it was actually $45 not $38",
+      "actually it was $45",
+      "I meant $45",
+      "make it $45",
+      "that should be 182",
+      "whoops, my bad — it cost 45 dollars",
+    ]) {
+      expect(hasBackReference(msg), msg).toBe(true);
+      expect(isStaleTurnReplay({ description: "Lunch at Panera" }, msg, prior), msg).toBe(false);
+    }
+    // The engine also exempts update-class tools from the gate entirely.
+    expect(toolOperation("update_expense")).toBe("update");
+    expect(toolOperation("create_expense")).toBe("create");
+    // …and a genuine replay is still caught.
+    expect(isStaleTurnReplay({ name: "Walk the Dog" }, "Create an asset for my Dodge Ram 2025", ["Create a habit to walk the dog"])).toBe(true);
+  });
+});
