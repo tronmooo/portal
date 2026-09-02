@@ -196,13 +196,50 @@ export async function apiRequest(
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The URL a query key stands for.
+ *
+ * Keys follow shared/query-keys.ts: [endpoint, mode, ...selectedIds, ...extra].
+ * A "selected" key carries its own profile ids, so a fetch for it must ask the
+ * server for exactly those ids — not for whatever the toolbar happens to have
+ * selected at that moment, and not for the bare endpoint (which lists the whole
+ * household). The dashboard seeds one cache slot per profile scope
+ * (scope-prefetch) with no query function of its own, so any refetch of Bob's
+ * slot that went through the default query function hit the bare endpoint and
+ * filled Bob's view with everyone's rows until the slot went stale. Deriving
+ * the URL from the key makes a slot's data a pure function of its key again.
+ *
+ * Ids are recognised against the cached profile list (ids are opaque strings)
+ * with a UUID shape as the fallback before that list exists; the trailing
+ * free-form discriminators ("hero", "trends", a month) are never ids.
+ */
+export function urlForQueryKey(queryKey: readonly unknown[]): string {
+  const base = String(queryKey[0]);
+  if (queryKey.length < 2 || queryKey[1] !== "selected" || base.includes("?")) return base;
+  let known: Set<string> | null = null;
+  try {
+    const all = queryClient.getQueryData<Array<{ id: string }>>(["/api/profiles"]);
+    if (Array.isArray(all) && all.length > 0) known = new Set(all.map((p) => p?.id).filter((id): id is string => typeof id === "string"));
+  } catch { /* client not ready */ }
+  const ids: string[] = [];
+  for (let i = 2; i < queryKey.length; i++) {
+    const seg = queryKey[i];
+    if (typeof seg !== "string") break;
+    if (!(known?.has(seg) || UUID_RE.test(seg))) break;
+    ids.push(seg);
+  }
+  return ids.length > 0 ? `${base}?profileIds=${ids.map(encodeURIComponent).join(",")}` : base;
+}
+
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey, signal }) => {
     // Build URL from queryKey — first element is the path, rest are ignored (used for cache segmentation)
-    const url = String(queryKey[0]);
+    const url = urlForQueryKey(queryKey);
     // IDLE-FREEZE FIX: enforce a hard timeout on every query so a stuck refetch
     // after the tab regains focus can't hang the UI. React Query passes its own
     // AbortSignal too; we combine both so either path cancels the request.
@@ -409,6 +446,14 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+// Debug hook: expose the client for cache inspection in the browser console /
+// automated probes. Opt-in via localStorage so production pages stay clean.
+if (typeof window !== "undefined") {
+  try {
+    if (localStorage.getItem("portol_debug_qc") === "1") (window as any).__portolQueryClient = queryClient;
+  } catch { /* storage unavailable */ }
+}
 
 /* ---------------------------------------------------------------------------
    Lightweight query cache persistence — mirrors what @tanstack/query-sync-storage-persister

@@ -868,6 +868,16 @@ export default function FinancePage() {
   // List ordering is user-selectable. Filters (above) drive totals/chart; sort
   // only reorders the rendered rows.
   const sortedExpenses = useMemo(() => sortExpenses(filtered, sortBy), [filtered, sortBy]);
+  // Render the list in pages. Every row is a component tree with two
+  // formatted strings, and this card used to mount ALL of them at once — with
+  // ~900 expenses that was 1.2s of main-thread time on open and ~3s after each
+  // add (the optimistic patch re-rendered the whole list several times).
+  // Totals, the chart and the category chips still read the full filtered set
+  // above; only the rows on screen are paged.
+  const EXPENSE_PAGE = 60;
+  const [visibleCount, setVisibleCount] = useState(EXPENSE_PAGE);
+  useEffect(() => { setVisibleCount(EXPENSE_PAGE); }, [filterCategory, searchQuery, rangeStart, sortBy, filterMode, filterIds.join(",")]);
+  const visibleExpenses = useMemo(() => sortedExpenses.slice(0, visibleCount), [sortedExpenses, visibleCount]);
   const total = useMemo(() => filtered.reduce((s, e) => s + e.amount, 0), [filtered]);
 
   // Group by category
@@ -1416,7 +1426,7 @@ export default function FinancePage() {
                 <EmptyState icon={Filter} label="No expenses match the selected filter." />
               )}
               {/* Order driven by the Sort control (defaults to newest first). */}
-              {sortedExpenses.map((expense) => (
+              {visibleExpenses.map((expense) => (
                 <ExpandableRow
                   key={expense.id}
                   testId={`expense-${expense.id}`}
@@ -1449,6 +1459,18 @@ export default function FinancePage() {
                   }
                 />
               ))}
+              {sortedExpenses.length > visibleExpenses.length && (
+                <div className="pt-3 flex justify-center">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setVisibleCount((n) => n + 100)}
+                    data-testid="button-show-more-expenses"
+                  >
+                    Show more ({sortedExpenses.length - visibleExpenses.length} remaining)
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </CardContent>

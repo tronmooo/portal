@@ -367,9 +367,42 @@ try { channel(); } catch {}
 // want to defer UI feedback until refresh — but most won't, because
 // optimistic updates already showed the change instantly.
 export function invalidateDomains(...domains: Domain[]): Promise<void> {
+  const pending = domains.filter((d) => !coveredByManifest(d));
+  if (pending.length === 0) return Promise.resolve();
+  try { channel()?.postMessage({ domains: pending }); } catch {}
+  return invalidateDomainsInternal(pending, false);
+}
+
+// ─── One invalidation per write ─────────────────────────────────────
+// A mutating response carries a manifest of the domains it touched, and
+// apiRequest applies it (write-sync.ts) before the mutation's own
+// onSuccess/onSettled runs — which then calls invalidateDomain() for the very
+// same domains a few milliseconds later. React Query answers the second
+// invalidation by cancelling the refetch the first one started and starting
+// another, so every write cost two network requests for every active query it
+// touched (tasks: 4 GETs + 2 notification GETs per create; tracker log: 16
+// requests). The manifest path records what it just invalidated; an explicit
+// invalidation arriving inside MANIFEST_COVER_MS for a domain that is already
+// refetching is a duplicate of the same write and is dropped. The window is
+// deliberately short: a different write's manifest a moment later invalidates
+// again on its own (the manifest path is never skipped), so nothing a later
+// write changes can be missed.
+const MANIFEST_COVER_MS = 150;
+const manifestInvalidatedAt = new Map<Domain, number>();
+function coveredByManifest(domain: Domain): boolean {
+  const at = manifestInvalidatedAt.get(domain);
+  return at !== undefined && Date.now() - at < MANIFEST_COVER_MS;
+}
+/** The write manifest's invalidation: always applied, and remembered so the
+ *  mutation's own follow-up invalidation of the same domains is a no-op. */
+export function invalidateDomainsFromManifest(domains: Domain[]): Promise<void> {
+  const now = Date.now();
+  for (const d of domains) manifestInvalidatedAt.set(d, now);
   try { channel()?.postMessage({ domains }); } catch {}
   return invalidateDomainsInternal(domains, false);
 }
+/** Test hook: forget recent manifest invalidations. */
+export function __resetManifestCoverage(): void { manifestInvalidatedAt.clear(); }
 
 /**
  * The aggregate payloads. They are the most expensive thing the server
@@ -388,33 +421,49 @@ const AGGREGATE_KEYS = new Set([
 ]);
 
 function invalidateDomainsInternal(domains: Domain[], remote: boolean): Promise<void> {
+  // Collect every top-level key prefix and nested predicate the domains name,
+  // then invalidate ONCE with a single combined predicate. Issuing one
+  // invalidateQueries per key and another per predicate made React Query
+  // cancel and restart the refetch of any query both matched — the "tasks"
+  // domain names ["/api/tasks"] and a predicate for "/api/tasks*", so every
+  // task write refetched the task list twice (and the notification feed
+  // twice, via the "tasks" key list plus the same list again from
+  // "notifications"). One pass, one refetch per active query.
+  const prefixes: string[][] = [];
   const seen = new Set<string>();
-  const promises: Promise<unknown>[] = [];
-  const refetchFor = (key: unknown) =>
-    remote && typeof key === "string" && AGGREGATE_KEYS.has(key)
-      ? ("none" as const)
-      : ("active" as const);
-
+  const predicates: Array<(q: any) => boolean> = [];
   for (const d of domains) {
-    // 1. Explicit top-level keys
     for (const key of DOMAIN_KEYS[d] || []) {
       const tag = JSON.stringify(key);
       if (seen.has(tag)) continue;
       seen.add(tag);
-      promises.push(
-        queryClient.invalidateQueries({ queryKey: key, refetchType: refetchFor(key[0]) })
-      );
+      prefixes.push(key);
     }
-    // 2. Predicate match for nested keys
     const pred = predicateForDomain(d);
-    if (pred) {
-      promises.push(
-        queryClient.invalidateQueries({ predicate: pred, refetchType: "active" })
-      );
-    }
+    if (pred) predicates.push(pred);
   }
+  if (prefixes.length === 0 && predicates.length === 0) return Promise.resolve();
 
-  return Promise.allSettled(promises).then(() => undefined);
+  // React Query's own prefix rule for a non-exact queryKey filter: the query's
+  // key starts with every segment of the filter key. All DOMAIN_KEYS entries
+  // are string segments, so element equality is the whole comparison.
+  const matchesPrefix = (queryKey: readonly unknown[]): boolean =>
+    prefixes.some((k) => k.length <= queryKey.length && k.every((seg, i) => queryKey[i] === seg));
+  const matches = (q: any): boolean => {
+    const key = Array.isArray(q?.queryKey) ? q.queryKey : [];
+    return matchesPrefix(key) || predicates.some((p) => p(q));
+  };
+
+  if (!remote) {
+    return Promise.resolve(queryClient.invalidateQueries({ predicate: matches, refetchType: "active" })).then(() => undefined);
+  }
+  // A sibling tab's write: refetch what is on screen, but only MARK the
+  // aggregate payloads stale (see AGGREGATE_KEYS).
+  const isAggregate = (q: any) => AGGREGATE_KEYS.has(String(q?.queryKey?.[0]));
+  return Promise.allSettled([
+    queryClient.invalidateQueries({ predicate: (q) => matches(q) && !isAggregate(q), refetchType: "active" }),
+    queryClient.invalidateQueries({ predicate: (q) => matches(q) && isAggregate(q), refetchType: "none" }),
+  ]).then(() => undefined);
 }
 
 // Single-domain convenience

@@ -1137,6 +1137,13 @@ function paginate<T>(items: T[], req: any, res: any): T[] {
 // calculated"). Like paginateProfiles, we return EVERY row by default and only
 // slice when the caller explicitly opts into ?limit=/?offset=. X-Total-Count is
 // still set so opt-in pagers know the full size.
+//
+// The same rule holds for every list /api/dashboard-bootstrap seeds WHOLE into
+// the client cache (tasks, events, habits, obligations, artifacts, journal,
+// goals, documents): the page renders the seeded full list, then its first
+// refetch — after any write — came back through the 100-row cap, so the Tasks
+// page counted 121 open tasks until a task was added and 100 afterwards, and
+// the task just created was not among the 100. One list, one size.
 function paginateFull<T>(items: T[], req: any, res: any): T[] {
   res.set("X-Total-Count", String(items.length));
   const hasPager = typeof req.query.limit === "string" || typeof req.query.offset === "string";
@@ -5989,7 +5996,7 @@ Rules:
     if (filterProfileIds.length > 0) {
       items = await filterByProfileScope(items, filterProfileIds, uid);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/tasks/:id", asyncHandler(async (req, res) => {
     const tasks = await storage.getTasks();
@@ -6648,7 +6655,7 @@ Rules:
       const ids = profileIdsParam.split(",").filter(Boolean);
       items = await filterByProfileScope(items, ids, uid);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/events/:id", asyncHandler(async (req, res) => {
     const event = await storage.getEvent(req.params.id);
@@ -6787,7 +6794,12 @@ Rules:
     // route-level cache, so historically EVERY request fetched the entire
     // documents table (all rows + extracted_data) just to slice out a page.
     // X-Total-Count still carries the true total for opt-in pagers.
-    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 100, 1), 500);
+    // Full-by-default, like paginateFull below: the bootstrap seeds the whole
+    // document list into the client cache, so a 100-row default page here made
+    // the Documents tab shrink on its first refetch. An explicit ?limit=/?offset=
+    // still pages.
+    const hasDocPager = typeof req.query.limit === "string" || typeof req.query.offset === "string";
+    const limit = hasDocPager ? Math.min(Math.max(parseInt(req.query.limit as string) || 100, 1), 500) : undefined;
     const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
     // [PERF Phase 4] Decide whether the DB-pushdown path is correctness-safe.
@@ -6826,7 +6838,7 @@ Rules:
     // METADATA ONLY — never ship base64 blobs in a list (dev/MemStorage parity;
     // SupabaseStorage.getDocuments already excludes file_data).
     items = items.map((d: any) => (d && d.fileData ? { ...d, fileData: "" } : d));
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/documents/:id", asyncHandler(async (req, res) => {
     // PERF: metadata-only read. This route never returns the binary (clients
@@ -7209,7 +7221,7 @@ Rules:
     if (habitFilterIds.length > 0) {
       items = await filterByProfileScope(items, habitFilterIds, uid);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/habits/:id", asyncHandler(async (req, res) => {
     const habit = await storage.getHabit(req.params.id);
@@ -7342,7 +7354,7 @@ Rules:
     if (oblFilterIds.length > 0) {
       items = await filterByProfileScope(items, oblFilterIds, uid);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/obligations/:id", asyncHandler(async (req, res) => {
     const ob = await storage.getObligation(req.params.id);
@@ -7837,7 +7849,7 @@ Rules:
       const uid_ar = cacheUserKey(req as AuthenticatedRequest);
       items = await filterByProfileScope(items, ids, uid_ar);
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.get("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const artifact = await storage.getArtifact(req.params.id);
@@ -8062,7 +8074,7 @@ Rules:
       // Journal entries are personal — only show for self profile
       if (!isSelf) { items = []; }
     }
-    res.json(paginate(items, req, res));
+    res.json(paginateFull(items, req, res));
   }));
   app.post("/api/journal", asyncHandler(async (req, res) => {
     if (!req.body.content || typeof req.body.content !== "string" || !req.body.content.trim()) {
@@ -9284,7 +9296,7 @@ No emojis. No prose outside the JSON.`,
           return lp.some(id => ids.includes(id));
         });
       }
-      res.json(paginate(goals, req, res));
+      res.json(paginateFull(goals, req, res));
     } catch (err: any) {
       console.error("Goals error:", err);
       res.status(500).json({ error: "Failed to get goals" });

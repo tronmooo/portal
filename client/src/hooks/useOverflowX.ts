@@ -23,15 +23,25 @@ export function useOverflowX<T extends HTMLElement>(deps: unknown[] = []): [RefO
     if (!el) return;
     // 1px of slack: sub-pixel layout rounding otherwise reports a permanent
     // overflow on rows that fit exactly.
-    const measure = () => setOverflowing(el.scrollWidth - el.clientWidth > 1);
-    measure();
+    const read = () => setOverflowing(el.scrollWidth - el.clientWidth > 1);
+    read();
     if (typeof ResizeObserver === "undefined") return;
+    // scrollWidth forces a synchronous layout. Every chip below is observed,
+    // and each one landing its number fires a callback in the same commit —
+    // measuring on each was a layout per chip on every dashboard render
+    // (~250ms of the cold-load long task). One read per animation frame
+    // answers the same question with one layout.
+    let frame = 0;
+    const measure = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; if (ref.current) read(); });
+    };
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     // Children too: a chip growing when its number arrives is the common case,
     // and it never changes the container's own box.
     for (const child of Array.from(el.children)) ro.observe(child);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); if (frame) cancelAnimationFrame(frame); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
