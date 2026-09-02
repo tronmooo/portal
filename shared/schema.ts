@@ -579,7 +579,8 @@ export const insertHabitSchema = z.object({
   // Nullable so a PATCH can explicitly clear a habit's schedule (send null),
   // not just leave it unset (undefined).
   timeOfDay: z.enum(["morning", "afternoon", "evening", "bedtime", "anytime"]).nullable().optional(),
-  scheduledTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)").nullable().optional(),
+  // "" clears the slot, the same way a task's dueTime does; storage stores null.
+  scheduledTime: z.union([z.literal(""), z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)")]).nullable().optional(),
   // Nullable so a PATCH can unlink a habit from its tracker (send null).
   linkedTrackerId: z.string().nullable().optional(),
 });

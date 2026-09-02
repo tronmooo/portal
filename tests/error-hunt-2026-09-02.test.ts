@@ -279,3 +279,13 @@ describe("D88: an item linked to something you own is in your scope", () => {
     expect(withAncestorOwnerIds(["x"], [])).toEqual(["x"]);
   });
 });
+
+// D93 — a habit's scheduled time could not be cleared with "" (400), unlike
+// a task's dueTime; storage already stores "" as null.
+import { insertHabitSchema } from "../shared/schema";
+describe("D93: habit scheduledTime accepts '' as clear", () => {
+  it("accepts '', null and HH:MM; rejects 9am", () => {
+    for (const v of ["", null, "07:30"]) expect(insertHabitSchema.partial().safeParse({ scheduledTime: v }).success, String(v)).toBe(true);
+    expect(insertHabitSchema.partial().safeParse({ scheduledTime: "9am" }).success).toBe(false);
+  });
+});
