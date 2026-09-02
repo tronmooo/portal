@@ -1234,8 +1234,13 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
         // answer as an unknown id — not a server error.
         const pgCode = String(err?.code || err?.details?.code || "");
         const msg = String(err?.message || "");
-        if (/invalid input syntax for type uuid/i.test(msg)) {
+        if (/invalid input syntax for type uuid/i.test(msg) || pgCode === "PGRST116" || /JSON object requested, multiple \(or no\) rows returned/i.test(msg)) {
+          // An unknown id: no row for the uuid, or a `.single()` read-back
+          // that matched nothing (an update of a row this user does not have).
           res.status(404).json({ error: "Not found" });
+        } else if (pgCode === "PGRST204" || /Could not find the '.*' column/i.test(msg)) {
+          // A field the table does not have is the caller's bad request.
+          res.status(400).json({ error: "Unknown field in request" });
         } else if (pgCode === "22P02" || pgCode === "22003" || pgCode === "42804" || /invalid input syntax for type|out of range for type|malformed array literal/i.test(msg)) {
           // A value the column cannot hold (text where a number goes, an
           // object where text goes) is the caller's bad request.

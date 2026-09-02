@@ -960,3 +960,16 @@ describe("D112/D113: malformed bodies are 400s", () => {
     expect((await h.api("PATCH", "/api/incomes/i1", { amount: 8 })).status).toBe(404);
   });
 });
+
+// D114 — a `.single()` read-back that matched nothing (an unknown or foreign
+// id) and an unknown column were 500s.
+describe("D114: no-row read-backs are 404, unknown columns are 400", () => {
+  it("maps PGRST116 to 404 and PGRST204 to 400", async () => {
+    h = await boot({}, (storage) => {
+      storage.updateLiabilityAssetLink = async () => { throw { code: "PGRST116", message: "JSON object requested, multiple (or no) rows returned" }; };
+      storage.updateCapture = async () => { throw { code: "PGRST204", message: "Could not find the 'amount' column of 'captures' in the schema cache" }; };
+    });
+    expect((await h.api("PATCH", "/api/liability-asset-links/x", { share: 1 })).status).toBe(404);
+    expect((await h.api("PATCH", "/api/captures/c1", { amount: 1 })).status).toBe(400);
+  });
+});
