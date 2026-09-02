@@ -217,3 +217,41 @@ describe("payBillOccurrence — full canonical side-effect set", () => {
     expect(out.reason).toBe("not_liability");
   });
 });
+
+// D91 — the due-scan cron's "Bill due: <name>" reminder task (linked to the
+// bill) stayed open after the bill was paid, so a paid bill still showed as
+// an overdue task on the Tasks page and the dashboard.
+describe("payBillOccurrence — closes the bill's reminder tasks", () => {
+  function withTasks(storage: any, tasks: any[]) {
+    storage.tasks = tasks;
+    storage.getTasks = async () => tasks;
+    storage.updateTask = async (id: string, patch: any) => {
+      const t = tasks.find(x => x.id === id);
+      if (!t) return undefined;
+      Object.assign(t, patch);
+      storage.writes.push(["updateTask", id, patch]);
+      return t;
+    };
+    return storage;
+  }
+  it("marks done the reminder due on or before the paid occurrence and leaves later / other ones alone", async () => {
+    const storage = withTasks(fakeStorage([USAGE_BILL]), [
+      { id: "t-old", title: "Bill due: ChatGPT", status: "todo", dueDate: "2026-07-28", linkedProfiles: ["bill-1"] },
+      { id: "t-this", title: "Bill due: ChatGPT", status: "todo", dueDate: "2026-08-01", linkedProfiles: ["bill-1"] },
+      { id: "t-next", title: "Bill due: ChatGPT", status: "todo", dueDate: "2026-09-01", linkedProfiles: ["bill-1"] },
+      { id: "t-other", title: "Bill due: Rent", status: "todo", dueDate: "2026-08-01", linkedProfiles: ["bill-9"] },
+      { id: "t-plain", title: "Call the ChatGPT people", status: "todo", dueDate: "2026-08-01", linkedProfiles: ["bill-1"] },
+    ]);
+    const out = await payBillOccurrence(storage, "bill-1", { occurrenceDate: "2026-08-01", source: "route" }, "UTC");
+    expect(out.ok).toBe(true);
+    expect(out.steps).toContainEqual({ step: "reminder_tasks", ok: true });
+    const byId = Object.fromEntries(storage.tasks.map((t: any) => [t.id, t.status]));
+    expect(byId).toEqual({ "t-old": "done", "t-this": "done", "t-next": "todo", "t-other": "todo", "t-plain": "todo" });
+  });
+  it("a storage without tasks still pays", async () => {
+    const storage = fakeStorage([USAGE_BILL]);
+    const out = await payBillOccurrence(storage, "bill-1", { occurrenceDate: "2026-08-01", source: "route" }, "UTC");
+    expect(out.ok).toBe(true);
+    expect(out.steps.some(s => s.step === "reminder_tasks")).toBe(false);
+  });
+});

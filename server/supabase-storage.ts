@@ -55,7 +55,7 @@ import { deleteProfileFields, mergeFieldWrite } from "../shared/profile-field-id
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
-import { selfIdsFrom, isInScope } from "../shared/scope";
+import { selfIdsFrom, isInScope, withAncestorOwnerIds } from "../shared/scope";
 import {
   parseMoney as _sharedParseMoney,
   resolveAssetValue as _sharedResolveAssetValue,
@@ -3745,8 +3745,10 @@ export class SupabaseStorage implements IStorage {
     const _selfIds = selfIdsFrom(profiles);
     const matchesProfile = (linked: string[] | null | undefined) => {
       if (!filterActive) return true;
+      // Owner chain, same as passesProfileFilter: the car's insurance bill and
+      // the "Bill due" task linked to a bill (parent: Self) are Self's.
       return isInScope(
-        Array.isArray(linked) ? linked : [],
+        withAncestorOwnerIds(Array.isArray(linked) ? linked.filter((x): x is string => typeof x === "string" && !!x) : [], profiles as any),
         { selectedIds: profileIds!, selfIds: _selfIds },
         "belongs_to_self",
       );

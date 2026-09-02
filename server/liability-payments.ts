@@ -253,7 +253,7 @@ export interface PayBillInput {
 }
 
 export interface PayBillStep {
-  step: "ledger" | "series_state" | "account" | "expense";
+  step: "ledger" | "series_state" | "account" | "expense" | "reminder_tasks";
   ok: boolean;
   error?: string;
 }
@@ -312,6 +312,38 @@ const noopLogger: PaymentLogger = { warn: () => {}, error: () => {} };
  * occurrence stamp (stamp first, row second). Poll briefly so a deduped
  * caller gets a real payment (id, date, amount) rather than nothing.
  */
+/** Prefix of the reminder tasks the liability due-scan creates (server/routes.ts). */
+export const BILL_REMINDER_TASK_PREFIX = "Bill due: ";
+
+/**
+ * Marks done every open "Bill due" reminder task linked to this bill and due
+ * on or before the occurrence just paid. Best effort: a storage without
+ * tasks (some doubles) or a failed read never fails the payment.
+ */
+export async function closeBillReminderTasks(storage: IStorage, liabilityId: string, occurrenceDate: string, logger: PaymentLogger = noopLogger): Promise<number> {
+  let closed = 0;
+  try {
+    if (typeof (storage as any).getTasks !== "function" || typeof (storage as any).updateTask !== "function") return 0;
+    const tasks: any[] = (await storage.getTasks()) || [];
+    for (const t of tasks) {
+      if (!t || t.status === "done") continue;
+      if (typeof t.title !== "string" || !t.title.startsWith(BILL_REMINDER_TASK_PREFIX)) continue;
+      if (!Array.isArray(t.linkedProfiles) || !t.linkedProfiles.includes(liabilityId)) continue;
+      const due = String(t.dueDate || "").slice(0, 10);
+      if (due && due > occurrenceDate) continue;
+      try {
+        await storage.updateTask(t.id, { status: "done" } as any);
+        closed++;
+      } catch (e: any) {
+        logger.warn(`[payBillOccurrence] reminder task ${t.id} not closed:`, e?.message || e);
+      }
+    }
+  } catch (e: any) {
+    logger.warn(`[payBillOccurrence] reminder tasks not read:`, e?.message || e);
+  }
+  return closed;
+}
+
 async function findPaymentWithRetry(storage: IStorage, liabilityId: string, paymentId: string | null | undefined): Promise<any | null> {
   for (let attempt = 0; attempt < 4; attempt++) {
     const payments = await storage.getLiabilityPayments(liabilityId).catch(() => [] as any[]);
@@ -541,6 +573,14 @@ export async function payBillOccurrence(
       logger.warn(`[payBillOccurrence] expense log failed for ${liability.name}:`, e?.message || e);
     }
   }
+
+  // ── 5. reminder tasks ───────────────────────────────────────────────────
+  // The due-scan cron surfaces a non-autopay bill as a "Bill due: <name>"
+  // task linked to the bill. Paying the occurrence is what that task asked
+  // for, so it is done now — it used to stay open (and overdue) on the Tasks
+  // page and the dashboard after the bill was paid.
+  const remindersClosed = await closeBillReminderTasks(storage, liabilityId, occurrenceDate, logger);
+  if (remindersClosed > 0) steps.push({ step: "reminder_tasks", ok: true });
 
   return {
     ok: true,
