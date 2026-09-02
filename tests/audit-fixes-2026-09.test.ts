@@ -383,3 +383,15 @@ describe("componentAmountIds: undated line items join the dated total", () => {
     expect([...r.componentFactIds].sort()).toEqual(["a1", "a2", "b1", "b2"]);
   });
 });
+
+import { detectTrackable, notTrackableReason } from "../shared/trackable-values";
+describe("trackable detection: card last-4 is an identifier, not a measurement", () => {
+  it("last4 = 1111 on a receipt is never a tracker candidate", () => {
+    expect(notTrackableReason({ key: "last4", label: "Last4", value: "1111", roles: ["financial"] } as any)).toBe("identifier");
+    expect(detectTrackable({ key: "last4", label: "Last4", value: 1111, roles: ["financial"] } as any)).toBeNull();
+    expect(notTrackableReason({ key: "cardEndingIn", label: "Card ending in", value: "4242" } as any)).toBe("identifier");
+  });
+  it("a real measurement still qualifies", () => {
+    expect(notTrackableReason({ key: "weight", label: "Weight", value: "180 lbs" } as any)).toBeNull();
+  });
+});

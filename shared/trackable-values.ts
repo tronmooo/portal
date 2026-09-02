@@ -84,7 +84,7 @@ export interface TrackableCandidate {
 // on opposite sides without either list naming a document type.
 
 const IDENT =
-  /(number|num\b|no\.?$|#|\bids?\b|identifier|\bcode\b|vin|serial|policy|account|routing|licen[cs]e|plate|barcode|sku|upc|isbn|npi|zip|postal|phone|fax|ssn|ein|tin|member|group|claim|case|invoice|receipt|confirmation|reference|tracking|\bpin\b|apn|parcel|cashier|register|approval|authorization)/i;
+  /(number|num\b|no\.?$|#|\bids?\b|identifier|\bcode\b|vin|serial|policy|account|routing|licen[cs]e|plate|barcode|sku|upc|isbn|npi|zip|postal|phone|fax|ssn|ein|tin|member|group|claim|case|invoice|receipt|confirmation|reference|tracking|\bpin\b|apn|parcel|cashier|register|approval|authorization|last\s?-?(4|four)|ending\s?in|card\s?ending)/i;
 
 const QUANTITY =
   /(balance|amount|total|premium|payment|value|price|cost|\bfees?\b|rate|percent|mileage|odometer|weight|height|pressure|temperature|level|reading|score|limit|deductible|coverage|salary|income|distance|duration|capacity|volume|usage|consumption)/i;
