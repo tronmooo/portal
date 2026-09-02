@@ -203,9 +203,16 @@ describe("item 10: asset-party-links / liability-profile-links are invalidated w
     const spy = vi.spyOn(qc, "invalidateQueries");
     spy.mockClear();
     await invalidateDomains(domain);
-    const keys = spy.mock.calls.map((c: any[]) => JSON.stringify(c[0]?.queryKey)).filter(Boolean);
-    expect(keys).toContain(JSON.stringify(["/api/asset-party-links"]));
-    expect(keys).toContain(JSON.stringify(["/api/liability-profile-links"]));
+    // The bus invalidates with ONE combined predicate per call (one refetch per
+    // active query — tests/cache-bus-single-refetch.test.ts), so ask that
+    // predicate about each key instead of reading a queryKey argument.
+    const invalidated = (key: unknown[]) => spy.mock.calls.some((c: any[]) => {
+      const a = c[0];
+      if (typeof a?.predicate === "function") return a.predicate({ queryKey: key });
+      return JSON.stringify(a?.queryKey) === JSON.stringify(key);
+    });
+    expect(invalidated(["/api/asset-party-links"])).toBe(true);
+    expect(invalidated(["/api/liability-profile-links"])).toBe(true);
     spy.mockRestore();
   });
 });

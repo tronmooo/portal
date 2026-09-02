@@ -368,6 +368,13 @@ describe("Active-profile header (PROP-005 wire contract)", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // CRUD-T1-003 — a "due today" alert survived the task being completed
 // ─────────────────────────────────────────────────────────────────────────────
+// The bus invalidates with ONE combined predicate per call (one refetch per
+// active query — tests/cache-bus-single-refetch.test.ts), so whether a key is
+// in the ripple is answered by asking that predicate.
+const touched = (spy: ReturnType<typeof vi.fn>, key: unknown[]) =>
+  spy.mock.calls.some((c: any[]) =>
+    typeof c[0]?.predicate === "function" ? c[0].predicate({ queryKey: key }) : JSON.stringify(c[0]?.queryKey) === JSON.stringify(key));
+
 describe("Cache bus (CRUD-T1-003)", () => {
   it("refreshes the notification feed when tasks change", async () => {
     vi.resetModules();
@@ -376,13 +383,10 @@ describe("Cache bus (CRUD-T1-003)", () => {
     vi.doMock("@/lib/queryClient", () => ({ queryClient: { invalidateQueries } }));
     const { invalidateDomain } = await vi.importActual<typeof import("@/lib/cache-bus")>("@/lib/cache-bus");
     await invalidateDomain("tasks");
-    const keys = invalidateQueries.mock.calls
-      .map((c: any[]) => JSON.stringify(c[0]?.queryKey))
-      .filter(Boolean);
     // Completing a task changes what is due today; the bell derives straight
     // from open tasks, so it has to be part of the tasks ripple.
-    expect(keys).toContain('["/api/notifications"]');
-    expect(keys).toContain('["/api/tasks"]');
+    expect(touched(invalidateQueries, ["/api/notifications"])).toBe(true);
+    expect(touched(invalidateQueries, ["/api/tasks"])).toBe(true);
   });
 
   it("refreshes the calendar and the feed when bills change", async () => {
@@ -392,8 +396,7 @@ describe("Cache bus (CRUD-T1-003)", () => {
     vi.doMock("@/lib/queryClient", () => ({ queryClient: { invalidateQueries } }));
     const { invalidateDomain } = await vi.importActual<typeof import("@/lib/cache-bus")>("@/lib/cache-bus");
     await invalidateDomain("obligations");
-    const keys = invalidateQueries.mock.calls.map((c: any[]) => JSON.stringify(c[0]?.queryKey));
-    expect(keys).toContain('["/api/calendar/timeline"]');
-    expect(keys).toContain('["/api/notifications"]');
+    expect(touched(invalidateQueries, ["/api/calendar/timeline"])).toBe(true);
+    expect(touched(invalidateQueries, ["/api/notifications"])).toBe(true);
   });
 });

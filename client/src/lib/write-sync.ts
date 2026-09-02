@@ -34,7 +34,7 @@
 import type { ChatMutation } from "@shared/schema";
 import type { WriteManifest } from "@shared/write-manifest";
 import { queryClient } from "./queryClient";
-import { invalidateDomains } from "./cache-bus";
+import { invalidateDomainsFromManifest } from "./cache-bus";
 import { applyRowPatches, isRowList } from "./cache-patch";
 
 /**
@@ -249,7 +249,7 @@ export function applyWriteManifest(manifest: WriteManifest | null | undefined): 
   //    block on the slowest aggregate query it triggered, which is the delay
   //    this whole change exists to remove. The user sees step 1; step 2 only
   //    ever confirms it.
-  void invalidateDomains(...manifest.domains);
+  void invalidateDomainsFromManifest(manifest.domains);
   return true;
 }
 

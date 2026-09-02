@@ -621,6 +621,15 @@ export default function TasksPage() {
   }, [tasks, filterMode, filterIds, allProfiles]);
   const activeTasks = useMemo(() => profileFilteredTasks.filter(t => t.status !== "done"), [profileFilteredTasks]);
   const completedTasks = useMemo(() => profileFilteredTasks.filter(t => t.status === "done"), [profileFilteredTasks]);
+  // Render the lists in pages: every card is a swipeable tree with several
+  // icons (120 tasks = ~4,600 DOM nodes and a 150ms long task on open). The
+  // counts above still read the full lists; only the cards on screen are paged.
+  const TASK_PAGE = 60;
+  const [visibleActive, setVisibleActive] = useState(TASK_PAGE);
+  const [visibleCompleted, setVisibleCompleted] = useState(TASK_PAGE);
+  useEffect(() => { setVisibleActive(TASK_PAGE); setVisibleCompleted(TASK_PAGE); }, [tabFilter, filterMode, filterIds.join(",")]);
+  const sortedActive = useMemo(() => activeTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')), [activeTasks]);
+  const sortedCompleted = useMemo(() => completedTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')), [completedTasks]);
   // v2 summary band: overdue / today / upcoming / done.
   const taskSummary = useMemo(() => {
     const todayStr = new Date().toLocaleDateString("en-CA");
@@ -728,7 +737,7 @@ export default function TasksPage() {
               {activeTasks.length === 0 ? (
                 <EmptyState icon={ListTodo} label="No active tasks" hint="All tasks are completed or create a new one." />
               ) : (
-                activeTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(task => (
+                sortedActive.slice(0, visibleActive).map(task => (
                   <SwipeableItem
                     key={task.id}
                     onSwipeLeft={async () => {
@@ -773,6 +782,13 @@ export default function TasksPage() {
                   </SwipeableItem>
                 ))
               )}
+              {sortedActive.length > visibleActive && (
+                <div className="pt-2 flex justify-center">
+                  <Button variant="outline" size="sm" onClick={() => setVisibleActive((n) => n + TASK_PAGE)} data-testid="button-show-more-active-tasks">
+                    Show more ({sortedActive.length - visibleActive} remaining)
+                  </Button>
+                </div>
+              )}
             </div>
           )}
           {(tabFilter === "all" || tabFilter === "completed") && (
@@ -783,7 +799,7 @@ export default function TasksPage() {
               {completedTasks.length === 0 ? (
                 <EmptyState icon={CheckCircle2} label="No completed tasks" hint="Complete a task to see it here." />
               ) : (
-                completedTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map(task => (
+                sortedCompleted.slice(0, visibleCompleted).map(task => (
                   <SwipeableItem
                     key={task.id}
                     leftLabel="↩ Reopen"
@@ -808,6 +824,13 @@ export default function TasksPage() {
                     <TaskItem task={task} onEdit={setEditTask} />
                   </SwipeableItem>
                 ))
+              )}
+              {sortedCompleted.length > visibleCompleted && (
+                <div className="pt-2 flex justify-center">
+                  <Button variant="outline" size="sm" onClick={() => setVisibleCompleted((n) => n + TASK_PAGE)} data-testid="button-show-more-completed-tasks">
+                    Show more ({sortedCompleted.length - visibleCompleted} remaining)
+                  </Button>
+                </div>
               )}
             </div>
           )}

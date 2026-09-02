@@ -2,6 +2,33 @@
 // Before this, the dashboard showed "$18000.00", the finance page "$1,368", and
 // cards mixed "6/29/2026" / "Jun 24" / "May 21". One source of truth here.
 
+// toLocaleString / toLocaleDateString build a fresh Intl formatter on every
+// call, and that construction — not the formatting — is what costs: a list of
+// 900 expense rows spent ~450ms per render inside these two helpers alone
+// (CPU profile, Finance page). Formatters are immutable, so one per option
+// set is reused for the life of the page. Output is byte-identical:
+// `x.toLocaleString("en-US", o)` is specified as `new Intl.NumberFormat("en-US", o).format(x)`.
+const numberFormats = new Map<string, Intl.NumberFormat>();
+function numberFormat(minFrac: number, maxFrac: number): Intl.NumberFormat {
+  const key = `${minFrac}:${maxFrac}`;
+  let f = numberFormats.get(key);
+  if (!f) {
+    f = new Intl.NumberFormat("en-US", { minimumFractionDigits: minFrac, maximumFractionDigits: maxFrac });
+    numberFormats.set(key, f);
+  }
+  return f;
+}
+const dateFormats = new Map<string, Intl.DateTimeFormat>();
+function dateFormat(opts: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${opts.month ?? ""}|${opts.day ?? ""}|${opts.year ?? ""}|${opts.weekday ?? ""}`;
+  let f = dateFormats.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", opts);
+    dateFormats.set(key, f);
+  }
+  return f;
+}
+
 /**
  * Format a dollar amount: thousands separators, no trailing ".00" on whole
  * dollars, two decimals otherwise. e.g. 18000 → "$18,000", 12.5 → "$12.50".
@@ -10,10 +37,7 @@ export function formatMoney(n: number | null | undefined): string {
   const v = Number(n) || 0;
   const abs = Math.abs(v);
   const whole = abs % 1 === 0;
-  const body = abs.toLocaleString("en-US", {
-    minimumFractionDigits: whole ? 0 : 2,
-    maximumFractionDigits: 2,
-  });
+  const body = numberFormat(whole ? 0 : 2, 2).format(abs);
   return `${v < 0 ? "-$" : "$"}${body}`;
 }
 
@@ -34,7 +58,7 @@ export function formatMoneyRound(n: number | null | undefined): string {
  */
 export function formatMoneyCents(n: number | null | undefined): string {
   const v = Number(n) || 0;
-  const body = Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const body = numberFormat(2, 2).format(Math.abs(v));
   return `${v < 0 ? "-$" : "$"}${body}`;
 }
 
@@ -53,8 +77,8 @@ export function formatMoneyCompact(n: number | null | undefined): string {
   const abs = Math.abs(v);
   const sign = v < 0 ? "-" : "";
   if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
-  if (abs >= 10_000) return `${sign}$${Math.round(abs).toLocaleString("en-US")}`;
-  return `${sign}$${abs.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  if (abs >= 10_000) return `${sign}$${numberFormat(0, 3).format(Math.round(abs))}`;
+  return `${sign}$${numberFormat(0, 2).format(abs)}`;
 }
 
 /**
@@ -85,7 +109,7 @@ export function formatFullDate(
 ): string {
   const d = parseLocalDate(input);
   if (!d) return empty;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return dateFormat({ month: "short", day: "numeric", year: "numeric" }).format(d);
 }
 
 /**
@@ -108,5 +132,5 @@ export function formatListDate(input: string | Date | null | undefined): string 
   if (dayDiff < -1 && dayDiff > -7) return `in ${-dayDiff}d`;
   const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
   if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
-  return d.toLocaleDateString("en-US", opts);
+  return dateFormat(opts).format(d);
 }

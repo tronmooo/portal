@@ -183,25 +183,31 @@ describe("applyChatMutations", () => {
     expect(usedPredicate).toBe(true);
   });
 
+  // The bus invalidates with ONE combined predicate per call (one refetch per
+  // active query — see tests/cache-bus-single-refetch.test.ts), so what it
+  // touched is read by asking that predicate about a key.
+  const invalidated = (spy: ReturnType<typeof vi.spyOn>, key: unknown[]) =>
+    spy.mock.calls.some(([arg]) => {
+      const a = arg as any;
+      if (typeof a?.predicate === "function") return a.predicate({ queryKey: key });
+      return JSON.stringify(a?.queryKey) === JSON.stringify(key);
+    });
+
   it("always refreshes the dashboard aggregates, which no single row can patch", async () => {
     const spy = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue(undefined as any);
     await applyChatMutations([createTask()], 1);
-    const keys = spy.mock.calls.map(([arg]) => JSON.stringify((arg as any)?.queryKey));
     // The bootstrap payload seeds the next launch's list caches — leaving it
     // stale is how a write "disappears" again after a reload.
-    expect(keys).toContain(JSON.stringify(["/api/dashboard-bootstrap"]));
-    expect(keys).toContain(JSON.stringify(["/api/stats"]));
+    expect(invalidated(spy, ["/api/dashboard-bootstrap"])).toBe(true);
+    expect(invalidated(spy, ["/api/stats"])).toBe(true);
   });
 
   it("invalidates the affected domains, not every domain, for a typed write", async () => {
     const spy = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue(undefined as any);
     await applyChatMutations([createTask()], 1);
-    const keys = spy.mock.calls
-      .map(([arg]) => JSON.stringify((arg as any)?.queryKey))
-      .filter(Boolean);
-    expect(keys).toContain(JSON.stringify(["/api/tasks"]));
-    // An expenses-only key would mean the tasks write was invalidating unrelated data.
-    expect(keys).not.toContain(JSON.stringify(["/api/expenses"]));
+    expect(invalidated(spy, ["/api/tasks"])).toBe(true);
+    // An expenses key would mean the tasks write was invalidating unrelated data.
+    expect(invalidated(spy, ["/api/expenses"])).toBe(false);
   });
 });
 

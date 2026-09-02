@@ -1,0 +1,23 @@
+import { launch, goto, settle, report } from "./pw";
+const ctx = await launch(); const page = ctx.page;
+const api = async (p: string, h: Record<string, string> = {}) => (await page.request.get("http://localhost:5000" + p, { headers: { "x-local-user": "u1", ...h } })).json();
+const profiles: any[] = await api("/api/profiles/lite"); const self = profiles.find(p => p.type === "self"); const bob = profiles.find(p => p.name === "Bob Partner");
+const names = (rows: any) => (Array.isArray(rows) ? rows : []).map((t: any) => t.name).sort().join(",");
+const cacheFor = async (key: any[]) => page.evaluate((k) => { const q = (window as any).__portolQueryClient.getQueryCache().find({ queryKey: k, exact: true }); return q ? { data: q.state.data, upd: q.state.dataUpdateCount, hasFn: !!q.options.queryFn } : null; }, key);
+await goto(ctx, "/dashboard", "dashboard"); await goto(ctx, "/trackers", "trackers");
+const serverBob = names(await api(`/api/trackers?profileIds=${bob.id}`)); const serverSelf = names(await api(`/api/trackers?profileIds=${self.id}`));
+console.log("server bob:", serverBob); console.log("server self:", serverSelf);
+const bobKey = ["/api/trackers", "selected", bob.id]; const b0 = await cacheFor(bobKey); console.log("cache bob BEFORE write:", names(b0?.data), "upd", b0?.upd, "hasQueryFn", b0?.hasFn);
+const trackers: any[] = await api("/api/trackers"); const weight = trackers.find(t => t.name === "Weight" && t.linkedProfiles?.includes(self.id)) || trackers.find(t => t.name === "Weight");
+await page.click(`[data-testid=card-tracker-${weight.id}]`); await page.click("[data-testid=button-add-entry-detail]"); await page.fill("[data-testid=input-entry-value]", "170.5"); ctx.mark(); await page.click("[data-testid=button-entry-submit]"); await settle(page, 1500); report(ctx, "entry add");
+const b1 = await cacheFor(bobKey); console.log("cache bob AFTER write:", names(b1?.data), "upd", b1?.upd);
+console.log(names(b1?.data) === serverBob ? "OK: bob scope intact" : "!!! POLLUTED: bob scope cache now holds: " + names(b1?.data));
+// Now switch the UI to Bob via the profile switcher and see what the trackers page renders
+await page.keyboard.press("Escape"); await page.waitForTimeout(300);
+const sw = page.locator("[data-testid=hub-profile-switcher], button:has-text('Alex Self')").first(); console.log("switcher found:", await sw.count());
+ctx.mark(); await sw.click().catch(() => {}); await page.waitForTimeout(300);
+const opt = page.locator("[role=menuitem], [role=option], [data-testid^=profile-option-]", { hasText: "Bob Partner" }).first(); console.log("bob option found:", await opt.count());
+await opt.click().catch(e => console.log("click bob failed", String(e).slice(0, 80))); await settle(page, 1200); report(ctx, "switch to Bob");
+const cards = await page.locator("[data-testid^=card-tracker-]").evaluateAll(els => els.map(e => (e.textContent || "").trim().slice(0, 25))); console.log("rendered tracker cards for Bob:", cards.length, cards.join(" | "));
+await page.screenshot({ path: "tests/perf/out/shot-bob-trackers.png" });
+await ctx.browser.close();

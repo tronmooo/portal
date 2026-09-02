@@ -2594,9 +2594,11 @@ export default function ChatPage() {
       action.data = { ...action.data, values: { ...vals } };
       setMessages((prev) => prev.map((m) => ({ ...m, actions: m.actions ? [...m.actions] : m.actions })));
       // …and across the app (trackers list, dashboard, stats).
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"], refetchType: "all" });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "all" });
+      // The trackers domain expands to stats and the dashboard aggregates.
+      // Active refetch only: a refetchType:"all" refetched every seeded
+      // profile-scope slot and, through the default query function, filled
+      // other profiles' slots with the household list.
+      void invalidateDomains("trackers");
       setEditingEntryId(null);
       toast({ title: "Entry updated" });
     } catch (e: any) {

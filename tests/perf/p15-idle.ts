@@ -1,0 +1,13 @@
+import { launch, goto, perf } from "./pw";
+const ctx = await launch(); const page = ctx.page;
+const api = async (p: string) => (await page.request.get("http://localhost:5000" + p, { headers: { "x-local-user": "u1" } })).json();
+const idle = async (label: string, ms = 15000) => { await page.evaluate(() => { (window as any).__lt = []; }); ctx.mark(); await page.waitForTimeout(ms); const calls = ctx.calls.filter(c => c.start >= ctx.since).length; process.stdout.write(`IDLE ${label} (${ms}ms): api calls=${calls} `); await perf(ctx); };
+await goto(ctx, "/dashboard", "dashboard"); await idle("dashboard");
+await goto(ctx, "/trackers", "trackers"); await idle("trackers page");
+const w = ((await api("/api/trackers")) as any[]).find(t => t.name === "Weight");
+await page.click(`[data-testid=card-tracker-${w.id}]`); await page.waitForTimeout(500); await idle("trackers + detail dialog");
+await page.click("[data-testid=tab-history]").catch(() => {}); await page.waitForTimeout(500); await idle("detail dialog history tab");
+await page.keyboard.press("Escape"); await goto(ctx, "/finance", "finance"); await idle("finance");
+await goto(ctx, "/calendar", "calendar"); await idle("calendar");
+await goto(ctx, "/chat", "chat"); await idle("chat");
+await ctx.browser.close();

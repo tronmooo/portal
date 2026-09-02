@@ -1057,11 +1057,12 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
       return { prev, tempId };
     },
     onSuccess: () => {
-      // BUG-T05/UI01: refetchType:"all" so the count badge updates even when
-      // the page-level trackers query is technically inactive at the moment.
-      // (The bus uses "active", so this one key keeps its stronger refetch.)
-      qc.invalidateQueries({ queryKey: ['/api/trackers'], refetchType: "all" });
-      // Cache bus: ripples to stats, dashboard, goals, activity, insights.
+      // Cache bus: refetches the mounted trackers query and ripples to stats,
+      // dashboard, goals, activity, insights. Only ACTIVE queries refetch —
+      // the optimistic patch above already updated every cached slot
+      // (including the badge's), and a slot nobody is rendering refetches when
+      // it mounts. A refetchType:"all" here used to refetch every seeded
+      // profile-scope slot at once (26 requests per log, 130 for five).
       invalidateDomain("trackers");
       toast({ title: `${drugName} logged`, description: `${dosageLabel ? `${dosageLabel} ` : ''}taken at ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` });
     },
@@ -1383,14 +1384,12 @@ function AddEntryDialog({
       toast({ title: "Failed to log entry", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      // BUG-T05/UI01: force a network refetch so the entry count badge (which
-      // reads tracker.entries.length straight from the cached list) updates
-      // immediately after a log. The default invalidate only marks queries as
-      // stale — inactive list queries on the trackers page wouldn't refetch
-      // until the user re-focused the page, leaving "3 entries" stuck while the
-      // newest entry was already on the server. (Bus uses "active" — keep this
-      // one key at "all"; the bus handles the cross-surface ripple.)
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
+      // The entry count badge reads tracker.entries.length from the cached
+      // list, which onMutate/onSuccess already patched in every slot. The bus
+      // refetches the mounted list; slots nobody renders are marked stale and
+      // refetch on mount. (A refetchType:"all" here refetched every seeded
+      // profile-scope slot per log — and through the default query function,
+      // which filled Bob's slot with everyone's trackers.)
       invalidateDomain("trackers");
     },
   });
@@ -1458,8 +1457,7 @@ function AddEntryDialog({
       toast({ title: "Failed to log", description: formatApiError(err), variant: "destructive" });
     },
     onSettled: () => {
-      // BUG-T05/UI01 (see entry form above): trackers key stays at "all".
-      queryClient.invalidateQueries({ queryKey: ["/api/trackers"], refetchType: "all" });
+      // See the entry form above: active refetch via the bus only.
       invalidateDomain("trackers");
     },
   });
@@ -3167,10 +3165,14 @@ function EntryEditor({
         if (old && typeof old === "object" && old.id === tracker.id) return patchTracker(old);
         return old;
       });
+      // The row already shows the new values; the form has nothing left to
+      // say. Closing here (not on success) is what makes Save feel instant —
+      // the form used to sit open for the whole server round trip. A rejected
+      // save rolls the row back and says so in a toast.
+      onClose();
       return { prev };
     },
     onSuccess: () => {
-      onClose();
       toast({ title: "Entry updated" });
     },
     onError: (err: Error, _vars, context) => {
@@ -5841,8 +5843,12 @@ export default function TrackersPage() {
       const hasUnlinked = trackers.some(t => !t.linkedProfiles || t.linkedProfiles.length === 0);
       if (hasUnlinked) {
         migrationDone.current = true;
-        apiRequest("POST", "/api/trackers/migrate-to-self").then(() => {
-          invalidateDomains("trackers", "profiles");
+        apiRequest("POST", "/api/trackers/migrate-to-self").then(async (r) => {
+          // Invalidate only when rows actually moved. When nothing was
+          // migrated this mount-time write used to refetch trackers, profiles,
+          // stats and the dashboard aggregates on EVERY visit to the page.
+          const out = await r.json().catch(() => null);
+          if (out && Number(out.migrated) > 0) invalidateDomains("trackers", "profiles");
         }).catch(() => {});
       }
     }

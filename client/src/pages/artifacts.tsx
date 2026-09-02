@@ -27,7 +27,11 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+// The async-light build: the full Prism entry bundles every refractor
+// grammar (582KB of the 659KB artifacts chunk) and evaluating it stalled the
+// main thread for ~350ms on every open of this page, diagram or not. The
+// light build ships no grammars and fetches the one a code artifact needs.
+import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import DOMPurify from "dompurify";
 import {
@@ -705,8 +709,6 @@ function DocumentGroup({ label, icon: Icon, items, onSelect, onTogglePin, onDele
 // ─── Main page ───────────────────────────────────────────────
 export default function ArtifactsPage() {
   useEffect(() => { document.title = "Artifacts — Portol"; }, []);
-  // Warm the mermaid chunk in the background so opening a diagram is instant.
-  useEffect(() => { prefetchMermaid(); }, []);
 
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
@@ -793,6 +795,13 @@ export default function ArtifactsPage() {
     queryKey: ["/api/artifacts"],
     queryFn: () => apiRequest("GET", "/api/artifacts").then(r => r.json()),
   });
+  // Warm the mermaid chunk in the background so opening a diagram is instant —
+  // but only when there is a diagram to open. Evaluating the 624KB chunk on
+  // every visit was a 345ms main-thread stall on a page with no mermaid
+  // artifact at all.
+  const hasMermaid = Array.isArray(artifacts) && artifacts.some((a: any) => a?.type === "mermaid");
+  useEffect(() => { if (hasMermaid) prefetchMermaid(); }, [hasMermaid]);
+
 
   // Fetch profiles for name resolution
   const { data: profiles = [] } = useQuery<Profile[]>({
