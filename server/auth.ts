@@ -424,6 +424,35 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
 /**
  * Register auth-related API endpoints
  */
+/**
+ * Decode a JWT payload WITHOUT verifying it. Only for reading claims off a
+ * token that has already been validated by supabase.auth.getUser().
+ */
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const part = String(token).split(".")[1];
+    if (!part) return null;
+    const json = Buffer.from(part, "base64url").toString("utf8");
+    const parsed = JSON.parse(json);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the session behind `accessToken` was created by the password
+ * recovery flow. Supabase lists the authentication methods that produced a
+ * session in the JWT `amr` claim as `[{ method, timestamp }]`; a reset-link
+ * session carries `method: "recovery"`. A password/OAuth session does not,
+ * and must not be allowed to set a new password without the current one.
+ */
+function isRecoverySession(accessToken: string): boolean {
+  const payload = decodeJwtPayload(accessToken);
+  const amr = Array.isArray(payload?.amr) ? payload!.amr : [];
+  return amr.some((m: any) => m === "recovery" || (m && typeof m === "object" && m.method === "recovery"));
+}
+
 export function registerAuthRoutes(app: Express) {
   // Per-IP rate limiter for auth endpoints. Bounded so a flood of unique
   // IPs (e.g. a botnet probing /api/auth/login) cannot grow this map
@@ -701,7 +730,8 @@ export function registerAuthRoutes(app: Express) {
     res.json({ success: true, message: "Check your email for a reset link" });
   });
 
-  // Reset password — updates password using the access token from the reset link
+  // Reset password — updates password using the access token from the reset link.
+  // Only a token minted by the recovery flow is accepted (see isRecoverySession).
   app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
     const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
     if (checkAuthRateLimit(clientIp, 5, 300000)) {
@@ -722,6 +752,16 @@ export function registerAuthRoutes(app: Express) {
     // Use the access token to set the user context, then update password
     const { data: { user }, error: userError } = await supabase.auth.getUser(access_token);
     if (userError || !user) {
+      return res.status(401).json({ error: "Invalid or expired reset token" });
+    }
+    // The token must come from the recovery flow (the emailed reset link), not
+    // from an ordinary sign-in. getUser() validates ANY session token, so
+    // without this check a stolen or leaked access token alone was enough to
+    // rotate the password — the exact hole change-password closes above by
+    // re-verifying the current password. Supabase records how a session was
+    // created in the JWT's `amr` claim; a reset link yields method "recovery".
+    if (!isRecoverySession(access_token)) {
+      console.warn("[auth] reset-password rejected: token is not a recovery session");
       return res.status(401).json({ error: "Invalid or expired reset token" });
     }
 

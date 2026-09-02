@@ -45,7 +45,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
   _sharedKey = key;
   return _sharedClient;
 }
-import { getUserToday, parseLocalDate, toLocalDateStr, addDays as tzAddDays } from "../shared/timezone";
+import { getUserToday, getUserCurrentMonth, parseLocalDate, toLocalDateStr, localDayOf, addDays as tzAddDays, DEFAULT_TIMEZONE } from "../shared/timezone";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
@@ -85,7 +85,16 @@ import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { autoCheckinLinkedHabits } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
-import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY } from "../shared/obligation-windows";
+import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill } from "../shared/obligation-windows";
+
+// PostgREST `.or()` filters are built by string concatenation, so a value
+// containing `,` `(` `)` or `.` breaks out of its operand and appends
+// caller-chosen conditions (or throws a 500). Every id interpolated into one
+// MUST pass this. Ids are UUIDs; anything else cannot match a row anyway.
+const POSTGREST_SAFE_VALUE = /^[A-Za-z0-9_-]{1,128}$/;
+function isPostgrestSafe(v: unknown): v is string {
+  return typeof v === "string" && POSTGREST_SAFE_VALUE.test(v);
+}
 import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
@@ -393,6 +402,10 @@ function generateInsights(
 ): Insight[] {
   const insights: Insight[] = [];
   const now = new Date();
+  // generateInsights() has no request context, so it cannot read the user's
+  // timezone; every date bucket below uses the app-wide default.
+  const insightTz = DEFAULT_TIMEZONE;
+  const todayLocal = getUserToday(insightTz);
 
   const weightTracker = trackers.find(t => t.name.toLowerCase().includes("weight") && t.category === "health");
   if (weightTracker && weightTracker.entries.length >= 3) {
@@ -412,7 +425,7 @@ function generateInsights(
     // addDays() (noon UTC anchor) so day arithmetic never drifts on DST days.
     // generateInsights() doesn't have access to the user's timezone, so we
     // fall back to America/Los_Angeles — same default the rest of the app uses.
-    const fitTz = 'America/Los_Angeles';
+    const fitTz = insightTz;
     const fitDays = new Set<string>();
     for (const e of allFE) {
       try { fitDays.add(toLocalDateStr(new Date(e.timestamp), fitTz)); }
@@ -433,13 +446,17 @@ function generateInsights(
   if (bpTracker && bpTracker.entries.length > 0) {
     const latest = bpTracker.entries[bpTracker.entries.length - 1];
     const sys = parseFloat(latest.values.systolic); const dia = parseFloat(latest.values.diastolic);
-    if (sys >= 140 || dia >= 90) {
+    // Both readings must be real numbers — a systolic-only entry used to
+    // render "Your latest reading (150/NaN)".
+    if (Number.isFinite(sys) && Number.isFinite(dia) && (sys >= 140 || dia >= 90)) {
       insights.push({ id: randomUUID(), type: "anomaly", title: "Elevated blood pressure detected", description: `Your latest reading (${sys}/${dia}) is above the recommended range.`, severity: "warning", relatedEntityType: "tracker", relatedEntityId: bpTracker.id, data: { systolic: sys, diastolic: dia }, createdAt: now.toISOString() });
     }
   }
 
-  const thisMonth = now.getMonth(); const thisYear = now.getFullYear();
-  const monthlyExpenses = expenses.filter(e => { const d = new Date(e.date); return d.getMonth() === thisMonth && d.getFullYear() === thisYear; });
+  // Expense dates are YYYY-MM-DD: compare the month prefix rather than parsing
+  // (new Date("YYYY-MM-DD") is UTC midnight, so the 1st landed in the prior month).
+  const thisMonthKey = getUserCurrentMonth(insightTz);
+  const monthlyExpenses = expenses.filter(e => String(e.date || "").slice(0, 7) === thisMonthKey);
   const monthTotal = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
   if (monthTotal > 0) {
     const topCat = Object.entries(monthlyExpenses.reduce((acc: Record<string, number>, e) => { acc[e.category] = (acc[e.category] || 0) + e.amount; return acc; }, {})).sort((a, b) => b[1] - a[1])[0];
@@ -448,7 +465,7 @@ function generateInsights(
     }
   }
 
-  const overdueTasks = tasks.filter(t => { if (t.status === "done" || !t.dueDate) return false; return new Date(t.dueDate) < now; });
+  const overdueTasks = tasks.filter(t => { if (t.status === "done" || !t.dueDate) return false; const dueDay = localDayOf(t.dueDate, insightTz); return !!dueDay && dueDay < todayLocal; });
   if (overdueTasks.length > 0) {
     insights.push({ id: randomUUID(), type: "reminder", title: `${overdueTasks.length} overdue task${overdueTasks.length > 1 ? "s" : ""}`, description: overdueTasks.map(t => t.title).join(", "), severity: "negative", data: { taskIds: overdueTasks.map(t => t.id) }, createdAt: now.toISOString() });
   }
@@ -459,8 +476,8 @@ function generateInsights(
     }
   }
 
-  const sevenDaysOut = new Date(now.getTime() + 7 * 86400000);
-  const upcomingObs = obligations.filter(o => { const due = new Date(o.nextDueDate); return due >= now && due <= sevenDaysOut; });
+  const weekOutLocal = tzAddDays(todayLocal, 7);
+  const upcomingObs = obligations.filter(o => { const dueDay = localDayOf(o.nextDueDate, insightTz); return !!dueDay && dueDay >= todayLocal && dueDay <= weekOutLocal; });
   if (upcomingObs.length > 0) {
     const totalDue = upcomingObs.reduce((s, o) => s + o.amount, 0);
     insights.push({ id: randomUUID(), type: "obligation_due", title: `$${totalDue.toFixed(0)} due this week`, description: upcomingObs.map(o => `${o.name}: $${o.amount}`).join(", "), severity: "warning", data: { obligations: upcomingObs.map(o => o.id), total: totalDue }, createdAt: now.toISOString() });
@@ -473,9 +490,8 @@ function generateInsights(
     else if (avg >= 6) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Great mood this week", description: "You've been feeling positive. Keep doing what's working!", severity: "positive", data: { avgMood: avg }, createdAt: now.toISOString() }); }
   }
 
-  const todayStr = now.toISOString().slice(0, 10);
   let totalCalsBurned = 0;
-  for (const t of trackers) { for (const e of t.entries) { if (e.timestamp.slice(0, 10) === todayStr && e.computed?.caloriesBurned) totalCalsBurned += e.computed.caloriesBurned; } }
+  for (const t of trackers) { for (const e of t.entries) { if (localDayOf(e.timestamp, insightTz) === todayLocal && e.computed?.caloriesBurned) totalCalsBurned += e.computed.caloriesBurned; } }
   if (totalCalsBurned > 0) { insights.push({ id: randomUUID(), type: "health_correlation", title: `${totalCalsBurned} calories burned today`, description: `Based on your logged activities. ${totalCalsBurned > 500 ? "Great active day!" : "Every bit counts."}`, severity: "positive", data: { caloriesBurned: totalCalsBurned }, createdAt: now.toISOString() }); }
 
   if (trackers.length > 0) {
@@ -6087,6 +6103,8 @@ export class SupabaseStorage implements IStorage {
   // ENTITY LINKS
   // ============================================================
   async getEntityLinks(entityType: string, entityId: string): Promise<EntityLink[]> {
+    // Both values are interpolated into the .or() filter below — see isPostgrestSafe.
+    if (!isPostgrestSafe(entityType) || !isPostgrestSafe(entityId)) return [];
     const { data, error } = await this.supabase.from("entity_links").select("*").eq("user_id", this.userId)
       .or(`and(source_type.eq.${entityType},source_id.eq.${entityId}),and(target_type.eq.${entityType},target_id.eq.${entityId})`)
       .order("created_at", { ascending: false });
@@ -6352,11 +6370,10 @@ export class SupabaseStorage implements IStorage {
     // BUG-20260528-upcoming-window: getStats() used a 7-day window while
     // getDashboardEnhanced() used 30 days. Tile count permanently differed
     // from popup count. Unified to 30 days via UPCOMING_BILL_WINDOW_DAYS.
-    const upcomingCutoff = new Date(now.getTime() + UPCOMING_BILL_WINDOW_DAYS * MS_PER_DAY);
-    const upcomingObs = obligations.filter(o => {
-      const due = new Date(o.nextDueDate);
-      return due <= upcomingCutoff;
-    });
+    // One predicate (shared/obligation-windows.ts) for this tile AND the
+    // popup rows in getDashboardEnhanced — same window, same status rule —
+    // so the KPI count always equals the list length (ARCHITECTURE §10.1).
+    const upcomingObs = obligations.filter(o => isUpcomingBill(o, now));
     // BUG-20260528-monthly-multipliers: previously used truncated 4.33/2.17.
     // Now uses exact fractions via shared toMonthlyAmount so this total
     // matches the Finance page and dashboard-enhanced.
@@ -6678,7 +6695,7 @@ export class SupabaseStorage implements IStorage {
     const lastMonthExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === lastMonthYM);
     const lastMonthTotal = lastMonthExpenses.reduce((s, e) => s + e.amount, 0);
 
-    const upcomingBills = allObligations.filter(o => { if (o.status === "paused" || o.status === "cancelled") return false; const due = new Date(o.nextDueDate); const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000); return daysUntil <= 30; }).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {
+    const upcomingBills = allObligations.filter(o => isUpcomingBill(o, now)).sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime()).map(o => {
       const daysUntil = Math.ceil((new Date(o.nextDueDate).getTime() - now.getTime()) / 86400000);
       return {
         id: o.id, name: o.name, amount: o.amount, dueDate: o.nextDueDate, daysUntil,
@@ -7999,6 +8016,10 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getOwnershipHistory(opts?: { subjectId?: string; counterpartyId?: string; limit?: number }): Promise<OwnershipHistoryEntry[]> {
+    // Both ids are interpolated into .or() filters below — see isPostgrestSafe.
+    // A malformed id can match nothing, so answer that rather than widening.
+    if ((opts?.subjectId && !isPostgrestSafe(opts.subjectId)) ||
+        (opts?.counterpartyId && !isPostgrestSafe(opts.counterpartyId))) return [];
     let q = this.supabase.from("ownership_history").select("*").eq("user_id", this.userId)
       .order("changed_at", { ascending: false });
     if (opts?.subjectId && opts?.counterpartyId) {

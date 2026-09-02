@@ -6,7 +6,7 @@ import { createClient } from "@supabase/supabase-js";
 import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
-import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, zonedTimeToUTC, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { completeHabitOccurrence, uncompleteHabitOccurrence } from "./habit-completion";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -1089,6 +1089,16 @@ export function wasSanitized(input: string): boolean {
 /** The one message the UI shows when input was altered for safety. */
 export const SANITIZE_NOTICE = "Some unsafe formatting was removed from your text.";
 
+/** Escape text for interpolation into HTML (outbound email bodies). */
+function htmlEscape(input: unknown): string {
+  return String(input ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function sanitize(input: string): string {
   return input
     .replace(/javascript:/gi, '')
@@ -2030,16 +2040,20 @@ export async function registerRoutes(
   // The ROUTE NAME is deliberately unchanged: it is wired into vercel.json's
   // `crons` block, and a schedule pointing at a 404 fails silently. A second
   // path is registered under the honest name for anything configured later.
-  const cronDailyMaintenance: any = asyncHandler(async (req: any, res: any) => {
+  // Accept the Bearer header as well as ?key=. Vercel Cron authenticates with
+  // `Authorization: Bearer $CRON_SECRET` and cannot append a query string, so
+  // a ?key=-only check makes an endpoint unreachable from a schedule. ?key= is
+  // kept so a job can still be triggered by hand. ONE check for every cron
+  // route — two of them had grown their own ?key=-only copy.
+  function cronAuthorized(req: any): boolean {
     const secret = process.env.CRON_SECRET;
-    // Accept the Bearer header as well as ?key=. Vercel Cron authenticates with
-    // `Authorization: Bearer $CRON_SECRET` and cannot append a query string, so
-    // a ?key=-only check made this endpoint unreachable from a schedule.
-    // ?key= is kept so the job can still be triggered by hand.
     const provided = String(
       req.query.key || (req.headers.authorization || "").replace("Bearer ", "")
     ).trim();
-    if (!secret || !provided || !safeEqual(provided, secret)) {
+    return !!secret && !!provided && safeEqual(provided, secret);
+  }
+  const cronDailyMaintenance: any = asyncHandler(async (req: any, res: any) => {
+    if (!cronAuthorized(req)) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     try {
@@ -2047,7 +2061,22 @@ export async function registerRoutes(
       // growing without bound.
       let swept = 0;
       try { swept = (await (storage as any).sweepResponseCache?.()) || 0; } catch { /* best-effort */ }
-      res.json({ swept });
+      // The net-worth snapshot and the recurring-bill due scan have their own
+      // routes below, but nothing ever scheduled them: vercel.json carries ONE
+      // cron (this one). So /api/net-worth/history stayed empty and autopay
+      // bills never auto-logged. Run both from the daily job — one schedule,
+      // three tasks — and report each outcome; one failing must not stop the
+      // others.
+      const [snapshot, dueScan] = await Promise.allSettled([
+        runNetWorthSnapshot(),
+        runLiabilityDueScan(),
+      ]);
+      const settle = (label: string, r: PromiseSettledResult<any>) => {
+        if (r.status === "fulfilled") return r.value;
+        log.error(`[Cron Daily Maintenance] ${label}`, (r.reason as any)?.message || r.reason);
+        return { error: "failed" };
+      };
+      res.json({ swept, snapshot: settle("snapshot", snapshot), dueScan: settle("due-scan", dueScan) });
     } catch (err: any) {
       log.error("[Cron Daily Maintenance]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
@@ -2058,20 +2087,15 @@ export async function registerRoutes(
   app.get("/api/cron/fire-due-reminders", cronDailyMaintenance);
 
   // ---- Cron: daily net-worth snapshot (W4-5) ----
-  // Global cross-user job. Gated by ?key= matching CRON_SECRET, runs under the
-  // service_role admin client, and writes one snapshot row per profile + an
+  // Global cross-user job. Gated by CRON_SECRET (see cronAuthorized), runs under
+  // the service_role admin client, and writes one snapshot row per profile + an
   // aggregate row for each user. Returns { snapped: N } counting users snapped.
-  const cronSnapshotNetWorth: any = asyncHandler(async (req: any, res: any) => {
-    const secret = process.env.CRON_SECRET;
-    const provided = String(req.query.key || "").trim();
-    if (!secret || !provided || !safeEqual(provided, secret)) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-    try {
+  // Also run by the daily-maintenance job, which is the one vercel.json schedules.
+  async function runNetWorthSnapshot(): Promise<{ snapped: number }> {
       const { createClient } = await import("@supabase/supabase-js");
       const url = process.env.VITE_SUPABASE_URL;
       const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (!url || !key) return res.status(500).json({ error: "Supabase admin env vars missing" });
+      if (!url || !key) throw new Error("Supabase admin env vars missing");
       const admin = createClient(url, key);
       const { data: usersList, error: listErr } = await (admin as any).auth.admin.listUsers({ perPage: 1000 });
       if (listErr) throw listErr;
@@ -2097,7 +2121,14 @@ export async function registerRoutes(
           });
         } catch { /* skip user */ }
       }
-      res.json({ snapped });
+      return { snapped };
+  }
+  const cronSnapshotNetWorth: any = asyncHandler(async (req: any, res: any) => {
+    if (!cronAuthorized(req)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      res.json(await runNetWorthSnapshot());
     } catch (err: any) {
       log.error("[Cron Snapshot Net Worth]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
@@ -2114,17 +2145,12 @@ export async function registerRoutes(
   // title + date) so the user sees it on the dashboard and can check it off.
   // This is the liability-native replacement for materializeOccurrences.
   const REMINDER_WINDOW_DAYS = 3;
-  const cronLiabilityDueScan: any = asyncHandler(async (req: any, res: any) => {
-    const secret = process.env.CRON_SECRET;
-    const provided = String(req.query.key || "").trim();
-    if (!secret || !provided || !safeEqual(provided, secret)) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-    try {
+  // Also run by the daily-maintenance job (the one vercel.json schedules).
+  async function runLiabilityDueScan(): Promise<{ autopaid: number; reminded: number }> {
       const { createClient } = await import("@supabase/supabase-js");
       const url = process.env.VITE_SUPABASE_URL;
       const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-      if (!url || !key) return res.status(500).json({ error: "Supabase admin env vars missing" });
+      if (!url || !key) throw new Error("Supabase admin env vars missing");
       const admin = createClient(url, key);
       const { data: usersList, error: listErr } = await (admin as any).auth.admin.listUsers({ perPage: 1000 });
       if (listErr) throw listErr;
@@ -2193,7 +2219,14 @@ export async function registerRoutes(
           });
         } catch { /* skip user */ }
       }
-      res.json({ autopaid, reminded });
+      return { autopaid, reminded };
+  }
+  const cronLiabilityDueScan: any = asyncHandler(async (req: any, res: any) => {
+    if (!cronAuthorized(req)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      res.json(await runLiabilityDueScan());
     } catch (err: any) {
       log.error("[Cron Liability Due Scan]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
@@ -3910,7 +3943,9 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
-    const month = (req.query.month as string) || new Date().toISOString().slice(0, 7);
+    // The user's month, not UTC's: late on the last evening of a month (US
+    // zones) the UTC default already pointed the budget block at next month.
+    const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
     const userId = cacheUserKey(req as AuthenticatedRequest, "bootstrap:");
     const filterKey = filterIds?.join(",") || "all";
     const cacheKey = `bootstrap:${userId}:${filterKey}:${month}`;
@@ -4542,7 +4577,9 @@ ${JSON.stringify(ctx, null, 2)}`;
         return null;
       }
       // S1: ownership guard — storage filters by user_id but be defensive.
-      if ((detail as any).userId && (detail as any).userId !== userId) {
+      // Compare against the bare user id: `userId` above is the versioned
+      // CACHE key ("<uid>@v…"), which never equals a row's user_id.
+      if ((detail as any).userId && (detail as any).userId !== (req as AuthenticatedRequest).userId) {
         try { (storage as any).disableRequestMemo?.(); } catch {}
         return null;
       }
@@ -5745,15 +5782,18 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
   }));
   app.patch("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     const { values, notes, mood, tags, timestamp, valuesToDelete } = req.body || {};
-    // Apply the same numeric validation we use on POST entries so edits can't
-    // smuggle bad numbers around the original bounds.
-    if (values && typeof values === 'object') {
-      if (Object.values(values).some((v: any) => typeof v === 'number' && isNaN(v))) {
-        return res.status(400).json({ error: "All values must be valid numbers" });
-      }
-    }
     const patch: any = {};
-    if (values && typeof values === 'object') patch.values = values;
+    // The same value gate as POST (server/tracker-entry-guard.ts), so an edit
+    // can't smuggle a value the create path would have rejected. The previous
+    // `typeof v === 'number' && isNaN(v)` check could never fire — JSON has no
+    // NaN literal — so edits were entirely unvalidated.
+    if (values && typeof values === 'object') {
+      const tracker = await storage.getTracker(req.params.id);
+      if (!tracker) return res.status(404).json({ error: "Tracker not found" });
+      const guard = sanitizeTrackerEntryValues(tracker.fields, values);
+      if (guard.error) return res.status(400).json({ error: guard.error });
+      patch.values = guard.values;
+    }
     if (notes !== undefined) patch.notes = notes;
     if (mood !== undefined) patch.mood = mood;
     if (tags !== undefined) patch.tags = tags;
@@ -5793,11 +5833,6 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
   // tracker-scoped route.
   app.patch("/api/tracker-entries/:entryId", asyncHandler(async (req, res) => {
     const { values, notes, mood, tags, timestamp, valuesToDelete } = req.body || {};
-    if (values && typeof values === 'object') {
-      if (Object.values(values).some((v: any) => typeof v === 'number' && isNaN(v))) {
-        return res.status(400).json({ error: "All values must be valid numbers" });
-      }
-    }
     const patch: any = {};
     if (values && typeof values === 'object') patch.values = values;
     if (notes !== undefined) patch.notes = notes;
@@ -5812,6 +5847,12 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     for (const t of trackers) {
       const entry = (t.entries || []).find((e: any) => e.id === req.params.entryId);
       if (entry) {
+        // Same value gate as the tracker-scoped PATCH above.
+        if (patch.values) {
+          const guard = sanitizeTrackerEntryValues(t.fields, patch.values);
+          if (guard.error) return res.status(400).json({ error: guard.error });
+          patch.values = guard.values;
+        }
         const updated = await storage.updateTrackerEntry(t.id, req.params.entryId, patch);
         if (!updated) return res.status(404).json({ error: "Entry not found" });
         const uid_tep2 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_tep2}`); bustCache(`profile-detail:${uid_tep2}:`);
@@ -5943,13 +5984,7 @@ Rules:
     const fps = req.query.profileIds as string | undefined;
     const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
     if (filterProfileIds.length > 0) {
-      const allProfiles = await storage.getProfiles();
-      const selfIds = allProfiles.filter(p => p.type === "self").map(p => p.id);
-      const hasSelf = filterProfileIds.some(id => selfIds.includes(id));
-      items = items.filter(item => {
-        const lp = item.linkedProfiles || [];
-        return lp.some(id => filterProfileIds.includes(id)) || (hasSelf && lp.length === 0);
-      });
+      items = await filterByProfileScope(items, filterProfileIds, uid);
     }
     res.json(paginate(items, req, res));
   }));
@@ -6445,10 +6480,9 @@ Rules:
     const profileId = req.query.profileId as string | undefined;
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
     if (ids.length > 0) {
-      items = items.filter((item: any) => {
-        const linked = item.linkedProfiles || [];
-        return ids.some(id => linked.includes(id) || item.profileId === id);
-      });
+      // Canonical scope rule (orphans pass for Self) plus the direct owner id.
+      const inScope = new Set((await filterByProfileScope(items, ids, uid)).map((i: any) => i.id));
+      items = items.filter((item: any) => inScope.has(item.id) || ids.includes(item.profileId));
     }
     res.json(items);
   }));
@@ -6516,10 +6550,10 @@ Rules:
       items = await storage.getAllLoanSchedules();
     }
     if (ids.length > 0) {
-      items = items.filter((item: any) => {
-        const linked = item.linkedProfiles || [];
-        return ids.some(id => linked.includes(id) || item.profileId === id);
-      });
+      // Canonical scope rule (orphans pass for Self) plus the direct owner id.
+      const loanUid = cacheUserKey(req as AuthenticatedRequest, "profiles:");
+      const inScope = new Set((await filterByProfileScope(items, ids, loanUid)).map((i: any) => i.id));
+      items = items.filter((item: any) => inScope.has(item.id) || ids.includes(item.profileId));
     }
     res.json(items);
   }));
@@ -7076,7 +7110,15 @@ Rules:
       return res.status(429).json({ error: "Too many email send attempts. Try again in an hour." });
     }
     const { to, subject, message } = req.body as { to: string; subject?: string; message?: string };
-    if (!to || !to.includes('@')) return res.status(400).json({ error: "Valid email required" });
+    if (typeof to !== "string" || to.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to.trim())) {
+      return res.status(400).json({ error: "Valid email required" });
+    }
+    if (subject !== undefined && subject !== null && (typeof subject !== "string" || subject.length > 200)) {
+      return res.status(400).json({ error: "Subject must be 200 characters or fewer" });
+    }
+    if (message !== undefined && message !== null && (typeof message !== "string" || message.length > 2000)) {
+      return res.status(400).json({ error: "Message must be 2000 characters or fewer" });
+    }
 
     // Fetch document with its file data (getDocument downloads from storage if needed)
     const doc = await storage.getDocument(req.params.id);
@@ -7113,15 +7155,18 @@ Rules:
     const hasAttachment = attachments.length > 0;
     const emailBody: any = {
       from: "Portol <onboarding@resend.dev>",
-      to: [to],
+      to: [to.trim()],
       subject: subject || `${doc.name} — shared from Portol`,
+      // Everything user- or document-supplied is escaped: the body used to
+      // interpolate the free-form message raw, which made this an authenticated
+      // HTML-injection relay from a Portol-branded sender.
       html: `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
         <div style="margin-bottom:20px">
           <img src="https://portol.me/portol-logo-sm.png" alt="Portol" height="28" />
         </div>
-        <h2 style="color:#1a1a1a;margin:0 0 8px">${doc.name}</h2>
-        <p style="color:#666;font-size:13px;margin:0 0 16px">Type: ${doc.type || doc.mimeType || 'document'}</p>
-        ${message ? `<p style="color:#444;font-size:14px;background:#f5f5f5;padding:12px;border-radius:6px">${message}</p>` : ''}
+        <h2 style="color:#1a1a1a;margin:0 0 8px">${htmlEscape(doc.name)}</h2>
+        <p style="color:#666;font-size:13px;margin:0 0 16px">Type: ${htmlEscape(doc.type || doc.mimeType || 'document')}</p>
+        ${message ? `<p style="color:#444;font-size:14px;background:#f5f5f5;padding:12px;border-radius:6px">${htmlEscape(message).replace(/\r?\n/g, '<br />')}</p>` : ''}
         ${hasAttachment
           ? `<p style="color:#444;font-size:13px;">The document is attached to this email.</p>`
           : `<p style="color:#888;font-size:12px;">File could not be attached (too large or unavailable).</p>`
@@ -8137,8 +8182,9 @@ Rules:
         ? profileIdsParam.split(",").filter(Boolean)
         : (fp ? [fp] : []);
       if (ids.length > 0) {
-        const [allDocs, allTasks, allObs, allHabits] = await Promise.all([
+        const [allDocs, allTasks, allObs, allHabits, notifProfiles] = await Promise.all([
           storage.getDocuments(), storage.getTasks(), storage.getObligations(), storage.getHabits(),
+          storage.getProfiles(),
         ]);
         const matchesProfile = (entityType: string | undefined, entityId: string | undefined): boolean => {
           if (!entityType || !entityId) return false;
@@ -8150,8 +8196,9 @@ Rules:
             entityType === "habit" ? allHabits : [];
           const ent = collection.find((x: any) => x.id === entityId);
           if (!ent) return false;
-          const lp: string[] = ent.linkedProfiles || [];
-          return lp.some((pid: string) => ids.includes(pid));
+          // Canonical rule (shared/profile-filter.ts): an unlinked item is
+          // Self's, so its alerts must not vanish under a Self filter.
+          return passesProfileFilter(ent.linkedProfiles, { selectedIds: ids, allProfiles: notifProfiles as any[] });
         };
         // Custom (user-created) notifications aren't entity-derived — they
         // survive every profile filter rather than silently vanishing.
@@ -8205,8 +8252,7 @@ Rules:
             if (isAssetOrLiability(r.type)) return itemVisibleForSelection(r.id, ids, ownerIndex, selfIds);
             return false;
           }
-          const lp: string[] = r.linkedProfiles || [];
-          return lp.some((pid: string) => ids.includes(pid));
+          return passesProfileFilter(r.linkedProfiles, { selectedIds: ids, allProfiles: allProfiles as any[] });
         });
       }
       res.json(results);
@@ -9794,20 +9840,29 @@ No emojis. No prose outside the JSON.`,
       }
 
       const dateStr = event.date;
-      const tzOffset = (() => { const o = new Date().getTimezoneOffset(); const h = String(Math.floor(Math.abs(o)/60)).padStart(2,"0"); const m = String(Math.abs(o)%60).padStart(2,"0"); return (o <= 0 ? "+" : "-") + h + ":" + m; })();
-      const startDateTime = `${dateStr}T${String(startHour).padStart(2, "0")}:${String(startMin).padStart(2, "0")}:00${tzOffset}`;
+      // Resolve the wall-clock time in the USER's zone. This used to stamp the
+      // server's UTC offset (always +00:00 on Vercel) onto local hours, so a
+      // 6:00 AM Pacific event reached Google Calendar at 06:00 UTC — 11 PM the
+      // previous evening for the user.
+      const tz = getTimezone(req);
+      const startInstant = zonedTimeToUTC(dateStr, startHour, startMin, tz);
 
-      let endHour = startHour + 1, endMin = startMin;
-      if (event.endTime) {
-        const endMatch = event.endTime.match(/(\d+):(\d+)\s*(AM|PM)?/i);
-        if (endMatch) {
-          endHour = parseInt(endMatch[1]);
-          endMin = parseInt(endMatch[2]);
-          if (endMatch[3]?.toUpperCase() === "PM" && endHour !== 12) endHour += 12;
-          if (endMatch[3]?.toUpperCase() === "AM" && endHour === 12) endHour = 0;
-        }
+      let endInstant: Date | null = null;
+      const endMatch = event.endTime ? event.endTime.match(/(\d+):(\d+)\s*(AM|PM)?/i) : null;
+      if (endMatch) {
+        let endHour = parseInt(endMatch[1]);
+        const endMin = parseInt(endMatch[2]);
+        if (endMatch[3]?.toUpperCase() === "PM" && endHour !== 12) endHour += 12;
+        if (endMatch[3]?.toUpperCase() === "AM" && endHour === 12) endHour = 0;
+        endInstant = zonedTimeToUTC(event.endDate || dateStr, endHour, endMin, tz);
       }
-      const endDateTime = `${event.endDate || dateStr}T${String(endHour).padStart(2, "0")}:${String(endMin).padStart(2, "0")}:00${tzOffset}`;
+      // Default to one hour, as an instant — "startHour + 1" emitted the invalid
+      // "T24:00:00" for an 11 PM start.
+      if (!endInstant || endInstant.getTime() <= startInstant.getTime()) {
+        endInstant = new Date(startInstant.getTime() + 60 * 60000);
+      }
+      const startDateTime = startInstant.toISOString();
+      const endDateTime = endInstant.toISOString();
 
       const params = JSON.stringify({
         source_id: "gcal",

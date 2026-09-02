@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { toMonthlyAmount, isUpcomingBill } from "@shared/obligation-windows";
 import { autoCheckinLinkedHabits } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
@@ -729,7 +730,8 @@ function generateInsights(
   // 5. Overdue tasks
   const overdueTasks = tasks.filter(t => {
     if (t.status === "done" || !t.dueDate) return false;
-    return new Date(t.dueDate) < now;
+    const dueDay = localDayOf(t.dueDate);
+    return !!dueDay && dueDay < getUserToday();
   });
   if (overdueTasks.length > 0) {
     insights.push({
@@ -2369,11 +2371,7 @@ export class MemStorage implements IStorage {
 
     const obligations = Array.from(this.obligations.values()).filter(o => matchesFilter((o as any).linkedProfiles));
     const upcomingBills = obligations
-      .filter(o => {
-        const due = new Date(o.nextDueDate);
-        const daysUntil = Math.ceil((due.getTime() - now.getTime()) / 86400000);
-        return daysUntil <= 30;
-      })
+      .filter(o => isUpcomingBill(o, now))
       .sort((a, b) => new Date(a.nextDueDate).getTime() - new Date(b.nextDueDate).getTime())
       .map(o => ({
         id: o.id,
@@ -2385,22 +2383,19 @@ export class MemStorage implements IStorage {
         category: o.category,
       }));
 
-    const monthlyObligationTotal = obligations.reduce((s, o) => {
-      switch (o.frequency) {
-        case 'weekly': return s + o.amount * 4.33;
-        case 'biweekly': return s + o.amount * 2.17;
-        case 'monthly': return s + o.amount;
-        case 'quarterly': return s + o.amount / 3;
-        case 'yearly': return s + o.amount / 12;
-        default: return s;
-      }
-    }, 0);
+    // Exact 52/12 and 26/12 multipliers (shared/obligation-windows.ts), the
+    // same ones production uses — the truncated 4.33/2.17 drifted from it.
+    const monthlyObligationTotal = obligations.reduce(
+      (s, o) => s + toMonthlyAmount(o.amount, o.frequency),
+      0,
+    );
 
     // Overdue tasks
     const tasks = Array.from(this.tasks.values()).filter(t => matchesFilter((t as any).linkedProfiles));
     const overdueTasks = tasks.filter(t => {
       if (t.status === 'done' || !t.dueDate) return false;
-      return new Date(t.dueDate) < now;
+      const dueDay = localDayOf(t.dueDate);
+      return !!dueDay && dueDay < today;
     }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
 
     // Tasks due today

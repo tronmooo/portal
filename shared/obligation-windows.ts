@@ -17,14 +17,24 @@ export const MS_PER_DAY = 86_400_000;
 
 export interface UpcomingBillCheckInput {
   nextDueDate?: string | Date | null;
+  status?: string | null;
 }
 
-/** Returns true if obligation falls in the upcoming-bill window. */
+/**
+ * Returns true if the obligation belongs in the upcoming-bill window: due
+ * within UPCOMING_BILL_WINDOW_DAYS (overdue bills included — they are still
+ * owed) and not paused or cancelled.
+ *
+ * The status rule and the ceil() day rounding are the ones the dashboard
+ * popup (getDashboardEnhanced.upcomingBills) has always used. getStats()
+ * had neither, so the KPI tile counted paused bills the popup did not list.
+ */
 export function isUpcomingBill(o: UpcomingBillCheckInput, now: Date = new Date()): boolean {
   if (!o?.nextDueDate) return false;
+  if (o.status === "paused" || o.status === "cancelled") return false;
   const due = new Date(o.nextDueDate);
   if (Number.isNaN(due.getTime())) return false;
-  const daysUntil = Math.floor((due.getTime() - now.getTime()) / MS_PER_DAY);
+  const daysUntil = Math.ceil((due.getTime() - now.getTime()) / MS_PER_DAY);
   return daysUntil <= UPCOMING_BILL_WINDOW_DAYS;
 }
 
