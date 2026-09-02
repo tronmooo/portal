@@ -424,3 +424,18 @@ describe("D111: every day field is a real calendar day", () => {
     expect(applyBalanceAdjustment(acct, { delta: 5, date: "2026-09-01" }, "2026-09-02").fields.balanceAsOf).toBe("2026-09-01");
   });
 });
+
+// D115 — money fields on profiles took anything.
+import { validateProfileMoneyFields } from "../shared/quick-add";
+describe("D115: profile money fields are finite, bounded numbers", () => {
+  it("normalises '$14,500', rejects words, negatives (except balances) and absurd sizes", () => {
+    const f: any = { estimatedValue: "$14,500", balance: "-120.5", name: "Civic" };
+    expect(validateProfileMoneyFields(f)).toBeNull();
+    expect(f.estimatedValue).toBe(14500); expect(f.balance).toBe(-120.5);
+    expect(validateProfileMoneyFields({ currentBalance: "eight thousand" })).toMatch(/must be a number/);
+    expect(validateProfileMoneyFields({ estimatedValue: -5 })).toMatch(/cannot be negative/);
+    expect(validateProfileMoneyFields({ estimatedValue: 1e12 })).toMatch(/too large/);
+    expect(validateProfileMoneyFields({ estimatedValue: "" , monthlyPayment: null })).toBeNull();
+    expect(validateProfileMoneyFields(undefined)).toBeNull();
+  });
+});

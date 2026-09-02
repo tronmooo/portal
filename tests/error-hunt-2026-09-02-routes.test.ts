@@ -973,3 +973,17 @@ describe("D114: no-row read-backs are 404, unknown columns are 400", () => {
     expect((await h.api("PATCH", "/api/captures/c1", { amount: 1 })).status).toBe(400);
   });
 });
+
+// D115 — profile create/edit reject impossible money values.
+describe("D115: POST/PATCH /api/profiles validate money fields", () => {
+  it("rejects a worded balance and an absurd value; normalises a formatted one", async () => {
+    h = await boot({ profiles: [SELF, { id: "loan-9", type: "liability", type_key: "auto_loan", name: "Loan", fields: { currentBalance: 8000 } }] }, (storage, db) => {
+      storage.updateProfile = async (id: string, patch: any) => { const p = db.profiles.find((x: any) => x.id === id); if (p) Object.assign(p, patch, { fields: { ...(p.fields || {}), ...(patch.fields || {}) } }); return p; };
+    });
+    expect((await h.api("PATCH", "/api/profiles/loan-9", { fields: { currentBalance: "eight thousand" } })).status).toBe(400);
+    expect((await h.api("POST", "/api/profiles", { type: "vehicle", name: "Truck", fields: { estimatedValue: 1e12 } })).status).toBe(400);
+    const ok = await h.api("POST", "/api/profiles", { type: "vehicle", name: "Truck", fields: { estimatedValue: "$14,500" } });
+    expect(ok.status).toBe(201);
+    expect(h.db.profiles.find((p: any) => p.name === "Truck")?.fields?.estimatedValue).toBe(14500);
+  });
+});

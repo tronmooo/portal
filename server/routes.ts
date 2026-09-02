@@ -432,7 +432,7 @@ import {
   isCalendarDay,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
-import { validateTransactionAmount } from "@shared/quick-add";
+import { validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
 import { generateSmartInsights } from "./insights-engine";
@@ -4788,6 +4788,8 @@ ${JSON.stringify(ctx, null, 2)}`;
     // Validate common profile fields if provided
     if (req.body.fields && typeof req.body.fields === "object") {
       const f = req.body.fields;
+      const moneyError = validateProfileMoneyFields(f);
+      if (moneyError) return res.status(400).json({ error: moneyError });
       if (f.email && typeof f.email === "string" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
         return res.status(400).json({ error: "Invalid email format" });
       }
@@ -4983,6 +4985,8 @@ ${JSON.stringify(ctx, null, 2)}`;
     // Validate common profile fields if provided
     if (req.body.fields && typeof req.body.fields === "object") {
       const f = req.body.fields;
+      const moneyError = validateProfileMoneyFields(f);
+      if (moneyError) return res.status(400).json({ error: moneyError });
       if (f.email && typeof f.email === "string" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email)) {
         return res.status(400).json({ error: "Invalid email format" });
       }

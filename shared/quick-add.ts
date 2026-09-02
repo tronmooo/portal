@@ -201,3 +201,34 @@ export function buildTimedTaskPayload(input: TimedTaskInput, ownerProfileId?: st
     },
   };
 }
+
+/**
+ * The money-carrying profile fields (asset values, balances, limits,
+ * payments). A record's net worth, cash flow and payoff math read these as
+ * numbers, so a value the number model cannot hold must not be stored: a
+ * loan balance of "eight thousand" used to save and silently drop the loan
+ * from net worth; an asset "worth" 1e12 used to save and swamp it.
+ *
+ * Returns an error message, or null after normalising each present value in
+ * place ("$14,500" → 14500). Balances may be negative (an overdrawn account,
+ * a credit); values, limits and payments may not.
+ */
+export const PROFILE_MONEY_FIELDS = [
+  "estimatedValue", "currentValue", "marketValue", "value", "purchasePrice", "originalAmount", "principal",
+  "balance", "currentBalance", "availableBalance", "creditLimit", "monthlyPayment", "monthlyAmount", "amount", "cost",
+] as const;
+const NEGATIVE_OK = new Set(["balance", "currentBalance", "availableBalance"]);
+
+export function validateProfileMoneyFields(fields: Record<string, any> | null | undefined): string | null {
+  if (!fields || typeof fields !== "object") return null;
+  for (const key of PROFILE_MONEY_FIELDS) {
+    const raw = fields[key];
+    if (raw === undefined || raw === null || raw === "") continue;
+    const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw.replace(/[$,\s]/g, "")) : NaN;
+    if (!Number.isFinite(n)) return `${key} must be a number`;
+    if (n < 0 && !NEGATIVE_OK.has(key)) return `${key} cannot be negative`;
+    if (Math.abs(n) > MAX_TRANSACTION_AMOUNT) return `${key} is too large (maximum ${MAX_TRANSACTION_AMOUNT.toLocaleString("en-US")})`;
+    fields[key] = n;
+  }
+  return null;
+}
