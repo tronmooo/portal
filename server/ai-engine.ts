@@ -5416,16 +5416,52 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
 // SYSTEM PROMPT (simplified — no JSON format instructions)
 // ============================================================
 
-function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: string): string {
-  // The user's IANA timezone is forwarded from the chat route via the
-  // `x-timezone` header; falling back to LA preserves prior behavior so
-  // model output stays sensible if the header is missing.
-  const tz = userTz || (storage as any)._timezone || 'America/Los_Angeles';
-  const tzLabel = tz === 'America/Los_Angeles' ? 'Pacific Time'
+function resolveTzLabel(tz: string): string {
+  return tz === 'America/Los_Angeles' ? 'Pacific Time'
     : tz === 'America/New_York' ? 'Eastern Time'
     : tz === 'America/Chicago' ? 'Central Time'
     : tz === 'America/Denver' ? 'Mountain Time'
     : tz.replace(/_/g, ' ');
+}
+
+/**
+ * The system prompt in two blocks, for prompt caching (latency, 2026-09-01).
+ *
+ * The instructions are ~130 KB and identical from one message to the next;
+ * the user's data snapshot and the clock are not. As ONE block the cache
+ * prefix broke on every turn (the snapshot sat near the top and the
+ * timestamp carried minutes), so every message re-processed the whole
+ * prompt. Split, the STABLE block (instructions — per user, since it carries
+ * the timezone label and self-profile id) is served from cache within the
+ * 5-minute window and only the DYNAMIC block (clock + EXISTING DATA) is
+ * processed fresh. The text the model reads is the same; only the boundary
+ * moved: the data now follows the instructions instead of interrupting them.
+ */
+export function buildSystemPromptBlocks(context: string, selfProfileId?: string, userTz?: string): { stable: string; dynamic: string } {
+  const tz = userTz || (storage as any)._timezone || 'America/Los_Angeles';
+  const tzLabel = resolveTzLabel(tz);
+  const now = new Date();
+  const dynamic = [
+    `Current date/time: ${now.toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz })} (${tzLabel}).`,
+    `Today is ${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}. Today's date is ${now.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz })}.`,
+    (() => { const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: tz })); } return 'Reference: ' + ref.join(', '); })(),
+    ``,
+    `EXISTING DATA (this is fresh from the database — use it for every answer):`,
+    context,
+  ].join("\n");
+  return { stable: buildStableSystemPrompt(selfProfileId, tz), dynamic };
+}
+
+function buildSystemPrompt(context: string, selfProfileId?: string, userTz?: string): string {
+  const { stable, dynamic } = buildSystemPromptBlocks(context, selfProfileId, userTz);
+  return `${stable}\n\n${dynamic}`;
+}
+
+function buildStableSystemPrompt(selfProfileId: string | undefined, tz: string): string {
+  // The user's IANA timezone is forwarded from the chat route via the
+  // `x-timezone` header; falling back to LA preserves prior behavior so
+  // model output stays sensible if the header is missing.
+  const tzLabel = resolveTzLabel(tz);
   return `You are Portol AI — the intelligent brain of a unified personal life operating system. You have FULL access to the user's data: health trackers, finances, calendar, profiles, documents, habits, tasks, medications, and more. Your job is to both act on commands AND generate real, data-driven insights.
 
 *** RESPONSE STYLE — BE CONCISE ***
@@ -5436,8 +5472,7 @@ Example for a multi-log request:
 ✅ Amoxicillin task: daily at 8 AM × 10 days
 ✅ Journal entry added
 
-EXISTING DATA (this is fresh from the database — use it for every answer):
-${context}
+EXISTING DATA — the user's live records (fresh from the database — use them for every answer) and the current date/time are in the SECOND system block, after these instructions. Everything below that says "EXISTING DATA", "the data snapshot", "the reference dates" or "your context" refers to that block.
 
 *** PROFILE EXISTENCE — READ THE NAME INDEX FIRST ***
 The "Profile Name Index" at the top of EXISTING DATA is the COMPLETE list of every profile the user owns (no truncation). Before you ever say "I don't have a profile for X", "I don't see X in your data", "there's no profile named X", or any similar denial, you MUST scan the Profile Name Index for case-insensitive name matches, nickname matches, and partial matches. If the name appears in the index, that profile EXISTS — answer from its row in "Profile Details" (if present) or call get_profile_data by name. If a field (hair color, eye color, breed, etc.) isn't shown in Profile Details because it was truncated, say "I see Craig but don't have that specific field loaded — let me check" and call a profile read tool rather than denying the profile's existence. NEVER deny a profile that appears in the Name Index.
@@ -6352,9 +6387,7 @@ When the user asks /help, "what can you do", "how do I use this", or similar, su
 Do NOT suggest: "create a workout plan" or "workout routine" (no workout-plan page exists — only fitness trackers). Workouts are tracked via /trackers as fitness entries. Goals ARE visible — they live in the Goals widget on /dashboard.
 Keep help responses concise: 4-6 example commands max, each tied to a real route the user can click.
 
-Current date/time: ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz })} (${tzLabel}).
-Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: tz })}. Today's date is ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: tz })}.
-${(() => { const now = new Date(); const ref: string[] = []; for (let i = 0; i < 7; i++) { const d = new Date(now.getTime() + i * 86400000); ref.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz }) + ' = ' + d.toLocaleDateString('en-CA', { timeZone: tz })); } return 'Reference: ' + ref.join(', '); })()}
+The current date/time, today's weekday, and a 7-day reference table are given in the EXISTING DATA block (second system block).
 CRITICAL DATE RULES:
 - "tomorrow" = the day AFTER today in ${tzLabel}. Calculate carefully.
 - "by Friday" or "this Friday" = if today IS Friday, that means TODAY. If today is before Friday, it means the upcoming Friday of this week. NEVER push to next week.
@@ -15591,7 +15624,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // hiding in profile names, memory keys/values, tracker names, etc. Stripping
   // happens at the top level so per-row mistakes elsewhere can't leak through.
   const safeContext = sanitize(`${scopeNote}\n\n${context}`).replace(/```/g, "'''");
-  const systemPrompt = buildSystemPrompt(safeContext, selfProfileId, (storage as any)._timezone);
+  const systemPromptBlocks = buildSystemPromptBlocks(safeContext, selfProfileId, (storage as any)._timezone);
 
   // ─── Model selection: Sonnet 4.5 ALWAYS ───
   // (2026-05-21) Haiku was dropping action-heavy multi-step prompts silently —
@@ -15829,9 +15862,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // Anthropic reuse the computed prefix instead of reprocessing it each call,
     // cutting time-to-first-token and input cost. This changes NOTHING about
     // the model, the tools, or the outputs — same answers, just less repeated
-    // work. Two cache breakpoints: end of tools, and the system block.
+    // work. Two cache breakpoints: end of tools, and the STABLE system block.
+    // The data snapshot + clock ride in a second, uncached block, so the
+    // cached prefix (tools + instructions) survives from one message to the
+    // next instead of breaking on every turn (see buildSystemPromptBlocks).
     const cachedSystem = [
-      { type: "text" as const, text: systemPrompt, cache_control: { type: "ephemeral" as const } },
+      { type: "text" as const, text: systemPromptBlocks.stable, cache_control: { type: "ephemeral" as const } },
+      { type: "text" as const, text: systemPromptBlocks.dynamic },
     ];
     const cachedTools = TOOL_DEFINITIONS.map((t, i) =>
       i === TOOL_DEFINITIONS.length - 1 ? { ...t, cache_control: { type: "ephemeral" as const } } : t,
