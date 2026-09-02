@@ -8626,16 +8626,49 @@ Rules:
       }
 
       // Import profiles
+      // Restored rows must point at the profiles THIS account now has, not the
+      // ids the file was exported with: a task linked to "Linda" in the old
+      // account carried Linda's old id, which is another user's profile (or
+      // nobody's) here — the ownership guard rejected the row, or it landed
+      // unowned. Every profile created below is mapped old → new, the file's
+      // Self maps to this account's own Self (there is exactly one), parents
+      // are remapped (parents are created first), and every section's
+      // linkedProfiles goes through the map.
+      const idMap = new Map<string, string>();
+      const remap = (ids: unknown): string[] =>
+        (Array.isArray(ids) ? ids : []).map((id) => idMap.get(String(id))).filter((id): id is string => !!id);
       if (data.profiles && Array.isArray(data.profiles)) {
-        for (const p of data.profiles) {
-          await tryImport("profiles", p.name || "unnamed", () => storage.createProfile({ type: p.type, name: p.name, fields: p.fields, tags: p.tags, notes: p.notes }));
+        const existingSelf = await (storage.getSelfProfile?.() ?? Promise.resolve(undefined)).catch(() => undefined);
+        const byId = new Map<string, any>((data.profiles as any[]).filter((p) => p && p.id).map((p) => [String(p.id), p]));
+        const ordered: any[] = [];
+        const seen = new Set<string>();
+        const visit = (p: any, depth = 0) => {
+          if (!p || depth > 20) return;
+          const key = p.id ? String(p.id) : `anon-${ordered.length}`;
+          if (seen.has(key)) return;
+          const parent = p.parentProfileId ? byId.get(String(p.parentProfileId)) : null;
+          if (parent && parent !== p) visit(parent, depth + 1);
+          seen.add(key);
+          ordered.push(p);
+        };
+        for (const p of data.profiles) visit(p);
+        for (const p of ordered) {
+          if (p.type === "self") {
+            if (existingSelf && p.id) idMap.set(String(p.id), existingSelf.id);
+            continue; // one Self per account: the file's Self is this account's Self
+          }
+          await tryImport("profiles", p.name || "unnamed", async () => {
+            const parentProfileId = p.parentProfileId ? idMap.get(String(p.parentProfileId)) : undefined;
+            const created = await storage.createProfile({ type: p.type, name: p.name, fields: p.fields, tags: p.tags, notes: p.notes, ...(parentProfileId ? { parentProfileId } : {}) } as any);
+            if (p.id && created?.id) idMap.set(String(p.id), created.id);
+          });
         }
       }
       // Import trackers + entries
       if (data.trackers && Array.isArray(data.trackers)) {
         for (const t of data.trackers) {
           await tryImport("trackers", t.name || "unnamed", async () => {
-            const created = await storage.createTracker({ name: t.name, category: t.category, unit: t.unit, icon: t.icon, fields: t.fields });
+            const created = await storage.createTracker({ name: t.name, category: t.category, unit: t.unit, icon: t.icon, fields: t.fields, linkedProfiles: remap(t.linkedProfiles) } as any);
             if (t.entries) {
               for (const e of t.entries) {
                 await tryImport("trackerEntries", `${t.name} entry`, () => storage.logEntry({ trackerId: created.id, values: e.values, notes: e.notes, mood: e.mood, tags: e.tags }));
@@ -8647,13 +8680,13 @@ Rules:
       // Import tasks
       if (data.tasks && Array.isArray(data.tasks)) {
         for (const t of data.tasks) {
-          await tryImport("tasks", t.title || "unnamed", () => storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, tags: t.tags }));
+          await tryImport("tasks", t.title || "unnamed", () => storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, tags: t.tags, linkedProfiles: remap(t.linkedProfiles) } as any));
         }
       }
       // Import expenses
       if (data.expenses && Array.isArray(data.expenses)) {
         for (const e of data.expenses) {
-          await tryImport("expenses", e.description || "unnamed", () => storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags }));
+          await tryImport("expenses", e.description || "unnamed", () => storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags, linkedProfiles: remap(e.linkedProfiles) } as any));
         }
       }
       // Import incomes, goals, paychecks and budgets — the money model the
@@ -8661,12 +8694,12 @@ Rules:
       // record only: their liability ids do not survive a re-import.
       if (data.incomes && Array.isArray(data.incomes)) {
         for (const i of data.incomes) {
-          await tryImport("incomes", i.description || "unnamed", () => storage.createIncome({ description: i.description, amount: Number(i.amount), category: i.category || "salary", frequency: i.frequency || "monthly", date: i.date || undefined, tags: i.tags || [], linkedProfiles: [] } as any));
+          await tryImport("incomes", i.description || "unnamed", () => storage.createIncome({ description: i.description, amount: Number(i.amount), category: i.category || "salary", frequency: i.frequency || "monthly", date: i.date || undefined, tags: i.tags || [], linkedProfiles: remap(i.linkedProfiles) } as any));
         }
       }
       if (data.goals && Array.isArray(data.goals)) {
         for (const g of data.goals) {
-          await tryImport("goals", g.title || "unnamed", () => storage.createGoal({ title: g.title, type: g.type || "custom", target: Number(g.target), unit: g.unit || "", startValue: g.startValue, deadline: g.deadline || undefined, category: g.category, milestones: g.milestones || [] } as any));
+          await tryImport("goals", g.title || "unnamed", () => storage.createGoal({ title: g.title, type: g.type || "custom", target: Number(g.target), unit: g.unit || "", startValue: g.startValue, deadline: g.deadline || undefined, category: g.category, milestones: g.milestones || [], linkedProfiles: remap(g.linkedProfiles) } as any));
         }
       }
       if (data.paychecks && Array.isArray(data.paychecks)) {
@@ -8685,20 +8718,20 @@ Rules:
       // Import events
       if (data.events && Array.isArray(data.events)) {
         for (const e of data.events) {
-          await tryImport("events", e.title || "unnamed", () => storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", tags: e.tags || [], source: e.source || "manual", linkedProfiles: e.linkedProfiles || [], linkedDocuments: e.linkedDocuments || [] }));
+          await tryImport("events", e.title || "unnamed", () => storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", tags: e.tags || [], source: e.source || "manual", linkedProfiles: remap(e.linkedProfiles), linkedDocuments: [] }));
         }
       }
       // Import documents
       if (data.documents && Array.isArray(data.documents)) {
         for (const d of data.documents) {
-          await tryImport("documents", d.name || "unnamed", () => storage.createDocument({ name: d.name, type: d.type, mimeType: d.mimeType, fileData: d.fileData, extractedData: d.extractedData, tags: d.tags }));
+          await tryImport("documents", d.name || "unnamed", () => storage.createDocument({ name: d.name, type: d.type, mimeType: d.mimeType, fileData: d.fileData, extractedData: d.extractedData, tags: d.tags, linkedProfiles: remap(d.linkedProfiles) } as any));
         }
       }
       // Import habits
       if (data.habits && Array.isArray(data.habits)) {
         for (const h of data.habits) {
           await tryImport("habits", h.name || "unnamed", async () => {
-            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency });
+            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency, targetPerDay: h.targetPerDay, linkedProfiles: remap(h.linkedProfiles) } as any);
             if (h.checkins) {
               for (const c of h.checkins) {
                 await tryImport("habitCheckins", `${h.name} checkin`, () => storage.checkinHabit(created.id, c.date, c.value, c.notes));
@@ -8711,7 +8744,7 @@ Rules:
       if (data.obligations && Array.isArray(data.obligations)) {
         for (const o of data.obligations) {
           await tryImport("obligations", o.name || "unnamed", async () => {
-            const created = await storage.createObligation({ name: o.name, amount: o.amount, frequency: o.frequency, category: o.category, nextDueDate: o.nextDueDate, autopay: o.autopay, notes: o.notes });
+            const created = await storage.createObligation({ name: o.name, amount: o.amount, frequency: o.frequency, category: o.category, nextDueDate: o.nextDueDate, autopay: o.autopay, notes: o.notes, linkedProfiles: remap(o.linkedProfiles) } as any);
             if (o.payments) {
               for (const p of o.payments) {
                 // Restoring HISTORY: raw ledger rows only, deliberately not
@@ -8735,7 +8768,7 @@ Rules:
       // Import artifacts
       if (data.artifacts && Array.isArray(data.artifacts)) {
         for (const a of data.artifacts) {
-          await tryImport("artifacts", a.title || "unnamed", () => storage.createArtifact({ type: a.type, title: a.title, content: a.content, items: a.items?.map((i: any) => ({ text: i.text, checked: i.checked })) || [], tags: a.tags, pinned: a.pinned, linkedProfiles: a.linkedProfiles || [], language: a.language, dataBindings: a.dataBindings, chartData: a.chartData }));
+          await tryImport("artifacts", a.title || "unnamed", () => storage.createArtifact({ type: a.type, title: a.title, content: a.content, items: a.items?.map((i: any) => ({ text: i.text, checked: i.checked })) || [], tags: a.tags, pinned: a.pinned, linkedProfiles: remap(a.linkedProfiles), language: a.language, dataBindings: a.dataBindings, chartData: a.chartData }));
         }
       }
       // Import journal entries

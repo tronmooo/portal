@@ -852,3 +852,37 @@ describe("D104: export carries the whole money model and import restores it", ()
     expect((h.db as any).goals.map((g: any) => g.title)).toEqual(["Save"]);
   });
 });
+
+// D105 — imported rows kept the exporting account's profile ids.
+describe("D105: import remaps profiles, parents, Self and every link", () => {
+  it("maps the file's Self to this account's Self, creates parents first, and rewrites links", async () => {
+    h = await boot({ profiles: [SELF] }, (storage, db) => {
+      storage.getSelfProfile = async () => SELF;
+      let n = 0;
+      storage.createProfile = async (data: any) => { const row = { id: `new-${++n}`, ...data }; db.profiles.push(row); return row; };
+      storage.getTrackers = async () => []; storage.getHabits = async () => []; storage.getEvents = async () => db.events;
+      storage.createEvent = async (data: any) => { const row = { id: `ev-${db.events.length + 1}`, ...data }; db.events.push(row); return row; };
+    });
+    const r = await h.api("POST", "/api/import", {
+      version: 1,
+      profiles: [
+        { id: "old-car", type: "vehicle", name: "Civic", parentProfileId: "old-self" },   // child listed before its parent
+        { id: "old-self", type: "self", name: "Old Me" },
+        { id: "old-linda", type: "person", name: "Linda" },
+      ],
+      tasks: [{ title: "Oil change", linkedProfiles: ["old-car"] }, { title: "Call Linda", linkedProfiles: ["old-linda", "ghost-id"] }, { title: "Mine", linkedProfiles: ["old-self"] }],
+      events: [{ title: "Dentist", date: "2026-09-10", linkedProfiles: ["old-self"] }],
+    });
+    expect(r.status, JSON.stringify(r.data)).toBe(200);
+    expect(r.data.failed?.profiles).toBeUndefined();
+    const byName = Object.fromEntries(h.db.profiles.map((p: any) => [p.name, p]));
+    expect(byName["Old Me"]).toBeUndefined();                       // no second Self
+    expect(byName["Civic"].parentProfileId).toBe(SELF.id);           // parent remapped to this account's Self
+    expect(byName["Linda"].id).not.toBe("old-linda");
+    const t = Object.fromEntries(h.db.tasks.map((x: any) => [x.title, x.linkedProfiles]));
+    expect(t["Oil change"]).toEqual([byName["Civic"].id]);
+    expect(t["Call Linda"]).toEqual([byName["Linda"].id]);            // unknown id dropped
+    expect(t["Mine"]).toEqual([SELF.id]);
+    expect(h.db.events[0].linkedProfiles).toEqual([SELF.id]);
+  });
+});
