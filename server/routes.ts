@@ -7489,6 +7489,9 @@ Rules:
     const payment = {
       id: result.payment?.id, amount: result.amount,
       date: result.payment?.paymentDate, method, confirmationNumber,
+      // True when another request settled this occurrence first — the row
+      // above is THAT payment, so the caller renders one payment, not two.
+      ...(result.deduped ? { deduped: true } : {}),
     };
     recentPayments.set(dedupeKey, { at: Date.now(), payment });
     bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);

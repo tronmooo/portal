@@ -395,3 +395,23 @@ describe("trackable detection: card last-4 is an identifier, not a measurement",
     expect(notTrackableReason({ key: "weight", label: "Weight", value: "180 lbs" } as any)).toBeNull();
   });
 });
+
+describe("payBillOccurrence: an implicit pay seconds after a posted payment is the same tap", () => {
+  it("folds into the just-posted payment instead of paying the next occurrence", async () => {
+    const bill: any = { id: "L1", name: "Water", type: "liability", type_key: "utility", fields: { frequency: "monthly", dueDate: "2026-10-01", nextDueDate: "2026-10-01", monthlyAmount: 40, occurrences: { "2026-09-01": { status: "paid", paymentId: "p-sep", amount: 40, postedAt: new Date(Date.now() - 1500).toISOString() } } } };
+    const payments: any[] = [{ id: "p-sep", liabilityProfileId: "L1", paymentDate: "2026-09-01", amount: 40 }];
+    const storage: any = { getProfile: async () => bill, getProfiles: async () => [bill], updateProfile: async () => bill, createLiabilityPayment: async (d: any) => { payments.push(d); return d; }, getLiabilityPayments: async () => payments, createExpense: async (e: any) => e, claimBillOccurrence: async () => { throw new Error("must not be reached"); } };
+    const r = await payBillOccurrence(storage, "L1", { source: "route" }, "America/Los_Angeles");
+    expect(r.deduped).toBe(true);
+    expect(r.payment?.id).toBe("p-sep");
+    expect(payments.length).toBe(1);
+  });
+  it("an explicit occurrence is an explicit intent and still pays", async () => {
+    const bill: any = { id: "L1", name: "Water", type: "liability", type_key: "utility", fields: { frequency: "monthly", dueDate: "2026-10-01", nextDueDate: "2026-10-01", monthlyAmount: 40, occurrences: { "2026-09-01": { status: "paid", paymentId: "p-sep", amount: 40, postedAt: new Date(Date.now() - 1500).toISOString() } } } };
+    const payments: any[] = [];
+    const storage: any = { getProfile: async () => bill, getProfiles: async () => [bill], updateProfile: async () => bill, createLiabilityPayment: async (d: any) => { payments.push(d); return d; }, getLiabilityPayments: async () => payments, createExpense: async (e: any) => e };
+    const r = await payBillOccurrence(storage, "L1", { source: "route", occurrenceDate: "2026-10-01" }, "America/Los_Angeles");
+    expect(r.deduped).toBeFalsy();
+    expect(payments.length).toBe(1);
+  });
+});

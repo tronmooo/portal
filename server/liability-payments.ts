@@ -307,6 +307,21 @@ const noopLogger: PaymentLogger = { warn: () => {}, error: () => {} };
  * here; the order is most-important-first so an interrupted pay leaves the
  * ledger (the source of truth the balance derives from) correct.
  */
+/**
+ * The winner's ledger row may not be visible for a few hundred ms after its
+ * occurrence stamp (stamp first, row second). Poll briefly so a deduped
+ * caller gets a real payment (id, date, amount) rather than nothing.
+ */
+async function findPaymentWithRetry(storage: IStorage, liabilityId: string, paymentId: string | null | undefined): Promise<any | null> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const payments = await storage.getLiabilityPayments(liabilityId).catch(() => [] as any[]);
+    const hit = paymentId ? payments.find((p: any) => p.id === paymentId) : payments[0];
+    if (hit) return hit;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return paymentId ? { id: paymentId } : null;
+}
+
 export async function payBillOccurrence(
   storage: IStorage,
   liabilityId: string,
@@ -349,6 +364,30 @@ export async function payBillOccurrence(
 
   const account: any = input.accountId ? await storage.getProfile(input.accountId) : null;
 
+  // ── 0a. an implicit "pay what's due" right after a payment is the same tap ─
+  // The claim below stops two requests settling ONE occurrence. But a second
+  // request that reads the bill after the first advanced the due date sees
+  // the NEXT occurrence as current and pays it: a triple-tap on "Mark paid"
+  // paid September and October. The route's in-memory 8-second window only
+  // covered one instance; this is the same rule, cross-instance, keyed on
+  // the stamp the winner just wrote. Only implicit pays (no occurrenceDate)
+  // are folded — an explicit occurrence is an explicit intent.
+  if (!input.occurrenceDate) {
+    const stamps = Object.values((f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {}) as any[];
+    const latest = stamps
+      .filter((o) => o && o.status === "paid" && typeof o.postedAt === "string" && o.paymentId)
+      .sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)))[0];
+    const ageMs = latest ? Date.now() - Date.parse(latest.postedAt) : Infinity;
+    if (latest && Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 8000) {
+      const winner = await findPaymentWithRetry(storage, liabilityId, latest.paymentId);
+      return {
+        ok: true, deduped: true, payment: winner, liability, occurrenceDate: curDue || occurrenceDate,
+        amount: winner?.amount ?? (Number(latest.amount) || amount), recurring, dueDateAdvanced: false, nextDueDate: null,
+        accountAdjusted: false, expenseId: null, steps: [{ step: "series_state", ok: true }],
+      };
+    }
+  }
+
   // ── 0. claim the occurrence (compare-and-set) ───────────────────────────
   // Two requests for the same occurrence — a double tap, two tabs, two
   // lambdas — each read the bill unpaid and each wrote a ledger row and an
@@ -379,8 +418,7 @@ export async function payBillOccurrence(
       const claim = await claimFn.call(storage, liabilityId, occurrenceDate, stamp, extra);
       if (claim.status === "already-paid") {
         const winnerId = claim.occurrences?.[occurrenceDate]?.paymentId;
-        const payments = await storage.getLiabilityPayments(liabilityId).catch(() => [] as any[]);
-        const winner = payments.find((p: any) => p.id === winnerId) || payments[0] || null;
+        const winner = await findPaymentWithRetry(storage, liabilityId, winnerId);
         return {
           ok: true, deduped: true, payment: winner, liability, occurrenceDate,
           amount: winner?.amount ?? amount, recurring, dueDateAdvanced: false, nextDueDate: null,
