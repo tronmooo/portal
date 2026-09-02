@@ -2546,6 +2546,12 @@ export class MemStorage implements IStorage {
     for (const m of this.memories.values()) {
       if (m.key.toLowerCase().includes(q) || m.value.toLowerCase().includes(q)) results.push({ ...m, _type: "memory" });
     }
+    for (const ev of Array.from(this.events.values())) {
+      if (ev.title.toLowerCase().includes(q) || (ev.description || "").toLowerCase().includes(q) || (ev.location || "").toLowerCase().includes(q) || (ev.category || "").toLowerCase().includes(q)) results.push({ ...ev, _type: "event" });
+    }
+    for (const d of Array.from(this.documents.values())) {
+      if ((d.name || "").toLowerCase().includes(q) || String((d as any).category || "").toLowerCase().includes(q) || String((d as any).type || "").toLowerCase().includes(q)) results.push({ ...d, _type: "document" });
+    }
     return results;
   }
 

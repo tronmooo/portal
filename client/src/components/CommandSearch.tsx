@@ -69,6 +69,8 @@ interface CalendarEvent {
   id: number;
   title: string;
   startDate?: string;
+  /** The API's event rows carry `date`; `startDate` is the calendar-adapter spelling. */
+  date?: string;
   category?: string;
 }
 interface Document {
@@ -396,8 +398,10 @@ export function CommandSearch() {
     t.priority ? `Priority: ${t.priority}${t.completed ? " · Done" : ""}` : t.completed ? "Completed" : "Task";
   const expenseSubtitle = (e: Expense) =>
     e.amount != null ? `$${e.amount}${e.category ? ` · ${e.category}` : ""}` : e.category ?? "Expense";
-  const eventSubtitle = (e: CalendarEvent) =>
-    e.startDate ? (parseLocalDate(e.startDate)?.toLocaleDateString() ?? e.startDate) : e.category ?? "Event";
+  const eventSubtitle = (e: CalendarEvent) => {
+    const when = e.startDate || e.date;
+    return when ? (parseLocalDate(when)?.toLocaleDateString() ?? when) : e.category ?? "Event";
+  };
   const documentSubtitle = (d: Document) =>
     [d.type, d.status].filter(Boolean).join(" · ") || "Document";
   const habitSubtitle = (h: Habit) =>

@@ -7025,7 +7025,7 @@ export class SupabaseStorage implements IStorage {
     // PERF: Fetch all top-level tables in parallel instead of 9 sequential awaits.
     // Previously this was ~9 round trips taking ~90–300ms each before any
     // filtering even started.
-    const [profiles, trackers, tasks, expenses, habits, obligations, artifacts, journal, memories] = await Promise.all([
+    const [profiles, trackers, tasks, expenses, habits, obligations, artifacts, journal, memories, events, documents] = await Promise.all([
       this.getProfiles(),
       this.getTrackers(),
       this.getTasks(),
@@ -7035,6 +7035,12 @@ export class SupabaseStorage implements IStorage {
       this.getArtifacts(),
       this.getJournalEntries(),
       this.getMemories(),
+      // Events and documents were never searched at all: the command palette
+      // has had "Events" and "Documents" groups all along, and the API simply
+      // never produced a row for them. A user searching "dentist" found the
+      // task and not the appointment.
+      this.getEvents().catch(() => [] as any[]),
+      this.getDocuments().catch(() => [] as any[]),
     ]);
 
     for (const p of profiles) {
@@ -7063,6 +7069,16 @@ export class SupabaseStorage implements IStorage {
     }
     for (const m of memories) {
       if (has(m.key) || has(m.value)) results.push({ ...m, _type: "memory" });
+    }
+    for (const ev of events as any[]) {
+      if (has(ev.title) || has(ev.description) || has(ev.location) || has(ev.category)) results.push({ ...ev, _type: "event" });
+    }
+    for (const d of documents as any[]) {
+      // Never match on file contents/base64 — name, category, type and tags only.
+      if (has(d.name) || has(d.title) || has(d.category) || has(d.type) || tagsMatch(d.tags)) {
+        const { content, fileData, data, ...rest } = d;
+        results.push({ ...rest, _type: "document" });
+      }
     }
 
     // Enhance with entity links — limit to first 10 results to avoid N+1 explosion.

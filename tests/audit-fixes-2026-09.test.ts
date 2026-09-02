@@ -480,3 +480,19 @@ describe("shouldAppendClarifyingQuestion", () => {
     expect(shouldAppendClarifyingQuestion({ ...base, reply: "What item should be moved to today? I found nothing." })).toBe(false);
   });
 });
+
+// ── D37: global search never returned events or documents ──
+describe("search covers events and documents", () => {
+  it("finds an event by title/location and a document by name, tagged with _type", async () => {
+    const { MemStorage } = await import("../server/storage");
+    const s = new MemStorage();
+    const ev = await s.createEvent({ title: "Dentist appointment", date: "2026-09-20", category: "health", location: "Bright Smiles" } as any);
+    const doc = await s.createDocument({ name: "Passport scan", type: "passport", category: "identity" } as any);
+    await s.createTask({ title: "Book dentist", priority: "low", status: "todo" } as any);
+    const hits = await s.search("dentist");
+    expect(hits.some((h: any) => h._type === "event" && h.id === ev.id)).toBe(true);
+    expect(hits.some((h: any) => h._type === "task")).toBe(true);
+    expect((await s.search("bright smiles")).some((h: any) => h._type === "event" && h.id === ev.id)).toBe(true);
+    expect((await s.search("passport")).some((h: any) => h._type === "document" && h.id === doc.id)).toBe(true);
+  });
+});
