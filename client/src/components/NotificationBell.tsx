@@ -436,6 +436,7 @@ function NotificationItem({
         size="icon"
         className="h-6 w-6 shrink-0 mt-0.5 opacity-50 hover:opacity-100 focus:opacity-100"
         onClick={(e) => onDismiss(notification.id, e)}
+        aria-label="Dismiss notification"
         data-testid={`button-dismiss-${notification.id}`}
       >
         <X className="h-3 w-3" />

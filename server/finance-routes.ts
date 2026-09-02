@@ -927,10 +927,14 @@ function registerWebhook(app: Express): void {
         logFinanceError("webhook.ledger", claimError, { eventType: event.type });
       }
 
-      // ACK immediately — Stripe times out at ~20s and a slow sync must not
-      // cause a retry storm. Processing continues after the response.
-      res.status(200).json({ received: true });
-
+      // Process BEFORE acknowledging. This runs as a Vercel function: once the
+      // response is sent the instance can be frozen, and work still in flight
+      // after res.json() is silently lost (the same failure the warm path on
+      // /api/dashboard-bootstrap hit). Stripe had its 200 by then, so it never
+      // retried and the ledger row stayed at "received" forever. The handlers
+      // are idempotent upserts keyed on Stripe's ids, so a slow run that Stripe
+      // retries is harmless; a dropped one is not. Failures still answer 200 —
+      // the event id is already claimed and the ledger records the outcome.
       try {
         const outcome = await processWebhookEvent(event);
         // Only write back to a row we actually created.
@@ -949,6 +953,7 @@ function registerWebhook(app: Express): void {
             .eq("stripe_event_id", event.id);
         }
       }
+      res.status(200).json({ received: true });
     },
   );
 }

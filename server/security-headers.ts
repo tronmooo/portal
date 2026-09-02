@@ -27,10 +27,16 @@ export function csrfOriginCheck(req: Request, res: Response, next: NextFunction)
   if (m !== "POST" && m !== "PATCH" && m !== "PUT" && m !== "DELETE") return next();
   // Public viewer + auth bootstrap routes are intentionally unauthenticated
   // and can be reached pre-auth from email links etc. Skip the check there.
+  // This is mounted via app.use("/api", ...), so Express has already stripped
+  // the mount prefix: req.path is "/auth/signup", not "/api/auth/signup". The
+  // exemptions below used to test for the "/api/" form and so never matched —
+  // a password reset opened from a webmail client (Referer: mail.google.com)
+  // got a 403. Normalize so they hold under either mounting.
+  const p = req.path.startsWith("/api/") ? req.path.slice(4) : req.path;
   if (
-    req.path.startsWith("/api/auth/") ||
-    req.path.startsWith("/api/public/") ||
-    req.path.startsWith("/api/cron/")
+    p.startsWith("/auth/") ||
+    p.startsWith("/public/") ||
+    p.startsWith("/cron/")
   ) return next();
   const origin = req.headers.origin || "";
   const referer = req.headers.referer || "";

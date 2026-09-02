@@ -3719,7 +3719,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
             <Plus className="h-3 w-3 mr-1" /> Add Category Budget
           </Button>
           {budgets.length === 0 && (
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => copyMutation.mutate()}>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => copyMutation.mutate()} disabled={copyMutation.isPending}>
               Copy Previous Month
             </Button>
           )}
@@ -5505,7 +5505,9 @@ export default function DashboardPage() {
   // /api/stats and /api/dashboard-enhanced requests in parallel with bootstrap,
   // causing 3 round-trips per filter swap. Now bootstrap fires once and the
   // dependent hooks read from the pre-filled cache.
-  const currentMonth = new Date().toISOString().slice(0, 7);
+  // Browser-zone month — the same key the budget hooks read (see line ~620),
+  // so the seed lands in the slot they consume.
+  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
   const bootstrapQs = (filterMode === "selected" && filterIds.length > 0)
     ? `?profileIds=${filterIds.join(",")}&month=${currentMonth}`
     : `?month=${currentMonth}`;

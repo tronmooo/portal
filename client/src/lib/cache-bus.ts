@@ -44,6 +44,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   // domain, which no data mutation ever fired — so insights stayed stale
   // after writes. Each feeding domain now busts them too.
   tasks: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/tasks"],
     // tasks affect KPI tile + dashboard widget + activity feed
     ["/api/dashboard-enhanced"],
@@ -59,6 +60,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/notifications"],
   ],
   habits: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/habits"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
@@ -76,6 +78,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/profiles"],
   ],
   trackers: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/trackers"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
@@ -150,6 +153,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/dashboard-enhanced"],
   ],
   documents: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/documents"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
@@ -169,6 +173,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/notifications"],
   ],
   expenses: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/expenses"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
@@ -179,6 +184,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/ai-digest"],
   ],
   incomes: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/incomes"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
@@ -191,6 +197,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/ai-digest"],
   ],
   obligations: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/obligations"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
@@ -203,22 +210,26 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/notifications"],     // "bill due" alerts derive from obligations
   ],
   budgets: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/budgets"],
     ["/api/budgets/summary"],
     ["/api/dashboard-enhanced"],
   ],
   goals: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/goals"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
   ],
   events: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/events"],
     ["/api/calendar/timeline"],
     ["/api/date-rules"],
     ["/api/dashboard-enhanced"],
   ],
   journal: [
+    ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
     ["/api/journal"],
     ["/api/journal-entries"],
     ["/api/dashboard-enhanced"],

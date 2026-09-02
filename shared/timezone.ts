@@ -51,6 +51,30 @@ export function parseLocalDate(dateStr: string): Date {
  * Timezone-safe date arithmetic. Adds N days to a YYYY-MM-DD string.
  * Consolidates the two separate addDays implementations in supabase-storage.ts.
  */
+/**
+ * Calendar day (YYYY-MM-DD) of a date-only string or of an instant, in
+ * `timezone`. A bare "YYYY-MM-DD" is returned as-is.
+ *
+ * Use this for due-date comparisons. `new Date("YYYY-MM-DD")` is UTC midnight,
+ * so comparing it against `now` marks anything due TODAY as overdue for the
+ * whole day (from 00:00 UTC onward) — compare the strings this returns to
+ * getUserToday() instead.
+ */
+export function localDayOf(
+  value: string | Date | null | undefined,
+  timezone: string = DEFAULT_TIMEZONE,
+): string | null {
+  if (!value) return null;
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  try {
+    return toLocalDateStr(d, timezone);
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
 export function addDays(dateStr: string, days: number): string {
   const d = parseLocalDate(dateStr);
   d.setDate(d.getDate() + days);

@@ -2,7 +2,8 @@ import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { parse as parseRoutePattern } from "regexparam";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
-import { queryClient, apiRequest } from "./lib/queryClient";
+import { queryClient, apiRequest, BROWSER_TIMEZONE } from "./lib/queryClient";
+import { getUserCurrentMonth } from "@shared/timezone";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { warmup } from "@/lib/warmup";
 import { hashNavigate } from "./lib/hashNavigate";
@@ -621,7 +622,9 @@ function DataPrefetch() {
     if (!user || prefetched.current) return;
     prefetched.current = true;
     const { mode, selectedIds: ids } = getProfileFilter();
-    const month = new Date().toISOString().slice(0, 7);
+    // The user's month (not UTC's): the budget hooks key on the browser-zone
+    // month, so a UTC key seeded the wrong slot on the last evening of a month.
+    const month = getUserCurrentMonth(BROWSER_TIMEZONE);
     const qs = (mode === 'selected' && ids.length > 0)
       ? `?profileIds=${ids.join(',')}&month=${month}`
       : `?month=${month}`;

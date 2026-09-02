@@ -4,7 +4,7 @@ import type {
   JournalEntry, Document, Goal, CalendarEvent,
 } from "@shared/schema";
 import { MOOD_SCORES } from "@shared/schema";
-import { getUserToday, addDays as tzAddDays, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { getUserToday, addDays as tzAddDays, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
 import {
   currentMonthYM,
   previousMonthYM,
@@ -43,7 +43,7 @@ export function generateSmartInsights(data: InsightsInput, timezone: string = DE
   analyzeStreaks(data.habits, todayStr, insights);
 
   // --- Task Reminders ---
-  analyzeTasks(data.tasks, now, insights);
+  analyzeTasks(data.tasks, now, insights, todayStr, timezone);
 
   // --- Document Expirations ---
   analyzeDocuments(data.documents, data.profiles, now, insights);
@@ -58,7 +58,7 @@ export function generateSmartInsights(data: InsightsInput, timezone: string = DE
   analyzeMood(data.journal, now, insights);
 
   // --- Obligation Alerts ---
-  analyzeObligations(data.obligations, now, insights);
+  analyzeObligations(data.obligations, now, insights, todayStr, timezone);
 
   // --- Upcoming Events ---
   analyzeEvents(data.events, now, insights);
@@ -192,8 +192,13 @@ function analyzeStreaks(habits: Habit[], todayStr: string, insights: Insight[]) 
 
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 
-function analyzeTasks(tasks: Task[], now: Date, insights: Insight[]) {
-  const overdue = tasks.filter(t => t.status !== "done" && t.dueDate && new Date(t.dueDate) < now);
+function analyzeTasks(tasks: Task[], now: Date, insights: Insight[], todayStr: string, timezone: string) {
+  // Compare calendar days in the user's zone: a task due TODAY is not overdue.
+  const overdue = tasks.filter(t => {
+    if (t.status === "done") return false;
+    const dueDay = localDayOf(t.dueDate, timezone);
+    return !!dueDay && dueDay < todayStr;
+  });
   if (overdue.length > 0) {
     insights.push({
       id: randomUUID(),
@@ -207,8 +212,7 @@ function analyzeTasks(tasks: Task[], now: Date, insights: Insight[]) {
   }
 
   // Tasks due today
-  const todayStr = getUserToday();
-  const dueToday = tasks.filter(t => t.status !== "done" && t.dueDate?.slice(0, 10) === todayStr);
+  const dueToday = tasks.filter(t => t.status !== "done" && localDayOf(t.dueDate, timezone) === todayStr);
   if (dueToday.length > 0) {
     insights.push({
       id: randomUUID(),
@@ -503,11 +507,14 @@ function analyzeMood(journal: JournalEntry[], now: Date, insights: Insight[]) {
 
 // ─── Obligations ─────────────────────────────────────────────────────────────
 
-function analyzeObligations(obligations: Obligation[], now: Date, insights: Insight[]) {
-  const sevenDaysOut = new Date(now.getTime() + 7 * 86400000);
+function analyzeObligations(obligations: Obligation[], now: Date, insights: Insight[], todayStr: string, timezone: string) {
+  // nextDueDate is a date-only string. `new Date("YYYY-MM-DD") < now` is true
+  // from 00:00 UTC on, so a bill due TODAY was reported as overdue (and left
+  // out of "due this week") for the whole day. Compare calendar days instead.
+  const weekOut = tzAddDays(todayStr, 7);
   const upcoming = obligations.filter(o => {
-    const due = new Date(o.nextDueDate);
-    return due >= now && due <= sevenDaysOut;
+    const dueDay = localDayOf(o.nextDueDate, timezone);
+    return !!dueDay && dueDay >= todayStr && dueDay <= weekOut;
   });
   if (upcoming.length > 0) {
     const totalDue = upcoming.reduce((s, o) => s + o.amount, 0);
@@ -523,7 +530,10 @@ function analyzeObligations(obligations: Obligation[], now: Date, insights: Insi
   }
 
   // Overdue bills
-  const overdue = obligations.filter(o => new Date(o.nextDueDate) < now);
+  const overdue = obligations.filter(o => {
+    const dueDay = localDayOf(o.nextDueDate, timezone);
+    return !!dueDay && dueDay < todayStr;
+  });
   if (overdue.length > 0) {
     const totalOverdue = overdue.reduce((s, o) => s + o.amount, 0);
     insights.push({

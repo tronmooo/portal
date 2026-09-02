@@ -1188,6 +1188,7 @@ export default function EditorPage() {
               size="icon"
               className="h-9 w-9"
               onClick={() => savedId ? setShareOpen(true) : saveMut.mutate()}
+              disabled={saveMut.isPending}
               aria-label="Share"
               data-testid="button-mobile-share"
             >
@@ -1198,6 +1199,7 @@ export default function EditorPage() {
               size="icon"
               className="h-9 w-9"
               onClick={() => { /* comment placeholder — surfaces share for now */ savedId ? setShareOpen(true) : saveMut.mutate(); }}
+              disabled={saveMut.isPending}
               aria-label="Comments"
               data-testid="button-mobile-comments"
             >
@@ -1210,6 +1212,7 @@ export default function EditorPage() {
             size="icon"
             className="h-9 w-9"
             onClick={() => saveMut.mutate()}
+            disabled={saveMut.isPending}
             aria-label="Insert"
             data-testid="button-mobile-insert"
           >

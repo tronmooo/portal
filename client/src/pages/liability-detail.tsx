@@ -90,7 +90,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
 import { invalidateDomains } from "@/lib/cache-bus";
 import {
   Popover,
@@ -2762,7 +2763,7 @@ function PartyLinkRow({
             ))}
           </SelectContent>
         </Select>
-        <Button size="icon" variant="ghost" onClick={onDelete} data-testid="party-link-delete">
+        <Button size="icon" variant="ghost" onClick={onDelete} aria-label="Remove owner" data-testid="party-link-delete">
           <Trash2 className="w-4 h-4 text-rose-500" />
         </Button>
       </div>
@@ -3100,6 +3101,7 @@ function LiabilityDocumentsCard({ liabilityId, liabilityName }: { liabilityId: s
                   size="icon"
                   variant="ghost"
                   onClick={() => setDeletingDocId(doc.id)}
+                  aria-label="Delete document"
                   data-testid={`liability-doc-delete-${doc.id}`}
                 >
                   <Trash2 className="w-4 h-4 text-rose-500" />
@@ -3402,10 +3404,11 @@ function ActivityTimelineCard({
     );
   }
 
-  // Group by Today / Yesterday / This Week / Earlier
+  // Group by Today / Yesterday / This Week / Earlier, in the browser's zone —
+  // the UTC slice put an 8 PM entry under "Today" all the next morning.
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
-  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  const todayStr = getUserToday(BROWSER_TIMEZONE);
+  const yesterday = tzAddDays(todayStr, -1);
   const weekAgo = new Date(now.getTime() - 7 * 86400000).getTime();
   const groups: { label: string; items: ActivityEntry[] }[] = [
     { label: "Today", items: [] },
@@ -3414,7 +3417,8 @@ function ActivityTimelineCard({
     { label: "Earlier", items: [] },
   ];
   for (const e of entries.slice(0, 100)) {
-    const d = e.timestamp.slice(0, 10);
+    let d: string;
+    try { d = toLocalDateStr(new Date(e.timestamp), BROWSER_TIMEZONE); } catch { d = String(e.timestamp || "").slice(0, 10); }
     const t = new Date(e.timestamp).getTime();
     if (d === todayStr) groups[0].items.push(e);
     else if (d === yesterday) groups[1].items.push(e);

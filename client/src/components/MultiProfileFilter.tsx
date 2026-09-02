@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getUserCurrentMonth } from "@shared/timezone";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { Button } from "@/components/ui/button";
@@ -115,7 +116,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
   const prefetchProfileDashboard = useCallback((id: string) => {
     if (!id || prefetched.current.has(id)) return;
     prefetched.current.add(id);
-    const currentMonth = new Date().toISOString().slice(0, 7);
+    const currentMonth = getUserCurrentMonth(BROWSER_TIMEZONE); // browser-zone month, same key the dashboard reads
     void queryClient.prefetchQuery({
       queryKey: ["/api/dashboard-bootstrap", "selected", id, currentMonth],
       queryFn: async () => {
