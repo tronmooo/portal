@@ -274,3 +274,41 @@ describe("closeBillReminderTasksWhere — the due-scan's self-heal rule", () => 
     expect(updates.map(u => u[0]).sort()).toEqual(["a", "b"]);
   });
 });
+
+// D100 — undoing a loan payment left the paying account short: only a
+// recurring bill's occurrence stamp named the account.
+import { unpayBillOccurrence, accountThatPaid } from "../server/liability-payments";
+import { applyBalanceAdjustment } from "../shared/finance-accounts";
+describe("unpayBillOccurrence — credits the account that paid a loan", () => {
+  function storageWithLedgeredAccounts(seed: any[]) {
+    const storage = fakeStorage(seed);
+    storage.getProfiles = async () => [...(storage as any)._profiles?.values?.() ?? []];
+    // real balance-history bookkeeping, like SupabaseStorage.adjustAccountBalance
+    storage.adjustAccountBalance = async (id: string, input: any) => {
+      const p = await storage.getProfile(id);
+      if (!p) return undefined;
+      const { fields } = applyBalanceAdjustment(p, input, "2026-09-02");
+      await storage.updateProfile(id, { fields });
+      storage.writes.push(["adjustAccountBalance", id, input]);
+      return storage.getProfile(id);
+    };
+    return storage;
+  }
+  it("restores the checking balance and never credits twice", async () => {
+    const storage = storageWithLedgeredAccounts([CAR_LOAN, CHECKING]);
+    // fakeStorage keeps profiles in a closure; expose them for getProfiles
+    const all = async () => [await storage.getProfile("loan-1"), await storage.getProfile("acct-1")];
+    storage.getProfiles = all;
+    const paid = await payBillOccurrence(storage, "loan-1", { amount: 400, accountId: "acct-1", source: "route" }, "UTC");
+    expect(paid.ok).toBe(true);
+    expect((await storage.getProfile("acct-1")).fields.balance).toBe(600);
+    expect(await accountThatPaid(storage, paid.payment.id)).toBe("acct-1");
+    const undone = await unpayBillOccurrence(storage, "loan-1", { paymentId: paid.payment.id, source: "route" }, "UTC");
+    expect(undone.ok).toBe(true);
+    expect(undone.accountCredited).toBe(true);
+    expect((await storage.getProfile("acct-1")).fields.balance).toBe(1000);
+    expect((await storage.getProfile("loan-1")).fields.currentBalance).toBe(10_000);
+    // a second look-up sees the reversal and finds nothing to credit
+    expect(await accountThatPaid(storage, paid.payment.id)).toBeNull();
+  });
+});

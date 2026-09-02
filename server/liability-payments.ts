@@ -312,6 +312,27 @@ const noopLogger: PaymentLogger = { warn: () => {}, error: () => {} };
  * occurrence stamp (stamp first, row second). Poll briefly so a deduped
  * caller gets a real payment (id, date, amount) rather than nothing.
  */
+/**
+ * The account whose balance history holds the debit for this payment, or
+ * null. Skips an account whose history already carries the reversal, so a
+ * repeated undo never credits twice.
+ */
+export async function accountThatPaid(storage: IStorage, paymentId: string): Promise<string | null> {
+  if (!paymentId) return null;
+  try {
+    const profiles: any[] = (await storage.getProfiles()) || [];
+    for (const p of profiles) {
+      if (!isAccountProfile(p)) continue;
+      const history: any[] = Array.isArray(p?.fields?.balanceHistory) ? p.fields.balanceHistory : [];
+      const linked = history.filter((a) => a && String(a.linkedRecordId || "") === String(paymentId));
+      if (linked.length === 0) continue;
+      const reversed = linked.some((a) => /^Reversed payment/.test(String(a.reason || "")));
+      return reversed ? null : p.id;
+    }
+  } catch { /* best effort — no account, no credit */ }
+  return null;
+}
+
 /** Prefix of the reminder tasks the liability due-scan creates (server/routes.ts). */
 export const BILL_REMINDER_TASK_PREFIX = "Bill due: ";
 
@@ -777,8 +798,13 @@ export async function unpayBillOccurrence(
   }
 
   // ── 5. credit the account the payment debited ───────────────────────────
+  // The occurrence stamp names the account for a recurring bill. A loan or
+  // card payment has no occurrence stamp, so the account that paid it is
+  // found through its own balance history: the debit carries this payment's
+  // id as linkedRecordId. Without this, undoing a loan payment restored the
+  // debt balance but left the checking balance short by the payment.
   let accountCredited = false;
-  const accountId = stampedOverride?.accountId || null;
+  const accountId = stampedOverride?.accountId || await accountThatPaid(storage, target.id);
   if (accountId) {
     try {
       const account: any = await storage.getProfile(accountId);
