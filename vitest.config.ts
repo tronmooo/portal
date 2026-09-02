@@ -270,6 +270,11 @@ export default defineConfig({
       'tests/profile-rename-routes.test.ts',
       'tests/profile-delete.test.ts',
       'tests/info-tab-delete.dom.test.tsx',
+      // Chat quick-log lanes: owner-scoped tracker resolution + deterministic
+      // recap (2026-09-01: "ran 2 miles" logged into another profile's tracker).
+      'tests/quick-log.test.ts',
+      'tests/quick-log-owner-scope.test.ts',
+      'tests/system-prompt-cache.test.ts',
       'tests/audit-fixes-2026-09.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
