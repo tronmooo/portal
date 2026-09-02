@@ -1228,8 +1228,16 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
         // invalid uuid literal (22P02). No row can match it, so it is the same
         // answer as an unknown id — not a server error.
         const pgCode = String(err?.code || err?.details?.code || "");
-        if (pgCode === "22P02" || /invalid input syntax for type uuid/i.test(String(err?.message || ""))) {
+        const msg = String(err?.message || "");
+        if (pgCode === "22P02" || /invalid input syntax for type uuid/i.test(msg)) {
           res.status(404).json({ error: "Not found" });
+        } else if (pgCode === "23505" || /duplicate key value violates unique constraint/i.test(msg)) {
+          // A uniqueness rule (one journal entry per day, one Self, …) is the
+          // caller's conflict, not a server fault.
+          res.status(409).json({ error: "A record with the same key already exists" });
+        } else if (pgCode === "22007" || pgCode === "22008" || /invalid input syntax for type (date|timestamp)|date\/time field value out of range/i.test(msg)) {
+          // A date or time the database could not read is a bad request.
+          res.status(400).json({ error: "Invalid date or time value" });
         } else if (Number.isInteger(status) && status >= 400 && status < 500) {
           res.status(status).json({ error: err?.message || "Request failed" });
         } else {

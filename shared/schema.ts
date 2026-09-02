@@ -899,7 +899,8 @@ export interface JournalEntry {
 }
 
 export const insertJournalEntrySchema = z.object({
-  date: z.string().optional(),
+  // The entry's day (one entry per day); a real calendar day or blank = today.
+  date: calendarDayOrBlank.optional(),
   mood: z.enum(["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"]),
   content: z.string().default(""),
   tags: z.array(z.string()).optional().default([]),

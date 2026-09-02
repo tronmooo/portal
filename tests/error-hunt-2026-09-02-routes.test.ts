@@ -899,3 +899,24 @@ describe("D106: a mistyped delete-all confirmation does not spend the hourly all
     expect((await h.api("DELETE", "/api/data/all", { confirmation: "DELETE" })).status).toBe(429);
   });
 });
+
+// D109/D110 — the journal edit answered 500 for an impossible date and for
+// a move onto a day that already has an entry.
+describe("D109/D110: journal edits fail cleanly", () => {
+  it("rejects an impossible date with 400 and maps a unique violation to 409, a bad date column value to 400", async () => {
+    h = await boot({}, (storage) => {
+      storage.updateJournalEntry = async (_id: string, patch: any) => {
+        if (patch.date === "2026-09-10") throw { code: "23505", message: 'duplicate key value violates unique constraint "journal_entries_unique_day"' };
+        if (patch.content === "boom-date") throw { code: "22008", message: "date/time field value out of range" };
+        return { id: "j1", ...patch };
+      };
+    });
+    expect((await h.api("PATCH", "/api/journal/j1", { date: "2026-13-45" })).status).toBe(400);
+    expect((await h.api("PATCH", "/api/journal/j1", { date: "next week" })).status).toBe(400);
+    const dup = await h.api("PATCH", "/api/journal/j1", { date: "2026-09-10" });
+    expect(dup.status).toBe(409);
+    expect(typeof dup.data.error).toBe("string");
+    expect((await h.api("PATCH", "/api/journal/j1", { content: "boom-date" })).status).toBe(400);
+    expect((await h.api("PATCH", "/api/journal/j1", { date: "2026-09-11" })).status).toBe(200);
+  });
+});
