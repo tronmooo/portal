@@ -182,7 +182,17 @@ export function deriveScheduleFields(
       due = new Date(yr, mo, Math.min(day, last)).toLocaleDateString("en-CA");
     }
   }
-  if (!ISO_RE.test(due)) due = todayISO;
+  // No explicit date and no due day: the last recorded payment plus one cycle
+  // is the only date the data actually supports. Without even that there is
+  // NO due date — and none is invented. This used to fall back to `todayISO`,
+  // which put a loan with no due date on the calendar as "due today" every
+  // single day (the anchor moved with the clock), and the assistant then told
+  // the user their mortgage was due today, forever.
+  if (!ISO_RE.test(due)) {
+    const lastPaid = clip(f.lastPaidDate ?? f.last_paid_date);
+    if (ISO_RE.test(lastPaid)) due = addMonthsISO(lastPaid, 1);
+  }
+  const hasDue = ISO_RE.test(due);
 
   let count: number | null = null;
   if (fam === "one_time") count = 1;
@@ -199,8 +209,10 @@ export function deriveScheduleFields(
     ...f,
     frequency: fam === "one_time" ? "once" : "monthly",
     monthlyAmount: amount, amount,
-    dueDate: due, nextDueDate: due,
-    firstPaymentDate: ISO_RE.test(clip(f.firstPaymentDate)) ? clip(f.firstPaymentDate) : due,
+    ...(hasDue ? {
+      dueDate: due, nextDueDate: due,
+      firstPaymentDate: ISO_RE.test(clip(f.firstPaymentDate)) ? clip(f.firstPaymentDate) : due,
+    } : {}),
     ...(count != null ? { count } : {}),
   };
 }

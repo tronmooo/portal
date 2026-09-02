@@ -428,3 +428,36 @@ describe("AI undo: a bill payment's reverse plan is the real inverse", () => {
     expect(rows[0].reversePlan).toEqual({ op: "unpay_bill", liabilityId: "L1", paymentId: "pay-1" });
   });
 });
+
+// ── D30 (root cause): a loan with no due date must not be scheduled "today" ──
+// deriveScheduleFields fell back to `todayISO` when a loan had neither a due
+// date nor a due day, so the calendar timeline, the liability schedule and the
+// assistant all presented the loan as due today — every day, re-anchored on
+// the clock. The only defensible anchors are an explicit date, a due day, or
+// the last recorded payment plus one cycle. Otherwise: no schedule at all.
+describe("deriveScheduleFields: no due date is no due date", () => {
+  const TODAY = "2026-09-02";
+  it("a loan with only a balance and monthly payment gets no occurrences and no next due", async () => {
+    const { deriveScheduleFields, generateSchedule, nextDueOccurrence } = await import("../shared/liability-schedule");
+    const f = deriveScheduleFields({ currentBalance: 350000, interestRate: 6.5, monthlyPayment: 2200 }, "mortgage", TODAY);
+    expect(f.dueDate).toBeUndefined();
+    expect(f.nextDueDate).toBeUndefined();
+    expect(f.firstPaymentDate).toBeUndefined();
+    expect(f.amount).toBe(2200);
+    expect(generateSchedule({ id: "l", fields: f }, [], { todayISO: TODAY, months: 12 })).toEqual([]);
+    expect(nextDueOccurrence({ id: "l", fields: f }, [], TODAY)).toBeNull();
+  });
+  it("a due day still anchors the series, and an explicit date wins over it", async () => {
+    const { deriveScheduleFields } = await import("../shared/liability-schedule");
+    const byDay = deriveScheduleFields({ monthlyPayment: 500, dueDay: 10 }, "auto_loan", TODAY);
+    expect(byDay.dueDate).toBe("2026-09-10");
+    const explicit = deriveScheduleFields({ monthlyPayment: 500, dueDay: 10, nextPaymentDate: "2026-09-20" }, "auto_loan", TODAY);
+    expect(explicit.dueDate).toBe("2026-09-20");
+  });
+  it("with no date but a recorded last payment, the next due is one cycle after it", async () => {
+    const { deriveScheduleFields } = await import("../shared/liability-schedule");
+    const f = deriveScheduleFields({ monthlyPayment: 500, lastPaidDate: "2026-08-15" }, "auto_loan", TODAY);
+    expect(f.dueDate).toBe("2026-09-15");
+    expect(f.firstPaymentDate).toBe("2026-09-15");
+  });
+});
