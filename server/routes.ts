@@ -7459,7 +7459,10 @@ Rules:
   // name+amount+frequency+nextDueDate so two genuinely distinct obligations
   // submitted in quick succession still both get through. 8s window matches
   // /pay dedup. Memory bounded the same way (cleanup once >500 entries).
-  const recentObligationCreates = new Map<string, { at: number; id: string }>();
+  // `inflight` is the FIRST request's create, registered before it is awaited:
+  // two identical creates that arrive together used to both miss the map (it
+  // was only written after the insert finished) and both insert.
+  const recentObligationCreates = new Map<string, { at: number; id?: string; inflight?: Promise<any> }>();
   app.post("/api/obligations", asyncHandler(async (req, res) => {
     // Fold the category before validation so a form that still posts "utility"
     // (or an importer posting "subscriptions") is stored under the one
@@ -7477,13 +7480,22 @@ Rules:
     const fp = `${uid_o1}|${(parsed.data.name || "").trim().toLowerCase()}|${Number(parsed.data.amount) || 0}|${parsed.data.frequency || ""}|${parsed.data.nextDueDate || ""}`;
     const prior = recentObligationCreates.get(fp);
     if (prior && Date.now() - prior.at < 8000) {
+      const priorId = prior.id ?? (await prior.inflight?.catch(() => undefined))?.id;
       // Re-fetch so the response shape matches a fresh insert.
-      const existing = await storage.getObligation(prior.id);
+      const existing = priorId ? await storage.getObligation(priorId) : undefined;
       if (existing) {
         return res.status(200).json({ ...existing, deduped: true });
       }
     }
-    const created = await storage.createObligation(parsed.data);
+    const inflight = storage.createObligation(parsed.data);
+    recentObligationCreates.set(fp, { at: Date.now(), inflight });
+    let created: Awaited<typeof inflight>;
+    try {
+      created = await inflight;
+    } catch (e) {
+      recentObligationCreates.delete(fp);
+      throw e;
+    }
     recentObligationCreates.set(fp, { at: Date.now(), id: created.id });
     if (recentObligationCreates.size > 500) {
       const cutoff = Date.now() - 30000;

@@ -729,3 +729,40 @@ describe("D88: GET /api/obligations?profileIds=self lists bills owned through th
     expect(m.data.map((o: any) => o.name)).toEqual(["Mike's gym"]);
   });
 });
+
+// D97 — the bill-create dedupe was written only after the insert finished,
+// so two identical creates arriving together both inserted.
+describe("D97: two identical bill creates arriving together insert once", () => {
+  it("the second waits for the first and answers deduped", async () => {
+    let creates = 0;
+    h = await boot({ profiles: [SELF] }, (storage, db) => {
+      storage.createObligation = async (data: any) => {
+        creates++;
+        await new Promise((r) => setTimeout(r, 150));
+        const row = { id: `obl-${creates}`, ...data };
+        db.obligations.push(row);
+        return row;
+      };
+    });
+    const body = { name: "Water", amount: 20, frequency: "monthly", nextDueDate: "2026-09-20" };
+    const [a, b] = await Promise.all([h.api("POST", "/api/obligations", body), h.api("POST", "/api/obligations", body)]);
+    expect(creates).toBe(1);
+    expect([a.status, b.status].sort()).toEqual([200, 201]);
+    const deduped = a.status === 200 ? a : b;
+    expect(deduped.data.deduped).toBe(true);
+    expect(deduped.data.id).toBe("obl-1");
+    expect(h.db.obligations).toHaveLength(1);
+  });
+  it("a failed first create does not poison the fingerprint", async () => {
+    let n = 0;
+    h = await boot({ profiles: [SELF] }, (storage, db) => {
+      storage.createObligation = async (data: any) => {
+        if (++n === 1) throw new Error("db hiccup");
+        const row = { id: `obl-${n}`, ...data }; db.obligations.push(row); return row;
+      };
+    });
+    const body = { name: "Gas", amount: 30, frequency: "monthly", nextDueDate: "2026-09-21" };
+    expect((await h.api("POST", "/api/obligations", body)).status).toBe(500);
+    expect((await h.api("POST", "/api/obligations", body)).status).toBe(201);
+  });
+});
