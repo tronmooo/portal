@@ -194,3 +194,28 @@ describe("D79: the development CSP lets the dev server render; production is unt
     expect(dev.replace(" 'unsafe-inline'", "").replace(" http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*", "") + "; upgrade-insecure-requests").toBe(CONTENT_SECURITY_POLICY);
   });
 });
+
+import { sumMonthlyIncome } from "../shared/obligation-windows";
+import { isRecurrenceTag, userTags } from "../shared/recurrence";
+
+// D80 — the hero cash-flow tile summed incomes at face value while the Finance
+// tile converted them to monthly: a $2,600 biweekly paycheck was +$2,312 on one
+// tile and +$5,345 on the next.
+describe("D80: one monthly-income definition for every cash-flow surface", () => {
+  it("converts each income by its frequency", () => {
+    expect(sumMonthlyIncome([{ amount: 2600, frequency: "biweekly" }])).toBeCloseTo(2600 * 26 / 12, 2);
+    expect(sumMonthlyIncome([{ amount: 1000, frequency: "weekly" }, { amount: 500, frequency: "monthly" }, { amount: 12000, frequency: "yearly" }])).toBeCloseTo(1000 * 52 / 12 + 500 + 1000, 2);
+    expect(sumMonthlyIncome([{ amount: "250", frequency: undefined }])).toBe(250);
+    expect(sumMonthlyIncome(null)).toBe(0);
+  });
+});
+
+// D81 — recurrence grammar tags rendered as user tag chips ("recur:weekly", "rdone:1").
+describe("D81: recurrence tags are internal, not labels", () => {
+  it("recognises every tag of the grammar and nothing else", () => {
+    for (const t of ["recur:weekly", "runtil:2026-12-31", "rcount:3", "rdone:1", "ranchor:31", "rpaused"]) expect(isRecurrenceTag(t), t).toBe(true);
+    for (const t of ["chore", "recurring", "rpaused-thing", "home"]) expect(isRecurrenceTag(t), t).toBe(false);
+    expect(userTags(["chore", "recur:weekly", "rdone:2", "home"])).toEqual(["chore", "home"]);
+    expect(userTags(undefined)).toEqual([]);
+  });
+});

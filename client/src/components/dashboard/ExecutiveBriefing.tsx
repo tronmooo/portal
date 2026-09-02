@@ -21,6 +21,7 @@
 // in, Pay arms then commits (money moves on the SECOND tap), medications get
 // "Taken", managed recurring dates get "Done". Popups are the same components
 // the dashboard KPI tiles use.
+import { sumMonthlyIncome } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -664,6 +665,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     return rows.slice().sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sections]);
+  // The "Next Important" tile: today counts — a 2 pm appointment is the next
+  // important thing at noon, not tomorrow's errand. The upcoming PANEL above
+  // keeps tomorrow-onward, because today's rows already sit under Needs
+  // attention and would otherwise render twice.
+  const nextImportantItem = useMemo(() => {
+    const from: ExecSectionId[] = ["today", "bills", "upcoming", "importantDates", "documents", "health"];
+    const rows = from.flatMap(id => secItems(id)).filter(i => (i.daysUntil ?? 0) >= 0);
+    return rows.slice().sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99))[0] ?? null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sections]);
 
   const activityItems = useMemo(() => secItems("activity"),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -694,7 +705,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // Cash flow — mirrors HubKpiStrip/HeroKPISection exactly: monthly income
   // minus (month expenses + monthlyized active obligations).
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
-  const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+  const monthlyIncome = sumMonthlyIncome(incomes);
   const monthlySpendBase = snap?.totalMonthlySpend ?? stats?.monthlySpend;
   const monthlyExpenses = monthlySpendBase != null ? monthlySpendBase + (snap?.monthlyObligationTotal ?? 0) : null;
   const cashFlow = monthlyExpenses != null ? monthlyIncome - monthlyExpenses : null;
@@ -713,7 +724,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
   // Next Important — the soonest dated thing across every domain. Falls back
   // to the most urgent attention row when nothing is coming up.
-  const nextImportant = upcomingItems[0] ?? null;
+  const nextImportant = nextImportantItem;
 
   // Schedule
   const nowClock = new Date().toTimeString().slice(0, 5);

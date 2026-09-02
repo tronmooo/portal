@@ -113,3 +113,16 @@ export function toMonthlyAmount(amount: number | string, frequency?: string | nu
       return n;
   }
 }
+
+/**
+ * The monthly-equivalent total of a set of incomes. ONE definition: the hero
+ * cash-flow tile, the executive overview and the Cash Flow popup used to add
+ * incomes at face value while the Finance tab converted them with
+ * toMonthlyAmount — a $2,600 biweekly paycheck read as $2,600 on one tile and
+ * $5,633 on the next, and the two cash-flow figures on one screen disagreed.
+ */
+export function sumMonthlyIncome(incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null }> | null | undefined): number {
+  let total = 0;
+  for (const i of incomes || []) total += toMonthlyAmount(Number(i?.amount) || 0, i?.frequency);
+  return total;
+}

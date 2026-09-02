@@ -13,6 +13,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
+import { isRecurring, humanSummary, parseRecurrence, userTags } from "@shared/recurrence";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { withFullLimit } from "@/lib/list-limit";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
@@ -52,7 +53,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { showUndoToast } from "@/lib/undo-delete";
-import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Plus, Trash2, CheckCircle2 } from "lucide-react";
+import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Plus, Trash2, CheckCircle2, Repeat } from "lucide-react";
 import { Link } from "wouter";
 import type { Task, Profile } from "@shared/schema";
 import { useState, useEffect, useRef, useMemo } from "react";
@@ -451,8 +452,16 @@ function TaskItem({
                   {formatStoredDate(task.dueDate) || task.dueDate}
                 </span>
               )}
+              {/* The recurrence grammar (recur:weekly, rdone:1, ranchor:31 …) lives
+                  in tags but is not a label; it reads as one summary pill. */}
+              {isRecurring(task.tags || []) && (
+                <Badge variant="outline" className="text-xs py-0.5" data-testid={`badge-task-recurrence-${task.id}`}>
+                  <Repeat className="h-3 w-3 mr-1" />
+                  {humanSummary(parseRecurrence(task.tags || []), task.dueDate || undefined)}
+                </Badge>
+              )}
               {/* BUG-TSK-002: tags must wrap and never truncate */}
-              {task.tags?.map(tag => (
+              {userTags(task.tags).map(tag => (
                 <Badge
                   key={tag}
                   variant="outline"

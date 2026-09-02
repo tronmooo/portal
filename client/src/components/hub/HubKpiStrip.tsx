@@ -12,6 +12,7 @@
 // /api/trackers (not bootstrap-seeded): the HEALTH chip shows "—" until it
 // lands, and its key/URL match the trackers page exactly so the cache is
 // shared with the Trackers tab.
+import { sumMonthlyIncome } from "@shared/obligation-windows";
 import { useState, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 // hashNavigate handles query-carrying targets ("/linked?tab=documents") correctly
@@ -143,7 +144,7 @@ export function HubKpiStrip() {
   // CASH FLOW — mirrors HeroKPISection's definition exactly: monthly incomes
   // minus (month expenses + monthlyized active obligations).
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
-  const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+  const monthlyIncome = sumMonthlyIncome(incomes);
   const monthlySpend = snap?.totalMonthlySpend ?? stats?.monthlySpend;
   const cashFlow = monthlySpend != null
     ? monthlyIncome - (monthlySpend + (snap?.monthlyObligationTotal ?? 0))

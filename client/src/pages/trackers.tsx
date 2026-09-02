@@ -1,4 +1,5 @@
 import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
+import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
 import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
 
 // "Today" in the browser's zone. The UTC-date prefix test reset the Today
@@ -7162,7 +7163,13 @@ export default function TrackersPage() {
                 const subtype = liabilitySubcategoryOf(liab);
                 const original = toNumLiab(fields.originalBalance ?? fin.originalBalance ?? fields.originalLoanAmount ?? fin.originalLoanAmount ?? fields.creditLimit ?? fin.creditLimit);
                 const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
-                const rawDue = fields.dueDate ?? fields.nextDueDate ?? fields.due_date ?? fin.dueDate;
+                // The same date the calendar schedules: an explicit next-due
+                // spelling, else the one the schedule derives from `dueDay` /
+                // the last payment. A loan with only "due on the 15th" read
+                // "No due date" here while the calendar put it on the 15th.
+                const rawDue = resolveLiabilityDueDate({ ...fin, ...fields })
+                  ?? deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(TRACKER_TZ)).nextDueDate
+                  ?? fin.dueDate;
                 const due = fmtDue(rawDue);
                 const dueIn = daysUntilDue(rawDue);
                 const freqUnit = subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo';

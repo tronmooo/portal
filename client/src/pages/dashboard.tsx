@@ -1,3 +1,4 @@
+import { sumMonthlyIncome } from "@shared/obligation-windows";
 import { localTodayISO } from "@/lib/dates";
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
@@ -766,7 +767,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // window (supabase-storage.ts getStats/getDashboardEnhanced), so the
   // value cannot flip as the two endpoints race.
   const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
-  const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+  const monthlyIncome = sumMonthlyIncome(incomes);
   // BUG (user report: tile "Out $0" while the Cash Flow popup said "Out $1,020"):
   // the tile only counted logged expenses; the popup counts recurring bills too.
   // Use the SAME definition as the popup: Out = month expenses + monthlyized
@@ -3808,7 +3809,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
   // source the drilldown popup uses) so the card headline and the popup total always match.
   // Falls back to stats?.monthlySpend for the brief window before enhanced data arrives.
   const monthlySpend = data?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
-  const monthlyIncome = useMemo(() => (incomes || []).reduce((s, i) => s + (i.amount || 0), 0), [incomes]);
+  const monthlyIncome = useMemo(() => sumMonthlyIncome(incomes || []), [incomes]);
   // Same definition as the hero tile + Cash Flow popup: Out includes the
   // monthlyized recurring obligations, not just logged expenses.
   const cashFlow = monthlyIncome - monthlySpend - (data?.monthlyObligationTotal ?? 0);

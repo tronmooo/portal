@@ -47,6 +47,16 @@ export const RECUR_PRESETS: { value: string; label: string }[] = [
 ];
 
 const RECUR_TAG_RE = /^(recur:|runtil:|rcount:|rdone:|ranchor:|rpaused$)/;
+
+/** Is this tag part of the recurrence grammar (never a user-facing label)? */
+export function isRecurrenceTag(tag: unknown): boolean {
+  return RECUR_TAG_RE.test(String(tag ?? ""));
+}
+
+/** The user's own tags — the recurrence grammar stripped. */
+export function userTags(tags: readonly unknown[] | null | undefined): string[] {
+  return (tags || []).map(String).filter((t) => !RECUR_TAG_RE.test(t));
+}
 const DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 export function freqToUnit(freq: string): { unit: RecurrenceRule["unit"]; interval: number } {
