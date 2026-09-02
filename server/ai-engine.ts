@@ -33,7 +33,7 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
-import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
+import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, entityTypeForTool, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { buildExtractionItems } from "@shared/extraction-destinations";
 import { reasonAboutDocument } from "./semantic-reasoner";
@@ -15996,17 +15996,33 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // create_obligation keys on name+amount+frequency+profile) — those are
       // fine and stay. The loop-level gate was the over-eager one and is gone.
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
-      const opsBeforeRound = allOperations.length;
-      const resultsBeforeRound = allResults.length;
-      for (const toolUse of toolUses) {
+      // ── PARALLEL TOOL EXECUTION (latency, 2026-09-01) ─────────────────────
+      // A round's tool calls used to run strictly one after another, so a
+      // three-clause message paid three full execute+verify latencies in
+      // series. Calls that cannot interfere now run concurrently; calls that
+      // CAN interfere — the same tracker identity (dedup, auto-create,
+      // schema auto-extend), the same entity family (same-name create
+      // refusal, profile writes), anything habit-related (a check-in mirrors
+      // into a tracker) — stay serial in their group, in model order. Every
+      // per-call gate runs unchanged inside the call; only the scheduling
+      // changed. Outputs are re-sorted into model order afterwards so the
+      // transcript, cards and ledger read exactly as before.
+      // AI_CHAT_SERIAL_TOOLS=1 restores strictly sequential execution.
+      type RoundMeta = { operation?: OperationOutcome; result?: any; action?: ParsedAction };
+      const roundMeta = new Map<number, RoundMeta>();
+      const roundIndexOf = new WeakMap<object, number>();
+      const runOne = async (toolIdx: number, toolUse: Anthropic.Messages.ToolUseBlock): Promise<void> => {
+        const meta: RoundMeta = {};
+        roundMeta.set(toolIdx, meta);
+        const pushOp = (op: OperationOutcome) => { meta.operation = op; roundIndexOf.set(op, toolIdx); pushOp(op); };
         // Safety limit: stop executing tools if we've hit the per-message cap
         if (totalToolCalls >= MAX_TOOL_CALLS) {
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify({ error: "Tool call limit reached for this message. Please send a new message for additional actions." }), is_error: true });
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Tool call limit reached", turnId, sourceMessageId });
+            pushOp({ index: -1, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Tool call limit reached", turnId, sourceMessageId });
           }
           emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: "Tool call limit reached" });
-          continue;
+          return;
         }
         totalToolCalls++;
         emitEvent({ type: "tool_start", tool: toolUse.name, label: opRawLabel(toolUse) });
@@ -16087,8 +16103,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // stay out of the user's per-operation checklist entirely. Genuine
             // routing mismatches DO surface, in plain language.
             if (routingViolation.userMessage) {
-              allOperations.push({
-                index: allOperations.length,
+              pushOp({
+                index: -1,
                 raw: opRawLabel(toolUse),
                 tool: toolUse.name,
                 status: "failed",
@@ -16098,7 +16114,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               } as OperationOutcome);
             }
             emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: routingViolation.userMessage });
-            continue;
+            return;
           }
 
           // Validate input before executing
@@ -16109,10 +16125,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify(errorResult), is_error: true });
             // Don't push to allActions for validation failures — nothing was actually done
             if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-              allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: toUserFacingError(errorResult.error, toolUse.name), turnId, sourceMessageId });
+              pushOp({ index: -1, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: toUserFacingError(errorResult.error, toolUse.name), turnId, sourceMessageId });
             }
             emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: toUserFacingError(errorResult.error, toolUse.name) });
-            continue;
+            return;
           }
           if (validation.warnings.length > 0) {
             logger.info("ai", `Validation warnings for ${toolUse.name}: ${validation.warnings.join(", ")}`);
@@ -16237,6 +16253,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 ...(sourceMessageId ? { _sourceMessageId: sourceMessageId } : {}),
               },
             };
+            meta.action = actionForStream;
+            meta.result = result;
+            roundIndexOf.set(actionForStream, toolIdx);
+            roundIndexOf.set(result, toolIdx);
             allActions.push(actionForStream);
             allResults.push(result);
             // Remember what this turn has created, under the name the tool was
@@ -16295,7 +16315,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           let operationForStream: OperationOutcome | undefined;
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
             operationForStream = {
-              index: allOperations.length,
+              index: -1,
               raw: opRawLabel(toolUse),
               tool: toolUse.name,
               status: isSuccess ? (wasDeduped ? "deduped" : "ok") : "failed",
@@ -16306,7 +16326,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               turnId,
               sourceMessageId,
             };
-            allOperations.push(operationForStream);
+            pushOp(operationForStream);
           }
           emitEvent({
             type: "tool_result",
@@ -16326,10 +16346,54 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           });
           const thrownUserError = toUserFacingError(err.message, toolUse.name);
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: thrownUserError, turnId, sourceMessageId });
+            pushOp({ index: -1, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: thrownUserError, turnId, sourceMessageId });
           }
           emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: thrownUserError });
         }
+      };
+
+      const opsBeforeRound = allOperations.length;
+      const actionsBeforeRound = allActions.length;
+      const resultsBeforeRound = allResults.length;
+      const serialTools = process.env.AI_CHAT_SERIAL_TOOLS === "1";
+      if (serialTools) {
+        for (let k = 0; k < toolUses.length; k++) await runOne(k, toolUses[k]);
+      } else {
+        // Group by interference key, preserving model order within a group.
+        const groups = new Map<string, number[]>();
+        toolUses.forEach((t, k) => {
+          const key = toolInterferenceKey(t);
+          const g = groups.get(key);
+          if (g) g.push(k); else groups.set(key, [k]);
+        });
+        const runGroup = async (idxs: number[]) => { for (const k of idxs) await runOne(k, toolUses[k]); };
+        // Habit work runs after everything else: a check-in mirrors into a
+        // tracker and a tracker log advances a linked habit, so the two must
+        // never race each other.
+        const habitGroups = [...groups.entries()].filter(([key]) => key.startsWith("family:habit")).map(([, g]) => g);
+        const otherGroups = [...groups.entries()].filter(([key]) => !key.startsWith("family:habit")).map(([, g]) => g);
+        const POOL = 4;
+        const runPool = async (gs: number[][]) => {
+          let next = 0;
+          const workers = Array.from({ length: Math.min(POOL, gs.length) }, async () => {
+            while (next < gs.length) { const g = gs[next++]; await runGroup(g); }
+          });
+          await Promise.all(workers);
+        };
+        await runPool(otherGroups);
+        await runPool(habitGroups);
+      }
+      // Restore model order in everything the round appended, then renumber
+      // the operation checklist so indices stay contiguous and stable.
+      {
+        const idxOfToolId = new Map(toolUses.map((t, k) => [t.id, k] as const));
+        toolResults.sort((a, b) => (idxOfToolId.get(a.tool_use_id) ?? 0) - (idxOfToolId.get(b.tool_use_id) ?? 0));
+        const byRound = (a: object, b: object) => (roundIndexOf.get(a) ?? 0) - (roundIndexOf.get(b) ?? 0);
+        const reorder = <T extends object>(arr: T[], from: number) => { const tail = arr.splice(from); tail.sort(byRound); arr.push(...tail); };
+        reorder(allOperations, opsBeforeRound);
+        reorder(allActions, actionsBeforeRound);
+        reorder(allResults, resultsBeforeRound);
+        for (let k = 0; k < allOperations.length; k++) allOperations[k].index = k;
       }
 
       // Add assistant response + tool results to messages for next iteration
@@ -16352,7 +16416,6 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // AI_CHAT_MODEL_RECAP=1 restores the model-written recap.
       {
         const roundOps = allOperations.slice(opsBeforeRound);
-        const roundResults = allResults.slice(resultsBeforeRound);
         const roundText = response.content.filter((b): b is Anthropic.Messages.TextBlock => b.type === "text").map((b) => b.text).join("");
         const eligible =
           process.env.AI_CHAT_MODEL_RECAP !== "1"
@@ -16361,14 +16424,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           && roundOps.length === toolUses.length
           && roundOps.every((o) => o.status === "ok" || o.status === "deduped")
           && roundOps.filter((o) => o.status === "ok").length >= Math.max(1, countActionClauses(userMessage))
-          && roundResults.every((r) => !(r as any)?.categoryNote)
+          && [...roundMeta.values()].every((m) => !(m.result as any)?.categoryNote)
           && !/\?/.test(roundText);
         if (eligible) {
-          const inputsByIndex = toolUses.map((t) => (t.input || {}) as Record<string, any>);
-          const recapOps: RecapOp[] = roundOps.map((o, idx) => {
-            const r = roundResults[idx] as any;
-            const inp = inputsByIndex[idx] || {};
-            return {
+          const recapOps: RecapOp[] = toolUses.flatMap((t, k) => {
+            const m = roundMeta.get(k);
+            const o = m?.operation;
+            if (!o) return [];
+            const r = m?.result as any;
+            const inp = (t.input || {}) as Record<string, any>;
+            return [{
               status: o.status,
               tool: o.tool,
               label: String(r?._displayData?.trackerName || o.trackerName || o.raw || o.tool),
@@ -16376,7 +16441,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               estimateNote: typeof r?.estimateNote === "string" ? r.estimateNote : undefined,
               createdTrackerName: o.createdTracker?.name,
               error: o.error,
-            };
+            } satisfies RecapOp];
           });
           textReply = buildTurnRecap(recapOps);
           logger.info("ai", `[turn ${turnId.slice(0, 8)}] deterministic recap after ${toolUses.length} write(s) — skipped the model's recap round`);
@@ -16868,6 +16933,32 @@ export const READ_ONLY_TOOLS = new Set<string>([
 // Write tools whose success needs no model follow-up: the outcome IS the
 // reply. Anything that reads, previews, asks, or chains (bulk previews,
 // merges, undo, document tools) stays out so the model keeps its next round.
+/**
+ * Which tool calls in one model round may run concurrently. Two calls with
+ * the SAME key are executed in model order; different keys run in parallel.
+ *   · read-only tools: each its own key (no interference);
+ *   · tracker tools: the tracker's canonical identity — logs to different
+ *     trackers are independent, logs to the same one (dedup, auto-create,
+ *     schema extension) are not; nutrition aliases and canonical activities
+ *     collapse the way the executor collapses them;
+ *   · everything else: the tool's entity family, so same-name creates and
+ *     profile writes keep their turn-level guards intact.
+ */
+export function toolInterferenceKey(t: { id: string; name: string; input?: any }): string {
+  const inp = (t.input || {}) as Record<string, any>;
+  if (READ_ONLY_TOOLS.has(t.name)) return `read:${t.id}`;
+  const trackerish = new Set(["log_tracker_entry", "log_medication_dose", "create_tracker", "update_tracker", "delete_tracker", "update_tracker_entry", "delete_tracker_entry"]);
+  if (trackerish.has(t.name)) {
+    const raw = String(inp.trackerName || inp.name || inp.medication || inp.drug || "").toLowerCase();
+    if (!raw) return `family:tracker`;
+    if (["calories", "nutrition", "food", "diet", "meal"].some((a) => raw.includes(a))) return "tracker:nutrition";
+    const canon = resolveCanonicalActivity(raw)?.trackerName;
+    return `tracker:${trackerIdentityKey(canon || raw) || raw}`;
+  }
+  const family = entityTypeForTool(t.name) || t.name;
+  return `family:${family}`;
+}
+
 const RECAP_SAFE_WRITE_TOOLS = new Set<string>([
   "log_tracker_entry", "log_medication_dose", "create_expense", "log_income",
   "create_task", "create_event", "create_reminder", "checkin_habit",

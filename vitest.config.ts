@@ -276,6 +276,8 @@ export default defineConfig({
       'tests/quick-log.test.ts',
       'tests/quick-log-owner-scope.test.ts',
       'tests/system-prompt-cache.test.ts',
+      'tests/tool-interference-key.test.ts',
+      'tests/intent-plan-activity-reports.test.ts',
       'tests/audit-fixes-2026-09.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],

@@ -23,6 +23,7 @@
 // it is not — a low-confidence intent never blocks a tool call.
 
 import { detectPossessiveOwner } from "./entity-naming";
+import { countActionClauses } from "./action-split";
 
 export type IntentEntity =
   | "habit"
@@ -463,10 +464,18 @@ export function parseTurnPlan(message: string): TurnIntentPlan {
   const writeClauses = clauses.filter((c) => WRITE_SHAPED.test(c));
   const perClause = writeClauses.map((c) => parseTurnIntent(c));
   const actionable = perClause.filter(isActionable);
-  const exhaustive = writeClauses.length > 0 && actionable.length === writeClauses.length;
+  // An activity REPORT ("I ran 2 miles", "Sarah ate grilled chicken") carries
+  // no request verb, so it is not write-shaped — but it is still a request:
+  // the assistant logs it. A message that mixes such reports with one named
+  // command ("…and create a task to buy chicken") was read as exhaustively
+  // task-only, and every tracker log for the reports was refused as "not what
+  // you asked for" (2026-09-01 report: 7 blocked entries, 1 task). Reports
+  // are unparsed requests, so their presence makes the plan non-exhaustive.
+  const unparsedReports = clauses.filter((c) => !WRITE_SHAPED.test(c) && countActionClauses(c) > 0);
+  const exhaustive = writeClauses.length > 0 && actionable.length === writeClauses.length && unparsedReports.length === 0;
 
   if (actionable.length === 0) {
-    return { message: raw, intents: [whole], exhaustive: isActionable(whole) && writeClauses.length <= 1 };
+    return { message: raw, intents: [whole], exhaustive: isActionable(whole) && writeClauses.length <= 1 && unparsedReports.length === 0 };
   }
   // Keep the whole-message read alongside the clause reads: it is the one that
   // sees attributes spread across sentences.
