@@ -19,7 +19,7 @@ import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance }
 import { summarizeAccounts, isAccountProfile } from "@shared/finance-accounts";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
-import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
+import { advanceLiabilityDueDate, readDueDate, isSettledOccurrence } from "@shared/liability-recurrence";
 import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
 import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
 import { selfIdsFrom } from "@shared/scope";
@@ -2305,6 +2305,11 @@ export async function registerRoutes(
                     // calendar at its hour; the reminder rows this used to write
                     // were neither.
                     const title = `Bill due: ${bill.name}`;
+                    // An occurrence already paid or skipped needs no reminder.
+                    // Creating one anyway made the next run close it (D92) and
+                    // the run after that create it again — a churn of reminder
+                    // tasks for a bill whose date sits on a settled day.
+                    if (isSettledOccurrence(f, due)) continue;
                     const dup = (existingTasks || []).some((t: any) =>
                       t.title === title && String(t.dueDate || "").slice(0, 10) === due && t.status !== "done");
                     if (!dup) {
