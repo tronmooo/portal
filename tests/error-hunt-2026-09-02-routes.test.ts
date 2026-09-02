@@ -808,3 +808,47 @@ describe("D99: POST /api/liabilities/:id/payments passes accountId to the pay pi
     expect(bad.status).toBe(400);
   });
 });
+
+// D104 — the backup export left out incomes, goals, paychecks, budgets and
+// liability payments; the import could not take them back.
+describe("D104: export carries the whole money model and import restores it", () => {
+  function moneyStorage(storage: any, db: FakeDb) {
+    const stub = (v: any) => async () => v;
+    for (const m of ["getTrackers", "getEvents", "getDocuments", "getHabits", "getArtifacts", "getJournalEntries", "getMemories", "getDomains"]) if (typeof storage[m] !== "function") storage[m] = stub([]);
+    storage.getGoals = async () => (db as any).goals || [];
+    storage.getPaychecks = async () => [{ id: "pc-1", source: "Acme", amount: 2600, expected_date: "2026-09-12" }];
+    storage.getAllBudgets = async () => ({ "2026-09": [{ id: "b-1", category: "food", amount: 300 }] });
+    storage.getLiabilityPayments = async (id: string) => db.liabilityPayments.filter((p: any) => p.liabilityProfileId === id);
+    storage.createGoal = async (g: any) => { const row = { id: `goal-${((db as any).goals ||= []).length + 1}`, status: "active", ...g }; (db as any).goals.push(row); return row; };
+    storage.createPaycheck = async (p: any) => ({ id: "pc-new", ...p });
+    storage.addBudget = async (month: string, category: string, amount: number) => ({ id: `b-${month}-${category}`, category, amount });
+  }
+  it("exports every section with the live rows", async () => {
+    h = await boot({
+      profiles: [SELF, { id: "loan-1", type: "liability", type_key: "auto_loan", name: "Loan", fields: {} }],
+      incomes: [{ id: "inc-1", description: "Salary", amount: 2600, frequency: "biweekly", linkedProfiles: [SELF.id] }],
+      liabilityPayments: [{ id: "pay-1", liabilityProfileId: "loan-1", amount: 400, paymentDate: "2026-09-02" }],
+    }, (storage, db) => { moneyStorage(storage, db); (db as any).goals = [{ id: "goal-1", title: "Save", type: "savings", target: 1000, unit: "$", linkedProfiles: [SELF.id] }]; });
+    const r = await h.api("GET", "/api/export");
+    expect(r.status).toBe(200);
+    expect(r.data.incomes.map((i: any) => i.id)).toEqual(["inc-1"]);
+    expect(r.data.goals.map((g: any) => g.id)).toEqual(["goal-1"]);
+    expect(r.data.paychecks.map((p: any) => p.id)).toEqual(["pc-1"]);
+    expect(r.data.budgets).toEqual({ "2026-09": [{ id: "b-1", category: "food", amount: 300 }] });
+    expect(r.data.liabilityPayments.map((p: any) => p.id)).toEqual(["pay-1"]);
+  });
+  it("imports incomes, goals, paychecks and budgets from such a file", async () => {
+    h = await boot({ profiles: [SELF] }, (storage, db) => moneyStorage(storage, db));
+    const r = await h.api("POST", "/api/import", {
+      version: 1,
+      incomes: [{ description: "Salary", amount: 2600, frequency: "biweekly", date: "2026-08-28" }],
+      goals: [{ title: "Save", type: "savings", target: 1000, unit: "$" }],
+      paychecks: [{ source: "Acme", amount: 2600, expected_date: "2026-09-12" }],
+      budgets: { "2026-09": [{ category: "food", amount: 300 }], "bad-month": [{ category: "x", amount: 1 }] },
+    });
+    expect(r.status, JSON.stringify(r.data)).toBe(200);
+    expect(r.data.imported).toMatchObject({ incomes: 1, goals: 1, paychecks: 1, budgets: 1 });
+    expect(h.db.incomes.map((i: any) => i.description)).toEqual(["Salary"]);
+    expect((h.db as any).goals.map((g: any) => g.title)).toEqual(["Save"]);
+  });
+});

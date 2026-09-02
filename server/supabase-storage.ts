@@ -7395,6 +7395,21 @@ export class SupabaseStorage implements IStorage {
     return parsed.filter(b => !b.profileId || wanted.has(b.profileId));
   }
 
+  async getAllBudgets(): Promise<Record<string, Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>>> {
+    const { data, error } = await this.supabase.from("preferences")
+      .select("key, value")
+      .eq("user_id", this.userId)
+      .like("key", "budget:%");
+    if (error) throw error;
+    const out: Record<string, any[]> = {};
+    for (const row of data || []) {
+      const month = String(row.key || "").slice("budget:".length);
+      if (!/^\d{4}-\d{2}$/.test(month)) continue;
+      try { const parsed = JSON.parse(row.value); if (Array.isArray(parsed)) out[month] = parsed; } catch { /* skip a corrupt month */ }
+    }
+    return out;
+  }
+
   async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>): Promise<void> {
     // Every Supabase error is thrown. The three budget writers (this, addBudget,
     // updateBudget — which both funnel here) used to discard `error`, so a

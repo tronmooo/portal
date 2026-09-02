@@ -8529,6 +8529,7 @@ Rules:
       let [
         profiles, trackers, tasks, expenses, events, documents,
         habits, obligations, artifacts, journalEntries, memories, domains,
+        incomes, goals, paychecks, budgetsByMonth,
       ] = await Promise.all([
         storage.getProfiles(),
         storage.getTrackers(),
@@ -8542,7 +8543,19 @@ Rules:
         storage.getJournalEntries(),
         storage.getMemories(),
         storage.getDomains(),
+        // A backup that left these out could not restore a household's money
+        // model: incomes, goals, paychecks, budgets and the payment history
+        // behind every loan, card and bill were all missing from the file.
+        storage.getIncomes(),
+        storage.getGoals(),
+        storage.getPaychecks().catch(() => [] as any[]),
+        storage.getAllBudgets().catch(() => ({} as Record<string, any[]>)),
       ]);
+      const liabilityIds = (profiles as any[]).filter((p) => p.type === "liability").map((p) => p.id);
+      let liabilityPayments: any[] = [];
+      for (const id of liabilityIds) {
+        try { liabilityPayments.push(...(await storage.getLiabilityPayments(id))); } catch { /* per-liability best effort */ }
+      }
       // [P6.2] Optional ?profileIds= scoping. Each entity collection goes
       // through the same canonical orphan rule as the list endpoints.
       // Profiles, memories and domains are reference data with no
@@ -8551,7 +8564,7 @@ Rules:
       const exportFilterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : [];
       if (exportFilterIds.length > 0) {
         const uid_ex = cacheUserKey(req as AuthenticatedRequest);
-        [trackers, tasks, expenses, events, documents, habits, obligations, artifacts, journalEntries] =
+        [trackers, tasks, expenses, events, documents, habits, obligations, artifacts, journalEntries, incomes, goals] =
           await Promise.all([
             filterByProfileScope(trackers, exportFilterIds, uid_ex),
             filterByProfileScope(tasks, exportFilterIds, uid_ex),
@@ -8562,7 +8575,13 @@ Rules:
             filterByProfileScope(obligations, exportFilterIds, uid_ex),
             filterByProfileScope(artifacts, exportFilterIds, uid_ex),
             filterByProfileScope(journalEntries, exportFilterIds, uid_ex),
+            filterByProfileScope(incomes, exportFilterIds, uid_ex),
+            filterByProfileScope(goals, exportFilterIds, uid_ex),
           ]);
+        const inScopeLiabilities = new Set((obligations as any[]).map((o) => o.id));
+        liabilityPayments = liabilityPayments.filter((p) => inScopeLiabilities.has(p.liabilityProfileId));
+        const wanted = new Set(exportFilterIds);
+        budgetsByMonth = Object.fromEntries(Object.entries(budgetsByMonth).map(([m, list]) => [m, (list as any[]).filter((b) => !b.profileId || wanted.has(b.profileId))]));
       }
       const data = {
         version: 1,
@@ -8571,6 +8590,7 @@ Rules:
         ...(exportFilterIds.length > 0 ? { filteredProfileIds: exportFilterIds } : {}),
         profiles, trackers, tasks, expenses, events, documents,
         habits, obligations, artifacts, journalEntries, memories, domains,
+        incomes, goals, paychecks, budgets: budgetsByMonth, liabilityPayments,
       };
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${getUserToday(getTimezone(req))}.json"`);
@@ -8634,6 +8654,32 @@ Rules:
       if (data.expenses && Array.isArray(data.expenses)) {
         for (const e of data.expenses) {
           await tryImport("expenses", e.description || "unnamed", () => storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags }));
+        }
+      }
+      // Import incomes, goals, paychecks and budgets — the money model the
+      // export used to leave out. Liability payments are exported for the
+      // record only: their liability ids do not survive a re-import.
+      if (data.incomes && Array.isArray(data.incomes)) {
+        for (const i of data.incomes) {
+          await tryImport("incomes", i.description || "unnamed", () => storage.createIncome({ description: i.description, amount: Number(i.amount), category: i.category || "salary", frequency: i.frequency || "monthly", date: i.date || undefined, tags: i.tags || [], linkedProfiles: [] } as any));
+        }
+      }
+      if (data.goals && Array.isArray(data.goals)) {
+        for (const g of data.goals) {
+          await tryImport("goals", g.title || "unnamed", () => storage.createGoal({ title: g.title, type: g.type || "custom", target: Number(g.target), unit: g.unit || "", startValue: g.startValue, deadline: g.deadline || undefined, category: g.category, milestones: g.milestones || [] } as any));
+        }
+      }
+      if (data.paychecks && Array.isArray(data.paychecks)) {
+        for (const p of data.paychecks) {
+          await tryImport("paychecks", p.source || "unnamed", () => storage.createPaycheck({ source: p.source, amount: Number(p.amount), expected_date: p.expected_date || p.expectedDate, notes: p.notes }));
+        }
+      }
+      if (data.budgets && typeof data.budgets === "object" && !Array.isArray(data.budgets)) {
+        for (const [month, list] of Object.entries(data.budgets as Record<string, any[]>)) {
+          if (!/^\d{4}-\d{2}$/.test(month) || !Array.isArray(list)) continue;
+          for (const b of list) {
+            await tryImport("budgets", `${month} ${b.category || "unnamed"}`, () => storage.addBudget(month, String(b.category || ""), Number(b.amount), b.notes, undefined));
+          }
         }
       }
       // Import events

@@ -292,6 +292,8 @@ export interface IStorage {
 
   // Budgets
   getBudgets(month: string, profileIds?: string[]): Promise<Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>>;
+  /** Every month's budgets, keyed by "YYYY-MM" — the backup export needs all of them. */
+  getAllBudgets(): Promise<Record<string, Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>>>;
   setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>): Promise<void>;
   addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string): Promise<{id: string; category: string; amount: number; notes?: string; profileId?: string}>;
   updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}): Promise<boolean>;
@@ -2686,6 +2688,7 @@ export class MemStorage implements IStorage {
     const wanted = new Set(profileIds);
     return all.filter(b => !b.profileId || wanted.has(b.profileId));
   }
+  async getAllBudgets() { return Object.fromEntries(this.budgetStore.entries()); }
   async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>) { this.budgetStore.set(month, budgets); }
   async addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string) {
     const list = this.budgetStore.get(month) || [];
