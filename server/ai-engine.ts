@@ -9,10 +9,10 @@ import {
   upsertJournalEntry, syncDateRulesForEntity,
 } from "./content-service";
 import { findActionableTime } from "@shared/temporal-rules";
-import { classifyContent, routeContent, checkContentRouting, isStructured, type ContentClassification } from "@shared/content-routing";
+import { classifyContent, routeContent, checkContentRouting, isStructured, extractSharedActivities, type ContentClassification } from "@shared/content-routing";
 import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
-import { classifyNutritionAutoCreate } from "@shared/nutrition-shaped";
+import { classifyNutritionAutoCreate, isNutritionTrackerName } from "@shared/nutrition-shaped";
 import {
   FINANCE_TOOL_DEFINITIONS, FINANCE_TOOL_SYSTEM_GUIDANCE, executeFinanceTool, isFinanceTool,
 } from "./finance-ai-tools";
@@ -8942,8 +8942,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Only match duplicates within the same profile — different profiles can have same tracker names.
       // Match by canonical IDENTITY (not exact string) so "Multivitamin" already
       // existing blocks a duplicate "Supplement Multivitamin"/"Daily Multivitamin".
+      // One nutrition tracker per profile, whatever it is called. "Calories",
+      // "Food Log" and "Macros" are the profile's existing Nutrition tracker —
+      // canonical NAME identity says they are different words, which is how a
+      // second one used to get created beside the real one (2026-09-02 report).
+      const wantsNutrition = isNutritionTrackerName(String(input.name || ""));
       const dupTracker = existingTrackers.find(t => {
-        if (!trackerNamesMatch(t.name, input.name)) return false;
+        const sameTracker = trackerNamesMatch(t.name, input.name)
+          || (wantsNutrition && (isNutritionTrackerName(t.name) || t.category === "nutrition"));
+        if (!sameTracker) return false;
         const lp = t.linkedProfiles || [];
         if (lp.length === 0) return true; // unowned tracker = global match
         return ctTargetId ? lp.includes(ctTargetId) : true;
@@ -14123,7 +14130,7 @@ async function resolveForProfile(forProfile: string | undefined, text: string): 
  * stated as suggestions. A message the router could not read produces nothing
  * at all — a bad hint is worse than no hint.
  */
-export function buildContentRoutingDirective(userMessage: string): string | null {
+export function buildContentRoutingDirective(userMessage: string, profiles?: Array<{ id: string; name: string; type?: string }>): string | null {
   const plan = routeContent(userMessage);
   const named = plan.actions.filter((a) => a.explicit);
   const inferred = plan.actions.filter((a) => !a.explicit && a.confidence >= 0.8 && a.kind !== "unknown");
@@ -14165,6 +14172,29 @@ export function buildContentRoutingDirective(userMessage: string): string | null
       `${names.length > 0 ? ` (${names.map((n) => `"${n.slice(0, 40)}"`).join(", ")})` : ""}. ` +
       `A same-named record already existing is NOT permission to update it instead — create the new one, or ASK which they want. ` +
       `This is guidance, not a restriction: if the message asks you to add to something that exists, do exactly that.`,
+    );
+  }
+
+  // ── SHARED ACTIVITIES ──────────────────────────────────────────────────
+  // "Sarah and I played soccer for 30 minutes" is TWO records, one per
+  // participant. Reported 2026-09-02: it produced one, on the user's tracker,
+  // and the other person's history simply lost the afternoon. The single-owner
+  // hint above cannot see a joint subject — it only ever looked for "for
+  // Robert" or "Robert's …" — so the activity defaulted to the user in
+  // silence. Names are confirmed against real profiles here, so a capitalized
+  // phrase that is not a person ("Grilled Chicken and Rice") says nothing.
+  for (const shared of extractSharedActivities(userMessage)) {
+    const matched = shared.names
+      .map((n) => matchProfileByName(profiles || [], n))
+      .filter((p): p is { id: string; name: string; type?: string } => !!p);
+    if (matched.length === 0) continue;
+    const participants = [...(shared.includesSelf ? ["you"] : []), ...matched.map((p) => p.name)];
+    if (participants.length < 2) continue;
+    lines.push(
+      `[ROUTER] SHARED ACTIVITY — "${shared.clause.slice(0, 80)}" names ${participants.length} participants: ${participants.join(" and ")}. ` +
+      `They ALL did it. Write it SEPARATELY for EACH one — ${matched.map((p) => `log_tracker_entry(..., forProfile:"${p.name}")`).join(" and ")}` +
+      `${shared.includesSelf ? " and one more for the user (no forProfile)" : ""} — same activity, same values, one entry per participant. ` +
+      `A single entry for a shared activity silently loses the other person's record.`,
     );
   }
 
@@ -15798,7 +15828,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // It is a directive when the user NAMED the object and a hint otherwise, so
     // an inferred read informs the model without overriding its judgement on a
     // message the router only half understood.
-    const contentDirective = buildContentRoutingDirective(userMessage);
+    const contentDirective = buildContentRoutingDirective(userMessage, profiles as any);
 
     // ── WHO IS "SHE"? ────────────────────────────────────────────────────
     // Resolved deterministically from the conversation, for the same reason
