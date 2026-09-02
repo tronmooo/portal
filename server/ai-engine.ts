@@ -9,10 +9,11 @@ import {
   upsertJournalEntry, syncDateRulesForEntity,
 } from "./content-service";
 import { findActionableTime } from "@shared/temporal-rules";
-import { classifyContent, routeContent, checkContentRouting, isStructured, type ContentClassification } from "@shared/content-routing";
+import { classifyContent, routeContent, checkContentRouting, isStructured, extractSharedActivities, type ContentClassification } from "@shared/content-routing";
+import { planSharedActivityFanout, type FanoutWrite } from "@shared/shared-activity";
 import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
-import { classifyNutritionAutoCreate } from "@shared/nutrition-shaped";
+import { classifyNutritionAutoCreate, isNutritionTrackerName } from "@shared/nutrition-shaped";
 import {
   FINANCE_TOOL_DEFINITIONS, FINANCE_TOOL_SYSTEM_GUIDANCE, executeFinanceTool, isFinanceTool,
 } from "./finance-ai-tools";
@@ -33,7 +34,7 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
-import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
+import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, entityTypeForTool, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { buildExtractionItems } from "@shared/extraction-destinations";
 import { reasonAboutDocument } from "./semantic-reasoner";
@@ -6872,6 +6873,12 @@ async function rememberCategoryMapping(name: string, category: string, opts: { o
 // Returns undefined when 0 matches OR multiple word-boundary matches (caller
 // can surface a disambiguation error). Single longest-name preference applies
 // for the bidirectional case.
+/** A profile's recorded body weight in kg, if it has one. */
+function profileWeightKg(p: any): number | null {
+  const f = p?.fields || {};
+  return parseWeightToKg(f.weight ?? f.weightLbs ?? f.weight_lbs ?? f.weightKg);
+}
+
 function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: any): T | undefined {
   const result = resolveProfileByName(profiles, rawName);
   if (result.kind === "found") return result.profile;
@@ -8942,8 +8949,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Only match duplicates within the same profile — different profiles can have same tracker names.
       // Match by canonical IDENTITY (not exact string) so "Multivitamin" already
       // existing blocks a duplicate "Supplement Multivitamin"/"Daily Multivitamin".
+      // One nutrition tracker per profile, whatever it is called. "Calories",
+      // "Food Log" and "Macros" are the profile's existing Nutrition tracker —
+      // canonical NAME identity says they are different words, which is how a
+      // second one used to get created beside the real one (2026-09-02 report).
+      const wantsNutrition = isNutritionTrackerName(String(input.name || ""));
       const dupTracker = existingTrackers.find(t => {
-        if (!trackerNamesMatch(t.name, input.name)) return false;
+        const sameTracker = trackerNamesMatch(t.name, input.name)
+          || (wantsNutrition && (isNutritionTrackerName(t.name) || t.category === "nutrition"));
+        if (!sameTracker) return false;
         const lp = t.linkedProfiles || [];
         if (lp.length === 0) return true; // unowned tracker = global match
         return ctTargetId ? lp.includes(ctTargetId) : true;
@@ -14123,7 +14137,7 @@ async function resolveForProfile(forProfile: string | undefined, text: string): 
  * stated as suggestions. A message the router could not read produces nothing
  * at all — a bad hint is worse than no hint.
  */
-export function buildContentRoutingDirective(userMessage: string): string | null {
+export function buildContentRoutingDirective(userMessage: string, profiles?: Array<{ id: string; name: string; type?: string }>): string | null {
   const plan = routeContent(userMessage);
   const named = plan.actions.filter((a) => a.explicit);
   const inferred = plan.actions.filter((a) => !a.explicit && a.confidence >= 0.8 && a.kind !== "unknown");
@@ -14134,7 +14148,8 @@ export function buildContentRoutingDirective(userMessage: string): string | null
     lines.push(
       `[ROUTER] The user explicitly named ${kinds.length === 1 ? "this object" : "these objects"}: ${kinds.join(", ").toUpperCase()}. ` +
       `Use the matching tool (note -> create_note, journal -> journal_entry, task -> create_task, habit -> create_habit, event -> create_event). ` +
-      `Explicit intent is never overridden — a tool that writes a different kind will be refused.`,
+      `Explicit intent is never overridden: write the object the user named. If the message ALSO asks for something else, do that too — ` +
+      `as an ADDITIONAL write, never in place of the named one.`,
     );
   }
   if (inferred.length > 0) {
@@ -14152,6 +14167,44 @@ export function buildContentRoutingDirective(userMessage: string): string | null
       `Write it there — do NOT bury it in a note. If that record's field is a date, it is already on the calendar; do not also create an event for it.`,
     );
   }
+  // Replaces the create-vs-update VETO that used to sit in the tool gate.
+  // "Create a task for Sarah" must not silently overwrite an existing
+  // same-named record — but that is a instruction to the model now, not a
+  // refusal, so a genuine "add this to the existing one" still gets through.
+  const creates = parseTurnPlan(userMessage).intents.filter((i) => isActionable(i) && i.operation === "create");
+  if (creates.length > 0) {
+    const names = creates.map((i) => i.fields?.name).filter(Boolean) as string[];
+    lines.push(
+      `[ROUTER] The user asked to CREATE ${creates.map((i) => `a ${i.entity}`).join(" and ")}` +
+      `${names.length > 0 ? ` (${names.map((n) => `"${n.slice(0, 40)}"`).join(", ")})` : ""}. ` +
+      `A same-named record already existing is NOT permission to update it instead — create the new one, or ASK which they want. ` +
+      `This is guidance, not a restriction: if the message asks you to add to something that exists, do exactly that.`,
+    );
+  }
+
+  // ── SHARED ACTIVITIES ──────────────────────────────────────────────────
+  // "Sarah and I played soccer for 30 minutes" is TWO records, one per
+  // participant. Reported 2026-09-02: it produced one, on the user's tracker,
+  // and the other person's history simply lost the afternoon. The single-owner
+  // hint above cannot see a joint subject — it only ever looked for "for
+  // Robert" or "Robert's …" — so the activity defaulted to the user in
+  // silence. Names are confirmed against real profiles here, so a capitalized
+  // phrase that is not a person ("Grilled Chicken and Rice") says nothing.
+  for (const shared of extractSharedActivities(userMessage)) {
+    const matched = shared.names
+      .map((n) => matchProfileByName(profiles || [], n))
+      .filter((p): p is { id: string; name: string; type?: string } => !!p);
+    if (matched.length === 0) continue;
+    const participants = [...(shared.includesSelf ? ["you"] : []), ...matched.map((p) => p.name)];
+    if (participants.length < 2) continue;
+    lines.push(
+      `[ROUTER] SHARED ACTIVITY — "${shared.clause.slice(0, 80)}" names ${participants.length} participants: ${participants.join(" and ")}. ` +
+      `They ALL did it. Write it SEPARATELY for EACH one — ${matched.map((p) => `log_tracker_entry(..., forProfile:"${p.name}")`).join(" and ")}` +
+      `${shared.includesSelf ? " and one more for the user (no forProfile)" : ""} — same activity, same values, one entry per participant. ` +
+      `A single entry for a shared activity silently loses the other person's record.`,
+    );
+  }
+
   const owners = Array.from(new Set(plan.actions.map((a) => a.profileHint).filter(Boolean)));
   if (owners.length > 0) {
     lines.push(`[ROUTER] Named person(s): ${owners.join(", ")}. Pass forProfile — do NOT default to the primary profile.`);
@@ -15782,7 +15835,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // It is a directive when the user NAMED the object and a hint otherwise, so
     // an inferred read informs the model without overriding its judgement on a
     // message the router only half understood.
-    const contentDirective = buildContentRoutingDirective(userMessage);
+    const contentDirective = buildContentRoutingDirective(userMessage, profiles as any);
 
     // ── WHO IS "SHE"? ────────────────────────────────────────────────────
     // Resolved deterministically from the conversation, for the same reason
@@ -15837,6 +15890,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // second create of the same thing is refused instead of producing a twin
     // record (2026-08-09: one "MacBook Pro m4" request → two profiles).
     const turnCreates: TurnCreate[] = [];
+    const trackerWritesThisTurn: FanoutWrite[] = [];
     const richCharts: ChartSpec[] = [];
     const richTables: TableSpec[] = [];
     let richReport: ReportSpec | undefined;
@@ -15996,34 +16050,63 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // create_obligation keys on name+amount+frequency+profile) — those are
       // fine and stay. The loop-level gate was the over-eager one and is gone.
       const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
-      const opsBeforeRound = allOperations.length;
-      const resultsBeforeRound = allResults.length;
-      for (const toolUse of toolUses) {
+      // ── PARALLEL TOOL EXECUTION (latency, 2026-09-01) ─────────────────────
+      // A round's tool calls used to run strictly one after another, so a
+      // three-clause message paid three full execute+verify latencies in
+      // series. Calls that cannot interfere now run concurrently; calls that
+      // CAN interfere — the same tracker identity (dedup, auto-create,
+      // schema auto-extend), the same entity family (same-name create
+      // refusal, profile writes), anything habit-related (a check-in mirrors
+      // into a tracker) — stay serial in their group, in model order. Every
+      // per-call gate runs unchanged inside the call; only the scheduling
+      // changed. Outputs are re-sorted into model order afterwards so the
+      // transcript, cards and ledger read exactly as before.
+      // AI_CHAT_SERIAL_TOOLS=1 restores strictly sequential execution.
+      type RoundMeta = { operation?: OperationOutcome; result?: any; action?: ParsedAction };
+      const roundMeta = new Map<number, RoundMeta>();
+      const roundIndexOf = new WeakMap<object, number>();
+      const runOne = async (toolIdx: number, toolUse: Anthropic.Messages.ToolUseBlock): Promise<void> => {
+        const meta: RoundMeta = {};
+        roundMeta.set(toolIdx, meta);
+        const pushOp = (op: OperationOutcome) => { meta.operation = op; roundIndexOf.set(op, toolIdx); allOperations.push(op); };
         // Safety limit: stop executing tools if we've hit the per-message cap
         if (totalToolCalls >= MAX_TOOL_CALLS) {
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify({ error: "Tool call limit reached for this message. Please send a new message for additional actions." }), is_error: true });
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Tool call limit reached", turnId, sourceMessageId });
+            pushOp({ index: -1, raw: opRawLabel(toolUse), tool: toolUse.name, status: "skipped", error: "Tool call limit reached", turnId, sourceMessageId });
           }
           emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: "Tool call limit reached" });
-          continue;
+          return;
         }
         totalToolCalls++;
         emitEvent({ type: "tool_start", tool: toolUse.name, label: opRawLabel(toolUse) });
 
         try {
-          // ── ROUTING GATE (spec items 2, 3, 7) ───────────────────────────
+          // ── TURN-SCOPE GATE ─────────────────────────────────────────────
           // The last thing between a tool_use block and a database write.
-          // Three refusals, all deterministic and all checked against the
-          // structured intent for THIS message rather than the model's prose:
-          //   · the tool writes a different entity than the user asked for;
-          //   · the user said CREATE and this tool UPDATES (create-vs-update
-          //     safety — a same-named record existing is never a licence to
-          //     switch operations);
-          //   · the call is replaying a request from an EARLIER message.
-          // A blocked call returns a directive to the model (so it can correct
-          // itself on the next round-trip) and is recorded as a production
-          // error, but never surfaces as a success card or an action.
+          // TWO refusals remain, and NEITHER is a guess about what the user
+          // meant — both are facts about this turn:
+          //   · the call is replaying a request from an EARLIER message;
+          //   · this turn already created a same-named record for the same
+          //     owner (one request creates ONE record; a second is fan-out).
+          //
+          // WHAT WAS REMOVED (2026-09-02, at the user's direction). Two
+          // further refusals used to sit here and decide, from a regex read of
+          // the user's prose, that a tool the model chose was the "wrong" one:
+          // an entity gate (checkToolAgainstIntent) and a note/journal/task
+          // gate (checkContentRouting). Both refused real work. "I ran 2
+          // miles … and create a task to buy chicken" lost all seven tracker
+          // logs to the entity gate; "remind Robert about the dentist
+          // tomorrow" could not become an event; "log that I paid Sarah $20"
+          // could not also feed a spending tracker. The parser cannot enumerate
+          // the things a person may ask for — anyone, anywhere, about
+          // anything — so a parse that comes up short must not become a
+          // refusal. The same signal still reaches the model as [ROUTER]
+          // guidance in the system prompt (buildContentRoutingDirective),
+          // where it informs the choice instead of overriding it, and every
+          // write is still verified against the database afterwards by the
+          // envelope's read-back. Guidance in front, verification behind, no
+          // veto in between.
           const routingViolation: RoutingViolation | null = (() => {
             if (READ_ONLY_TOOLS.has(toolUse.name)) return null;
             const input = (toolUse.input || {}) as Record<string, any>;
@@ -16035,29 +16118,34 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // name this turn is fan-out, not work.
             const dupCreate = findDuplicateCreateInTurn(toolUse.name, input, turnCreates);
             if (dupCreate) return duplicateCreateViolation(toolUse.name, label, dupCreate);
-            // NOTE vs JOURNAL vs TASK (user report 2026-08-20). The generic
-            // intent gate above cannot catch "jane doe note: …" — the message
-            // carries no create VERB, so the parsed operation is unknown and
-            // the intent is not actionable. The content router reads the named
-            // OBJECT instead, which is the thing the user was explicit about.
-            const contentViolation = checkContentRouting(toolUse.name, userMessage);
-            if (contentViolation) {
-              // The router's generic kinds map 1:1 onto intent entities; the
-              // cast is safe because `checkContentRouting` only ever reports a
-              // GENERIC kind (see GENERIC_KINDS in shared/content-routing).
-              return {
-                mismatchType: "entity_mismatch",
-                tool: toolUse.name,
-                expectedEntity: contentViolation.requestedKind as any,
-                actualEntity: contentViolation.toolKind as any,
-                expectedOperation: "create",
-                actualOperation: toolOperation(toolUse.name),
-                modelDirective: contentViolation.modelDirective,
-                userMessage: contentViolation.userMessage,
-              } satisfies RoutingViolation;
-            }
-            return checkToolAgainstIntent(toolUse.name, turnPlan);
+            return null;
           })();
+
+          // The two retired gates still RUN — they just cannot refuse any
+          // more. A disagreement between the parse and the model's tool
+          // choice is recorded as telemetry (an in-memory ring + a log line,
+          // never a card and never a tool error) so a model that genuinely
+          // starts mis-routing is still visible in production. The call
+          // proceeds either way: the parse is an opinion, not an authority.
+          if (!routingViolation && !READ_ONLY_TOOLS.has(toolUse.name)) {
+            const observed = checkContentRouting(toolUse.name, userMessage)
+              ? "entity_mismatch" as const
+              : checkToolAgainstIntent(toolUse.name, turnPlan)?.mismatchType;
+            if (observed) {
+              recordChatFailure({
+                turnId,
+                sourceMessageId,
+                userId,
+                userMessage,
+                parsedIntent: { entity: turnIntent.entity, operation: turnIntent.operation, target: turnIntent.target, confidence: turnIntent.confidence },
+                toolSelected: toolUse.name,
+                toolResult: "observed only — allowed to execute",
+                mismatchType: observed,
+                detail: `The parse disagreed with ${toolUse.name} (${observed}); the call was ALLOWED. Telemetry only.`,
+              });
+            }
+          }
+
           if (routingViolation) {
             logger.warn("ai", `[turn ${turnId.slice(0, 8)}] BLOCKED ${toolUse.name}: ${routingViolation.mismatchType}`);
             recordChatFailure({
@@ -16087,8 +16175,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // stay out of the user's per-operation checklist entirely. Genuine
             // routing mismatches DO surface, in plain language.
             if (routingViolation.userMessage) {
-              allOperations.push({
-                index: allOperations.length,
+              pushOp({
+                index: -1,
                 raw: opRawLabel(toolUse),
                 tool: toolUse.name,
                 status: "failed",
@@ -16098,7 +16186,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               } as OperationOutcome);
             }
             emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: routingViolation.userMessage });
-            continue;
+            return;
           }
 
           // Validate input before executing
@@ -16109,10 +16197,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             toolResults.push({ type: "tool_result" as const, tool_use_id: toolUse.id, content: JSON.stringify(errorResult), is_error: true });
             // Don't push to allActions for validation failures — nothing was actually done
             if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-              allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: toUserFacingError(errorResult.error, toolUse.name), turnId, sourceMessageId });
+              pushOp({ index: -1, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: toUserFacingError(errorResult.error, toolUse.name), turnId, sourceMessageId });
             }
             emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: toUserFacingError(errorResult.error, toolUse.name) });
-            continue;
+            return;
           }
           if (validation.warnings.length > 0) {
             logger.info("ai", `Validation warnings for ${toolUse.name}: ${validation.warnings.join(", ")}`);
@@ -16237,6 +16325,20 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 ...(sourceMessageId ? { _sourceMessageId: sourceMessageId } : {}),
               },
             };
+            // Every tracker entry this turn wrote, for the shared-activity
+            // fan-out after the loop. Recorded under the name the tool was
+            // ASKED for, which is what the fan-out matches clauses against.
+            if (toolUse.name === "log_tracker_entry" && result && !(result as any).error) {
+              trackerWritesThisTurn.push({
+                trackerName: String(inp.trackerName || (result as any).trackerName || ""),
+                profileId: (result as any).profileId ?? null,
+                values: { ...((result as any).values || inp.values || {}) },
+              });
+            }
+            meta.action = actionForStream;
+            meta.result = result;
+            roundIndexOf.set(actionForStream, toolIdx);
+            roundIndexOf.set(result, toolIdx);
             allActions.push(actionForStream);
             allResults.push(result);
             // Remember what this turn has created, under the name the tool was
@@ -16295,7 +16397,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           let operationForStream: OperationOutcome | undefined;
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
             operationForStream = {
-              index: allOperations.length,
+              index: -1,
               raw: opRawLabel(toolUse),
               tool: toolUse.name,
               status: isSuccess ? (wasDeduped ? "deduped" : "ok") : "failed",
@@ -16306,7 +16408,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               turnId,
               sourceMessageId,
             };
-            allOperations.push(operationForStream);
+            pushOp(operationForStream);
           }
           emitEvent({
             type: "tool_result",
@@ -16326,10 +16428,54 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           });
           const thrownUserError = toUserFacingError(err.message, toolUse.name);
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
-            allOperations.push({ index: allOperations.length, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: thrownUserError, turnId, sourceMessageId });
+            pushOp({ index: -1, raw: opRawLabel(toolUse), tool: toolUse.name, status: "failed", error: thrownUserError, turnId, sourceMessageId });
           }
           emitEvent({ type: "tool_result", tool: toolUse.name, ok: false, error: thrownUserError });
         }
+      };
+
+      const opsBeforeRound = allOperations.length;
+      const actionsBeforeRound = allActions.length;
+      const resultsBeforeRound = allResults.length;
+      const serialTools = process.env.AI_CHAT_SERIAL_TOOLS === "1";
+      if (serialTools) {
+        for (let k = 0; k < toolUses.length; k++) await runOne(k, toolUses[k]);
+      } else {
+        // Group by interference key, preserving model order within a group.
+        const groups = new Map<string, number[]>();
+        toolUses.forEach((t, k) => {
+          const key = toolInterferenceKey(t);
+          const g = groups.get(key);
+          if (g) g.push(k); else groups.set(key, [k]);
+        });
+        const runGroup = async (idxs: number[]) => { for (const k of idxs) await runOne(k, toolUses[k]); };
+        // Habit work runs after everything else: a check-in mirrors into a
+        // tracker and a tracker log advances a linked habit, so the two must
+        // never race each other.
+        const habitGroups = [...groups.entries()].filter(([key]) => key.startsWith("family:habit")).map(([, g]) => g);
+        const otherGroups = [...groups.entries()].filter(([key]) => !key.startsWith("family:habit")).map(([, g]) => g);
+        const POOL = 4;
+        const runPool = async (gs: number[][]) => {
+          let next = 0;
+          const workers = Array.from({ length: Math.min(POOL, gs.length) }, async () => {
+            while (next < gs.length) { const g = gs[next++]; await runGroup(g); }
+          });
+          await Promise.all(workers);
+        };
+        await runPool(otherGroups);
+        await runPool(habitGroups);
+      }
+      // Restore model order in everything the round appended, then renumber
+      // the operation checklist so indices stay contiguous and stable.
+      {
+        const idxOfToolId = new Map(toolUses.map((t, k) => [t.id, k] as const));
+        toolResults.sort((a, b) => (idxOfToolId.get(a.tool_use_id) ?? 0) - (idxOfToolId.get(b.tool_use_id) ?? 0));
+        const byRound = (a: object, b: object) => (roundIndexOf.get(a) ?? 0) - (roundIndexOf.get(b) ?? 0);
+        const reorder = <T extends object>(arr: T[], from: number) => { const tail = arr.splice(from); tail.sort(byRound); arr.push(...tail); };
+        reorder(allOperations, opsBeforeRound);
+        reorder(allActions, actionsBeforeRound);
+        reorder(allResults, resultsBeforeRound);
+        for (let k = 0; k < allOperations.length; k++) allOperations[k].index = k;
       }
 
       // Add assistant response + tool results to messages for next iteration
@@ -16352,7 +16498,6 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // AI_CHAT_MODEL_RECAP=1 restores the model-written recap.
       {
         const roundOps = allOperations.slice(opsBeforeRound);
-        const roundResults = allResults.slice(resultsBeforeRound);
         const roundText = response.content.filter((b): b is Anthropic.Messages.TextBlock => b.type === "text").map((b) => b.text).join("");
         const eligible =
           process.env.AI_CHAT_MODEL_RECAP !== "1"
@@ -16361,14 +16506,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           && roundOps.length === toolUses.length
           && roundOps.every((o) => o.status === "ok" || o.status === "deduped")
           && roundOps.filter((o) => o.status === "ok").length >= Math.max(1, countActionClauses(userMessage))
-          && roundResults.every((r) => !(r as any)?.categoryNote)
+          && [...roundMeta.values()].every((m) => !(m.result as any)?.categoryNote)
           && !/\?/.test(roundText);
         if (eligible) {
-          const inputsByIndex = toolUses.map((t) => (t.input || {}) as Record<string, any>);
-          const recapOps: RecapOp[] = roundOps.map((o, idx) => {
-            const r = roundResults[idx] as any;
-            const inp = inputsByIndex[idx] || {};
-            return {
+          const recapOps: RecapOp[] = toolUses.flatMap((t, k) => {
+            const m = roundMeta.get(k);
+            const o = m?.operation;
+            if (!o) return [];
+            const r = m?.result as any;
+            const inp = (t.input || {}) as Record<string, any>;
+            return [{
               status: o.status,
               tool: o.tool,
               label: String(r?._displayData?.trackerName || o.trackerName || o.raw || o.tool),
@@ -16376,13 +16523,100 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               estimateNote: typeof r?.estimateNote === "string" ? r.estimateNote : undefined,
               createdTrackerName: o.createdTracker?.name,
               error: o.error,
-            };
+            } satisfies RecapOp];
           });
           textReply = buildTurnRecap(recapOps);
           logger.info("ai", `[turn ${turnId.slice(0, 8)}] deterministic recap after ${toolUses.length} write(s) — skipped the model's recap round`);
           break;
         }
       }
+    }
+
+    // ── SHARED ACTIVITY FAN-OUT (2026-09-02) ──────────────────────────────
+    // "Sarah and I both played soccer" is TWO entries. Telling the model that
+    // was not enough — the user reported the same single entry again — so the
+    // missing halves are written here, deterministically, after the model has
+    // had its turn. Only gaps are filled: a participant the model already
+    // logged is never written twice. The values are not a copy; everything
+    // that depends on whose body did the activity is stripped so the target
+    // profile's own weight, height and history recompute it (see
+    // shared/shared-activity.ts).
+    try {
+      const selfP = (profiles || []).find((p: any) => p?.type === "self");
+      const fanout = planSharedActivityFanout({
+        userMessage,
+        writes: trackerWritesThisTurn,
+        resolveName: (name) => {
+          const m = matchProfileByName((profiles || []) as any[], name);
+          return m ? { id: m.id, name: m.name, weightKg: profileWeightKg(m) } : null;
+        },
+        selfProfile: selfP ? { id: selfP.id, name: selfP.name, weightKg: profileWeightKg(selfP) } : null,
+      });
+      for (const plan of fanout) {
+        logger.info("ai", `[turn ${turnId.slice(0, 8)}] shared-activity fan-out: ${plan.trackerName} for ${plan.forProfile}`);
+        const fanInput: Record<string, any> = {
+          trackerName: plan.trackerName,
+          forProfile: plan.forProfile,
+          values: plan.values,
+          __userMessage: userMessage,
+        };
+        let raw: any;
+        try {
+          raw = await executeTool("log_tracker_entry", fanInput, userId);
+        } catch (err: any) {
+          raw = { error: err?.message || String(err) };
+        }
+        if (!raw || raw.error) {
+          allOperations.push({
+            index: allOperations.length,
+            raw: `log_tracker_entry ${plan.trackerName} (${plan.forProfile})`,
+            tool: "log_tracker_entry",
+            status: "failed",
+            error: `Couldn't log ${plan.trackerName} for ${plan.forProfile}${raw?.error ? ` — ${raw.error}` : ""}.`,
+            turnId,
+            sourceMessageId,
+          } as OperationOutcome);
+          continue;
+        }
+        invalidateContextCache(userId);
+        let fanResult: any = raw;
+        try { fanResult = await finalizeToolResult("log_tracker_entry", "log_entry", fanInput, raw, turnVerifyCtx); } catch { /* verification is best-effort */ }
+        const fanDeduped = fanResult?.deduped === true;
+        if (!fanDeduped) {
+          try { await recordActionLog(turnVerifyCtx, "log_tracker_entry", "log_entry", fanInput, fanResult, null); } catch { /* ledger is best-effort */ }
+        }
+        allActions.push({
+          type: "log_entry",
+          category: "ai",
+          data: {
+            trackerName: plan.trackerName,
+            ...plan.values,
+            ...(raw?._displayData || {}),
+            ...(raw?.id ? { _entityId: raw.id } : {}),
+            ...(raw?.trackerId ? { _trackerId: raw.trackerId } : {}),
+            _ownerName: plan.forProfile,
+            _ownerProfileId: plan.participantId,
+            _turnId: turnId,
+            ...(sourceMessageId ? { _sourceMessageId: sourceMessageId } : {}),
+          },
+        } as ParsedAction);
+        allResults.push(fanResult);
+        allOperations.push({
+          index: allOperations.length,
+          raw: `log_tracker_entry ${plan.trackerName} (${plan.forProfile})`,
+          tool: "log_tracker_entry",
+          status: fanDeduped ? "deduped" : "ok",
+          entity: fanResult?.entity,
+          turnId,
+          sourceMessageId,
+        } as OperationOutcome);
+        if (!fanDeduped) {
+          const fanMutation = buildChatMutation("log_tracker_entry", fanResult, raw);
+          if (fanMutation) turnMutations.push(fanMutation);
+        }
+      }
+    } catch (e: any) {
+      logger.warn("ai", `Shared-activity fan-out failed (non-fatal): ${e?.message || e}`);
     }
 
     // Bug #48: track tool-level failures from this entire chat turn so we can
@@ -16868,6 +17102,32 @@ export const READ_ONLY_TOOLS = new Set<string>([
 // Write tools whose success needs no model follow-up: the outcome IS the
 // reply. Anything that reads, previews, asks, or chains (bulk previews,
 // merges, undo, document tools) stays out so the model keeps its next round.
+/**
+ * Which tool calls in one model round may run concurrently. Two calls with
+ * the SAME key are executed in model order; different keys run in parallel.
+ *   · read-only tools: each its own key (no interference);
+ *   · tracker tools: the tracker's canonical identity — logs to different
+ *     trackers are independent, logs to the same one (dedup, auto-create,
+ *     schema extension) are not; nutrition aliases and canonical activities
+ *     collapse the way the executor collapses them;
+ *   · everything else: the tool's entity family, so same-name creates and
+ *     profile writes keep their turn-level guards intact.
+ */
+export function toolInterferenceKey(t: { id: string; name: string; input?: any }): string {
+  const inp = (t.input || {}) as Record<string, any>;
+  if (READ_ONLY_TOOLS.has(t.name)) return `read:${t.id}`;
+  const trackerish = new Set(["log_tracker_entry", "log_medication_dose", "create_tracker", "update_tracker", "delete_tracker", "update_tracker_entry", "delete_tracker_entry"]);
+  if (trackerish.has(t.name)) {
+    const raw = String(inp.trackerName || inp.name || inp.medication || inp.drug || "").toLowerCase();
+    if (!raw) return `family:tracker`;
+    if (["calories", "nutrition", "food", "diet", "meal"].some((a) => raw.includes(a))) return "tracker:nutrition";
+    const canon = resolveCanonicalActivity(raw)?.trackerName;
+    return `tracker:${trackerIdentityKey(canon || raw) || raw}`;
+  }
+  const family = entityTypeForTool(t.name) || t.name;
+  return `family:${family}`;
+}
+
 const RECAP_SAFE_WRITE_TOOLS = new Set<string>([
   "log_tracker_entry", "log_medication_dose", "create_expense", "log_income",
   "create_task", "create_event", "create_reminder", "checkin_habit",
