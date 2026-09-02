@@ -1,0 +1,13 @@
+import { launch, goto } from "./pw";
+const ctx = await launch(); const page = ctx.page;
+const api = async (p: string) => (await page.request.get("http://localhost:5000" + p, { headers: { "x-local-user": "u1" } })).json();
+await goto(ctx, "/dashboard", "d"); await goto(ctx, "/trackers", "t");
+const w = ((await api("/api/trackers")) as any[]).find(t => t.name === "Weight"); const last = w.entries[w.entries.length - 1];
+await page.click(`[data-testid=card-tracker-${w.id}]`); await page.waitForTimeout(300); await page.click("[data-testid=tab-history]"); await page.waitForTimeout(400);
+const row = page.locator(`[data-testid=entry-row-${last.id}]`).first(); console.log("row count:", await row.count(), "text:", (await row.innerText().catch(() => "")).replace(/\n/g, " ").slice(0, 120));
+console.log("row testids:", await row.locator("[data-testid]").evaluateAll(els => els.map(e => e.getAttribute("data-testid")!.replace(/[0-9a-f-]{36}/g, "<id>"))).catch(() => []));
+console.log("row buttons:", await row.locator("button").evaluateAll(els => els.map(e => (e.getAttribute("aria-label") || e.textContent || "").trim().slice(0, 20))));
+await row.click(); await page.waitForTimeout(300);
+console.log("after click testids:", await page.locator("[data-testid=tracker-detail-dialog] [data-testid]").evaluateAll(els => [...new Set(els.map(e => e.getAttribute("data-testid")!.replace(/[0-9a-f-]{36}/g, "<id>")))].filter(t => /entry|field|save/.test(t))));
+await page.screenshot({ path: "tests/perf/out/shot-entry-row.png" });
+await ctx.browser.close();

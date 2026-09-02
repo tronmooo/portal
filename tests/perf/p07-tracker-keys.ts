@@ -1,0 +1,18 @@
+import { launch, goto, settle, report } from "./pw";
+const ctx = await launch(); const page = ctx.page;
+const api = async (p: string) => (await page.request.get("http://localhost:5000" + p, { headers: { "x-local-user": "u1" } })).json();
+const snap = async () => page.evaluate(() => (window as any).__portolQueryClient.getQueryCache().getAll().filter((q: any) => String(q.queryKey[0]).includes("/api/trackers") || String(q.queryKey[0]).includes("/api/profiles")).map((q: any) => ({ key: JSON.stringify(q.queryKey), obs: q.observers.length, upd: q.state.dataUpdateCount, fs: q.state.fetchStatus })));
+const show = (rows: any[], prev?: Map<string, number>) => { for (const r of rows.sort((a, b) => b.obs - a.obs)) { const d = prev ? r.upd - (prev.get(r.key) ?? r.upd) : 0; if (r.obs > 0 || d > 0) console.log(`   obs=${r.obs} upd=${r.upd}${prev ? ` (+${d})` : ""} ${r.key}`); } };
+await goto(ctx, "/dashboard", "dashboard");
+await goto(ctx, "/trackers", "trackers");
+const trackers: any[] = await api("/api/trackers"); const weight = trackers.find(t => t.name === "Weight");
+console.log("\n--- keys on trackers page ---"); show(await snap());
+await page.click(`[data-testid=card-tracker-${weight.id}]`); await page.waitForTimeout(400);
+console.log("\n--- keys with detail dialog open ---"); show(await snap());
+const ids = await page.locator("[data-testid=tracker-detail-dialog] [data-testid]").evaluateAll(els => [...new Set(els.map(e => e.getAttribute("data-testid")!.replace(/[0-9a-f-]{36}/g, "<id>")))]); console.log("dialog testids:", ids.join(", "));
+const tabs = await page.locator("[data-testid=tracker-detail-dialog] [role=tab], [data-testid=tracker-detail-dialog] [data-testid^=tab-]").evaluateAll(els => els.map(e => (e.textContent || "").trim())); console.log("dialog tabs:", tabs.join(" | "));
+const before = new Map((await snap()).map((r: any) => [r.key, r.upd]));
+ctx.mark(); await page.click("[data-testid=button-add-entry-detail]"); await page.fill("[data-testid=input-entry-value]", "171.1"); await page.click("[data-testid=button-entry-submit]"); await settle(page, 1200);
+report(ctx, "add entry");
+console.log("\n--- refetch deltas after add ---"); show(await snap(), before);
+await ctx.browser.close();

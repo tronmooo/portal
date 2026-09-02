@@ -1,0 +1,30 @@
+import { launch, goto, settle, report, perf } from "./pw";
+const ctx = await launch(); const page = ctx.page; const T = () => Date.now();
+const H = { "x-local-user": "u1", "content-type": "application/json" };
+const api = async (method: string, p: string, body?: any) => { const t0 = T(); const r = await page.request.fetch("http://localhost:5000" + p, { method, headers: H, data: body ? JSON.stringify(body) : undefined }); let d: any = null; try { d = await r.json(); } catch {} return { status: r.status(), data: d, ms: T() - t0 }; };
+const profiles = (await api("GET", "/api/profiles/lite")).data as any[]; const bob = profiles.find(p => p.name === "Bob Partner"); const self = profiles.find(p => p.type === "self");
+// 1x1 PNG
+const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+console.log("######## document lifecycle (API save-only + UI propagation)");
+const up = await api("POST", "/api/upload/save-only", { fileName: "probe-insurance-card.png", mimeType: "image/png", fileData: png, profileIds: [bob.id], note: "probe doc" });
+console.log("upload:", up.status, up.ms + "ms", JSON.stringify(up.data).slice(0, 160));
+const docId = up.data?.document?.id || up.data?.id || up.data?.documentId;
+const list = await api("GET", "/api/documents"); console.log("GET /documents:", list.status, list.ms + "ms", "n=" + (list.data?.length), "has probe:", (list.data || []).some((d: any) => /probe-insurance/.test(d.name || d.fileName || d.title || "")));
+const bobDocs = await api("GET", `/api/profiles/${bob.id}/documents`); console.log("Bob documents:", bobDocs.status, "n=" + (bobDocs.data?.length), "has probe:", (bobDocs.data || []).some((d: any) => /probe-insurance/.test(JSON.stringify(d))));
+await goto(ctx, "/dashboard", "dashboard"); await goto(ctx, `/profiles/${bob.id}`, "Bob detail");
+const tabs = await page.locator("[role=tab], [data-testid^=tab-]").evaluateAll(els => els.map(e => (e.textContent || "").trim()).filter(Boolean)); console.log("Bob tabs:", tabs.slice(0, 12).join(" | "));
+const docTab = page.locator("[role=tab], [data-testid^=tab-]", { hasText: /Documents/i }).first(); if (await docTab.count()) { ctx.mark(); await docTab.click(); await settle(page); report(ctx, "Bob → Documents tab"); }
+console.log("Bob page shows probe doc:", /probe-insurance/.test(await page.innerText("body")));
+await goto(ctx, "/trackers", "trackers"); await page.click("[data-testid=section-toggle-documents]").catch(() => {}); await page.waitForTimeout(300); console.log("trackers hub Documents section shows probe doc:", /probe-insurance/.test(await page.innerText("body")));
+const del = await api("DELETE", `/api/documents/${docId}`); console.log("delete:", del.status, del.ms + "ms");
+const list2 = await api("GET", "/api/documents"); console.log("after delete has probe:", (list2.data || []).some((d: any) => /probe-insurance/.test(JSON.stringify(d))));
+await goto(ctx, `/profiles/${bob.id}`, "Bob detail after delete"); console.log("Bob page still shows probe doc:", /probe-insurance/.test(await page.innerText("body")));
+console.log("\n######## goals lifecycle");
+const trackers = (await api("GET", "/api/trackers")).data as any[]; const steps = trackers.find(t => t.name === "Steps");
+const g = await api("POST", "/api/goals", { title: "Probe 10k steps", type: "tracker_target", target: 10000, unit: "steps", trackerId: steps?.id, deadline: "2026-12-31" }); console.log("create goal:", g.status, g.ms + "ms", JSON.stringify(g.data).slice(0, 120));
+await goto(ctx, "/goals", "goals page"); console.log("goals page shows probe goal:", /Probe 10k steps/.test(await page.innerText("body")));
+await goto(ctx, "/dashboard", "dashboard"); const body = await page.innerText("body"); console.log("dashboard mentions goal:", /Probe 10k steps/.test(body));
+const prog = await api("GET", `/api/goals/${g.data?.id}`); console.log("goal progress:", JSON.stringify(prog.data).slice(0, 200));
+const d = await api("DELETE", `/api/goals/${g.data?.id}`); console.log("delete goal:", d.status, d.ms + "ms");
+await goto(ctx, "/goals", "goals after delete"); console.log("goals page still shows:", /Probe 10k steps/.test(await page.innerText("body")));
+await ctx.browser.close();
