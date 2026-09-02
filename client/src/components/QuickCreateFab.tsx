@@ -16,6 +16,7 @@
  * The FAB is suppressed on /editor/* and on the chat page so it doesn't
  * collide with their own UI.
  */
+import { localTodayISO } from "@/lib/dates";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useMutation } from "@tanstack/react-query";
@@ -278,13 +279,13 @@ function QuickBillDialog({ open, onClose }: { open: boolean; onClose: () => void
   const { toast } = useToast();
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
-  const [nextDueDate, setNextDueDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [nextDueDate, setNextDueDate] = useState(() => localTodayISO());
   const [frequency, setFrequency] = useState<"monthly" | "weekly" | "biweekly" | "quarterly" | "yearly" | "once">("monthly");
   const [category, setCategory] = useState("general");
 
   useEffect(() => {
     if (!open) {
-      setName(""); setAmount(""); setNextDueDate(new Date().toISOString().slice(0, 10));
+      setName(""); setAmount(""); setNextDueDate(localTodayISO());
       setFrequency("monthly"); setCategory("general");
     }
   }, [open]);

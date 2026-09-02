@@ -21,6 +21,8 @@
 // in, Pay arms then commits (money moves on the SECOND tap), medications get
 // "Taken", managed recurring dates get "Done". Popups are the same components
 // the dashboard KPI tiles use.
+import { sumMonthlyIncome } from "@shared/obligation-windows";
+import { localDayOf } from "@shared/timezone";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -664,6 +666,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     return rows.slice().sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sections]);
+  // The "Next Important" tile: today counts — a 2 pm appointment is the next
+  // important thing at noon, not tomorrow's errand. The upcoming PANEL above
+  // keeps tomorrow-onward, because today's rows already sit under Needs
+  // attention and would otherwise render twice.
+  const nextImportantItem = useMemo(() => {
+    const from: ExecSectionId[] = ["today", "bills", "upcoming", "importantDates", "documents", "health"];
+    const rows = from.flatMap(id => secItems(id)).filter(i => (i.daysUntil ?? 0) >= 0);
+    return rows.slice().sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99))[0] ?? null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sections]);
 
   const activityItems = useMemo(() => secItems("activity"),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -694,7 +706,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // Cash flow — mirrors HubKpiStrip/HeroKPISection exactly: monthly income
   // minus (month expenses + monthlyized active obligations).
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
-  const monthlyIncome = incomes.reduce((s: number, i: any) => s + (i.amount || 0), 0);
+  const monthlyIncome = sumMonthlyIncome(incomes);
   const monthlySpendBase = snap?.totalMonthlySpend ?? stats?.monthlySpend;
   const monthlyExpenses = monthlySpendBase != null ? monthlySpendBase + (snap?.monthlyObligationTotal ?? 0) : null;
   const cashFlow = monthlyExpenses != null ? monthlyIncome - monthlyExpenses : null;
@@ -707,13 +719,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     return Math.round((new Date(`${t}T12:00:00`).getTime() - new Date(`${todayStr}T12:00:00`).getTime()) / 86400000);
   };
   const overdueTasks = pending.filter((t: any) => (daysFromToday(t.dueDate) ?? 1) < 0);
-  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && String(t.completedAt || t.updatedAt || "").slice(0, 10) === todayStr).length;
+  // The completion stamp is a UTC instant; "today" is the browser's calendar
+  // day. Slicing the instant compared UTC's date with the user's, so a chore
+  // finished this morning east of Greenwich (or last night in the US) read
+  // as "0 completed today".
+  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && localDayOf(t.completedAt || t.updatedAt || null, BROWSER_TIMEZONE) === todayStr).length;
   const sortedPending = pending.slice().sort((a: any, b: any) =>
     (daysFromToday(a.dueDate) ?? 9e9) - (daysFromToday(b.dueDate) ?? 9e9));
 
   // Next Important — the soonest dated thing across every domain. Falls back
   // to the most urgent attention row when nothing is coming up.
-  const nextImportant = upcomingItems[0] ?? null;
+  const nextImportant = nextImportantItem;
 
   // Schedule
   const nowClock = new Date().toTimeString().slice(0, 5);

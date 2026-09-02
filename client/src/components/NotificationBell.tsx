@@ -19,6 +19,7 @@ import {
 import { cn } from "@/lib/utils";
 import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { daysFromToday } from "@/lib/dates";
 
 interface Notification {
   id: string;
@@ -32,24 +33,17 @@ interface Notification {
   dismissed?: boolean;
 }
 
-function getRelativeTime(dueDate?: string): string {
-  if (!dueDate) return "";
-  try {
-    const now = new Date();
-    now.setHours(0, 0, 0, 0);
-    const target = new Date(dueDate);
-    if (isNaN(target.getTime())) return "";
-    target.setHours(0, 0, 0, 0);
-    const diffMs = target.getTime() - now.getTime();
-    const days = Math.round(diffMs / 86400000);
-    if (days === 0) return "today";
-    if (days === 1) return "tomorrow";
-    if (days === -1) return "yesterday";
-    if (days > 0) return `in ${days} days`;
-    return `${Math.abs(days)} days ago`;
-  } catch {
-    return "";
-  }
+// Calendar-day distance via lib/dates: a bare "YYYY-MM-DD" is read as a LOCAL
+// day there. `new Date("2026-09-02")` is UTC midnight, which is the evening of
+// Sep 1 for every US user, so a task due today read "yesterday" in the bell.
+export function getRelativeTime(dueDate?: string): string {
+  const days = daysFromToday(dueDate);
+  if (days === null) return "";
+  if (days === 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days === -1) return "yesterday";
+  if (days > 0) return `in ${days} days`;
+  return `${Math.abs(days)} days ago`;
 }
 
 function getIcon(type: Notification["type"]) {

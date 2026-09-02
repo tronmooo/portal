@@ -548,6 +548,8 @@ export interface Habit {
   checkins: HabitCheckin[];
   linkedProfiles?: string[];
   createdAt: string;
+  /** Last write time (the row's updated_at); echo it back as expectedUpdatedAt to guard an edit. */
+  updatedAt?: string;
 }
 
 /**
@@ -572,12 +574,13 @@ export const insertHabitSchema = z.object({
   targetPerDay: z.number().min(1).max(10).default(1),
   // Nullable so a PATCH can clear the window ("make it open-ended") rather than
   // only ever narrowing it.
-  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").nullable().optional(),
-  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").nullable().optional(),
+  startDate: z.string().refine((v) => v === "" || isCalendarDay(v), "Use YYYY-MM-DD").nullable().optional(),
+  endDate: z.string().refine((v) => v === "" || isCalendarDay(v), "Use YYYY-MM-DD").nullable().optional(),
   // Nullable so a PATCH can explicitly clear a habit's schedule (send null),
   // not just leave it unset (undefined).
   timeOfDay: z.enum(["morning", "afternoon", "evening", "bedtime", "anytime"]).nullable().optional(),
-  scheduledTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)").nullable().optional(),
+  // "" clears the slot, the same way a task's dueTime does; storage stores null.
+  scheduledTime: z.union([z.literal(""), z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM (24h)")]).nullable().optional(),
   // Nullable so a PATCH can unlink a habit from its tracker (send null).
   linkedTrackerId: z.string().nullable().optional(),
 });
@@ -702,13 +705,48 @@ export const LARGE_TRANSACTION_AMOUNT = 1_000_000; // $1 million
 export const TRANSACTION_TOO_LARGE_MESSAGE =
   `Amount must be less than $${MAX_TRANSACTION_AMOUNT.toLocaleString("en-US")}. Check for a typo or a stray zero.`;
 
+/** HH:MM, 24-hour. Rejects "9am", "25:00" and other things that aren't a time. */
+export const CLOCK_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+/** YYYY-MM-DD with a real month and day. Rejects "not-a-date" and "2026-13-45"
+ *  before they reach a date column and come back as a 500. */
+export const ISO_DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+/**
+ * True for a YYYY-MM-DD that exists on the calendar. The regex alone lets
+ * "2026-09-31" and "2026-02-30" through, and a date column rejects those
+ * with "date/time field value out of range" — a 500 for a typo.
+ */
+export function isCalendarDay(s: string): boolean {
+  if (!ISO_DAY_RE.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
+}
+/** A calendar day, or "" to clear the field. */
+const isoDayOrEmpty = z.string().refine((v) => v === "" || isCalendarDay(v), "Use YYYY-MM-DD");
+/**
+ * A calendar day for a `date` column. A client that round-trips a row may
+ * send the day as a full timestamp ("2026-09-10T00:00:00.000Z"); the day part
+ * is kept, the way the date column itself would cast it. Anything else that
+ * is not a real YYYY-MM-DD ("next week", "2026-13-45") is a validation error
+ * here rather than a 500 from Postgres (expenses.date) or a bill whose
+ * schedule can never be derived (liability fields.dueDate is free text).
+ * Blank means "not given" so a form's empty date input reads as absent.
+ */
+const calendarDay = z.string().trim()
+  .transform((s) => (/^\d{4}-\d{2}-\d{2}T/.test(s) ? s.slice(0, 10) : s))
+  .pipe(z.string().refine(isCalendarDay, "Use YYYY-MM-DD"));
+/** An optional calendar day; "" (an empty date input) means "not given". */
+const calendarDayOrBlank = z.union([z.literal(""), calendarDay]).transform((v) => (v === "" ? undefined : v));
+/** A clock time, or "" to clear the field. */
+const clockTimeOrEmpty = z.string().refine((v) => v === "" || CLOCK_TIME_RE.test(v), "Use HH:MM (24-hour)");
+
 export const insertObligationSchema = z.object({
   name: z.string().min(1),
   amount: z.number().nonnegative("Amount must be 0 or positive").max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE),
   frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"]).default("monthly"),
   category: z.string().default("general"),
   kind: z.enum(["bill","subscription","loan_payment","medication","maintenance","appointment","habit","doc_expiration","task"]).default("bill"),
-  nextDueDate: z.string(),
+  nextDueDate: calendarDay,
   autopay: z.boolean().default(false),
   status: z.enum(["active", "paused", "cancelled"]).optional(),
   notes: z.string().optional(),
@@ -718,7 +756,7 @@ export const insertObligationSchema = z.object({
   linkedAssetId: z.string().uuid().optional().nullable(),
   linkedLiabilityId: z.string().uuid().optional().nullable(),
   linkedDocumentId: z.string().uuid().optional().nullable(),
-  recurrenceEnd: z.string().optional(),
+  recurrenceEnd: calendarDayOrBlank.optional(),
   currency: z.string().optional(),
   icon: z.string().optional(),
   /**
@@ -861,7 +899,8 @@ export interface JournalEntry {
 }
 
 export const insertJournalEntrySchema = z.object({
-  date: z.string().optional(),
+  // The entry's day (one entry per day); a real calendar day or blank = today.
+  date: calendarDayOrBlank.optional(),
   mood: z.enum(["amazing", "great", "good", "okay", "neutral", "bad", "awful", "terrible"]),
   content: z.string().default(""),
   tags: z.array(z.string()).optional().default([]),
@@ -922,16 +961,6 @@ export interface Task {
   updatedAt?: string;
 }
 
-/** HH:MM, 24-hour. Rejects "9am", "25:00" and other things that aren't a time. */
-export const CLOCK_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-/** YYYY-MM-DD with a real month and day. Rejects "not-a-date" and "2026-13-45"
- *  before they reach a date column and come back as a 500. */
-export const ISO_DAY_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-/** A calendar day, or "" to clear the field. */
-const isoDayOrEmpty = z.string().refine((v) => v === "" || ISO_DAY_RE.test(v), "Use YYYY-MM-DD");
-/** A clock time, or "" to clear the field. */
-const clockTimeOrEmpty = z.string().refine((v) => v === "" || CLOCK_TIME_RE.test(v), "Use HH:MM (24-hour)");
-
 export const insertTaskSchema = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
@@ -961,6 +990,8 @@ export interface Expense {
   tags: string[];
   date: string;
   createdAt: string;
+  /** Last write time (the row's updated_at); echo it back as expectedUpdatedAt to guard an edit. */
+  updatedAt?: string;
 }
 
 export const insertExpenseSchema = z.object({
@@ -969,7 +1000,7 @@ export const insertExpenseSchema = z.object({
   description: z.string().min(1, "Description must be non-empty"),
   vendor: z.string().optional(),
   isRecurring: z.boolean().optional(),
-  date: z.string().optional(),
+  date: calendarDayOrBlank.optional(),
   tags: z.array(z.string()).optional().default([]),
   linkedProfiles: z.array(z.string()).optional().default([]),
 });
@@ -1030,6 +1061,8 @@ export interface Income {
   tags: string[];
   deletedAt?: string | null;
   createdAt: string;
+  /** Last write time (the row's updated_at); echo it back as expectedUpdatedAt to guard an edit. */
+  updatedAt?: string;
 }
 
 export const insertIncomeSchema = z.object({
@@ -1037,7 +1070,8 @@ export const insertIncomeSchema = z.object({
   amount: z.number().positive().max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE),
   category: z.string().default("salary"),
   frequency: z.string().default("monthly"),
-  date: z.string().optional(),
+  // The first pay day (a real calendar day) or blank; free text used to be stored.
+  date: calendarDayOrBlank.optional(),
   linkedProfiles: z.array(z.string()).optional().default([]),
   tags: z.array(z.string()).optional().default([]),
 });
@@ -1078,11 +1112,13 @@ export interface CalendarEvent {
   tags: string[];
   source: "manual" | "chat" | "ai" | "external";
   createdAt: string;
+  /** Last write time (the row's updated_at); echo it back as expectedUpdatedAt to guard an edit. */
+  updatedAt?: string;
 }
 
 export const insertEventSchema = z.object({
   title: z.string().min(1),
-  date: z.string().regex(ISO_DAY_RE, "Use YYYY-MM-DD"),
+  date: z.string().refine(isCalendarDay, "Use YYYY-MM-DD"),
   time: clockTimeOrEmpty.optional(),
   endTime: clockTimeOrEmpty.optional(),
   endDate: isoDayOrEmpty.optional(),
@@ -1209,7 +1245,9 @@ export const insertGoalSchema = z.object({
   target: z.number(),
   unit: z.string(),
   startValue: z.number().optional(),
-  deadline: z.string().optional(),
+  // A real calendar day or blank (no deadline); "next month" used to be stored
+  // and every goal card then showed "Invalid Date" for its countdown.
+  deadline: calendarDayOrBlank.optional(),
   trackerId: z.string().optional(),
   habitId: z.string().optional(),
   category: z.string().optional(),
@@ -1459,7 +1497,7 @@ export interface OwnershipHistoryEntry {
 
 export const insertLiabilityPaymentSchema = z.object({
   liabilityProfileId: z.string().uuid(),
-  paymentDate: z.string(),
+  paymentDate: calendarDay,
   amount: z.number().nonnegative(),
   principalPortion: z.number().nonnegative().default(0),
   interestPortion: z.number().nonnegative().default(0),

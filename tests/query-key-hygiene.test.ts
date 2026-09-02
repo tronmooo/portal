@@ -39,12 +39,11 @@ const FILTERABLE = [
 //      artifacts, the global CalendarManagerPanel).
 // Key shape: "<relpath from client/src>::<endpoint>".
 const ALLOWLIST = new Set<string>([
-  // Global calendar manager — a management tool that intentionally shows the
-  // full set across all profiles.
+  // Calendar manager — the document pickers on the Create forms read the full
+  // list (a document can be linked to any profile). The Manage tab's
+  // obligations/events/tasks reads were scoped 2026-09-02 (audit item 9): the
+  // tab renders under the toolbar filter and listed everyone's items.
   "components/CalendarManagerPanel.tsx::documents",
-  "components/CalendarManagerPanel.tsx::obligations",
-  "components/CalendarManagerPanel.tsx::events",
-  "components/CalendarManagerPanel.tsx::tasks",
   // Artifacts library — reads all docs, then applies passesProfileFilter into
   // `profileFiltered` before rendering (see artifacts.tsx).
   "pages/artifacts.tsx::documents",

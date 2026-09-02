@@ -107,17 +107,51 @@ export function isInScope(
  * Link arrays are small (user-scoped), so the per-call scan is cheap;
  * callers iterating many profiles inside a useMemo are fine.
  */
+/**
+ * The ids plus every ancestor reachable through `parentProfileId` — the
+ * insurance bill (parent: the car) of a car (parent: Self) belongs to Self.
+ * Cycle-safe; unknown ids pass through unchanged. `allProfiles` may carry
+ * no parent column at all (a lite projection), in which case this is the
+ * identity.
+ */
+export function withAncestorOwnerIds(
+  ids: Iterable<string>,
+  allProfiles: ReadonlyArray<{ id: string; parentProfileId?: string | null }> | null | undefined,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  if (!allProfiles || allProfiles.length === 0) {
+    for (const id of ids) if (!seen.has(id)) { seen.add(id); out.push(id); }
+    return out;
+  }
+  const parentOf = new Map<string, string | null | undefined>();
+  for (const p of allProfiles) if (p && typeof p.id === "string") parentOf.set(p.id, p.parentProfileId);
+  for (const start of ids) {
+    let cur: string | null | undefined = start;
+    while (typeof cur === "string" && cur && !seen.has(cur)) {
+      seen.add(cur);
+      out.push(cur);
+      cur = parentOf.get(cur);
+    }
+  }
+  return out;
+}
+
 export function ownerCandidatesForProfile(
   profile: { id?: string | null; parentProfileId?: string | null } | null | undefined,
   assetLinks?: ReadonlyArray<{ assetProfileId?: string | null; partyProfileId?: string | null }> | null,
   liabilityLinks?: ReadonlyArray<{ liabilityProfileId?: string | null; partyProfileId?: string | null }> | null,
+  /** When given, the whole parent chain counts, not just the immediate parent. */
+  allProfiles?: ReadonlyArray<{ id: string; parentProfileId?: string | null }> | null,
 ): string[] {
   const ids: string[] = [];
   if (!profile) return ids;
   const pid = profile.id;
   if (typeof pid === "string" && pid) ids.push(pid);
   const parentId = profile.parentProfileId;
-  if (typeof parentId === "string" && parentId) ids.push(parentId);
+  if (typeof parentId === "string" && parentId) {
+    for (const id of withAncestorOwnerIds([parentId], allProfiles)) if (!ids.includes(id)) ids.push(id);
+  }
   if (pid) {
     for (const l of assetLinks || []) {
       if (l?.assetProfileId === pid && typeof l.partyProfileId === "string" && l.partyProfileId) {

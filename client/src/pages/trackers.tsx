@@ -1,4 +1,5 @@
 import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
+import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
 import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
 
 // "Today" in the browser's zone. The UTC-date prefix test reset the Today
@@ -14,7 +15,7 @@ import { stopProp, stopPropAndDefault } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
+import { invalidateDomain, invalidateDomains, patchQueries } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
@@ -5377,13 +5378,18 @@ function TrackerDetailDialog({
       if (!tracker) return;
       await apiRequest("DELETE", `/api/trackers/${tracker.id}`);
     },
+    // The page reads ["/api/trackers", filterMode, ...filterIds]; an exact-key
+    // patch of the bare ["/api/trackers"] slot hit nothing, so the row stayed
+    // until the refetch and a failed delete had nothing to roll back.
+    // patchQueries reaches every scoped variant and restores exactly those.
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: ["/api/trackers"] });
-      const prev = qc.getQueryData<any[]>(["/api/trackers"]);
-      if (tracker) {
-        qc.setQueryData<any[]>(["/api/trackers"], (old) => old?.filter((t: any) => t.id !== tracker.id));
-      }
-      return { prev };
+      const id = tracker?.id;
+      const restore = id
+        ? patchQueries(["/api/trackers"], (old) =>
+            Array.isArray(old) ? old.filter((t: any) => t.id !== id) : undefined)
+        : () => {};
+      return { restore };
     },
     onSuccess: () => {
       invalidateDomain("trackers");
@@ -5391,7 +5397,7 @@ function TrackerDetailDialog({
       onClose();
     },
     onError: (err: Error, _v: void, ctx: any) => {
-      if (ctx?.prev) qc.setQueryData(["/api/trackers"], ctx.prev);
+      ctx?.restore?.();
       toast({ title: "Failed to delete tracker", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -5632,7 +5638,7 @@ export default function TrackersPage() {
     if (filterMode === "everyone") return true;
     if (filterIds.length === 0) return true;
     return isInScope(
-      ownerCandidatesForProfile({ id: assetId, parentProfileId: parentId ?? null }, assetPartyLinks, null),
+      ownerCandidatesForProfile({ id: assetId, parentProfileId: parentId ?? null }, assetPartyLinks, null, profiles),
       { selectedIds: filterIds, selfIds: emptySelfIds },
       "out_of_scope",
     );
@@ -5641,7 +5647,7 @@ export default function TrackersPage() {
     if (filterMode === "everyone") return true;
     if (filterIds.length === 0) return true;
     return isInScope(
-      ownerCandidatesForProfile({ id: liabId, parentProfileId: parentId ?? null }, null, liabilityProfileLinks),
+      ownerCandidatesForProfile({ id: liabId, parentProfileId: parentId ?? null }, null, liabilityProfileLinks, profiles),
       { selectedIds: filterIds, selfIds: emptySelfIds },
       "out_of_scope",
     );
@@ -7163,7 +7169,13 @@ export default function TrackersPage() {
                 const subtype = liabilitySubcategoryOf(liab);
                 const original = toNumLiab(fields.originalBalance ?? fin.originalBalance ?? fields.originalLoanAmount ?? fin.originalLoanAmount ?? fields.creditLimit ?? fin.creditLimit);
                 const paidPct = (original && balance != null && original > 0) ? Math.max(0, Math.min(1, 1 - (balance / original))) : 0;
-                const rawDue = fields.dueDate ?? fields.nextDueDate ?? fields.due_date ?? fin.dueDate;
+                // The same date the calendar schedules: an explicit next-due
+                // spelling, else the one the schedule derives from `dueDay` /
+                // the last payment. A loan with only "due on the 15th" read
+                // "No due date" here while the calendar put it on the 15th.
+                const rawDue = resolveLiabilityDueDate({ ...fin, ...fields })
+                  ?? deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(TRACKER_TZ)).nextDueDate
+                  ?? fin.dueDate;
                 const due = fmtDue(rawDue);
                 const dueIn = daysUntilDue(rawDue);
                 const freqUnit = subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo';

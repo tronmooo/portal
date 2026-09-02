@@ -30,7 +30,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
+import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -72,26 +72,66 @@ function activeProfileIds(req: Request): string[] {
  * chosen owner always wins. See shared/active-scope.ts for the reasoning.
  *
  * `field` is the entity's owner column: `linkedProfiles` (array) on expenses /
- * incomes / obligations / tasks / events.
+ * incomes / obligations / tasks / events / habits / trackers / goals / journal /
+ * documents / artifacts; `ownerProfileId` (scalar) on captures.
  */
 function applyActiveProfileScope(
   req: Request,
   body: any,
-  field: "linkedProfiles" | "profileId" = "linkedProfiles",
+  field: "linkedProfiles" | "profileId" | "ownerProfileId" = "linkedProfiles",
 ): any {
   if (!body || typeof body !== "object") return body;
   const active = activeProfileIds(req);
   if (active.length === 0) return body;
-  if (field === "profileId") {
-    if (typeof body.profileId === "string" && body.profileId) return body;
+  if (field === "profileId" || field === "ownerProfileId") {
+    if (typeof body[field] === "string" && body[field]) return body;
     const owner = resolveCreateOwnerIds([], active);
-    if (owner.length === 1) body.profileId = owner[0];
+    if (owner.length === 1) body[field] = owner[0];
     return body;
   }
   const explicit = Array.isArray(body.linkedProfiles) ? body.linkedProfiles.filter(Boolean) : [];
   const owners = resolveCreateOwnerIds(explicit, active);
   if (owners.length > 0) body.linkedProfiles = owners;
   return body;
+}
+
+/**
+ * The guards a parent assignment must pass: the parent exists (404), the link
+ * would not close a cycle (400), the chain stays at most 32 deep (400).
+ *
+ * Shared by PATCH /api/profiles/:id (`parentProfileId`) and PATCH
+ * /api/accounts/:id (`ownerProfileId`, which storage writes to the SAME
+ * column). The account route used to skip all three — a self-parented
+ * account sent deleteProfile's child cascade into unbounded recursion.
+ */
+async function checkParentAssignment(
+  userId: string,
+  profileId: string,
+  newParentId: string,
+): Promise<{ status: number; error: string } | null> {
+  // storage.getProfile() is user-scoped: a parent it returns is ours.
+  const parentProfile = await storage.getProfile(newParentId);
+  if (!parentProfile) return { status: 404, error: "Parent profile not found" };
+  const cycle = await storage.wouldCreateCycle(userId, profileId, newParentId);
+  if (cycle) return { status: 400, error: "Cannot set parent: would create a cycle" };
+  // Depth cap: 32 levels of nesting is far beyond any realistic use
+  // (Home → Furniture → Couch → Screws is 4 levels). Reject inserts
+  // that would push us past 32 to keep the parent-chain walks bounded.
+  let depthFromParent = 1; // parent counts as level 1
+  let walkId: string | null = newParentId;
+  const seen = new Set<string>();
+  while (walkId && depthFromParent < 64) {
+    if (seen.has(walkId)) break;
+    seen.add(walkId);
+    const walkP = await storage.getProfile(walkId);
+    if (!walkP) break;
+    const wpid: string | null = walkP.parentProfileId || null;
+    if (!wpid) break;
+    depthFromParent++;
+    walkId = wpid;
+  }
+  if (depthFromParent > 32) return { status: 400, error: "Cannot set parent: nesting depth would exceed 32 levels" };
+  return null;
 }
 
 // Augment Express Request with auth middleware userId
@@ -101,7 +141,7 @@ interface AuthenticatedRequest extends Request {
 import { computeDocumentDeletionImpact, deleteDocumentEverywhere, parseDeletionMode, repairOrphanedDocumentEvents } from "./document-deletion";
 import { storage } from "./storage";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
-import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment } from "./supabase-storage";
+import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { buildNotifications } from "./notification-service";
 import {
@@ -375,6 +415,7 @@ import {
   insertTrackerEntrySchema,
   insertTaskSchema,
   insertExpenseSchema,
+  insertIncomeSchema,
   insertEventSchema,
   insertHabitSchema,
   insertObligationSchema,
@@ -388,9 +429,11 @@ import {
   insertLiabilityPaymentSchema,
   insertAssetPartyLinkSchema,
   insertDocumentSchema,
+  isCalendarDay,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { validateTransactionAmount } from "@shared/quick-add";
+import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
 import { generateSmartInsights } from "./insights-engine";
 import { requireAdmin, resolveUserFromRequest, isUniqueViolation } from "./auth";
@@ -1101,7 +1144,11 @@ function htmlEscape(input: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
-function sanitize(input: string): string {
+function sanitize(input: unknown): string {
+  // A non-string (an array or object where a title was expected) is not
+  // text to clean; returning "" lets the schema reject it as empty instead
+  // of `.replace` throwing halfway through the handler (a 500).
+  if (typeof input !== "string") return "";
   return input
     .replace(/javascript:/gi, '')
     .replace(/on\w+\s*=/gi, '')
@@ -1116,9 +1163,14 @@ function sanitize(input: string): string {
     .slice(0, 10000);
 }
 
+/** The same object without the keys whose value is undefined. */
+function withoutUndefined<T extends Record<string, any>>(obj: T): T {
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T;
+}
+
 // Date validation helper
 function isValidDateStr(d: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime());
+  return isCalendarDay(d);
 }
 
 // Pagination helper — applies ?limit= and ?offset= to any array and sets X-Total-Count header
@@ -1184,7 +1236,25 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
         // statusCode = 409). 5xx and unknown statuses stay a generic 500 so
         // internal details never leak to clients.
         const status = Number(err?.statusCode || err?.status);
-        if (Number.isInteger(status) && status >= 400 && status < 500) {
+        // A malformed id ("undefined", "not-a-uuid") reaches Postgres as an
+        // invalid uuid literal (22P02). No row can match it, so it is the same
+        // answer as an unknown id — not a server error.
+        const pgCode = String(err?.code || err?.details?.code || "");
+        const msg = String(err?.message || "");
+        if (/invalid input syntax for type uuid/i.test(msg)) {
+          res.status(404).json({ error: "Not found" });
+        } else if (pgCode === "22P02" || pgCode === "22003" || pgCode === "42804" || /invalid input syntax for type|out of range for type|malformed array literal/i.test(msg)) {
+          // A value the column cannot hold (text where a number goes, an
+          // object where text goes) is the caller's bad request.
+          res.status(400).json({ error: "Invalid value for a field" });
+        } else if (pgCode === "23505" || /duplicate key value violates unique constraint/i.test(msg)) {
+          // A uniqueness rule (one journal entry per day, one Self, …) is the
+          // caller's conflict, not a server fault.
+          res.status(409).json({ error: "A record with the same key already exists" });
+        } else if (pgCode === "22007" || pgCode === "22008" || /invalid input syntax for type (date|timestamp)|date\/time field value out of range/i.test(msg)) {
+          // A date or time the database could not read is a bad request.
+          res.status(400).json({ error: "Invalid date or time value" });
+        } else if (Number.isInteger(status) && status >= 400 && status < 500) {
           res.status(status).json({ error: err?.message || "Request failed" });
         } else {
           res.status(500).json({ error: "Internal server error" });
@@ -2183,6 +2253,17 @@ export async function registerRoutes(
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
                   const due = readDueDate(f);
+                  // A reminder whose occurrence was paid or skipped, or that the
+                  // schedule has already rolled past, is finished. Closing it
+                  // here (not only at pay time) heals the ones an older build
+                  // left open.
+                  if (existingTasks.some((t: any) => isOpenBillReminderTask(t, bill.id))) {
+                    const occ = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {};
+                    await closeBillReminderTasksWhere(scoped, bill.id, (day) => {
+                      const st = occ[day]?.status;
+                      return st === "paid" || st === "skipped" || (!!day && !!due && day < due);
+                    }, log, existingTasks);
+                  }
                   if (!due || due > windowEnd) continue; // not due within the window
                   const autopay = f.autopay === true || f.autoPay === true || String(f.autopay ?? "").toLowerCase() === "true";
                   if (autopay) {
@@ -2715,7 +2796,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       const createdObligations: Array<{ id: string; name: string; nextDueDate: string; kind: string }> = [];
       if (Array.isArray(dates)) {
         for (const d of dates) {
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(d?.iso || "")) continue;
+          if (!isCalendarDay(d?.iso || "")) continue;
           const kind: "doc_expiration" | "bill" | "appointment" =
             d.kind === "expiration" || d.kind === "renewal" ? "doc_expiration"
             : d.kind === "appointment" ? "appointment"
@@ -3547,7 +3628,7 @@ ${JSON.stringify(ctx, null, 2)}`;
               values: entryValues,
               notes: `From document extraction (${extractionId})`,
               profileId: resolvedProfileId,
-              timestamp: /^\d{4}-\d{2}-\d{2}$/.test(entryDate)
+              timestamp: isCalendarDay(entryDate)
                 ? parseUserDateTime(entryDate, (storage as any)._timezone).toISOString()
                 : undefined,
             });
@@ -4715,7 +4796,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       if (f.phone && typeof f.phone === "string" && !/^[\d\s()+-]{7,20}$/.test(f.phone)) {
         return res.status(400).json({ error: "Invalid phone number format" });
       }
-      if (f.birthday && typeof f.birthday === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(f.birthday)) {
+      if (f.birthday && typeof f.birthday === "string" && !isCalendarDay(f.birthday)) {
         return res.status(400).json({ error: "Birthday must be in YYYY-MM-DD format" });
       }
       if (f.bloodType && typeof f.bloodType === "string" && !/^(A|B|AB|O)[+-]$/i.test(f.bloodType)) {
@@ -4910,7 +4991,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       if (f.phone && typeof f.phone === "string" && !/^[\d\s()+-]{7,20}$/.test(f.phone)) {
         return res.status(400).json({ error: "Invalid phone number format" });
       }
-      if (f.birthday && typeof f.birthday === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(f.birthday)) {
+      if (f.birthday && typeof f.birthday === "string" && !isCalendarDay(f.birthday)) {
         return res.status(400).json({ error: "Birthday must be in YYYY-MM-DD format" });
       }
       if (f.bloodType && typeof f.bloodType === "string" && !/^(A|B|AB|O)[+-]$/i.test(f.bloodType)) {
@@ -4932,43 +5013,9 @@ ${JSON.stringify(ctx, null, 2)}`;
       const newParentId: string | null = (!rawParent || rawParent === "") ? null : rawParent;
 
       if (newParentId !== null) {
-        // Validate that new parent exists and belongs to the same user
-        const parentProfile = await storage.getProfile(newParentId);
-        if (!parentProfile) {
-          return res.status(404).json({ error: "Parent profile not found" });
-        }
-        // Ownership check: storage is already scoped to the user, but double-check
-        // by verifying the profile is accessible. If storage returned it, it's ours.
-        // (For extra safety, compare with userId from request.)
-        // Note: storage.getProfile() is user-scoped; if it returns a profile it belongs to this user.
-        // Still, verify the parentProfile is not from a different user via the returned type.
-        // Since getProfile is user-scoped, an accessible profile is always owned by the user.
-        // If you can't access it → already returns undefined (handled above as 404).
-
-        // Cycle detection
-        const cycle = await storage.wouldCreateCycle(uid_p2, req.params.id, newParentId);
-        if (cycle) {
-          return res.status(400).json({ error: "Cannot set parent: would create a cycle" });
-        }
-        // Depth cap: 32 levels of nesting is far beyond any realistic use
-        // (Home → Furniture → Couch → Screws is 4 levels). Reject inserts
-        // that would push us past 32 to keep the parent-chain walks bounded.
-        let depthFromParent = 1; // parent counts as level 1
-        let walkId: string | null = newParentId;
-        const seen = new Set<string>();
-        while (walkId && depthFromParent < 64) {
-          if (seen.has(walkId)) break;
-          seen.add(walkId);
-          const walkP = await storage.getProfile(walkId);
-          if (!walkP) break;
-          const wpid: string | null = walkP.parentProfileId || null;
-          if (!wpid) break;
-          depthFromParent++;
-          walkId = wpid;
-        }
-        if (depthFromParent > 32) {
-          return res.status(400).json({ error: "Cannot set parent: nesting depth would exceed 32 levels" });
-        }
+        // Existence, cycle and depth — the same guards the accounts route runs.
+        const problem = await checkParentAssignment(uid_p2, req.params.id, newParentId);
+        if (problem) return res.status(problem.status).json({ error: problem.error });
       }
 
       // Persist: set top-level parentProfileId. The legacy `fields._parentProfileId`
@@ -5712,6 +5759,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // Now an empty linkedProfiles array on the new tracker means "scope to whichever
     // profile the UI later attaches" — only dup if both old and new have NO profile
     // attribution AND identical name.
+    applyActiveProfileScope(req, req.body);
     const requestedProfiles = req.body.linkedProfiles || [];
     const existing = await storage.getTrackers();
     const dup = skipDupCheck ? null : existing.find(t => {
@@ -5757,10 +5805,77 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     bustCache(`trackers:${uid_tr2}`); bustCache(`stats:${uid_tr2}`);
     res.json(updated);
   }));
+  // ONE timestamp rule for every tracker-entry write. A zone-less value
+  // ("2026-09-02T22:30", what <input type="datetime-local"> posts) is the
+  // user's wall clock, read in the caller's zone; a qualified instant passes
+  // through; junk is a 400. Storage stores the string it is given, so before
+  // this a datetime-local value landed as UTC — an evening entry moved to the
+  // next day for anyone west of Greenwich — and junk failed inside Postgres.
+  const parseEntryTimestamp = (raw: unknown, req: Request): { iso?: string; error?: string } => {
+    if (typeof raw !== "string" || !raw.trim()) return { error: "timestamp must be a date/time string" };
+    const d = parseUserDateTime(raw, getTimezone(req));
+    if (isNaN(d.getTime())) return { error: "timestamp must be a valid date/time" };
+    return { iso: d.toISOString() };
+  };
+  // The tracker-scoped and by-id PATCH routes accept the same body; the
+  // storage patch is built once so the two cannot drift.
+  const buildTrackerEntryPatch = (req: Request, trackerFields: any): { patch?: any; error?: string } => {
+    const { values, notes, mood, tags, timestamp, valuesToDelete } = req.body || {};
+    const patch: any = {};
+    // The same value gate as POST (server/tracker-entry-guard.ts), so an edit
+    // can't smuggle a value the create path would have rejected.
+    if (values && typeof values === "object") {
+      const guard = sanitizeTrackerEntryValues(trackerFields, values);
+      if (guard.error) return { error: guard.error };
+      patch.values = guard.values;
+    }
+    if (notes !== undefined) patch.notes = notes;
+    if (mood !== undefined) patch.mood = mood;
+    if (tags !== undefined) patch.tags = tags;
+    if (timestamp !== undefined && timestamp !== null && timestamp !== "") {
+      const ts = parseEntryTimestamp(timestamp, req);
+      if (ts.error) return { error: ts.error };
+      patch.timestamp = ts.iso;
+    }
+    // P1 universal-delete: clients can pass `valuesToDelete: [key, ...]` to
+    // remove specific keys from the entry.values JSONB. Shallow-PATCH'ing
+    // `{ values: rest }` no longer removes keys after the storage rewrite,
+    // so we surface the explicit deletion signal here instead.
+    if (Array.isArray(valuesToDelete)) {
+      const clean = valuesToDelete.filter((k: any) => typeof k === "string" && k.length > 0);
+      if (clean.length > 0) patch.valuesToDelete = clean;
+    }
+    return { patch };
+  };
+  // Resolve an entry the caller knows only by id (chat result cards) to the
+  // tracker that owns it. This used to scan getTrackers(), whose entries are
+  // windowed to the last 120 days — so any older entry was "not found". The
+  // by-id read proves the entry exists (it is user-scoped) but carries no
+  // trackerId in either storage, so the owner is looked for in the default
+  // window first and, on a miss, in an effectively unbounded one.
+  const ALL_TRACKER_ENTRIES_DAYS = 36_500;
+  const locateTrackerEntry = async (entryId: string): Promise<{ tracker: Tracker; entry: any } | null> => {
+    const entry: any = await storage.getTrackerEntry(entryId);
+    if (!entry || typeof entry !== "object") return null;
+    const owning = (trackers: Tracker[]) => trackers.find((t) => (t.entries || []).some((e: any) => e?.id === entryId));
+    const hinted = typeof entry.trackerId === "string" && entry.trackerId ? await storage.getTracker(entry.trackerId) : undefined;
+    const tracker = hinted || owning(await storage.getTrackers()) || owning(await storage.getTrackers(ALL_TRACKER_ENTRIES_DAYS));
+    return tracker ? { tracker, entry } : null;
+  };
+
   app.post("/api/trackers/:id/entries", asyncHandler(async (req, res) => {
     const { values } = req.body;
     if (!values || typeof values !== "object") {
       return res.status(400).json({ error: "Values required" });
+    }
+    if (req.body.timestamp !== undefined) {
+      if (req.body.timestamp === null || req.body.timestamp === "") {
+        delete req.body.timestamp; // "no timestamp": storage stamps now
+      } else {
+        const ts = parseEntryTimestamp(req.body.timestamp, req);
+        if (ts.error) return res.status(400).json({ error: ts.error });
+        req.body.timestamp = ts.iso;
+      }
     }
     // ONE value gate (server/tracker-entry-guard.ts), shared with logEntry in
     // both storages, so this route, smart-entry, the AI quick-log lanes and
@@ -5791,32 +5906,17 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     res.status(201).json(entry);
   }));
   app.patch("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
-    const { values, notes, mood, tags, timestamp, valuesToDelete } = req.body || {};
-    const patch: any = {};
-    // The same value gate as POST (server/tracker-entry-guard.ts), so an edit
-    // can't smuggle a value the create path would have rejected. The previous
-    // `typeof v === 'number' && isNaN(v)` check could never fire — JSON has no
-    // NaN literal — so edits were entirely unvalidated.
-    if (values && typeof values === 'object') {
+    // The tracker's field definitions drive the value gate; only fetched when
+    // there are values to gate (a notes-only edit never needed the tracker).
+    let trackerFields: any = undefined;
+    if (req.body?.values && typeof req.body.values === "object") {
       const tracker = await storage.getTracker(req.params.id);
       if (!tracker) return res.status(404).json({ error: "Tracker not found" });
-      const guard = sanitizeTrackerEntryValues(tracker.fields, values);
-      if (guard.error) return res.status(400).json({ error: guard.error });
-      patch.values = guard.values;
+      trackerFields = tracker.fields;
     }
-    if (notes !== undefined) patch.notes = notes;
-    if (mood !== undefined) patch.mood = mood;
-    if (tags !== undefined) patch.tags = tags;
-    if (timestamp && typeof timestamp === 'string') patch.timestamp = timestamp;
-    // P1 universal-delete: clients can pass `valuesToDelete: [key, ...]` to
-    // remove specific keys from the entry.values JSONB. Shallow-PATCH'ing
-    // `{ values: rest }` no longer removes keys after the storage rewrite,
-    // so we surface the explicit deletion signal here instead.
-    if (Array.isArray(valuesToDelete)) {
-      const clean = valuesToDelete.filter((k: any) => typeof k === 'string' && k.length > 0);
-      if (clean.length > 0) patch.valuesToDelete = clean;
-    }
-    const updated = await storage.updateTrackerEntry(req.params.id, req.params.entryId, patch);
+    const built = buildTrackerEntryPatch(req, trackerFields);
+    if (built.error) return res.status(400).json({ error: built.error });
+    const updated = await storage.updateTrackerEntry(req.params.id, req.params.entryId, built.patch);
     if (!updated) return res.status(404).json({ error: "Entry not found" });
     const uid_tep = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_tep}`);
     res.json(updated);
@@ -5842,54 +5942,35 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
   // applies the same value/notes/timestamp/valuesToDelete patch as the
   // tracker-scoped route.
   app.patch("/api/tracker-entries/:entryId", asyncHandler(async (req, res) => {
-    const { values, notes, mood, tags, timestamp, valuesToDelete } = req.body || {};
-    const patch: any = {};
-    if (values && typeof values === 'object') patch.values = values;
-    if (notes !== undefined) patch.notes = notes;
-    if (mood !== undefined) patch.mood = mood;
-    if (tags !== undefined) patch.tags = tags;
-    if (timestamp && typeof timestamp === 'string') patch.timestamp = timestamp;
-    if (Array.isArray(valuesToDelete)) {
-      const clean = valuesToDelete.filter((k: any) => typeof k === 'string' && k.length > 0);
-      if (clean.length > 0) patch.valuesToDelete = clean;
-    }
-    const trackers = await storage.getTrackers();
-    for (const t of trackers) {
-      const entry = (t.entries || []).find((e: any) => e.id === req.params.entryId);
-      if (entry) {
-        // Same value gate as the tracker-scoped PATCH above.
-        if (patch.values) {
-          const guard = sanitizeTrackerEntryValues(t.fields, patch.values);
-          if (guard.error) return res.status(400).json({ error: guard.error });
-          patch.values = guard.values;
-        }
-        const updated = await storage.updateTrackerEntry(t.id, req.params.entryId, patch);
-        if (!updated) return res.status(404).json({ error: "Entry not found" });
-        const uid_tep2 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_tep2}`); bustCache(`profile-detail:${uid_tep2}:`);
-        return res.json(updated);
-      }
-    }
-    return res.status(404).json({ error: "Entry not found" });
+    const located = await locateTrackerEntry(req.params.entryId);
+    if (!located) return res.status(404).json({ error: "Entry not found" });
+    // Same value gate + timestamp rule as the tracker-scoped PATCH above.
+    const built = buildTrackerEntryPatch(req, located.tracker.fields);
+    if (built.error) return res.status(400).json({ error: built.error });
+    const updated = await storage.updateTrackerEntry(located.tracker.id, req.params.entryId, built.patch);
+    if (!updated) return res.status(404).json({ error: "Entry not found" });
+    const uid_tep2 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_tep2}`); bustCache(`profile-detail:${uid_tep2}:`);
+    return res.json(updated);
   }));
   app.delete("/api/tracker-entries/:entryId", asyncHandler(async (req, res) => {
-    const trackers = await storage.getTrackers();
-    for (const t of trackers) {
-      const entry = (t.entries || []).find((e: any) => e.id === req.params.entryId);
-      if (entry) {
-        const removed = await removeTrackerEntry(storage, { trackerId: t.id, entryId: req.params.entryId }, getTimezone(req), log);
-        if (removed.ok) {
-          const uid_te3 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_te3}`);
-          if (removed.removedHabitCheckinId) bustCache(`habits:${uid_te3}`);
-          return res.json({ success: true, removedHabitCheckinId: removed.removedHabitCheckinId });
-        }
-      }
-    }
-    return res.status(404).json({ error: "Entry not found" });
+    const located = await locateTrackerEntry(req.params.entryId);
+    if (!located) return res.status(404).json({ error: "Entry not found" });
+    const removed = await removeTrackerEntry(storage, { trackerId: located.tracker.id, entryId: req.params.entryId }, getTimezone(req), log);
+    if (!removed.ok) return res.status(404).json({ error: "Entry not found" });
+    const uid_te3 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_te3}`);
+    if (removed.removedHabitCheckinId) bustCache(`habits:${uid_te3}`);
+    return res.json({ success: true, removedHabitCheckinId: removed.removedHabitCheckinId });
   }));
   app.delete("/api/trackers/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getTracker(req.params.id);
     if (!existing) return res.status(404).json({ error: "Tracker not found" });
-    await storage.deleteTracker(req.params.id);
+    // A storage delete that returns false did NOT remove the row (a failed
+    // cascade rolls back, an RLS miss matches nothing): answering 200 then
+    // left the client believing the record was gone while every list still
+    // showed it.
+    if (!(await storage.deleteTracker(req.params.id))) {
+      return res.status(500).json({ error: "Tracker could not be deleted. Nothing was removed — please try again." });
+    }
     // Bug fix: deleted trackers stayed visible for up to 5 minutes because
     // the trackers list cache wasn't busted.
     const uid_tr3 = cacheUserKey(req as AuthenticatedRequest);
@@ -6447,7 +6528,9 @@ Rules:
     {
       const parsed = insertExpenseSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
-      req.body = { ...req.body, ...parsed.data };
+      // A blank date input parses to undefined ("not given"); drop it rather
+      // than hand storage a patch that names the column with nothing in it.
+      req.body = withoutUndefined({ ...req.body, ...parsed.data });
     }
     if (req.body.amount !== undefined) {
       if (typeof req.body.amount !== "number") return res.status(400).json({ error: "Expense amount must be a positive number" });
@@ -6581,18 +6664,32 @@ Rules:
     // Thin adapter over the one pay operation. Marking an amortization row
     // paid used to flip `loan_amortization.paid` and nothing else — no payment
     // row, no balance move — a boolean only the cashflow projection read.
-    const updated = await storage.markLoanPayment(req.params.id);
-    if (updated?.loan_id) {
-      const paid = await payBillOccurrence(storage, updated.loan_id, {
-        occurrenceDate: String(updated.payment_date || "").slice(0, 10) || null,
-        amount: Number(updated.total_payment) || null,
-        principal: Number(updated.principal_amount) || null,
-        interest: Number(updated.interest_amount) || null,
-        notes: `Amortization payment #${updated.payment_number ?? ""}`.trim(),
+    //
+    // Order matters: the ledger write comes FIRST and the flag SECOND. The
+    // flag used to be set before the payment and the payment's failure was
+    // only logged, so a row read "paid" with no payment behind it while the
+    // caller saw a 200.
+    const rows = await storage.getAllLoanSchedules();
+    const row = (rows || []).find((r: any) => r?.id === req.params.id);
+    if (!row) return res.status(404).json({ error: "Amortization row not found" });
+    // Already flagged: the payment behind it exists; never record it twice.
+    if (row.paid) return res.json({ ...row, alreadyPaid: true });
+    if (row.loan_id) {
+      const paid = await payBillOccurrence(storage, row.loan_id, {
+        occurrenceDate: String(row.payment_date || "").slice(0, 10) || null,
+        amount: Number(row.total_payment) || null,
+        principal: Number(row.principal_amount) || null,
+        interest: Number(row.interest_amount) || null,
+        notes: `Amortization payment #${row.payment_number ?? ""}`.trim(),
         source: "route",
-      }, getTimezone(req));
-      if (!paid.ok) log.warn("[loans/mark] ledger write failed", paid.reason);
+      }, getTimezone(req), log);
+      if (!paid.ok) {
+        log.warn("[loans/mark] ledger write failed", paid.reason);
+        const failed = paid.reason === "payment_failed";
+        return res.status(failed ? 500 : 404).json({ error: failed ? "Payment failed" : "Loan not found", reason: paid.reason });
+      }
     }
+    const updated = await storage.markLoanPayment(req.params.id);
     const uid_ln2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_ln2}`); bustCache(`cashflow:${uid_ln2}`); bustCache(`profile-detail:${uid_ln2}:`);
     res.json(updated);
@@ -6600,7 +6697,10 @@ Rules:
 
   // ---- Cashflow ----
   app.get("/api/cashflow", asyncHandler(async (req, res) => {
-    const month = req.query.month as string;
+    // The client sends no ?month; storage's own default is the UTC month, which
+    // is next month for an evening caller west of Greenwich on the last day.
+    // Default here, in the user's zone, and pass it explicitly.
+    const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
@@ -6667,6 +6767,7 @@ Rules:
     res.json(event);
   }));
   app.post("/api/events", asyncHandler(async (req, res) => {
+    applyActiveProfileScope(req, req.body);
     const parsed = insertEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const newEvent = await storage.createEvent(parsed.data);
@@ -6693,7 +6794,13 @@ Rules:
   app.delete("/api/events/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getEvent(req.params.id);
     if (!existing) return res.status(404).json({ error: "Event not found" });
-    await storage.deleteEvent(req.params.id);
+    // A storage delete that returns false did NOT remove the row (a failed
+    // cascade rolls back, an RLS miss matches nothing): answering 200 then
+    // left the client believing the record was gone while every list still
+    // showed it.
+    if (!(await storage.deleteEvent(req.params.id))) {
+      return res.status(500).json({ error: "Event could not be deleted. Nothing was removed — please try again." });
+    }
     const uid_ev3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_ev3}`); bustCache(`stats:${uid_ev3}`); bustCache(`calendar:${uid_ev3}`);
     res.json({ success: true });
@@ -6871,6 +6978,10 @@ Rules:
       // Reads the doc name + extracted fields and picks the best matching profile
       // (e.g. "Sarah's drivers license.pdf" → Sarah's profile). Falls back to no
       // linkage so behaviour is identical to before when AI is unavailable.
+      // Profile isolation (PROP-005): the active scope is the owner the caller
+      // can see, so it is applied BEFORE the AI guess below — the guess only
+      // runs for a document nobody has claimed.
+      applyActiveProfileScope(req, req.body);
       const linked = Array.isArray(req.body.linkedProfiles) ? req.body.linkedProfiles : [];
       if (linked.length === 0) {
         try {
@@ -7238,6 +7349,7 @@ Rules:
     }
     const parsed = insertHabitSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
+    applyActiveProfileScope(req, req.body);
     // The owner goes in WITH the insert. Creating first (auto-linked to self)
     // and re-linking afterwards inserted every habit as the user's own for an
     // instant — and under the owner-scoped unique name key that instant is
@@ -7323,7 +7435,13 @@ Rules:
   app.delete("/api/habits/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getHabit(req.params.id);
     if (!existing) return res.status(404).json({ error: "Habit not found" });
-    await storage.deleteHabit(req.params.id);
+    // A storage delete that returns false did NOT remove the row (a failed
+    // cascade rolls back, an RLS miss matches nothing): answering 200 then
+    // left the client believing the record was gone while every list still
+    // showed it.
+    if (!(await storage.deleteHabit(req.params.id))) {
+      return res.status(500).json({ error: "Habit could not be deleted. Nothing was removed — please try again." });
+    }
     const uid_h5 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`habits:${uid_h5}`); bustCache(`stats:${uid_h5}`);
     res.json({ success: true });
@@ -7370,7 +7488,10 @@ Rules:
   // name+amount+frequency+nextDueDate so two genuinely distinct obligations
   // submitted in quick succession still both get through. 8s window matches
   // /pay dedup. Memory bounded the same way (cleanup once >500 entries).
-  const recentObligationCreates = new Map<string, { at: number; id: string }>();
+  // `inflight` is the FIRST request's create, registered before it is awaited:
+  // two identical creates that arrive together used to both miss the map (it
+  // was only written after the insert finished) and both insert.
+  const recentObligationCreates = new Map<string, { at: number; id?: string; inflight?: Promise<any> }>();
   app.post("/api/obligations", asyncHandler(async (req, res) => {
     // Fold the category before validation so a form that still posts "utility"
     // (or an importer posting "subscriptions") is stored under the one
@@ -7388,13 +7509,22 @@ Rules:
     const fp = `${uid_o1}|${(parsed.data.name || "").trim().toLowerCase()}|${Number(parsed.data.amount) || 0}|${parsed.data.frequency || ""}|${parsed.data.nextDueDate || ""}`;
     const prior = recentObligationCreates.get(fp);
     if (prior && Date.now() - prior.at < 8000) {
+      const priorId = prior.id ?? (await prior.inflight?.catch(() => undefined))?.id;
       // Re-fetch so the response shape matches a fresh insert.
-      const existing = await storage.getObligation(prior.id);
+      const existing = priorId ? await storage.getObligation(priorId) : undefined;
       if (existing) {
         return res.status(200).json({ ...existing, deduped: true });
       }
     }
-    const created = await storage.createObligation(parsed.data);
+    const inflight = storage.createObligation(parsed.data);
+    recentObligationCreates.set(fp, { at: Date.now(), inflight });
+    let created: Awaited<typeof inflight>;
+    try {
+      created = await inflight;
+    } catch (e) {
+      recentObligationCreates.delete(fp);
+      throw e;
+    }
     recentObligationCreates.set(fp, { at: Date.now(), id: created.id });
     if (recentObligationCreates.size > 500) {
       const cutoff = Date.now() - 30000;
@@ -7420,10 +7550,15 @@ Rules:
     if (req.body?.category !== undefined) {
       req.body.category = canonicalObligationCategory(req.body.category);
     }
+    // A client that round-trips the record sends back whatever status it was
+    // shown; lifecycle words ("upcoming", "overdue") mean the bill is active.
+    if (typeof req.body?.status === "string") {
+      req.body.status = canonicalObligationStatus(req.body.status);
+    }
     {
       const parsed = insertObligationSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
-      req.body = { ...req.body, ...parsed.data };
+      req.body = withoutUndefined({ ...req.body, ...parsed.data });
     }
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Obligation name must be a non-empty string" });
@@ -7473,7 +7608,7 @@ Rules:
       return res.status(400).json({ error: "Payment amount must be a positive number" });
     }
     // Validate date if provided
-    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    if (date && !isCalendarDay(date)) {
       return res.status(400).json({ error: "Date must be YYYY-MM-DD format" });
     }
     const uid_o3 = cacheUserKey(req as AuthenticatedRequest);
@@ -7491,7 +7626,11 @@ Rules:
     if (last && Date.now() - last.at < 8000) {
       const prior = last.payment ?? (last.inflight ? await last.inflight.catch(() => null) : null);
       if (prior && typeof prior === "object") return res.status(200).json({ ...(prior as object), deduped: true });
-      return res.status(200).json({ ok: true, deduped: true });
+      // The first tap produced NO payment — it threw, or the pay operation
+      // refused. There is nothing to share, so this retry is the real attempt.
+      // It used to be answered `{ok:true, deduped:true}` with no row behind
+      // it, which is how a failed payment looked paid for eight seconds.
+      if (recentPayments.get(dedupeKey) === last) recentPayments.delete(dedupeKey);
     }
     // Clean old entries occasionally to bound memory
     if (recentPayments.size > 500) {
@@ -7502,6 +7641,7 @@ Rules:
     // occurrence's REAL total (base + charges / posted actual); `date` is the
     // payment date the caller chose — previously validated and then silently
     // dropped on the floor.
+    let failReason: string | undefined;
     const inflight = (async () => {
       const result = await payBillOccurrence(storage, req.params.id, {
         amount: amount ?? null,
@@ -7513,7 +7653,7 @@ Rules:
         confirmationNumber,
         source: "route",
       }, getTimezone(req));
-      if (!result.ok) return null;
+      if (!result.ok) { failReason = result.reason; return null; }
       // Same response shape payObligation produced, so existing callers keep working.
       return {
         id: result.payment?.id, amount: result.amount,
@@ -7524,8 +7664,19 @@ Rules:
       };
     })();
     recentPayments.set(dedupeKey, { at: Date.now(), payment: null, inflight });
-    const payment = await inflight;
-    if (!payment) { recentPayments.delete(dedupeKey); return res.status(404).json({ error: "Obligation not found" }); }
+    let payment: any = null;
+    try {
+      payment = await inflight;
+    } finally {
+      // The window entry only ever holds a REAL payment: release it on every
+      // other outcome — a throw included — so a retry pays for real.
+      if (!payment && recentPayments.get(dedupeKey)?.inflight === inflight) recentPayments.delete(dedupeKey);
+    }
+    if (!payment) {
+      // A ledger failure is a server error, not a missing bill.
+      if (failReason === "payment_failed") return res.status(500).json({ error: "Payment failed" });
+      return res.status(404).json({ error: "Obligation not found" });
+    }
     recentPayments.set(dedupeKey, { at: Date.now(), payment });
     bustCache(`obligations:${uid_o3}`); bustCache(`stats:${uid_o3}`); bustCache(`cashflow:${uid_o3}`); bustCache(`expenses:${uid_o3}`); bustCache(`calendar:${uid_o3}`); bustCache(`notifications:${uid_o3}`);
     res.status(201).json(payment);
@@ -7556,7 +7707,13 @@ Rules:
   app.delete("/api/obligations/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getObligation(req.params.id);
     if (!existing) return res.status(404).json({ error: "Obligation not found" });
-    await storage.deleteObligation(req.params.id);
+    // A storage delete that returns false did NOT remove the row (a failed
+    // cascade rolls back, an RLS miss matches nothing): answering 200 then
+    // left the client believing the record was gone while every list still
+    // showed it.
+    if (!(await storage.deleteObligation(req.params.id))) {
+      return res.status(500).json({ error: "Obligation could not be deleted. Nothing was removed — please try again." });
+    }
     const uid_o4 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`obligations:${uid_o4}`); bustCache(`stats:${uid_o4}`); bustCache(`cashflow:${uid_o4}`); bustCache(`calendar:${uid_o4}`); bustCache(`notifications:${uid_o4}`);
     res.json({ success: true });
@@ -7581,7 +7738,7 @@ Rules:
     if (i < 0) return null;
     const liabilityId = occId.slice(0, i);
     const date = occId.slice(i + 1).slice(0, 10);
-    if (!liabilityId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    if (!liabilityId || !isCalendarDay(date)) return null;
     return { liabilityId, date };
   };
 
@@ -7591,9 +7748,9 @@ Rules:
   app.get("/api/obligation-occurrences", asyncHandler(async (req, res) => {
     const tz = getTimezone(req);
     const today = getUserToday(tz);
-    const start = (req.query.start as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.start as string)
+    const start = (req.query.start as string) && isCalendarDay(req.query.start as string)
       ? (req.query.start as string) : today;
-    const end = (req.query.end as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.end as string)
+    const end = (req.query.end as string) && isCalendarDay(req.query.end as string)
       ? (req.query.end as string) : toLocalDateStr(new Date(Date.now() + 90 * 86400000), tz);
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
@@ -7655,7 +7812,7 @@ Rules:
   app.post("/api/obligation-occurrences/:occId/reschedule", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const { newDueAt } = req.body || {};
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(newDueAt || ""))) return res.status(400).json({ error: "newDueAt must be YYYY-MM-DD" });
+    if (!isCalendarDay(String(newDueAt || ""))) return res.status(400).json({ error: "newDueAt must be YYYY-MM-DD" });
     const parsed = parseOccId(req.params.occId);
     if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
     const result = await storage.rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
@@ -7674,7 +7831,7 @@ Rules:
 
   app.post("/api/liabilities/:id/occurrences/:date/pay", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const { amount, method, paymentDate, accountId } = req.body || {};
     if (amount !== undefined && (typeof amount !== "number" || amount < 0)) return res.status(400).json({ error: "amount must be a non-negative number" });
     const paid = await payBillOccurrence(storage, req.params.id, {
@@ -7689,7 +7846,7 @@ Rules:
 
   app.post("/api/liabilities/:id/occurrences/:date/skip", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const result = await storage.skipOccurrence(req.params.id, req.params.date);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
@@ -7698,11 +7855,11 @@ Rules:
 
   app.patch("/api/liabilities/:id/occurrences/:date", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const { movedTo, amount, notes, estimatedAmount, actualAmount } = req.body || {};
     let result;
     if (movedTo !== undefined) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(movedTo))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
+      if (!isCalendarDay(String(movedTo))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
       result = await storage.rescheduleOccurrence(req.params.id, req.params.date, movedTo);
     }
     if (amount !== undefined || notes !== undefined) {
@@ -7732,7 +7889,7 @@ Rules:
   // month's bill or inflating next month's estimate.
   app.post("/api/liabilities/:id/occurrences/:date/charges", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const { amount, kind, label, date, notes } = req.body || {};
     const n = Number(amount);
     if (!Number.isFinite(n) || n === 0) return res.status(400).json({ error: "amount must be a non-zero number" });
@@ -7746,7 +7903,7 @@ Rules:
 
   app.delete("/api/liabilities/:id/occurrences/:date/charges/:chargeId", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const result = await storage.removeOccurrenceCharge(req.params.id, req.params.date, req.params.chargeId);
     if (!result) return res.status(404).json({ error: "Liability not found" });
     bustBillCaches(uid);
@@ -7756,7 +7913,7 @@ Rules:
   app.post("/api/liabilities/:id/pause", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const { until } = req.body || {};
-    if (until !== undefined && until !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(until))) return res.status(400).json({ error: "until must be YYYY-MM-DD" });
+    if (until !== undefined && until !== null && !isCalendarDay(String(until))) return res.status(400).json({ error: "until must be YYYY-MM-DD" });
     const result = await storage.pauseLiability(req.params.id, until || undefined);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
@@ -7801,7 +7958,18 @@ Rules:
 
   app.patch("/api/accounts/:id", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    const updated = await (storage as any).updateAccount(req.params.id, req.body || {});
+    const body = (req.body && typeof req.body === "object") ? req.body : {};
+    // `ownerProfileId` IS the account's parent (storage writes it to
+    // parentProfileId), so it gets exactly the guards a profile's parent gets.
+    // An empty value clears the owner and needs none of them.
+    if (body.ownerProfileId !== undefined && body.ownerProfileId !== null && body.ownerProfileId !== "") {
+      if (typeof body.ownerProfileId !== "string") return res.status(400).json({ error: "ownerProfileId must be a profile id" });
+      const existing = await storage.getProfile(req.params.id);
+      if (!existing || !isAccountProfile(existing)) return res.status(404).json({ error: "Account not found" });
+      const problem = await checkParentAssignment(uid, req.params.id, body.ownerProfileId);
+      if (problem) return res.status(problem.status).json({ error: problem.error });
+    }
+    const updated = await (storage as any).updateAccount(req.params.id, body);
     if (!updated) return res.status(404).json({ error: "Account not found" });
     bustBillCaches(uid);
     res.json(updated);
@@ -7823,6 +7991,9 @@ Rules:
   // A balance CHANGE is an event with a reason, not a field overwrite: the
   // before/after pair is kept so "why is this $40 lower" stays answerable.
   app.post("/api/accounts/:id/adjust", asyncHandler(async (req, res) => {
+    if (req.body?.date !== undefined && req.body?.date !== null && req.body?.date !== "" && !isCalendarDay(String(req.body.date))) {
+      return res.status(400).json({ error: "date must be a real calendar day (YYYY-MM-DD)" });
+    }
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const { newBalance, delta, date, reason } = req.body || {};
     if (newBalance == null && delta == null) {
@@ -7858,6 +8029,7 @@ Rules:
   }));
   app.post("/api/artifacts", asyncHandler(async (req, res) => {
     if (req.body.title) req.body.title = sanitize(req.body.title);
+    applyActiveProfileScope(req, req.body);
     const parsed = insertArtifactSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const created = await storage.createArtifact(parsed.data);
@@ -7905,7 +8077,13 @@ Rules:
   app.delete("/api/artifacts/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getArtifact(req.params.id);
     if (!existing) return res.status(404).json({ error: "Artifact not found" });
-    await storage.deleteArtifact(req.params.id);
+    // A storage delete that returns false did NOT remove the row (a failed
+    // cascade rolls back, an RLS miss matches nothing): answering 200 then
+    // left the client believing the record was gone while every list still
+    // showed it.
+    if (!(await storage.deleteArtifact(req.params.id))) {
+      return res.status(500).json({ error: "Artifact could not be deleted. Nothing was removed — please try again." });
+    }
     const uid_a4 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`artifacts:${uid_a4}`); bustCache(`stats:${uid_a4}`);
     res.json({ success: true });
@@ -8092,6 +8270,7 @@ Rules:
     // appends, because journal_entries is UNIQUE on (user_id, date) and
     // "add this to today's journal" should append anyway.
     const entryDate = String(req.body.entryDate || parsed.data.date || getUserToday(getTimezone(req))).slice(0, 10);
+    applyActiveProfileScope(req, req.body);
     const linkedProfileId = Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0
       ? String(req.body.linkedProfiles[0]) : null;
     const { entry: newEntry, appended } = await upsertJournalEntry(storage, {
@@ -8382,6 +8561,7 @@ Rules:
       let [
         profiles, trackers, tasks, expenses, events, documents,
         habits, obligations, artifacts, journalEntries, memories, domains,
+        incomes, goals, paychecks, budgetsByMonth,
       ] = await Promise.all([
         storage.getProfiles(),
         storage.getTrackers(),
@@ -8395,7 +8575,19 @@ Rules:
         storage.getJournalEntries(),
         storage.getMemories(),
         storage.getDomains(),
+        // A backup that left these out could not restore a household's money
+        // model: incomes, goals, paychecks, budgets and the payment history
+        // behind every loan, card and bill were all missing from the file.
+        storage.getIncomes(),
+        storage.getGoals(),
+        storage.getPaychecks().catch(() => [] as any[]),
+        storage.getAllBudgets().catch(() => ({} as Record<string, any[]>)),
       ]);
+      const liabilityIds = (profiles as any[]).filter((p) => p.type === "liability").map((p) => p.id);
+      let liabilityPayments: any[] = [];
+      for (const id of liabilityIds) {
+        try { liabilityPayments.push(...(await storage.getLiabilityPayments(id))); } catch { /* per-liability best effort */ }
+      }
       // [P6.2] Optional ?profileIds= scoping. Each entity collection goes
       // through the same canonical orphan rule as the list endpoints.
       // Profiles, memories and domains are reference data with no
@@ -8404,7 +8596,7 @@ Rules:
       const exportFilterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : [];
       if (exportFilterIds.length > 0) {
         const uid_ex = cacheUserKey(req as AuthenticatedRequest);
-        [trackers, tasks, expenses, events, documents, habits, obligations, artifacts, journalEntries] =
+        [trackers, tasks, expenses, events, documents, habits, obligations, artifacts, journalEntries, incomes, goals] =
           await Promise.all([
             filterByProfileScope(trackers, exportFilterIds, uid_ex),
             filterByProfileScope(tasks, exportFilterIds, uid_ex),
@@ -8415,7 +8607,13 @@ Rules:
             filterByProfileScope(obligations, exportFilterIds, uid_ex),
             filterByProfileScope(artifacts, exportFilterIds, uid_ex),
             filterByProfileScope(journalEntries, exportFilterIds, uid_ex),
+            filterByProfileScope(incomes, exportFilterIds, uid_ex),
+            filterByProfileScope(goals, exportFilterIds, uid_ex),
           ]);
+        const inScopeLiabilities = new Set((obligations as any[]).map((o) => o.id));
+        liabilityPayments = liabilityPayments.filter((p) => inScopeLiabilities.has(p.liabilityProfileId));
+        const wanted = new Set(exportFilterIds);
+        budgetsByMonth = Object.fromEntries(Object.entries(budgetsByMonth).map(([m, list]) => [m, (list as any[]).filter((b) => !b.profileId || wanted.has(b.profileId))]));
       }
       const data = {
         version: 1,
@@ -8424,6 +8622,7 @@ Rules:
         ...(exportFilterIds.length > 0 ? { filteredProfileIds: exportFilterIds } : {}),
         profiles, trackers, tasks, expenses, events, documents,
         habits, obligations, artifacts, journalEntries, memories, domains,
+        incomes, goals, paychecks, budgets: budgetsByMonth, liabilityPayments,
       };
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${getUserToday(getTimezone(req))}.json"`);
@@ -8459,16 +8658,49 @@ Rules:
       }
 
       // Import profiles
+      // Restored rows must point at the profiles THIS account now has, not the
+      // ids the file was exported with: a task linked to "Linda" in the old
+      // account carried Linda's old id, which is another user's profile (or
+      // nobody's) here — the ownership guard rejected the row, or it landed
+      // unowned. Every profile created below is mapped old → new, the file's
+      // Self maps to this account's own Self (there is exactly one), parents
+      // are remapped (parents are created first), and every section's
+      // linkedProfiles goes through the map.
+      const idMap = new Map<string, string>();
+      const remap = (ids: unknown): string[] =>
+        (Array.isArray(ids) ? ids : []).map((id) => idMap.get(String(id))).filter((id): id is string => !!id);
       if (data.profiles && Array.isArray(data.profiles)) {
-        for (const p of data.profiles) {
-          await tryImport("profiles", p.name || "unnamed", () => storage.createProfile({ type: p.type, name: p.name, fields: p.fields, tags: p.tags, notes: p.notes }));
+        const existingSelf = await (storage.getSelfProfile?.() ?? Promise.resolve(undefined)).catch(() => undefined);
+        const byId = new Map<string, any>((data.profiles as any[]).filter((p) => p && p.id).map((p) => [String(p.id), p]));
+        const ordered: any[] = [];
+        const seen = new Set<string>();
+        const visit = (p: any, depth = 0) => {
+          if (!p || depth > 20) return;
+          const key = p.id ? String(p.id) : `anon-${ordered.length}`;
+          if (seen.has(key)) return;
+          const parent = p.parentProfileId ? byId.get(String(p.parentProfileId)) : null;
+          if (parent && parent !== p) visit(parent, depth + 1);
+          seen.add(key);
+          ordered.push(p);
+        };
+        for (const p of data.profiles) visit(p);
+        for (const p of ordered) {
+          if (p.type === "self") {
+            if (existingSelf && p.id) idMap.set(String(p.id), existingSelf.id);
+            continue; // one Self per account: the file's Self is this account's Self
+          }
+          await tryImport("profiles", p.name || "unnamed", async () => {
+            const parentProfileId = p.parentProfileId ? idMap.get(String(p.parentProfileId)) : undefined;
+            const created = await storage.createProfile({ type: p.type, name: p.name, fields: p.fields, tags: p.tags, notes: p.notes, ...(parentProfileId ? { parentProfileId } : {}) } as any);
+            if (p.id && created?.id) idMap.set(String(p.id), created.id);
+          });
         }
       }
       // Import trackers + entries
       if (data.trackers && Array.isArray(data.trackers)) {
         for (const t of data.trackers) {
           await tryImport("trackers", t.name || "unnamed", async () => {
-            const created = await storage.createTracker({ name: t.name, category: t.category, unit: t.unit, icon: t.icon, fields: t.fields });
+            const created = await storage.createTracker({ name: t.name, category: t.category, unit: t.unit, icon: t.icon, fields: t.fields, linkedProfiles: remap(t.linkedProfiles) } as any);
             if (t.entries) {
               for (const e of t.entries) {
                 await tryImport("trackerEntries", `${t.name} entry`, () => storage.logEntry({ trackerId: created.id, values: e.values, notes: e.notes, mood: e.mood, tags: e.tags }));
@@ -8480,32 +8712,58 @@ Rules:
       // Import tasks
       if (data.tasks && Array.isArray(data.tasks)) {
         for (const t of data.tasks) {
-          await tryImport("tasks", t.title || "unnamed", () => storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, tags: t.tags }));
+          await tryImport("tasks", t.title || "unnamed", () => storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, tags: t.tags, linkedProfiles: remap(t.linkedProfiles) } as any));
         }
       }
       // Import expenses
       if (data.expenses && Array.isArray(data.expenses)) {
         for (const e of data.expenses) {
-          await tryImport("expenses", e.description || "unnamed", () => storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags }));
+          await tryImport("expenses", e.description || "unnamed", () => storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags, linkedProfiles: remap(e.linkedProfiles) } as any));
+        }
+      }
+      // Import incomes, goals, paychecks and budgets — the money model the
+      // export used to leave out. Liability payments are exported for the
+      // record only: their liability ids do not survive a re-import.
+      if (data.incomes && Array.isArray(data.incomes)) {
+        for (const i of data.incomes) {
+          await tryImport("incomes", i.description || "unnamed", () => storage.createIncome({ description: i.description, amount: Number(i.amount), category: i.category || "salary", frequency: i.frequency || "monthly", date: i.date || undefined, tags: i.tags || [], linkedProfiles: remap(i.linkedProfiles) } as any));
+        }
+      }
+      if (data.goals && Array.isArray(data.goals)) {
+        for (const g of data.goals) {
+          await tryImport("goals", g.title || "unnamed", () => storage.createGoal({ title: g.title, type: g.type || "custom", target: Number(g.target), unit: g.unit || "", startValue: g.startValue, deadline: g.deadline || undefined, category: g.category, milestones: g.milestones || [], linkedProfiles: remap(g.linkedProfiles) } as any));
+        }
+      }
+      if (data.paychecks && Array.isArray(data.paychecks)) {
+        for (const p of data.paychecks) {
+          await tryImport("paychecks", p.source || "unnamed", () => storage.createPaycheck({ source: p.source, amount: Number(p.amount), expected_date: p.expected_date || p.expectedDate, notes: p.notes }));
+        }
+      }
+      if (data.budgets && typeof data.budgets === "object" && !Array.isArray(data.budgets)) {
+        for (const [month, list] of Object.entries(data.budgets as Record<string, any[]>)) {
+          if (!/^\d{4}-\d{2}$/.test(month) || !Array.isArray(list)) continue;
+          for (const b of list) {
+            await tryImport("budgets", `${month} ${b.category || "unnamed"}`, () => storage.addBudget(month, String(b.category || ""), Number(b.amount), b.notes, undefined));
+          }
         }
       }
       // Import events
       if (data.events && Array.isArray(data.events)) {
         for (const e of data.events) {
-          await tryImport("events", e.title || "unnamed", () => storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", tags: e.tags || [], source: e.source || "manual", linkedProfiles: e.linkedProfiles || [], linkedDocuments: e.linkedDocuments || [] }));
+          await tryImport("events", e.title || "unnamed", () => storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", tags: e.tags || [], source: e.source || "manual", linkedProfiles: remap(e.linkedProfiles), linkedDocuments: [] }));
         }
       }
       // Import documents
       if (data.documents && Array.isArray(data.documents)) {
         for (const d of data.documents) {
-          await tryImport("documents", d.name || "unnamed", () => storage.createDocument({ name: d.name, type: d.type, mimeType: d.mimeType, fileData: d.fileData, extractedData: d.extractedData, tags: d.tags }));
+          await tryImport("documents", d.name || "unnamed", () => storage.createDocument({ name: d.name, type: d.type, mimeType: d.mimeType, fileData: d.fileData, extractedData: d.extractedData, tags: d.tags, linkedProfiles: remap(d.linkedProfiles) } as any));
         }
       }
       // Import habits
       if (data.habits && Array.isArray(data.habits)) {
         for (const h of data.habits) {
           await tryImport("habits", h.name || "unnamed", async () => {
-            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency });
+            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency, targetPerDay: h.targetPerDay, linkedProfiles: remap(h.linkedProfiles) } as any);
             if (h.checkins) {
               for (const c of h.checkins) {
                 await tryImport("habitCheckins", `${h.name} checkin`, () => storage.checkinHabit(created.id, c.date, c.value, c.notes));
@@ -8518,7 +8776,7 @@ Rules:
       if (data.obligations && Array.isArray(data.obligations)) {
         for (const o of data.obligations) {
           await tryImport("obligations", o.name || "unnamed", async () => {
-            const created = await storage.createObligation({ name: o.name, amount: o.amount, frequency: o.frequency, category: o.category, nextDueDate: o.nextDueDate, autopay: o.autopay, notes: o.notes });
+            const created = await storage.createObligation({ name: o.name, amount: o.amount, frequency: o.frequency, category: o.category, nextDueDate: o.nextDueDate, autopay: o.autopay, notes: o.notes, linkedProfiles: remap(o.linkedProfiles) } as any);
             if (o.payments) {
               for (const p of o.payments) {
                 // Restoring HISTORY: raw ledger rows only, deliberately not
@@ -8542,7 +8800,7 @@ Rules:
       // Import artifacts
       if (data.artifacts && Array.isArray(data.artifacts)) {
         for (const a of data.artifacts) {
-          await tryImport("artifacts", a.title || "unnamed", () => storage.createArtifact({ type: a.type, title: a.title, content: a.content, items: a.items?.map((i: any) => ({ text: i.text, checked: i.checked })) || [], tags: a.tags, pinned: a.pinned, linkedProfiles: a.linkedProfiles || [], language: a.language, dataBindings: a.dataBindings, chartData: a.chartData }));
+          await tryImport("artifacts", a.title || "unnamed", () => storage.createArtifact({ type: a.type, title: a.title, content: a.content, items: a.items?.map((i: any) => ({ text: i.text, checked: i.checked })) || [], tags: a.tags, pinned: a.pinned, linkedProfiles: remap(a.linkedProfiles), language: a.language, dataBindings: a.dataBindings, chartData: a.chartData }));
         }
       }
       // Import journal entries
@@ -9165,7 +9423,7 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
           const todayISO = getUserToday(tz);
           const dayDelta = (d: any) => {
             const s = String(d || "").slice(0, 10);
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+            if (!isCalendarDay(s)) return null;
             return Math.round(
               (new Date(`${s}T12:00:00`).getTime() - new Date(`${todayISO}T12:00:00`).getTime()) / 86400000,
             );
@@ -9331,9 +9589,16 @@ No emojis. No prose outside the JSON.`,
       if (req.body.unit !== undefined && typeof req.body.unit !== "string") {
         return res.status(400).json({ error: "Unit must be a string" });
       }
+      applyActiveProfileScope(req, req.body);
       const parsed = insertGoalSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid request data" });
-      const goal = await storage.createGoal(parsed.data);
+      // insertGoalSchema strips linkedProfiles, but both storages read it off
+      // the insert (defaulting to self when absent) — so the owner the body
+      // named, or the active scope supplied, must be carried past the parse.
+      const goalOwners = Array.isArray(req.body.linkedProfiles)
+        ? (req.body.linkedProfiles as any[]).filter((x) => typeof x === "string" && x.length > 0)
+        : [];
+      const goal = await storage.createGoal({ ...parsed.data, ...(goalOwners.length > 0 ? { linkedProfiles: goalOwners } : {}) } as any);
       res.json(goal);
     } catch (err: any) {
       console.error("Create goal error:", err);
@@ -9345,7 +9610,7 @@ No emojis. No prose outside the JSON.`,
     {
       const parsed = insertGoalSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
-      req.body = { ...req.body, ...parsed.data };
+      req.body = withoutUndefined({ ...req.body, ...parsed.data });
     }
     if (req.body.title !== undefined) {
       if (typeof req.body.title !== "string" || !req.body.title.trim()) return res.status(400).json({ error: "Goal title must be a non-empty string" });
@@ -9478,6 +9743,21 @@ No emojis. No prose outside the JSON.`,
     bustCache(`profile-detail:${uid}:`);
   };
 
+  // An income's cadence has to be one the monthly converter (shared/
+  // obligation-windows toMonthlyAmount) knows: anything else it silently
+  // treats as monthly, which is how `frequency: "hourly"` was stored and then
+  // counted as a monthly paycheck. "custom" is the converter's documented
+  // treat-as-monthly value. (insertIncomeSchema types frequency as a bare
+  // string; the vocabulary belongs there eventually.)
+  const normalizeIncomeFrequency = (raw: unknown): string => String(raw ?? "").trim().toLowerCase();
+  const validateIncomeFrequency = (raw: unknown): string | null => {
+    if (typeof raw !== "string") return "frequency must be a string";
+    const f = normalizeIncomeFrequency(raw);
+    if (!f) return "frequency must not be empty";
+    const known = f === "monthly" || f === "month" || f === "custom" || toMonthlyAmount(1, f) !== 1;
+    return known ? null : `Unknown frequency "${raw}" — use once, daily, weekly, biweekly, monthly, quarterly or yearly`;
+  };
+
   app.post("/api/incomes", asyncHandler(async (req, res) => {
     const uid = (req as AuthenticatedRequest).userId || req.ip || "anon";
     // Bug fix: this route used to call storage.createIncome(req.body) with no
@@ -9499,8 +9779,17 @@ No emojis. No prose outside the JSON.`,
     }
     req.body.amount = amt;
     req.body.description = sanitize(req.body.description);
+    if (req.body.frequency !== undefined) {
+      const frequencyError = validateIncomeFrequency(req.body.frequency);
+      if (frequencyError) return res.status(400).json({ error: frequencyError });
+      req.body.frequency = normalizeIncomeFrequency(req.body.frequency);
+    }
     applyActiveProfileScope(req, req.body);
-    const income = await storage.createIncome(req.body);
+    // The same gate expenses / tasks / events run. Without it a string `tags`,
+    // a non-array linkedProfiles or a junk date reached storage and 500'd.
+    const parsed = insertIncomeSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
+    const income = await storage.createIncome(parsed.data);
     bustIncomeCaches(uid);
     res.status(201).json(income);
   }));
@@ -9521,6 +9810,16 @@ No emojis. No prose outside the JSON.`,
         return res.status(400).json({ error: "description must be a non-empty string" });
       }
       req.body.description = sanitize(req.body.description);
+    }
+    if (req.body.frequency !== undefined) {
+      const frequencyError = validateIncomeFrequency(req.body.frequency);
+      if (frequencyError) return res.status(400).json({ error: frequencyError });
+      req.body.frequency = normalizeIncomeFrequency(req.body.frequency);
+    }
+    {
+      const parsed = insertIncomeSchema.partial().safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
+      req.body = { ...req.body, ...parsed.data };
     }
     const income = await storage.updateIncome(req.params.id, req.body);
     if (!income) return res.status(404).json({ error: "Not found" });
@@ -9599,13 +9898,16 @@ No emojis. No prose outside the JSON.`,
   // ---- Delete All User Data ----
   app.delete("/api/data/all", asyncHandler(async (req, res) => {
     try {
-      const deleteUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
-      if (rateLimit(`delete-all:${deleteUid}`, 1, 3600000)) {
-        return res.status(429).json({ error: "Account deletion rate limited. Try again in an hour." });
-      }
       const { confirmation } = req.body || {};
       if (confirmation !== "DELETE") {
         return res.status(400).json({ error: "You must send confirmation: 'DELETE' to proceed." });
+      }
+      // Validate first, then spend the once-an-hour allowance: a mistyped
+      // confirmation used to burn it, and the corrected request an instant
+      // later was told to come back in an hour.
+      const deleteUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+      if (rateLimit(`delete-all:${deleteUid}`, 1, 3600000)) {
+        return res.status(429).json({ error: "Account deletion rate limited. Try again in an hour." });
       }
       const result = await storage.deleteAllUserData();
       clearAllCache();
@@ -10149,12 +10451,20 @@ No emojis. No prose outside the JSON.`,
     // The occurrence stamp and due-date policy ride along too — this form used
     // to skip both, so a bill paid here still showed unpaid on its schedule.
     const d: any = parsed.data;
-    const occurrenceDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.occurrenceDate || ""))
+    const occurrenceDate = isCalendarDay(String(req.body?.occurrenceDate || ""))
       ? String(req.body.occurrenceDate) : null;
+    // Pay-from-account, the same field the bills route honours. The schema
+    // strips unknown keys, so `accountId` used to be dropped here and a loan
+    // payment "from Chase Checking" never debited Chase Checking.
+    const accountId = req.body?.accountId;
+    if (accountId !== undefined && accountId !== null && typeof accountId !== "string") {
+      return res.status(400).json({ error: "accountId must be a string" });
+    }
     const result = await payBillOccurrence(storage, req.params.id, {
       amount: d.amount,
       paymentDate: d.paymentDate,
       occurrenceDate,
+      accountId: accountId || null,
       principal: d.principalPortion || null,
       interest: d.interestPortion || null,
       fees: d.fees ?? null,
@@ -10167,9 +10477,92 @@ No emojis. No prose outside the JSON.`,
     res.json(result.payment);
   }));
   app.patch("/api/liability-payments/:id", asyncHandler(async (req, res) => {
-    const row = await storage.updateLiabilityPayment(req.params.id, req.body || {});
+    const body = (req.body && typeof req.body === "object" && !Array.isArray(req.body)) ? req.body : null;
+    if (!body) return res.status(400).json({ error: "Request body must be a JSON object" });
+    const row: any = await storage.getLiabilityPayment(req.params.id);
     if (!row) return res.status(404).json({ error: "Not found" });
-    res.json(row);
+
+    // A payment row is the head of a pipeline (server/liability-payments.ts):
+    // the ledger DERIVES principal/interest/fees, the balance after and the
+    // payment type from the amount and the liability's state, and the row's
+    // liability is the key the occurrence stamp, the account debit and the
+    // logged expense hang off. Editing any of those directly leaves the debt
+    // balance, the stamp and the expense describing a payment that no longer
+    // exists — so they are refused rather than desynced. `amount` and
+    // `paymentDate` are edited by re-recording the payment (below);
+    // notes / sourceAccount / documentId touch nothing downstream.
+    const DERIVED = ["principalPortion", "interestPortion", "fees", "remainingBalanceAfter", "paymentType", "liabilityProfileId"];
+    const refused = DERIVED.filter((k) => body[k] !== undefined);
+    if (refused.length > 0) {
+      return res.status(400).json({ error: `${refused.join(", ")} ${refused.length > 1 ? "are" : "is"} derived by the ledger and cannot be edited directly; change amount or paymentDate instead` });
+    }
+    const EDITABLE = ["amount", "paymentDate", "notes", "sourceAccount", "documentId"];
+    const unknown = Object.keys(body).filter((k) => !EDITABLE.includes(k));
+    if (unknown.length > 0) return res.status(400).json({ error: `Unknown field(s): ${unknown.join(", ")}` });
+
+    let amount: number | undefined;
+    if (body.amount !== undefined) {
+      const parsedAmount = typeof body.amount === "number" ? body.amount : Number(body.amount);
+      const amountError = validateTransactionAmount(parsedAmount);
+      if (amountError) return res.status(400).json({ error: amountError });
+      amount = parsedAmount;
+    }
+    const tz = getTimezone(req);
+    let paymentDate: string | undefined;
+    if (body.paymentDate !== undefined) {
+      const d = typeof body.paymentDate === "string" ? parseUserDateTime(body.paymentDate, tz) : new Date(NaN);
+      if (isNaN(d.getTime())) return res.status(400).json({ error: "paymentDate must be a valid date" });
+      paymentDate = toLocalDateStr(d, tz);
+    }
+    const cosmetic: Record<string, any> = {};
+    for (const k of ["notes", "sourceAccount", "documentId"]) {
+      if (body[k] === undefined) continue;
+      if (body[k] !== null && typeof body[k] !== "string") return res.status(400).json({ error: `${k} must be a string` });
+      cosmetic[k] = body[k];
+    }
+
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const amountChanged = amount !== undefined && amount !== Number(row.amount);
+    const dateChanged = paymentDate !== undefined && paymentDate !== String(row.paymentDate || "").slice(0, 10);
+    if (!amountChanged && !dateChanged) {
+      const updated = Object.keys(cosmetic).length > 0 ? await storage.updateLiabilityPayment(req.params.id, cosmetic) : row;
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      bustBillCaches(uid);
+      return res.json(updated);
+    }
+
+    // Amount / date: re-record through the one pay operation, so the balance,
+    // the occurrence stamp, the source account and the logged expense all
+    // describe the edited payment. unpayBillOccurrence retracts exactly what
+    // payBillOccurrence wrote; the occurrence and account come from the stamp
+    // the original payment left, so the same period is settled again.
+    const liability: any = await storage.getProfile(row.liabilityProfileId);
+    if (!liability) return res.status(404).json({ error: "Liability not found" });
+    const occ = (liability.fields?.occurrences && typeof liability.fields.occurrences === "object") ? liability.fields.occurrences : {};
+    const stamped = Object.entries(occ).find(([, ov]: [string, any]) => ov && ov.paymentId === row.id);
+    const occurrenceDate = stamped?.[0] || String(row.paymentDate || "").slice(0, 10) || null;
+    const accountId = (stamped?.[1] as any)?.accountId || null;
+    const undone = await unpayBillOccurrence(storage, row.liabilityProfileId, { paymentId: row.id, source: "route" }, tz, log);
+    if (!undone.ok) return res.status(404).json({ error: "Payment not found" });
+    const result = await payBillOccurrence(storage, row.liabilityProfileId, {
+      occurrenceDate,
+      amount: amount ?? Number(row.amount),
+      paymentDate: paymentDate ?? String(row.paymentDate || "").slice(0, 10),
+      accountId,
+      method: cosmetic.sourceAccount !== undefined ? cosmetic.sourceAccount : (row.sourceAccount ?? null),
+      notes: cosmetic.notes !== undefined ? cosmetic.notes : (row.notes ?? null),
+      fees: row.fees ?? null,
+      paymentType: row.paymentType && row.paymentType !== "standard" ? row.paymentType : null,
+      source: "route",
+    }, tz, log);
+    if (!result.ok) return res.status(500).json({ error: "Payment could not be re-recorded", reason: result.reason });
+    let payment = result.payment;
+    if (cosmetic.documentId !== undefined && payment?.id) {
+      payment = (await storage.updateLiabilityPayment(payment.id, { documentId: cosmetic.documentId })) ?? payment;
+    }
+    bustBillCaches(uid);
+    // The edited payment is a NEW row; callers holding the old id get both.
+    res.json({ ...payment, previousPaymentId: row.id });
   }));
   app.delete("/api/liability-payments/:id", asyncHandler(async (req, res) => {
     // Full inverse, not a bare row delete: occurrence stamp cleared, due date
@@ -10458,7 +10851,7 @@ No emojis. No prose outside the JSON.`,
   app.post("/api/captures", asyncHandler(async (req, res) => {
     if (!storage.createCapture) return res.status(501).json({ error: "Captures not supported by this storage backend" });
     const { insertCaptureSchema } = await import("@shared/schema");
-    const parsed = insertCaptureSchema.safeParse(req.body || {});
+    const parsed = insertCaptureSchema.safeParse(applyActiveProfileScope(req, req.body || {}, "ownerProfileId"));
     if (!parsed.success) return res.status(400).json({ error: "Invalid capture", details: parsed.error.flatten() });
     // Default ownerProfileId to self when missing/null.
     let ownerProfileId = parsed.data.ownerProfileId ?? null;
@@ -10479,7 +10872,10 @@ No emojis. No prose outside the JSON.`,
 
   app.patch("/api/captures/:id", asyncHandler(async (req, res) => {
     if (!storage.updateCapture) return res.status(501).json({ error: "Captures not supported" });
-    const updated = await storage.updateCapture(req.params.id, req.body || {});
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+      return res.status(400).json({ error: "Request body must be a JSON object" });
+    }
+    const updated = await storage.updateCapture(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
   }));
@@ -10498,12 +10894,30 @@ No emojis. No prose outside the JSON.`,
   // exempted from bearer auth in server/auth.ts and authenticates by signature.
   registerFinanceRoutes(app);
 
-  // Global async error handler — catches unhandled promise rejections from route handlers
+  // Unknown API paths are 404 JSON, never the SPA shell. Without this the
+  // static fallback answered `POST /api/profiles/:id/restore` (no such
+  // route) with 200 + index.html, so a client believed a restore, an undo
+  // or a typo'd call had succeeded when nothing happened.
+  app.all(/^\/api(\/|$)/, (req: any, res: any) => {
+    res.status(404).json({ error: `No API route for ${req.method} ${req.path}` });
+  });
+
+  // Global error handler — body-parser rejections (a JSON string or bare
+  // number as the body, malformed JSON, a body over the size limit) carry a
+  // 4xx status and are the caller's fault: they used to come back as 500
+  // with the parser's own message. Everything else stays a generic 500 so
+  // internal details never leak.
   app.use((err: any, _req: any, res: any, _next: any) => {
-    console.error(`[API Error]`, err?.message || err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: err?.message || "Internal server error" });
+    const status = Number(err?.statusCode || err?.status);
+    if (res.headersSent) return;
+    if (err?.type === "entity.parse.failed" || (Number.isInteger(status) && status >= 400 && status < 500)) {
+      res.status(Number.isInteger(status) && status >= 400 && status < 500 ? status : 400).json({
+        error: err?.type === "entity.parse.failed" ? "Invalid JSON body" : (err?.type === "entity.too.large" ? "Request body too large" : (err?.expose ? err.message : "Bad request")),
+      });
+      return;
     }
+    console.error(`[API Error]`, err?.message || err);
+    res.status(500).json({ error: "Internal server error" });
   });
 
   return httpServer;

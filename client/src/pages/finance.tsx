@@ -1,3 +1,5 @@
+import { localTodayISO, formatLocalDate } from "@/lib/dates";
+import { buildCashTrend } from "@/lib/cash-trend";
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
@@ -12,7 +14,7 @@ import { useShowTestData } from "@/lib/showTestData";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
-import { toMonthlyAmount } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthlyIncome } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -66,35 +68,6 @@ const categoryColors: Record<string, string> = {
 };
 
 const EXPENSE_CATEGORIES = ["entertainment", "food", "general", "health", "housing", "pet", "transport", "utilities", "vehicle"];
-
-// Six-month in/out/net series shared by the Money overview cards AND the Cash
-// Flow Overview popup, so both surfaces plot identical numbers. Outflow is
-// summed per calendar month from real expenses; inflow uses the current
-// monthly income (no per-month income history yet — honest flat baseline).
-function buildCashTrend(expenses: any[], monthlyIncome: number): Array<{ month: string; inflow: number; outflow: number; net: number }> {
-  const now = new Date();
-  const monthKeys: Array<{ key: string; label: string }> = [];
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    monthKeys.push({
-      key: `${d.getFullYear()}-${d.getMonth()}`,
-      label: d.toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }),
-    });
-  }
-  const outByMonth: Record<string, number> = {};
-  for (const e of (Array.isArray(expenses) ? expenses : [])) {
-    const raw = (e as any).date || (e as any).createdAt;
-    if (!raw) continue;
-    const d = new Date(raw);
-    if (isNaN(d.getTime())) continue;
-    const k = `${d.getFullYear()}-${d.getMonth()}`;
-    outByMonth[k] = (outByMonth[k] || 0) + (Number((e as any).amount) || 0);
-  }
-  return monthKeys.map(m => {
-    const outflow = Math.round(outByMonth[m.key] || 0);
-    return { month: m.label, inflow: Math.round(monthlyIncome), outflow, net: Math.round(monthlyIncome) - outflow };
-  });
-}
 
 /** Order profile-picker options: self ("Me") pinned first, everyone else A→Z. */
 function sortProfilesForSelect(a: { type?: string; name?: string }, b: { type?: string; name?: string }) {
@@ -901,7 +874,7 @@ export default function FinancePage() {
       // Canonical ownership candidates (id, parent, linked co-owners) — the
       // inline parent-only check hid a subscription owned through a linked party.
       return isInScope(
-        ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks),
+        ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks, profiles),
         { selectedIds: filterIds, selfIds: emptySelfIds },
         "out_of_scope",
       );
@@ -1133,8 +1106,7 @@ export default function FinancePage() {
           : (typeof snap.spendTrend === "number" ? null : null);
 
         // Cash flow: monthly income vs (month spend + monthlyized bills).
-        const monthlyIncome = (incomes || []).reduce(
-          (s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+        const monthlyIncome = sumMonthlyIncome(incomes || []);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const cashOut = spendMtd + Number(snap.monthlyObligationTotal || 0);
         const savingsRate = monthlyIncome > 0 ? Math.round(((monthlyIncome - spendMtd) / monthlyIncome) * 100) : null;
@@ -1149,9 +1121,11 @@ export default function FinancePage() {
           }))
           .filter((b: { limit: number }) => b.limit > 0);
 
-        const bills14 = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : [])
-          .filter((b: any) => typeof b.daysUntil === "number" && b.daysUntil <= 14)
-          .slice(0, 8);
+        // ONE list for the Bills Due KPI, the Bills card and the BillsDuePopup it
+        // opens: the server's 30-day upcomingBills window, untrimmed. The KPI used
+        // to count a 14-day / 8-row slice while the popup listed the full window,
+        // so the tile said "3" and the popup showed 7 (ARCHITECTURE §10.1).
+        const upcomingBillsList = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : []) as any[];
 
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
 
@@ -1162,16 +1136,16 @@ export default function FinancePage() {
         const breached = budgetRows.filter(b => b.spent > b.limit);
         for (const b of breached.slice(0, 2)) alerts.push({ id: `budget-${b.category}`, tone: "warn", text: `${b.category[0].toUpperCase()}${b.category.slice(1)} spending is over budget (${Math.round((b.spent / b.limit) * 100)}%).`, onClick: () => setFinancePopup("budget") });
         if (savingsRate != null && savingsRate >= 15) alerts.push({ id: "savings", tone: "pos", text: `Great job — you're saving ${savingsRate}% of income this month.` });
-        const soonBill = bills14.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
+        const soonBill = upcomingBillsList.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
         if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
 
         // Multi-month cash-flow trend (last 6 months) — shared helper so the
         // Cash Flow Overview popup plots the exact same series.
-        const cashTrend = buildCashTrend(expenses as any[], monthlyIncome);
+        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE);
         // Per-KPI mini-chart series.
         const spendSeries = cashTrend.map(c => c.outflow);
         const incomeSeries = cashTrend.map(c => c.inflow);
-        const billsSeries = bills14.map((b: any) => Number(b.amount) || 0);
+        const billsSeries = upcomingBillsList.map((b: any) => Number(b.amount) || 0);
 
         return (
           <MoneyOverview
@@ -1186,7 +1160,7 @@ export default function FinancePage() {
             spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
             incomeMtd={monthlyIncome}
             budgets={budgetRows}
-            bills={bills14}
+            bills={upcomingBillsList}
             spendByCategory={spendByCat}
             cashTrend={cashTrend}
             spendSeries={spendSeries}
@@ -1219,7 +1193,7 @@ export default function FinancePage() {
       {(() => {
         const fc: "all" | "selected" | "everyone" = (filterMode === "selected" ? "selected" : "everyone");
         const snap = enhanced?.financeSnapshot || {};
-        const monthlyIncome = (incomes || []).reduce((s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+        const monthlyIncome = sumMonthlyIncome(incomes || []);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const recurringOut = Number(snap.monthlyObligationTotal || 0);
         const spendByCat: Record<string, number> = snap.spendByCategory || {};
@@ -1227,7 +1201,7 @@ export default function FinancePage() {
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
         const ymNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
         const monthExpenses = (Array.isArray(expenses) ? expenses : []).filter((e: any) => String(e.date || "").slice(0, 7) === ymNow);
-        const cashTrend = buildCashTrend(expenses as any[], monthlyIncome);
+        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE);
         const closer = (o: boolean) => !o && setFinancePopup(null);
         return (
           <>
@@ -1496,7 +1470,7 @@ export default function FinancePage() {
             </div>
             <div><Label>Vendor</Label><Input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} placeholder="Optional" /></div>
             {/* U11: prevent picking a future date for an already-incurred expense */}
-            <div><Label>Date</Label><Input type="date" max={new Date().toISOString().slice(0,10)} value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
+            <div><Label>Date</Label><Input type="date" max={localTodayISO()} value={editForm.date} onChange={e => setEditForm(f => ({...f, date: e.target.value}))} /></div>
             {/* Round-6 fix (BUG-017): Edit Expense was missing the Profile field that Add Expense already had.
                 Match parity so re-assigning is possible without delete+recreate. */}
             <div><Label>Profile</Label>
@@ -1609,7 +1583,7 @@ export default function FinancePage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{pc.source}</p>
                       <p className="text-[11px] text-muted-foreground">
-                        Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                        Expected {formatLocalDate(pc.expected_date, { month: 'short', day: 'numeric', year: 'numeric' })}
                       </p>
                     </div>
                     <span className="text-xs font-bold tabular-nums">{formatMoney(pc.actual_amount || pc.amount)}</span>
@@ -1625,8 +1599,8 @@ export default function FinancePage() {
                 detail={
                   <div className="space-y-2 pt-1">
                     <p className="text-[11px] text-muted-foreground">
-                      Expected {new Date(pc.expected_date).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
-                      {pc.confirmed && pc.received_date && <> · Received {new Date(pc.received_date).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</>}
+                      Expected {formatLocalDate(pc.expected_date, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}
+                      {pc.confirmed && pc.received_date && <> · Received {formatLocalDate(pc.received_date, { month: 'long', day: 'numeric', year: 'numeric' })}</>}
                     </p>
                     <div className="flex items-center gap-2">
                       {!pc.confirmed && !isFuture && (
@@ -1668,7 +1642,7 @@ export default function FinancePage() {
                 <Input type="number" inputMode="decimal" step="0.01" min="0" max="999999999" placeholder="0.00" value={newPaycheck.amount} onChange={e => setNewPaycheck(p => ({ ...p, amount: e.target.value }))} data-testid="input-paycheck-amount" /></div>
               {/* U12: paycheck is expected/future income — disallow past dates */}
               <div><Label className="text-xs">Expected Date <span className="text-destructive">*</span></Label>
-                <Input type="date" min={new Date().toISOString().slice(0,10)} value={newPaycheck.expectedDate} onChange={e => setNewPaycheck(p => ({ ...p, expectedDate: e.target.value }))} data-testid="input-paycheck-date" /></div>
+                <Input type="date" min={localTodayISO()} value={newPaycheck.expectedDate} onChange={e => setNewPaycheck(p => ({ ...p, expectedDate: e.target.value }))} data-testid="input-paycheck-date" /></div>
             </div>
             <Button className="w-full" onClick={() => {
               if (!newPaycheck.source.trim() || !newPaycheck.amount || parseFloat(newPaycheck.amount) <= 0 || !newPaycheck.expectedDate) return;
@@ -1711,7 +1685,7 @@ export default function FinancePage() {
                       <p className="text-xs font-medium truncate">{inc.description}</p>
                       <p className="text-[11px] text-muted-foreground capitalize">
                         {inc.frequency || 'monthly'}
-                        {inc.date ? ` · ${new Date(inc.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                        {inc.date ? ` · ${formatLocalDate(inc.date, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
                       </p>
                     </div>
                     <span className="text-xs font-bold tabular-nums">{formatMoney(Number(inc.amount || 0))}</span>
@@ -1722,7 +1696,7 @@ export default function FinancePage() {
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <Badge variant="secondary" className="capitalize">{inc.category || 'income'}</Badge>
                       <span className="text-muted-foreground capitalize">{inc.frequency || 'monthly'}</span>
-                      {inc.date && <span className="text-muted-foreground">{new Date(inc.date).toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}</span>}
+                      {inc.date && <span className="text-muted-foreground">{formatLocalDate(inc.date, { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' })}</span>}
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={stopProp(() => setEditingIncome(inc))} data-testid={`btn-edit-income-${inc.id}`}><Pencil className="h-3 w-3" /> Edit</Button>
@@ -1985,7 +1959,7 @@ export default function FinancePage() {
                           <tr key={p.id}
                             className={` ${p.paid ? 'bg-green-500/5 text-muted-foreground' : ''} ${isCurrent ? 'bg-primary/10 font-medium' : ''}`}>
                             <td className="px-2 py-1">{p.payment_number}</td>
-                            <td className="px-2 py-1">{new Date(p.payment_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })}</td>
+                            <td className="px-2 py-1">{formatLocalDate(p.payment_date, { month: 'short', day: 'numeric', year: '2-digit' })}</td>
                             <td className="px-2 py-1 text-right tabular-nums">${p.principal_amount?.toFixed(0)}</td>
                             <td className="px-2 py-1 text-right tabular-nums">${p.interest_amount?.toFixed(0)}</td>
                             <td className="px-2 py-1 text-right tabular-nums font-medium">${p.total_payment?.toFixed(0)}</td>

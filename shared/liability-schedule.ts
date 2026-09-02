@@ -232,8 +232,14 @@ export function liabilityAmount(liability: Liabilityish): number {
 /** Anchor date the series is generated from. */
 function seriesAnchor(liability: Liabilityish): string | null {
   const f = liability.fields || {};
-  const a = clip(f.firstPaymentDate ?? f.dueDate ?? f.nextDueDate ?? f.due_date ?? f.next_due_date ?? f.renewalDate);
-  return ISO_RE.test(a) ? a : null;
+  // The first spelling that PARSES — the same rule as resolveLiabilityDueDate.
+  // `??` does not skip an empty string, so a cleared firstPaymentDate ("")
+  // used to short-circuit the chain and the bill emitted no series at all.
+  for (const v of [f.firstPaymentDate, f.dueDate, f.nextDueDate, f.due_date, f.next_due_date, f.renewalDate]) {
+    const a = clip(v);
+    if (ISO_RE.test(a)) return a;
+  }
+  return null;
 }
 
 /**
@@ -278,8 +284,13 @@ export function generateSchedule(
     if (ISO_RE.test(d)) paidByDate.set(d, p.id);
   }
 
-  const paused = f.paused === true;
-  const pausedUntil = ISO_RE.test(clip(f.pausedUntil)) ? clip(f.pausedUntil) : null;
+  // Two spellings of "not running": the schedule's own `paused` flag and the
+  // bills surface's `status` ("paused" / "cancelled", written by PATCH
+  // /api/obligations/:id). A bill paused through its status used to keep
+  // filling the calendar while the bills list and cash flow had dropped it.
+  const statusWord = String(f.status ?? "").trim().toLowerCase();
+  const paused = f.paused === true || statusWord === "paused" || statusWord === "cancelled" || statusWord === "canceled";
+  const pausedUntil = ISO_RE.test(clip(f.pausedUntil)) && statusWord !== "cancelled" && statusWord !== "canceled" ? clip(f.pausedUntil) : null;
   const inPausedSpan = (dISO: string) =>
     paused && dISO >= today && (!pausedUntil || dISO < pausedUntil);
 

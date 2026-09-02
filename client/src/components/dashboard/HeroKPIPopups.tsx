@@ -9,7 +9,7 @@
  */
 import { useMemo, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
-import { isInScope as scopeIsInScope, selfIdsFrom } from "@shared/scope";
+import { isInScope as scopeIsInScope, selfIdsFrom, withAncestorOwnerIds } from "@shared/scope";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { isRecurringBill } from "@shared/liability-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -251,7 +251,8 @@ export function NetWorthPopup({
     if (filterMode !== "selected" || filterIds.length === 0) return true;
     const candidates: string[] = [];
     if (p?.id) candidates.push(p.id);
-    if (p?.parentProfileId) candidates.push(p.parentProfileId);
+    // The whole owner chain, not just the immediate parent (shared/scope).
+    if (p?.parentProfileId) candidates.push(...withAncestorOwnerIds([p.parentProfileId], allProfiles as any[]));
     return scopeIsInScope(candidates, { selectedIds: filterIds, selfIds }, "out_of_scope");
   };
 

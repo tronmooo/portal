@@ -54,7 +54,7 @@ import type {
   CalendarTimelineItem, CalendarEvent, EventCategory, Profile,
 } from "@shared/schema";
 import { EVENT_CATEGORY_COLORS } from "@shared/schema";
-import { isInScope, selfIdsFrom } from "@shared/scope";
+import { isInScope, selfIdsFrom, withAncestorOwnerIds } from "@shared/scope";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
@@ -1275,8 +1275,10 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       // unowned items never leak into individual profile calendars. Matches
       // the server's getCalendarTimeline rule one-for-one.
       if (effectiveFilterMode === "selected" && effectiveFilterIds.length > 0) {
+        // Owner chain (shared/scope): the car's insurance bill and a "Bill
+        // due" task linked to a bill are the car owner's / bill owner's.
         if (!isInScope(
-          item.linkedProfiles,
+          withAncestorOwnerIds((item.linkedProfiles || []).filter((x: any): x is string => typeof x === "string" && !!x), filterProfiles as any),
           { selectedIds: effectiveFilterIds, selfIds: selfIdsFrom(filterProfiles) },
           "out_of_scope",
         )) continue;

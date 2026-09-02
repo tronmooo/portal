@@ -72,8 +72,25 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
-  res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY);
+  res.setHeader('Content-Security-Policy', contentSecurityPolicyFor(process.env.NODE_ENV));
   next();
+}
+
+/**
+ * The policy for the running mode. Production is CONTENT_SECURITY_POLICY
+ * verbatim. Development needs three things the production page never does,
+ * and without them `npm run dev` rendered a BLANK page ("@vitejs/plugin-react
+ * can't detect preamble" — the react-refresh preamble is an inline script):
+ *   - 'unsafe-inline' scripts (the Vite/React refresh preamble),
+ *   - plain-http/ws connections to localhost (Vite HMR, a local Supabase),
+ *   - no upgrade-insecure-requests (it would rewrite those to https).
+ */
+export function contentSecurityPolicyFor(nodeEnv: string | undefined): string {
+  if (nodeEnv === "production") return CONTENT_SECURITY_POLICY;
+  return CONTENT_SECURITY_POLICY
+    .replace("script-src 'self' 'unsafe-eval'", "script-src 'self' 'unsafe-eval' 'unsafe-inline'")
+    .replace("connect-src 'self'", "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*")
+    .replace("; upgrade-insecure-requests", "");
 }
 
 /**

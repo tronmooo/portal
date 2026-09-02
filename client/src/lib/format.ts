@@ -41,9 +41,15 @@ export function formatMoney(n: number | null | undefined): string {
   return `${v < 0 ? "-$" : "$"}${body}`;
 }
 
-/** Whole-dollar variant (rounded) for compact KPI tiles. */
+/**
+ * Whole-dollar variant (rounded) for compact KPI tiles. Rounds the magnitude,
+ * so a -$23.50 cash flow is "-$24" here exactly as it is on the hero card
+ * (which counts up Math.round(Math.abs(n))); Math.round alone rounds -23.5
+ * toward +∞ to -23 and the two tiles disagreed by a dollar.
+ */
 export function formatMoneyRound(n: number | null | undefined): string {
-  return formatMoney(Math.round(Number(n) || 0));
+  const v = Number(n) || 0;
+  return formatMoney(Math.sign(v) * Math.round(Math.abs(v)));
 }
 
 /**

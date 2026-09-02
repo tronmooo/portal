@@ -17,7 +17,7 @@
 // how the app stops feeling like one product.
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { toMonthlyAmount } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthlyIncome } from "@shared/obligation-windows";
 import { CashFlowWaterfallPopup } from "@/components/finance/MoneyPopups";
 
 export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
@@ -45,8 +45,7 @@ export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
 
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
   // Mirrors finance.tsx: incomes normalised to monthly via their frequency.
-  const monthlyIncome = incomes.reduce(
-    (s: number, i: any) => s + toMonthlyAmount(Number(i.amount) || 0, i.frequency), 0);
+  const monthlyIncome = sumMonthlyIncome(incomes);
   const snap = enhanced?.financeSnapshot || {};
   const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
 

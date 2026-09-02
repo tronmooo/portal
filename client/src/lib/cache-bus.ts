@@ -94,6 +94,13 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   profiles: [
     ["/api/profiles"],
     ["/api/accounts"], // accounts ARE profiles (type: "account")
+    // Ownership link tables. An asset's owners and a liability's borrowers are
+    // what the net-worth share math reads (shared/net-worth.ts, seeded from the
+    // bootstrap under these bare keys). No domain listed them, so an ownership
+    // change made through chat — "make the car 50/50 with Jane" — left every
+    // share on the dashboard at its pre-change split until a hard reload.
+    ["/api/asset-party-links"],
+    ["/api/liability-profile-links"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/insights"],
@@ -109,6 +116,8 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   ],
   assets: [
     ["/api/profiles"], // assets are profiles
+    ["/api/asset-party-links"],      // ownership shares — see the profiles domain
+    ["/api/liability-profile-links"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/rel-assets"],
@@ -124,6 +133,8 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   ],
   liabilities: [
     ["/api/profiles"], // liabilities are profiles
+    ["/api/asset-party-links"],      // ownership shares — see the profiles domain
+    ["/api/liability-profile-links"],
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/rel-liabilities"],
@@ -505,6 +516,100 @@ export function buildOptimisticListMutation<TItem, TVars>(
       invalidateDomains(...opts.invalidate);
     },
   };
+}
+
+// ─── patchQueries ───────────────────────────────────────────────────
+// Optimistic patch of EVERY cached query under a key prefix, with a restore
+// function for rollback.
+//
+// Why a prefix and not an exact key: the live list keys carry the profile
+// scope — ["/api/budgets", month, filterMode, ...filterIds],
+// ["/api/trackers", filterMode, ...filterIds] — so an exact-key
+// getQueryData(["/api/budgets", month]) hits an empty slot: the optimistic
+// removal shows nothing and the "rollback" restores nothing (audit
+// 2026-09-02, dashboard BudgetManager and trackers deleteTrackerMut). The
+// setQueriesData prefix predicate reaches every variant, and the returned
+// restore() puts back exactly the slots that were touched.
+//
+// Usage inside a mutation:
+//   onMutate: async (id) => {
+//     await queryClient.cancelQueries({ queryKey: ["/api/budgets", month] });
+//     const restore = patchQueries(["/api/budgets", month], (old) => ...);
+//     return { restore };
+//   },
+//   onError: (_e, _v, ctx) => ctx?.restore?.(),
+//
+// The updater may return undefined to leave a slot untouched (e.g. a shape it
+// doesn't understand). Slots holding `undefined` are skipped entirely.
+export function patchQueries(
+  queryKey: readonly unknown[],
+  updater: (old: any, key: readonly unknown[]) => any,
+): () => void {
+  const snapshots = queryClient.getQueriesData<any>({ queryKey: queryKey as unknown[] });
+  for (const [key, old] of snapshots) {
+    if (old === undefined) continue;
+    const next = updater(old, key);
+    if (next !== undefined && next !== old) queryClient.setQueryData(key, next);
+  }
+  return () => {
+    for (const [key, old] of snapshots) queryClient.setQueryData(key, old);
+  };
+}
+
+/** Compose several restore functions into one (runs in reverse order). */
+export function composeRestores(...restores: Array<(() => void) | undefined>): () => void {
+  return () => {
+    for (let i = restores.length - 1; i >= 0; i--) restores[i]?.();
+  };
+}
+
+// ─── Profile detail embeds ──────────────────────────────────────────
+// ["/api/profiles", id, "detail"] is a ProfileDetail (shared/schema.ts): the
+// profile row plus its embedded lists — relatedTasks, relatedTrackers,
+// relatedHabits, relatedExpenses, ... The profile page renders those embeds,
+// so an optimistic patch has to write THOSE fields. Several mutations wrote
+// `tasks` / `trackers` instead (fields that don't exist on the payload), so
+// the optimistic update never showed and the rollback restored an unchanged
+// object (audit 2026-09-02 item 1). One helper, one field name.
+export type ProfileDetailListField =
+  | "relatedTasks" | "relatedTrackers" | "relatedHabits" | "relatedExpenses"
+  | "relatedEvents" | "relatedDocuments" | "relatedObligations" | "childProfiles";
+
+export function profileDetailKey(profileId: string): unknown[] {
+  return ["/api/profiles", profileId, "detail"];
+}
+
+/**
+ * Patch one embedded list on the cached ProfileDetail. Returns a restore
+ * function; a no-op when nothing is cached or the embed is missing.
+ */
+export function patchProfileDetailList<TItem = any>(
+  profileId: string,
+  field: ProfileDetailListField,
+  updater: (items: TItem[]) => TItem[],
+): () => void {
+  return patchQueries(profileDetailKey(profileId), (old: any) => {
+    if (!old || !Array.isArray(old[field])) return undefined;
+    const next = updater(old[field] as TItem[]);
+    return next === old[field] ? undefined : { ...old, [field]: next };
+  });
+}
+
+// ─── Dashboard upcoming bills ───────────────────────────────────────
+// The dashboard's Bills section and the Now queue both render
+// enhanced.financeSnapshot.upcomingBills (every scoped variant of
+// ["/api/dashboard-enhanced", ...]). "Mark paid" must drop the row THERE —
+// the /api/obligations entity lists still hold the obligation (it is live; it
+// just advanced to its next due date), so removing it from those is wrong for
+// every other consumer. Returns a restore function for rollback.
+export function dropUpcomingBillFromDashboard(billId: string): () => void {
+  return patchQueries(["/api/dashboard-enhanced"], (old: any) => {
+    const bills = old?.financeSnapshot?.upcomingBills;
+    if (!Array.isArray(bills)) return undefined;
+    const next = bills.filter((b: any) => b?.id !== billId);
+    if (next.length === bills.length) return undefined;
+    return { ...old, financeSnapshot: { ...old.financeSnapshot, upcomingBills: next } };
+  });
 }
 
 // ─── optimisticBust ─────────────────────────────────────────────────

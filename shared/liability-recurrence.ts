@@ -40,6 +40,65 @@ export function billRecurrenceRule(frequency?: string | null): RecurrenceRule {
   return { freq, interval, unit, until: undefined, count: undefined, done: 0, paused: false };
 }
 
+/**
+ * The day-of-month a monthly/yearly bill is pinned to.
+ *
+ * A bill due on the 31st advances to Feb 28 (the month is short), and that
+ * clamped date is what gets STORED as the next due date. Advancing again from
+ * the stored date without an anchor gave Mar 28, then Apr 28: one payment on a
+ * short month silently turned a "due on the 31st" bill into a "due on the
+ * 28th" bill, while the calendar — generated from `firstPaymentDate` with the
+ * anchor intact — kept saying the 31st. See shared/date-math.ts.
+ *
+ * The anchor is the current due date's own day, except when that day is the
+ * LAST day of its month and the series origin (`firstPaymentDate`, which the
+ * storage writes on create and on every explicit due-date edit) names a later
+ * day: a month-end date is the only thing clamping ever produces, so that is
+ * the one case where the stored day is not the user's intent.
+ */
+export function liabilityAnchorDay(fields: any, currentISO: string): number | undefined {
+  const cur = String(currentISO || "").slice(0, 10);
+  const m = cur.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return undefined;
+  const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+  if (!(day >= 1 && day <= 31)) return undefined;
+  const lastOfMonth = new Date(year, month, 0).getDate();
+  if (day < lastOfMonth) return day;
+  const f = fields || {};
+  const origin = String(f.firstPaymentDate ?? f.first_payment_date ?? "").slice(0, 10);
+  const om = origin.match(/^\d{4}-\d{2}-(\d{2})$/);
+  const originDay = om ? Number(om[1]) : NaN;
+  return originDay > day && originDay <= 31 ? originDay : day;
+}
+
+/**
+ * The field patch that moves a bill to its next occurrence after `occDate`
+ * was paid or skipped. Every entry point that advances a stored due date
+ * applies THIS, so they all pin the series origin the same way: a bill that
+ * never had a `firstPaymentDate` gets the occurrence just settled as its
+ * origin — the last date known to carry the user's intended day-of-month —
+ * before the clamped next date is written over `dueDate`.
+ */
+/** True for a bill that happens exactly once (no next occurrence to advance to). */
+export function isOneTimeFrequency(frequency?: string | null): boolean {
+  const s = String(frequency ?? "").trim().toLowerCase();
+  return s === "once" || s === "one-time" || s === "one_time" || s === "onetime" || s === "one time" || s === "single";
+}
+
+export function advanceLiabilityDueDatePatch(
+  fields: any,
+  occDate: string,
+): { dueDate: string; nextDueDate: string; firstPaymentDate?: string } {
+  const f = fields || {};
+  const next = advanceLiabilityDueDate(f, occDate);
+  const patch: { dueDate: string; nextDueDate: string; firstPaymentDate?: string } = { dueDate: next, nextDueDate: next };
+  const origin = String(f.firstPaymentDate ?? f.first_payment_date ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(origin) && /^\d{4}-\d{2}-\d{2}$/.test(String(occDate || "").slice(0, 10))) {
+    patch.firstPaymentDate = String(occDate).slice(0, 10);
+  }
+  return patch;
+}
+
 /** Read the current next-due date from a liability's fields (YYYY-MM-DD or ""). */
 export function readDueDate(fields: any): string {
   const f = fields || {};
@@ -53,16 +112,33 @@ export function readDueDate(fields: any): string {
  * date is always in the future.
  */
 export function advanceLiabilityDueDate(fields: any, todayISO: string): string {
-  const rule = billRecurrenceRule((fields || {}).frequency ?? (fields || {}).billingFrequency);
   const current = readDueDate(fields);
+  // A one-time bill has nothing to advance to. The generic rule read "once"
+  // as a daily cadence, so paying a deposit moved its due date to tomorrow —
+  // one day past the paid stamp — and it stayed "upcoming" forever.
+  if (isOneTimeFrequency((fields || {}).frequency ?? (fields || {}).billingFrequency)) return current;
+  const rule = billRecurrenceRule((fields || {}).frequency ?? (fields || {}).billingFrequency);
   const base = current && current >= todayISO ? current : (current || todayISO);
+  rule.anchorDay = liabilityAnchorDay(fields, base);
   let next = advance(base, rule);
   // If advancing one cycle from a stale past date still lands in the past,
-  // keep rolling until the next due date is today or later.
+  // keep rolling until the next due date is today or later. An occurrence the
+  // user already settled (paid early from the calendar, or skipped) is not
+  // "next due" either: landing on it left the bill stuck — every later
+  // "Mark paid" hit the paid stamp and answered as a duplicate, and the
+  // reminder named a date that was already paid.
   let guard = 0;
-  while (next < todayISO && guard < 240) {
+  while ((next < todayISO || isSettledOccurrence(fields, next)) && guard < 240) {
     next = advance(next, rule);
     guard++;
   }
   return next;
+}
+
+/** Has this series date already been paid or skipped via a per-occurrence override? */
+export function isSettledOccurrence(fields: any, dateISO: string): boolean {
+  const occ = (fields || {}).occurrences;
+  if (!occ || typeof occ !== "object") return false;
+  const status = occ[String(dateISO || "").slice(0, 10)]?.status;
+  return status === "paid" || status === "skipped";
 }

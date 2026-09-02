@@ -25,9 +25,18 @@ export interface UpcomingBillCheckInput {
  * neither the upcoming-bill list nor the monthly-obligations total. ONE rule
  * for both, so the KPI tile and the popup never disagree.
  */
-export function isActiveObligation(o: { status?: string | null } | null | undefined): boolean {
+export function isActiveObligation(
+  o: { status?: string | null; nextDueDate?: string | Date | null; recurrenceEnd?: string | null } | null | undefined,
+): boolean {
   const s = o?.status;
-  return s !== "paused" && s !== "cancelled";
+  if (s === "paused" || s === "cancelled") return false;
+  // A finite series whose next occurrence falls after its end date has no
+  // occurrence left: the calendar already drew nothing for it, but the bills
+  // list and the monthly total still counted it.
+  const end = typeof o?.recurrenceEnd === "string" ? o.recurrenceEnd.slice(0, 10) : "";
+  const next = typeof o?.nextDueDate === "string" ? o.nextDueDate.slice(0, 10) : o?.nextDueDate instanceof Date ? o.nextDueDate.toISOString().slice(0, 10) : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(end) && /^\d{4}-\d{2}-\d{2}$/.test(next) && next > end) return false;
+  return true;
 }
 
 /**
@@ -112,4 +121,37 @@ export function toMonthlyAmount(amount: number | string, frequency?: string | nu
       // Unknown / custom — treat as already monthly.
       return n;
   }
+}
+
+/**
+ * The monthly-equivalent total of a set of incomes. ONE definition: the hero
+ * cash-flow tile, the executive overview and the Cash Flow popup used to add
+ * incomes at face value while the Finance tab converted them with
+ * toMonthlyAmount — a $2,600 biweekly paycheck read as $2,600 on one tile and
+ * $5,633 on the next, and the two cash-flow figures on one screen disagreed.
+ */
+export function sumMonthlyIncome(incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null }> | null | undefined): number {
+  let total = 0;
+  for (const i of incomes || []) total += toMonthlyAmount(Number(i?.amount) || 0, i?.frequency);
+  return total;
+}
+
+/**
+ * The monthly-equivalent income that existed in a given calendar month
+ * (`ym` = "YYYY-MM"). An income's `date` is its first pay day, so a paycheck
+ * first dated Aug 28 is not inflow for April; an income without a date counts
+ * in every month. The Cash Flow Trend used to paint today's income across all
+ * six months, so the months before a job started showed a full paycheck.
+ */
+export function sumMonthlyIncomeForMonth(
+  incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null; date?: string | null }> | null | undefined,
+  ym: string,
+): number {
+  let total = 0;
+  for (const i of incomes || []) {
+    const start = typeof i?.date === "string" && /^\d{4}-\d{2}/.test(i.date) ? i.date.slice(0, 7) : null;
+    if (start && start > ym) continue;
+    total += toMonthlyAmount(Number(i?.amount) || 0, i?.frequency);
+  }
+  return total;
 }

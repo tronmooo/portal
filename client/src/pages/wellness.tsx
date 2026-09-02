@@ -13,6 +13,7 @@ import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { parseLocalDate } from "@/lib/format";
 import { invalidateDomain } from "@/lib/cache-bus";
+import { withFullLimit } from "@/lib/list-limit";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useToast } from "@/hooks/use-toast";
 import { HeartPulse, Plus } from "lucide-react";
@@ -70,7 +71,7 @@ export default function WellnessPage() {
   });
   const { data: habits = [] } = useQuery<any[]>({
     queryKey: ["/api/habits", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/habits${profileParam}`).then((r) => r.json()),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/habits${profileParam}`)).then((r) => r.json()),
   });
   const { data: stats } = useQuery<any>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
@@ -78,11 +79,11 @@ export default function WellnessPage() {
   });
   const { data: obligations = [] } = useQuery<Obligation[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then((r) => r.json()),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then((r) => r.json()),
   });
   const { data: events = [] } = useQuery<CalendarEvent[]>({
     queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/events${profileParam}`).then((r) => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/events${profileParam}`)).then((r) => r.json()).catch(() => []),
   });
   // BUG-20260709-wellness-doc-leak: the Wellness hub renders under the global
   // profile filter, but this read hit the bare /api/documents and `healthDocs`
@@ -92,7 +93,7 @@ export default function WellnessPage() {
   // fall through to the self profile only).
   const { data: documents = [] } = useQuery<Doc[]>({
     queryKey: ["/api/documents", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/documents${profileParam}`).then((r) => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/documents${profileParam}`)).then((r) => r.json()).catch(() => []),
   });
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],

@@ -217,3 +217,98 @@ describe("payBillOccurrence — full canonical side-effect set", () => {
     expect(out.reason).toBe("not_liability");
   });
 });
+
+// D91 — the due-scan cron's "Bill due: <name>" reminder task (linked to the
+// bill) stayed open after the bill was paid, so a paid bill still showed as
+// an overdue task on the Tasks page and the dashboard.
+describe("payBillOccurrence — closes the bill's reminder tasks", () => {
+  function withTasks(storage: any, tasks: any[]) {
+    storage.tasks = tasks;
+    storage.getTasks = async () => tasks;
+    storage.updateTask = async (id: string, patch: any) => {
+      const t = tasks.find(x => x.id === id);
+      if (!t) return undefined;
+      Object.assign(t, patch);
+      storage.writes.push(["updateTask", id, patch]);
+      return t;
+    };
+    return storage;
+  }
+  it("marks done the reminder due on or before the paid occurrence and leaves later / other ones alone", async () => {
+    const storage = withTasks(fakeStorage([USAGE_BILL]), [
+      { id: "t-old", title: "Bill due: ChatGPT", status: "todo", dueDate: "2026-07-28", linkedProfiles: ["bill-1"] },
+      { id: "t-this", title: "Bill due: ChatGPT", status: "todo", dueDate: "2026-08-01", linkedProfiles: ["bill-1"] },
+      { id: "t-next", title: "Bill due: ChatGPT", status: "todo", dueDate: "2026-09-01", linkedProfiles: ["bill-1"] },
+      { id: "t-other", title: "Bill due: Rent", status: "todo", dueDate: "2026-08-01", linkedProfiles: ["bill-9"] },
+      { id: "t-plain", title: "Call the ChatGPT people", status: "todo", dueDate: "2026-08-01", linkedProfiles: ["bill-1"] },
+    ]);
+    const out = await payBillOccurrence(storage, "bill-1", { occurrenceDate: "2026-08-01", source: "route" }, "UTC");
+    expect(out.ok).toBe(true);
+    expect(out.steps).toContainEqual({ step: "reminder_tasks", ok: true });
+    const byId = Object.fromEntries(storage.tasks.map((t: any) => [t.id, t.status]));
+    expect(byId).toEqual({ "t-old": "done", "t-this": "done", "t-next": "todo", "t-other": "todo", "t-plain": "todo" });
+  });
+  it("a storage without tasks still pays", async () => {
+    const storage = fakeStorage([USAGE_BILL]);
+    const out = await payBillOccurrence(storage, "bill-1", { occurrenceDate: "2026-08-01", source: "route" }, "UTC");
+    expect(out.ok).toBe(true);
+    expect(out.steps.some(s => s.step === "reminder_tasks")).toBe(false);
+  });
+});
+
+describe("closeBillReminderTasksWhere — the due-scan's self-heal rule", () => {
+  it("closes reminders whose occurrence is paid/skipped or that the schedule rolled past", async () => {
+    const { closeBillReminderTasksWhere } = await import("../server/liability-payments");
+    const tasks = [
+      { id: "a", title: "Bill due: X", status: "todo", dueDate: "2026-08-30", linkedProfiles: ["bill-1"] }, // rolled past
+      { id: "b", title: "Bill due: X", status: "todo", dueDate: "2026-09-04", linkedProfiles: ["bill-1"] }, // paid occurrence
+      { id: "c", title: "Bill due: X", status: "todo", dueDate: "2026-10-04", linkedProfiles: ["bill-1"] }, // current, open
+      { id: "d", title: "Bill due: X", status: "done", dueDate: "2026-08-30", linkedProfiles: ["bill-1"] },
+    ];
+    const updates: any[] = [];
+    const storage: any = { getTasks: async () => tasks, updateTask: async (id: string, p: any) => { updates.push([id, p]); return {}; } };
+    const occ: any = { "2026-09-04": { status: "paid" } };
+    const due = "2026-10-04";
+    const n = await closeBillReminderTasksWhere(storage, "bill-1", (day) => occ[day]?.status === "paid" || occ[day]?.status === "skipped" || (!!day && day < due));
+    expect(n).toBe(2);
+    expect(updates.map(u => u[0]).sort()).toEqual(["a", "b"]);
+  });
+});
+
+// D100 — undoing a loan payment left the paying account short: only a
+// recurring bill's occurrence stamp named the account.
+import { unpayBillOccurrence, accountThatPaid } from "../server/liability-payments";
+import { applyBalanceAdjustment } from "../shared/finance-accounts";
+describe("unpayBillOccurrence — credits the account that paid a loan", () => {
+  function storageWithLedgeredAccounts(seed: any[]) {
+    const storage = fakeStorage(seed);
+    storage.getProfiles = async () => [...(storage as any)._profiles?.values?.() ?? []];
+    // real balance-history bookkeeping, like SupabaseStorage.adjustAccountBalance
+    storage.adjustAccountBalance = async (id: string, input: any) => {
+      const p = await storage.getProfile(id);
+      if (!p) return undefined;
+      const { fields } = applyBalanceAdjustment(p, input, "2026-09-02");
+      await storage.updateProfile(id, { fields });
+      storage.writes.push(["adjustAccountBalance", id, input]);
+      return storage.getProfile(id);
+    };
+    return storage;
+  }
+  it("restores the checking balance and never credits twice", async () => {
+    const storage = storageWithLedgeredAccounts([CAR_LOAN, CHECKING]);
+    // fakeStorage keeps profiles in a closure; expose them for getProfiles
+    const all = async () => [await storage.getProfile("loan-1"), await storage.getProfile("acct-1")];
+    storage.getProfiles = all;
+    const paid = await payBillOccurrence(storage, "loan-1", { amount: 400, accountId: "acct-1", source: "route" }, "UTC");
+    expect(paid.ok).toBe(true);
+    expect((await storage.getProfile("acct-1")).fields.balance).toBe(600);
+    expect(await accountThatPaid(storage, paid.payment.id)).toBe("acct-1");
+    const undone = await unpayBillOccurrence(storage, "loan-1", { paymentId: paid.payment.id, source: "route" }, "UTC");
+    expect(undone.ok).toBe(true);
+    expect(undone.accountCredited).toBe(true);
+    expect((await storage.getProfile("acct-1")).fields.balance).toBe(1000);
+    expect((await storage.getProfile("loan-1")).fields.currentBalance).toBe(10_000);
+    // a second look-up sees the reversal and finds nothing to credit
+    expect(await accountThatPaid(storage, paid.payment.id)).toBeNull();
+  });
+});

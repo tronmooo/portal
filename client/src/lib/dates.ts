@@ -119,6 +119,24 @@ export function formatStoredDate(input: unknown): string {
 }
 
 /**
+ * Render a stored date with `toLocaleDateString` options, WITHOUT the UTC
+ * rollback. `new Date("2026-09-02").toLocaleDateString()` shows "9/1/2026" for
+ * every negative-offset user because a bare date parses as UTC midnight; this
+ * routes through parseDate (local noon for date-only strings, normal parsing
+ * for timestamps) so the day the row carries is the day that renders.
+ * Returns "" when the input is unparseable.
+ */
+export function formatLocalDate(
+  input: unknown,
+  options?: Intl.DateTimeFormatOptions,
+  locale?: string,
+): string {
+  const d = parseDate(input);
+  if (!d) return "";
+  return d.toLocaleDateString(locale, options);
+}
+
+/**
  * How far out a date may plausibly be before a form should say something.
  * A due date a century away is a typo far more often than a plan (EDGE-004
  * entered 12/31/2126 and it saved without a murmur).
@@ -146,4 +164,23 @@ export function relativeDayLabel(input: unknown): string {
   if (diff < -1 && diff >= -7) return `${Math.abs(diff)}d ago`;
   const d = parseDate(input)!;
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/**
+ * Today's calendar date in the BROWSER's zone, as YYYY-MM-DD.
+ *
+ * `new Date().toISOString().slice(0, 10)` is the UTC date, which for every
+ * negative-offset user is TOMORROW from late afternoon onward — an expense
+ * dialog opened at 8 pm in Los Angeles defaulted to tomorrow's date, a payment
+ * recorded that evening posted a day late. Use this for form defaults.
+ */
+export function localTodayISO(): string {
+  return new Date().toLocaleDateString("en-CA");
+}
+
+/** Today plus `n` calendar days, in the browser's zone, as YYYY-MM-DD. */
+export function localDaysFromNowISO(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return d.toLocaleDateString("en-CA");
 }

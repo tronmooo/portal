@@ -16,8 +16,34 @@ import type { IStorage } from "./storage";
 import { setOwners } from "./ownership-writer";
 import { OWNERSHIP_TABLES, type OwnedEntityType } from "../shared/ownership";
 import { selfIdsFrom } from "../shared/scope";
+import { journalStorageCall, writeJournalContext } from "./write-journal";
 
-const norm = (s: any) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+/**
+ * Tell the caches what a merge did. The merge writes raw supabase rows
+ * (setOwners, profiles.update) that the storage proxy's write journal never
+ * sees, so before this only the ai_bulk_plans/ai_action_log bookkeeping was
+ * recorded — the "dashboard" domain — and every shared response cache
+ * (expenses:, tasks:, trackers:, caltimeline:, …) kept serving the pre-merge
+ * ownership. A merge touches every owned table, so it is reported to the
+ * request's journal as `mergeProfiles` (→ "everything", see
+ * shared/storage-domains STORAGE_METHOD_TARGETS), which both bumps the
+ * account-wide epoch and puts "everything" in the client manifest. Outside a
+ * request (no journal — a script, a cron job) the epoch is bumped directly.
+ */
+async function reportMergeWrite(storage: IStorage, method: "mergeProfiles" | "unmergeProfiles", args: unknown[], result: unknown): Promise<void> {
+  if (writeJournalContext.getStore()) {
+    journalStorageCall(method, args, result);
+    return;
+  }
+  try {
+    const s = storage as any;
+    // An empty domain list is the RPC's "move the epoch" (bumpDataVersionNow).
+    if (typeof s.bumpDataVersions === "function") await s.bumpDataVersions([]);
+    else if (typeof s.bumpDataVersion === "function") await s.bumpDataVersion();
+  } catch { /* best effort — the next request resolves versions from the DB */ }
+}
+
+const norm =(s: any) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 
 // Entity lists that carry linkedProfiles, keyed by OWNERSHIP_TABLES type.
 const LIST_BY_TYPE: Record<OwnedEntityType, (s: IStorage) => Promise<any[]>> = {
@@ -202,6 +228,9 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
     });
   } catch { /* ledger is best-effort */ }
 
+  // Ownership moved on every affected table — invalidate everything.
+  await reportMergeWrite(storage, "mergeProfiles", [source_id, target_id], { id: target_id, relinked, childrenMoved });
+
   return {
     executed: true,
     merged: { relinked, children_moved: childrenMoved, fields_filled: filledFields },
@@ -238,6 +267,9 @@ export async function reverseMerge(storage: IStorage, reversePlan: { source_id: 
     await sb.from("profiles").update({ parent_profile_id: reversePlan.source_id })
       .eq("id", childId).eq("user_id", userId);
   }
+
+  // Same fan-out as the merge itself: every owned table moved back.
+  await reportMergeWrite(storage, "unmergeProfiles", [reversePlan.source_id, reversePlan.target_id], { id: reversePlan.source_id, relinked });
 
   return {
     ok: failed === 0,

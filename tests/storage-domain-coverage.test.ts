@@ -5,6 +5,7 @@ import {
   parseStorageMethod,
   targetForStorageMethod,
   STORAGE_NOUN_TARGETS,
+  STORAGE_METHOD_TARGETS,
   STORAGE_INFRA_METHODS,
 } from "@shared/storage-domains";
 import type { Domain } from "@shared/entity-domains";
@@ -118,6 +119,29 @@ describe("storage method → domain coverage", () => {
     for (const name of ["getProfiles", "getStats", "getDashboardEnhanced", "getLiabilityPayments"]) {
       expect(targetForStorageMethod(name), name).toBeNull();
     }
+  });
+
+  it("maps every cross-table cascade to everything (method-level override)", () => {
+    // deleteProfile's RPC cascade soft-deletes rows in expenses, tasks, habits,
+    // trackers, events, documents, goals, incomes, journal and artifacts. The
+    // noun rule ("Profile") bumped only the profile domains, so the shared
+    // response caches built from those tables (expenses:, trackers:,
+    // obligations:, incomes:, caltimeline:, stats:, enhanced:) kept serving
+    // the pre-delete lists. Same for anything that delegates to it or fans
+    // out across tables the way a merge does.
+    for (const name of ["deleteProfile", "deleteObligation", "mergeProfiles", "unmergeProfiles"]) {
+      expect(targetForStorageMethod(name)!.domains, name).toEqual(["everything"]);
+    }
+    // Overrides are method names with a write verb, and they too only name
+    // domains the bus can invalidate.
+    const known = busDomains();
+    for (const [name, target] of Object.entries(STORAGE_METHOD_TARGETS)) {
+      expect(parseStorageMethod(name), name).not.toBeNull();
+      for (const d of target.domains as Domain[]) expect(known.has(d), `${name} → ${d}`).toBe(true);
+      if (target.endpoint != null) expect(target.endpoint, name).toMatch(/^\/api\/[a-z-]+$/);
+    }
+    // A plain profile edit still moves only the profile domains.
+    expect(targetForStorageMethod("updateProfile")!.domains).not.toContain("everything");
   });
 
   it("routes a liability write into every domain that renders one", () => {

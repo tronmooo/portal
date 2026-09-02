@@ -113,7 +113,8 @@ import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTim
 import { payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
-import { groupMaterializedSeries } from "@shared/series-detect";
+import { groupMaterializedSeries, stemKey } from "@shared/series-detect";
+import { expenseAttributionName } from "@shared/expense-attribution";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
@@ -951,9 +952,28 @@ function safeMatchEntity<T extends { id: string }>(
 
   const eligible = opts?.filter ? items.filter(opts.filter) : items;
 
-  // 1. Exact match
-  const exact = eligible.find(item => getField(item).toLowerCase().trim() === search);
-  if (exact) return { match: exact };
+  // 1. Exact match. Several rows can share a title — the user's and a family
+  // member's "Take Vitamins", or a completed chore and the occurrence its
+  // completion spawned. A finished row yields to a live one; beyond that a
+  // destructive op asks rather than deleting whichever sorted first.
+  const exacts = eligible.filter(item => getField(item).toLowerCase().trim() === search);
+  if (exacts.length === 1) return { match: exacts[0] };
+  if (exacts.length > 1) {
+    const settled = (item: any) => {
+      const st = String(item?.status || "").toLowerCase();
+      return st === "done" || st === "completed" || st === "cancelled";
+    };
+    const live = exacts.filter(item => !settled(item));
+    if (live.length === 1) return { match: live[0] };
+    const pool = live.length > 0 ? live : exacts;
+    if (opts?.isDestructive) {
+      return {
+        error: `Multiple matches for "${searchText}". Please be more specific.`,
+        candidates: pool.slice(0, 5).map(item => ({ id: item.id, name: getField(item) })),
+      };
+    }
+    return { match: pool[0] };
+  }
 
   // 2. Starts-with match
   const startsWith = eligible.filter(item => getField(item).toLowerCase().trim().startsWith(search));
@@ -1354,7 +1374,15 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
   // events; habits only move on explicit language like "mark off").
   const habitCheckinMatch = lower.match(/^(?:done|did|completed?|checked?\s*in|✓|✅)\s+(.+)/)
     || lower.match(/^(?:mark|check)\s+off\s+(?:my\s+|that\s+(?:i\s+)?)?(.+?)(?:\s+(?:habit|today|for today|on my (?:habits?|list)))?$/);
-  if (habitCheckinMatch) {
+  // A question ("did I walk the dog today?"), a first-person report ("did I
+  // …" / "did we …") or a quantity ("did 20 pushups") is not an explicit
+  // check-in: the model lane has the vetoes and the tracker for those.
+  const habitLaneVetoed = !!habitCheckinMatch && (
+    /\?\s*$/.test(lower)
+    || /^(?:did|done|completed?)\s+(?:i|we|you|he|she|they)\b/.test(lower)
+    || /^\d/.test(habitCheckinMatch[1].trim())
+  );
+  if (habitCheckinMatch && !habitLaneVetoed) {
     const habitName = habitCheckinMatch[1].trim();
     const habits = await storage.getHabits();
     // Never check in ANOTHER profile's habit from an unqualified message —
@@ -1413,6 +1441,12 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
       const names = new Set(weightTrackers.map(t => t.name.trim().toLowerCase()));
       if (names.size > 1) return { matched: false, reply: "", actions: [], results: [] };
       const { weight } = parsed;
+      // The reply and the BMI must speak the tracker's own unit: a kg tracker
+      // used to be answered "Logged weight: 80 lbs" with a BMI computed from
+      // the pounds formula on a kilogram value.
+      const weightUnit = String(weightTrackers[0]?.fields?.find?.((f: any) => /weight/i.test(String(f?.name || "")))?.unit || weightTrackers[0]?.unit || "lbs").toLowerCase();
+      const weightIsKg = /^(kg|kgs|kilograms?)$/.test(weightUnit);
+      const weightLbs = weightIsKg ? weight * 2.2046226218 : weight;
       const q = await quickLogEntry(weightTrackers[0]?.name || "Weight", { weight }, message, "health", userId);
       if (q) {
         actions.push(q.action);
@@ -1456,12 +1490,12 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
           })();
           if (heightInches) {
             // BMI = (weight_lbs / height_in^2) * 703
-            bmi = Math.round(((weight / (heightInches * heightInches)) * 703) * 10) / 10;
+            bmi = Math.round(((weightLbs / (heightInches * heightInches)) * 703) * 10) / 10;
           }
         } catch { /* non-fatal */ }
         return {
           matched: true,
-          reply: `Logged weight: ${weight} lbs${bmi ? ` (BMI: ${bmi})` : ""}`,
+          reply: `Logged weight: ${weight} ${weightIsKg ? "kg" : weightUnit}${bmi ? ` (BMI: ${bmi})` : ""}`,
           actions, results,
           ...(q.mutation ? { mutations: [q.mutation] } : {}),
         };
@@ -6906,6 +6940,20 @@ function profileWeightKg(p: any): number | null {
   return parseWeightToKg(f.weight ?? f.weightLbs ?? f.weight_lbs ?? f.weightKg);
 }
 
+/**
+ * The entries in a tracker that belong to one person. Entries carry the
+ * profile they were logged for (`profileId`; null = the tracker's own owner).
+ * When the tracker's entries all belong to one person the list is returned
+ * whole, so a single-owner tracker behaves exactly as before.
+ */
+function entriesForPerson<T extends { profileId?: string | null }>(entries: T[], profileId: string | undefined): T[] {
+  const owners = new Set(entries.map((e) => e.profileId || ""));
+  if (owners.size <= 1) return entries;
+  const mine = entries.filter((e) => (e.profileId || "") === (profileId || ""));
+  // Legacy rows logged before entries carried an owner count as the owner's.
+  return mine.length > 0 ? mine : entries.filter((e) => !e.profileId);
+}
+
 function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: any): T | undefined {
   const result = resolveProfileByName(profiles, rawName);
   if (result.kind === "found") return result.profile;
@@ -7987,8 +8035,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const taskForProfile = await resolveForProfile(input.forProfile, input.title || "");
       if (taskForProfile) {
         const profiles = await storage.getProfiles();
-        const target = profiles.find(p => p.name.toLowerCase() === safeLC(taskForProfile).trim())
-          || profiles.find(p => p.name.toLowerCase().includes(safeLC(taskForProfile).trim()));
+        const target = matchProfileByName(profiles, taskForProfile);
         if (target) taskLinkedProfiles.push(target.id);
       }
 
@@ -8162,7 +8209,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
               name: habitHit[0].name,
               __userMessage: `mark habit ${habitHit[0].name} done`,
             }, userId);
-            return { resolvedAs: "habit", habitName: habitHit[0].name, ...(checkin || {}) };
+            // The row this call wrote is a HABIT check-in, not a task: tell the
+            // envelope which table to read back, or it looks the habit id up
+            // among tasks, finds nothing, and reports "Nothing was saved".
+            return { resolvedAs: "habit", habitName: habitHit[0].name, ...(checkin || {}), _verify: { type: "habit", id: habitHit[0].id } };
           }
           if (habitHit.length > 1) {
             return {
@@ -8254,8 +8304,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         return { error: result.error || "Task not found", candidates: result.candidates };
       }
 
+      // A row in a materialized series: delete the WHOLE series when the user
+      // named the schedule ("my Propranolol refill"), but only this row when
+      // they named one occurrence ("the September refill") — the words that
+      // single out one row are exactly the ones the series stem drops.
       const matchedSeries = seriesContaining(result.match.id);
-      if (matchedSeries && matchedSeries.rows.length > 1) return deleteWholeSeries(matchedSeries);
+      if (matchedSeries && matchedSeries.rows.length > 1) {
+        const plain = (t: unknown) => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+        const stem = stemKey(matchedSeries.stem);
+        // The row is one occurrence when its own title carries a qualifier the
+        // stem lacks AND the user's words carried it too (a bare "Propranolol
+        // refill" is the schedule even though it resolved to one row).
+        const namesOneOccurrence = plain(result.match.title) !== stem && plain(input.title) !== stem;
+        if (!namesOneOccurrence) return deleteWholeSeries(matchedSeries);
+      }
 
       await storage.deleteTask(result.match.id);
       return { deleted: true, title: result.match.title, id: result.match.id };
@@ -8634,7 +8696,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         });
         if (recentDup) {
           logger.info("ai", `Skipped duplicate ${tracker.name} entry (matches ${recentDup.id.slice(0,8)})`);
-          return recentDup;
+          // Flagged, so the recap says "already logged just now" and the
+          // undo ledger does not point at the ORIGINAL entry as if it were
+          // this turn's write.
+          return { ...recentDup, deduped: true, message: `An identical ${tracker.name} entry was logged moments ago — I kept that one and didn't log it twice. If this was a second, separate entry, say so and I'll add it.` };
         }
         // Normalize the AI-supplied values to the tracker's schema:
         //  - rename unknown fields via alias/single-numeric fallback
@@ -8762,6 +8827,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           }, userId);
           if (diverted && !(diverted as any).error) {
             (diverted as any).__divertedFromTracker = input.trackerName;
+            // The write is an EXPENSE row; verification keyed off the tool
+            // name (log_tracker_entry) would look it up among tracker
+            // entries and report the saved expense as "not saved".
+            if (typeof (diverted as any).id === "string") {
+              (diverted as any)._verify = { type: "expense", id: (diverted as any).id };
+            }
           }
           return diverted;
         }
@@ -10144,18 +10215,8 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (isDuplicateCreation(dedupUser, expDedupKey)) {
         logger.info("ai", `Dedup lock hit for expense $${parsedAmount} ${input.description} — deferring to the live duplicate check`);
       }
-      // Dedup: check if same amount + similar description was created in last 2 minutes
-      const allExpenses = await storage.getExpenses();
-      const twoMinAgoExp = Date.now() - 120000;
-      const dupExpense = allExpenses.find(e => {
-        if (new Date(e.createdAt).getTime() < twoMinAgoExp) return false;
-        return e.amount === parsedAmount &&
-          e.description.toLowerCase().includes((input.description || "").toLowerCase().slice(0, 20));
-      });
-      if (dupExpense) {
-        logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
-        return { ...dupExpense, deduped: true, message: `An identical expense from the last few minutes already exists ($${dupExpense.amount} ${dupExpense.description}) — I didn't log it twice.` };
-      }
+      // (The live duplicate check runs below, once the owner and date are
+      // known — "Sarah and I each paid $15 for lunch" is two expenses.)
       // Server-side category inference fallback when AI sends 'general'
       let inferredCategory = input.category || "general";
       if (inferredCategory === "general") {
@@ -10223,22 +10284,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // NON-self profile, attribute to that profile. Requiring an existing
       // profile match keeps this from ever inventing an owner.
       if (expenseLinkedProfiles.length === 0) {
-        const rawMsg = String((input as any).__userMessage || "");
-        const amtStr = String(parsedAmount).replace(/\.0+$/, "");
-        const idx = rawMsg.indexOf(amtStr);
-        if (idx >= 0) {
-          const window = rawMsg.slice(idx, idx + 70);
-          const m = window.match(/\bfor\s+([A-Z][a-zA-Z'’.-]+(?:\s+[A-Z][a-zA-Z'’.-]+)?)/);
-          if (m) {
-            const cand = m[1].trim().toLowerCase();
-            const profiles2 = await storage.getProfiles();
-            const candRe = new RegExp(`(^|\\b)${cand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\b|$)`);
-            const target2 = profiles2.find(p => p.type !== "self" && p.name.toLowerCase() === cand)
-              || profiles2.find(p => p.type !== "self" && candRe.test(p.name.toLowerCase()));
-            if (target2) {
-              expenseLinkedProfiles.push(target2.id);
-              logger.info("ai", `Attribution safety net: recovered forProfile "${target2.name}" for $${parsedAmount} expense from message context`);
-            }
+        // The name must come from the clause that carries THIS amount as a
+        // money token (shared/expense-attribution.ts) — "$5 on coffee and $50
+        // on groceries for Mom" used to put the coffee on Mom.
+        const candName = expenseAttributionName(String((input as any).__userMessage || ""), parsedAmount);
+        if (candName) {
+          const cand = candName.toLowerCase();
+          const profiles2 = await storage.getProfiles();
+          const candRe = new RegExp(`(^|\\b)${cand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\b|$)`);
+          const target2 = profiles2.find(p => p.type !== "self" && p.name.toLowerCase() === cand)
+            || profiles2.find(p => p.type !== "self" && candRe.test(p.name.toLowerCase()));
+          if (target2) {
+            expenseLinkedProfiles.push(target2.id);
+            logger.info("ai", `Attribution safety net: recovered forProfile "${target2.name}" for $${parsedAmount} expense from message context`);
           }
         }
       }
@@ -10248,12 +10306,31 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // calling into the AI engine; falling back to LA preserves the old
       // behavior if for some reason the header was missing.
       const userTz = (storage as any)._timezone || 'America/Los_Angeles';
+      const expenseDate = String(input.date || new Date().toLocaleDateString('en-CA', { timeZone: userTz })).slice(0, 10);
+      // Dedup: the SAME expense created in the last 2 minutes — same amount,
+      // similar description, same owner and same date. Owner and date used to
+      // be ignored, so the second of two people's identical lunches, or
+      // yesterday's $20 lunch followed by today's, was "already logged".
+      const allExpenses = await storage.getExpenses();
+      const twoMinAgoExp = Date.now() - 120000;
+      const wantedOwner = expenseLinkedProfiles[0] || "";
+      const dupExpense = allExpenses.find(e => {
+        if (new Date(e.createdAt).getTime() < twoMinAgoExp) return false;
+        if (e.amount !== parsedAmount) return false;
+        if (!e.description.toLowerCase().includes((input.description || "").toLowerCase().slice(0, 20))) return false;
+        if (String(e.date || "").slice(0, 10) !== expenseDate) return false;
+        return ((e.linkedProfiles || [])[0] || "") === wantedOwner;
+      });
+      if (dupExpense) {
+        logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
+        return { ...dupExpense, deduped: true, message: `An identical expense from the last few minutes already exists ($${dupExpense.amount} ${dupExpense.description}) — I didn't log it twice.` };
+      }
       // P0.3a: validate with the shared insert schema before writing.
       const expensePayload = validateAiPayload(insertExpenseSchema, {
         amount: parsedAmount,
         category: inferredCategory,
         description: input.description || "Expense",
-        date: input.date || new Date().toLocaleDateString('en-CA', { timeZone: userTz }),
+        date: expenseDate,
         vendor: input.vendor,
         tags: input.tags || [],
         linkedProfiles: expenseLinkedProfiles,
@@ -10483,22 +10560,28 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (isDuplicateCreation(dedupUser, evtDedupKey)) {
         logger.info("ai", `Dedup lock hit for event "${input.title}" on ${input.date} — deferring to the live duplicate check`);
       }
-      // Dedup: skip if a very similar event exists on the same date
-      const allEvents = await storage.getEvents();
-      const dupEvent = allEvents.find(e =>
-        e.title.toLowerCase() === safeLC(input.title) &&
-        e.date === input.date
-      );
-      if (dupEvent) {
-        logger.info("ai", `Skipped duplicate event: "${dupEvent.title}" on ${dupEvent.date}`);
-        return dupEvent;
-      }
-      // Resolve target profile BEFORE creating the event
+      // Resolve target profile BEFORE the duplicate check — two people can
+      // each have a "dentist appointment" on the same day.
       let eventLinkedProfiles: string[] = [];
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
         const target = matchProfileByName(profiles, input.forProfile);
         if (target) eventLinkedProfiles.push(target.id);
+      }
+      // Dedup: skip if the SAME event exists — same title, date, owner and
+      // clock time. Sarah's 9 am dentist is not the user's 3 pm one.
+      const allEvents = await storage.getEvents();
+      const wantedTime = normalizeClockTime(input.time) || "";
+      const dupEvent = allEvents.find(e => {
+        if (e.title.toLowerCase() !== safeLC(input.title) || e.date !== input.date) return false;
+        const owner = (e.linkedProfiles || [])[0] || "";
+        if (owner !== (eventLinkedProfiles[0] || "")) return false;
+        const existingTime = normalizeClockTime((e as any).time) || "";
+        return !existingTime || !wantedTime || existingTime === wantedTime;
+      });
+      if (dupEvent) {
+        logger.info("ai", `Skipped duplicate event: "${dupEvent.title}" on ${dupEvent.date}`);
+        return { ...dupEvent, deduped: true, message: `"${dupEvent.title}" on ${dupEvent.date} already exists — I didn't add it twice.` };
       }
       // Bug #42: when AI omits forProfile for a medical-looking event, try to
       // pull the doctor/dentist/therapist name out of the title/description and
@@ -10885,7 +10968,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
               title: taskHit[0].name,
               __userMessage: `mark task ${taskHit[0].name} done`,
             }, userId);
-            return { resolvedAs: "task", taskTitle: taskHit[0].name, ...(done || {}) };
+            return { resolvedAs: "task", taskTitle: taskHit[0].name, ...(done || {}), _verify: { type: "task", id: taskHit[0].id } };
           }
           const hint = crossKindHint(resolved, "habit");
           if (hint) {
@@ -10990,9 +11073,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       let oblForProfile = input.forProfile;
       if (!oblForProfile) {
         const allProfiles = await storage.getProfiles();
+        // A whole-word mention only: "Allstate insurance" is not Al's.
         for (const p of allProfiles) {
           if (p.type === 'self') continue;
-          if ((input.name || '').toLowerCase().includes(p.name.toLowerCase())) {
+          const pn = String(p.name || '').trim();
+          if (pn.length < 2) continue;
+          const re = new RegExp(`(^|[^\\p{L}\\p{N}])${pn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[^\\p{L}\\p{N}])`, 'iu');
+          if (re.test(String(input.name || ''))) {
             oblForProfile = p.name;
             break;
           }
@@ -11073,7 +11160,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       let inferredDueDate: string | undefined;
       let dueDateInferenceNote: string | undefined;
       if (!input.nextDueDate && (normalizedFrequency === "monthly" || normalizedFrequency === "yearly" || normalizedFrequency === "quarterly")) {
-        const today = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+        const today = new Date(new Date().toLocaleString("en-US", { timeZone: aiUserTimezone() }));
         const dueDay = today.getDate();
         const periodMonths = normalizedFrequency === "monthly" ? 1 : normalizedFrequency === "quarterly" ? 3 : 12;
         const ty = today.getFullYear();
@@ -11091,7 +11178,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // PR AB: recurrenceEnd is forwarded when the AI passes it (e.g. user
       // said "for the next year" → today + 12 months). materializeOccurrences
       // honors recurrence_end and stops expanding past that date.
-      const resolvedDue = input.nextDueDate || inferredDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const resolvedDue = input.nextDueDate || inferredDueDate || new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
       // Finite term: "for 10 months / 10 payments / stops after the final one".
       const finiteCount = input.count != null ? Math.max(1, parseInt(String(input.count), 10) || 0) : undefined;
       const reminderLead = input.reminderLeadDays != null ? Math.max(0, parseInt(String(input.reminderLeadDays), 10) || 0) : undefined;
@@ -11156,8 +11243,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "pay_obligation": {
       const obligations = await storage.getObligations();
-      const ob = obligations.find(o => o.name.toLowerCase().includes((input.name || "").toLowerCase()));
-      if (!ob) return { error: "Obligation not found: " + (input.name || "unknown") };
+      // Money moves here: an ambiguous name ("the bill" with a phone bill and
+      // a water bill) is a question, never the first substring hit. An empty
+      // name used to match EVERY bill ("".includes("") is true) and pay the
+      // first one.
+      const obMatch = safeMatchEntity(obligations, input.name || "", o => o.name, { isDestructive: true });
+      if (!obMatch.match) return { error: obMatch.error || ("Obligation not found: " + (input.name || "unknown")), candidates: obMatch.candidates };
+      const ob = obMatch.match;
       // An explicit amount wins; otherwise leave it undefined so the pay operation
       // settles the month's REAL total (base + that month's usage charges). For
       // a usage-based bill `ob.amount` is only the base price, so defaulting to
@@ -11964,8 +12056,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "undo_last_payment": {
       const obligations = await storage.getObligations();
-      const match = obligations.find(o => o.name.toLowerCase().includes(safeLC(input.billName)));
-      if (!match) return { error: `No bill found matching "${input.billName}"` };
+      const ulpMatch = safeMatchEntity(obligations, input.billName || "", o => o.name, { isDestructive: true });
+      if (!ulpMatch.match) return { error: ulpMatch.error || `No bill found matching "${input.billName}"`, candidates: ulpMatch.candidates };
+      const match = ulpMatch.match;
       const payments = (match as any).payments || [];
       if (payments.length === 0) return { error: `${match.name} has no recorded payments to undo` };
       // Full inverse via the one operation — same semantics as
@@ -12199,7 +12292,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
                 ...(target.kind === "habit" ? { name: target.name } : { title: target.name }),
                 __userMessage: `mark ${target.kind} ${target.name} done`,
               }, userId);
-              return { resolvedAs: target.kind, name: target.name, ...(out || {}) };
+              return { resolvedAs: target.kind, name: target.name, ...(out || {}), _verify: { type: target.kind, id: target.id } };
             }
             return { error: `${crossKindHint(resolved, "event")} Act on that instead — do NOT create anything.`, code: "WRONG_ENTITY_KIND" };
           }
@@ -12226,7 +12319,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const dteResult = safeMatchEntity(trackerPool, input.trackerName || "", t => t.name);
       if (!dteResult.match) return { error: dteResult.error || "Tracker not found", candidates: dteResult.candidates };
       const tracker = dteResult.match;
-      const entries = tracker.entries || [];
+      // A shared tracker holds several people's entries; "delete my last
+      // entry" must pick from the named person's rows, not the newest of all.
+      const dteProfs = await storage.getProfiles();
+      const dteTarget = input.forProfile ? matchProfileByName(dteProfs, input.forProfile) : dteProfs.find(p => p.type === "self");
+      const entries = entriesForPerson(tracker.entries || [], dteTarget?.id);
       if (entries.length === 0) return { error: `Tracker "${tracker.name}" has no entries to delete.` };
       const idx = input.entryIndex ?? 0;
       const entry = entries[entries.length - 1 - idx]; // 0 = most recent
@@ -12257,7 +12354,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const uteResult = safeMatchEntity(trackerPool2, input.trackerName || "", t => t.name);
       if (!uteResult.match) return { error: uteResult.error || "Tracker not found", candidates: uteResult.candidates };
       const uTracker = uteResult.match;
-      const uEntries = uTracker.entries || [];
+      const uEntries = entriesForPerson(uTracker.entries || [], uteProfileId);
       if (uEntries.length === 0) return { error: `Tracker "${uTracker.name}" has no entries to update.` };
       const uIdx = input.entryIndex ?? 0;
       const uEntry = uEntries[uEntries.length - 1 - uIdx];
@@ -13097,9 +13194,14 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "update_income": {
       const incomes = await storage.getIncomes();
-      const needle = safeLC(input.description);
-      const match = incomes.find(i => safeLC(i.description).includes(needle));
-      if (!match) return { error: `No income found matching "${input.description}"`, candidates: incomes.slice(0, 5).map(i => i.description) };
+      const uiMatch = safeMatchEntity(incomes, input.description || "", i => i.description, { isDestructive: true });
+      if (!uiMatch.match) {
+        return {
+          error: uiMatch.error || `No income found matching "${input.description}"`,
+          candidates: uiMatch.candidates || incomes.slice(0, 5).map(i => ({ id: i.id, name: i.description })),
+        };
+      }
+      const match = uiMatch.match;
       const allowed = ["description", "amount", "frequency", "category", "date"] as const;
       const changes: Record<string, any> = {};
       for (const k of allowed) if (input.changes?.[k] !== undefined) changes[k] = input.changes[k];
@@ -14110,7 +14212,13 @@ async function syncHabitsForTrackerLog(
 async function autoUpdateGoalProgress(trackerId: string, values: Record<string, any>): Promise<void> {
   try {
     const goals = await storage.getGoals();
-    const linkedGoals = goals.filter(g => g.trackerId === trackerId && g.status === 'active');
+    // Goals whose progress is READ from the tracker (weight, distance, count,
+    // target value — see SupabaseStorage.computeGoalProgress) must not be
+    // incremented per entry: "get down to 170" plus a reading of 184 made
+    // current = 185 + 184 and marked the goal completed. Only accumulating
+    // goals (savings, custom) add up their entries.
+    const DERIVED_GOAL_TYPES = new Set(["weight_loss", "weight_gain", "habit_streak", "fitness_distance", "fitness_frequency", "spending_limit", "tracker_target"]);
+    const linkedGoals = goals.filter(g => g.trackerId === trackerId && g.status === 'active' && !DERIVED_GOAL_TYPES.has(String(g.type)));
     for (const goal of linkedGoals) {
       // Determine the increment from the entry values
       let increment = 0;
@@ -15530,21 +15638,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       storage.getLiabilityProfileLinks().catch(() => [] as any[]),
     ]);
     const selectedSet = new Set(profileFilterIds);
-    const byId = new Map(allProfiles.map((p: any) => [p.id, p]));
     const selfIds = selfIdsFrom(allProfiles);
     const profileInScope = (p: any): boolean => {
       if (selectedSet.has(p.id)) return true;
-      // Descendant of a selected profile (walk the parent chain)?
-      const seen = new Set<string>();
-      let parentId: string | undefined = p.parentProfileId;
-      while (parentId && !seen.has(parentId)) {
-        if (selectedSet.has(parentId)) return true;
-        seen.add(parentId);
-        parentId = (byId.get(parentId) as any)?.parentProfileId;
-      }
-      // Co-owned by a selected profile (asset_party_links / liability_profile_links)?
+      // Descendant of a selected profile (the whole parent chain) or co-owned
+      // by one (asset_party_links / liability_profile_links)?
       return isInScope(
-        ownerCandidatesForProfile(p, allAssetLinks as any, allLiabLinks as any),
+        ownerCandidatesForProfile(p, allAssetLinks as any, allLiabLinks as any, allProfiles as any),
         { selectedIds: profileFilterIds, selfIds },
         "out_of_scope",
       );

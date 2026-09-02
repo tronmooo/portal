@@ -14,7 +14,7 @@
 // answering one question. Both callers now land here.
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
-import { advanceLiabilityDueDate, readDueDate } from "@shared/liability-recurrence";
+import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
 import { deriveScheduleFields, liabilityAmount } from "@shared/liability-schedule";
@@ -253,7 +253,7 @@ export interface PayBillInput {
 }
 
 export interface PayBillStep {
-  step: "ledger" | "series_state" | "account" | "expense";
+  step: "ledger" | "series_state" | "account" | "expense" | "reminder_tasks";
   ok: boolean;
   error?: string;
 }
@@ -312,6 +312,81 @@ const noopLogger: PaymentLogger = { warn: () => {}, error: () => {} };
  * occurrence stamp (stamp first, row second). Poll briefly so a deduped
  * caller gets a real payment (id, date, amount) rather than nothing.
  */
+/**
+ * The account whose balance history holds the debit for this payment, or
+ * null. Skips an account whose history already carries the reversal, so a
+ * repeated undo never credits twice.
+ */
+export async function accountThatPaid(storage: IStorage, paymentId: string): Promise<string | null> {
+  if (!paymentId) return null;
+  try {
+    const profiles: any[] = (await storage.getProfiles()) || [];
+    for (const p of profiles) {
+      if (!isAccountProfile(p)) continue;
+      const history: any[] = Array.isArray(p?.fields?.balanceHistory) ? p.fields.balanceHistory : [];
+      const linked = history.filter((a) => a && String(a.linkedRecordId || "") === String(paymentId));
+      if (linked.length === 0) continue;
+      const reversed = linked.some((a) => /^Reversed payment/.test(String(a.reason || "")));
+      return reversed ? null : p.id;
+    }
+  } catch { /* best effort — no account, no credit */ }
+  return null;
+}
+
+/** Prefix of the reminder tasks the liability due-scan creates (server/routes.ts). */
+export const BILL_REMINDER_TASK_PREFIX = "Bill due: ";
+
+/**
+ * Marks done every open "Bill due" reminder task linked to this bill and due
+ * on or before the occurrence just paid. Best effort: a storage without
+ * tasks (some doubles) or a failed read never fails the payment.
+ */
+export async function closeBillReminderTasks(storage: IStorage, liabilityId: string, occurrenceDate: string, logger: PaymentLogger = noopLogger): Promise<number> {
+  return closeBillReminderTasksWhere(storage, liabilityId, (due) => !due || due <= occurrenceDate, logger);
+}
+
+/** True for an open "Bill due" reminder task that belongs to this bill. */
+export function isOpenBillReminderTask(t: any, liabilityId: string): boolean {
+  if (!t || t.status === "done") return false;
+  if (typeof t.title !== "string" || !t.title.startsWith(BILL_REMINDER_TASK_PREFIX)) return false;
+  return Array.isArray(t.linkedProfiles) && t.linkedProfiles.includes(liabilityId);
+}
+
+/**
+ * Marks done the bill's open reminder tasks whose due day satisfies
+ * `settled` — the pay pipeline passes "on or before the paid occurrence"; the
+ * due-scan cron passes "that occurrence is paid or skipped, or the schedule
+ * has already moved past it", so a reminder left behind by an older build
+ * heals on the next run instead of sitting overdue forever.
+ */
+export async function closeBillReminderTasksWhere(
+  storage: IStorage,
+  liabilityId: string,
+  settled: (dueDay: string) => boolean,
+  logger: PaymentLogger = noopLogger,
+  tasks?: any[],
+): Promise<number> {
+  let closed = 0;
+  try {
+    if (typeof (storage as any).getTasks !== "function" || typeof (storage as any).updateTask !== "function") return 0;
+    const all: any[] = tasks ?? ((await storage.getTasks()) || []);
+    for (const t of all) {
+      if (!isOpenBillReminderTask(t, liabilityId)) continue;
+      const due = String(t.dueDate || "").slice(0, 10);
+      if (!settled(due)) continue;
+      try {
+        await storage.updateTask(t.id, { status: "done" } as any);
+        closed++;
+      } catch (e: any) {
+        logger.warn(`[payBillOccurrence] reminder task ${t.id} not closed:`, e?.message || e);
+      }
+    }
+  } catch (e: any) {
+    logger.warn(`[payBillOccurrence] reminder tasks not read:`, e?.message || e);
+  }
+  return closed;
+}
+
 async function findPaymentWithRetry(storage: IStorage, liabilityId: string, paymentId: string | null | undefined): Promise<any | null> {
   for (let attempt = 0; attempt < 4; attempt++) {
     const payments = await storage.getLiabilityPayments(liabilityId).catch(() => [] as any[]);
@@ -411,8 +486,9 @@ export async function payBillOccurrence(
     const extra: Record<string, any> = { lastPaidDate: paymentDate };
     let advanced: string | null = null;
     if (curDue && curDue === occurrenceDate) {
-      advanced = advanceLiabilityDueDate(f, occurrenceDate);
-      extra.dueDate = advanced; extra.nextDueDate = advanced; extra.status = "upcoming";
+      const adv = advanceLiabilityDueDatePatch(f, occurrenceDate);
+      advanced = adv.dueDate;
+      Object.assign(extra, adv, { status: "upcoming" });
     }
     try {
       const claim = await claimFn.call(storage, liabilityId, occurrenceDate, stamp, extra);
@@ -484,10 +560,9 @@ export async function payBillOccurrence(
     };
     const patch: any = { occurrences: occ, lastPaidDate: paymentDate };
     if (curDue && curDue === occurrenceDate) {
-      nextDueDate = advanceLiabilityDueDate(f, occurrenceDate);
-      patch.dueDate = nextDueDate;
-      patch.nextDueDate = nextDueDate;
-      patch.status = "upcoming";
+      const adv = advanceLiabilityDueDatePatch(f, occurrenceDate);
+      nextDueDate = adv.dueDate;
+      Object.assign(patch, adv, { status: "upcoming" });
       dueDateAdvanced = true;
     }
     await storage.updateProfile(liabilityId, { fields: patch } as any);
@@ -541,6 +616,14 @@ export async function payBillOccurrence(
       logger.warn(`[payBillOccurrence] expense log failed for ${liability.name}:`, e?.message || e);
     }
   }
+
+  // ── 5. reminder tasks ───────────────────────────────────────────────────
+  // The due-scan cron surfaces a non-autopay bill as a "Bill due: <name>"
+  // task linked to the bill. Paying the occurrence is what that task asked
+  // for, so it is done now — it used to stay open (and overdue) on the Tasks
+  // page and the dashboard after the bill was paid.
+  const remindersClosed = await closeBillReminderTasks(storage, liabilityId, occurrenceDate, logger);
+  if (remindersClosed > 0) steps.push({ step: "reminder_tasks", ok: true });
 
   return {
     ok: true,
@@ -715,8 +798,13 @@ export async function unpayBillOccurrence(
   }
 
   // ── 5. credit the account the payment debited ───────────────────────────
+  // The occurrence stamp names the account for a recurring bill. A loan or
+  // card payment has no occurrence stamp, so the account that paid it is
+  // found through its own balance history: the debit carries this payment's
+  // id as linkedRecordId. Without this, undoing a loan payment restored the
+  // debt balance but left the checking balance short by the payment.
   let accountCredited = false;
-  const accountId = stampedOverride?.accountId || null;
+  const accountId = stampedOverride?.accountId || await accountThatPaid(storage, target.id);
   if (accountId) {
     try {
       const account: any = await storage.getProfile(accountId);

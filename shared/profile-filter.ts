@@ -19,11 +19,13 @@
 // comes from the same primitive that `shared/net-worth.ts` uses, so the two
 // scope checks can no longer drift apart on the core question.
 
-import { isInScope, selfIdsFrom } from "./scope";
+import { isInScope, selfIdsFrom, withAncestorOwnerIds } from "./scope";
 
 export interface ProfileLike {
   id: string;
   type?: string;
+  /** Owner chain: a car's bill is the car's, and so the car owner's. */
+  parentProfileId?: string | null;
 }
 
 export interface ProfileFilterContext {
@@ -33,7 +35,7 @@ export interface ProfileFilterContext {
    * The full list of known profiles. Only the `id` and `type` fields are
    * used, so callers can pass a slimmer shape if they want.
    */
-  allProfiles: Pick<ProfileLike, "id" | "type">[];
+  allProfiles: Pick<ProfileLike, "id" | "type" | "parentProfileId">[];
 }
 
 /**
@@ -65,8 +67,17 @@ export function passesProfileFilter(
   linkedProfiles: string[] | undefined | null,
   ctx: ProfileFilterContext,
 ): boolean {
+  // An item linked to a profile is also in scope for that profile's owners:
+  // the insurance bill linked to the Honda (parent: Self) is Self's bill, and
+  // Linda's car's registration is Linda's. Without the walk, the Self view
+  // dropped every bill and expense attached to the user's own car, home or
+  // account from the bills list and the cash-flow total.
+  const linked = withAncestorOwnerIds(
+    Array.isArray(linkedProfiles) ? linkedProfiles.filter((id): id is string => typeof id === "string" && !!id) : [],
+    ctx.allProfiles,
+  );
   return isInScope(
-    Array.isArray(linkedProfiles) ? linkedProfiles : [],
+    linked,
     { selectedIds: ctx.selectedIds, selfIds: selfIdsFrom(ctx.allProfiles) },
     "belongs_to_self",
   );

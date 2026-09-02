@@ -1,3 +1,4 @@
+import { formatLocalDate } from "@/lib/dates";
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -784,7 +785,9 @@ export default function JournalPage() {
             // Group by calendar day so the list reads like a real journal.
             const groups: Array<{ day: string; items: any[] }> = [];
             for (const e of visible) {
-              const day = new Date(e.createdAt || e.date).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+              // createdAt is a timestamp; the `date` fallback is a bare YYYY-MM-DD,
+              // which `new Date()` would file under the previous local day.
+              const day = formatLocalDate(e.createdAt || e.date, { weekday: "long", month: "long", day: "numeric", year: "numeric" }, "en-US");
               const g = groups[groups.length - 1];
               if (g && g.day === day) g.items.push(e);
               else groups.push({ day, items: [e] });
