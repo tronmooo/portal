@@ -105,11 +105,15 @@ export function hasThirdPersonSubject(message: string): boolean {
   if (/\b(he|she|they)\s+(just\s+|already\s+)?\w+(ed|ked)\b/i.test(m)) return true;
   // A proper name in subject position: capitalized, not a normal opener, and
   // followed by a past-tense verb.
-  const named = m.match(/^\s*([A-Z][a-zA-Z'-]{1,})\s+(?:just\s+|already\s+)?([a-z]+)\b/);
+  // One to three capitalized words: "John walked", "Smoke Child flossed",
+  // "Mary Ann Smith fed the cat". A two-word name used to slip through
+  // because only the first word was read as the subject and the second
+  // ("Child") was then tested as the verb.
+  const named = m.match(/^\s*([A-Z][a-zA-Z'-]*(?:\s+[A-Z][a-zA-Z'-]*){0,2})\s+(?:just\s+|already\s+)?([a-z]+)\b/);
   if (named) {
-    const subject = named[1].toLowerCase();
+    const subjectFirstWord = named[1].split(/\s+/)[0].toLowerCase();
     const verb = named[2].toLowerCase();
-    if (!SENTENCE_OPENERS.has(subject) && (verb.endsWith("ed") || IRREGULAR_PAST.has(verb))) {
+    if (!SENTENCE_OPENERS.has(subjectFirstWord) && (verb.endsWith("ed") || IRREGULAR_PAST.has(verb))) {
       return true;
     }
   }
@@ -192,6 +196,29 @@ export interface CompletionMatch<T extends HabitLike> {
  * since the sentence itself already asserts that something was finished.
  * Ambiguity — two habits sharing the token — always declines.
  */
+/**
+ * "Smoke Child flossed today", reported by the user ABOUT a profile the
+ * caller has already scoped the habit list to, is that profile's completion
+ * — the third-person veto exists to keep "John walked the dog" off the
+ * USER's streak, not to refuse a report filed under John. Strip the named
+ * subject so the rest of the sentence classifies as the report it is.
+ * Only a leading subject that IS one of the given names is stripped; any
+ * other third party still vetoes.
+ */
+export function stripNamedSubject(message: string, names: ReadonlyArray<string> | undefined | null): string {
+  const m = String(message || "").trim();
+  if (!m || !names || names.length === 0) return m;
+  for (const raw of names) {
+    const name = String(raw || "").trim();
+    if (!name) continue;
+    const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // "Smoke Child flossed", "Smoke Child's floss done", "smoke child just flossed"
+    const re = new RegExp(`^\\s*${esc}(?:'s)?\\s+`, "i");
+    if (re.test(m)) return m.replace(re, "");
+  }
+  return m;
+}
+
 export function matchHabitForCompletionReport<T extends HabitLike>(
   habits: T[],
   message: string,
@@ -200,12 +227,16 @@ export function matchHabitForCompletionReport<T extends HabitLike>(
     /** Tie-break among habits that share a NAME: prefer one this returns true
      *  for (the caller uses "today isn't finished yet"). */
     prefer?: (habit: T) => boolean;
+    /** Profile names the habit list is already scoped to; a report whose
+     *  subject is one of them is that profile's own completion. */
+    subjectNames?: ReadonlyArray<string>;
   },
 ): CompletionMatch<T> | null {
-  const confidence = confidenceOverride ?? classifyCompletionReport(message);
+  const effectiveMessage = stripNamedSubject(message, opts?.subjectNames);
+  const confidence = confidenceOverride ?? classifyCompletionReport(effectiveMessage);
   if (confidence === "none" || !habits.length) return null;
 
-  const msgTokens = new Set(habitTokens(message));
+  const msgTokens = new Set(habitTokens(effectiveMessage));
   if (msgTokens.size === 0) return null;
 
   const scored = habits

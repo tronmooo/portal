@@ -550,3 +550,18 @@ describe("rankByName paraphrase matching (safeMatchEntity step 4)", () => {
     expect(rankByName(items, "panera lunch", (t) => t.title)).toEqual([]);
   });
 });
+
+// ── D45: a report about the profile the habit list is scoped to is that profile's completion ──
+describe("matchHabitForCompletionReport with a named subject", () => {
+  it("'Smoke Child flossed today' checks the child's habit when scoped to the child; other third parties still veto", async () => {
+    const { matchHabitForCompletionReport, stripNamedSubject } = await import("../shared/habit-completion-intent");
+    const habits = [{ id: "h1", name: "Floss" }];
+    expect(stripNamedSubject("Smoke Child flossed today", ["Smoke Child"])).toBe("flossed today");
+    expect(stripNamedSubject("Smoke Child's floss done", ["Smoke Child"])).toBe("floss done");
+    expect(matchHabitForCompletionReport(habits, "Smoke Child flossed today", undefined, { subjectNames: ["Smoke Child"] })?.habit.id).toBe("h1");
+    // unscoped: a third person's action never touches the user's habit
+    expect(matchHabitForCompletionReport(habits, "Smoke Child flossed today")).toBeNull();
+    // scoped to the child, but the sentence is about someone else
+    expect(matchHabitForCompletionReport(habits, "John flossed today", undefined, { subjectNames: ["Smoke Child"] })).toBeNull();
+  });
+});

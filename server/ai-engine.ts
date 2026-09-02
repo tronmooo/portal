@@ -10772,10 +10772,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // NEVER fall back to other profiles' habits — an unqualified message
       // can only ever move the user's own streaks.
       let eligible = habits;
+      // The profile the list is scoped to, so a third-person report ABOUT
+      // that profile ("Smoke Child flossed today") counts as their completion.
+      let scopedProfileName: string | null = null;
       if (input.forProfile) {
         const allProfs = await storage.getProfiles();
         const prof = matchProfileByName(allProfs, input.forProfile);
-        if (prof) eligible = habits.filter(h => (h.linkedProfiles || []).includes(prof.id));
+        if (prof) { eligible = habits.filter(h => (h.linkedProfiles || []).includes(prof.id)); scopedProfileName = prof.name; }
       } else {
         // The CANONICAL ownership rule (shared/profile-filter), not a local
         // copy: every self profile, plus orphans, exactly as the dashboard
@@ -10826,6 +10829,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           // Duplicate rows with the same name are common in real data; send the
           // report to one that still has an occurrence left today.
           prefer: (h) => !habitDayProgress(h as any, inferDate).isComplete,
+          subjectNames: scopedProfileName ? [scopedProfileName] : [],
         });
         if (!inferred) {
           return {
