@@ -14134,7 +14134,8 @@ export function buildContentRoutingDirective(userMessage: string): string | null
     lines.push(
       `[ROUTER] The user explicitly named ${kinds.length === 1 ? "this object" : "these objects"}: ${kinds.join(", ").toUpperCase()}. ` +
       `Use the matching tool (note -> create_note, journal -> journal_entry, task -> create_task, habit -> create_habit, event -> create_event). ` +
-      `Explicit intent is never overridden — a tool that writes a different kind will be refused.`,
+      `Explicit intent is never overridden: write the object the user named. If the message ALSO asks for something else, do that too — ` +
+      `as an ADDITIONAL write, never in place of the named one.`,
     );
   }
   if (inferred.length > 0) {
@@ -14152,6 +14153,21 @@ export function buildContentRoutingDirective(userMessage: string): string | null
       `Write it there — do NOT bury it in a note. If that record's field is a date, it is already on the calendar; do not also create an event for it.`,
     );
   }
+  // Replaces the create-vs-update VETO that used to sit in the tool gate.
+  // "Create a task for Sarah" must not silently overwrite an existing
+  // same-named record — but that is a instruction to the model now, not a
+  // refusal, so a genuine "add this to the existing one" still gets through.
+  const creates = parseTurnPlan(userMessage).intents.filter((i) => isActionable(i) && i.operation === "create");
+  if (creates.length > 0) {
+    const names = creates.map((i) => i.fields?.name).filter(Boolean) as string[];
+    lines.push(
+      `[ROUTER] The user asked to CREATE ${creates.map((i) => `a ${i.entity}`).join(" and ")}` +
+      `${names.length > 0 ? ` (${names.map((n) => `"${n.slice(0, 40)}"`).join(", ")})` : ""}. ` +
+      `A same-named record already existing is NOT permission to update it instead — create the new one, or ASK which they want. ` +
+      `This is guidance, not a restriction: if the message asks you to add to something that exists, do exactly that.`,
+    );
+  }
+
   const owners = Array.from(new Set(plan.actions.map((a) => a.profileHint).filter(Boolean)));
   if (owners.length > 0) {
     lines.push(`[ROUTER] Named person(s): ${owners.join(", ")}. Pass forProfile — do NOT default to the primary profile.`);
@@ -16014,7 +16030,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       const runOne = async (toolIdx: number, toolUse: Anthropic.Messages.ToolUseBlock): Promise<void> => {
         const meta: RoundMeta = {};
         roundMeta.set(toolIdx, meta);
-        const pushOp = (op: OperationOutcome) => { meta.operation = op; roundIndexOf.set(op, toolIdx); pushOp(op); };
+        const pushOp = (op: OperationOutcome) => { meta.operation = op; roundIndexOf.set(op, toolIdx); allOperations.push(op); };
         // Safety limit: stop executing tools if we've hit the per-message cap
         if (totalToolCalls >= MAX_TOOL_CALLS) {
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify({ error: "Tool call limit reached for this message. Please send a new message for additional actions." }), is_error: true });
@@ -16028,18 +16044,31 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         emitEvent({ type: "tool_start", tool: toolUse.name, label: opRawLabel(toolUse) });
 
         try {
-          // ── ROUTING GATE (spec items 2, 3, 7) ───────────────────────────
+          // ── TURN-SCOPE GATE ─────────────────────────────────────────────
           // The last thing between a tool_use block and a database write.
-          // Three refusals, all deterministic and all checked against the
-          // structured intent for THIS message rather than the model's prose:
-          //   · the tool writes a different entity than the user asked for;
-          //   · the user said CREATE and this tool UPDATES (create-vs-update
-          //     safety — a same-named record existing is never a licence to
-          //     switch operations);
-          //   · the call is replaying a request from an EARLIER message.
-          // A blocked call returns a directive to the model (so it can correct
-          // itself on the next round-trip) and is recorded as a production
-          // error, but never surfaces as a success card or an action.
+          // TWO refusals remain, and NEITHER is a guess about what the user
+          // meant — both are facts about this turn:
+          //   · the call is replaying a request from an EARLIER message;
+          //   · this turn already created a same-named record for the same
+          //     owner (one request creates ONE record; a second is fan-out).
+          //
+          // WHAT WAS REMOVED (2026-09-02, at the user's direction). Two
+          // further refusals used to sit here and decide, from a regex read of
+          // the user's prose, that a tool the model chose was the "wrong" one:
+          // an entity gate (checkToolAgainstIntent) and a note/journal/task
+          // gate (checkContentRouting). Both refused real work. "I ran 2
+          // miles … and create a task to buy chicken" lost all seven tracker
+          // logs to the entity gate; "remind Robert about the dentist
+          // tomorrow" could not become an event; "log that I paid Sarah $20"
+          // could not also feed a spending tracker. The parser cannot enumerate
+          // the things a person may ask for — anyone, anywhere, about
+          // anything — so a parse that comes up short must not become a
+          // refusal. The same signal still reaches the model as [ROUTER]
+          // guidance in the system prompt (buildContentRoutingDirective),
+          // where it informs the choice instead of overriding it, and every
+          // write is still verified against the database afterwards by the
+          // envelope's read-back. Guidance in front, verification behind, no
+          // veto in between.
           const routingViolation: RoutingViolation | null = (() => {
             if (READ_ONLY_TOOLS.has(toolUse.name)) return null;
             const input = (toolUse.input || {}) as Record<string, any>;
@@ -16051,29 +16080,34 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // name this turn is fan-out, not work.
             const dupCreate = findDuplicateCreateInTurn(toolUse.name, input, turnCreates);
             if (dupCreate) return duplicateCreateViolation(toolUse.name, label, dupCreate);
-            // NOTE vs JOURNAL vs TASK (user report 2026-08-20). The generic
-            // intent gate above cannot catch "jane doe note: …" — the message
-            // carries no create VERB, so the parsed operation is unknown and
-            // the intent is not actionable. The content router reads the named
-            // OBJECT instead, which is the thing the user was explicit about.
-            const contentViolation = checkContentRouting(toolUse.name, userMessage);
-            if (contentViolation) {
-              // The router's generic kinds map 1:1 onto intent entities; the
-              // cast is safe because `checkContentRouting` only ever reports a
-              // GENERIC kind (see GENERIC_KINDS in shared/content-routing).
-              return {
-                mismatchType: "entity_mismatch",
-                tool: toolUse.name,
-                expectedEntity: contentViolation.requestedKind as any,
-                actualEntity: contentViolation.toolKind as any,
-                expectedOperation: "create",
-                actualOperation: toolOperation(toolUse.name),
-                modelDirective: contentViolation.modelDirective,
-                userMessage: contentViolation.userMessage,
-              } satisfies RoutingViolation;
-            }
-            return checkToolAgainstIntent(toolUse.name, turnPlan);
+            return null;
           })();
+
+          // The two retired gates still RUN — they just cannot refuse any
+          // more. A disagreement between the parse and the model's tool
+          // choice is recorded as telemetry (an in-memory ring + a log line,
+          // never a card and never a tool error) so a model that genuinely
+          // starts mis-routing is still visible in production. The call
+          // proceeds either way: the parse is an opinion, not an authority.
+          if (!routingViolation && !READ_ONLY_TOOLS.has(toolUse.name)) {
+            const observed = checkContentRouting(toolUse.name, userMessage)
+              ? "entity_mismatch" as const
+              : checkToolAgainstIntent(toolUse.name, turnPlan)?.mismatchType;
+            if (observed) {
+              recordChatFailure({
+                turnId,
+                sourceMessageId,
+                userId,
+                userMessage,
+                parsedIntent: { entity: turnIntent.entity, operation: turnIntent.operation, target: turnIntent.target, confidence: turnIntent.confidence },
+                toolSelected: toolUse.name,
+                toolResult: "observed only — allowed to execute",
+                mismatchType: observed,
+                detail: `The parse disagreed with ${toolUse.name} (${observed}); the call was ALLOWED. Telemetry only.`,
+              });
+            }
+          }
+
           if (routingViolation) {
             logger.warn("ai", `[turn ${turnId.slice(0, 8)}] BLOCKED ${toolUse.name}: ${routingViolation.mismatchType}`);
             recordChatFailure({
