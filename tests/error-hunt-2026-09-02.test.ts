@@ -377,3 +377,30 @@ describe("D103: a one-time bill never advances its due date", () => {
     expect(advanceLiabilityDueDate({ frequency: "monthly", dueDate: "2026-09-05" }, "2026-09-02")).toBe("2026-10-05");
   });
 });
+
+// D107 — a weekly habit's streak broke on every off-day.
+import { calculateStreak } from "../shared/streak";
+import { isHabitDueOn } from "../shared/habit-schedule";
+describe("D107: streaks follow the habit's schedule", () => {
+  const mwf = { frequency: "weekly", targetDays: [1, 3, 5] }; // Mon/Wed/Fri
+  const sched = (d: string) => isHabitDueOn(mwf, d);
+  it("Mon/Wed/Fri check-ins are a streak of scheduled days; off-days neither count nor break", () => {
+    // 2026-08-31 Mon, 09-02 Wed, 09-04 Fri; today Sat 09-05
+    const r = calculateStreak(["2026-08-31", "2026-09-02", "2026-09-04"], { today: "2026-09-05", isScheduled: sched });
+    expect(r).toEqual({ current: 3, longest: 3 });
+    // an off-day check-in (Tue) is ignored, not counted
+    expect(calculateStreak(["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-04"], { today: "2026-09-05", isScheduled: sched }).current).toBe(3);
+  });
+  it("today (scheduled, not yet done) keeps the run alive; a missed scheduled day ends it", () => {
+    // today Fri 09-04 not yet checked: Mon + Wed still count
+    expect(calculateStreak(["2026-08-31", "2026-09-02"], { today: "2026-09-04", isScheduled: sched }).current).toBe(2);
+    // missed Wed: only Fri counts
+    expect(calculateStreak(["2026-08-31", "2026-09-04"], { today: "2026-09-05", isScheduled: sched })).toEqual({ current: 1, longest: 1 });
+    // last check-in a week ago with scheduled days missed since → 0 current, longest kept
+    expect(calculateStreak(["2026-08-24", "2026-08-26"], { today: "2026-09-05", isScheduled: sched })).toEqual({ current: 0, longest: 2 });
+  });
+  it("without a schedule the daily rule is unchanged", () => {
+    expect(calculateStreak(["2026-09-03", "2026-09-04"], { today: "2026-09-05" })).toEqual({ current: 2, longest: 2 });
+    expect(calculateStreak(["2026-09-01", "2026-09-04"], { today: "2026-09-05" })).toEqual({ current: 1, longest: 1 });
+  });
+});

@@ -31,6 +31,24 @@ export interface StreakOptions {
    * used instead of counting occurrences in `checkinDates`.
    */
   countsByDate?: Record<string, number>;
+  /**
+   * Which calendar days the habit is scheduled on (shared/habit-schedule's
+   * isHabitDueOn). When given, only scheduled days count and unscheduled
+   * days neither count nor break the run: a Mon/Wed/Fri habit checked every
+   * Mon/Wed/Fri is a streak of scheduled days, not a streak of 1 that
+   * Tuesday reset. Absent = every day is scheduled (daily).
+   */
+  isScheduled?: (dateISO: string) => boolean;
+}
+
+/** The nearest scheduled day at or before `from`, stepping back at most `limit` days. */
+function scheduledAtOrBefore(from: string, isScheduled: (d: string) => boolean, limit = 400): string | null {
+  let d = from;
+  for (let i = 0; i <= limit; i++) {
+    if (isScheduled(d)) return d;
+    d = addDays(d, -1);
+  }
+  return null;
 }
 
 export function calculateStreak(checkinDates: string[], opts: StreakOptions): StreakResult {
@@ -58,6 +76,35 @@ export function calculateStreak(checkinDates: string[], opts: StreakOptions): St
   if (completeDates.length === 0) return { current: 0, longest: 0 };
 
   const todayStr = opts.today;
+
+  if (opts.isScheduled) {
+    const isScheduled = opts.isScheduled;
+    const complete = new Set(completeDates.filter(isScheduled));
+    if (complete.size === 0) return { current: 0, longest: 0 };
+    // The step back from one scheduled day to the previous scheduled day.
+    const prevScheduled = (d: string) => scheduledAtOrBefore(addDays(d, -1), isScheduled);
+    // Current: today (if scheduled) may still be open, so the run may start
+    // at today or at the most recent scheduled day before it.
+    let current = 0;
+    const anchorToday = scheduledAtOrBefore(todayStr, isScheduled);
+    if (anchorToday) {
+      let d: string | null = complete.has(anchorToday) ? anchorToday : (anchorToday === todayStr ? prevScheduled(anchorToday) : null);
+      while (d && complete.has(d)) { current++; d = prevScheduled(d); }
+    }
+    // Longest: walk each run of consecutive scheduled complete days.
+    let longest = 0;
+    const sorted = [...complete].sort();
+    const seen = new Set<string>();
+    for (const start of sorted) {
+      if (seen.has(start)) continue;
+      let run = 0;
+      let d: string | null = start;
+      while (d && complete.has(d)) { seen.add(d); run++; d = scheduledAtOrAfter(addDays(d, 1), isScheduled); }
+      longest = Math.max(longest, run);
+    }
+    return { current, longest: Math.max(longest, current) };
+  }
+
   const yesterdayStr = addDays(todayStr, -1);
 
   let current = 0;
@@ -89,4 +136,14 @@ export function calculateStreak(checkinDates: string[], opts: StreakOptions): St
   }
 
   return { current: Math.max(current, 0), longest: Math.max(longest, current) };
+}
+
+/** The nearest scheduled day at or after `from`, stepping forward at most `limit` days. */
+function scheduledAtOrAfter(from: string, isScheduled: (d: string) => boolean, limit = 400): string | null {
+  let d = from;
+  for (let i = 0; i <= limit; i++) {
+    if (isScheduled(d)) return d;
+    d = addDays(d, 1);
+  }
+  return null;
 }

@@ -56,6 +56,8 @@ import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
 import { selfIdsFrom, isInScope, withAncestorOwnerIds } from "../shared/scope";
+import { calculateStreak as sharedCalculateStreak } from "../shared/streak";
+import { isHabitDueOn, type HabitScheduleShape } from "../shared/habit-schedule";
 import {
   parseMoney as _sharedParseMoney,
   resolveAssetValue as _sharedResolveAssetValue,
@@ -359,38 +361,20 @@ function getExtension(mimeType: string): string {
 }
 
 // ---- Streak calculator (timezone-aware) ----
-function calculateStreak(checkins: { date: string }[], targetPerDay: number = 1, timezone: string = 'America/Los_Angeles'): { current: number; longest: number } {
-  if (checkins.length === 0) return { current: 0, longest: 0 };
-  // Count check-ins per date
-  const countByDate = new Map<string, number>();
-  for (const c of checkins) {
-    countByDate.set(c.date, (countByDate.get(c.date) || 0) + 1);
-  }
-  // A day is "complete" if check-in count >= targetPerDay
-  const completeDates = [...countByDate.entries()]
-    .filter(([, count]) => count >= targetPerDay)
-    .map(([date]) => date)
-    .sort()
-    .reverse();
-  if (completeDates.length === 0) return { current: 0, longest: 0 };
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: timezone });
-  const addDays = tzAddDays;
-  const yesterdayStr = addDays(todayStr, -1);
-  let current = 0;
-  if (completeDates[0] === todayStr || completeDates[0] === yesterdayStr) {
-    let expectedDate = completeDates[0];
-    for (let i = 0; i < completeDates.length; i++) {
-      if (completeDates[i] === expectedDate) { current++; expectedDate = addDays(expectedDate, -1); }
-      else if (completeDates[i] < expectedDate) { break; }
-    }
-  }
-  const allDates = [...completeDates].sort();
-  let tempStreak = 1;
-  let longest = 1;
-  for (let i = 1; i < allDates.length; i++) {
-    if (allDates[i] === addDays(allDates[i - 1], 1)) { tempStreak++; longest = Math.max(longest, tempStreak); } else { tempStreak = 1; }
-  }
-  return { current: Math.max(current, 0), longest: Math.max(longest, current) };
+function calculateStreak(
+  checkins: { date: string }[],
+  targetPerDay: number = 1,
+  timezone: string = 'America/Los_Angeles',
+  schedule?: HabitScheduleShape | null,
+): { current: number; longest: number } {
+  // One streak rule for every reader (shared/streak.ts). With the habit's
+  // schedule, a Mon/Wed/Fri habit's off-days neither count nor break the run.
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: timezone });
+  return sharedCalculateStreak(checkins.map((c) => String(c.date || "").slice(0, 10)).filter(Boolean), {
+    today,
+    targetPerDay,
+    ...(schedule ? { isScheduled: (d: string) => isHabitDueOn(schedule, d) } : {}),
+  });
 }
 
 // ---- Insight generation ----
@@ -1183,7 +1167,7 @@ export class SupabaseStorage implements IStorage {
     // every read; callers that don't load check-ins (deleted-habit listings)
     // keep the stored snapshot.
     const live = checkins.length > 0
-      ? calculateStreak(checkins, r.target_per_day || 1, this._timezone)
+      ? calculateStreak(checkins, r.target_per_day || 1, this._timezone, { frequency: r.frequency, targetDays: r.target_days || null, startDate: r.start_date || null, endDate: r.end_date || null } as HabitScheduleShape)
       : { current: r.current_streak || 0, longest: r.longest_streak || 0 };
     return {
       id: r.id, name: r.name, icon: r.icon || undefined, color: r.color || undefined,
@@ -4860,7 +4844,7 @@ export class SupabaseStorage implements IStorage {
     }
     // Recalculate streaks (with targetPerDay support)
     const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
-    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone);
+    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone, habit as any);
     await this.supabase.from("habits").update({
       current_streak: current, longest_streak: Math.max(longest, habit.longestStreak),
     }).eq("id", habitId).eq("user_id", this.userId);
@@ -4878,7 +4862,7 @@ export class SupabaseStorage implements IStorage {
     // MemStorage both guard with Math.max — this path used to be the one
     // backend that didn't, so an undo could destroy a year-old record).
     const { data: allCheckins } = await this.supabase.from("habit_checkins").select("date").eq("habit_id", habitId).eq("user_id", this.userId);
-    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone);
+    const { current, longest } = calculateStreak(allCheckins || [], habit.targetPerDay || 1, this._timezone, habit as any);
     await this.supabase.from("habits").update({
       current_streak: current, longest_streak: Math.max(longest, habit.longestStreak || 0),
     }).eq("id", habitId).eq("user_id", this.userId);

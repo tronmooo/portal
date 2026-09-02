@@ -886,3 +886,16 @@ describe("D105: import remaps profiles, parents, Self and every link", () => {
     expect(h.db.events[0].linkedProfiles).toEqual([SELF.id]);
   });
 });
+
+// D106 — a refused delete-all attempt spent the hourly allowance.
+describe("D106: a mistyped delete-all confirmation does not spend the hourly allowance", () => {
+  it("400 first, then the real request runs", async () => {
+    let deleted = 0;
+    h = await boot({ profiles: [SELF] }, (storage) => { storage.deleteAllUserData = async () => { deleted++; return { errors: {} }; }; });
+    expect((await h.api("DELETE", "/api/data/all", { confirmation: "yes" })).status).toBe(400);
+    const ok = await h.api("DELETE", "/api/data/all", { confirmation: "DELETE" });
+    expect(ok.status, JSON.stringify(ok.data)).toBe(200);
+    expect(deleted).toBe(1);
+    expect((await h.api("DELETE", "/api/data/all", { confirmation: "DELETE" })).status).toBe(429);
+  });
+});

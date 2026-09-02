@@ -9866,13 +9866,16 @@ No emojis. No prose outside the JSON.`,
   // ---- Delete All User Data ----
   app.delete("/api/data/all", asyncHandler(async (req, res) => {
     try {
-      const deleteUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
-      if (rateLimit(`delete-all:${deleteUid}`, 1, 3600000)) {
-        return res.status(429).json({ error: "Account deletion rate limited. Try again in an hour." });
-      }
       const { confirmation } = req.body || {};
       if (confirmation !== "DELETE") {
         return res.status(400).json({ error: "You must send confirmation: 'DELETE' to proceed." });
+      }
+      // Validate first, then spend the once-an-hour allowance: a mistyped
+      // confirmation used to burn it, and the corrected request an instant
+      // later was told to come back in an hour.
+      const deleteUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
+      if (rateLimit(`delete-all:${deleteUid}`, 1, 3600000)) {
+        return res.status(429).json({ error: "Account deletion rate limited. Try again in an hour." });
       }
       const result = await storage.deleteAllUserData();
       clearAllCache();
