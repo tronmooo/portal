@@ -262,6 +262,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Bill occurrences (probe s29) — verified working
+Skipping the first occurrence marks it skipped on the calendar and moves next-due a month; rescheduling the next one (`movedTo`) moves its calendar day; paying by the original occurrence key stamps the moved occurrence paid, logs one expense and advances next-due; paying the same key again is folded into the first payment. (The probe's "upcoming shows the following occurrence" expectation ignored the 30-day window; not a bug.)
+
 ### Final integrity sweep on the replica
 No live children of deleted parents, no entries without a tracker, no payments without a liability, no live task or expense linked only to missing profiles, no duplicate live task title+date, one Self per user, one journal entry per day. The 25 check-ins whose habit is gone all belong to soft-deleted habits (kept for restore — by design).
 
