@@ -615,7 +615,7 @@ export default function TasksPage() {
     if (filterMode === "everyone" || filterIds.length === 0) return tasks || [];
     const ctx = {
       selectedIds: filterIds,
-      allProfiles: allProfiles.map(p => ({ id: p.id, type: p.type })),
+      allProfiles: allProfiles.map(p => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
     };
     return (tasks || []).filter(t => passesProfileFilter(t.linkedProfiles, ctx));
   }, [tasks, filterMode, filterIds, allProfiles]);

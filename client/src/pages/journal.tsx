@@ -253,7 +253,7 @@ export default function JournalPage() {
     ? allEntries.filter(e =>
         passesProfileFilter((e as any).linkedProfiles, {
           selectedIds: filterIds,
-          allProfiles: profiles.map(p => ({ id: p.id, type: p.type })),
+          allProfiles: profiles.map(p => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
         })
       )
     : allEntries;

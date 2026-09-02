@@ -815,7 +815,7 @@ export default function FinancePage() {
   // calendar, dashboard and the server agree on what "active filter" means.
   const filterCtx = useMemo(() => ({
     selectedIds: filterMode === "everyone" ? [] : filterIds,
-    allProfiles: (profiles || []).map((p: any) => ({ id: p.id, type: p.type })),
+    allProfiles: (profiles || []).map((p: any) => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
   }), [filterMode, filterIds, profiles]);
   const showTestData = useShowTestData();
   const profileFiltered = useMemo(

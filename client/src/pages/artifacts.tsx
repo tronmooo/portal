@@ -877,7 +877,7 @@ export default function ArtifactsPage() {
     if (filterMode === "everyone" || filterIds.length === 0) return allItems;
     const ctx = {
       selectedIds: filterIds,
-      allProfiles: profiles.map(p => ({ id: p.id, type: p.type })),
+      allProfiles: profiles.map(p => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
     };
     return allItems.filter(item => passesProfileFilter(item.source?.linkedProfiles, ctx));
   }, [allItems, filterMode, filterIds, profiles]);

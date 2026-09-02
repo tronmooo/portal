@@ -296,3 +296,18 @@ describe("D96: buildCashTrend", () => {
     expect(t[5].net).toBe(1100);
   });
 });
+
+// D117 — four pages handed passesProfileFilter a profile list stripped to
+// { id, type }, so the owner chain (D88) was lost there: the Tasks page hid
+// the "Bill due" tasks (linked to a bill whose parent is Self) that the
+// dashboard counted, and the two "completed" figures disagreed.
+describe("D117: every client scope filter keeps parentProfileId", () => {
+  it("no caller maps profiles down to { id, type } only", () => {
+    const files = ["client/src/pages/finance.tsx", "client/src/pages/journal.tsx", "client/src/pages/tasks.tsx", "client/src/pages/artifacts.tsx"];
+    for (const f of files) {
+      const src = read(f);
+      expect(src, f).not.toMatch(/allProfiles:\s*[^\n]*\.map\([^)]*=>\s*\(\{\s*id:\s*p\.id,\s*type:\s*p\.type\s*\}\)\)/);
+      expect(src, f).toMatch(/parentProfileId/);
+    }
+  });
+});
