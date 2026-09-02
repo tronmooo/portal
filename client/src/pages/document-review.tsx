@@ -1379,16 +1379,21 @@ function MiniPreview({
           >
             <Plus className="h-3 w-3" />
           </Button>
-          <div className="w-px h-3.5 bg-border mx-1" />
-          <Button
-            variant="ghost" size="icon" className="h-6 w-6"
-            onClick={() => navigate(`/documents/${documentId}`)}
-            aria-label="Open document full screen"
-            title="Open document"
-            data-testid="btn-open-document"
-          >
-            <Maximize2 className="h-3 w-3" />
-          </Button>
+          {/* No file, nothing to open full screen. */}
+          {!imageDiscarded && (
+            <>
+              <div className="w-px h-3.5 bg-border mx-1" />
+              <Button
+                variant="ghost" size="icon" className="h-6 w-6"
+                onClick={() => navigate(`/documents/${documentId}`)}
+                aria-label="Open document full screen"
+                title="Open document"
+                data-testid="btn-open-document"
+              >
+                <Maximize2 className="h-3 w-3" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -1407,8 +1412,10 @@ export default function DocumentReviewPage() {
   // Load once — the stash is a moment in time, and re-reading it after a
   // confirm cleared it would blank the screen mid-navigation.
   const [extraction] = useState(() => (id ? loadPendingReview(id) : null));
+  const imageDiscarded = extraction?.documentPreview?.imageDiscarded === true;
 
-  useEffect(() => { if (id) prefetchDocumentBlob(id); }, [id]);
+  // Nothing was stored, so there are no bytes to warm a cache with.
+  useEffect(() => { if (id && !imageDiscarded) prefetchDocumentBlob(id); }, [id, imageDiscarded]);
 
   const handleConfirm = useCallback(async (payload: ReviewConfirmPayload): Promise<boolean> => {
     try {
@@ -1443,8 +1450,16 @@ export default function DocumentReviewPage() {
       window.history.back();
       return;
     }
+    // Finishing normally lands on the document, because there IS a document to
+    // look at. An extract-only upload has none — the file was read and dropped
+    // — so that destination is a dead end: an empty viewer offering to download
+    // a file that does not exist. The fields have been saved; go home instead.
+    if (imageDiscarded) {
+      navigate("/dashboard");
+      return;
+    }
     navigate(`/documents/${id}`);
-  }, [id, navigate]);
+  }, [id, navigate, imageDiscarded]);
 
   if (!id || !extraction) {
     // Direct navigation, a reload after confirming, or an expired session

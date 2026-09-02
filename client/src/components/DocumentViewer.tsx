@@ -43,6 +43,8 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import {
   useDocumentBlobUrl,
+  wasFileDiscarded,
+  DISCARDED_FILE_TAG,
   classifyDocument,
   DOCUMENT_UPLOAD_ACCEPT,
   prefetchDocument,
@@ -1219,12 +1221,12 @@ function ExtractedDataPanel({
           </div>
 
           {/* Tags */}
-          {doc.tags && doc.tags.some((t) => !t.startsWith("sha256:")) && (
+          {doc.tags && doc.tags.some((t) => !t.startsWith("sha256:") && t !== DISCARDED_FILE_TAG) && (
             <div>
               <p className="micro-label text-muted-foreground mb-2">Tags</p>
               <div className="flex flex-wrap gap-1" data-testid="tags-list">
                 {/* sha256: tags are the upload-dedupe content hash — internal, never shown */}
-                {doc.tags.filter((tag) => !tag.startsWith("sha256:")).map((tag) => (
+                {doc.tags.filter((tag) => !tag.startsWith("sha256:") && tag !== DISCARDED_FILE_TAG).map((tag) => (
                   <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0">{tag}</Badge>
                 ))}
               </div>
@@ -1257,6 +1259,21 @@ function DocumentPreviewPanel({
   } = useViewerControls();
 
   const dataUrl = `data:${doc.mimeType};base64,${doc.fileData}`;
+
+  // Extract-only upload: there is no file behind this row. Say so instead of
+  // rendering a zoom toolbar over an empty frame.
+  if (wasFileDiscarded(doc)) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-muted/10" data-testid={`preview-discarded-${doc.id}`}>
+        <FileText className="h-12 w-12 text-muted-foreground" />
+        <p className="text-sm font-medium break-words">{doc.name}</p>
+        <p className="text-xs text-muted-foreground max-w-xs">
+          This file wasn't kept. You chose to extract only, so it was read once
+          to pull the fields beside it and then discarded.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full bg-muted/10">

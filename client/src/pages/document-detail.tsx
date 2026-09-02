@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
-import { useDocumentBlobUrl, classifyDocument, prefetchDocumentBlob } from "@/lib/document-preview";
+import { useDocumentBlobUrl, classifyDocument, prefetchDocumentBlob, wasFileDiscarded, DISCARDED_FILE_TAG } from "@/lib/document-preview";
 import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel } from "@shared/date-rules";
 import { UPCOMING_WINDOW_DAYS } from "@shared/extraction-calendar";
 
@@ -204,6 +204,7 @@ function useViewerControls() {
 // ─── Preview panel ─────────────────────────────────────────────────────────────
 
 function PreviewPanel({ doc }: { doc: Document }) {
+  const fileDiscarded = wasFileDiscarded(doc);
   const kind = classifyDocument(doc.mimeType);
   const isImage = kind === "image";
   const isPdf = kind === "pdf";
@@ -222,7 +223,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
   // freshly-uploaded doc still has it, otherwise via the authenticated /file
   // endpoint.
   const { url: previewUrl, blob, loading: blobLoading, error: blobError } =
-    useDocumentBlobUrl(doc.id, doc.mimeType, (doc as any).fileData);
+    useDocumentBlobUrl(doc.id, doc.mimeType, (doc as any).fileData, !fileDiscarded);
 
   const downloadFromBlob = useCallback(() => {
     if (!previewUrl) return;
@@ -270,7 +271,16 @@ function PreviewPanel({ doc }: { doc: Document }) {
 
       {/* Preview */}
       <div className="flex-1 overflow-hidden relative">
-        {blobError ? (
+        {fileDiscarded ? (
+          <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center" data-testid="preview-discarded">
+            <FileText className="h-12 w-12 text-muted-foreground" />
+            <p className="text-sm font-medium">{doc.name}</p>
+            <p className="text-xs text-muted-foreground max-w-xs">
+              This file wasn't kept. You chose to extract only, so it was read
+              once to pull the fields on the right and then discarded.
+            </p>
+          </div>
+        ) : blobError ? (
           <div className="h-full flex flex-col items-center justify-center gap-3 p-6 text-center" data-testid="preview-error">
             <AlertCircle className="h-12 w-12 text-muted-foreground" />
             <p className="text-sm font-medium">{doc.name}</p>
@@ -487,17 +497,20 @@ function DataPanel({
             >
               {(doc.type || "other").replace(/_/g, " ")}
             </Badge>
-            <Button
-              variant="outline"
-              size="icon"
-              className="h-7 w-7"
-              onClick={downloadFile}
-              data-testid="btn-download-doc"
-              title="Download file"
-              aria-label="Download file"
-            >
-              <Download className="h-3.5 w-3.5" />
-            </Button>
+            {/* No file was kept — a download button here can only fail. */}
+            {!wasFileDiscarded(doc) && (
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-7 w-7"
+                onClick={downloadFile}
+                data-testid="btn-download-doc"
+                title="Download file"
+                aria-label="Download file"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -644,12 +657,12 @@ function DataPanel({
           </section>
 
           {/* Tags */}
-          {doc.tags && doc.tags.some((t) => !t.startsWith("sha256:")) && (
+          {doc.tags && doc.tags.some((t) => !t.startsWith("sha256:") && t !== DISCARDED_FILE_TAG) && (
             <section>
               <h3 className="micro-label text-muted-foreground mb-2">Tags</h3>
               <div className="flex flex-wrap gap-1" data-testid="tags-list">
                 {/* sha256: tags are the upload-dedupe content hash — internal, never shown */}
-                {doc.tags.filter((tag) => !tag.startsWith("sha256:")).map((tag) => (
+                {doc.tags.filter((tag) => !tag.startsWith("sha256:") && tag !== DISCARDED_FILE_TAG).map((tag) => (
                   <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0">{tag}</Badge>
                 ))}
               </div>

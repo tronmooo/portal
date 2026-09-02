@@ -167,6 +167,7 @@ export default defineConfig({
       'tests/upload-discard-image.test.ts',
       'tests/upload-discard-image-route.test.ts',
       'tests/upload-discard-image.dom.test.tsx',
+      'tests/upload-discard-image-nav.dom.test.tsx',
       'tests/cache-bust-predicate.test.ts',
       'tests/recover-wedged-queries.test.ts',
       'tests/resume-refresh.test.ts',
