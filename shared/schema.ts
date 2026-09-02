@@ -1069,7 +1069,8 @@ export const insertIncomeSchema = z.object({
   amount: z.number().positive().max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE),
   category: z.string().default("salary"),
   frequency: z.string().default("monthly"),
-  date: z.string().optional(),
+  // The first pay day (a real calendar day) or blank; free text used to be stored.
+  date: calendarDayOrBlank.optional(),
   linkedProfiles: z.array(z.string()).optional().default([]),
   tags: z.array(z.string()).optional().default([]),
 });

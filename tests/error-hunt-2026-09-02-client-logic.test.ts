@@ -266,3 +266,26 @@ describe("D87: one rounding rule for every money tile", () => {
     expect(src).not.toMatch(/\$\{monthly(Spend|Income)\.toLocaleString\(\)\}/);
   });
 });
+
+// D96 — cash trend: month-aware inflow and string-bucketed outflow.
+import { buildCashTrend, monthKeyBack } from "../client/src/lib/cash-trend";
+describe("D96: buildCashTrend", () => {
+  it("steps months back across a year boundary", () => {
+    expect(monthKeyBack("2026-09-02", 0)).toBe("2026-09");
+    expect(monthKeyBack("2026-09-02", 5)).toBe("2026-04");
+    expect(monthKeyBack("2026-01-15", 1)).toBe("2025-12");
+  });
+  it("buckets an expense dated the 1st in its own month and only paints income from its start month", () => {
+    const expenses = [
+      { amount: 100, date: "2026-09-01" },   // September, not Aug 31
+      { amount: 40, date: "2026-08-15" },
+      { amount: 7, createdAt: "2026-07-01T03:00:00.000Z" }, // Jun 30 20:00 in LA
+    ];
+    const incomes = [{ amount: 1200, frequency: "monthly", date: "2026-08-28" }];
+    const t = buildCashTrend(expenses, incomes, "2026-09-02", "America/Los_Angeles");
+    expect(t.map(p => p.month)).toEqual(["Apr", "May", "Jun", "Jul", "Aug", "Sep"]);
+    expect(t.map(p => p.inflow)).toEqual([0, 0, 0, 0, 1200, 1200]);
+    expect(t.map(p => p.outflow)).toEqual([0, 0, 7, 0, 40, 100]);
+    expect(t[5].net).toBe(1100);
+  });
+});

@@ -1,4 +1,5 @@
 import { localTodayISO, formatLocalDate } from "@/lib/dates";
+import { buildCashTrend } from "@/lib/cash-trend";
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
@@ -67,35 +68,6 @@ const categoryColors: Record<string, string> = {
 };
 
 const EXPENSE_CATEGORIES = ["entertainment", "food", "general", "health", "housing", "pet", "transport", "utilities", "vehicle"];
-
-// Six-month in/out/net series shared by the Money overview cards AND the Cash
-// Flow Overview popup, so both surfaces plot identical numbers. Outflow is
-// summed per calendar month from real expenses; inflow uses the current
-// monthly income (no per-month income history yet — honest flat baseline).
-function buildCashTrend(expenses: any[], monthlyIncome: number): Array<{ month: string; inflow: number; outflow: number; net: number }> {
-  const now = new Date();
-  const monthKeys: Array<{ key: string; label: string }> = [];
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    monthKeys.push({
-      key: `${d.getFullYear()}-${d.getMonth()}`,
-      label: d.toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }),
-    });
-  }
-  const outByMonth: Record<string, number> = {};
-  for (const e of (Array.isArray(expenses) ? expenses : [])) {
-    const raw = (e as any).date || (e as any).createdAt;
-    if (!raw) continue;
-    const d = new Date(raw);
-    if (isNaN(d.getTime())) continue;
-    const k = `${d.getFullYear()}-${d.getMonth()}`;
-    outByMonth[k] = (outByMonth[k] || 0) + (Number((e as any).amount) || 0);
-  }
-  return monthKeys.map(m => {
-    const outflow = Math.round(outByMonth[m.key] || 0);
-    return { month: m.label, inflow: Math.round(monthlyIncome), outflow, net: Math.round(monthlyIncome) - outflow };
-  });
-}
 
 /** Order profile-picker options: self ("Me") pinned first, everyone else A→Z. */
 function sortProfilesForSelect(a: { type?: string; name?: string }, b: { type?: string; name?: string }) {
@@ -1159,7 +1131,7 @@ export default function FinancePage() {
 
         // Multi-month cash-flow trend (last 6 months) — shared helper so the
         // Cash Flow Overview popup plots the exact same series.
-        const cashTrend = buildCashTrend(expenses as any[], monthlyIncome);
+        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE);
         // Per-KPI mini-chart series.
         const spendSeries = cashTrend.map(c => c.outflow);
         const incomeSeries = cashTrend.map(c => c.inflow);
@@ -1219,7 +1191,7 @@ export default function FinancePage() {
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
         const ymNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
         const monthExpenses = (Array.isArray(expenses) ? expenses : []).filter((e: any) => String(e.date || "").slice(0, 7) === ymNow);
-        const cashTrend = buildCashTrend(expenses as any[], monthlyIncome);
+        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE);
         const closer = (o: boolean) => !o && setFinancePopup(null);
         return (
           <>

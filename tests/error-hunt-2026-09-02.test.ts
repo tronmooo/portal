@@ -305,3 +305,33 @@ describe("D94: a goal deadline is a real calendar day or blank", () => {
     }
   });
 });
+
+// D95 — income `date` was the last free-text day field on a money record.
+import { insertIncomeSchema } from "../shared/schema";
+describe("D95: an income date is a real calendar day or blank", () => {
+  const base = { description: "Pay", amount: 100, frequency: "monthly" as const };
+  it("keeps a day, blanks '', rejects free text", () => {
+    expect(insertIncomeSchema.parse({ ...base, date: "2026-09-15" }).date).toBe("2026-09-15");
+    expect(insertIncomeSchema.parse({ ...base, date: "" }).date).toBeUndefined();
+    for (const bad of ["next friday", "2026-13-45"]) {
+      expect(insertIncomeSchema.safeParse({ ...base, date: bad }).success, bad).toBe(false);
+      expect(insertIncomeSchema.partial().safeParse({ date: bad }).success, `partial ${bad}`).toBe(false);
+    }
+  });
+});
+
+// D96 — the Cash Flow Trend painted today's income across all six months.
+import { sumMonthlyIncomeForMonth } from "../shared/obligation-windows";
+describe("D96: income counts only from its first pay month", () => {
+  const incomes = [
+    { amount: 2600, frequency: "biweekly", date: "2026-08-28" },
+    { amount: 300, frequency: "monthly" }, // undated: always
+  ];
+  it("excludes an income from months before its date and includes it from that month on", () => {
+    expect(sumMonthlyIncomeForMonth(incomes, "2026-04")).toBeCloseTo(300, 6);
+    expect(sumMonthlyIncomeForMonth(incomes, "2026-07")).toBeCloseTo(300, 6);
+    expect(sumMonthlyIncomeForMonth(incomes, "2026-08")).toBeCloseTo(300 + 2600 * 26 / 12, 6);
+    expect(sumMonthlyIncomeForMonth(incomes, "2026-09")).toBeCloseTo(300 + 2600 * 26 / 12, 6);
+    expect(sumMonthlyIncomeForMonth([], "2026-09")).toBe(0);
+  });
+});

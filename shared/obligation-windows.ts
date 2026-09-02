@@ -126,3 +126,23 @@ export function sumMonthlyIncome(incomes: ReadonlyArray<{ amount?: number | stri
   for (const i of incomes || []) total += toMonthlyAmount(Number(i?.amount) || 0, i?.frequency);
   return total;
 }
+
+/**
+ * The monthly-equivalent income that existed in a given calendar month
+ * (`ym` = "YYYY-MM"). An income's `date` is its first pay day, so a paycheck
+ * first dated Aug 28 is not inflow for April; an income without a date counts
+ * in every month. The Cash Flow Trend used to paint today's income across all
+ * six months, so the months before a job started showed a full paycheck.
+ */
+export function sumMonthlyIncomeForMonth(
+  incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null; date?: string | null }> | null | undefined,
+  ym: string,
+): number {
+  let total = 0;
+  for (const i of incomes || []) {
+    const start = typeof i?.date === "string" && /^\d{4}-\d{2}/.test(i.date) ? i.date.slice(0, 7) : null;
+    if (start && start > ym) continue;
+    total += toMonthlyAmount(Number(i?.amount) || 0, i?.frequency);
+  }
+  return total;
+}
