@@ -461,3 +461,22 @@ describe("deriveScheduleFields: no due date is no due date", () => {
     expect(f.firstPaymentDate).toBe("2026-09-15");
   });
 });
+
+// ── D36: the capture classifier's question must not contradict the reply ──
+describe("shouldAppendClarifyingQuestion", () => {
+  const base = { question: "What item should be moved to today?", confidence: 0.4, projectionsCount: 0, actionsCount: 0 };
+  it("appends only when the turn went nowhere and the assistant asked nothing", async () => {
+    const { shouldAppendClarifyingQuestion } = await import("../shared/chat-clarify");
+    expect(shouldAppendClarifyingQuestion({ ...base, reply: "I couldn't tell what you meant." })).toBe(true);
+    // the assistant executed something: its summary stands alone
+    expect(shouldAppendClarifyingQuestion({ ...base, reply: "Updated Lunch at Panera to $45, dated today.", actionsCount: 1 })).toBe(false);
+    // the assistant already asked (a confirmation prompt)
+    expect(shouldAppendClarifyingQuestion({ ...base, reply: "Are you sure you'd like to delete the Lunch at Panera expense ($45)?" })).toBe(false);
+    // routed, confident, or no question at all
+    expect(shouldAppendClarifyingQuestion({ ...base, reply: "Hmm.", projectionsCount: 1 })).toBe(false);
+    expect(shouldAppendClarifyingQuestion({ ...base, reply: "Hmm.", confidence: 0.9 })).toBe(false);
+    expect(shouldAppendClarifyingQuestion({ ...base, reply: "Hmm.", question: "" })).toBe(false);
+    // the same question already in the reply
+    expect(shouldAppendClarifyingQuestion({ ...base, reply: "What item should be moved to today? I found nothing." })).toBe(false);
+  });
+});

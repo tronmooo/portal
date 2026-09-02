@@ -1,4 +1,5 @@
 import express, { type Express, type Request } from "express";
+import { shouldAppendClarifyingQuestion, appendClarifyingQuestion } from "@shared/chat-clarify";
 import { canonicalExpenseCategory, canonicalObligationCategory, EXPENSE_CATEGORIES } from "@shared/category-canon";
 import { createServer, type Server } from "http";
 import { createHash } from "crypto";
@@ -1823,24 +1824,25 @@ export async function registerRoutes(
           tCapture = Date.now() - tCaptureStart;
 
           // Surface the clarifying question in the chat reply when the
-          // classifier is unsure AND nothing was routed. We only append
-          // (never replace) so the AI's own response stays intact. Skipped
-          // when the final frame already shipped (routed turns) — the reply
-          // is on the wire and routed turns never carried the question anyway.
+          // classifier is unsure AND nothing was routed AND the assistant
+          // neither executed anything nor asked its own question — the rule
+          // lives in shared/chat-clarify.ts. Appending it after a successful
+          // update or a confirmation prompt made the reply contradict itself.
+          // Skipped when the final frame already shipped (routed turns) — the
+          // reply is on the wire and routed turns never carried the question.
           if (
             !finalSent &&
-            classification?.clarifyingQuestion &&
-            captureConf < 0.7 &&
-            projections.length === 0 &&
             (result as any) &&
-            typeof (result as any).reply === "string"
+            typeof (result as any).reply === "string" &&
+            shouldAppendClarifyingQuestion({
+              question: classification?.clarifyingQuestion,
+              reply: (result as any).reply,
+              confidence: captureConf,
+              projectionsCount: projections.length,
+              actionsCount: actions.length,
+            })
           ) {
-            const existing = (result as any).reply.trim();
-            const q = classification.clarifyingQuestion.trim();
-            // Avoid duplicating the question if the AI already asked it.
-            if (!existing.toLowerCase().includes(q.toLowerCase().slice(0, 40))) {
-              (result as any).reply = existing ? `${existing}\n\n${q}` : q;
-            }
+            (result as any).reply = appendClarifyingQuestion((result as any).reply, classification!.clarifyingQuestion!);
           }
         }
       } catch (err) {
