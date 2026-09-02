@@ -8016,9 +8016,13 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // A9 fix: include forProfile in the key so the same task title for two
       // different family members isn't suppressed as a duplicate.
       const taskDedupKey = `task:${safeLC(input.forProfile || "")}:${incomingNorm}:${taskLinkedProfiles.join(",")}`;
+      // A lock hit is NOT a refusal on its own: the database check above is
+      // the authority. "Log a bagel" → delete it → "log a bagel" again within
+      // 30 s was refused ("1 step didn't go through") because the lock still
+      // remembered a record that no longer existed. The lock now only says
+      // "look again"; the live duplicate check decides.
       if (isDuplicateCreation(dedupUser, taskDedupKey)) {
-        logger.info("ai", `Dedup lock: skipped duplicate task "${input.title}"`);
-        return { error: "Duplicate task detected — skipped" };
+        logger.info("ai", `Dedup lock hit for task "${input.title}" — no live duplicate found, creating`);
       }
       // BUG-B: recurring tasks. We store cadence as a `recur:<freq>` tag (no
       // schema change needed). On completion the PATCH/complete_task path reads
@@ -10104,9 +10108,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       // In-memory dedup lock — catches concurrent requests before DB persistence
       const expDedupKey = `expense:${safeLC(input.description)}:${parsedAmount}:${input.date || ""}:${safeLC(input.forProfile || "")}`;
+      // A lock hit is NOT a refusal on its own — the live duplicate check
+      // right below is the authority. Refusing here made the same message
+      // fail for 30 s after the user deleted the record it had created.
       if (isDuplicateCreation(dedupUser, expDedupKey)) {
-        logger.info("ai", `Dedup lock: skipped duplicate expense $${parsedAmount} ${input.description}`);
-        return { error: "Duplicate expense detected — skipped" };
+        logger.info("ai", `Dedup lock hit for expense $${parsedAmount} ${input.description} — deferring to the live duplicate check`);
       }
       // Dedup: check if same amount + similar description was created in last 2 minutes
       const allExpenses = await storage.getExpenses();
@@ -10442,9 +10448,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // In-memory dedup lock
       // A9 fix: include forProfile in event dedup key.
       const evtDedupKey = `event:${safeLC(input.forProfile || "")}:${safeLC(input.title)}:${input.date}`;
+      // A lock hit is NOT a refusal on its own — the live duplicate check
+      // right below is the authority (see create_expense).
       if (isDuplicateCreation(dedupUser, evtDedupKey)) {
-        logger.info("ai", `Dedup lock: skipped duplicate event "${input.title}" on ${input.date}`);
-        return { error: "Duplicate event detected — skipped" };
+        logger.info("ai", `Dedup lock hit for event "${input.title}" on ${input.date} — deferring to the live duplicate check`);
       }
       // Dedup: skip if a very similar event exists on the same date
       const allEvents = await storage.getEvents();
