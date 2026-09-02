@@ -184,6 +184,12 @@ Sent 22 bad PATCH bodies across expenses, tasks, events, obligations, goals, hab
 ### UI interaction pass 2 (Playwright, production build)
 Pay from the dashboard's Needs-attention row (two-tap Confirm): one payment row, due date advanced a month, the row left the list and stayed gone after reload, the auto-logged expense appeared in MTD spend. Habit segment on /habits: check-in wrote one checkin (streak 1), the second tap removed it (0), the state survived reload. Delete a task on /tasks then Undo in the toast: the row came back, the server row was restored (same id), no duplicate after reload. No console errors, no failed requests. Integrity after the pass: no orphan checkins, no payments without a liability profile.
 
+### Goals, habit mirror, entry edits (probe s19) — verified working
+A weight goal's `current` follows the tracker's latest entry and falls back to the previous entry when that entry is deleted; a habit check-in writes exactly one entry to its mirror tracker and un-checking removes it; `PATCH /api/tracker-entries/:id` changes the value, keeps notes and timestamp, and rejects a non-numeric value. Noted, by design: reaching a goal's target does not flip `status` to completed (progress is computed for display; completion is the user's call, "update_goal status completed" in chat).
+
+### Browser re-crawl after round 3b–3g (Playwright, production build)
+All 19 routes again: no console errors or warnings, no failed or 4xx/5xx requests, no "NaN / undefined / Invalid Date / $-" text on any page.
+
 ### Accounts and payments (probe s17) — verified working
 A bill paid from Chase Checking debits it and the undo credits it back; a $10 payment on a $25 bill logs a $10 expense and the undo retracts it; `/api/accounts/:id/adjust` rejects non-numeric balances and deltas and an empty body. Noted, by design: a partial bill payment settles the occurrence (`status: paid`, `paidAmount` 10 vs `actualAmount` 25 — the shortfall stays visible on the schedule) and the series advances; a credit-card *account* is not a liability profile, so `/api/liabilities/:id/payments` answers 404 for it and there is no account-to-account transfer route (card balances are adjusted directly).
 
