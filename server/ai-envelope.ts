@@ -25,6 +25,7 @@ import type { IStorage } from "./storage";
 import type { ChatMutation } from "@shared/schema";
 import { domainsForEntity, endpointForEntity, type Domain } from "@shared/entity-domains";
 import { deleteDocumentEverywhere } from "./document-deletion";
+import { unpayBillOccurrence } from "./liability-payments";
 
 export interface ToolVerification {
   /** Post-write read-back: the record is visible in the database (creates/
@@ -296,6 +297,18 @@ export async function recordActionLog(
       reversible = true;
       reversePlan = { op: "set_preference", key: "dashboard_layout", value: envelope?._previousState?.layout ?? null };
     }
+    // Bill / loan payments: the real inverse is unpayBillOccurrence — ledger
+    // row, occurrence stamp, due-date rollback, account credit and the logged
+    // expense. The generic "reapply_before" only put the obligation's
+    // nextDueDate back and left the payment, the paid stamp and the expense
+    // in place ("undo that" after "I paid X" claimed success and did a third
+    // of the work).
+    const paidId = envelope?.paid?.paymentId ?? envelope?.payment?.id ?? envelope?.paymentId;
+    const liabilityIdForUndo = envelope?.entity?.id || entityId || envelope?.liabilityId;
+    if ((toolName === "pay_obligation" || toolName === "add_liability_payment" || toolName === "mark_loan_payment") && liabilityIdForUndo && paidId) {
+      reversible = true;
+      reversePlan = { op: "unpay_bill", liabilityId: String(liabilityIdForUndo), paymentId: String(paidId) };
+    }
     if (toolName === "set_notification_preferences") {
       reversible = true;
       reversePlan = { op: "set_preference", key: "notification_prefs", value: envelope?._previousState?.prefs ?? "{}" };
@@ -461,6 +474,13 @@ export async function executeReversePlan(
       // which is how a deleted reminder used to reappear on the next fetch.
       await fn(s, id);
       return { ok: true, description: `Removed ${name} (${plan.soft ? "recoverable" : "permanent"} delete).` };
+    }
+    case "unpay_bill": {
+      if (!plan.liabilityId || !plan.paymentId) return { ok: false, description: "No payment recorded in the reverse plan." };
+      const r = await unpayBillOccurrence(s, String(plan.liabilityId), { paymentId: String(plan.paymentId), source: "ai" });
+      return r.ok
+        ? { ok: true, description: `Retracted the payment on ${name} — due date, paid status${r.steps?.some((st: any) => st.step === "expense_delete" && st.ok) ? ", logged expense" : ""}${r.steps?.some((st: any) => st.step === "account_credit" && st.ok) ? " and account balance" : ""} restored.` }
+        : { ok: false, description: `Couldn't retract the payment on ${name}${(r as any).reason ? ` (${(r as any).reason})` : ""}.` };
     }
     case "restore": {
       const ok = await s.restoreEntity(type, id);

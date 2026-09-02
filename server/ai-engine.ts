@@ -114,6 +114,9 @@ import { groupMaterializedSeries } from "@shared/series-detect";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
+import { isRecurringBill as sharedIsRecurringBill } from "@shared/liability-types";
+import { readDueDate as sharedReadDueDate } from "@shared/liability-recurrence";
+import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
 import { parseQuickRun, parseQuickSleep, parseQuickWeight, buildTurnRecap, type RecapOp } from "@shared/quick-log";
@@ -15577,7 +15580,14 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         const f = l.fields || {};
         const bal = sharedLiabilityBalance(l);
         const apr = sharedAnnualRate(f); // normalized fraction (6.5 → 0.065)
-        const status = bal === 0 ? "PAID-OFF" : "active";
+        // A recurring service bill (utility, phone, streaming) has no balance
+        // BY DESIGN — it has a due date. Labelling it "PAID-OFF" for bal 0 made
+        // the model tell the user an OVERDUE internet bill was paid off.
+        const recurringBill = sharedIsRecurringBill(l.type_key ?? l.typeKey);
+        const billDue = recurringBill ? sharedReadDueDate(f) : "";
+        const status = recurringBill
+          ? sharedBillStatus(billDue || null, getUserToday(aiUserTimezone()))
+          : (bal === 0 ? "PAID-OFF" : "active");
         const subtype = l.type_key || "other";
         // Searchable keywords helps the model fuzzy-match casual phrasings ("boat", "sea ray", "my dad's loan").
         const keywords: string[] = [];
@@ -15587,10 +15597,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         if (f.vehicleModel) keywords.push(String(f.vehicleModel));
         if (f.propertyAddress) keywords.push(String(f.propertyAddress));
         const details = [
-          `bal: $${bal.toFixed(2)}`,
+          recurringBill ? null : `bal: $${bal.toFixed(2)}`,
           apr > 0 ? `apr: ${(apr * 100).toFixed(2)}%` : null,
           f.monthlyPayment ? `mo: $${f.monthlyPayment}` : null,
-          f.dueDay ? `due: ${f.dueDay}` : null,
+          recurringBill && (f.amount ?? f.monthlyAmount ?? f.monthlyCost) != null ? `amount: $${f.amount ?? f.monthlyAmount ?? f.monthlyCost}/${f.frequency || "month"}` : null,
+          // The next due date, stated explicitly — with only "mo: $2,200" the
+          // model guessed "due today" for a mortgage that has no due date set.
+          recurringBill ? `due: ${billDue || "not set"}` : (f.dueDay ? `due day: ${f.dueDay}` : (sharedReadDueDate(f) ? `due: ${sharedReadDueDate(f)}` : "due: not set")),
         ].filter(Boolean).join(', ');
         // Ownership: "Self 50%, Tom 50%" — always state percentages explicitly.
         const partyLinks = allPartyLinks[idx] || [];

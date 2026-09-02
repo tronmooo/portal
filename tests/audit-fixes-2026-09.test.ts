@@ -415,3 +415,16 @@ describe("payBillOccurrence: an implicit pay seconds after a posted payment is t
     expect(payments.length).toBe(1);
   });
 });
+
+import { recordActionLog, buildTurnVerifyContext } from "../server/ai-envelope";
+describe("AI undo: a bill payment's reverse plan is the real inverse", () => {
+  it("pay_obligation records an unpay_bill plan carrying the payment id", async () => {
+    const rows: any[] = [];
+    const storage: any = { createAiActionLog: async (row: any) => { rows.push(row); return { id: "log-1", ...row }; }, getProfiles: async () => [] };
+    const ctx = buildTurnVerifyContext(storage);
+    await recordActionLog(ctx, "pay_obligation", "update_entity", { name: "Water" }, { entity: { id: "L1", type: "obligation", name: "Water" }, paid: { amount: 40, occurrence: "2026-09-01", paymentId: "pay-1" } }, [{ id: "L1", nextDueDate: "2026-09-01" }]);
+    expect(rows.length).toBe(1);
+    expect(rows[0].reversible).toBe(true);
+    expect(rows[0].reversePlan).toEqual({ op: "unpay_bill", liabilityId: "L1", paymentId: "pay-1" });
+  });
+});
