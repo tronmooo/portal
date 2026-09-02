@@ -10,6 +10,7 @@ import {
 } from "./content-service";
 import { findActionableTime } from "@shared/temporal-rules";
 import { classifyContent, routeContent, checkContentRouting, isStructured, extractSharedActivities, type ContentClassification } from "@shared/content-routing";
+import { planSharedActivityFanout, type FanoutWrite } from "@shared/shared-activity";
 import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate, isNutritionTrackerName } from "@shared/nutrition-shaped";
@@ -6872,6 +6873,12 @@ async function rememberCategoryMapping(name: string, category: string, opts: { o
 // Returns undefined when 0 matches OR multiple word-boundary matches (caller
 // can surface a disambiguation error). Single longest-name preference applies
 // for the bidirectional case.
+/** A profile's recorded body weight in kg, if it has one. */
+function profileWeightKg(p: any): number | null {
+  const f = p?.fields || {};
+  return parseWeightToKg(f.weight ?? f.weightLbs ?? f.weight_lbs ?? f.weightKg);
+}
+
 function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: any): T | undefined {
   const result = resolveProfileByName(profiles, rawName);
   if (result.kind === "found") return result.profile;
@@ -15883,6 +15890,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // second create of the same thing is refused instead of producing a twin
     // record (2026-08-09: one "MacBook Pro m4" request → two profiles).
     const turnCreates: TurnCreate[] = [];
+    const trackerWritesThisTurn: FanoutWrite[] = [];
     const richCharts: ChartSpec[] = [];
     const richTables: TableSpec[] = [];
     let richReport: ReportSpec | undefined;
@@ -16317,6 +16325,16 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 ...(sourceMessageId ? { _sourceMessageId: sourceMessageId } : {}),
               },
             };
+            // Every tracker entry this turn wrote, for the shared-activity
+            // fan-out after the loop. Recorded under the name the tool was
+            // ASKED for, which is what the fan-out matches clauses against.
+            if (toolUse.name === "log_tracker_entry" && result && !(result as any).error) {
+              trackerWritesThisTurn.push({
+                trackerName: String(inp.trackerName || (result as any).trackerName || ""),
+                profileId: (result as any).profileId ?? null,
+                values: { ...((result as any).values || inp.values || {}) },
+              });
+            }
             meta.action = actionForStream;
             meta.result = result;
             roundIndexOf.set(actionForStream, toolIdx);
@@ -16512,6 +16530,93 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           break;
         }
       }
+    }
+
+    // ── SHARED ACTIVITY FAN-OUT (2026-09-02) ──────────────────────────────
+    // "Sarah and I both played soccer" is TWO entries. Telling the model that
+    // was not enough — the user reported the same single entry again — so the
+    // missing halves are written here, deterministically, after the model has
+    // had its turn. Only gaps are filled: a participant the model already
+    // logged is never written twice. The values are not a copy; everything
+    // that depends on whose body did the activity is stripped so the target
+    // profile's own weight, height and history recompute it (see
+    // shared/shared-activity.ts).
+    try {
+      const selfP = (profiles || []).find((p: any) => p?.type === "self");
+      const fanout = planSharedActivityFanout({
+        userMessage,
+        writes: trackerWritesThisTurn,
+        resolveName: (name) => {
+          const m = matchProfileByName((profiles || []) as any[], name);
+          return m ? { id: m.id, name: m.name, weightKg: profileWeightKg(m) } : null;
+        },
+        selfProfile: selfP ? { id: selfP.id, name: selfP.name, weightKg: profileWeightKg(selfP) } : null,
+      });
+      for (const plan of fanout) {
+        logger.info("ai", `[turn ${turnId.slice(0, 8)}] shared-activity fan-out: ${plan.trackerName} for ${plan.forProfile}`);
+        const fanInput: Record<string, any> = {
+          trackerName: plan.trackerName,
+          forProfile: plan.forProfile,
+          values: plan.values,
+          __userMessage: userMessage,
+        };
+        let raw: any;
+        try {
+          raw = await executeTool("log_tracker_entry", fanInput, userId);
+        } catch (err: any) {
+          raw = { error: err?.message || String(err) };
+        }
+        if (!raw || raw.error) {
+          allOperations.push({
+            index: allOperations.length,
+            raw: `log_tracker_entry ${plan.trackerName} (${plan.forProfile})`,
+            tool: "log_tracker_entry",
+            status: "failed",
+            error: `Couldn't log ${plan.trackerName} for ${plan.forProfile}${raw?.error ? ` — ${raw.error}` : ""}.`,
+            turnId,
+            sourceMessageId,
+          } as OperationOutcome);
+          continue;
+        }
+        invalidateContextCache(userId);
+        let fanResult: any = raw;
+        try { fanResult = await finalizeToolResult("log_tracker_entry", "log_entry", fanInput, raw, turnVerifyCtx); } catch { /* verification is best-effort */ }
+        const fanDeduped = fanResult?.deduped === true;
+        if (!fanDeduped) {
+          try { await recordActionLog(turnVerifyCtx, "log_tracker_entry", "log_entry", fanInput, fanResult, null); } catch { /* ledger is best-effort */ }
+        }
+        allActions.push({
+          type: "log_entry",
+          category: "ai",
+          data: {
+            trackerName: plan.trackerName,
+            ...plan.values,
+            ...(raw?._displayData || {}),
+            ...(raw?.id ? { _entityId: raw.id } : {}),
+            ...(raw?.trackerId ? { _trackerId: raw.trackerId } : {}),
+            _ownerName: plan.forProfile,
+            _ownerProfileId: plan.participantId,
+            _turnId: turnId,
+            ...(sourceMessageId ? { _sourceMessageId: sourceMessageId } : {}),
+          },
+        } as ParsedAction);
+        allResults.push(fanResult);
+        allOperations.push({
+          index: allOperations.length,
+          raw: `log_tracker_entry ${plan.trackerName} (${plan.forProfile})`,
+          tool: "log_tracker_entry",
+          status: fanDeduped ? "deduped" : "ok",
+          entity: fanResult?.entity,
+          turnId,
+          sourceMessageId,
+        } as OperationOutcome);
+        if (!fanDeduped) {
+          const fanMutation = buildChatMutation("log_tracker_entry", fanResult, raw);
+          if (fanMutation) turnMutations.push(fanMutation);
+        }
+      }
+    } catch (e: any) {
+      logger.warn("ai", `Shared-activity fan-out failed (non-fatal): ${e?.message || e}`);
     }
 
     // Bug #48: track tool-level failures from this entire chat turn so we can
