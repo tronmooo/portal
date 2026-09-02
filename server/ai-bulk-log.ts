@@ -31,6 +31,10 @@ export interface OperationOutcome {
   tool: string;
   status: "ok" | "failed" | "skipped" | "deduped";
   error?: string;
+  /** Debug-only (request sent `debug:true`): the tool's raw, model-facing
+   *  error and the arguments it was called with — never shown in the UI. */
+  rawError?: string;
+  toolInput?: Record<string, unknown>;
   entityId?: string;
   trackerName?: string;
   createdTracker?: { id: string; name: string };

@@ -16514,6 +16514,12 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               tool: toolUse.name,
               status: isSuccess ? (wasDeduped ? "deduped" : "ok") : "failed",
               error: userFacingError,
+              // A probe with debug:true needs the raw failure to diagnose a
+              // turn; the user-facing sentence above hides it by design.
+              ...(options?.debug && !isSuccess ? {
+                rawError: String(result?.error || ""),
+                toolInput: Object.fromEntries(Object.entries(inp).filter(([k]) => !k.startsWith("__")).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])),
+              } : {}),
               entityId: isSuccess ? (entityId || undefined) : undefined,
               trackerName: inp.trackerName ? String(inp.trackerName) : undefined,
               createdTracker: isSuccess && (result as any)?.__createdTracker?.id ? (result as any).__createdTracker : undefined,
