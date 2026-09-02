@@ -73,6 +73,10 @@ Advisors: 28 WARN `auth_rls_initplan` — all on the Stripe/financial_* tables, 
 
 ## Blocked on the live database (to run when Supabase answers)
 
+### Follow-up check, 20:41 UTC
+`https://portol.me/api/profiles/lite` and Supabase Auth `/auth/v1/health` both timed out at 20s; the background live probe saw the API answer nothing but 000/401 on 17 checks between 19:45 and 20:00 UTC and then stopped. The management API answered `select now()` once at 20:42 (11 connections) and timed out on the next two statements, so the `EXPLAIN` on the expenses read could not be taken either. The live endpoint timings, the AI chat probe and the contract suite remain blocked; the scripts to run them are `tests/perf/live-chat.ts` and the endpoint loop in `tests/perf/README.md`.
+
+
 - Production endpoint latencies (`.probe/live-probe2.sh` waits until `/api/profiles/lite` answers, then times 18 endpoints × 3). A token was minted at 19:37 UTC (attempt 29) but every API read then timed out at 60s: the API's own Postgres calls were still failing.
 - AI chat: time to first frame, time to final, action accuracy for single/multi-person/multi-action/correction/delete commands (`.probe/live-chat.ts`).
 - `EXPLAIN (analyze)` on the expenses and tracker_entries list reads and the expenses insert path (triggers/indexes); the bootstrap's 18 parallel reads end to end.
