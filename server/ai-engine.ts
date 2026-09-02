@@ -34,6 +34,8 @@ import {
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
+import { upcomingEventOccurrences } from "@shared/event-upcoming";
+import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags } from "@shared/recurring-dates";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, entityTypeForTool, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
 import { buildExtractionItems } from "@shared/extraction-destinations";
@@ -4655,11 +4657,13 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "delete_event",
-    description: "Delete a calendar EVENT by title — an occasion that was going to happen (a meeting, an appointment someone else scheduled). When the user says 'reminder' ('delete the pickup reminder', 'cancel my dentist reminder') they mean the TASK of that name — use delete_task; there is no reminder entity.",
+    description: "Delete a calendar EVENT by title — an occasion that was going to happen (a meeting, an appointment someone else scheduled). When the user says 'reminder' ('delete the pickup reminder', 'cancel my dentist reminder') they mean the TASK of that name — use delete_task; there is no reminder entity.\n\nRECURRING SERIES: 'cancel tomorrow's stand-up', 'skip this Friday's class', 'no yoga on the 14th' means ONE occurrence — pass occurrenceDate (YYYY-MM-DD) and the series keeps every other date. Only 'delete the stand-up entirely', 'remove the whole series', 'stop the weekly class' deletes the series — pass entireSeries:true. For a recurring event with neither, the tool refuses rather than guess.",
     input_schema: {
       type: "object" as const,
       properties: {
         title: { type: "string", description: "Event title (partial match)" },
+        occurrenceDate: { type: "string", description: "For a RECURRING event: the single date (YYYY-MM-DD) to cancel. The series survives." },
+        entireSeries: { type: "boolean", description: "For a RECURRING event: true to delete the whole series and every future occurrence." },
       },
       required: ["title"],
     },
@@ -12031,8 +12035,27 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const events = await storage.getEvents();
       const deResult = safeMatchEntity(events, input.title || "", e => e.title, { isDestructive: true });
       if (!deResult.match) return { error: deResult.error || "Event not found", candidates: deResult.candidates };
-      await storage.deleteEvent(deResult.match.id);
-      return { deleted: true, title: deResult.match.title, id: deResult.match.id };
+      const target: any = deResult.match;
+      const isSeries = !!target.recurrence && target.recurrence !== "none";
+      const occ = String(input.occurrenceDate || "").slice(0, 10);
+      if (isSeries && /^\d{4}-\d{2}-\d{2}$/.test(occ)) {
+        // ONE date of a series: the same rd:skip tag the calendar's "this
+        // occurrence" delete writes. Deleting the row here removed every
+        // stand-up the user had, to cancel one morning.
+        const today = getUserToday(aiUserTimezone());
+        const tags = pruneRecurringOccurrenceTags(markRecurringOccurrence(target.tags ?? [], occ, "skip"), today);
+        await storage.updateEvent(target.id, { tags } as any);
+        return { skipped: occ, seriesKept: true, title: target.title, id: target.id, message: `Cancelled ${target.title} on ${occ} only — the series continues.` };
+      }
+      if (isSeries && input.entireSeries !== true) {
+        return {
+          error: `"${target.title}" is a recurring series (${target.recurrence}). To cancel one date pass occurrenceDate (YYYY-MM-DD); to delete the whole series and all future occurrences pass entireSeries:true. Ask the user which they mean if the message doesn't say.`,
+          code: "RECURRING_SCOPE_REQUIRED",
+          recurrence: target.recurrence,
+        };
+      }
+      await storage.deleteEvent(target.id);
+      return { deleted: true, title: target.title, id: target.id, ...(isSeries ? { entireSeries: true } : {}) };
     }
 
     // ─── NEW HANDLERS ─────────────────────────────────────────────────────────
@@ -15541,7 +15564,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     }).join("; ") || "none"}`,
     `Active Tasks: ${tasks.filter(t => t.status !== "done").slice(0, 15).map(t => `${t.title}${t.dueDate ? ` (due: ${t.dueDate})` : ""}`).join("; ") || "none"}`,
     `Recent Expenses (last 10): ${expenses.slice(-10).map(e => `$${e.amount} - ${e.description} (${e.date?.slice(0,10)})`).join("; ") || "none"}`,
-    `Upcoming Events (next 10): ${events.filter(e => new Date(e.date) >= new Date()).slice(0, 10).map(e => `${e.title} on ${e.date}`).join("; ") || "none"}`,
+    // NEXT OCCURRENCE, not base date: a daily stand-up anchored last month is
+    // upcoming every day, and used to be invisible here ("no upcoming events
+    // listed for your account").
+    `Upcoming Events (next 10, by next occurrence): ${upcomingEventOccurrences(events as any[], getUserToday(aiUserTimezone())).map(e => `${e.title} on ${e.date}${e.time ? ` ${e.time}` : ""}${e.recurrence ? ` [recurring: ${e.recurrence} — to cancel ONE date call delete_event with occurrenceDate; the series is deleted only with entireSeries:true]` : ""}`).join("; ") || "none"}`,
     // Today's progress rides along so a report of doing one of these ("I
     // walked the dog") can be checked in and quoted accurately — and so an
     // already-finished habit is visibly already finished rather than being

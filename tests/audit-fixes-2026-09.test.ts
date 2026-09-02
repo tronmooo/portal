@@ -521,3 +521,21 @@ describe("stale-replay gate vs corrections", () => {
     expect(isStaleTurnReplay({ name: "Walk the Dog" }, "Create an asset for my Dodge Ram 2025", ["Create a habit to walk the dog"])).toBe(true);
   });
 });
+
+// ── D40: the assistant's "upcoming events" are next occurrences, not base dates ──
+describe("upcomingEventOccurrences", () => {
+  it("lists a past-anchored daily series by its next date, drops past one-time events, sorts by date", async () => {
+    const { upcomingEventOccurrences } = await import("../shared/event-upcoming");
+    const today = "2026-09-02";
+    const rows = [
+      { id: "a", title: "Standup", date: "2026-08-23", recurrence: "daily", time: "09:00", tags: [] },
+      { id: "b", title: "Old party", date: "2026-08-30", recurrence: "none" },
+      { id: "c", title: "Dentist", date: "2026-09-04", recurrence: "none", time: "14:00" },
+      { id: "d", title: "Yoga", date: "2026-08-05", recurrence: "weekly", tags: [`rd:skip:2026-09-02`] },
+    ];
+    const out = upcomingEventOccurrences(rows as any, today);
+    expect(out.map((o) => `${o.title}@${o.date}`)).toEqual(["Standup@2026-09-02", "Dentist@2026-09-04", "Yoga@2026-09-09"]);
+    expect(out[0].recurrence).toBe("Every day");
+    expect(out[1].recurrence).toBeNull();
+  });
+});
