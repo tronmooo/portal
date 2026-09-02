@@ -26,7 +26,7 @@
  * whole, trimmed name so "Nutrition" / "Calories" / "Food Log" pass through but
  * "Chicken Salad" does not.
  */
-const GENERIC_NUTRITION_TRACKER_RE =
+export const GENERIC_NUTRITION_TRACKER_RE =
   /^\s*(daily |weekly |my )?(nutrition|nutrients?|calorie counter|calories?|caloric intake|diet|macros?|macro tracker|food log|food diary|food journal|food tracker|meal log|meal tracker|eating|nutrition tracker)\s*$/i;
 
 /**
@@ -142,4 +142,20 @@ function cleanItemName(name: string): string {
     .map((w) => (w.length > 2 ? w.charAt(0).toUpperCase() + w.slice(1) : w))
     .join(" ")
     .replace(/^./, (c) => c.toUpperCase());
+}
+
+/**
+ * Is this name the profile's ONE nutrition tracker, under any of its usual
+ * names? "Calories", "Food Log", "Macros" and "Nutrition" are the same
+ * tracker — a profile has exactly one.
+ *
+ * Reported 2026-09-02 ("there is no calorie tracker, it should go in
+ * nutrition"): log_tracker_entry already resolved these aliases onto the
+ * existing Nutrition tracker, but create_tracker's duplicate check compared
+ * canonical name identity only, where "Calories" and "Nutrition" are
+ * different words. So a create call for "Calories" slipped past the check and
+ * would stand up a second nutrition tracker beside the real one.
+ */
+export function isNutritionTrackerName(name: string | null | undefined): boolean {
+  return GENERIC_NUTRITION_TRACKER_RE.test(String(name ?? ""));
 }

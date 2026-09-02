@@ -436,6 +436,69 @@ export function extractProfileHint(clause: string): string | null {
   return null;
 }
 
+// ─── Shared activities ───────────────────────────────────────────────────────
+
+/** One clause whose subject names more than one participant. */
+export interface SharedActivity {
+  clause: string;
+  /** Candidate profile names from the joint subject — NOT yet validated
+   *  against the user's real profiles; the caller does that. */
+  names: string[];
+  /** The subject included "I" / "me" — the user is a participant too. */
+  includesSelf: boolean;
+}
+
+const SELF_SUBJECT = /^(?:i|me|myself)$/i;
+/** A capitalized name of one or two words, or a self pronoun. */
+const PARTICIPANT = String.raw`(?:[A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)?|[Ii]|me)`;
+/**
+ * A conjoined subject followed by a verb: "Sarah and I played",
+ * "Me and Sarah went", "Sarah, Jane and I ran", "Sarah and I both played".
+ * The trailing lowercase word keeps "Grilled Chicken and Rice" (a food list,
+ * no verb) from reading as a subject; the caller's profile check removes
+ * whatever survives that.
+ */
+const JOINT_SUBJECT = new RegExp(
+  String.raw`\b(` +
+  PARTICIPANT + String.raw`(?:\s*,\s*` + PARTICIPANT + String.raw`)*` +
+  String.raw`\s+(?:and|&|\+)\s+` + PARTICIPANT +
+  String.raw`)\s+(?:both\s+|each\s+|all\s+)?[a-z]`,
+);
+
+/**
+ * Clauses whose subject names several people — "Sarah and I played soccer".
+ *
+ * Reported 2026-09-02: that sentence produced ONE soccer entry, on the user's
+ * tracker. Half the message's meaning was dropped, and the person whose data
+ * went missing had no way to tell. The owner extractor above only ever looked
+ * for a SINGLE owner ("for Robert", "Robert's …"), so a joint subject named
+ * nobody at all and the activity silently defaulted to the user.
+ *
+ * This only DETECTS the shape; it never decides anything. The caller checks
+ * the names against real profiles and tells the model to write one entry per
+ * participant, which is the honest reading of "we both did this".
+ */
+export function extractSharedActivities(message: string): SharedActivity[] {
+  const out: SharedActivity[] = [];
+  for (const clause of splitIntentClauses(String(message ?? ""))) {
+    const hit = clause.match(JOINT_SUBJECT);
+    if (!hit) continue;
+    const parts = hit[1].split(/\s*,\s*|\s+(?:and|&|\+)\s+/).map((x) => x.trim()).filter(Boolean);
+    const names: string[] = [];
+    let includesSelf = false;
+    for (const part of parts) {
+      if (SELF_SUBJECT.test(part)) { includesSelf = true; continue; }
+      const name = cleanName(part);
+      if (name) names.push(name);
+    }
+    // Two or more participants is the whole point; one name plus nothing else
+    // is an ordinary single-owner clause the existing hint already handles.
+    if (names.length + (includesSelf ? 1 : 0) < 2) continue;
+    out.push({ clause: clause.trim(), names, includesSelf });
+  }
+  return out;
+}
+
 const STOP_NAMES = new Set([
   "i", "me", "my", "mine", "myself", "self", "us", "we", "our",
   "today", "tomorrow", "yesterday", "note", "journal", "task", "the", "a", "an",
