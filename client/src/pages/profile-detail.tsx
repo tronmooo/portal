@@ -1,7 +1,7 @@
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField } from "@/lib/field-display";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatFullDate, parseLocalDate } from "@/lib/format";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
 // ValueRollupCard / MaintenanceCard below still exist and are still used for
@@ -281,7 +281,26 @@ import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { checkProfileRename } from "@shared/profile-rename";
 import { calculateStreak } from "@shared/streak";
-import { getUserToday, toLocalDateStr } from "@shared/timezone";
+import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
+import { toMonthlyAmount } from "@shared/obligation-windows";
+
+// Expense dates are "YYYY-MM-DD". Slice the month rather than parse: new
+// Date("YYYY-MM-DD") is UTC midnight, which is the previous evening in the
+// Americas, so every 1st-of-month expense was bucketed into the prior month
+// (and every Jan 1 expense dropped out of the year total).
+function monthKeyOf(date: unknown): string {
+  const s = String(date || "");
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 7);
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  try { return toLocalDateStr(d, BROWSER_TIMEZONE).slice(0, 7); } catch { return ""; }
+}
+
+// Calendar day of a timestamp in the browser's zone, for Today/Yesterday
+// grouping. The UTC slice put an 8 PM entry under "Today" all the next morning.
+function localDayOfTimestamp(ts: string): string {
+  try { return toLocalDateStr(new Date(ts), BROWSER_TIMEZONE); } catch { return String(ts || "").slice(0, 10); }
+}
 import { habitDayProgress } from "@shared/habit-progress";
 import { DocumentDeleteDialog } from "@/components/DocumentDeleteDialog";
 import { useToast } from "@/hooks/use-toast";
@@ -1380,7 +1399,7 @@ function MaintenanceCard({
     return ids;
   }, [profile.id, treeDataMaint]);
   const { data: allEvents } = useQuery<any[]>({
-    queryKey: ["/api/events", profile.id, "maint-scope", maintScopeIds.join(",")],
+    queryKey: ["/api/events", profile.id, "maint-scope", ...maintScopeIds],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/events?profileIds=${encodeURIComponent(maintScopeIds.join(","))}&limit=500`);
       return res.json();
@@ -1689,7 +1708,7 @@ function MaintenanceCard({
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-muted-foreground">
-                            {new Date(e.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                            {formatFullDate(e.date)}
                           </span>
                           {childName && (
                             <span className="text-[11px] text-muted-foreground">· {childName}</span>
@@ -3918,7 +3937,10 @@ function ProductivityHubTab({
   profileId: string;
   onChanged: () => void;
 }) {
-  const todayISO = new Date().toISOString().slice(0, 10);
+  // The user's day, matching how check-ins are written (habits.tsx). The UTC
+  // date is already tomorrow from ~5 PM Pacific, which showed a habit just
+  // checked off as not done and shifted "due today" by a day.
+  const todayISO = getUserToday(BROWSER_TIMEZONE);
   const habits = (profile.relatedHabits || []) as any[];
   const tasks = (profile.relatedTasks || []) as any[];
   const events = (profile.relatedEvents || []) as any[];
@@ -4247,7 +4269,7 @@ function ProductivityHubTab({
 }
 
 const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }: { habits: any[]; profileName: string }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getUserToday(BROWSER_TIMEZONE);
   if (!habits || habits.length === 0) {
     return (
       <Card>
@@ -4943,32 +4965,23 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   }, [(profile as any).ownedAssetExpenses]);
 
   const now = new Date();
-  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const currentMonthKey = getUserToday(BROWSER_TIMEZONE).slice(0, 7);
   const thisMonth = expenses
-    .filter(e => {
-      const d = new Date(e.date);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` === currentMonthKey;
-    })
+    .filter(e => monthKeyOf(e.date) === currentMonthKey)
     .reduce((sum, e) => sum + (e.amount || 0), 0);
 
   const expensesByMonth: Record<string, number> = {};
   for (const exp of expenses) {
-    const d = new Date(exp.date);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const key = monthKeyOf(exp.date);
+    if (!key) continue;
     expensesByMonth[key] = (expensesByMonth[key] || 0) + (exp.amount || 0);
   }
   const sortedMonths = Object.keys(expensesByMonth).sort();
   const avgPerMonth = sortedMonths.length > 0 ? totalSpent / sortedMonths.length : 0;
 
-  const monthlyObligations = obligations.reduce((sum, ob) => {
-    const freq = (ob.frequency || "").toLowerCase();
-    const amt = ob.amount || 0;
-    if (freq === "weekly") return sum + amt * 4.33;
-    if (freq === "biweekly") return sum + amt * 2.17;
-    if (freq === "quarterly") return sum + amt / 3;
-    if (freq === "annual" || freq === "yearly") return sum + amt / 12;
-    return sum + amt; // monthly default
-  }, 0);
+  // Exact 52/12 and 26/12 multipliers (shared/obligation-windows.ts), matching
+  // the dashboard and finance page rather than the truncated 4.33/2.17.
+  const monthlyObligations = obligations.reduce((sum, ob) => sum + toMonthlyAmount(ob.amount || 0, ob.frequency), 0);
   const monthlyBurn = monthlyObligations + avgPerMonth;
 
   const outstanding =
@@ -5158,9 +5171,12 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     onMutate: async ({ id }: { id: string; desc?: string }) => {
       await queryClient.cancelQueries({ queryKey: ["/api/expenses"] });
       await queryClient.cancelQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
-      const prevExpenses = queryClient.getQueryData<any[]>(["/api/expenses"]);
+      // Prefix match: the live key is ["/api/expenses", filterMode, ...ids], so
+      // an exact-key get/set on ["/api/expenses"] touched a slot no query reads —
+      // the optimistic removal never showed and the rollback restored nothing.
+      const prevExpenses = queryClient.getQueriesData<any[]>({ queryKey: ["/api/expenses"] });
       const prevDetail = queryClient.getQueryData<any>(["/api/profiles", profileId, "detail"]);
-      queryClient.setQueryData<any[]>(["/api/expenses"], (old) => (old || []).filter((e: any) => e.id !== id));
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/expenses"] }, (old) => Array.isArray(old) ? old.filter((e: any) => e.id !== id) : old);
       queryClient.setQueryData<any>(["/api/profiles", profileId, "detail"], (old: any) => {
         if (!old?.relatedExpenses) return old;
         return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
@@ -5174,7 +5190,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       onChanged();
     },
     onError: (err: Error, _vars, ctx: any) => {
-      if (ctx?.prevExpenses !== undefined) queryClient.setQueryData(["/api/expenses"], ctx.prevExpenses);
+      if (Array.isArray(ctx?.prevExpenses)) for (const [key, data] of ctx.prevExpenses) queryClient.setQueryData(key, data);
       if (ctx?.prevDetail !== undefined) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prevDetail);
       toast({ title: "Failed", description: formatApiError(err), variant: "destructive" });
     },
@@ -7770,10 +7786,10 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
 
   const filtered = filter === "all" ? timeline : timeline.filter(e => normalizeFilter(e.type) === normalizeFilter(filter));
 
-  // Group by relative date
+  // Group by relative date, in the browser's zone (see localDayOfTimestamp).
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
-  const yesterday = new Date(now.getTime() - 86400000).toISOString().slice(0, 10);
+  const todayStr = getUserToday(BROWSER_TIMEZONE);
+  const yesterday = tzAddDays(todayStr, -1);
   const weekAgo = new Date(now.getTime() - 7 * 86400000).getTime();
 
   const groups: { label: string; items: TimelineEntry[] }[] = [
@@ -7783,7 +7799,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
     { label: "Earlier", items: [] },
   ];
   for (const e of filtered.slice(0, 50)) {
-    const d = e.timestamp.slice(0, 10);
+    const d = localDayOfTimestamp(e.timestamp);
     const t = new Date(e.timestamp).getTime();
     if (d === todayStr) groups[0].items.push(e);
     else if (d === yesterday) groups[1].items.push(e);
@@ -9427,7 +9443,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
   const deleteClaimMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
     onSuccess: (_data, id) => {
-      queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter((e: any) => e.id !== id) || []);
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/expenses"] }, (old) => Array.isArray(old) ? old.filter((e: any) => e.id !== id) : old);
       queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
         if (!old?.relatedExpenses) return old;
         return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
@@ -9517,7 +9533,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
   const deleteRedemptionMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
     onSuccess: (_data, id) => {
-      queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter((e: any) => e.id !== id) || []);
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/expenses"] }, (old) => Array.isArray(old) ? old.filter((e: any) => e.id !== id) : old);
       queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
         if (!old?.relatedExpenses) return old;
         return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
@@ -10951,7 +10967,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
   const deletePayMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
     onSuccess: (_data, id) => {
-      queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter((e: any) => e.id !== id) || []);
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/expenses"] }, (old) => Array.isArray(old) ? old.filter((e: any) => e.id !== id) : old);
       queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
         if (!old?.relatedExpenses) return old;
         return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
@@ -10995,7 +11011,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
             <div className="divide-y divide-border/30">
               {paymentHistory.slice(0, 10).map((p: any) => (
                 <div key={p.id} className="group flex justify-between items-center py-1.5">
-                  <span className="text-xs text-muted-foreground">{p.date ? new Date(p.date).toLocaleDateString() : "—"}</span>
+                  <span className="text-xs text-muted-foreground">{formatFullDate(p.date)}</span>
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium tabular-nums">{p.amount ? formatCurrency(Number(p.amount)) : "—"}</span>
                     <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deletePayMutation.mutate(p.id)} data-testid={`button-delete-payment-${p.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
@@ -12425,7 +12441,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
   const deleteSubPayMutation = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/expenses/${id}`); },
     onSuccess: (_data, id) => {
-      queryClient.setQueryData(["/api/expenses"], (old: any[]) => old?.filter((e: any) => e.id !== id) || []);
+      queryClient.setQueriesData<any[]>({ queryKey: ["/api/expenses"] }, (old) => Array.isArray(old) ? old.filter((e: any) => e.id !== id) : old);
       queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => {
         if (!old?.relatedExpenses) return old;
         return { ...old, relatedExpenses: old.relatedExpenses.filter((e: any) => e.id !== id) };
@@ -12512,7 +12528,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
                 <div key={exp.id} className="group flex items-center justify-between py-1.5 border-b border-border/30 last:border-0" data-testid={`payment-row-${exp.id}`}>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium truncate">{exp.description || "Payment"}</p>
-                    <p className="text-xs text-muted-foreground tabular-nums">{new Date(exp.date).toLocaleDateString()}</p>
+                    <p className="text-xs text-muted-foreground tabular-nums">{formatFullDate(exp.date)}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold tabular-nums">${(exp.amount || 0).toFixed(2)}</span>
@@ -12578,19 +12594,20 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
   const f = profile.fields || {};
   const cost = Number(f.monthlyCost || f.cost || f.amount || 0);
   const freq = (f.frequency || "monthly").toLowerCase();
-  const monthlyCost = freq === "yearly" || freq === "annual" ? cost / 12 : freq === "quarterly" ? cost / 3 : freq === "weekly" ? cost * 4.33 : cost;
+  // Shared exact multipliers: the inline version used 4.33 and had no biweekly
+  // branch at all, so a biweekly subscription was costed as monthly.
+  const monthlyCost = toMonthlyAmount(cost, freq);
   const expenses = profile.relatedExpenses || [];
 
-  const now = new Date();
-  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const currentYear = now.getFullYear();
+  const currentMonthKey = getUserToday(BROWSER_TIMEZONE).slice(0, 7);
+  const currentYear = currentMonthKey.slice(0, 4);
 
   const thisMonthTotal = expenses
-    .filter(e => { const d = new Date(e.date); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}` === currentMonthKey; })
+    .filter(e => monthKeyOf(e.date) === currentMonthKey)
     .reduce((sum, e) => sum + (e.amount || 0), 0);
 
   const thisYearTotal = expenses
-    .filter(e => new Date(e.date).getFullYear() === currentYear)
+    .filter(e => monthKeyOf(e.date).slice(0, 4) === currentYear)
     .reduce((sum, e) => sum + (e.amount || 0), 0);
 
   const startDate = f.startDate ? new Date(f.startDate) : null;
@@ -12605,8 +12622,8 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
   // Monthly totals for cost trend
   const monthlyTotals: Record<string, number> = {};
   for (const exp of expenses) {
-    const d = new Date(exp.date);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const key = monthKeyOf(exp.date);
+    if (!key) continue;
     monthlyTotals[key] = (monthlyTotals[key] || 0) + (exp.amount || 0);
   }
   const sortedMonths = Object.entries(monthlyTotals).sort((a, b) => a[0].localeCompare(b[0])).slice(-12);
@@ -14043,7 +14060,7 @@ export default function ProfileDetailPage() {
                               {item.subtitle && <p className="text-xs text-muted-foreground">{item.subtitle}</p>}
                             </div>
                             <span className="text-xs text-muted-foreground shrink-0">
-                              {item.date ? new Date(item.date).toLocaleDateString('en-US', {month:'short', day:'numeric'}) : ''}
+                              {item.date ? (parseLocalDate(item.date)?.toLocaleDateString('en-US', {month:'short', day:'numeric'}) ?? '') : ''}
                             </span>
                           </div>
                         ))}

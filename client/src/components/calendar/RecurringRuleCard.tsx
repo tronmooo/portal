@@ -213,7 +213,7 @@ export function RecurringRuleCard({
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" data-testid={`rule-menu-${series.id}`}>
+          <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" aria-label="More actions" data-testid={`rule-menu-${series.id}`}>
             <MoreHorizontal className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>

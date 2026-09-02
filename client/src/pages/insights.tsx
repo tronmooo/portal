@@ -4,7 +4,9 @@
 import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
+import { getUserToday } from "@shared/timezone";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -44,7 +46,7 @@ const CATEGORY_MAP: Record<string, string> = {
   fuel: "transport",
   shopping: "shopping",
   transport: "transport",
-  utilities: "utility",
+  utilities: "utilities",
   health: "health",
   entertainment: "entertainment",
   services: "general",
@@ -111,15 +113,15 @@ export default function InsightsPage() {
         description: r.vendor,
         vendor: r.vendor,
         category: mappedCat,
-        date: r.date || new Date().toISOString().slice(0, 10),
+        date: r.date || getUserToday(BROWSER_TIMEZONE),
       };
       const res = await apiRequest("POST", "/api/expenses", body);
       return res.json();
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["/api/expenses"] });
-      qc.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
-      qc.invalidateQueries({ queryKey: ["/api/stats"] });
+      // Cache bus: an expense also moves budgets, cashflow and the bootstrap
+      // seed, and other open tabs need to hear about it (ARCHITECTURE §6).
+      void invalidateDomains("expenses");
       toast({ title: "Expense added" });
       setReceipt(null);
     },

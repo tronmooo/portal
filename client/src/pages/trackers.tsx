@@ -1,3 +1,11 @@
+import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
+import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
+
+// "Today" in the browser's zone. The UTC-date prefix test reset the Today
+// calories / hydration / dose tiles at 5-8 PM local for US users.
+function isTodayLocal(timestamp: string): boolean {
+  try { return tzLocalDateStr(new Date(timestamp), TRACKER_TZ) === tzUserToday(TRACKER_TZ); } catch { return false; }
+}
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { warmProfileDetail } from "@/lib/scope-prefetch";
@@ -5312,7 +5320,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
               {editGoal ? "Update" : "Create"}
             </Button>
             {editGoal && (
-              <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => deleteMutation.mutate({ id: editGoal.id, title: editGoal.title })} data-testid="btn-delete-tracker-goal">
+              <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => deleteMutation.mutate({ id: editGoal.id, title: editGoal.title })} disabled={deleteMutation.isPending} data-testid="btn-delete-tracker-goal">
                 <Trash2 className="h-3 w-3" />
               </Button>
             )}
@@ -7572,14 +7580,14 @@ export default function TrackersPage() {
               if (vals.length >= 2) kpis.push({ label: "Best", value: Math.max(...vals).toFixed(1) + " hrs" });
               kpis.push({ label: "Logged", value: `${entries.length} nights` });
             } else if (tracker.category === "nutrition" || tracker.name.toLowerCase().includes("calorie")) {
-              const todayEntries = entries.filter(e => e.timestamp.startsWith(new Date().toISOString().slice(0, 10)));
+              const todayEntries = entries.filter(e => isTodayLocal(e.timestamp));
               const todayTotal = todayEntries.reduce((s, e) => s + (Number(e.values?.[pf]) || 0), 0);
               kpis.push({ label: "Today", value: `${todayTotal.toLocaleString()} ${unit}` });
               if (avg7d != null) kpis.push({ label: "Daily Avg", value: `${avg7d.toFixed(0)} ${unit}` });
               kpis.push({ label: "Entries", value: `${entries.length}` });
               if (vals.length >= 2) kpis.push({ label: "High", value: `${Math.max(...vals).toLocaleString()} ${unit}` });
             } else if (tracker.name.toLowerCase().includes("hydration") || tracker.name.toLowerCase().includes("water")) {
-              const todayEntries = entries.filter(e => e.timestamp.startsWith(new Date().toISOString().slice(0, 10)));
+              const todayEntries = entries.filter(e => isTodayLocal(e.timestamp));
               const todayTotal = todayEntries.reduce((s, e) => s + (Number(e.values?.[pf]) || 0), 0);
               kpis.push({ label: "Today", value: `${todayTotal} ml`, color: todayTotal >= 2000 ? "text-green-500" : todayTotal >= 1000 ? "text-amber-500" : "text-red-400" });
               if (avg7d != null) kpis.push({ label: "Daily Avg", value: `${avg7d.toFixed(0)} ml` });
@@ -7590,7 +7598,7 @@ export default function TrackersPage() {
               if (vals.length >= 2) kpis.push({ label: "Range", value: `${Math.min(...vals)}-${Math.max(...vals)} bpm` });
               kpis.push({ label: "Readings", value: String(entries.length) });
             } else if (tracker.name.toLowerCase().includes("medication")) {
-              const todayDoses = entries.filter(e => e.timestamp.startsWith(new Date().toISOString().slice(0, 10))).length;
+              const todayDoses = entries.filter(e => isTodayLocal(e.timestamp)).length;
               kpis.push({ label: "Today", value: `${todayDoses} dose${todayDoses !== 1 ? "s" : ""}`, color: todayDoses > 0 ? "text-green-500" : "text-muted-foreground" });
               kpis.push({ label: "This Week", value: `${entries.filter(e => Date.now() - new Date(e.timestamp).getTime() < 7 * 86400000).length} doses` });
               kpis.push({ label: "Total", value: `${entries.length} logged` });
@@ -7625,7 +7633,7 @@ export default function TrackersPage() {
             else if (spec === "sleep" && avg7d != null && avg7d < 6) insight = "⚠️ Below recommended 7+ hours";
             else if (spec === "sleep" && avg7d != null && avg7d >= 7) insight = "✓ Meeting sleep goal";
             else if (tracker.name.toLowerCase().includes("hydration")) {
-              const todayH = entries.filter(e => e.timestamp.startsWith(new Date().toISOString().slice(0, 10))).reduce((s, e) => s + (Number(e.values?.[pf]) || 0), 0);
+              const todayH = entries.filter(e => isTodayLocal(e.timestamp)).reduce((s, e) => s + (Number(e.values?.[pf]) || 0), 0);
               if (todayH >= 2000) insight = "✓ Hydration goal met today";
               else if (todayH > 0) insight = `${2000 - todayH}ml to go today`;
             } else if (trendPct != null && Math.abs(trendPct) > 10) insight = `${trendPct > 0 ? "Increasing" : "Decreasing"} ${Math.abs(trendPct).toFixed(0)}% vs last week`;

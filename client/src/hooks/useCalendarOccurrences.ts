@@ -63,6 +63,8 @@ export interface CalendarOccurrencesResult {
   isLoading: boolean;
 }
 
+const EMPTY_LIST: any[] = [];
+
 export function useCalendarOccurrences(
   opts: UseCalendarOccurrencesOptions = {},
 ): CalendarOccurrencesResult {
@@ -114,10 +116,13 @@ export function useCalendarOccurrences(
     queryFn: () => get(`/api/incomes${profileParam}`),
   });
 
+  // Stable empty fallbacks: a fresh [] per render defeated every useMemo
+  // downstream (allSeries, scopedSeries, ...) and regenerated years of
+  // occurrences on each render while a query was still loading.
   const profileList: any[] = Array.isArray(profiles.data)
     ? profiles.data
-    : (profiles.data?.data ?? []);
-  const eventList: any[] = Array.isArray(events.data) ? events.data : [];
+    : (profiles.data?.data ?? EMPTY_LIST);
+  const eventList: any[] = Array.isArray(events.data) ? events.data : EMPTY_LIST;
 
   const todayISO = todayLocal();
 

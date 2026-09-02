@@ -549,7 +549,7 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0 mt-0.5" data-testid={`rd-menu-${ev.id}`}>
+            <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0 mt-0.5" aria-label="More actions" data-testid={`rd-menu-${ev.id}`}>
               <MoreHorizontal className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>

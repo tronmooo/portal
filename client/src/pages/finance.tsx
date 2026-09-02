@@ -5,6 +5,7 @@ import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { matchesExpenseSearch, sortExpenses, type ExpenseSort } from "@shared/expense-view";
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
@@ -152,6 +153,16 @@ export default function FinancePage() {
   // showing the previous profile's numbers until you tabbed away and back.
   const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const { data: profiles } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  // Ownership link tables, so the subscription filter below sees co-owners
+  // the way the dashboard roll-ups do (shared/scope.ts).
+  const { data: assetPartyLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/asset-party-links"],
+    queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()),
+  });
+  const { data: liabilityProfileLinks = [] } = useQuery<any[]>({
+    queryKey: ["/api/liability-profile-links"],
+    queryFn: () => apiRequest("GET", "/api/liability-profile-links").then(r => r.json()),
+  });
   // Accounts, for the "Paid from" picker. Derived from the profile list that is
   // already loaded — one fetch, one source of truth, no second account list.
   const accountOptions = useMemo(() => accountViews(profiles || []), [profiles]);
@@ -872,14 +883,20 @@ export default function FinancePage() {
   // show all when "everyone", otherwise only subs whose parent is selected (or
   // the sub itself is directly selected). Exclude soft-deleted rows.
   const subscriptions = useMemo(() => {
-    const selected = filterMode === "everyone" ? null : new Set(filterIds);
+    const emptySelfIds = new Set<string>();
     return (profiles || []).filter((p: any) => {
       if (p.type !== "subscription") return false;
       if (p.deletedAt || p.deleted_at) return false;
-      if (!selected) return true;
-      return selected.has(p.id) || (p.parentProfileId && selected.has(p.parentProfileId));
+      if (filterMode === "everyone" || filterIds.length === 0) return true;
+      // Canonical ownership candidates (id, parent, linked co-owners) — the
+      // inline parent-only check hid a subscription owned through a linked party.
+      return isInScope(
+        ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks),
+        { selectedIds: filterIds, selfIds: emptySelfIds },
+        "out_of_scope",
+      );
     });
-  }, [profiles, filterMode, filterIds]);
+  }, [profiles, filterMode, filterIds, assetPartyLinks, liabilityProfileLinks]);
 
   // Group loans by loan_name
   const loanGroups = useMemo(() => loanSchedules.reduce((acc: Record<string, any[]>, entry: any) => {

@@ -330,10 +330,9 @@ function EventFormDialog({
       return { prevEvents, prevTimeline, tempId };
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/events"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
+      // Cache bus, as the delete path already does: it also covers
+      // /api/date-rules and the bootstrap seed, and reaches other open tabs.
+      void invalidateDomains("events", "dashboard");
       queryClient.invalidateQueries({ queryKey: ["/api/cashflow"] });
     },
     onError: (err: Error, _vars, ctx) => {
