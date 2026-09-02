@@ -10849,6 +10849,8 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return {
             error: `The user reported an activity, not a habit check-in — do NOT touch habits. Log it with log_tracker_entry(trackerName:"${input.name || "the activity"}") instead, keeping every quantity, method, and timestamp they stated.`,
             code: "NOT_A_HABIT_CHECKIN",
+            // Diagnostics for debug:true probes only (stripped from the model-facing result below).
+            __debug: { eligible: eligible.map(h => h.name).slice(0, 10), scopedProfileName, message: checkinMsg.slice(0, 200) },
           };
         }
         // The message names the habit; trust it over the model's `name`
@@ -16517,8 +16519,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               // A probe with debug:true needs the raw failure to diagnose a
               // turn; the user-facing sentence above hides it by design.
               ...(options?.debug && !isSuccess ? {
-                rawError: String(result?.error || ""),
-                toolInput: Object.fromEntries(Object.entries(inp).filter(([k]) => !k.startsWith("__")).map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])),
+                rawError: String(result?.error || "") + ((result as any)?.__debug ? ` ‖ debug=${JSON.stringify((result as any).__debug)}` : ""),
+                toolInput: Object.fromEntries(Object.entries(inp).filter(([k]) => !k.startsWith("__") || k === "__userMessage").map(([k, v]) => [k, typeof v === "string" ? v.slice(0, 200) : v])),
               } : {}),
               entityId: isSuccess ? (entityId || undefined) : undefined,
               trackerName: inp.trackerName ? String(inp.trackerName) : undefined,
