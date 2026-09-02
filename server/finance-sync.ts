@@ -713,6 +713,9 @@ export async function syncFinancialData(opts: SyncOptions): Promise<SyncResult> 
 
     let connectionFailed = false;
     let connectionNeedsRelink = false;
+    // Errors accumulate across ALL connections in `result`; this connection's
+    // status must be judged only on the ones added during its own loop.
+    const accountErrorsBefore = result.accountErrors.length;
 
     try {
       // Which accounts belong to this connection? Ask Stripe (authoritative)
@@ -740,6 +743,16 @@ export async function syncFinancialData(opts: SyncOptions): Promise<SyncResult> 
             ? await stripe.financialConnections.accounts.retrieve(stripeAccount.id)
             : stripeAccount;
 
+          // Read the PREVIOUS refresh id before upsertAccount overwrites it with
+          // the one just requested — reading it afterwards made the import
+          // filter on "after the current refresh", skipping everything that
+          // refresh produced until the following sync.
+          const { data: prior } = await db
+            .from("financial_accounts")
+            .select("last_transaction_refresh_id")
+            .eq("user_id", userId)
+            .eq("stripe_financial_connections_account_id", fresh.id)
+            .maybeSingle();
           const { id: localId, accountType } = await upsertAccount(db, userId, conn.id, fresh);
           result.accountsProcessed++;
 
@@ -755,18 +768,11 @@ export async function syncFinancialData(opts: SyncOptions): Promise<SyncResult> 
             continue;
           }
 
-          const { data: local } = await db
-            .from("financial_accounts")
-            .select("last_transaction_refresh_id")
-            .eq("id", localId)
-            .eq("user_id", userId)
-            .maybeSingle();
-
           const stats = await importTransactions(
             db, stripe, userId, localId, fresh.id, accountType,
             {
               fullHistory: opts.fullHistory ?? syncType === "initial",
-              sinceRefreshId: syncType === "initial" ? null : local?.last_transaction_refresh_id ?? null,
+              sinceRefreshId: syncType === "initial" ? null : prior?.last_transaction_refresh_id ?? null,
             },
           );
           result.transactionsInserted += stats.inserted;
@@ -793,7 +799,7 @@ export async function syncFinancialData(opts: SyncOptions): Promise<SyncResult> 
       if (code === "relink_required" || code === "account_inactive") connectionNeedsRelink = true;
     }
 
-    const hadAccountErrors = result.accountErrors.length > 0;
+    const hadAccountErrors = result.accountErrors.length > accountErrorsBefore;
     const connStatus = connectionFailed ? "failed"
       : connectionNeedsRelink ? "action_required"
         : "active";
@@ -804,9 +810,9 @@ export async function syncFinancialData(opts: SyncOptions): Promise<SyncResult> 
       .update({
         connection_status: connStatus,
         last_sync_status: syncStatus,
-        last_sync_error: connectionFailed || hadAccountErrors
-          ? result.errorCode ?? result.accountErrors[0]?.code ?? null
-          : null,
+        last_sync_error: connectionFailed
+          ? result.errorCode ?? null
+          : hadAccountErrors ? result.accountErrors[accountErrorsBefore]?.code ?? null : null,
         ...(syncStatus === "success" ? { last_successful_sync_at: new Date().toISOString() } : {}),
       })
       .eq("id", conn.id)

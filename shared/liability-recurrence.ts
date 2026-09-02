@@ -21,7 +21,9 @@ export function normalizeBillFrequency(input?: string | null): string {
   if (["weekly", "week", "/wk"].includes(s)) return "weekly";
   if (["biweekly", "every 2 weeks", "fortnightly"].includes(s)) return "every-2-weeks";
   if (["daily", "day"].includes(s)) return "daily";
-  if (["quarterly", "quarter"].includes(s)) return "every-3-months";
+  if (["quarterly", "quarter", "every 3 months"].includes(s)) return "every-3-months";
+  if (["semiannual", "semi-annual", "semiannually", "semi-annually", "biannual", "biannually", "every 6 months", "twice a year"].includes(s)) return "every-6-months";
+  if (["bimonthly", "bi-monthly", "every 2 months", "every other month"].includes(s)) return "every-2-months";
   // Already a recur token (e.g. "every-2-weeks")? pass through.
   return s;
 }

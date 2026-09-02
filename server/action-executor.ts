@@ -644,7 +644,7 @@ function requireAmount(v: unknown): number {
  * with a fixed West-Coast date lands on the wrong day for anyone east of it,
  * and a bill dated one day late is a bill that looks paid late.
  */
-const today = () => getUserToday();
+const today = () => getUserToday((storage as any)._timezone);
 
 /**
  * Update an EXISTING recurring bill. It never creates one.
@@ -699,13 +699,25 @@ async function writeExpense(action: ProposedAction, documentId: string): Promise
   const date = String(p.date || today());
   const owner = p.linkedProfileId ? String(p.linkedProfileId) : (action.target?.id ?? undefined);
 
+  // Provenance link expense → document. linkProfileTo(profileId, …) was being
+  // called with the EXPENSE id as the profile id, so it returned silently and
+  // the link was never written.
+  const linkExpenseToDocument = async (expenseId: string) => {
+    try {
+      await storage.createEntityLink({
+        sourceType: "expense", sourceId: expenseId,
+        targetType: "document", targetId: documentId,
+        relationship: "extracted_from", confidence: 1,
+      } as any);
+    } catch { /* best effort */ }
+  };
   const priors = await storage.getExpenses();
   const dup = (priors || []).find((e: any) =>
     String(e?.date) === date &&
     Math.abs(Number(e?.amount) - amount) < 0.005 &&
     String((e?.linkedProfiles || [])[0] || "") === String(owner || ""));
   if (dup) {
-    try { await storage.linkProfileTo((dup as any).id, "document", documentId); } catch { /* already linked */ }
+    await linkExpenseToDocument(String((dup as any).id));
     return `Expense $${amount.toFixed(2)} already exists (${(dup as any).description}) — not duplicated`;
   }
 
@@ -724,7 +736,7 @@ async function writeExpense(action: ProposedAction, documentId: string): Promise
     tags: isRecurring ? ["recurring"] : [],
     linkedProfiles: owner ? [owner] : [],
   } as any);
-  try { await storage.linkProfileTo((expense as any).id, "document", documentId); } catch { /* best effort */ }
+  await linkExpenseToDocument(String((expense as any).id));
   return isRecurring
     ? `Created recurring expense: $${amount.toFixed(2)} ${(expense as any).description}`
     : `Created expense: $${amount.toFixed(2)} ${(expense as any).description}`;

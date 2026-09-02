@@ -101,3 +101,97 @@ describe("insights: due today is not overdue", () => {
     expect(overdue?.data?.taskIds).toEqual(["t-late"]);
   });
 });
+
+// ── Round 2: shared calendar / finance math ──────────────────────────────────
+import { expandRecurrenceDates, nextOccurrence } from "../shared/recurring-dates";
+import { generateSchedule, periodsPerYear } from "../shared/liability-schedule";
+import { buildAmortization, summarizeLiability } from "../shared/liability-calc";
+import { computeNetWorth } from "../shared/net-worth";
+import { computeAssetRollup } from "../shared/asset-rollup";
+import { frequencyToRecurrence } from "../shared/calendar-adapters";
+import { monthlyEquivalent } from "../shared/overview-compose";
+import { nextAnnual } from "../shared/calendar-occurrences";
+import { isAssetProfile } from "../shared/asset-value";
+
+describe("recurrence expansion reaches windows far from the base date", () => {
+  it("an old daily series still produces occurrences in a window years later", () => {
+    expect(expandRecurrenceDates("2024-01-01", "daily", { windowStart: "2026-09-02", windowEnd: "2026-09-04" }))
+      .toEqual(["2026-09-02", "2026-09-03", "2026-09-04"]);
+    expect(nextOccurrence({ date: "2020-01-01", recurrence: "daily" } as any, "2026-09-02")).toBe("2026-09-02");
+  });
+  it("weekly and weekday series keep their cadence when fast-forwarded", () => {
+    expect(expandRecurrenceDates("2024-01-01", "weekly", { windowStart: "2026-09-02", windowEnd: "2026-09-20" }))
+      .toEqual(["2026-09-07", "2026-09-14"]); // 2024-01-01 was a Monday
+    expect(expandRecurrenceDates("2024-01-01", "weekdays", { windowStart: "2026-09-04", windowEnd: "2026-09-08" }))
+      .toEqual(["2026-09-04", "2026-09-07", "2026-09-08"]); // Fri, Mon, Tue
+  });
+  it("a day-31 monthly series stays clamped to month end after fast-forward", () => {
+    expect(expandRecurrenceDates("2020-01-31", "monthly", { windowStart: "2026-09-02", windowEnd: "2026-11-30" }))
+      .toEqual(["2026-09-30", "2026-10-31", "2026-11-30"]);
+  });
+  it("a recent series is unchanged", () => {
+    expect(expandRecurrenceDates("2026-09-01", "daily", { windowStart: "2026-09-01", windowEnd: "2026-09-03" }))
+      .toEqual(["2026-09-01", "2026-09-02", "2026-09-03"]);
+  });
+});
+
+describe("liability schedule honours non-monthly cadences", () => {
+  const opts = { todayISO: "2026-01-01", windowStart: "2026-01-01", windowEnd: "2026-12-31" } as any;
+  it("quarterly bill yields four occurrences a year, not one", () => {
+    const dates = generateSchedule({ id: "L1", fields: { frequency: "quarterly", dueDate: "2026-01-15", monthlyAmount: 300 } } as any, [], opts)
+      .map((o: any) => o.date ?? o.dueDate);
+    expect(dates).toEqual(["2026-01-15", "2026-04-15", "2026-07-15", "2026-10-15"]);
+  });
+  it("periodsPerYear knows quarterly, annual and one-off", () => {
+    expect(periodsPerYear({ fields: { frequency: "quarterly" } } as any)).toBe(4);
+    expect(periodsPerYear({ fields: { frequency: "annually" } } as any)).toBe(1);
+    expect(periodsPerYear({ fields: { frequency: "once" } } as any)).toBe(1);
+  });
+});
+
+describe("amortization", () => {
+  it("clamps month-end due dates instead of overflowing", () => {
+    const rows = buildAmortization({ currentBalance: 10000, annualInterestRate: 6, monthlyPayment: 500, firstPaymentDate: "2026-01-31" } as any).rows;
+    expect(rows.slice(0, 4).map(r => r.dueDate)).toEqual(["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30"]);
+  });
+  it("flags a payment that never covers interest instead of reporting a 1-month payoff", () => {
+    const s = summarizeLiability({ currentBalance: 10000, annualRate: 24, monthlyPayment: 100 });
+    expect(s.neverAmortizes).toBe(true);
+    expect(s.remainingMonths).toBe(0);
+  });
+});
+
+describe("balance keys are one-sided", () => {
+  it("a loan profile's balance is debt, not an asset", () => {
+    const nw = computeNetWorth([{ id: "a", name: "Car loan", type: "loan", fields: { balance: 20000 } }] as any, { mode: "everyone", selectedIds: [] } as any);
+    expect([nw.assets, nw.liabilities, nw.netWorth]).toEqual([0, 20000, -20000]);
+    // A loan may still carry the financed asset's own value.
+    expect(isAssetProfile({ type: "loan", fields: { currentValue: 1000 } })).toBe(true);
+  });
+  it("a checking account's balance is its value, not a loan against it", () => {
+    const r: any = computeAssetRollup({ id: "p", name: "Checking", type: "account", fields: { balance: 5000 } } as any, []);
+    expect([r.baseValue, r.baseLoans, r.netValue]).toEqual([5000, 0, 5000]);
+    const h: any = computeAssetRollup({ id: "h", name: "House", type: "property", fields: { currentValue: 500000, loan: { balance: 300000 } } } as any, []);
+    expect([h.baseValue, h.baseLoans, h.netValue]).toEqual([500000, 300000, 200000]);
+  });
+});
+
+describe("frequency vocabulary agrees across engines", () => {
+  it("calendar adapter maps the multi-month and fortnightly spellings", () => {
+    expect(["semiannual", "every-2-weeks", "fortnightly", "bimonthly", "once"].map(frequencyToRecurrence))
+      .toEqual(["semiannual", "biweekly", "biweekly", "bimonthly", "none"]);
+  });
+  it("toMonthlyAmount handles the same spellings, and one-offs are not monthly", () => {
+    expect(toMonthlyAmount(600, "semiannually")).toBe(100);
+    expect(toMonthlyAmount(100, "bimonthly")).toBe(50);
+    expect(toMonthlyAmount(100, "semimonthly")).toBe(200);
+    expect(toMonthlyAmount(100, "once")).toBe(0);
+  });
+  it("monthlyEquivalent tells semi-monthly from semi-annual", () => {
+    expect(monthlyEquivalent(1000, "semi-monthly")).toBe(2000);
+    expect(monthlyEquivalent(600, "semiannual")).toBe(100);
+  });
+  it("nextAnnual handles a base date years in the future", () => {
+    expect(nextAnnual("2030-05-01", "2026-09-02")).toBe("2030-05-01");
+  });
+});

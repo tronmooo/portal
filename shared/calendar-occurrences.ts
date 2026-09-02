@@ -1047,7 +1047,10 @@ export function nextAnnual(baseDate: string, todayISO: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return null;
   const todayYear = Number(todayISO.slice(0, 4));
   const baseYear = Number(base.slice(0, 4));
-  for (let y = Math.max(0, todayYear - baseYear); y <= todayYear - baseYear + 2; y++) {
+  // Lower bound clamps at 0 for a future base; the upper bound must clamp the
+  // same way or a base 3+ years out yields an empty loop (and null).
+  const fromYears = Math.max(0, todayYear - baseYear);
+  for (let y = fromYears; y <= fromYears + 2; y++) {
     const candidate = addYearsISO(base, y);
     if (candidate >= todayISO) return candidate;
   }

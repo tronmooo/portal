@@ -1,3 +1,4 @@
+import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 // ─── Asset valuation dossier ────────────────────────────────────────────────
 // Builds the complete "everything we know about this asset" context that the
 // valuation LLM calls (Perplexity primary, Anthropic fallback) receive, and
@@ -18,6 +19,27 @@
 //    and keep returning the same number even after mileage/condition/location
 //    changed. Those keys are stripped here (purchase price/date are kept —
 //    those are real inputs, not prior model output).
+
+// Identifier-shaped keys that must never leave the platform in a valuation
+// prompt, on top of the app-wide sensitive-field list. VIN, mileage, year,
+// condition and the like stay: they are what a valuation is made of.
+const THIRD_PARTY_KEY_RE = /(ssn|social.?security|passport|driver.?s?.?licen[cs]e|licen[cs]e.?(no|num|number)|policy.?(no|num|number)|account.?(no|num|number)|routing|card.?(no|num|number)|cvv|\bpin\b|password|secret|token|date.?of.?birth|\bdob\b|birth.?date|phone|email|address)/i;
+const APP_SENSITIVE_KEYS = computeAiSensitiveStripKeys(undefined);
+
+function stripForThirdParty(obj: any): any {
+  const pass1 = deepStripKeys(obj, APP_SENSITIVE_KEYS);
+  const walk = (v: any): any => {
+    if (v == null || typeof v !== "object") return v;
+    if (Array.isArray(v)) return v.map(walk);
+    const out: Record<string, any> = {};
+    for (const [k, val] of Object.entries(v)) {
+      if (THIRD_PARTY_KEY_RE.test(k)) continue;
+      out[k] = walk(val);
+    }
+    return out;
+  };
+  return walk(pass1);
+}
 
 export interface AssetValuationContext {
   /** Free-form notes stored on the profile. */
@@ -164,8 +186,12 @@ export function buildValuationDossier(
   if (docs.length) {
     lines.push(`Linked documents:`);
     for (const d of docs.slice(0, 12)) {
-      const extracted = d.extractedData && Object.keys(d.extractedData).length
-        ? ` — ${fmtValue(d.extractedData, 400)}`
+      // This dossier leaves the platform (Perplexity / Anthropic). A linked
+      // registration or insurance PDF's extraction carries licence, policy
+      // and account numbers that no valuation needs — strip them.
+      const safeExtracted = stripForThirdParty(d.extractedData);
+      const extracted = safeExtracted && Object.keys(safeExtracted).length
+        ? ` — ${fmtValue(safeExtracted, 400)}`
         : "";
       lines.push(`- ${clip(String(d.name || "document"), 80)}${d.type ? ` (${d.type})` : ""}${extracted}`);
     }

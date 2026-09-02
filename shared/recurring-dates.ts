@@ -208,7 +208,33 @@ export function expandRecurrenceDates(
   // weekdays / weekends / weekly:<days> all walk forward to the next date whose
   // day-of-week is in the set.
   const daySet = weekdaySetFor(String(recurrence));
-  for (let i = 1; i <= cap; i++) {
+  // Start at the first index that can land in the window instead of walking
+  // every step from the base. Walking exhausted `cap` before reaching a window
+  // years ahead, so an old daily standup generated ZERO occurrences and
+  // vanished from the calendar (task-occurrences fixed this for tasks; events
+  // never got it). Month/year cadences are indexed from the base already, so
+  // only the index needs to move; day/week cadences also reposition `d`.
+  const windowStartDate = parseLocal(windowStart);
+  const daysAhead = Math.max(0, Math.floor((windowStartDate.getTime() - seriesStart.getTime()) / 86400000));
+  const monthsAhead = Math.max(0,
+    (windowStartDate.getFullYear() - seriesStart.getFullYear()) * 12 + (windowStartDate.getMonth() - seriesStart.getMonth()) - 1);
+  let firstIndex = 1;
+  if (daySet) {
+    if (daysAhead > 1) d.setDate(d.getDate() + daysAhead - 1);
+  } else {
+    const stepDays = recurrence === "daily" ? 1 : recurrence === "weekly" ? 7 : recurrence === "biweekly" ? 14 : 0;
+    if (stepDays) {
+      firstIndex = Math.max(1, Math.floor(daysAhead / stepDays));
+      d.setDate(d.getDate() + (firstIndex - 1) * stepDays);
+    } else {
+      const stepMonths =
+        recurrence === "monthly" ? 1 : recurrence === "bimonthly" ? 2 : recurrence === "quarterly" ? 3
+        : (recurrence === "semiannual" || recurrence === "semiannually" || recurrence === "biannual") ? 6
+        : recurrence === "yearly" ? 12 : 0;
+      if (stepMonths) firstIndex = Math.max(1, Math.floor(monthsAhead / stepMonths));
+    }
+  }
+  for (let i = firstIndex; i < firstIndex + cap; i++) {
     if (daySet) {
       do { d.setDate(d.getDate() + 1); } while (!daySet.has(d.getDay()));
     } else

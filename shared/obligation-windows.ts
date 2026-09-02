@@ -67,9 +67,29 @@ export function toMonthlyAmount(amount: number | string, frequency?: string | nu
       return n / 3;
     case "semiannual":
     case "semi-annual":
+    case "semiannually":
     case "semi-annually":
+    case "biannual":
+    case "biannually":
     case "every-6-months":
       return n / 6;
+    case "bimonthly":
+    case "bi-monthly":
+    case "every-2-months":
+    case "every-other-month":
+      return n / 2;
+    case "semimonthly":
+    case "semi-monthly":
+    case "twice-monthly":
+    case "twice-a-month":
+      return n * 2;
+    case "once":
+    case "one-time":
+    case "one_time":
+    case "onetime":
+    case "single":
+      // A one-off is not a recurring monthly cost.
+      return 0;
     case "annual":
     case "annually":
     case "yearly":

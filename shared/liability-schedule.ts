@@ -12,7 +12,8 @@
 //   { "2026-08-15": { status?: "paid"|"skipped", amount?, movedTo?, notes?, paymentId? } }
 // fields.paused / fields.pausedUntil suppress generation while paused.
 
-import { freqToUnit, advance, type RecurrenceRule } from "./recurrence";
+import { advance, type RecurrenceRule } from "./recurrence";
+import { billRecurrenceRule } from "./liability-recurrence";
 import { normalizeDateString } from "./extraction-normalize";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
 import { liabilityFamily } from "./liability-types";
@@ -242,7 +243,11 @@ export function generateSchedule(
   const windowEnd = opts.windowEnd ?? addMonthsISO(today, opts.months ?? 12);
   const cap = opts.cap ?? 500;
 
-  const { unit, interval } = freqToUnit(liabilityFrequency(liability));
+  // billRecurrenceRule normalizes the label first ("quarterly" → every 3
+  // months, "annually" → yearly). Feeding the raw label to freqToUnit made
+  // every cadence it didn't know "does not recur", so a quarterly or annual
+  // bill produced exactly ONE occurrence and then fell off the calendar.
+  const { unit, interval } = billRecurrenceRule(liabilityFrequency(liability));
   // Pin monthly/yearly bills to the anchor's day-of-month. Without this the
   // walk below steps off each previous occurrence, so a bill due on the 31st
   // overflows through a short month and silently becomes a bill due on the 1st.
@@ -373,9 +378,10 @@ export function scheduleCounts(
 
 /** Number of billing periods per year for the annual-total question. */
 export function periodsPerYear(liability: Liabilityish): number {
-  const { unit, interval } = freqToUnit(liabilityFrequency(liability));
+  const { unit, interval } = billRecurrenceRule(liabilityFrequency(liability));
   const perYear: Record<string, number> = { day: 365, week: 52, weekday: 260, month: 12, year: 1 };
-  const base = perYear[unit] ?? 12;
+  // A one-off ("once") bills once; it used to be counted as 12 periods.
+  const base = perYear[unit] ?? 1;
   return interval > 0 ? base / interval : base;
 }
 

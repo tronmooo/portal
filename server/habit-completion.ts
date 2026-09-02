@@ -540,6 +540,7 @@ export async function autoCheckinLinkedHabits(
           habitId: habit.id,
           date,
           source: "tracker",
+          timezone: tz, // computed above; without it the callee fell back to the default zone
           // The tracker entry IS the record — mirroring it back would duplicate it.
           skipTrackerWrite: true,
           notes: value != null ? `Logged ${value} on ${habit.name}'s tracker` : undefined,
