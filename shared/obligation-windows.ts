@@ -25,9 +25,18 @@ export interface UpcomingBillCheckInput {
  * neither the upcoming-bill list nor the monthly-obligations total. ONE rule
  * for both, so the KPI tile and the popup never disagree.
  */
-export function isActiveObligation(o: { status?: string | null } | null | undefined): boolean {
+export function isActiveObligation(
+  o: { status?: string | null; nextDueDate?: string | Date | null; recurrenceEnd?: string | null } | null | undefined,
+): boolean {
   const s = o?.status;
-  return s !== "paused" && s !== "cancelled";
+  if (s === "paused" || s === "cancelled") return false;
+  // A finite series whose next occurrence falls after its end date has no
+  // occurrence left: the calendar already drew nothing for it, but the bills
+  // list and the monthly total still counted it.
+  const end = typeof o?.recurrenceEnd === "string" ? o.recurrenceEnd.slice(0, 10) : "";
+  const next = typeof o?.nextDueDate === "string" ? o.nextDueDate.slice(0, 10) : o?.nextDueDate instanceof Date ? o.nextDueDate.toISOString().slice(0, 10) : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(end) && /^\d{4}-\d{2}-\d{2}$/.test(next) && next > end) return false;
+  return true;
 }
 
 /**

@@ -80,7 +80,7 @@ import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-owne
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
-import { advanceLiabilityDueDatePatch } from "../shared/liability-recurrence";
+import { advanceLiabilityDueDatePatch, isSettledOccurrence } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
@@ -5025,9 +5025,15 @@ export class SupabaseStorage implements IStorage {
     const f: any = p.fields || {};
     const baseAmount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? f.balance ?? 0) || 0;
     const frequency = String(f.frequency ?? f.billingFrequency ?? "monthly");
-    const nextDueDate = String(
+    let nextDueDate = String(
       f.dueDate ?? f.due_date ?? f.nextDueDate ?? f.next_due_date ?? f.renewalDate ?? "",
     ).slice(0, 10);
+    // A one-time bill has no next occurrence once its only one is paid or
+    // skipped; the pay path advances a recurring bill's due date but a
+    // "once" bill kept its date and stayed in "upcoming" after being paid.
+    if (/^(once|one[-_ ]?time|single)$/i.test(frequency) && nextDueDate && isSettledOccurrence(f, nextDueDate)) {
+      nextDueDate = "";
+    }
     // `amount` is what the NEXT BILLING PERIOD actually costs, not the
     // definition's figure. For a fixed bill those are identical; for a
     // usage-based one the definition says $20 while August says $62, and every
@@ -5055,6 +5061,7 @@ export class SupabaseStorage implements IStorage {
       // written by the pay path). Echoing those back made an edit form that
       // round-trips the record fail validation with a 400.
       status: canonicalObligationStatus(f.status),
+      recurrenceEnd: typeof f.recurrenceEnd === "string" && f.recurrenceEnd ? String(f.recurrenceEnd).slice(0, 10) : undefined,
       kind: kind as any,
       leadTimeDays: 3,
       autoLogExpense: false,

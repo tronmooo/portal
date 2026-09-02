@@ -284,8 +284,13 @@ export function generateSchedule(
     if (ISO_RE.test(d)) paidByDate.set(d, p.id);
   }
 
-  const paused = f.paused === true;
-  const pausedUntil = ISO_RE.test(clip(f.pausedUntil)) ? clip(f.pausedUntil) : null;
+  // Two spellings of "not running": the schedule's own `paused` flag and the
+  // bills surface's `status` ("paused" / "cancelled", written by PATCH
+  // /api/obligations/:id). A bill paused through its status used to keep
+  // filling the calendar while the bills list and cash flow had dropped it.
+  const statusWord = String(f.status ?? "").trim().toLowerCase();
+  const paused = f.paused === true || statusWord === "paused" || statusWord === "cancelled" || statusWord === "canceled";
+  const pausedUntil = ISO_RE.test(clip(f.pausedUntil)) && statusWord !== "cancelled" && statusWord !== "canceled" ? clip(f.pausedUntil) : null;
   const inPausedSpan = (dISO: string) =>
     paused && dISO >= today && (!pausedUntil || dISO < pausedUntil);
 

@@ -839,3 +839,18 @@ describe("D90: a guarded update is conditional on the version it was checked aga
     expect(s.rowToHabit(r, []).updatedAt).toBe(ROW_VERSION);
   });
 });
+
+// D103 — a paid one-time bill kept its due date and stayed "upcoming".
+describe("D103: a settled one-time bill has no next due date; recurrenceEnd rides along", () => {
+  it("maps a paid once-bill to an empty nextDueDate and passes recurrenceEnd through", () => {
+    const s = bareStorage();
+    const once = { id: "o1", name: "Deposit", type: "liability", type_key: "bill", fields: { amount: 90, frequency: "once", dueDate: "2026-09-05", occurrences: { "2026-09-05": { status: "paid", paymentId: "p1" } } } };
+    expect(s.liabilityToObligation(once).nextDueDate).toBe("");
+    const unpaid = { ...once, fields: { ...once.fields, occurrences: {} } };
+    expect(s.liabilityToObligation(unpaid).nextDueDate).toBe("2026-09-05");
+    const monthly = { ...once, fields: { amount: 30, frequency: "monthly", dueDate: "2026-09-05", recurrenceEnd: "2026-09-01", occurrences: { "2026-09-05": { status: "paid" } } } };
+    const o = s.liabilityToObligation(monthly);
+    expect(o.nextDueDate).toBe("2026-09-05");
+    expect(o.recurrenceEnd).toBe("2026-09-01");
+  });
+});

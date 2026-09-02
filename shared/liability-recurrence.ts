@@ -79,6 +79,12 @@ export function liabilityAnchorDay(fields: any, currentISO: string): number | un
  * origin — the last date known to carry the user's intended day-of-month —
  * before the clamped next date is written over `dueDate`.
  */
+/** True for a bill that happens exactly once (no next occurrence to advance to). */
+export function isOneTimeFrequency(frequency?: string | null): boolean {
+  const s = String(frequency ?? "").trim().toLowerCase();
+  return s === "once" || s === "one-time" || s === "one_time" || s === "onetime" || s === "one time" || s === "single";
+}
+
 export function advanceLiabilityDueDatePatch(
   fields: any,
   occDate: string,
@@ -106,8 +112,12 @@ export function readDueDate(fields: any): string {
  * date is always in the future.
  */
 export function advanceLiabilityDueDate(fields: any, todayISO: string): string {
-  const rule = billRecurrenceRule((fields || {}).frequency ?? (fields || {}).billingFrequency);
   const current = readDueDate(fields);
+  // A one-time bill has nothing to advance to. The generic rule read "once"
+  // as a daily cadence, so paying a deposit moved its due date to tomorrow —
+  // one day past the paid stamp — and it stayed "upcoming" forever.
+  if (isOneTimeFrequency((fields || {}).frequency ?? (fields || {}).billingFrequency)) return current;
+  const rule = billRecurrenceRule((fields || {}).frequency ?? (fields || {}).billingFrequency);
   const base = current && current >= todayISO ? current : (current || todayISO);
   rule.anchorDay = liabilityAnchorDay(fields, base);
   let next = advance(base, rule);

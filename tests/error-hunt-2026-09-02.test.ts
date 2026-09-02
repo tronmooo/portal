@@ -335,3 +335,45 @@ describe("D96: income counts only from its first pay month", () => {
     expect(sumMonthlyIncomeForMonth([], "2026-09")).toBe(0);
   });
 });
+
+// D101–D102 — bill lifecycle words the calendar and the totals disagreed on.
+import { generateSchedule } from "../shared/liability-schedule";
+import { isActiveObligation, isUpcomingBill } from "../shared/obligation-windows";
+describe("D101: a bill paused or cancelled through its status draws no future occurrences", () => {
+  const fields = (extra: any) => ({ amount: 40, frequency: "monthly", dueDate: "2026-09-07", firstPaymentDate: "2026-09-07", ...extra });
+  const opts = { todayISO: "2026-09-02", windowStart: "2026-09-02", windowEnd: "2026-11-30" };
+  it("status paused behaves like fields.paused; cancelled ignores pausedUntil", () => {
+    expect(generateSchedule({ id: "b", fields: fields({}) }, [], opts).length).toBeGreaterThanOrEqual(3);
+    expect(generateSchedule({ id: "b", fields: fields({ status: "paused" }) }, [], opts).filter(o => o.status !== "paid" && o.status !== "skipped")).toHaveLength(0);
+    expect(generateSchedule({ id: "b", fields: fields({ paused: true }) }, [], opts).filter(o => o.status !== "paid" && o.status !== "skipped")).toHaveLength(0);
+    expect(generateSchedule({ id: "b", fields: fields({ status: "cancelled", pausedUntil: "2026-09-20" }) }, [], opts).filter(o => o.status !== "paid" && o.status !== "skipped")).toHaveLength(0);
+    // a pause with an end date resumes after it
+    const resumed = generateSchedule({ id: "b", fields: fields({ status: "paused", pausedUntil: "2026-10-01" }) }, [], opts).filter(o => o.status !== "paid" && o.status !== "skipped");
+    expect(resumed.length).toBeGreaterThanOrEqual(1);
+    expect(resumed.every(o => o.date >= "2026-10-01")).toBe(true);
+  });
+});
+describe("D102: a finite series past its end is not active", () => {
+  it("drops out of the monthly total and the upcoming list; an open-ended or in-range series stays", () => {
+    expect(isActiveObligation({ status: "active", nextDueDate: "2026-09-04", recurrenceEnd: "2026-09-01" })).toBe(false);
+    expect(isUpcomingBill({ status: "active", nextDueDate: "2026-09-04", recurrenceEnd: "2026-09-01" }, new Date("2026-09-02T12:00:00Z"))).toBe(false);
+    expect(isActiveObligation({ status: "active", nextDueDate: "2026-09-04", recurrenceEnd: "2026-09-04" })).toBe(true);
+    expect(isActiveObligation({ status: "active", nextDueDate: "2026-09-04" })).toBe(true);
+    expect(isActiveObligation({ status: "active", nextDueDate: "2026-09-04", recurrenceEnd: "never" })).toBe(true);
+    expect(isActiveObligation({ status: "paused", nextDueDate: "2026-09-04" })).toBe(false);
+  });
+});
+
+// D103 (root) — "once" fell into the generic cadence and advanced by a day.
+import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, isOneTimeFrequency } from "../shared/liability-recurrence";
+describe("D103: a one-time bill never advances its due date", () => {
+  it("keeps the date on pay for every spelling of once; a monthly bill still advances", () => {
+    for (const f of ["once", "one-time", "one_time", "single", "One Time"]) {
+      expect(isOneTimeFrequency(f), f).toBe(true);
+      expect(advanceLiabilityDueDate({ frequency: f, dueDate: "2026-09-05" }, "2026-09-02"), f).toBe("2026-09-05");
+      expect(advanceLiabilityDueDatePatch({ frequency: f, dueDate: "2026-09-05" }, "2026-09-05").dueDate, f).toBe("2026-09-05");
+    }
+    expect(isOneTimeFrequency("monthly")).toBe(false);
+    expect(advanceLiabilityDueDate({ frequency: "monthly", dueDate: "2026-09-05" }, "2026-09-02")).toBe("2026-10-05");
+  });
+});
