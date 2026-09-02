@@ -30,7 +30,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
+import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -2229,6 +2229,17 @@ export async function registerRoutes(
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
                   const due = readDueDate(f);
+                  // A reminder whose occurrence was paid or skipped, or that the
+                  // schedule has already rolled past, is finished. Closing it
+                  // here (not only at pay time) heals the ones an older build
+                  // left open.
+                  if (existingTasks.some((t: any) => isOpenBillReminderTask(t, bill.id))) {
+                    const occ = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {};
+                    await closeBillReminderTasksWhere(scoped, bill.id, (day) => {
+                      const st = occ[day]?.status;
+                      return st === "paid" || st === "skipped" || (!!day && !!due && day < due);
+                    }, log, existingTasks);
+                  }
                   if (!due || due > windowEnd) continue; // not due within the window
                   const autopay = f.autopay === true || f.autoPay === true || String(f.autopay ?? "").toLowerCase() === "true";
                   if (autopay) {

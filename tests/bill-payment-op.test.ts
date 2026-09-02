@@ -255,3 +255,22 @@ describe("payBillOccurrence — closes the bill's reminder tasks", () => {
     expect(out.steps.some(s => s.step === "reminder_tasks")).toBe(false);
   });
 });
+
+describe("closeBillReminderTasksWhere — the due-scan's self-heal rule", () => {
+  it("closes reminders whose occurrence is paid/skipped or that the schedule rolled past", async () => {
+    const { closeBillReminderTasksWhere } = await import("../server/liability-payments");
+    const tasks = [
+      { id: "a", title: "Bill due: X", status: "todo", dueDate: "2026-08-30", linkedProfiles: ["bill-1"] }, // rolled past
+      { id: "b", title: "Bill due: X", status: "todo", dueDate: "2026-09-04", linkedProfiles: ["bill-1"] }, // paid occurrence
+      { id: "c", title: "Bill due: X", status: "todo", dueDate: "2026-10-04", linkedProfiles: ["bill-1"] }, // current, open
+      { id: "d", title: "Bill due: X", status: "done", dueDate: "2026-08-30", linkedProfiles: ["bill-1"] },
+    ];
+    const updates: any[] = [];
+    const storage: any = { getTasks: async () => tasks, updateTask: async (id: string, p: any) => { updates.push([id, p]); return {}; } };
+    const occ: any = { "2026-09-04": { status: "paid" } };
+    const due = "2026-10-04";
+    const n = await closeBillReminderTasksWhere(storage, "bill-1", (day) => occ[day]?.status === "paid" || occ[day]?.status === "skipped" || (!!day && day < due));
+    expect(n).toBe(2);
+    expect(updates.map(u => u[0]).sort()).toEqual(["a", "b"]);
+  });
+});

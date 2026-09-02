@@ -321,16 +321,38 @@ export const BILL_REMINDER_TASK_PREFIX = "Bill due: ";
  * tasks (some doubles) or a failed read never fails the payment.
  */
 export async function closeBillReminderTasks(storage: IStorage, liabilityId: string, occurrenceDate: string, logger: PaymentLogger = noopLogger): Promise<number> {
+  return closeBillReminderTasksWhere(storage, liabilityId, (due) => !due || due <= occurrenceDate, logger);
+}
+
+/** True for an open "Bill due" reminder task that belongs to this bill. */
+export function isOpenBillReminderTask(t: any, liabilityId: string): boolean {
+  if (!t || t.status === "done") return false;
+  if (typeof t.title !== "string" || !t.title.startsWith(BILL_REMINDER_TASK_PREFIX)) return false;
+  return Array.isArray(t.linkedProfiles) && t.linkedProfiles.includes(liabilityId);
+}
+
+/**
+ * Marks done the bill's open reminder tasks whose due day satisfies
+ * `settled` — the pay pipeline passes "on or before the paid occurrence"; the
+ * due-scan cron passes "that occurrence is paid or skipped, or the schedule
+ * has already moved past it", so a reminder left behind by an older build
+ * heals on the next run instead of sitting overdue forever.
+ */
+export async function closeBillReminderTasksWhere(
+  storage: IStorage,
+  liabilityId: string,
+  settled: (dueDay: string) => boolean,
+  logger: PaymentLogger = noopLogger,
+  tasks?: any[],
+): Promise<number> {
   let closed = 0;
   try {
     if (typeof (storage as any).getTasks !== "function" || typeof (storage as any).updateTask !== "function") return 0;
-    const tasks: any[] = (await storage.getTasks()) || [];
-    for (const t of tasks) {
-      if (!t || t.status === "done") continue;
-      if (typeof t.title !== "string" || !t.title.startsWith(BILL_REMINDER_TASK_PREFIX)) continue;
-      if (!Array.isArray(t.linkedProfiles) || !t.linkedProfiles.includes(liabilityId)) continue;
+    const all: any[] = tasks ?? ((await storage.getTasks()) || []);
+    for (const t of all) {
+      if (!isOpenBillReminderTask(t, liabilityId)) continue;
       const due = String(t.dueDate || "").slice(0, 10);
-      if (due && due > occurrenceDate) continue;
+      if (!settled(due)) continue;
       try {
         await storage.updateTask(t.id, { status: "done" } as any);
         closed++;
