@@ -274,6 +274,7 @@ export default defineConfig({
       // recap (2026-09-01: "ran 2 miles" logged into another profile's tracker).
       'tests/quick-log.test.ts',
       'tests/quick-log-owner-scope.test.ts',
+      'tests/system-prompt-cache.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
