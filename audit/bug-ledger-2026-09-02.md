@@ -262,6 +262,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
+A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
+
 ### Bill occurrences (probe s29) — verified working
 Skipping the first occurrence marks it skipped on the calendar and moves next-due a month; rescheduling the next one (`movedTo`) moves its calendar day; paying by the original occurrence key stamps the moved occurrence paid, logs one expense and advances next-due; paying the same key again is folded into the first payment. (The probe's "upcoming shows the following occurrence" expectation ignored the 30-day window; not a bug.)
 
