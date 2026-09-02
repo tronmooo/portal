@@ -4730,12 +4730,23 @@ export class SupabaseStorage implements IStorage {
    * NOTHING but this habit's mirror entries (an auto-created one). A tracker
    * the user logs to directly is theirs and must survive the habit.
    */
-  private async habitMirrorTrackerId(habitId: string, linkedTrackerId: string | null | undefined): Promise<string | null> {
+  private async habitMirrorTrackerId(habitId: string, habitName: string | null | undefined, linkedTrackerId: string | null | undefined): Promise<string | null> {
     if (!linkedTrackerId) return null;
-    const { data: entries } = await this.supabase.from("tracker_entries").select("values")
-      .eq("tracker_id", linkedTrackerId).eq("user_id", this.userId).limit(500);
-    const own = (entries || []).every((e: any) => (e?.values as any)?.["_habitId"] === habitId);
-    return own ? linkedTrackerId : null;
+    // Fail CLOSED: any doubt means the tracker stays. (A lookup error once
+    // made the `every` below vacuously true and retired a user's own tracker.)
+    const [{ data: tracker, error: tErr }, { data: entries, error: eErr }] = await Promise.all([
+      this.supabase.from("trackers").select("name").eq("id", linkedTrackerId).eq("user_id", this.userId).maybeSingle(),
+      this.supabase.from("tracker_entries").select("entry_values").eq("tracker_id", linkedTrackerId).eq("user_id", this.userId).is("deleted_at", null).limit(500),
+    ]);
+    if (tErr || eErr || !tracker) return null;
+    const rows = entries || [];
+    const allMirrors = rows.every((e: any) => (e?.entry_values as any)?.["_habitId"] === habitId);
+    if (!allMirrors) return null;
+    // An EMPTY tracker is only a mirror if it is the one auto-created for this
+    // habit (habit-completion names it after the habit); a tracker the user
+    // made and linked, with nothing logged yet, is theirs.
+    if (rows.length === 0 && String(tracker.name || "").trim() !== String(habitName || "").trim()) return null;
+    return linkedTrackerId;
   }
 
   async deleteHabit(id: string): Promise<boolean> {
@@ -4745,9 +4756,9 @@ export class SupabaseStorage implements IStorage {
     // it is purely a mirror) is retired with it. Otherwise a deleted habit
     // kept showing up on the Trackers page under its own name, with its
     // check-ins, as if it still existed.
-    const { data: habitRow } = await this.supabase.from("habits").select("linked_tracker_id")
+    const { data: habitRow } = await this.supabase.from("habits").select("linked_tracker_id, name")
       .eq("id", id).eq("user_id", this.userId).maybeSingle();
-    const mirrorId = await this.habitMirrorTrackerId(id, habitRow?.linked_tracker_id);
+    const mirrorId = await this.habitMirrorTrackerId(id, habitRow?.name, habitRow?.linked_tracker_id);
     // Soft delete the habit and KEEP its check-ins. The old hard-delete of
     // habit_checkins made "recoverable" a lie: restore returned an empty habit
     // with a phantom stored streak and no history. Check-in readers join
@@ -5002,7 +5013,14 @@ export class SupabaseStorage implements IStorage {
     const fieldsPatch: any = {};
     if (data.amount !== undefined) { fieldsPatch.monthlyAmount = data.amount; fieldsPatch.amount = data.amount; }
     if (data.frequency !== undefined) { fieldsPatch.frequency = data.frequency; fieldsPatch.billingFrequency = data.frequency; }
-    if (data.nextDueDate !== undefined) { fieldsPatch.dueDate = data.nextDueDate; fieldsPatch.nextDueDate = data.nextDueDate; }
+    if (data.nextDueDate !== undefined) {
+      fieldsPatch.dueDate = data.nextDueDate; fieldsPatch.nextDueDate = data.nextDueDate;
+      // An explicit due-date edit re-anchors the series. The schedule anchors on
+      // firstPaymentDate (so the day-of-month survives each payment's advance),
+      // and leaving it untouched kept the calendar on the OLD dates while the
+      // bill, the popup and the date rules all showed the new one.
+      fieldsPatch.firstPaymentDate = data.nextDueDate;
+    }
     if (data.autopay !== undefined) fieldsPatch.autopay = data.autopay;
     if ((data as any).category !== undefined) fieldsPatch.category = (data as any).category;
     if (data.status !== undefined) fieldsPatch.status = data.status;

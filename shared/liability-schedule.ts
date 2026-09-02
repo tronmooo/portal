@@ -277,15 +277,61 @@ export function generateSchedule(
   const maxCount = f.count != null ? Math.max(1, parseInt(String(f.count), 10) || 0) : null;
 
   const out: ScheduleOccurrence[] = [];
+
+  // Emit one occurrence dated `cur`. Returns false once the cap is reached.
+  const emit = (cur: string): boolean => {
+    const ov = overrides[cur] || null;
+    const effectiveDate = ov && ISO_RE.test(clip(ov.movedTo)) ? clip(ov.movedTo) : cur;
+    // Include when EITHER the canonical or the shifted date lands in-window.
+    const inWindow = (cur >= windowStart && cur <= windowEnd) ||
+      (effectiveDate >= windowStart && effectiveDate <= windowEnd);
+    if (!inWindow || inPausedSpan(effectiveDate)) return true;
+    const paymentId = ov?.paymentId ?? paidByDate.get(cur) ?? paidByDate.get(effectiveDate);
+    const isPaid = ov?.status === "paid" || paymentId != null;
+    const isSkipped = ov?.status === "skipped";
+    const status: OccurrenceStatus = isSkipped
+      ? "skipped"
+      : liabilityBillStatus(effectiveDate, today, isPaid);
+    // The per-occurrence money model. `amount` is whatever THIS period costs —
+    // the definition's amount is only the starting point, never the answer.
+    const money = resolveOccurrenceAmount(baseAmount, ov as OccurrenceOverride | null, billingModel);
+    out.push({
+      date: cur,
+      effectiveDate,
+      amount: money.current,
+      status,
+      notes: ov?.notes || undefined,
+      occurrenceId: `${liability.id}:${cur}`,
+      paymentId,
+      overridden: !!ov,
+      billingModel,
+      baseAmount: money.base,
+      estimatedAmount: money.estimated,
+      actualAmount: money.actual,
+      charges: money.charges,
+      chargeTotal: money.chargeTotal,
+      // A paid occurrence is history even before an actual is stamped on it.
+      isEstimate: money.isEstimate && !isPaid,
+      amountLabel: isPaid ? "Actual" : money.label,
+      accountId: ov?.accountId || undefined,
+    });
+    return out.length < cap;
+  };
+
+  // History: overridden dates BEFORE the anchor — a paid or skipped past
+  // occurrence stays visible after `dueDate` advanced past it, and survives a
+  // re-anchored series (the user edited the due date). They are emitted as
+  // standalone rows, never as walk starting points: stepping the cadence from
+  // an off-grid date used to drop the anchor's own day-of-month, so an edited
+  // bill kept its old dates on the calendar.
+  const history = Object.keys(overrides).filter((d) => ISO_RE.test(d) && d < anchor).sort();
+  for (const d of history) {
+    if (d > windowEnd) break;
+    if (!emit(d)) return out;
+  }
+
   let cur = anchor;
   let seriesIndex = 0; // occurrences counted from the anchor (for maxCount)
-  // Extend the walk backward to the earliest overridden date so a paid or
-  // skipped past occurrence stays visible even after `dueDate` advanced past
-  // it (the anchor moves forward as bills are paid; overrides do not). Override
-  // keys are canonical on-grid dates, so this keeps cadence alignment.
-  for (const d of Object.keys(overrides)) {
-    if (ISO_RE.test(d) && d < cur) cur = d;
-  }
   let guard = 0;
   const maxIter = Math.max(cap * 3, 1500);
 
@@ -293,47 +339,10 @@ export function generateSchedule(
     if (cur > windowEnd) break;
     // Stop at the finite bounds (count of payments and/or hard end date).
     if (seriesEnd && cur > seriesEnd) break;
-    if (maxCount != null && cur >= anchor && seriesIndex >= maxCount) break;
-    if (cur >= anchor) seriesIndex++;
+    if (maxCount != null && seriesIndex >= maxCount) break;
+    seriesIndex++;
 
-    const ov = overrides[cur] || null;
-    const effectiveDate = ov && ISO_RE.test(clip(ov.movedTo)) ? clip(ov.movedTo) : cur;
-    // Include when EITHER the canonical or the shifted date lands in-window.
-    const inWindow = (cur >= windowStart && cur <= windowEnd) ||
-      (effectiveDate >= windowStart && effectiveDate <= windowEnd);
-
-    if (inWindow && !inPausedSpan(effectiveDate)) {
-      const paymentId = ov?.paymentId ?? paidByDate.get(cur) ?? paidByDate.get(effectiveDate);
-      const isPaid = ov?.status === "paid" || paymentId != null;
-      const isSkipped = ov?.status === "skipped";
-      const status: OccurrenceStatus = isSkipped
-        ? "skipped"
-        : liabilityBillStatus(effectiveDate, today, isPaid);
-      // The per-occurrence money model. `amount` is whatever THIS period costs —
-      // the definition's amount is only the starting point, never the answer.
-      const money = resolveOccurrenceAmount(baseAmount, ov as OccurrenceOverride | null, billingModel);
-      out.push({
-        date: cur,
-        effectiveDate,
-        amount: money.current,
-        status,
-        notes: ov?.notes || undefined,
-        occurrenceId: `${liability.id}:${cur}`,
-        paymentId,
-        overridden: !!ov,
-        billingModel,
-        baseAmount: money.base,
-        estimatedAmount: money.estimated,
-        actualAmount: money.actual,
-        charges: money.charges,
-        chargeTotal: money.chargeTotal,
-        // A paid occurrence is history even before an actual is stamped on it.
-        isEstimate: money.isEstimate && !isPaid,
-        amountLabel: isPaid ? "Actual" : money.label,
-        accountId: ov?.accountId || undefined,
-      });
-      if (out.length >= cap) break;
-    }
+    if (!emit(cur)) break;
 
     if (!recurs) break;
     const next = advance(cur, rule);

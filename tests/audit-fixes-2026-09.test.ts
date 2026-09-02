@@ -244,3 +244,23 @@ describe("tracker entry guard: numeric-by-name keys", () => {
     expect(r.values.mood).toBe("great");
   });
 });
+
+describe("liability schedule: re-anchored series keeps history and the new grid", () => {
+  const opts = { todayISO: "2026-09-01", windowStart: "2026-08-01", windowEnd: "2026-12-31" } as any;
+  it("an off-grid paid override before the anchor is history, and the series walks from the anchor", () => {
+    // Bill was due on the 4th, 08-04 was paid, then the user edited the due date to the 13th.
+    const dates = generateSchedule({ id: "L1", fields: {
+      frequency: "monthly", firstPaymentDate: "2026-09-13", dueDate: "2026-09-13", monthlyAmount: 30,
+      occurrences: { "2026-08-04": { status: "paid" } },
+    } } as any, [], opts).map((o: any) => [o.date, o.status]);
+    expect(dates.map(d => d[0])).toEqual(["2026-08-04", "2026-09-13", "2026-10-13", "2026-11-13", "2026-12-13"]);
+    expect(dates[0][1]).toBe("paid");
+  });
+  it("an on-grid paid override still reads as before", () => {
+    const dates = generateSchedule({ id: "L2", fields: {
+      frequency: "monthly", firstPaymentDate: "2026-09-04", dueDate: "2026-09-04", monthlyAmount: 30,
+      occurrences: { "2026-08-04": { status: "paid" } },
+    } } as any, [], opts).map((o: any) => o.date);
+    expect(dates).toEqual(["2026-08-04", "2026-09-04", "2026-10-04", "2026-11-04", "2026-12-04"]);
+  });
+});
