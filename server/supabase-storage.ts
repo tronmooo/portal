@@ -82,7 +82,7 @@ import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-owne
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
-import { advanceLiabilityDueDatePatch, isSettledOccurrence } from "../shared/liability-recurrence";
+import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
@@ -5060,6 +5060,13 @@ export class SupabaseStorage implements IStorage {
     // "once" bill kept its date and stayed in "upcoming" after being paid.
     if (/^(once|one[-_ ]?time|single)$/i.test(frequency) && nextDueDate && isSettledOccurrence(f, nextDueDate)) {
       nextDueDate = "";
+    } else if (nextDueDate && isSettledOccurrence(f, nextDueDate)) {
+      // A recurring bill whose stored date sits on a paid or skipped
+      // occurrence (a manual date edit back onto a settled day) is next due
+      // at the following unsettled occurrence — the same step the pay path
+      // takes — so the bills list, the attention row and the cron agree
+      // instead of offering to pay a day that is already paid.
+      nextDueDate = advanceLiabilityDueDate(f, nextDueDate);
     }
     // `amount` is what the NEXT BILLING PERIOD actually costs, not the
     // definition's figure. For a fixed bill those are identical; for a

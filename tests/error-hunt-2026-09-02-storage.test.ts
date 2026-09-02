@@ -850,7 +850,8 @@ describe("D103: a settled one-time bill has no next due date; recurrenceEnd ride
     expect(s.liabilityToObligation(unpaid).nextDueDate).toBe("2026-09-05");
     const monthly = { ...once, fields: { amount: 30, frequency: "monthly", dueDate: "2026-09-05", recurrenceEnd: "2026-09-01", occurrences: { "2026-09-05": { status: "paid" } } } };
     const o = s.liabilityToObligation(monthly);
-    expect(o.nextDueDate).toBe("2026-09-05");
+    // D119: a recurring bill on a paid occurrence maps to its next unsettled date
+    expect(o.nextDueDate).toBe("2026-10-05");
     expect(o.recurrenceEnd).toBe("2026-09-01");
   });
 });
@@ -892,5 +893,17 @@ describe("D108: un-completing a recurring task takes back the untouched spawn", 
     expect(await s3.retractSpawnedRecurringTask(prevTask)).toBe(false);
     expect(await s3.retractSpawnedRecurringTask({ ...prevTask, tags: [] })).toBe(false);
     expect(deleted).toEqual([]);
+  });
+});
+
+// D119 — a recurring bill whose stored date is a paid occurrence showed that
+// paid day as "next due".
+describe("D119: a recurring bill on a settled occurrence maps to its next unsettled date", () => {
+  it("advances past paid and skipped occurrences; an unsettled date is untouched", () => {
+    const s = bareStorage();
+    const bill = (occ: any, due = "2026-09-04") => ({ id: "b1", name: "Electric", type: "liability", type_key: "utility", fields: { amount: 92.4, frequency: "monthly", dueDate: due, firstPaymentDate: "2026-08-04", occurrences: occ } });
+    expect(s.liabilityToObligation(bill({ "2026-09-04": { status: "paid" } })).nextDueDate).toBe("2026-10-04");
+    expect(s.liabilityToObligation(bill({ "2026-09-04": { status: "paid" }, "2026-10-04": { status: "skipped" } })).nextDueDate).toBe("2026-11-04");
+    expect(s.liabilityToObligation(bill({})).nextDueDate).toBe("2026-09-04");
   });
 });
