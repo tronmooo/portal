@@ -429,6 +429,7 @@ import {
   insertLiabilityPaymentSchema,
   insertAssetPartyLinkSchema,
   insertDocumentSchema,
+  isCalendarDay,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { validateTransactionAmount } from "@shared/quick-add";
@@ -1165,7 +1166,7 @@ function withoutUndefined<T extends Record<string, any>>(obj: T): T {
 
 // Date validation helper
 function isValidDateStr(d: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}$/.test(d) && !isNaN(new Date(d).getTime());
+  return isCalendarDay(d);
 }
 
 // Pagination helper — applies ?limit= and ?offset= to any array and sets X-Total-Count header
@@ -2780,7 +2781,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       const createdObligations: Array<{ id: string; name: string; nextDueDate: string; kind: string }> = [];
       if (Array.isArray(dates)) {
         for (const d of dates) {
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(d?.iso || "")) continue;
+          if (!isCalendarDay(d?.iso || "")) continue;
           const kind: "doc_expiration" | "bill" | "appointment" =
             d.kind === "expiration" || d.kind === "renewal" ? "doc_expiration"
             : d.kind === "appointment" ? "appointment"
@@ -3612,7 +3613,7 @@ ${JSON.stringify(ctx, null, 2)}`;
               values: entryValues,
               notes: `From document extraction (${extractionId})`,
               profileId: resolvedProfileId,
-              timestamp: /^\d{4}-\d{2}-\d{2}$/.test(entryDate)
+              timestamp: isCalendarDay(entryDate)
                 ? parseUserDateTime(entryDate, (storage as any)._timezone).toISOString()
                 : undefined,
             });
@@ -4780,7 +4781,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       if (f.phone && typeof f.phone === "string" && !/^[\d\s()+-]{7,20}$/.test(f.phone)) {
         return res.status(400).json({ error: "Invalid phone number format" });
       }
-      if (f.birthday && typeof f.birthday === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(f.birthday)) {
+      if (f.birthday && typeof f.birthday === "string" && !isCalendarDay(f.birthday)) {
         return res.status(400).json({ error: "Birthday must be in YYYY-MM-DD format" });
       }
       if (f.bloodType && typeof f.bloodType === "string" && !/^(A|B|AB|O)[+-]$/i.test(f.bloodType)) {
@@ -4975,7 +4976,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       if (f.phone && typeof f.phone === "string" && !/^[\d\s()+-]{7,20}$/.test(f.phone)) {
         return res.status(400).json({ error: "Invalid phone number format" });
       }
-      if (f.birthday && typeof f.birthday === "string" && !/^\d{4}-\d{2}-\d{2}$/.test(f.birthday)) {
+      if (f.birthday && typeof f.birthday === "string" && !isCalendarDay(f.birthday)) {
         return res.status(400).json({ error: "Birthday must be in YYYY-MM-DD format" });
       }
       if (f.bloodType && typeof f.bloodType === "string" && !/^(A|B|AB|O)[+-]$/i.test(f.bloodType)) {
@@ -7587,7 +7588,7 @@ Rules:
       return res.status(400).json({ error: "Payment amount must be a positive number" });
     }
     // Validate date if provided
-    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    if (date && !isCalendarDay(date)) {
       return res.status(400).json({ error: "Date must be YYYY-MM-DD format" });
     }
     const uid_o3 = cacheUserKey(req as AuthenticatedRequest);
@@ -7717,7 +7718,7 @@ Rules:
     if (i < 0) return null;
     const liabilityId = occId.slice(0, i);
     const date = occId.slice(i + 1).slice(0, 10);
-    if (!liabilityId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+    if (!liabilityId || !isCalendarDay(date)) return null;
     return { liabilityId, date };
   };
 
@@ -7727,9 +7728,9 @@ Rules:
   app.get("/api/obligation-occurrences", asyncHandler(async (req, res) => {
     const tz = getTimezone(req);
     const today = getUserToday(tz);
-    const start = (req.query.start as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.start as string)
+    const start = (req.query.start as string) && isCalendarDay(req.query.start as string)
       ? (req.query.start as string) : today;
-    const end = (req.query.end as string) && /^\d{4}-\d{2}-\d{2}$/.test(req.query.end as string)
+    const end = (req.query.end as string) && isCalendarDay(req.query.end as string)
       ? (req.query.end as string) : toLocalDateStr(new Date(Date.now() + 90 * 86400000), tz);
     const profileIdsParam = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
@@ -7791,7 +7792,7 @@ Rules:
   app.post("/api/obligation-occurrences/:occId/reschedule", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const { newDueAt } = req.body || {};
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(newDueAt || ""))) return res.status(400).json({ error: "newDueAt must be YYYY-MM-DD" });
+    if (!isCalendarDay(String(newDueAt || ""))) return res.status(400).json({ error: "newDueAt must be YYYY-MM-DD" });
     const parsed = parseOccId(req.params.occId);
     if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
     const result = await storage.rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
@@ -7810,7 +7811,7 @@ Rules:
 
   app.post("/api/liabilities/:id/occurrences/:date/pay", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const { amount, method, paymentDate, accountId } = req.body || {};
     if (amount !== undefined && (typeof amount !== "number" || amount < 0)) return res.status(400).json({ error: "amount must be a non-negative number" });
     const paid = await payBillOccurrence(storage, req.params.id, {
@@ -7825,7 +7826,7 @@ Rules:
 
   app.post("/api/liabilities/:id/occurrences/:date/skip", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const result = await storage.skipOccurrence(req.params.id, req.params.date);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
@@ -7834,11 +7835,11 @@ Rules:
 
   app.patch("/api/liabilities/:id/occurrences/:date", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const { movedTo, amount, notes, estimatedAmount, actualAmount } = req.body || {};
     let result;
     if (movedTo !== undefined) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(movedTo))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
+      if (!isCalendarDay(String(movedTo))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
       result = await storage.rescheduleOccurrence(req.params.id, req.params.date, movedTo);
     }
     if (amount !== undefined || notes !== undefined) {
@@ -7868,7 +7869,7 @@ Rules:
   // month's bill or inflating next month's estimate.
   app.post("/api/liabilities/:id/occurrences/:date/charges", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const { amount, kind, label, date, notes } = req.body || {};
     const n = Number(amount);
     if (!Number.isFinite(n) || n === 0) return res.status(400).json({ error: "amount must be a non-zero number" });
@@ -7882,7 +7883,7 @@ Rules:
 
   app.delete("/api/liabilities/:id/occurrences/:date/charges/:chargeId", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isCalendarDay(req.params.date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     const result = await storage.removeOccurrenceCharge(req.params.id, req.params.date, req.params.chargeId);
     if (!result) return res.status(404).json({ error: "Liability not found" });
     bustBillCaches(uid);
@@ -7892,7 +7893,7 @@ Rules:
   app.post("/api/liabilities/:id/pause", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const { until } = req.body || {};
-    if (until !== undefined && until !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(until))) return res.status(400).json({ error: "until must be YYYY-MM-DD" });
+    if (until !== undefined && until !== null && !isCalendarDay(String(until))) return res.status(400).json({ error: "until must be YYYY-MM-DD" });
     const result = await storage.pauseLiability(req.params.id, until || undefined);
     if (!result) return res.status(404).json({ error: "Recurring liability not found" });
     bustBillCaches(uid);
@@ -7970,6 +7971,9 @@ Rules:
   // A balance CHANGE is an event with a reason, not a field overwrite: the
   // before/after pair is kept so "why is this $40 lower" stays answerable.
   app.post("/api/accounts/:id/adjust", asyncHandler(async (req, res) => {
+    if (req.body?.date !== undefined && req.body?.date !== null && req.body?.date !== "" && !isCalendarDay(String(req.body.date))) {
+      return res.status(400).json({ error: "date must be a real calendar day (YYYY-MM-DD)" });
+    }
     const uid = cacheUserKey(req as AuthenticatedRequest);
     const { newBalance, delta, date, reason } = req.body || {};
     if (newBalance == null && delta == null) {
@@ -9399,7 +9403,7 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
           const todayISO = getUserToday(tz);
           const dayDelta = (d: any) => {
             const s = String(d || "").slice(0, 10);
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+            if (!isCalendarDay(s)) return null;
             return Math.round(
               (new Date(`${s}T12:00:00`).getTime() - new Date(`${todayISO}T12:00:00`).getTime()) / 86400000,
             );
@@ -10427,7 +10431,7 @@ No emojis. No prose outside the JSON.`,
     // The occurrence stamp and due-date policy ride along too — this form used
     // to skip both, so a bill paid here still showed unpaid on its schedule.
     const d: any = parsed.data;
-    const occurrenceDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.occurrenceDate || ""))
+    const occurrenceDate = isCalendarDay(String(req.body?.occurrenceDate || ""))
       ? String(req.body.occurrenceDate) : null;
     // Pay-from-account, the same field the bills route honours. The schema
     // strips unknown keys, so `accountId` used to be dropped here and a loan

@@ -574,8 +574,8 @@ export const insertHabitSchema = z.object({
   targetPerDay: z.number().min(1).max(10).default(1),
   // Nullable so a PATCH can clear the window ("make it open-ended") rather than
   // only ever narrowing it.
-  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").nullable().optional(),
-  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").nullable().optional(),
+  startDate: z.string().refine((v) => v === "" || isCalendarDay(v), "Use YYYY-MM-DD").nullable().optional(),
+  endDate: z.string().refine((v) => v === "" || isCalendarDay(v), "Use YYYY-MM-DD").nullable().optional(),
   // Nullable so a PATCH can explicitly clear a habit's schedule (send null),
   // not just leave it unset (undefined).
   timeOfDay: z.enum(["morning", "afternoon", "evening", "bedtime", "anytime"]).nullable().optional(),
@@ -1497,7 +1497,7 @@ export interface OwnershipHistoryEntry {
 
 export const insertLiabilityPaymentSchema = z.object({
   liabilityProfileId: z.string().uuid(),
-  paymentDate: z.string(),
+  paymentDate: calendarDay,
   amount: z.number().nonnegative(),
   principalPortion: z.number().nonnegative().default(0),
   interestPortion: z.number().nonnegative().default(0),

@@ -1,4 +1,5 @@
 // Financial accounts — the manual side of the money model.
+import { isCalendarDay } from "./schema";
 //
 // An account is a `type: "account"` PROFILE. It is not a new table and not a
 // parallel universe: making it a profile is what gets it net worth, the profile
@@ -241,7 +242,7 @@ export function applyBalanceAdjustment(
   const next = explicit != null && Number.isFinite(explicit)
     ? round2(explicit)
     : round2(previous + (Number.isFinite(delta as number) ? (delta as number) : 0));
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(input.date ?? "")) ? String(input.date).slice(0, 10) : todayISO;
+  const date = isCalendarDay(String(input.date ?? "").slice(0, 10)) ? String(input.date).slice(0, 10) : todayISO;
 
   const adjustment: BalanceAdjustment = {
     id: `adj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,

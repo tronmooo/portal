@@ -404,3 +404,23 @@ describe("D107: streaks follow the habit's schedule", () => {
     expect(calculateStreak(["2026-09-01", "2026-09-04"], { today: "2026-09-05" })).toEqual({ current: 1, longest: 1 });
   });
 });
+
+// D111 — the last regex-only day gates: habit start/end, payment dates,
+// the account adjustment date (which was stored as-is).
+import { insertLiabilityPaymentSchema } from "../shared/schema";
+import { applyBalanceAdjustment } from "../shared/finance-accounts";
+describe("D111: every day field is a real calendar day", () => {
+  it("habit start/end and payment dates reject impossible days", () => {
+    expect(insertHabitSchema.partial().safeParse({ startDate: "2026-02-30" }).success).toBe(false);
+    expect(insertHabitSchema.partial().safeParse({ endDate: "2026-09-31" }).success).toBe(false);
+    expect(insertHabitSchema.partial().safeParse({ startDate: "2026-09-01", endDate: "" }).success).toBe(true);
+    const base = { liabilityProfileId: "33333333-3333-4333-8333-333333333333", amount: 10 };
+    expect(insertLiabilityPaymentSchema.safeParse({ ...base, paymentDate: "2026-13-45" }).success).toBe(false);
+    expect(insertLiabilityPaymentSchema.safeParse({ ...base, paymentDate: "2026-09-02T10:00:00Z" }).success).toBe(true);
+  });
+  it("a balance adjustment with an unreadable date falls back to today instead of storing it", () => {
+    const acct = { id: "a", type: "account", fields: { balance: 100, accountKind: "checking" } };
+    expect(applyBalanceAdjustment(acct, { delta: 5, date: "2026-13-45" }, "2026-09-02").fields.balanceAsOf).toBe("2026-09-02");
+    expect(applyBalanceAdjustment(acct, { delta: 5, date: "2026-09-01" }, "2026-09-02").fields.balanceAsOf).toBe("2026-09-01");
+  });
+});

@@ -920,3 +920,14 @@ describe("D109/D110: journal edits fail cleanly", () => {
     expect((await h.api("PATCH", "/api/journal/j1", { date: "2026-09-11" })).status).toBe(200);
   });
 });
+
+// D111 — pay and adjust routes answer 400, not 500 or 200, to an impossible day.
+describe("D111: payment and adjustment dates are validated as calendar days", () => {
+  it("bills pay, liability payments and account adjust reject 2026-13-45", async () => {
+    h = await boot({ profiles: [SELF, { id: LOAN_ID, type: "liability", type_key: "auto_loan", name: "Loan", fields: {} }, { id: ACCT_ID, type: "account", type_key: "checking", name: "Checking", fields: { balance: 100, accountKind: "checking" } }],
+      obligations: [{ id: "obl-1", name: "Water", amount: 20, frequency: "monthly", nextDueDate: "2026-09-20", status: "active" }] });
+    expect((await h.api("POST", "/api/obligations/obl-1/pay", { date: "2026-13-45" })).status).toBe(400);
+    expect((await h.api("POST", `/api/liabilities/${LOAN_ID}/payments`, { amount: 5, paymentDate: "2026-13-45" })).status).toBe(400);
+    expect((await h.api("POST", `/api/accounts/${ACCT_ID}/adjust`, { delta: 1, date: "2026-13-45" })).status).toBe(400);
+  });
+});
