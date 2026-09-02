@@ -1163,6 +1163,18 @@ function sanitize(input: unknown): string {
     .slice(0, 10000);
 }
 
+/** Text fields of an account must be strings when present (an object or array is not a name). */
+function validateAccountTextFields(body: Record<string, any> | null | undefined): string | null {
+  if (!body || typeof body !== "object") return "Request body must be a JSON object";
+  for (const key of ["name", "accountKind", "institution", "accountNumberLast4", "currency", "notes"]) {
+    const v = body[key];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== "string") return `${key} must be a string`;
+    if (v.length > 500) return `${key} is too long`;
+  }
+  return null;
+}
+
 /** The same object without the keys whose value is undefined. */
 function withoutUndefined<T extends Record<string, any>>(obj: T): T {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T;
@@ -7951,6 +7963,14 @@ Rules:
 
   app.post("/api/accounts", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
+    // `String({x:1})` is "[object Object]", which is what four accounts were
+    // named after a probe posted an object: the name must BE a string. The
+    // money check also normalises "1,000" in place, so it runs before the
+    // fields are read out.
+    const textError = validateAccountTextFields(req.body);
+    if (textError) return res.status(400).json({ error: textError });
+    const moneyError = validateProfileMoneyFields(req.body);
+    if (moneyError) return res.status(400).json({ error: moneyError });
     const { name, accountKind, institution, balance, availableBalance, creditLimit,
       accountNumberLast4, balanceAsOf, currency, notes, ownerProfileId } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: "name is required" });
@@ -7967,7 +7987,14 @@ Rules:
 
   app.patch("/api/accounts/:id", asyncHandler(async (req, res) => {
     const uid = cacheUserKey(req as AuthenticatedRequest);
-    const body = (req.body && typeof req.body === "object") ? req.body : {};
+    const body = (req.body && typeof req.body === "object" && !Array.isArray(req.body)) ? req.body : {};
+    {
+      const textError = validateAccountTextFields(body);
+      if (textError) return res.status(400).json({ error: textError });
+      if (body.name !== undefined && !String(body.name).trim()) return res.status(400).json({ error: "name cannot be empty" });
+      const moneyError = validateProfileMoneyFields(body);
+      if (moneyError) return res.status(400).json({ error: moneyError });
+    }
     // `ownerProfileId` IS the account's parent (storage writes it to
     // parentProfileId), so it gets exactly the guards a profile's parent gets.
     // An empty value clears the owner and needs none of them.

@@ -987,3 +987,19 @@ describe("D115: POST/PATCH /api/profiles validate money fields", () => {
     expect(h.db.profiles.find((p: any) => p.name === "Truck")?.fields?.estimatedValue).toBe(14500);
   });
 });
+
+// D116 — POST /api/accounts stored an object as the name ("[object Object]").
+describe("D116: account text and money fields are validated", () => {
+  it("rejects an object name, a worded balance, and an empty rename; accepts a real account", async () => {
+    h = await boot({ profiles: [SELF] }, (storage, db) => {
+      storage.createAccount = async (d: any) => { const row = { id: "acct-new", type: "account", ...d }; db.profiles.push(row); return row; };
+      storage.updateAccount = async (id: string, patch: any) => ({ id, ...patch });
+    });
+    expect((await h.api("POST", "/api/accounts", { name: { x: 1 }, balance: 10 })).status).toBe(400);
+    expect((await h.api("POST", "/api/accounts", { name: "Savings", balance: "ten" })).status).toBe(400);
+    expect((await h.api("PATCH", "/api/accounts/acct-1", { name: "" })).status).toBe(400);
+    expect((await h.api("PATCH", "/api/accounts/acct-1", { institution: ["x"] })).status).toBe(400);
+    const ok = await h.api("POST", "/api/accounts", { name: "Savings", accountKind: "savings", balance: "1,000" });
+    expect(ok.status, JSON.stringify(ok.data)).toBeLessThan(300);
+  });
+});
