@@ -11746,8 +11746,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "update_goal": {
       const goals = await storage.getGoals();
-      const goal = goals.find(g => g.title.toLowerCase().includes((input.title || "").toLowerCase()));
-      if (!goal) return { error: "Goal not found: " + (input.title || "unknown") };
+      const ugResult = safeMatchEntity(goals, input.title || "", g => g.title);
+      if (!ugResult.match) return { error: ugResult.error || ("Goal not found: " + (input.title || "unknown")), candidates: ugResult.candidates };
+      const goal = ugResult.match;
       const changes: any = {};
       if (input.status) changes.status = input.status;
       if (input.target) changes.target = input.target;
@@ -12369,16 +12370,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "update_artifact": {
       const artifacts = await storage.getArtifacts();
-      const artifact = artifacts.find(a => a.title.toLowerCase().includes(safeLC(input.title)));
-      if (!artifact) return { error: `No artifact found matching "${input.title}"` };
+      const uaResult = safeMatchEntity(artifacts, input.title || "", a => a.title);
+      if (!uaResult.match) return { error: uaResult.error || `No artifact found matching "${input.title}"`, candidates: uaResult.candidates };
+      const artifact = uaResult.match;
       const updated = await storage.updateArtifact(artifact.id, input.changes);
       return { updated: true, artifact: updated };
     }
 
     case "duplicate_artifact": {
       const artifacts = await storage.getArtifacts();
-      const src = artifacts.find(a => a.title.toLowerCase().includes(safeLC(input.title)));
-      if (!src) return { error: `No artifact found matching "${input.title}"`, candidates: artifacts.slice(0, 5).map(a => a.title) };
+      const daResult = safeMatchEntity(artifacts, input.title || "", a => a.title);
+      if (!daResult.match) return { error: daResult.error || `No artifact found matching "${input.title}"`, candidates: daResult.candidates || artifacts.slice(0, 5).map(a => ({ id: a.id, name: a.title })) };
+      const src = daResult.match;
       // Mirror POST /api/artifacts/:id/duplicate: "(copy)" title, never pinned,
       // shareToken NOT carried over, item ids re-minted by createArtifact.
       const created = await storage.createArtifact({
@@ -12400,8 +12403,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "toggle_artifact_item": {
       const artifacts = await storage.getArtifacts();
-      const art = artifacts.find(a => a.title.toLowerCase().includes(safeLC(input.title)));
-      if (!art) return { error: `No artifact found matching "${input.title}"`, candidates: artifacts.slice(0, 5).map(a => a.title) };
+      const taResult = safeMatchEntity(artifacts, input.title || "", a => a.title);
+      if (!taResult.match) return { error: taResult.error || `No artifact found matching "${input.title}"`, candidates: taResult.candidates || artifacts.slice(0, 5).map(a => ({ id: a.id, name: a.title })) };
+      const art = taResult.match;
       const needle = safeLC(input.itemText).trim();
       const item = (art.items || []).find(i => i.text.toLowerCase().includes(needle));
       if (!item) return { error: `No checklist item matching "${input.itemText}" in "${art.title}"`, candidates: (art.items || []).slice(0, 8).map(i => i.text) };
@@ -12412,8 +12416,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "delete_goal": {
       const goals = await storage.getGoals();
-      const match = goals.find(g => g.title.toLowerCase().includes(safeLC(input.title)));
-      if (!match) return { error: `No goal found matching "${input.title}"` };
+      const dgResult = safeMatchEntity(goals, input.title || "", g => g.title, { isDestructive: true });
+      if (!dgResult.match) return { error: dgResult.error || `No goal found matching "${input.title}"`, candidates: dgResult.candidates };
+      const match = dgResult.match;
       await storage.deleteGoal(match.id);
       return { deleted: true, title: match.title, id: match.id };
     }
