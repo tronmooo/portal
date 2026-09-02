@@ -854,3 +854,43 @@ describe("D103: a settled one-time bill has no next due date; recurrenceEnd ride
     expect(o.recurrenceEnd).toBe("2026-09-01");
   });
 });
+
+// D108 — un-completing a recurring task left the occurrence its completion
+// had spawned, so the series forked.
+describe("D108: un-completing a recurring task takes back the untouched spawn", () => {
+  const prevTask = { id: "p1", title: "Water plants", status: "done", dueDate: "2026-09-02", tags: ["recur:daily"], linkedProfiles: [SELF] };
+  function retractStorage(cloneRow: any | null) {
+    const deleted: string[] = [];
+    const s = bareStorage({
+      _timezone: "UTC",
+      getTask: async (id: string) => (cloneRow && id === cloneRow.id ? cloneRow : undefined),
+      deleteTask: async () => { throw new Error("soft delete must not be used: the clone id is deterministic"); },
+      purgeTask: async (id: string) => { deleted.push(id); return true; },
+    });
+    return { s, deleted };
+  }
+  it("hard-deletes the open, unedited clone on the predicted date (so a re-completion can spawn it again)", async () => {
+    const { s } = retractStorage(null);
+    const cloneId = s.recurringCloneId("p1", "2026-09-03");
+    const { s: s2, deleted } = retractStorage({ id: cloneId, title: "Water plants", status: "todo", dueDate: "2026-09-03" });
+    expect(await s2.retractSpawnedRecurringTask(prevTask)).toBe(true);
+    expect(deleted).toEqual([cloneId]);
+  });
+  it("keeps a clone the user completed, moved or renamed, and does nothing without a spawn", async () => {
+    const { s } = retractStorage(null);
+    const cloneId = s.recurringCloneId("p1", "2026-09-03");
+    for (const row of [
+      { id: cloneId, title: "Water plants", status: "done", dueDate: "2026-09-03" },
+      { id: cloneId, title: "Water plants", status: "todo", dueDate: "2026-09-05" },
+      { id: cloneId, title: "Water the garden", status: "todo", dueDate: "2026-09-03" },
+    ]) {
+      const { s: sx, deleted } = retractStorage(row);
+      expect(await sx.retractSpawnedRecurringTask(prevTask)).toBe(false);
+      expect(deleted).toEqual([]);
+    }
+    const { s: s3, deleted } = retractStorage(null);
+    expect(await s3.retractSpawnedRecurringTask(prevTask)).toBe(false);
+    expect(await s3.retractSpawnedRecurringTask({ ...prevTask, tags: [] })).toBe(false);
+    expect(deleted).toEqual([]);
+  });
+});

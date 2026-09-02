@@ -3340,6 +3340,18 @@ export class SupabaseStorage implements IStorage {
           console.error(`[updateTask] recurring spawn failed for ${id.slice(0,8)}: ${e?.message || e}`);
         }
       }
+    } else if (data.status !== undefined && data.status !== "done" && existing.status === "done") {
+      // Un-completing takes back the occurrence that the completion spawned;
+      // otherwise today's chore and tomorrow's both stay open and the series
+      // forks at the next completion.
+      const recurTag = (existing.tags || []).find((t: string) => String(t).startsWith("recur:"));
+      if (recurTag) {
+        try {
+          await this.retractSpawnedRecurringTask(existing);
+        } catch (e: any) {
+          console.error(`[updateTask] recurring retract failed for ${id.slice(0,8)}: ${e?.message || e}`);
+        }
+      }
     }
     return this.getTask(id);
   }
@@ -3382,10 +3394,7 @@ export class SupabaseStorage implements IStorage {
     // both saw no sibling. The clone's id is derived from the series row and
     // the next date, so the second insert hits the primary key and is dropped
     // instead of becoming a duplicate.
-    const seriesCloneId = (() => {
-      const h = createHash("sha1").update(`recurring-clone:${prev.id}:${next.dueDate}`).digest("hex");
-      return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${((parseInt(h.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0")}${h.slice(18, 20)}-${h.slice(20, 32)}`;
-    })();
+    const seriesCloneId = this.recurringCloneId(prev.id, next.dueDate);
     try {
       await this.createTask({
         id: seriesCloneId,
@@ -3403,6 +3412,40 @@ export class SupabaseStorage implements IStorage {
       if (isUniqueViolationError(e)) return; // the other completion won
       throw e;
     }
+  }
+
+  /** The deterministic id of the occurrence spawned from `prevId` for `dueDate` (a v5-shaped uuid). */
+  private recurringCloneId(prevId: string, dueDate: string): string {
+    const h = createHash("sha1").update(`recurring-clone:${prevId}:${dueDate}`).digest("hex");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${((parseInt(h.slice(16, 18), 16) & 0x3f) | 0x80).toString(16).padStart(2, "0")}${h.slice(18, 20)}-${h.slice(20, 32)}`;
+  }
+
+  /**
+   * Remove the occurrence a completion spawned, when the completion is undone.
+   * Only the untouched spawn goes: it must still be open, on the date the
+   * series step predicts and with the same title — an occurrence the user
+   * has since edited or completed is theirs to keep.
+   */
+  private async retractSpawnedRecurringTask(prev: Task): Promise<boolean> {
+    const next = nextRecurringTaskSpawn({ dueDate: prev.dueDate, tags: prev.tags }, getUserToday(this._timezone));
+    if (!next) return false;
+    const clone = await this.getTask(this.recurringCloneId(prev.id, next.dueDate));
+    if (!clone || clone.status === "done") return false;
+    if (String(clone.dueDate || "").slice(0, 10) !== next.dueDate) return false;
+    if (String(clone.title || "").trim().toLowerCase() !== String(prev.title || "").trim().toLowerCase()) return false;
+    // A hard delete, not the soft one: the clone's id is deterministic, so a
+    // soft-deleted row would make the next re-completion's spawn collide on
+    // it and spawn nothing. The row was machine-made moments ago — there is
+    // nothing for the trash to restore.
+    return this.purgeTask(clone.id);
+  }
+
+  /** Permanently remove a task row (its entity links first). */
+  async purgeTask(id: string): Promise<boolean> {
+    await this.cleanupEntityLinks("task", id);
+    const { data, error } = await this.supabase.from("tasks")
+      .delete().eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   async deleteTask(id: string): Promise<boolean> {
