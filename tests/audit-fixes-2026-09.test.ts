@@ -539,3 +539,14 @@ describe("upcomingEventOccurrences", () => {
     expect(out[1].recurrence).toBeNull();
   });
 });
+
+// ── D42: a paraphrased title must still find the record ──
+describe("rankByName paraphrase matching (safeMatchEntity step 4)", () => {
+  it("'call the plumber' finds 'Call plumber TKab12' and nothing else", async () => {
+    const { rankByName } = await import("../shared/entity-resolution");
+    const items = [{ id: "1", title: "Call plumber TKab12" }, { id: "2", title: "Buy groceries" }, { id: "3", title: "Plumb the new sink" }];
+    const r = rankByName(items, "call the plumber", (t) => t.title);
+    expect(r.map((t) => t.id)).toEqual(["1"]);
+    expect(rankByName(items, "panera lunch", (t) => t.title)).toEqual([]);
+  });
+});

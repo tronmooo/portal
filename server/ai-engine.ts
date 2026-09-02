@@ -35,6 +35,7 @@ import {
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
 import { upcomingEventOccurrences } from "@shared/event-upcoming";
+import { rankByName } from "@shared/entity-resolution";
 import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags } from "@shared/recurring-dates";
 import { finalizeToolResult, buildTurnVerifyContext, captureBeforeRows, recordActionLog, executeReversePlan, buildChatMutation, entityTypeForTool, SOFT_DELETE_TYPES, trimExtractedFields, docContentMatches } from "./ai-envelope";
 import { flattenExtractedData, containsDate, normalizeDateString, isPlaceholderValue, toCamelKey, unwrapValue, canonicalizeExtractedFieldKeys } from "@shared/extraction-normalize";
@@ -960,7 +961,23 @@ function safeMatchEntity<T extends { id: string }>(
   // 3. Contains match
   const contains = eligible.filter(item => getField(item).toLowerCase().includes(search));
   if (contains.length === 1) return { match: contains[0] };
-  if (contains.length === 0) return { error: `Not found: "${searchText}"` };
+  if (contains.length === 0) {
+    // 4. Word match. The model paraphrases: "call the plumber" for a task
+    // titled "Call plumber", "panera lunch" for "Lunch at Panera". A plain
+    // substring test answered 'Not found' and the assistant told the user the
+    // record "may have been deleted" while it sat in the list. Same ranked
+    // matcher the actionable resolver uses; a mutation still needs ONE clear
+    // winner — several plausible records is a question, never a guess.
+    const ranked = rankByName(eligible, searchText, getField);
+    if (ranked.length === 1) return { match: ranked[0] };
+    if (ranked.length > 1) {
+      return {
+        error: `Multiple matches for "${searchText}". Please be more specific.`,
+        candidates: ranked.slice(0, 5).map(item => ({ id: item.id, name: getField(item) })),
+      };
+    }
+    return { error: `Not found: "${searchText}"` };
+  }
 
   // Multiple matches — for destructive ops, don't guess
   if (opts?.isDestructive || contains.length > 3) {
@@ -11751,8 +11768,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "update_task": {
       const tasks = await storage.getTasks();
-      const match = tasks.find(t => t.title.toLowerCase().includes(safeLC(input.title)));
-      if (!match) return { error: `No task found matching "${input.title}"` };
+      const utResult = safeMatchEntity(tasks, input.title || "", t => t.title);
+      if (!utResult.match) return { error: utResult.error || `No task found matching "${input.title}"`, candidates: utResult.candidates };
+      const match = utResult.match;
       const changes: Record<string, any> = { ...(input.changes || {}) };
       // A task carries a clock time, so "move it to 4pm" and "push it to
       // tomorrow at 9" are ordinary task edits. `dueDate` may arrive as a full
@@ -11812,8 +11830,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "update_expense": {
       const expenses = await storage.getExpenses();
-      const match = expenses.find(e => e.description.toLowerCase().includes(safeLC(input.description)));
-      if (!match) return { error: `No expense found matching "${input.description}"` };
+      const uxResult = safeMatchEntity(expenses, input.description || "", e => e.description);
+      if (!uxResult.match) return { error: uxResult.error || `No expense found matching "${input.description}"`, candidates: uxResult.candidates };
+      const match = uxResult.match;
       const changes: any = { ...(input.changes || {}) };
       // forProfile = MOVE: replace the owner set. Expenses keep the app-wide
       // convention of also linking self so they stay visible in the main
@@ -11836,8 +11855,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "update_obligation": {
       const obligations = await storage.getObligations();
-      const match = obligations.find(o => o.name.toLowerCase().includes(safeLC(input.name)));
-      if (!match) return { error: `No obligation found matching "${input.name}"` };
+      const uoResult = safeMatchEntity(obligations, input.name || "", o => o.name);
+      if (!uoResult.match) return { error: uoResult.error || `No obligation found matching "${input.name}"`, candidates: uoResult.candidates };
+      const match = uoResult.match;
 
       // Series actions operate on the EXISTING bill + its generated calendar
       // series — they never create a new record.
