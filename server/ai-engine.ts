@@ -10768,6 +10768,20 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "checkin_habit": {
       const habits = await storage.getHabits();
       const checkinMsg = String((input as any).__userMessage || "");
+      // "Smoke Child flossed today": the sentence's SUBJECT is a profile the
+      // user keeps. When the model left forProfile out, the report used to be
+      // scoped to the user's own habits, refused by the third-person veto,
+      // and narrated back as "that habit belongs to you, not Smoke Child".
+      // The subject names the owner; scope to them.
+      if (!input.forProfile && checkinMsg) {
+        const allProfs = await storage.getProfiles();
+        const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const subject = allProfs
+          .filter((p: any) => p.type !== "self" && String(p.name || "").trim().length >= 2)
+          .sort((a: any, b: any) => b.name.length - a.name.length)
+          .find((p: any) => new RegExp(`^\\s*${esc(p.name)}(?:'s)?\\s+`, "i").test(checkinMsg));
+        if (subject) input.forProfile = subject.name;
+      }
       // Scope to the named profile, else to self-owned/unowned habits.
       // NEVER fall back to other profiles' habits — an unqualified message
       // can only ever move the user's own streaks.

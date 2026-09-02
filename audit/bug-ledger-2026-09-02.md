@@ -73,3 +73,8 @@ Expense lifecycle across list/stats/enhanced/bootstrap/profile-detail/search/sco
 - Document expiry: calendar shows the expiry on the date, moves when edited, chat answers with the date, search finds the document, deleting it clears the notification.
 - Notification freshness across serverless instances: version-stamped cache keys plus the client's read-your-writes `x-data-version` token keep the bell fresh after a write (a probe without that token can read a ≤2 s stale list; the real client always sends it).
 - Upcoming feed (client-side aggregator) honours `rd:skip` on a weekly series and agrees with the calendar timeline.
+- Bills via chat: "went up to $18.99" updates the amount; "pause X until <date>" removes it from the calendar window; "resume X" brings it back; "I got paid $3,200 today from Acme" logs an income dated today.
+- Memory: save, recall, and "actually my gate code is 9876" updates the same memory in place (one row).
+- Goals via chat: create with target and deadline; two contributions accumulate (750 + 250 = 1000); progress read reports 20%; "the goal is now $4,000" corrects the target and keeps progress.
+- Multi-action + pronouns: "add a task to buy milk and put dinner with Sam on the calendar Friday 7pm" creates both; "move the dinner to 8pm", "make the milk task high priority", "cancel it" each hit the right record.
+- Accounts: "transfer $200 from Checking to Savings" moves balances (800/700), logs no expense; chat reads the balance back.
