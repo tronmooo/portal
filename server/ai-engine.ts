@@ -920,6 +920,7 @@ async function getCachedContextData(userId?: string): Promise<any[]> {
     storage.getDocuments(),
     storage.getGoals(),
     storage.getJournalEntries(), // index 10
+    storage.getIncomes().catch(() => [] as any[]), // index 11
   ]);
   contextCacheMap.set(cacheKey, { data, timestamp: now });
   // Evict old entries to prevent memory leak
@@ -7132,6 +7133,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const tasks = filterProfileId ? allTasks.filter(t => t.linkedProfiles.includes(filterProfileId!)) : allTasks;
         const active = tasks.filter(t => t.status !== "done");
         summary.tasks = { total: tasks.length, active: active.length, done: tasks.length - active.length, items: active.map(t => ({ id: t.id, title: t.title, priority: t.priority, dueDate: t.dueDate })) };
+      }
+      if (entityType === "all" || entityType === "expenses" || entityType === "incomes" || entityType === "income" || entityType === "finances") {
+        const allIncomes = await storage.getIncomes().catch(() => [] as any[]);
+        const incomesForSummary = filterProfileId ? allIncomes.filter((i: any) => (i.linkedProfiles || []).includes(filterProfileId!)) : allIncomes;
+        const monthlyRecurring = incomesForSummary.reduce((s: number, i: any) => s + (i.frequency && i.frequency !== "once" && i.frequency !== "one_time" ? toMonthlyAmount(Number(i.amount || 0), i.frequency) : 0), 0);
+        summary.incomes = { count: incomesForSummary.length, monthlyRecurring, items: incomesForSummary.slice(-10).map((i: any) => ({ id: i.id, source: i.source || i.description, amount: i.amount, frequency: i.frequency || "once", date: i.date })) };
       }
       if (entityType === "all" || entityType === "expenses") {
         const allExpenses = await storage.getExpenses();
@@ -14686,7 +14693,9 @@ function parseArtifactFromResponse(text: string, profileId: string): { chatText:
 // never aborts the rest; every operation reports its own outcome.
 function opRawLabel(toolUse: { name: string; input?: any }): string {
   const inp = (toolUse.input || {}) as Record<string, any>;
-  return String(inp.trackerName || inp.title || inp.description || inp.name || toolUse.name);
+  // `source` is an income's label ("Globex"); without it the recap read
+  // "Logged income: log_income — $2000".
+  return String(inp.trackerName || inp.title || inp.description || inp.name || inp.source || toolUse.name);
 }
 
 async function runBulkLogPath(
@@ -15486,7 +15495,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // (agent loop + bulk path), so post-write reads are never stale. A manual UI
   // edit followed by a chat message within the same 5s window on the same warm
   // instance can see a snapshot up to 5s old — an accepted, bounded tradeoff.
-  let [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
+  let [profiles, trackers, tasks, expenses, events, habits, obligations, memories, documents, goals, journalEntries, incomes] = await getCachedContextData(userId) as [any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[], any[]];
+  incomes = incomes || [];
 
   // P4.5: honor the UI profile filter when the chat route passes it through.
   // `allProfiles` stays the FULL list — the orphan rule, self lookups and the
@@ -15635,6 +15645,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       return `${h.name} (${h.frequency}, ${today}, ${h.currentStreak}d streak, owner:${hOwner || "unlinked"})`;
     }).join("; ") || "none"}`,
     `Obligations (${obligations.length}): ${obligations.filter((o: any) => o.status !== "cancelled").slice(0, 20).map(o => `${o.name}: $${o.amount}/${o.frequency}`).join("; ") || "none"}`,
+    // Incomes were never in the context at all, so "what's my monthly income?"
+    // was answered "I don't see any income logged" right after logging one.
+    (() => {
+      const rows = (incomes as any[]).slice(-15);
+      if (rows.length === 0) return "Incomes: none recorded";
+      const monthly = rows.reduce((sum: number, i: any) => sum + (i.frequency && i.frequency !== "once" && i.frequency !== "one_time" ? toMonthlyAmount(Number(i.amount || 0), i.frequency) : 0), 0);
+      const owner = (i: any) => (i.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name).filter(Boolean).join(",");
+      return `Incomes (${incomes.length}; recurring ≈ $${monthly.toFixed(2)}/month): ${rows.map((i: any) => `${i.source || i.description || "income"}: $${i.amount}${i.frequency && i.frequency !== "once" ? `/${i.frequency}` : " one-time"} (${String(i.date || "").slice(0, 10)}${owner(i) ? `, ${owner(i)}` : ""})`).join("; ")}`;
+    })(),
     // The bell, as the user sees it: the same computed list the notification
     // endpoint serves, already minus dismissed ids and muted categories. With
     // no such line the model answered "do I have any notifications?" from the
