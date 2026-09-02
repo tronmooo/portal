@@ -38,6 +38,7 @@ Status key: FIXED · DOCUMENTED (measured, left as follow-up) · BLOCKED (needs 
 | P15 | Settings / dashboard | 7 individual preference reads (14B each) on Settings, 3 on the dashboard, one fetched twice | 10 requests | One route per key | — (parallel, one round trip of settle time) | — | — | DOCUMENTED |
 | P16 | `/api/dashboard-bootstrap` | 605KB at 3× volume: calendar timeline 97KB (246 habit occurrences), expenses 200KB, trackers 150KB (120 days of entries) | 605KB raw | Bootstrap ships every list whole | — (gzip on Vercel; server cost is the real question — BLOCKED on live DB) | — | — | BLOCKED |
 | P17 | Journal save | Journal list fetched twice per save | 2× | Four sites called `queryClient.invalidateQueries` directly (journal, stats, enhanced), bypassing the bus and its manifest coalescing | Route through `invalidateDomain("journal")` | 1× (2 requests per save: POST + list) | Entry visible optimistically (15ms) | FIXED |
+| P18 | Expense writes (server) | Expense INSERT averages 72ms, UPDATE 34–44ms in production | 72ms | `pg_stat_user_indexes`: `idx_expenses_desc_search` (GIN over `to_tsvector(description‖vendor)`) has **0 scans** and is the table's largest index (2.9MB) — `/api/search` uses ILIKE, nothing issues a text search; four legacy `idx_profiles_linked_{expenses,trackers,tasks,events}_gin` also have 0 scans; `expenses` carries two identical BEFORE UPDATE triggers (`set_updated_at`, `trg_expenses_updated_at`, both `NEW.updated_at = now()`) | Recommended migration (not applied — schema change during an incident, and the session's permission gate declined to write it): `DROP INDEX IF EXISTS idx_expenses_desc_search; DROP INDEX IF EXISTS idx_profiles_linked_expenses_gin; DROP INDEX IF EXISTS idx_profiles_linked_trackers_gin; DROP INDEX IF EXISTS idx_profiles_linked_tasks_gin; DROP INDEX IF EXISTS idx_profiles_linked_events_gin; DROP TRIGGER IF EXISTS trg_expenses_updated_at ON expenses;` | — | Re-check `idx_scan` is still 0 right before applying | DOCUMENTED |
 
 ## Verified working (no bug)
 
@@ -45,6 +46,7 @@ Status key: FIXED · DOCUMENTED (measured, left as follow-up) · BLOCKED (needs 
 - Cross-screen sync without reload: dashboard KPI/widgets after task create/complete/delete; dashboard cash flow after expense add; dashboard schedule after event create; tracker tile after entry add.
 - Rapid actions: double-click Save on New Task → the second click is blocked (button disabled), one row; five rapid tracker entries → five rows, correct latest value.
 - Profile switch: Self → Bob 2 requests, Bob → Self 0 (cached), Everyone 12 (cold), back 0. Bob's dashboard does not show Alex's tasks.
+- Rapid switching Self → Bob → Casey → Biscuit → Self with ~30ms between clicks: 6 requests total, final scope Self, cache for Self (121 tasks) and Bob (0) both match the server — no older response overwrote a newer scope.
 - Warm navigation between screens is nearly network-free (0–1 requests) thanks to bootstrap seeding; back navigation 0 requests.
 - Idle: no background CPU burn on dashboard, trackers (with and without the detail dialog), finance, calendar, chat (0 long tasks over 15s each).
 - Search (⌘K): result in ~470ms (server 130ms + debounce).
@@ -64,6 +66,8 @@ Statement stats since the last reset, ordered by total time (application stateme
 | `INSERT audit_log` (three shapes) | 49k | 24–34ms | 6.4s | Fire-and-forget per write; not on the request path but ~1.2M ms of DB time |
 | `INSERT expenses` | 7,775 | 72ms | 5.7s | Slow for a single-row insert; trigger/index check still to run |
 | GoTrue session/user lookups | 152k / 139k | 3.6ms / 3.5ms | 2.5s | Token verification hits Postgres for ~6% of API calls (per-instance 60s cache misses) |
+
+Index usage (`pg_stat_user_indexes`, hot tables): reads are served by the `(user_id, date)`, `deleted_at` and `linked_profiles` GIN indexes on expenses/tasks/events/documents and the `user`/`tracker`/`tracker_time` indexes on tracker_entries — no missing-index signal on the hot paths. See P18 for the unused ones.
 
 Advisors: 28 WARN `auth_rls_initplan` — all on the Stripe/financial_* tables, whose policies re-evaluate `auth.uid()` per row (the server reaches them with the service role, so app reads are unaffected; fix is `(select auth.uid())`); 19 INFO unused indexes; 5 INFO unindexed foreign keys on `financial_transaction_overrides`; 6 INFO tables without a primary key. No advisor finding touches the hot read paths above.
 
