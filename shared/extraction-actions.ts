@@ -2161,12 +2161,23 @@ export function componentAmountIds(
   if (money.length < 3) return { componentFactIds, total: null };
 
   // Group by what the money is ABOUT and WHEN — two purchases on one statement
-  // are two totals, and merging them would suppress a real expense.
-  const groups = new Map<string, SemanticFact[]>();
+  // are two totals, and merging them would suppress a real expense. A fact
+  // with no date of its own (a receipt's line items usually carry none; only
+  // the total is dated) joins every dated group of its subject: keying it
+  // under "" put the components in one group and the total in another, so a
+  // $8.99 + $5.49 = $14.48 receipt was filed as three expenses.
+  const bySubject = new Map<string, SemanticFact[]>();
   for (const f of money) {
-    const key = `${f.subject.entityRef}:${normalizeDateString(f.date) || ""}`;
-    const arr = groups.get(key);
-    if (arr) arr.push(f); else groups.set(key, [f]);
+    const arr = bySubject.get(f.subject.entityRef);
+    if (arr) arr.push(f); else bySubject.set(f.subject.entityRef, [f]);
+  }
+  const groups = new Map<string, SemanticFact[]>();
+  for (const [ref, facts] of bySubject) {
+    const dated = facts.filter((f) => normalizeDateString(f.date));
+    const undated = facts.filter((f) => !normalizeDateString(f.date));
+    const dates = Array.from(new Set(dated.map((f) => normalizeDateString(f.date))));
+    if (dates.length <= 1) { groups.set(`${ref}:${dates[0] || ""}`, facts); continue; }
+    for (const d of dates) groups.set(`${ref}:${d}`, [...dated.filter((f) => normalizeDateString(f.date) === d), ...undated]);
   }
 
   let total: number | null = null;

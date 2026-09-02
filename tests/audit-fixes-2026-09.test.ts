@@ -369,3 +369,17 @@ describe("payBillOccurrence: concurrent payers settle one occurrence once", () =
     expect(s.expenses.length).toBe(0);
   });
 });
+
+import { componentAmountIds } from "../shared/extraction-actions";
+describe("componentAmountIds: undated line items join the dated total", () => {
+  const fact = (id: string, value: string, date?: string): any => ({ id, label: id, value, roles: ["financial"], financialKind: "charge", date, subject: { entityRef: "e1", confidence: 0.9 } });
+  it("a receipt whose only dated fact is the total still marks the line items as components", () => {
+    const r = componentAmountIds([fact("f1", "8.99"), fact("f2", "5.49"), fact("f3", "14.48", "2026-08-29")]);
+    expect(r.total).toBe(14.48);
+    expect([...r.componentFactIds].sort()).toEqual(["f1", "f2"]);
+  });
+  it("two dated purchases stay separate totals", () => {
+    const r = componentAmountIds([fact("a1", "10", "2026-08-01"), fact("a2", "5", "2026-08-01"), fact("a3", "15", "2026-08-01"), fact("b1", "20", "2026-08-02"), fact("b2", "7", "2026-08-02"), fact("b3", "27", "2026-08-02")]);
+    expect([...r.componentFactIds].sort()).toEqual(["a1", "a2", "b1", "b2"]);
+  });
+});
