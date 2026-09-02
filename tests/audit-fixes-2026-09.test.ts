@@ -586,3 +586,17 @@ describe("deriveBulkSet date bounds", () => {
     expect(entityDate("task", { createdAt: "2026-09-01T00:00:00Z" })).toBe("2026-09-01");
   });
 });
+
+// ── D49/D50: malformed dates and times are rejected at the door ──
+describe("task and event input validation", () => {
+  it("rejects a non-date due date and a 25:00 event time; accepts ISO and empty-to-clear", async () => {
+    const { insertTaskSchema, insertEventSchema } = await import("../shared/schema");
+    expect(insertTaskSchema.safeParse({ title: "x", dueDate: "not-a-date" }).success).toBe(false);
+    expect(insertTaskSchema.safeParse({ title: "x", dueDate: "2026-13-45" }).success).toBe(false);
+    expect(insertTaskSchema.safeParse({ title: "x", dueDate: "2026-09-05", dueTime: "09:30" }).success).toBe(true);
+    expect(insertTaskSchema.partial().safeParse({ dueDate: "", dueTime: "" }).success).toBe(true);
+    expect(insertEventSchema.safeParse({ title: "x", date: "2026-09-10", time: "25:00" }).success).toBe(false);
+    expect(insertEventSchema.safeParse({ title: "x", date: "09/10/2026" }).success).toBe(false);
+    expect(insertEventSchema.safeParse({ title: "x", date: "2026-09-10", time: "19:00", recurrenceEnd: "" }).success).toBe(true);
+  });
+});
