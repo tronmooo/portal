@@ -269,10 +269,24 @@ export function normalizeTrackerEntry(
   // SINGLE number — otherwise multiple metrics collapse onto one field.
   const allowSingleNumericFallback = numericSourceCount <= 1;
 
+  // A unit may arrive as a SIBLING key rather than a suffix on the value:
+  // `{ value: 80, unit: "kg" }` or `{ weight: 80, weightUnit: "kg" }` (the AI
+  // quick-log lanes emit the former). Without this, 80 kg landed as a bare 80
+  // in a pounds tracker — a 100 lb "drop" on the chart — with the unit key
+  // stored alongside as junk.
+  const raw = rawValues || {};
+  const siblingUnit = typeof raw.unit === "string" && raw.unit.trim() ? raw.unit.trim() : (typeof raw.units === "string" && raw.units.trim() ? raw.units.trim() : null);
+  const unitKeyFor = (k: string): string | null => {
+    for (const cand of [`${k}Unit`, `${k}_unit`, `${k}Units`]) if (typeof raw[cand] === "string" && raw[cand].trim()) return cand;
+    return null;
+  };
+  const consumedUnitKeys = new Set<string>();
+
   for (const [k, v] of Object.entries(rawValues || {})) {
     // Reserved metadata keys pass through untouched: _notes (free text) and
     // _enrichment (provenance/estimates from shared/estimation-engine).
     if (k.startsWith("_")) { (out as any)[k] = v; continue; }
+    if (consumedUnitKeys.has(k)) continue;
 
     // Resolve field name (value-aware: a non-numeric stray never gets mapped
     // onto a lone numeric field)
@@ -295,7 +309,11 @@ export function normalizeTrackerEntry(
     // Parse numeric + unit suffix
     const parsed = parseNumericWithUnit(v);
     if (parsed) {
-      const { value, unit: sourceUnit } = parsed;
+      const { value } = parsed;
+      // Unit precedence: suffix on the value, then `<key>Unit`, then a bare
+      // `unit` sibling (which applies to the entry's single measurement).
+      const perKeyUnitKey = parsed.unit ? null : unitKeyFor(k);
+      const sourceUnit = parsed.unit ?? (perKeyUnitKey ? String(raw[perKeyUnitKey]) : null) ?? (numericSourceCount <= 1 ? siblingUnit : null);
       // Target unit: prefer field-level unit, fall back to tracker-level
       const targetUnit = fieldUnit || trackerUnit || null;
       if (sourceUnit && targetUnit && canonUnit(sourceUnit) !== canonUnit(targetUnit)) {
@@ -304,8 +322,16 @@ export function normalizeTrackerEntry(
           // round to 2 decimals — temperature/weight don't need more
           out[canonicalKey] = Math.round(converted * 100) / 100;
           warnings.push(`Converted ${value} ${sourceUnit} → ${out[canonicalKey]} ${targetUnit}`);
+          // The unit is now expressed by the tracker; the sibling key is spent.
+          if (perKeyUnitKey) consumedUnitKeys.add(perKeyUnitKey);
+          else if (sourceUnit === siblingUnit) consumedUnitKeys.add(typeof raw.unit === "string" ? "unit" : "units");
           continue;
         }
+      }
+      if (sourceUnit && targetUnit && canonUnit(sourceUnit) === canonUnit(targetUnit)) {
+        // Same unit either way — drop the redundant sibling key.
+        if (perKeyUnitKey) consumedUnitKeys.add(perKeyUnitKey);
+        else if (sourceUnit === siblingUnit) consumedUnitKeys.add(typeof raw.unit === "string" ? "unit" : "units");
       }
       // No conversion needed (or impossible): store the parsed number
       out[canonicalKey] = value;

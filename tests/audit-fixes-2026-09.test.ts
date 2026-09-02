@@ -264,3 +264,29 @@ describe("liability schedule: re-anchored series keeps history and the new grid"
     expect(dates).toEqual(["2026-08-04", "2026-09-04", "2026-10-04", "2026-11-04", "2026-12-04"]);
   });
 });
+
+import { normalizeTrackerEntry } from "../server/tracker-normalize";
+describe("tracker normalize: sibling unit keys", () => {
+  const lbs = { name: "Weight", category: "health", unit: "lbs", fields: [{ name: "value", type: "number", isPrimary: true }] } as any;
+  it("converts { value: 80, unit: 'kg' } into the tracker's pounds and drops the unit key", () => {
+    const r = normalizeTrackerEntry(lbs, { value: 80, unit: "kg" });
+    expect(r.values.value).toBeCloseTo(176.37, 1);
+    expect("unit" in r.values).toBe(false);
+  });
+  it("handles a per-key unit and leaves other keys alone", () => {
+    const r = normalizeTrackerEntry({ ...lbs, fields: [{ name: "weight", type: "number", unit: "lbs" }, { name: "notes", type: "text" }] }, { weight: 80, weightUnit: "kg", notes: "morning" });
+    expect(r.values.weight).toBeCloseTo(176.37, 1);
+    expect(r.values.notes).toBe("morning");
+    expect("weightUnit" in r.values).toBe(false);
+  });
+  it("same unit as the tracker: value unchanged, redundant key dropped", () => {
+    const r = normalizeTrackerEntry(lbs, { value: 180, unit: "lbs" });
+    expect(r.values.value).toBe(180);
+    expect("unit" in r.values).toBe(false);
+  });
+  it("does not apply a bare unit sibling when the entry carries several numbers", () => {
+    const run = { name: "Running", category: "fitness", unit: "mi", fields: [{ name: "distance", type: "number", unit: "mi" }, { name: "duration", type: "number", unit: "min" }] } as any;
+    const r = normalizeTrackerEntry(run, { distance: 5, duration: 30, unit: "km" });
+    expect(r.values.distance).toBe(5); // ambiguous — left alone rather than guessed
+  });
+});
