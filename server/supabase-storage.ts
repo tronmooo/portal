@@ -1038,12 +1038,7 @@ export class SupabaseStorage implements IStorage {
     const currentMs = Date.parse(currentUpdatedAt);
     const matches = expected === currentUpdatedAt
       || (Number.isFinite(expectedMs) && Number.isFinite(currentMs) && expectedMs === currentMs);
-    if (!matches) {
-      throw Object.assign(
-        new Error("Conflict: record was modified by another request"),
-        { name: "ConflictError", statusCode: 409 },
-      );
-    }
+    if (!matches) throw this.writeConflictError();
   }
 
   /**
@@ -1053,11 +1048,37 @@ export class SupabaseStorage implements IStorage {
    * trigger (verified live 2026-06-10), so the comparison is authoritative
    * even though some row mappers don't surface the column.
    */
-  private async assertNoWriteConflictFor(table: string, id: string, patch: Record<string, any>): Promise<void> {
-    if (!patch || typeof patch !== "object" || (patch as any).expectedUpdatedAt === undefined) return;
+  private async assertNoWriteConflictFor(table: string, id: string, patch: Record<string, any>): Promise<string | undefined> {
+    if (!patch || typeof patch !== "object" || (patch as any).expectedUpdatedAt === undefined) return undefined;
     const { data: curRow } = await this.supabase.from(table)
       .select("updated_at").eq("id", id).eq("user_id", this.userId).maybeSingle();
     this.assertNoWriteConflict(patch, curRow?.updated_at);
+    // The version the caller was checked against, in the column's own
+    // spelling, so the write itself can be made conditional on it.
+    return typeof curRow?.updated_at === "string" ? curRow.updated_at : undefined;
+  }
+
+  private writeConflictError(): Error {
+    return Object.assign(
+      new Error("Conflict: record was modified by another request"),
+      { name: "ConflictError", statusCode: 409 },
+    );
+  }
+
+  /**
+   * Runs an UPDATE builder. With a `version` (the updated_at the caller was
+   * checked against) the write only lands if the row still carries it —
+   * the check above and the write are two round trips, and two same-version
+   * edits arriving together both passed the check and both wrote, the
+   * second silently over the first. Zero rows touched under a version is
+   * the same 409 the pre-check raises.
+   */
+  private async guardedWrite(query: any, version: string | undefined): Promise<{ error: any }> {
+    if (!version) return await query;
+    const { data, error } = await query.eq("updated_at", version).select("id");
+    if (error) return { error };
+    if (!Array.isArray(data) || data.length === 0) throw this.writeConflictError();
+    return { error: null };
   }
 
   // ---- ROW → OBJECT helpers ----
@@ -1119,7 +1140,7 @@ export class SupabaseStorage implements IStorage {
       id: r.id, amount: Number(r.amount) || 0, category: r.category, description: r.description,
       vendor: r.vendor || undefined, isRecurring: r.is_recurring || undefined,
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [],
-      date: r.date, createdAt: r.created_at,
+      date: r.date, createdAt: r.created_at, updatedAt: r.updated_at || undefined,
     };
   }
 
@@ -1133,6 +1154,7 @@ export class SupabaseStorage implements IStorage {
       recurrenceEnd: r.recurrence_end || undefined,
       linkedProfiles: r.linked_profiles || [], linkedDocuments: r.linked_documents || [],
       tags: r.tags || [], source: r.source as any, createdAt: r.created_at,
+      updatedAt: r.updated_at || undefined,
     };
   }
 
@@ -1173,7 +1195,7 @@ export class SupabaseStorage implements IStorage {
       currentStreak: live.current, longestStreak: Math.max(live.longest, r.longest_streak || 0),
       linkedProfiles: r.linked_profiles || [],
       linkedTrackerId: r.linked_tracker_id || undefined,
-      checkins, createdAt: r.created_at,
+      checkins, createdAt: r.created_at, updatedAt: r.updated_at || undefined,
     };
   }
 
@@ -2916,7 +2938,7 @@ export class SupabaseStorage implements IStorage {
     if (!existing) return undefined;
     // [P0.2] Optimistic concurrency: compare against the trigger-maintained
     // updated_at column (fetched only when the caller sent expectedUpdatedAt).
-    await this.assertNoWriteConflictFor("trackers", id, data as Record<string, any>);
+    const trackerVersion = await this.assertNoWriteConflictFor("trackers", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
     const baseUpdate: any = {
       name: merged.name, category: merged.category, unit: merged.unit || null,
@@ -2929,7 +2951,7 @@ export class SupabaseStorage implements IStorage {
     const fullUpdate = (merged as any).metricDefinition
       ? { ...baseUpdate, metric_definition: (merged as any).metricDefinition }
       : baseUpdate;
-    let updErr = (await this.supabase.from("trackers").update(fullUpdate).eq("id", id).eq("user_id", this.userId)).error;
+    let updErr = (await this.guardedWrite(this.supabase.from("trackers").update(fullUpdate).eq("id", id).eq("user_id", this.userId), trackerVersion)).error;
     if (updErr && fullUpdate !== baseUpdate &&
         /metric_definition|column .* does not exist|schema cache|could not find/i.test(updErr.message || "")) {
       console.warn(`[updateTracker] optional column rejected (${updErr.message}); retrying with base columns`);
@@ -3306,14 +3328,14 @@ export class SupabaseStorage implements IStorage {
     if (!existing) return undefined;
     // [P0.2] Optimistic concurrency: compare against the trigger-maintained
     // updated_at column (fetched only when the caller sent expectedUpdatedAt).
-    await this.assertNoWriteConflictFor("tasks", id, data as Record<string, any>);
+    const taskVersion = await this.assertNoWriteConflictFor("tasks", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
-    const { error } = await this.supabase.from("tasks").update({
+    const { error } = await this.guardedWrite(this.supabase.from("tasks").update({
       title: merged.title, description: merged.description || null, status: merged.status,
       priority: merged.priority, due_date: merged.dueDate || null,
       due_time: merged.dueTime || null,
       tags: merged.tags,
-    }).eq("id", id).eq("user_id", this.userId);
+    }).eq("id", id).eq("user_id", this.userId), taskVersion);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
     // raw linked_profiles write alongside the rest of the patch.
@@ -3498,13 +3520,13 @@ export class SupabaseStorage implements IStorage {
     if (!existing) return undefined;
     // [P0.2] Optimistic concurrency: compare against the trigger-maintained
     // updated_at column (fetched only when the caller sent expectedUpdatedAt).
-    await this.assertNoWriteConflictFor("expenses", id, data as Record<string, any>);
+    const expenseVersion = await this.assertNoWriteConflictFor("expenses", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
-    const { error } = await this.supabase.from("expenses").update({
+    const { error } = await this.guardedWrite(this.supabase.from("expenses").update({
       amount: merged.amount, category: merged.category, description: merged.description,
       vendor: merged.vendor || null, is_recurring: merged.isRecurring || false,
       tags: merged.tags, date: merged.date,
-    }).eq("id", id).eq("user_id", this.userId);
+    }).eq("id", id).eq("user_id", this.userId), expenseVersion);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
     // raw linked_profiles write alongside the rest of the patch.
@@ -3547,6 +3569,7 @@ export class SupabaseStorage implements IStorage {
       category: r.category || "salary", frequency: r.frequency || "monthly",
       date: r.date || undefined, linkedProfiles: r.linked_profiles || [],
       tags: r.tags || [], deletedAt: r.deleted_at, createdAt: r.created_at,
+      updatedAt: r.updated_at || undefined,
     } as Income;
   }
 
@@ -3660,9 +3683,9 @@ export class SupabaseStorage implements IStorage {
     if (!existing) return undefined;
     // [P0.2] Optimistic concurrency: compare against the trigger-maintained
     // updated_at column (fetched only when the caller sent expectedUpdatedAt).
-    await this.assertNoWriteConflictFor("events", id, data as Record<string, any>);
+    const eventVersion = await this.assertNoWriteConflictFor("events", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
-    const { error } = await this.supabase.from("events").update({
+    const { error } = await this.guardedWrite(this.supabase.from("events").update({
       title: merged.title, date: merged.date, time: merged.time || null,
       end_time: merged.endTime || null, end_date: merged.endDate || null,
       all_day: merged.allDay, description: merged.description || null,
@@ -3671,7 +3694,7 @@ export class SupabaseStorage implements IStorage {
       recurrence_end: merged.recurrenceEnd || null,
       linked_documents: merged.linkedDocuments,
       tags: merged.tags, source: merged.source,
-    }).eq("id", id).eq("user_id", this.userId);
+    }).eq("id", id).eq("user_id", this.userId), eventVersion);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
     // raw linked_profiles write alongside the rest of the patch.
@@ -4865,9 +4888,9 @@ export class SupabaseStorage implements IStorage {
     if (!existing) return undefined;
     // [P0.2] Optimistic concurrency: compare against the trigger-maintained
     // updated_at column (fetched only when the caller sent expectedUpdatedAt).
-    await this.assertNoWriteConflictFor("habits", id, data as Record<string, any>);
+    const habitVersion = await this.assertNoWriteConflictFor("habits", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
-    const { error } = await this.supabase.from("habits").update({
+    const { error } = await this.guardedWrite(this.supabase.from("habits").update({
       name: merged.name, icon: merged.icon || null, color: merged.color || null,
       frequency: merged.frequency, target_days: merged.targetDays || null,
       target_per_day: merged.targetPerDay || existing.targetPerDay || 1,
@@ -4875,7 +4898,7 @@ export class SupabaseStorage implements IStorage {
       time_of_day: merged.timeOfDay || null,
       scheduled_time: merged.scheduledTime || null,
       linked_tracker_id: merged.linkedTrackerId || null,
-    }).eq("id", id).eq("user_id", this.userId);
+    }).eq("id", id).eq("user_id", this.userId), habitVersion);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
     // raw linked_profiles write alongside the rest of the patch.

@@ -786,3 +786,56 @@ describe("D77 recurring spawn clone id is deterministic per series + date", () =
     expect(inserted[0].due_date).toBe("2026-09-09");
   });
 });
+
+// D90 — the optimistic-concurrency guard was check-then-write: two edits
+// carrying the same expectedUpdatedAt both passed the pre-check and both
+// wrote. The write now carries the version, and a write that touches no row
+// under a version is the same 409. Expense/event/habit/income rows also did
+// not surface updatedAt, so a client could never guard those edits.
+describe("D90: a guarded update is conditional on the version it was checked against", () => {
+  const ROW_VERSION = "2026-09-02T20:06:11.746601+00:00";
+  function expenseStorage(updateRows: any[]) {
+    const { client, calls } = chainClient((table, op) => {
+      if (table === "expenses" && op === "select") return { data: [{ updated_at: ROW_VERSION }], error: null };
+      if (table === "expenses" && op === "update") return { data: updateRows, error: null };
+      return { data: [], error: null };
+    });
+    const s = bareStorage({
+      supabase: client,
+      getExpense: async (id: string) => ({ id, amount: 5, category: "general", description: "x", tags: [], date: "2026-09-02", linkedProfiles: [] }),
+      applyOwnershipPatch: async () => undefined,
+    });
+    return { s, calls };
+  }
+  it("filters the UPDATE on updated_at when expectedUpdatedAt was sent, and 409s when no row matched", async () => {
+    const { s, calls } = expenseStorage([]);
+    await expect(s.updateExpense("exp-1", { amount: 6, expectedUpdatedAt: ROW_VERSION })).rejects.toMatchObject({ statusCode: 409 });
+    const upd = calls.find(c => c.table === "expenses" && c.op === "update")!;
+    expect(upd.filters).toContainEqual(["eq", ["updated_at", ROW_VERSION]]);
+    expect(upd.payload.expectedUpdatedAt).toBeUndefined();
+  });
+  it("writes when the row still carries the version", async () => {
+    const { s, calls } = expenseStorage([{ id: "exp-1" }]);
+    await expect(s.updateExpense("exp-1", { amount: 6, expectedUpdatedAt: ROW_VERSION })).resolves.toBeTruthy();
+    expect(calls.find(c => c.table === "expenses" && c.op === "update")!.payload.amount).toBe(6);
+  });
+  it("an unguarded edit never filters on updated_at (last write wins, as before)", async () => {
+    const { s, calls } = expenseStorage([]);
+    await expect(s.updateExpense("exp-1", { amount: 6 })).resolves.toBeTruthy();
+    const upd = calls.find(c => c.table === "expenses" && c.op === "update")!;
+    expect(upd.filters.some(([f, a]) => f === "eq" && a[0] === "updated_at")).toBe(false);
+  });
+  it("a stale expectedUpdatedAt is rejected before the write", async () => {
+    const { s, calls } = expenseStorage([{ id: "exp-1" }]);
+    await expect(s.updateExpense("exp-1", { amount: 6, expectedUpdatedAt: "2026-09-01T00:00:00.000Z" })).rejects.toMatchObject({ statusCode: 409 });
+    expect(calls.some(c => c.table === "expenses" && c.op === "update")).toBe(false);
+  });
+  it("expense, event, habit and income rows surface updatedAt", () => {
+    const s = bareStorage();
+    const r = { id: "r1", updated_at: ROW_VERSION, created_at: ROW_VERSION, amount: 1, linked_profiles: [], tags: [] };
+    expect(s.rowToExpense(r).updatedAt).toBe(ROW_VERSION);
+    expect(s.rowToEvent(r).updatedAt).toBe(ROW_VERSION);
+    expect(s.rowToIncome(r).updatedAt).toBe(ROW_VERSION);
+    expect(s.rowToHabit(r, []).updatedAt).toBe(ROW_VERSION);
+  });
+});

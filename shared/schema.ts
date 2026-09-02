@@ -548,6 +548,8 @@ export interface Habit {
   checkins: HabitCheckin[];
   linkedProfiles?: string[];
   createdAt: string;
+  /** Last write time (the row's updated_at); echo it back as expectedUpdatedAt to guard an edit. */
+  updatedAt?: string;
 }
 
 /**
@@ -986,6 +988,8 @@ export interface Expense {
   tags: string[];
   date: string;
   createdAt: string;
+  /** Last write time (the row's updated_at); echo it back as expectedUpdatedAt to guard an edit. */
+  updatedAt?: string;
 }
 
 export const insertExpenseSchema = z.object({
@@ -1055,6 +1059,8 @@ export interface Income {
   tags: string[];
   deletedAt?: string | null;
   createdAt: string;
+  /** Last write time (the row's updated_at); echo it back as expectedUpdatedAt to guard an edit. */
+  updatedAt?: string;
 }
 
 export const insertIncomeSchema = z.object({
@@ -1103,6 +1109,8 @@ export interface CalendarEvent {
   tags: string[];
   source: "manual" | "chat" | "ai" | "external";
   createdAt: string;
+  /** Last write time (the row's updated_at); echo it back as expectedUpdatedAt to guard an edit. */
+  updatedAt?: string;
 }
 
 export const insertEventSchema = z.object({
