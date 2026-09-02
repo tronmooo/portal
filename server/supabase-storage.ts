@@ -84,6 +84,7 @@ import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { autoCheckinLinkedHabits } from "./habit-completion";
+import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation } from "../shared/obligation-windows";
 
@@ -2892,7 +2893,14 @@ export class SupabaseStorage implements IStorage {
     // entry's `computed` column — an object left inside values renders as
     // "_enrichment: [object Object]" in every values-chip UI and pollutes the
     // duplicate-detection key below.
-    const { _enrichment: enrichmentMeta, ...cleanValues } = { ...data.values } as Record<string, any>;
+    const { _enrichment: enrichmentMeta, ...rawClean } = { ...data.values } as Record<string, any>;
+    // ONE unit gate: convert to the tracker's unit here, at the write, so a
+    // value that arrives with a unit ("80 kg", or { value: 80, unit: "kg" })
+    // lands in the tracker's own unit from EVERY entry point — the POST route
+    // and the habit mirror never ran the normalizer the AI lanes run, so the
+    // form stored kilograms in a pounds tracker. Idempotent for already-
+    // normalized input.
+    const cleanValues = normalizeTrackerEntry(tracker as any, rawClean).values;
 
     // Validate and normalize entry values against tracker field definitions
     let values = cleanValues;

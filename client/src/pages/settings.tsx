@@ -396,7 +396,11 @@ export default function SettingsPage() {
       const result = await res.json();
       if (result.error) throw new Error(result.error);
       setLastCsvImport(new Date().toLocaleString());
-      toast({ title: "Bank CSV imported", description: `${result.imported} expenses created, ${result.skipped} skipped.` });
+      const parts = [`${result.imported} expenses created`];
+      if (result.duplicates) parts.push(`${result.duplicates} already imported`);
+      if (result.skippedCredits) parts.push(`${result.skippedCredits} deposits ignored`);
+      if (result.skipped) parts.push(`${result.skipped} skipped`);
+      toast({ title: "Bank CSV imported", description: parts.join(", ") + "." });
       // N new expenses: budgets, cashflow, insights and the bootstrap seed
       // all move with them (expenses domain).
       void invalidateDomains("expenses");

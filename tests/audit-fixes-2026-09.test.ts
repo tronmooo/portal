@@ -290,3 +290,36 @@ describe("tracker normalize: sibling unit keys", () => {
     expect(r.values.distance).toBe(5); // ambiguous — left alone rather than guessed
   });
 });
+
+import { parseBankCsv, parseCsvRow, normalizeCsvDate, expenseDedupeKey } from "../server/bank-csv";
+describe("bank CSV import parsing", () => {
+  const T = "2026-09-01";
+  it("negative amounts are debits (expenses); positives are credits and skipped", () => {
+    const r: any = parseBankCsv(['Date,Description,Amount', '09/01/2026,"AMAZON, INC",-42.50', '08/31/2026,PAYROLL DEPOSIT,2500.00', '2026-08-30,SHELL,(60.00)'].join("\n"), T);
+    expect(r.signConvention).toBe("negative-debits");
+    expect(r.rows.map((x: any) => [x.date, x.description, x.amount])).toEqual([["2026-09-01", "AMAZON, INC", 42.5], ["2026-08-30", "SHELL", 60]]);
+    expect(r.skippedCredits).toBe(1);
+  });
+  it("a file with only positive amounts treats them as spending", () => {
+    const r: any = parseBankCsv("Date,Memo,Amount\n2026-09-01,Coffee,5.25", T);
+    expect(r.signConvention).toBe("positive-debits");
+    expect(r.rows[0].amount).toBe(5.25);
+  });
+  it("separate Debit / Credit columns", () => {
+    const r: any = parseBankCsv("Date,Description,Debit,Credit\n2026-09-01,Coffee,5.25,\n2026-09-01,Refund,,12.00", T);
+    expect(r.signConvention).toBe("debit-column");
+    expect(r.rows.map((x: any) => x.amount)).toEqual([5.25]);
+    expect(r.skippedCredits).toBe(1);
+  });
+  it("quoted fields keep commas and escaped quotes", () => {
+    expect(parseCsvRow('a,"b, c","say ""hi""",d')).toEqual(["a", "b, c", 'say "hi"', "d"]);
+  });
+  it("dates: ISO passes through untouched, US M/D/YYYY normalizes, garbage falls back to today", () => {
+    expect(normalizeCsvDate("2026-08-30", T)).toBe("2026-08-30");
+    expect(normalizeCsvDate("9/1/2026", T)).toBe("2026-09-01");
+    expect(normalizeCsvDate("not a date", T)).toBe(T);
+  });
+  it("dedupe key is day + cents + case-insensitive text", () => {
+    expect(expenseDedupeKey({ date: "2026-09-01", amount: 42.5, description: "Amazon, Inc" })).toBe(expenseDedupeKey({ date: "2026-09-01T00:00:00Z", amount: 42.5, description: "AMAZON, INC " }));
+  });
+});

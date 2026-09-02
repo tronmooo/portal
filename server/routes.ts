@@ -353,6 +353,7 @@ Rules:
   }
 }
 import { normalizeTrackerEntry } from "./tracker-normalize";
+import { parseBankCsv, expenseDedupeKey } from "./bank-csv";
 // weekly-review + anthropic-client pull @anthropic-ai/sdk — lazy, same-name
 // proxies as the ai-engine block above. (The bare `Anthropic` default import
 // that used to sit here was entirely unused.) getAnthropicClient is sync in
@@ -8545,25 +8546,11 @@ Rules:
       }
 
       // Parse CSV lines
-      const lines = csv.split("\n").map(l => l.trim()).filter(Boolean);
-      if (lines.length < 2) {
-        return res.status(400).json({ error: "CSV must have a header row and at least one data row" });
-      }
-
-      // Parse header — auto-detect column mapping
-      const header = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/['"]/g, ""));
-      const colMap: Record<string, number> = {};
-      for (let i = 0; i < header.length; i++) {
-        const h = header[i];
-        if (!colMap.date && /date|posted|trans/.test(h)) colMap.date = i;
-        if (!colMap.amount && /amount|debit|credit|sum|total/.test(h)) colMap.amount = i;
-        if (!colMap.description && /desc|memo|narr|detail|merchant|payee|name/.test(h)) colMap.description = i;
-        if (!colMap.category && /cat|type|class/.test(h)) colMap.category = i;
-      }
-
-      if (colMap.amount === undefined) {
-        return res.status(400).json({ error: "Could not detect an amount column in the CSV header" });
-      }
+      // Pure parser (server/bank-csv.ts): header mapping, quoted fields, the
+      // file's sign convention (negative debits / debit column / positives)
+      // and date normalization. Credits are skipped — they are not expenses.
+      const parsedCsv = parseBankCsv(csv, getUserToday(getTimezone(req)));
+      if ("error" in parsedCsv) return res.status(400).json({ error: parsedCsv.error });
 
       // Canonical category set — the same vocabulary POST /api/expenses folds
       // to (shared/category-canon), so an import can't introduce a spelling the
@@ -8595,23 +8582,9 @@ Rules:
         return "general";
       };
 
-      // Parse a CSV row respecting quoted fields
-      const parseRow = (line: string): string[] => {
-        const fields: string[] = [];
-        let current = "";
-        let inQuotes = false;
-        for (let i = 0; i < line.length; i++) {
-          const ch = line[i];
-          if (ch === '"') { inQuotes = !inQuotes; continue; }
-          if (ch === "," && !inQuotes) { fields.push(current.trim()); current = ""; continue; }
-          current += ch;
-        }
-        fields.push(current.trim());
-        return fields;
-      };
 
       let imported = 0;
-      let skipped = 0;
+      let skipped = parsedCsv.skippedEmpty;
       const errors: string[] = [];
 
       // ── AI BATCH CATEGORIZATION ──────────────────────────────────────────
@@ -8622,9 +8595,8 @@ Rules:
       try {
         const uniqueDescs: string[] = [];
         const seen = new Set<string>();
-        for (let i = 1; i < lines.length; i++) {
-          const fields = parseRow(lines[i]);
-          const d = (fields[colMap.description ?? colMap.amount] || `Row ${i}`).trim().slice(0, 120);
+        for (const r of parsedCsv.rows) {
+          const d = r.description.trim().slice(0, 120);
           if (!seen.has(d)) { seen.add(d); uniqueDescs.push(d); }
           if (uniqueDescs.length >= 200) break; // cap so prompt stays cheap
         }
@@ -8656,47 +8628,49 @@ If unsure, use "other". Use "subscription" for recurring services; "vehicle" for
         console.error(`[bank-csv-import] AI batch categorise failed, using keyword fallback for all rows: ${e?.message || e}`);
       }
 
-      for (let i = 1; i < lines.length; i++) {
-        try {
-          const fields = parseRow(lines[i]);
-          const rawAmount = fields[colMap.amount] || "";
-          const parsedAmount = parseFloat(rawAmount.replace(/[$,\s]/g, ""));
-          // Preserve sign: negative = refund/credit, positive = expense
-          const amount = parsedAmount;
-          const isRefund = parsedAmount < 0;
-          if (isNaN(amount) || amount === 0) { skipped++; continue; }
+      // Re-importing the same statement must not duplicate rows: a row that
+      // matches an existing expense on day, cents and text is skipped. Kept as
+      // a multiset so two identical legitimate transactions in one file still
+      // both import when only one exists already.
+      const existingKeys = new Map<string, number>();
+      for (const e of await storage.getExpenses()) {
+        const k = expenseDedupeKey(e);
+        existingKeys.set(k, (existingKeys.get(k) || 0) + 1);
+      }
+      let duplicates = 0;
 
-          const description = fields[colMap.description ?? colMap.amount] || `Row ${i}`;
-          const date = colMap.date !== undefined ? fields[colMap.date] : getUserToday(getTimezone(req));
-          const csvCategory = colMap.category !== undefined ? fields[colMap.category] : undefined;
+      for (const r of parsedCsv.rows) {
+        try {
+          const description = r.description;
           // Priority: explicit CSV column → AI batch decision → keyword fallback.
           const aiCat = aiCategoryByDesc.get(description.trim().slice(0, 120));
           // Fold through the one vocabulary so a CSV column reading "Utility"
           // lands in the same bucket as the app's "utilities".
-          const category = canonicalExpenseCategory(csvCategory || aiCat || keywordCategory(description));
+          const category = canonicalExpenseCategory(r.category || aiCat || keywordCategory(description));
 
-          // Normalize date to YYYY-MM-DD if possible
-          let normalizedDate = date;
-          const parsed = new Date(date);
-          if (!isNaN(parsed.getTime())) {
-            normalizedDate = parsed.toLocaleDateString('en-CA');
-          }
+          const key = expenseDedupeKey({ date: r.date, amount: r.amount, description });
+          const seenCount = existingKeys.get(key) || 0;
+          if (seenCount > 0) { existingKeys.set(key, seenCount - 1); duplicates++; continue; }
 
           await storage.createExpense({
-            amount,
+            amount: r.amount,
             category,
-            description: description.slice(0, 200),
+            description,
             vendor: description.split(/\s{2,}|[-–]/).shift()?.trim().slice(0, 100) || undefined,
-            date: normalizedDate,
+            date: r.date,
             tags: ["bank-import"],
           });
           imported++;
         } catch (err: any) {
-          errors.push(`Row ${i}: ${err.message || "unknown error"}`);
+          errors.push(`Row ${r.row}: ${err.message || "unknown error"}`);
         }
       }
 
-      res.json({ success: true, imported, skipped, errors: errors.slice(0, 10), totalRows: lines.length - 1 });
+      res.json({
+        success: true, imported, skipped, duplicates, skippedCredits: parsedCsv.skippedCredits,
+        signConvention: parsedCsv.signConvention, errors: errors.slice(0, 10),
+        totalRows: parsedCsv.rows.length + parsedCsv.skippedCredits + parsedCsv.skippedEmpty,
+      });
     } catch (err: any) {
       console.error("Bank CSV import error:", err);
       res.status(500).json({ error: "CSV import failed" });

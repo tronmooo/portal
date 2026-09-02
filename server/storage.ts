@@ -4,6 +4,7 @@ import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, loc
 import { toMonthlyAmount, isUpcomingBill } from "@shared/obligation-windows";
 import { autoCheckinLinkedHabits } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
+import { normalizeTrackerEntry } from "./tracker-normalize";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
@@ -1215,8 +1216,9 @@ export class MemStorage implements IStorage {
     const tracker = this.trackers.get(data.trackerId);
     if (!tracker) return undefined;
     // Mirror supabase-storage: provenance metadata moves from values into computed.
-    const { _enrichment: enrichmentMeta, ...rawValues } = { ...data.values } as Record<string, any>;
-    // Same value gate as SupabaseStorage.logEntry — every write path, one rule.
+    const { _enrichment: enrichmentMeta, ...rawInput } = { ...data.values } as Record<string, any>;
+    // Same unit + value gates as SupabaseStorage.logEntry — every write path, one rule.
+    const rawValues = normalizeTrackerEntry(tracker as any, rawInput).values;
     const guard = sanitizeTrackerEntryValues(tracker.fields, rawValues);
     if (guard.error) throw new Error(guard.error);
     const values = guard.values;
