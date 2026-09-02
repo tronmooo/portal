@@ -245,6 +245,19 @@ export interface DocumentBlobState {
  * @param data      Optional inline base64 ("" / "__LAZY_LOAD__" = not present).
  * @param enabled   Skip all work when false (e.g. dialog closed).
  */
+/**
+ * An extract-only upload ("don't keep the photo") stores no bytes: the file is
+ * read once for extraction and dropped. The document row survives to hold the
+ * extracted fields, so every surface that would otherwise offer a preview or a
+ * download has to know there is nothing behind it — an empty viewer and a
+ * download that 404s are worse than saying plainly that the file wasn't kept.
+ */
+export const DISCARDED_FILE_TAG = "image-discarded";
+
+export function wasFileDiscarded(doc: { tags?: string[] | null } | null | undefined): boolean {
+  return Array.isArray(doc?.tags) && doc!.tags!.includes(DISCARDED_FILE_TAG);
+}
+
 export function useDocumentBlobUrl(
   id: string,
   mimeType: string,
