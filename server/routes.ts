@@ -10339,10 +10339,18 @@ No emojis. No prose outside the JSON.`,
     const d: any = parsed.data;
     const occurrenceDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.occurrenceDate || ""))
       ? String(req.body.occurrenceDate) : null;
+    // Pay-from-account, the same field the bills route honours. The schema
+    // strips unknown keys, so `accountId` used to be dropped here and a loan
+    // payment "from Chase Checking" never debited Chase Checking.
+    const accountId = req.body?.accountId;
+    if (accountId !== undefined && accountId !== null && typeof accountId !== "string") {
+      return res.status(400).json({ error: "accountId must be a string" });
+    }
     const result = await payBillOccurrence(storage, req.params.id, {
       amount: d.amount,
       paymentDate: d.paymentDate,
       occurrenceDate,
+      accountId: accountId || null,
       principal: d.principalPortion || null,
       interest: d.interestPortion || null,
       fees: d.fees ?? null,

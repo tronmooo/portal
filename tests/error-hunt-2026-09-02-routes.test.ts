@@ -6,7 +6,7 @@
 //
 // Every `it` below fails on the pre-fix code unless it says otherwise.
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import express from "express";
 import { createServer, type Server } from "http";
 import type { AddressInfo } from "net";
@@ -778,5 +778,33 @@ describe("D98: unknown API paths are 404 JSON for every method", () => {
       expect(r.headers["content-type"] || "").toMatch(/json/);
     }
     expect((await h.api("GET", "/api/profiles")).status).toBe(200);
+  });
+});
+
+const LOAN_ID = "33333333-3333-4333-8333-333333333333";
+const ACCT_ID = "44444444-4444-4444-8444-444444444444";
+// D99 — the loan/card payment route dropped accountId. The pay pipeline
+// reads the account through storage.getProfile(accountId), so the fake
+// records which profiles were asked for: before the fix ACCT_ID never was.
+describe("D99: POST /api/liabilities/:id/payments passes accountId to the pay pipeline", () => {
+  it("forwards a string accountId and rejects a non-string one", async () => {
+    const asked: string[] = [];
+    h = await boot({ profiles: [SELF,
+      { id: LOAN_ID, type: "liability", type_key: "auto_loan", name: "Loan", fields: { currentBalance: 1000, annualInterestRate: 0, monthlyPayment: 50 } },
+      { id: ACCT_ID, type: "account", type_key: "checking", name: "Checking", fields: { accountKind: "checking", balance: 500 } },
+    ] }, (storage, db) => {
+      const orig = storage.getProfile;
+      storage.getProfile = async (id: string) => { asked.push(id); return orig(id); };
+      storage.createLiabilityPayment = async (data: any) => { const row = { id: "pay-1", ...data }; db.liabilityPayments.push(row); return row; };
+      storage.getLiabilityPayments = async () => db.liabilityPayments;
+      storage.updateProfile = async (id: string, patch: any) => { const p = db.profiles.find((x: any) => x.id === id); if (p) Object.assign(p, patch, { fields: { ...(p.fields || {}), ...(patch.fields || {}) } }); return p; };
+      storage.adjustAccountBalance = async (id: string) => db.profiles.find((x: any) => x.id === id);
+      storage.updateOccurrenceOverride = async () => null;
+    });
+    const r = await h.api("POST", `/api/liabilities/${LOAN_ID}/payments`, { amount: 50, paymentDate: "2026-09-02", accountId: ACCT_ID });
+    expect(r.status, JSON.stringify(r.data)).toBe(200);
+    expect(asked).toContain(ACCT_ID);
+    const bad = await h.api("POST", `/api/liabilities/${LOAN_ID}/payments`, { amount: 50, paymentDate: "2026-09-02", accountId: 42 });
+    expect(bad.status).toBe(400);
   });
 });
