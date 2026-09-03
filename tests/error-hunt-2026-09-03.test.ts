@@ -2305,6 +2305,11 @@ describe("D231: /api/relationships/graph returns only edges whose both ends are 
     expect(g.edges.map((e: any) => e.linkId)).toEqual(["ap-1"]);
     for (const e of g.edges) { expect(ids.has(e.from)).toBe(true); expect(ids.has(e.to)).toBe(true); }
   });
+  it("D245: a root the caller cannot see is 404, not an empty graph", async () => {
+    h = await boot(seed, wire);
+    const r = await h.api("GET", "/api/relationships/graph/someone-elses-car");
+    expect(r.status).toBe(404);
+  });
   it("two hops: the loan becomes a node and its edge is kept", async () => {
     h = await boot(seed, wire);
     const g = (await h.api("GET", "/api/relationships/graph/car-1?hops=2")).data;

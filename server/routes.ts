@@ -11306,6 +11306,9 @@ No emojis. No prose outside the JSON.`,
   // Aggregate "relationships graph" for a profile — 1 or 2 hops
   app.get("/api/relationships/graph/:id", asyncHandler(async (req, res) => {
     const id = req.params.id;
+    // A root the caller cannot see is "not found", like every other
+    // per-record route — not an empty graph answered 200 (D245).
+    if (!(await storage.getProfile(id).catch(() => undefined))) return res.status(404).json({ error: "Resource not found" });
     const hops = Math.max(1, Math.min(2, Number(req.query.hops) || 1));
     const visited = new Set<string>([id]);
     const nodes: any[] = [];
