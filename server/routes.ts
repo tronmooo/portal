@@ -464,6 +464,7 @@ import {
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
 import { normalizeMonthKey, budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
+import { canonicalizeRegistryFields } from "@shared/registry-fields";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
@@ -4942,7 +4943,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     // (shared/date-rules) derives the same rule whichever door the date came
     // in by. No screen-specific shortcut.
     if (req.body.fields && typeof req.body.fields === "object") {
-      req.body.fields = normalizeEntityDateFields(req.body.fields as Record<string, any>).fields;
+      req.body.fields = canonicalizeRegistryFields(normalizeEntityDateFields(req.body.fields as Record<string, any>).fields);
       {
         const impossible = impossibleCalendarDays(req.body.fields as Record<string, any>);
         if (impossible.length > 0) return res.status(400).json({ error: `${impossible.join(", ")} must be a real calendar day (YYYY-MM-DD)` });
@@ -5143,7 +5144,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     // (shared/date-rules) derives the same rule whichever door the date came
     // in by. No screen-specific shortcut.
     if (req.body.fields && typeof req.body.fields === "object") {
-      req.body.fields = normalizeEntityDateFields(req.body.fields as Record<string, any>).fields;
+      req.body.fields = canonicalizeRegistryFields(normalizeEntityDateFields(req.body.fields as Record<string, any>).fields);
       {
         const impossible = impossibleCalendarDays(req.body.fields as Record<string, any>);
         if (impossible.length > 0) return res.status(400).json({ error: `${impossible.join(", ")} must be a real calendar day (YYYY-MM-DD)` });

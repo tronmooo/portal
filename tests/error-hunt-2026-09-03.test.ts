@@ -3160,3 +3160,38 @@ describe("D264 registry-form numeric fields are coerced at submit", async () => 
     expect(src).toContain("selectedTypeDef.field_schema");
   });
 });
+
+// ── D265: registry snake_case keys fold into the model's keys at write time.
+describe("D265 registry-dialog profiles fold into the model's keys", async () => {
+  const { canonicalizeRegistryFields } = await import("../shared/registry-fields");
+  it("a registry loan's fields become the loan model's fields, snake_case dropped", () => {
+    expect(canonicalizeRegistryFields({ monthly_payment: 200, current_balance: 5000, original_balance: 8000, interest_rate: 6, loan_term_months: 36, due_date_day: 12, loan_number: "L-1" }))
+      .toEqual({ monthlyAmount: 200, balance: 5000, originalAmount: 8000, interestRate: 6, termMonths: 36, dueDay: 12, loan_number: "L-1" });
+  });
+  it("the model key wins when both are present; blanks do not overwrite", () => {
+    expect(canonicalizeRegistryFields({ current_balance: 5000, balance: 4200 })).toEqual({ balance: 4200 });
+    expect(canonicalizeRegistryFields({ current_value: "", value: 9000 })).toEqual({ value: 9000 });
+    expect(canonicalizeRegistryFields({ current_value: "" })).toEqual({});
+  });
+  it("assets, subscriptions and people fold too", () => {
+    expect(canonicalizeRegistryFields({ current_value: 9000, purchase_price: 12000, purchase_date: "2019-05-01" })).toEqual({ value: 9000, purchasePrice: 12000, purchaseDate: "2019-05-01" });
+    expect(canonicalizeRegistryFields({ next_billing_date: "2026-10-01" })).toEqual({ dueDate: "2026-10-01", nextDueDate: "2026-10-01" });
+    expect(canonicalizeRegistryFields({ date_of_birth: "1990-01-02" })).toEqual({ birthday: "1990-01-02" });
+  });
+  it("POST and PATCH /api/profiles fold the fields before storing", async () => {
+    const created: any[] = []; const patched: any[] = [];
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.createProfile = async (p: any) => { const row = { id: "loan-1", ...p }; created.push(row); return row; };
+      storage.getProfile = async (id: string) => id === "loan-1" ? { id, type: "liability", type_key: "personal_loan", name: "Loan", fields: { balance: 5000 }, userId: "u1" } : id === "self-1" ? { id, type: "self", name: "Me", fields: {} } : undefined;
+      storage.updateProfile = async (id: string, patch: any) => { patched.push([id, patch]); return { id, ...patch }; };
+    });
+    const r = await h.api("POST", "/api/profiles", { type: "liability", type_key: "personal_loan", name: "Loan", fields: { monthly_payment: 200, current_balance: 5000, due_date_day: 12 } });
+    expect([200, 201]).toContain(r.status);
+    expect(created[0].fields).toMatchObject({ monthlyAmount: 200, balance: 5000, dueDay: 12 });
+    expect(created[0].fields.monthly_payment).toBeUndefined();
+    const p = await h.api("PATCH", "/api/profiles/loan-1", { fields: { monthly_payment: 250 } });
+    expect(p.status).toBe(200);
+    expect(patched[0][1].fields).toMatchObject({ monthlyAmount: 250 });
+    expect(patched[0][1].fields.monthly_payment).toBeUndefined();
+  });
+});
