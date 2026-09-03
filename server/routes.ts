@@ -56,6 +56,32 @@ import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted } from "@shared/profile-field-identity";
 
 /** Extract user timezone from request header, with fallback */
+/** Preference key holding the zone the user's client last reported. */
+export const USER_TIMEZONE_PREF = "timezone";
+const rememberedTimezone = new Map<string, { tz: string; at: number }>();
+const REMEMBER_TZ_EVERY_MS = 60 * 60 * 1000;
+/**
+ * Persist the client's zone as a preference, at most once an hour per user
+ * and only when it changed — a cron job has no request to read the header
+ * from, so this is the only way it can know a Tokyo user's "today".
+ */
+export async function rememberUserTimezone(store: IStorage, uid: string, tz: string): Promise<void> {
+  const seen = rememberedTimezone.get(uid);
+  const now = Date.now();
+  if (seen && seen.tz === tz && now - seen.at < REMEMBER_TZ_EVERY_MS) return;
+  rememberedTimezone.set(uid, { tz, at: now });
+  // Outside the request's write journal: this bookkeeping is not part of what
+  // the request wrote, so it must not show up in its manifest or bump the
+  // preferences version alongside, say, the task the request created.
+  try { await writeJournalContext.exit(() => store.setPreference(USER_TIMEZONE_PREF, tz)); } catch { rememberedTimezone.delete(uid); }
+}
+/** The zone a cron should run this user's day in: the remembered one, else the default. */
+export async function userTimezoneFor(store: IStorage): Promise<string> {
+  try {
+    const tz = await store.getPreference(USER_TIMEZONE_PREF);
+    return typeof tz === "string" && tz.trim() ? tz.trim() : DEFAULT_TIMEZONE;
+  } catch { return DEFAULT_TIMEZONE; }
+}
 function getTimezone(req: Request): string {
   return (req.headers['x-timezone'] as string) || DEFAULT_TIMEZONE;
 }
@@ -141,7 +167,7 @@ interface AuthenticatedRequest extends Request {
   userId?: string;
 }
 import { computeDocumentDeletionImpact, deleteDocumentEverywhere, parseDeletionMode, repairOrphanedDocumentEvents } from "./document-deletion";
-import { storage } from "./storage";
+import { storage, type IStorage } from "./storage";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
@@ -1414,6 +1440,13 @@ export async function registerRoutes(
   // user's actual day. Storage is request-scoped, so this is per-request safe.
   app.use("/api", (req, _res, next) => {
     try { (storage as any)._timezone = getTimezone(req); } catch { /* ignore */ }
+    // Remember it too (throttled), so the crons — which have no request and
+    // used to run every user's day in Los Angeles — can run each user's day.
+    try {
+      const uid = (req as AuthenticatedRequest).userId;
+      const tz = req.headers["x-timezone"];
+      if (uid && typeof tz === "string" && tz) void rememberUserTimezone(storage, uid, tz);
+    } catch { /* best effort */ }
     next();
   });
 
@@ -2245,6 +2278,8 @@ export async function registerRoutes(
           await new Promise<void>((resolve) => {
             requestStorageContext.run(scoped, async () => {
               try {
+                // The snapshot is keyed by the user's own day (D219).
+                (scoped as any)._timezone = await userTimezoneFor(scoped);
                 const profiles = await scoped.getProfiles();
                 // Only profiles that can carry a balance are worth a per-profile row.
                 const ownerTypes = new Set(["self", "person", "vehicle", "asset", "investment", "property", "loan", "liability", "account"]);
@@ -2301,8 +2336,12 @@ export async function registerRoutes(
           await new Promise<void>((resolve) => {
             requestStorageContext.run(scoped, async () => {
               try {
-                const todayISO = getUserToday(DEFAULT_TIMEZONE);
-                const windowEnd = toLocalDateStr(new Date(Date.now() + REMINDER_WINDOW_DAYS * 86400000), DEFAULT_TIMEZONE);
+                // Each user's own day (D219): the scan ran every user's
+                // reminders and autopay on the Los Angeles calendar.
+                const userTz = await userTimezoneFor(scoped);
+                (scoped as any)._timezone = userTz;
+                const todayISO = getUserToday(userTz);
+                const windowEnd = toLocalDateStr(new Date(Date.now() + REMINDER_WINDOW_DAYS * 86400000), userTz);
                 const profiles = await scoped.getProfiles();
                 const bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey));
                 const existingTasks = await scoped.getTasks().catch(() => [] as any[]);

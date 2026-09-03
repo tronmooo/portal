@@ -1879,3 +1879,32 @@ describe("D218: no hard-coded Los Angeles clock in the AI engine", () => {
     expect(routes.split("\n").filter((l) => /timeZone:\s*['"]America\/Los_Angeles['"]/.test(l))).toEqual([]);
   });
 });
+
+// ─── D219: the crons run each user's own day ─────────────────────────────────
+import { rememberUserTimezone, userTimezoneFor, USER_TIMEZONE_PREF } from "../server/routes";
+import { DEFAULT_TIMEZONE as DEFAULT_TZ } from "../shared/timezone";
+describe("D219: remembered timezone", () => {
+  it("rememberUserTimezone writes once per zone per hour, and again when the zone changes", async () => {
+    const writes: Array<[string, string]> = [];
+    const store: any = { setPreference: async (k: string, v: string) => { writes.push([k, v]); } };
+    await rememberUserTimezone(store, "u-tz-1", "Asia/Tokyo");
+    await rememberUserTimezone(store, "u-tz-1", "Asia/Tokyo");
+    await rememberUserTimezone(store, "u-tz-1", "Europe/Paris");
+    expect(writes).toEqual([[USER_TIMEZONE_PREF, "Asia/Tokyo"], [USER_TIMEZONE_PREF, "Europe/Paris"]]);
+  });
+  it("userTimezoneFor reads the preference and falls back to the default", async () => {
+    expect(await userTimezoneFor({ getPreference: async () => "Asia/Tokyo" } as any)).toBe("Asia/Tokyo");
+    expect(await userTimezoneFor({ getPreference: async () => null } as any)).toBe(DEFAULT_TZ);
+    expect(await userTimezoneFor({ getPreference: async () => { throw new Error("no table"); } } as any)).toBe(DEFAULT_TZ);
+  });
+  it("an authenticated request's X-Timezone header is remembered as the preference", async () => {
+    const writes: Array<[string, string]> = [];
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.setPreference = async (k: string, v: string) => { writes.push([k, v]); };
+    });
+    const r = await h.api("GET", "/api/tasks", undefined, { "X-Timezone": "Asia/Tokyo" });
+    expect(r.status).toBe(200);
+    await new Promise((res) => setTimeout(res, 20));
+    expect(writes).toContainEqual([USER_TIMEZONE_PREF, "Asia/Tokyo"]);
+  });
+});
