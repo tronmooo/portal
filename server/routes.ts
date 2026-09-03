@@ -1,3 +1,4 @@
+import { z } from "zod";
 import express, { type Express, type Request } from "express";
 import { shouldAppendClarifyingQuestion, appendClarifyingQuestion } from "@shared/chat-clarify";
 import { canonicalExpenseCategory, canonicalObligationCategory, EXPENSE_CATEGORIES } from "@shared/category-canon";
@@ -46,7 +47,7 @@ import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-c
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
 import { checkProfileDelete } from "@shared/profile-delete";
 import { cascadeProfileRename } from "./profile-rename-cascade";
-import { normalizeEntityDateFields, impossibleCalendarDays, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
+import { normalizeEntityDateFields, impossibleCalendarDays, isRealCalendarDay, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { itemsClaimedByActions, type ProposedAction } from "@shared/extraction-actions";
 import { executeActions } from "./action-executor";
@@ -6739,7 +6740,26 @@ Rules:
   app.post("/api/loans/schedule", asyncHandler(async (req, res) => {
     const { entries } = req.body;
     if (!Array.isArray(entries)) return res.status(400).json({ error: "entries array required" });
-    const created = await storage.createLoanSchedule(entries);
+    // The rows used to go to the table as given: an empty entry was a 500, a
+    // loan id nobody owns produced a schedule (and projected payments) for a
+    // loan that does not exist.
+    const entrySchema = z.object({
+      loan_id: z.string().uuid(),
+      loan_name: z.string().min(1),
+      payment_number: z.number().int().min(1),
+      payment_date: z.string().refine((v) => isRealCalendarDay(v), "payment_date must be a real calendar day (YYYY-MM-DD)"),
+      principal_amount: z.number().finite().min(0),
+      interest_amount: z.number().finite().min(0),
+      total_payment: z.number().finite().min(0),
+      remaining_balance: z.number().finite().min(0),
+    }).strict();
+    const parsed = z.array(entrySchema).min(1).safeParse(entries);
+    if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
+    for (const loanId of new Set(parsed.data.map((e) => e.loan_id))) {
+      const loan = await storage.getProfile(loanId);
+      if (!loan) return res.status(404).json({ error: "Loan not found" });
+    }
+    const created = await storage.createLoanSchedule(parsed.data);
     const uid_ln1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_ln1}`); bustCache(`cashflow:${uid_ln1}`); bustCache(`profile-detail:${uid_ln1}:`);
     res.json(created);

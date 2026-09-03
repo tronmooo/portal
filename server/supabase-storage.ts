@@ -7784,6 +7784,21 @@ export class SupabaseStorage implements IStorage {
     if (error) throw error;
     return data;
   }
+  async unmarkLoanPayment(loanId: string, match: { paymentNumber?: number | null; paymentDate?: string | null }): Promise<number> {
+    // The inverse of markLoanPayment: a retracted ledger payment leaves its
+    // amortization row open again, so the row can be marked once more and the
+    // cashflow projection counts it as still due. Matched by the payment
+    // number the mark stamped into the payment's note, else by the date.
+    let q = this.supabase.from('loan_amortization').update({ paid: false })
+      .eq('loan_id', loanId).eq('user_id', this.userId).eq('paid', true);
+    if (typeof match.paymentNumber === 'number' && Number.isFinite(match.paymentNumber)) q = q.eq('payment_number', match.paymentNumber);
+    else if (match.paymentDate) q = q.eq('payment_date', String(match.paymentDate).slice(0, 10));
+    else return 0;
+    const { data, error } = await q.select('id');
+    if (error) throw error;
+    return Array.isArray(data) ? data.length : 0;
+  }
+
 
   // ============================================================
   // CASHFLOW PROJECTIONS

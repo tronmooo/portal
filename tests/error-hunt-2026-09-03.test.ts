@@ -721,3 +721,41 @@ describe("D165: createObligation folds the category", () => {
     expect(o.category).toBe("utilities");
   });
 });
+
+// ─── D166/D167: the loan amortization schedule ──────────────────────────────
+import { unpayBillOccurrence } from "../server/liability-payments";
+describe("D166: POST /api/loans/schedule validates its rows and the loan", () => {
+  it("empty / junk rows are 400, an unknown loan is 404, a valid row is stored", async () => {
+    const stored: any[] = [];
+    h = await boot({ profiles: [{ id: "11111111-1111-4111-8111-111111111111", type: "liability", type_key: "auto_loan", name: "Civic Loan", fields: {} }] }, (storage) => {
+      storage.createLoanSchedule = async (rows: any[]) => { stored.push(...rows); return rows; };
+    });
+    const row = { loan_id: "11111111-1111-4111-8111-111111111111", loan_name: "Civic Loan", payment_number: 1, payment_date: "2026-09-10", principal_amount: 250, interest_amount: 39.7, total_payment: 289.7, remaining_balance: 7750 };
+    expect((await h.api("POST", "/api/loans/schedule", { entries: [{}] })).status).toBe(400);
+    expect((await h.api("POST", "/api/loans/schedule", { entries: [{ ...row, principal_amount: "abc" }] })).status).toBe(400);
+    expect((await h.api("POST", "/api/loans/schedule", { entries: [{ ...row, payment_date: "2026-02-30" }] })).status).toBe(400);
+    expect((await h.api("POST", "/api/loans/schedule", { entries: [{ ...row, loan_id: "00000000-0000-4000-8000-000000000000" }] })).status).toBe(404);
+    expect((await h.api("POST", "/api/loans/schedule", { entries: [] })).status).toBe(400);
+    expect(stored).toEqual([]);
+    expect((await h.api("POST", "/api/loans/schedule", { entries: [row] })).status).toBe(200);
+    expect(stored).toEqual([row]);
+  });
+});
+describe("D167: retracting a payment re-opens the amortization row it had marked", () => {
+  it("unpayBillOccurrence calls unmarkLoanPayment with the number from the note", async () => {
+    const unmarks: any[] = [];
+    const loan = { id: "loan-1", name: "Civic Loan", type: "liability", type_key: "auto_loan", fields: { currentBalance: 7750, annualInterestRate: 6, monthlyPayment: 289.7, occurrences: {} } };
+    const storage: any = {
+      getProfile: async () => loan,
+      getLiabilityPayments: async () => [{ id: "pay-1", liabilityProfileId: "loan-1", amount: 289.7, principalPortion: 250, interestPortion: 39.7, paymentDate: "2026-09-10", notes: "Amortization payment #1", createdAt: "2026-09-03T00:00:00Z" }],
+      deleteLiabilityPayment: async () => true,
+      unmarkLoanPayment: async (loanId: string, match: any) => { unmarks.push([loanId, match]); return 1; },
+      updateProfile: async (_id: string, patch: any) => ({ ...loan, ...patch, fields: { ...loan.fields, ...patch.fields } }),
+      getExpenses: async () => [], deleteExpense: async () => true, getAccountAdjustments: async () => [],
+    };
+    const out = await unpayBillOccurrence(storage, "loan-1", { paymentId: "pay-1" } as any, "UTC");
+    expect(out.ok).toBe(true);
+    expect(unmarks).toEqual([["loan-1", { paymentNumber: 1, paymentDate: "2026-09-10" }]]);
+    expect(out.steps.some((s) => s.step === "schedule_unmark" && s.ok)).toBe(true);
+  });
+});

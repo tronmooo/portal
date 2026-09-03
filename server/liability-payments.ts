@@ -661,7 +661,7 @@ export interface UnpayBillInput {
 }
 
 export interface UnpayBillStep {
-  step: "delete_payment" | "occurrence_clear" | "series_rollback" | "balance_restore" | "account_credit" | "expense_delete";
+  step: "delete_payment" | "schedule_unmark" | "occurrence_clear" | "series_rollback" | "balance_restore" | "account_credit" | "expense_delete";
   ok: boolean;
   error?: string;
 }
@@ -746,6 +746,21 @@ export async function unpayBillOccurrence(
     steps.push({ step: "delete_payment", ok: false, error: e?.message || String(e) });
     logger.error(`[unpayBillOccurrence] payment delete failed:`, e?.message || e);
     return fail("no_payment");
+  }
+  // ── 1b. the amortization row this payment had marked paid opens again ──
+  // "Mark paid" on a schedule row records the ledger payment and flips the
+  // row's flag; retracting the payment used to leave the flag set, so the
+  // row could never be marked again and the projection still counted it paid
+  // while the balance had gone back up.
+  try {
+    const numberMatch = /Amortization payment #(\d+)/.exec(String(target.notes || ""));
+    const cleared = await storage.unmarkLoanPayment(liabilityId, {
+      paymentNumber: numberMatch ? Number(numberMatch[1]) : null,
+      paymentDate: String(target.paymentDate || "").slice(0, 10) || null,
+    });
+    if (cleared > 0) steps.push({ step: "schedule_unmark", ok: true });
+  } catch (e: any) {
+    steps.push({ step: "schedule_unmark", ok: false, error: e?.message || String(e) });
   }
   const amount = Number(target.amount) || 0;
 

@@ -315,6 +315,8 @@ export interface IStorage {
   getAllLoanSchedules(): Promise<any[]>;
   createLoanSchedule(entries: Array<{ loan_id: string; loan_name: string; payment_number: number; payment_date: string; principal_amount: number; interest_amount: number; total_payment: number; remaining_balance: number }>): Promise<any[]>;
   markLoanPayment(id: string): Promise<any>;
+  /** Clear the paid flag on the amortization row(s) a retracted payment had marked. Returns how many rows were cleared. */
+  unmarkLoanPayment(loanId: string, match: { paymentNumber?: number | null; paymentDate?: string | null }): Promise<number>;
 
   // Cashflow Projections
   getCashflow(month?: string): Promise<any[]>;
@@ -2771,6 +2773,7 @@ export class MemStorage implements IStorage {
   async getAllLoanSchedules() { return []; }
   async createLoanSchedule(entries: any[]) { return entries; }
   async markLoanPayment(id: string) { return { id, paid: true }; }
+  async unmarkLoanPayment(_loanId: string, _match: { paymentNumber?: number | null; paymentDate?: string | null }) { return 0; }
 
   // Cashflow stubs
   async getCashflow(_month?: string) { return []; }
