@@ -528,3 +528,38 @@ describe("D156: events cannot end before they start", () => {
     expect((await h.api("PATCH", `/api/events/${ok.data.id}`, { time: "16:00", endTime: "16:30" })).status).toBe(200);
   });
 });
+
+// ─── D157: a day-shaped value that is not a day ─────────────────────────────
+import { isRealCalendarDay, impossibleCalendarDays } from "../shared/date-rules";
+describe("D157: an impossible calendar day is refused on documents and profile fields", () => {
+  it("detector: dated keys only, real days pass", () => {
+    expect(isRealCalendarDay("2026-02-28")).toBe(true);
+    expect(isRealCalendarDay("2026-02-30")).toBe(false);
+    expect(isRealCalendarDay("2026-13-01")).toBe(false);
+    expect(isRealCalendarDay("2024-02-29")).toBe(true);
+    expect(impossibleCalendarDays({ expirationDate: "2026-02-30", dob: "2026-04-31", issued: "2026-02-28", notes: "2026-02-30", nested: { renewalDate: "2026-06-31" } }))
+      .toEqual(["expirationDate", "dob", "nested.renewalDate"]);
+    expect(impossibleCalendarDays({ expirationDate: "2027-09-02" })).toEqual([]);
+    expect(impossibleCalendarDays(null)).toEqual([]);
+  });
+  it("routes: document create/edit and profile field edits answer 400 and store nothing", async () => {
+    const writes: any[] = [];
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me", fields: {} }] }, (storage) => {
+      storage.getDocumentMeta = async () => ({ id: "doc-1", name: "Passport", type: "identity", extractedData: { expirationDate: "2027-09-02" } });
+      storage.updateDocument = async (_id: string, patch: any) => { writes.push(patch); return { id: "doc-1", ...patch }; };
+      storage.createDocument = async (d: any) => { writes.push(d); return { id: "doc-2", ...d }; };
+      storage.updateProfile = async (_id: string, patch: any) => { writes.push(patch); return { id: "self-1", type: "self", name: "Me", ...patch }; };
+    });
+    const bad = await h.api("PATCH", "/api/documents/doc-1", { extractedData: { expirationDate: "2026-02-30" } });
+    expect(bad.status).toBe(400);
+    expect(bad.data.error).toMatch(/expirationDate must be a real calendar day/);
+    const badCreate = await h.api("POST", "/api/documents", { name: "Visa", type: "identity", fileData: "", extractedData: { expirationDate: "2026-11-31" } });
+    expect(badCreate.status).toBe(400);
+    const badDob = await h.api("PATCH", "/api/profiles/self-1", { fields: { dateOfBirth: "1990-02-30" } });
+    expect(badDob.status).toBe(400);
+    expect(writes).toEqual([]);
+    const ok = await h.api("PATCH", "/api/documents/doc-1", { extractedData: { expirationDate: "2028-02-29" } });
+    expect(ok.status).toBe(200);
+    expect(writes[0].extractedData.expirationDate).toBe("2028-02-29");
+  });
+});

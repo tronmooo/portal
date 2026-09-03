@@ -1447,6 +1447,44 @@ export function isBareExpiryStatement(title: unknown): boolean {
  * value parses as a date, so a licence number or an address is never rewritten.
  * Returns the same object shape plus the list of keys that changed.
  */
+/** True for a YYYY-MM-DD string that names a real calendar day (no Feb 30). */
+export function isRealCalendarDay(s: unknown): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s ?? "").trim());
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
+}
+
+/**
+ * The dated fields (by name — the same classification the normalizer uses)
+ * whose value is shaped like a day but is not one: "2026-02-30". The
+ * normalizer leaves a day-shaped value alone, so an impossible day written by
+ * hand used to be stored as given and the JavaScript Date the rule engine
+ * built from it rolled over to the next month (Feb 30 → Mar 2). Returns the
+ * offending paths so a write path can refuse them.
+ */
+export function impossibleCalendarDays(fields: Record<string, any> | null | undefined, ctx: { contextKey?: string; maxDepth?: number } = {}): string[] {
+  const out: string[] = [];
+  const maxDepth = ctx.maxDepth ?? 2;
+  const walk = (obj: any, depth: number, path: string) => {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj) || depth > maxDepth) return;
+    for (const [key, value] of Object.entries(obj)) {
+      if (key.startsWith("_")) continue;
+      const here = path ? `${path}.${key}` : key;
+      if (value && typeof value === "object" && !Array.isArray(value)) { walk(value, depth + 1, here); continue; }
+      if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) continue;
+      const cls = classifyDateField(key, ctx.contextKey);
+      const words = String(key).replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[^A-Za-z0-9]+/);
+      const looksDated = cls.ruleType !== "informational"
+        || words.some((w) => /^(date|dates|dob|birth|birthday|birthdate|due|valid|start|starts|end|ends|until|thru|through)$/i.test(w) || /^(expir|renew)/i.test(w));
+      if (looksDated && !isRealCalendarDay(value)) out.push(here);
+    }
+  };
+  walk(fields, 0, "");
+  return out;
+}
+
 export function normalizeEntityDateFields<T extends Record<string, any>>(
   fields: T,
   ctx: { contextKey?: string; maxDepth?: number } = {},

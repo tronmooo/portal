@@ -46,7 +46,7 @@ import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-c
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
 import { checkProfileDelete } from "@shared/profile-delete";
 import { cascadeProfileRename } from "./profile-rename-cascade";
-import { normalizeEntityDateFields, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
+import { normalizeEntityDateFields, impossibleCalendarDays, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { itemsClaimedByActions, type ProposedAction } from "@shared/extraction-actions";
 import { executeActions } from "./action-executor";
@@ -4832,6 +4832,10 @@ ${JSON.stringify(ctx, null, 2)}`;
     // in by. No screen-specific shortcut.
     if (req.body.fields && typeof req.body.fields === "object") {
       req.body.fields = normalizeEntityDateFields(req.body.fields as Record<string, any>).fields;
+      {
+        const impossible = impossibleCalendarDays(req.body.fields as Record<string, any>);
+        if (impossible.length > 0) return res.status(400).json({ error: `${impossible.join(", ")} must be a real calendar day (YYYY-MM-DD)` });
+      }
     }
     // Validate common profile fields if provided
     if (req.body.fields && typeof req.body.fields === "object") {
@@ -5029,6 +5033,10 @@ ${JSON.stringify(ctx, null, 2)}`;
     // in by. No screen-specific shortcut.
     if (req.body.fields && typeof req.body.fields === "object") {
       req.body.fields = normalizeEntityDateFields(req.body.fields as Record<string, any>).fields;
+      {
+        const impossible = impossibleCalendarDays(req.body.fields as Record<string, any>);
+        if (impossible.length > 0) return res.status(400).json({ error: `${impossible.join(", ")} must be a real calendar day (YYYY-MM-DD)` });
+      }
     }
     // Validate common profile fields if provided
     if (req.body.fields && typeof req.body.fields === "object") {
@@ -7039,6 +7047,10 @@ Rules:
     if (!req.body.name || typeof req.body.name !== "string" || !req.body.name.trim()) {
       return res.status(400).json({ error: "Document name is required" });
     }
+    if (req.body.extractedData && typeof req.body.extractedData === "object") {
+      const impossible = impossibleCalendarDays(req.body.extractedData, { contextKey: String(req.body.type ?? "") });
+      if (impossible.length > 0) return res.status(400).json({ error: `${impossible.join(", ")} must be a real calendar day (YYYY-MM-DD)` });
+    }
     req.body.name = sanitize(req.body.name);
     if (!req.body.type || typeof req.body.type !== "string") {
       return res.status(400).json({ error: "Document type is required" });
@@ -7118,6 +7130,10 @@ Rules:
         req.body.extractedData as Record<string, any>,
         { contextKey: String(req.body.type ?? "") },
       ).fields;
+      // A day-shaped value that is not a day ("2026-02-30") passes the
+      // normalizer untouched and used to be stored as given.
+      const impossible = impossibleCalendarDays(req.body.extractedData, { contextKey: String(req.body.type ?? "") });
+      if (impossible.length > 0) return res.status(400).json({ error: `${impossible.join(", ")} must be a real calendar day (YYYY-MM-DD)` });
     }
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
