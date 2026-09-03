@@ -1873,5 +1873,9 @@ describe("D218: no hard-coded Los Angeles clock in the AI engine", () => {
     const src = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
     const literal = src.split("\n").filter((l) => /timeZone:\s*['"]America\/Los_Angeles['"]|_timezone \|\| ['"]America\/Los_Angeles['"]/.test(l));
     expect(literal).toEqual([]);
+    // The routes file too: an expense created from a document with no date
+    // was stamped with the Los Angeles day.
+    const routes = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    expect(routes.split("\n").filter((l) => /timeZone:\s*['"]America\/Los_Angeles['"]/.test(l))).toEqual([]);
   });
 });

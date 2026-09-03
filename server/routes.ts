@@ -3841,7 +3841,7 @@ ${JSON.stringify(ctx, null, 2)}`;
             // canonical bucket so the dashboard never splits one category.
             category: canonicalExpenseCategory(exp.category || 'general'),
             vendor: exp.vendor,
-            date: exp.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+            date: exp.date || getUserToday(getTimezone(req)),
             tags: [],
             linkedProfiles: expenseLinks,
           });
