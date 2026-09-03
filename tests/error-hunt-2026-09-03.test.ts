@@ -1489,3 +1489,33 @@ describe("D201: the account wipe sweeps the user's folder in the documents bucke
     expect(tables).toBeGreaterThan(10);
   });
 });
+
+// ─── D202: a wipe that errors elsewhere still gives the account its Self back ─
+describe("D202: the Self is recreated whenever the profiles table was swept", () => {
+  it("one failing table (the file sweep) → 500 with the error named, profiles gone, and a Self recreated", async () => {
+    const created: any[] = [];
+    const booted = await boot({}, (storage) => {
+      storage.deleteAllUserData = async () => ({ deleted: { profiles: 3, tasks: 2 }, errors: { storage_files: "bucket offline" } });
+      storage.createProfile = async (d: any) => { created.push(d); return { id: "self-new", ...d }; };
+    });
+    try {
+      const r = await booted.api("DELETE", "/api/data/all", { confirmation: "DELETE" });
+      expect(r.status).toBe(500);
+      expect(r.data?.success).toBe(false);
+      expect(r.data?.errors?.storage_files).toMatch(/bucket offline/);
+      expect(created.map((c) => c.type)).toEqual(["self"]);
+      expect(r.data?.selfRecreated ?? true).toBe(true);
+    } finally { await booted.close(); }
+  });
+  it("when the profiles table itself failed, no Self is created on top of the surviving one", async () => {
+    const created: any[] = [];
+    const booted = await boot({}, (storage) => {
+      storage.deleteAllUserData = async () => ({ deleted: { tasks: 2 }, errors: { profiles: "locked" } });
+      storage.createProfile = async (d: any) => { created.push(d); return { id: "self-new", ...d }; };
+    });
+    try {
+      await booted.api("DELETE", "/api/data/all", { confirmation: "DELETE" });
+      expect(created).toEqual([]);
+    } finally { await booted.close(); }
+  });
+});

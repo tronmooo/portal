@@ -10142,7 +10142,12 @@ No emojis. No prose outside the JSON.`,
       // expense linked to nobody and the orphan rule had no Self to fall back
       // to. Give the account its Self back as part of the wipe.
       let selfRecreated = false;
-      if (failed.length === 0) {
+      // The Self comes back whenever the profiles table was swept — not only
+      // when every other table (or the file sweep) succeeded. A wipe that
+      // errored elsewhere used to report failure with the profiles already
+      // gone and no Self recreated, leaving the account with no profile at
+      // all: every new task and expense linked to nobody.
+      if (!failed.includes("profiles")) {
         try {
           await storage.createProfile({ name: "Me", type: "self", notes: "", fields: {}, tags: [] } as any);
           selfRecreated = true;
