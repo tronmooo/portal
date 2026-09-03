@@ -354,6 +354,9 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
+### Legacy-spelled cap beside a new one, and the month copy (probe s147) — verified working
+A stored "Groceries" cap and a new "food" cap read back as one food bucket (the later write updates it) and copying the month forward lands one food cap.
+
 ### Imported cap for a known category (probe s146) — verified after D206
 With a 300 food cap in place, importing a "Groceries" 450 cap previews as an update and the month ends with one food cap at 450; the import probes s64 and s128 still pass.
 
