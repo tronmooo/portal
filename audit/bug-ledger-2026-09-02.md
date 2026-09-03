@@ -287,7 +287,8 @@ The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 a
 ### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
 A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
 
-### Real-user browser flows 9 (flows9.mjs, Settings export/import) — verified working
+### Real-user browser flows 9 (flows9.mjs, Settings export/import, Wellness quick log) — verified working
+The Wellness tile's "log weight" opens the value dialog; a value logs onto the existing weight tracker (no duplicate tracker). Repeating the import in the same hour hits the import rate limit (3/hour) — expected.
 The Export button downloads a file carrying every section including party links, liability links and budgets; a small JSON chosen through the import file input and the Import button creates its tasks, linked to Self when the file gives no links; "Import complete" is shown. The download's name used the UTC day (D141).
 
 ### Real-user browser flows 8 (flows8.mjs, Journal and the bell) — verified working
@@ -372,4 +373,5 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - `update_event` has no per-occurrence scope: "move Friday's standup to 4 pm" edits the whole series (needs an occurrence exception model for events).
 - `transaction_date` for Stripe-synced bank transactions is the UTC date of `transacted_at`; changing it would alter existing dedup keys, so it is left as is.
-- Production live re-verification of this round and the contract suite are still blocked on Supabase Auth: at 20:45 UTC `/auth/v1/health` answers, but the password grant returns 504 "upstream request timeout" / "Database error querying schema", so `npm run test:contracts` skipped all 49 tests (smoke auth failed) and portol.me could not be exercised.
+- Production probe p1 (smoke account, throwaway rows) at 03:27 UTC: D111 and D120 hold on production; D131 (future entry, $0 loan payment), D139 and D140 did not yet — those commits were pushed within the previous two hours and the deployment check below tells whether production still runs an older build.
+- UPDATE 03:22 UTC Sep 3: production Supabase Auth recovered; `npm run test:contracts` ran against portol.me with the smoke account and passed 16 files / 101 tests. A targeted production probe of this round's fixes follows below. Earlier note: production live re-verification of this round and the contract suite were blocked on Supabase Auth: at 20:45 UTC `/auth/v1/health` answers, but the password grant returns 504 "upstream request timeout" / "Database error querying schema", so `npm run test:contracts` skipped all 49 tests (smoke auth failed) and portol.me could not be exercised.
