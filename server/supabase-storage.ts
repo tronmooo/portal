@@ -6378,10 +6378,15 @@ export class SupabaseStorage implements IStorage {
         const tracker = await resolveTracker(goal.trackerId);
         if (!tracker || tracker.entries.length === 0) return goal.current;
         const latest = tracker.entries[tracker.entries.length - 1];
-        if (!tracker.fields?.length) return goal.current;
-        const primary = tracker.fields.find((f: any) => f.isPrimary) || tracker.fields.find((f: any) => f.type === "number");
+        // A tracker without field definitions (API/import-created: just a
+        // name and a unit) logs `{ value }` entries; the goal used to stay at
+        // its stored figure forever because the no-fields case bailed out
+        // before the first-value fallback below.
+        const fields: any[] = Array.isArray(tracker.fields) ? tracker.fields : [];
+        const primary = fields.find((f: any) => f.isPrimary) || fields.find((f: any) => f.type === "number");
         if (primary) return parseFloat(latest.values[primary.name] || "0") || goal.current;
-        return parseFloat(Object.values(latest.values)[0] as string || "0") || goal.current;
+        const firstNumeric = Object.values(latest.values || {}).map((v) => parseFloat(String(v))).find((n) => Number.isFinite(n));
+        return firstNumeric ?? goal.current;
       }
       case "savings":
       case "custom":

@@ -1004,3 +1004,23 @@ describe("D127: deleting a profile prunes its budget entries", () => {
     expect(writes.find(([m]) => m === "2026-10")![1]).toEqual([]);
   });
 });
+
+// D128 — a tracker_target goal on a tracker without field definitions
+// (created with just a name and a unit) never moved off its stored figure.
+describe("D128: a tracker_target goal follows a fields-less tracker's latest entry", () => {
+  const goalRow = { id: "g1", title: "Walk 10k", type: "tracker_target", target: 10000, current: 0, unit: "steps", tracker_id: "tr-1", status: "active", milestones: [], linked_profiles: ["self"] };
+  const tracker = (fields: any[]) => ({ id: "tr-1", name: "Steps", fields, entries: [
+    { id: "e1", values: { value: "4000" }, timestamp: "2026-09-01T10:00:00Z" },
+    { id: "e2", values: { value: "2500" }, timestamp: "2026-09-02T10:00:00Z" },
+  ] });
+  it("uses the latest entry's first numeric value when the tracker has no fields", async () => {
+    const { client } = chainClient((table) => table === "goals" ? { data: [goalRow], error: null } : { data: [], error: null });
+    const s = bareStorage({ supabase: client, getTracker: async () => tracker([]) });
+    expect((await s.getGoal("g1"))?.current).toBe(2500);
+  });
+  it("still prefers the primary field when one is defined", async () => {
+    const { client } = chainClient((table) => table === "goals" ? { data: [goalRow], error: null } : { data: [], error: null });
+    const s = bareStorage({ supabase: client, getTracker: async () => ({ ...tracker([{ name: "steps", type: "number", isPrimary: true }]), entries: [{ id: "e1", values: { steps: "7200", note: "x" }, timestamp: "2026-09-02T10:00:00Z" }] }) });
+    expect((await s.getGoal("g1"))?.current).toBe(7200);
+  });
+});
