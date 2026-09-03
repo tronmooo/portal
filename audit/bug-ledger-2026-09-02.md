@@ -280,6 +280,9 @@ The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 a
 ### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
 A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
 
+### Co-owner cross-system consistency (probes s49, s50) — verified working after D133/D134
+With Linda half-owning the Honda (which carries a task due today, an overdue task, a registration expiring in 10 days, a daily habit, its insurance bill, a journal entry and a goal): her calendar bill occurrences, journal and goals carry the car's rows; stats (`activeTasks`, `totalHabits`, `totalObligations`), the enhanced snapshot (`overdueTasks`, `expiringDocuments`, `totalDocuments`) and the bootstrap seeds (tasks, habits) agree with the scoped list routes; the AI-suggestions route answers 200.
+
 ### "Today" defaults at the UTC/LA boundary (probe s48, run at 01:28 UTC = 18:28 Los Angeles) — verified working
 With the server's UTC day already Sep 3 and the user's day Sep 2: an expense, a journal entry, a habit check-in and a bill payment created without a date are all stamped Sep 2; a tracker entry without a timestamp is stamped now (local day Sep 2); the bootstrap reports the user's month; the default calendar window starts on the user's today.
 
