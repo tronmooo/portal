@@ -983,3 +983,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - Full suite 260 files / 4660 tests green with the word-boundary matcher; entity-resolver, AI, domain and tracker suites green. Client-side `includes` uses are typed search filters and keyword heuristics (nutrition, hydration…), not entity resolution — left alone.
 - Replica after the D242/D243 builds: s213 3/3, s214 5/5, s216 3/3, s217 2/2, s222 5/5.
+
+### Habit streaks across mirror moves — verified (s224)
+
+- Three consecutive check-ins → streak 3; moving today's mirror entry to −5d (D233) leaves check-ins on −5/−2/−1 and the streak at 2; checking today again → 3; removing yesterday's → 1. Streaks are derived from the check-ins, never left stale. s208 (D229) 5/5 again after re-minting user B's expired replica token.
