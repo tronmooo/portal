@@ -1,3 +1,4 @@
+import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField } from "@/lib/field-display";
@@ -8735,16 +8736,30 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
   const [formLender, setFormLender] = useState(lender);
   const [formStartDate, setFormStartDate] = useState(startDate);
 
+  // The form → the fields it means. Pure, so the same builder runs on the
+  // values the form opened with and only what the user changed is written: a
+  // balance moved by a payment while the form sat open is not put back, and
+  // the loan's ORIGINAL amount is no longer overwritten with the current
+  // balance on every save (D248).
+  const buildLoanFields = (v: { balance: string; rate: string; term: string; payment: string; lender: string; startDate: string }): Record<string, any> => {
+    const fields: Record<string, any> = {};
+    if (v.balance) fields.loanBalance = v.balance;
+    if (v.rate) fields.interestRate = v.rate;
+    if (v.term) fields.termMonths = v.term;
+    if (v.payment) fields.monthlyPayment = v.payment;
+    if (v.lender) fields.lender = v.lender;
+    if (v.startDate) fields.loanStartDate = v.startDate;
+    return fields;
+  };
+  const seededLoan = { balance: String(loanBalance || ""), rate: String(interestRate || ""), term: String(termMonths || ""), payment: String(monthlyPayment || ""), lender, startDate };
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const fields: Record<string, any> = {};
-      if (formBalance) fields.originalAmount = formBalance;
-      if (formBalance) fields.loanBalance = formBalance;
-      if (formRate) fields.interestRate = formRate;
-      if (formTerm) fields.termMonths = formTerm;
-      if (formPayment) fields.monthlyPayment = formPayment;
-      if (formLender) fields.lender = formLender;
-      if (formStartDate) fields.loanStartDate = formStartDate;
+      const current = { balance: formBalance, rate: formRate, term: formTerm, payment: formPayment, lender: formLender, startDate: formStartDate };
+      const fields = changedFieldsOnly(buildLoanFields(seededLoan), buildLoanFields(current));
+      // A loan with no recorded original amount takes the first balance typed
+      // as its original; an existing original is the user's and stays.
+      if (fields.loanBalance !== undefined && firstNum(f.originalAmount, fin.originalAmount, ln.originalAmount) <= 0) fields.originalAmount = fields.loanBalance;
+      if (Object.keys(fields).length === 0) return;
       await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
     },
     onSuccess: () => {
@@ -9663,7 +9678,7 @@ function CredentialsList({ profileId, fields, onChanged }: { profileId: string; 
   const [cUser, setCUser] = useState("");
   const [cUrl, setCUrl] = useState("");
   const saveMutation = useMutation({
-    mutationFn: async (updatedCreds: any[]) => { await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { ...fields, credentials: updatedCreds } }); },
+    mutationFn: async (updatedCreds: any[]) => { await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { credentials: updatedCreds } }); },
     onSuccess: () => { toast({ title: "Credentials updated" }); invalidateDomains("profiles"); onChanged(); },
     onError: (err: Error) => toast({ title: "Failed to save credentials", description: formatApiError(err), variant: "destructive" }),
   });
@@ -9866,7 +9881,7 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
   const [aValue, setAValue] = useState("");
   const [aSource, setASource] = useState("");
   const saveMutation = useMutation({
-    mutationFn: async (updated: any[]) => { await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { ...fields, appraisals: updated } }); },
+    mutationFn: async (updated: any[]) => { await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: { appraisals: updated } }); },
     onSuccess: () => { toast({ title: "Appraisal updated" }); invalidateDomains("profiles"); onChanged(); },
     onError: (err: Error) => toast({ title: "Failed to save appraisal", description: formatApiError(err), variant: "destructive" }),
   });
