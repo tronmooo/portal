@@ -36,7 +36,7 @@ import {
   insertMemorySchema,
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
-import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF } from "./notification-service";
+import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF, mergeDismissedNotifications } from "./notification-service";
 import { upcomingEventOccurrences } from "@shared/event-upcoming";
 import { rankByName } from "@shared/entity-resolution";
 import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags } from "@shared/recurring-dates";
@@ -7993,10 +7993,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         try { await storage.markUserNotifications("dismissed", customIds); } catch { /* best effort */ }
       }
       const computedIds = targets.filter(n => !n.id.startsWith("custom:")).map(n => n.id);
-      if (computedIds.length > 0) {
-        const merged = Array.from(new Set([...existing, ...computedIds]));
-        await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(merged));
-      }
+      // Same merge as the bell and the briefing (D263): never write back a
+      // list read earlier in the turn.
+      if (computedIds.length > 0) await mergeDismissedNotifications(storage, computedIds);
       return { dismissed: targets.length, titles: targets.slice(0, 8).map(n => n.title), message: `Dismissed ${targets.length} notification${targets.length === 1 ? "" : "s"}.` };
     }
 

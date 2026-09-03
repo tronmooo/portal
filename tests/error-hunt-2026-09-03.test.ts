@@ -3135,5 +3135,7 @@ describe("D263 notification dismissals merge on the server", () => {
     const briefing = readFileSync(new URL("../client/src/components/dashboard/ExecutiveBriefing.tsx", import.meta.url), "utf8");
     expect(briefing).toContain('apiRequest("POST", "/api/notifications/dismiss", { ids: [id] })');
     expect(briefing).not.toContain('apiRequest("PUT", "/api/preferences/dismissed_notifications"');
+    const ai = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
+    expect(ai).toContain("await mergeDismissedNotifications(storage, computedIds)");
   });
 });
