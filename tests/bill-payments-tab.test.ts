@@ -94,8 +94,11 @@ describe("bill details are editable", () => {
     // shared/liability-schedule anchors on firstPaymentDate ?? dueDate ??
     // nextDueDate. Writing dueDate alone on a bill that carries a
     // firstPaymentDate moves nothing the user can see.
-    const save = src.match(/const saveBillMutation[\s\S]{0,3000}?openBillEditor/)?.[0] ?? "";
-    expect(save, "saveBillMutation not found").not.toBe("");
+    // The field map is built by buildBillFields (pure, so the seeded and the
+    // current form run through the same code — D246); the save sends its diff.
+    const save = src.match(/const buildBillFields[\s\S]{0,4000}?openBillEditor/)?.[0] ?? "";
+    expect(save, "buildBillFields/saveBillMutation not found").not.toBe("");
+    expect(save).toContain("const saveBillMutation");
     for (const key of ["firstPaymentDate", "dueDate", "nextDueDate"]) {
       expect(save, `saveBillMutation does not set ${key}`).toContain(key);
     }
