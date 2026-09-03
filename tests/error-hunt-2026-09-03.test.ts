@@ -1353,3 +1353,26 @@ describe("D193: 'undo' with the post-write row re-applies only the keys the tool
     expect(Number(f.balance ?? f.currentValue)).toBe(950);
   });
 });
+
+// ─── D194: un-completing a chore spares a next occurrence the user edited ───
+describe("D194: retracting a spawned occurrence only removes an untouched clone", () => {
+  const prev = { id: "t-1", title: "Weekly bins", description: "", priority: "medium", dueDate: "2026-09-03", dueTime: null, status: "done", tags: ["recur:weekly"], linkedProfiles: ["self-1"] };
+  const cloneOf = (extra: Record<string, any>) => ({ id: "t-1-next", title: "Weekly bins", description: "", priority: "medium", dueDate: "2026-09-10", dueTime: null, status: "todo", tags: ["recur:weekly", "rdone:1"], linkedProfiles: ["self-1"], ...extra });
+  function retractWith(clone: any) {
+    const purged: string[] = [];
+    const s = bareStorage({ getTask: async () => clone, recurringCloneId: () => "t-1-next", purgeTask: async (id: string) => { purged.push(id); return true; } });
+    return { s, purged };
+  }
+  it("an untouched clone is purged", async () => {
+    const { s, purged } = retractWith(cloneOf({}));
+    expect(await s.retractSpawnedRecurringTask(prev)).toBe(true);
+    expect(purged).toEqual(["t-1-next"]);
+  });
+  it("a clone the user edited (a note, a priority, a time, an owner) stays", async () => {
+    for (const edit of [{ description: "bring the recycling too" }, { priority: "high" }, { dueTime: "08:00" }, { linkedProfiles: ["self-1", "linda-1"] }, { tags: ["recur:weekly", "rdone:1", "outside"] }]) {
+      const { s, purged } = retractWith(cloneOf(edit));
+      expect(await s.retractSpawnedRecurringTask(prev), JSON.stringify(edit)).toBe(false);
+      expect(purged, JSON.stringify(edit)).toEqual([]);
+    }
+  });
+});

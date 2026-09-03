@@ -3692,11 +3692,30 @@ export class SupabaseStorage implements IStorage {
     if (!clone || clone.status === "done") return false;
     if (String(clone.dueDate || "").slice(0, 10) !== next.dueDate) return false;
     if (String(clone.title || "").trim().toLowerCase() !== String(prev.title || "").trim().toLowerCase()) return false;
+    // Only a clone that is still exactly what the spawn made goes: once the
+    // user has touched next week's occurrence (a note, a priority, a tag, a
+    // time), it is their task, and un-completing this week's must not take
+    // it away. (It used to be purged regardless, edit and all.)
+    if (!this.isPristineRecurringClone(clone, prev, next.tags)) return false;
     // A hard delete, not the soft one: the clone's id is deterministic, so a
     // soft-deleted row would make the next re-completion's spawn collide on
     // it and spawn nothing. The row was machine-made moments ago — there is
     // nothing for the trash to restore.
     return this.purgeTask(clone.id);
+  }
+
+  /** Does the spawned occurrence still carry exactly what the spawn copied from its source? */
+  private isPristineRecurringClone(clone: Task, prev: Task, spawnTags: string[] | undefined): boolean {
+    const text = (v: unknown) => String(v ?? "").trim();
+    const sorted = (t: unknown) => (Array.isArray(t) ? [...t].map(String).sort() : []);
+    if (text(clone.description) !== text(prev.description)) return false;
+    if (text(clone.priority || "medium") !== text(prev.priority || "medium")) return false;
+    if (text(clone.dueTime) !== text(prev.dueTime)) return false;
+    // A stored row always carries tags and owners; only compare what the row
+    // has (a stub without them is not an edit).
+    if (clone.tags !== undefined && JSON.stringify(sorted(clone.tags)) !== JSON.stringify(sorted(spawnTags ?? prev.tags))) return false;
+    if (clone.linkedProfiles !== undefined && JSON.stringify(sorted(clone.linkedProfiles)) !== JSON.stringify(sorted(prev.linkedProfiles))) return false;
+    return true;
   }
 
   /** Permanently remove a task row (its entity links first). */
