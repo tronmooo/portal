@@ -277,6 +277,12 @@ The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 a
 ### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
 A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
 
+### "Today" defaults at the UTC/LA boundary (probe s48, run at 01:28 UTC = 18:28 Los Angeles) — verified working
+With the server's UTC day already Sep 3 and the user's day Sep 2: an expense, a journal entry, a habit check-in and a bill payment created without a date are all stamped Sep 2; a tracker entry without a timestamp is stamped now (local day Sep 2); the bootstrap reports the user's month; the default calendar window starts on the user's today.
+
+### Rename, account adjustments and the wrong-save sweep (probes s46, s47) — verified working
+Renaming a person is visible at once in search, the profile list, the bootstrap and the related-entities route. An account adjustment moves the balance, appends a `balanceHistory` row with delta/reason/date/previous/new, refuses a non-numeric value and an impossible date, and a second adjustment restores the balance. Overpaying a loan floors the balance at 0 (the payment row keeps the typed amount — noted, not changed), a negative payment and a payment dated in the future are handled (refused / accepted as post-dated), a third check-in on a 2-a-day habit does not exceed the target, and completing a task whose recurrence ended spawns nothing (an occurrence falling on the inclusive `runtil` day is still spawned, correctly).
+
 ### Calendar range edges (probe s45) — verified working
 `/api/calendar/timeline?start&end` is inclusive on both ends for all-day events, a 23:30 event, a task due and a document expiring on the last day; the day before/after is out; a weekly series inside an 11-day window lands on day 0 and day 7 only; narrowing the window by a day drops the last-day items.
 
