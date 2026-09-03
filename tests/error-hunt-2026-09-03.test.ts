@@ -854,3 +854,18 @@ describe("D173: DELETE /api/documents/:id checks ownership before the cascade", 
     expect(cascaded).toBe(0);
   });
 });
+
+// ─── D174: unlink and materialize check the profile is the caller's ─────────
+describe("D174: POST /api/profiles/:id/unlink and /api/obligations/:id/materialize are 404 for a foreign id", () => {
+  it("unlink is not run for a profile that is not this user's", async () => {
+    let unlinked = 0;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.unlinkProfileFrom = async () => { unlinked++; };
+      storage.getObligation = async (id: string) => (id === "bill-mine" ? { id, name: "Mine" } : undefined);
+    });
+    expect((await h.api("POST", "/api/profiles/theirs-1/unlink", { targetId: "x", targetType: "profile" })).status).toBe(404);
+    expect(unlinked).toBe(0);
+    expect((await h.api("POST", "/api/obligations/bill-theirs/materialize")).status).toBe(404);
+    expect((await h.api("POST", "/api/obligations/bill-mine/materialize")).status).toBe(200);
+  });
+});

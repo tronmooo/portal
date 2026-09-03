@@ -5171,6 +5171,9 @@ ${JSON.stringify(ctx, null, 2)}`;
 
   app.post("/api/profiles/:id/unlink", asyncHandler(async (req, res) => {
     const { entityType, entityId } = req.body;
+    // The unlink writes under this user's storage and never fails for a
+    // profile that is not theirs; answer 404 unless the profile is the caller's.
+    if (!(await storage.getProfile(req.params.id))) return res.status(404).json({ error: "Resource not found" });
     await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
     const uid_pl2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`profiles:${uid_pl2}`); bustCache(`profile-detail:${uid_pl2}:`); bustCache(`stats:${uid_pl2}`); bustCache(`${entityType}s:${uid_pl2}`);
@@ -7910,6 +7913,7 @@ Rules:
 
   // Materialize is a no-op now — occurrences are generated, never persisted.
   app.post("/api/obligations/:id/materialize", asyncHandler(async (req, res) => {
+    if (!(await storage.getObligation(req.params.id))) return res.status(404).json({ error: "Obligation not found" });
     res.json({ ok: true, generated: true, note: "Occurrences are generated on the fly; nothing to materialize." });
   }));
 
