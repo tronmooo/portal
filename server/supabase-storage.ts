@@ -2110,6 +2110,11 @@ export class SupabaseStorage implements IStorage {
     // semantics inside a single transaction. Fall back to the legacy loop only
     // when the function hasn't been deployed yet (Postgres 42883 /
     // PostgREST PGRST202 = function not found).
+    // Captures this profile owned go to the Self first: the table's foreign
+    // key would otherwise set their owner to NULL when the row goes, leaving
+    // the user's own notes ownerless (visible under nobody's scope). The
+    // capture route defaults an owner to the Self; a deleted owner does too.
+    await this.rehomeCapturesToSelf(id);
     const { data: rpcCounts, error: rpcError } = await this.supabase.rpc("delete_profile_cascade", {
       p_user_id: this.userId,
       p_profile_id: id,
@@ -3716,6 +3721,22 @@ export class SupabaseStorage implements IStorage {
     if (clone.tags !== undefined && JSON.stringify(sorted(clone.tags)) !== JSON.stringify(sorted(spawnTags ?? prev.tags))) return false;
     if (clone.linkedProfiles !== undefined && JSON.stringify(sorted(clone.linkedProfiles)) !== JSON.stringify(sorted(prev.linkedProfiles))) return false;
     return true;
+  }
+
+  /** Move the captures a profile owns onto the Self (a deleted owner must not leave them ownerless). */
+  private async rehomeCapturesToSelf(profileId: string): Promise<number> {
+    try {
+      const self = await this.getSelfProfile();
+      if (!self || self.id === profileId) return 0;
+      const { data, error } = await this.supabase.from("captures")
+        .update({ owner_profile_id: self.id })
+        .eq("user_id", this.userId).eq("owner_profile_id", profileId).select("id");
+      if (error) { console.warn(`[deleteProfile] could not re-home captures of ${profileId}: ${error.message}`); return 0; }
+      return Array.isArray(data) ? data.length : 0;
+    } catch (e: any) {
+      console.warn(`[deleteProfile] capture re-home failed for ${profileId}: ${e?.message || e}`);
+      return 0;
+    }
   }
 
   /** Permanently remove a task row (its entity links first). */

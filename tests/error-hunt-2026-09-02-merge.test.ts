@@ -170,3 +170,20 @@ describe("D126: merging re-points relationship links, entries logged for the per
     expect(storage._budgets["2026-09"].map((b: any) => [b.id, b.profileId])).toEqual([["b-fuel-l", LINDA], ["b-food-l2", LINDA2], ["b-food-l", LINDA]]);
   });
 });
+
+// D204: captures a merged-away profile owned come back to it on unmerge
+describe("D204: unmerge returns the moved captures to the source profile", () => {
+  it("re-points every capture id in the reverse plan at the source", async () => {
+    const { client, writes } = recorderClient();
+    const storage = stubStorage({}, client);
+    const out = await reverseMerge(storage, {
+      source_id: LINDA, target_id: LINDA2, affected: {}, child_ids: [],
+      capture_ids: ["cap-1", "cap-2"],
+    });
+    expect(out.ok).toBe(true);
+    const cap = writes.find((w) => w.table === "captures");
+    expect(cap?.op).toBe("update");
+    expect(cap?.payload).toEqual({ owner_profile_id: LINDA });
+    expect(JSON.stringify(cap)).toContain("cap-1");
+  });
+});

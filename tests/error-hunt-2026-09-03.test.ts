@@ -1544,3 +1544,27 @@ describe("D203: export and import cover captures", () => {
     } finally { await booted.close(); }
   });
 });
+
+// ─── D204: a deleted or merged person's captures never end up ownerless ─────
+describe("D204: captures follow their owner on delete (to the Self) and on merge (to the target, and back)", () => {
+  it("deleteProfile re-homes the person's captures to the Self before the cascade runs", async () => {
+    const { client, calls } = chainClient((table, op) => {
+      if (table === "captures" && op === "update") return { data: [{ id: "c-1" }, { id: "c-2" }], error: null };
+      return { data: [], error: null };
+    });
+    let rpcAt = -1;
+    (client as any).rpc = async () => { rpcAt = calls.length; return { data: { profiles_deleted: 1 }, error: null }; };
+    const s = bareStorage({
+      supabase: client,
+      getProfile: async () => ({ id: "pat-1", type: "person", name: "Pat", fields: {}, documents: [], tags: [] }),
+      getProfiles: async () => [],
+      getSelfProfile: async () => ({ id: "self-1", type: "self", name: "Me" }),
+      cleanupEntityLinks: async () => undefined, bumpDataVersion: async () => undefined, logActivity: () => {},
+    });
+    await s.deleteProfile("pat-1");
+    const move = calls.find((c) => c.table === "captures" && c.op === "update");
+    expect(move?.payload).toEqual({ owner_profile_id: "self-1" });
+    expect(move?.filters).toEqual(expect.arrayContaining([["eq", ["owner_profile_id", "pat-1"]], ["eq", ["user_id", s.userId]]]));
+    expect(calls.indexOf(move!)).toBeLessThan(rpcAt);
+  });
+});

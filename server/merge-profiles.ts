@@ -144,6 +144,15 @@ const chunks = <T,>(arr: T[], n: number): T[][] => { const out: T[][] = []; for 
 
 /** Rows that name the source by id outside linked_profiles: the relationship
  *  graph (entity_links) and entries logged FOR the person (tracker_entries). */
+async function deriveCaptureIds(storage: IStorage, sourceId: string): Promise<string[]> {
+  const sb = (storage as any).supabase;
+  if (!sb?.from) return [];
+  try {
+    const { data } = await sb.from("captures").select("id").eq("user_id", (storage as any).userId).eq("owner_profile_id", sourceId).limit(5000);
+    return (data || []).map((r: any) => String(r.id));
+  } catch { return []; }
+}
+
 async function deriveProfileRefs(storage: IStorage, sourceId: string): Promise<{ entityLinks: MergeSet["entityLinks"]; trackerEntryIds: string[] }> {
   const sb = (storage as any).supabase;
   const userId = (storage as any).userId as string;
@@ -332,6 +341,16 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
       if (!error) refsMoved += chunk.length;
     } catch { /* counted as not moved */ }
   }
+  // Captures the source owned follow it to the target (and come back on
+  // unmerge); they used to stay pointed at the archived source, out of every
+  // scope.
+  const captureIds = await deriveCaptureIds(storage, source_id);
+  for (const chunk of chunks(captureIds, 200)) {
+    try {
+      const { error } = await sb.from("captures").update({ owner_profile_id: target_id }).in("id", chunk).eq("user_id", userId);
+      if (!error) refsMoved += chunk.length;
+    } catch { /* counted as not moved */ }
+  }
   for (const b of set.budgets) {
     try {
       const arr: any[] = await (storage as any).getBudgets(b.month);
@@ -387,7 +406,7 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
       reversible: !big,
       reversePlan: big
         ? { op: "none", reason: `merge touched ${totalRelinked} records — undo is best-effort only, ask to re-merge manually` }
-        : { op: "unmerge", source_id, target_id, affected: set.affected, child_ids: set.childIds, shares: set.shares, entity_links: set.entityLinks, tracker_entry_ids: set.trackerEntryIds, budgets: set.budgets },
+        : { op: "unmerge", source_id, target_id, affected: set.affected, child_ids: set.childIds, shares: set.shares, entity_links: set.entityLinks, tracker_entry_ids: set.trackerEntryIds, capture_ids: captureIds, budgets: set.budgets },
       source: "bulk",
     });
   } catch { /* ledger is best-effort */ }
@@ -405,7 +424,7 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
 }
 
 /** Reverse a merge: restore the source profile, re-point links back, move children back. */
-export async function reverseMerge(storage: IStorage, reversePlan: { source_id: string; target_id: string; affected: MergeSet["affected"]; child_ids: string[]; shares?: MovedShare[]; entity_links?: MergeSet["entityLinks"]; tracker_entry_ids?: string[]; budgets?: MovedBudgets[] }): Promise<{ ok: boolean; description: string }> {
+export async function reverseMerge(storage: IStorage, reversePlan: { source_id: string; target_id: string; affected: MergeSet["affected"]; child_ids: string[]; shares?: MovedShare[]; entity_links?: MergeSet["entityLinks"]; tracker_entry_ids?: string[]; capture_ids?: string[]; budgets?: MovedBudgets[] }): Promise<{ ok: boolean; description: string }> {
   const sb = (storage as any).supabase;
   const userId = (storage as any).userId as string;
   if (!sb || !userId) return { ok: false, description: "Unmerge isn't available in this deployment." };
@@ -465,6 +484,12 @@ export async function reverseMerge(storage: IStorage, reversePlan: { source_id: 
   for (const chunk of chunks(reversePlan.tracker_entry_ids || [], 200)) {
     try {
       const { error } = await sb.from("tracker_entries").update({ profile_id: reversePlan.source_id }).in("id", chunk).eq("user_id", userId);
+      if (error) failed++; else refsRestored += chunk.length;
+    } catch { failed++; }
+  }
+  for (const chunk of chunks(reversePlan.capture_ids || [], 200)) {
+    try {
+      const { error } = await sb.from("captures").update({ owner_profile_id: reversePlan.source_id }).in("id", chunk).eq("user_id", userId);
       if (error) failed++; else refsRestored += chunk.length;
     } catch { failed++; }
   }
