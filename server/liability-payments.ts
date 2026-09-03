@@ -524,6 +524,10 @@ export async function payBillOccurrence(
   // (autopay, a confirmed extraction, a chat tool the model may call twice)
   // keeps the old idempotent answer on a settled occurrence.
   const automated = input.source === "autopay" || input.source === "extraction" || input.source === "ai" || input.source === "shim";
+  // A one-tap "Mark paid" (no amount of its own) repeated on a settled
+  // occurrence is the same tap a minute later, not a second payment; only a
+  // payment that names its amount can be one.
+  const explicitAmount = input.amount != null && Number.isFinite(Number(input.amount));
   let additional = false;
 
   // ── 0a. an implicit "pay what's due" right after a payment is the same tap ─
@@ -580,7 +584,7 @@ export async function payBillOccurrence(
       const claim = await claimFn.call(storage, liabilityId, occurrenceDate, stamp, extra);
       if (claim.status === "already-paid") {
         const prior = claim.occurrences?.[occurrenceDate];
-        if (sameTap(prior) || automated) {
+        if (sameTap(prior) || automated || !explicitAmount) {
           const winner = await findPaymentWithRetry(storage, liabilityId, prior?.paymentId);
           return {
             ok: true, deduped: true, payment: winner, liability, occurrenceDate,

@@ -1257,3 +1257,26 @@ describe("D135/D136: the weekly review is the user's week and one document per w
     expect(created).toHaveLength(1);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D183 (route window): the short dedupe window folds the SAME payload only;
+// a different amount seconds later is a second payment and reaches the pay
+// operation (which books it as an additional payment on the settled occurrence).
+// ─────────────────────────────────────────────────────────────────────────────
+describe("D183: the pay route's dedupe window is keyed on the payload", () => {
+  it("an explicit different amount right after 'Mark paid' is recorded as a second payment", async () => {
+    h = await boot({ profiles: [SELF, { ...BILL, fields: { ...BILL.fields } }], obligations: [BILL_OBLIGATION] });
+    const first = await h.api("POST", `/api/obligations/${BILL.id}/pay`, {});
+    expect(first.status).toBe(201);
+    const extra = await h.api("POST", `/api/obligations/${BILL.id}/pay`, { amount: 12 });
+    expect(extra.status).toBe(201);
+    expect(extra.data?.deduped).toBeFalsy();
+    expect(extra.data?.id).not.toBe(first.data.id);
+    expect(h.db.liabilityPayments).toHaveLength(2);
+    const dueAfterFirst = h.db.profiles.find((p: any) => p.id === BILL.id).fields.dueDate;
+    const again = await h.api("POST", `/api/obligations/${BILL.id}/pay`, {});
+    expect(again.data?.deduped).toBe(true);
+    expect(h.db.liabilityPayments).toHaveLength(2);
+    expect(h.db.profiles.find((p: any) => p.id === BILL.id).fields.dueDate).toBe(dueAfterFirst);
+  });
+});

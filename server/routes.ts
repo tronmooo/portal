@@ -7754,7 +7754,11 @@ Rules:
     // got `{ok:true,deduped:true}` with no row (the UI had nothing to render).
     // Awaiting the in-flight promise answers both taps with the same payment.
     // Cross-instance duplicates are handled inside payBillOccurrence.
-    const dedupeKey = `${uid_o3}:${req.params.id}`;
+    // Keyed on WHAT is being paid as well as who and which bill: a second
+    // tap with the same payload is the duplicate; a different amount (or a
+    // named occurrence) seconds later is a second payment and must reach
+    // the pay operation.
+    const dedupeKey = `${uid_o3}:${req.params.id}:${amount ?? "due"}:${req.body?.occurrenceDate ?? ""}`;
     const last = recentPayments.get(dedupeKey);
     if (last && Date.now() - last.at < 8000) {
       const prior = last.payment ?? (last.inflight ? await last.inflight.catch(() => null) : null);

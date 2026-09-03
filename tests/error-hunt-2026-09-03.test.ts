@@ -1162,6 +1162,15 @@ describe("D183: a second, different payment on a settled occurrence is recorded,
       expect(payments, source).toHaveLength(1);
     }
   });
+  it("a repeated one-tap 'Mark paid' (no amount) on a settled occurrence stays the same payment", async () => {
+    const { s, payments } = payStorage({ id: "bill-3", name: "Water", type: "liability", type_key: "utility", fields: { monthlyAmount: 40, amount: 40, dueDate: "2026-09-10", nextDueDate: "2026-09-10", frequency: "monthly", autoLogExpense: false } });
+    const first = await payBillOccurrence(s, "bill-3", { occurrenceDate: "2026-09-10", source: "route" }, "UTC");
+    s.getProfile = (((orig) => async (id: string) => { const p = await orig(id); if (p?.fields?.occurrences?.["2026-09-10"]) p.fields.occurrences["2026-09-10"].postedAt = "2026-09-01T00:00:00Z"; return p; })(s.getProfile));
+    const again = await payBillOccurrence(s, "bill-3", { occurrenceDate: "2026-09-10", source: "route" }, "UTC");
+    expect(again.deduped).toBe(true);
+    expect(again.payment?.id).toBe(first.payment.id);
+    expect(payments).toHaveLength(1);
+  });
   it("a bill paid in two goes: the second part is a payment of its own on the same occurrence", async () => {
     const { s, payments, profiles } = payStorage({ id: "bill-1", name: "Power", type: "liability", type_key: "utility", fields: { monthlyAmount: 100, amount: 100, dueDate: "2026-09-10", nextDueDate: "2026-09-10", frequency: "monthly", autoLogExpense: false } });
     const a = await payBillOccurrence(s, "bill-1", { amount: 60, occurrenceDate: "2026-09-10", paymentDate: "2026-09-03" }, "UTC");
