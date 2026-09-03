@@ -658,6 +658,8 @@ const LINK_ENDPOINT_TABLES: Record<string, string> = {
   profile: "profiles", obligation: "profiles", memory: "memories", artifact: "artifacts",
 };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** writeProfilePatch's answer when the row moved between the read and the guarded write. */
+const PROFILE_WRITE_COLLIDED: unique symbol = Symbol("profile-write-collided");
 
 export class SupabaseStorage implements IStorage {
   private supabase: SupabaseClient;
@@ -1863,10 +1865,52 @@ export class SupabaseStorage implements IStorage {
     id: string,
     data: Partial<Profile> & { fieldsToDelete?: string[] }
   ): Promise<Profile | undefined> {
-    const existing = await this.getProfile(id);
+    let existing = await this.getProfile(id);
     if (!existing) return undefined;
     // [P0.2] optimistic concurrency — 409 if the row moved since the caller read it.
     this.assertNoWriteConflict(data as Record<string, any>, existing.updatedAt);
+    for (let attempt = 0; ; attempt++) {
+      const out = await this.writeProfilePatch(id, data, existing);
+      if (out !== PROFILE_WRITE_COLLIDED) return out;
+      if (attempt >= 6) throw Object.assign(new Error("Profile edit kept colliding with another writer; try again"), { statusCode: 409 });
+      this.clearRequestMemo();
+      existing = await this.getProfile(id);
+      if (!existing) return undefined;
+    }
+  }
+
+  /**
+   * Read-modify-write on a profile with the patch RECOMPUTED from the fresh
+   * row on every retry. updateProfile retries a fixed patch, which keeps two
+   * edits to different fields from losing one; it cannot help a caller whose
+   * patch is derived from what it read (a balance delta, a payment's split):
+   * that retry wrote the stale figure over the other writer's, so two
+   * adjustments in flight together moved the balance once. `fn` returns the
+   * patch for the row it is handed, or null to write nothing.
+   */
+  async mutateProfileFields(
+    id: string,
+    fn: (fresh: Profile) => (Partial<Profile> & { fieldsToDelete?: string[] }) | null,
+  ): Promise<Profile | undefined> {
+    for (let attempt = 0; ; attempt++) {
+      this.clearRequestMemo();
+      const fresh = await this.getProfile(id);
+      if (!fresh) return undefined;
+      const patch = fn(fresh);
+      if (!patch) return fresh;
+      const out = await this.writeProfilePatch(id, patch, fresh);
+      if (out !== PROFILE_WRITE_COLLIDED) return out;
+      if (attempt >= 6) throw Object.assign(new Error("Profile edit kept colliding with another writer; try again"), { statusCode: 409 });
+      await new Promise((r) => setTimeout(r, 10 + attempt * 20));
+    }
+  }
+
+  /** One attempt at writing `data` over `existing`; PROFILE_WRITE_COLLIDED when the row moved since `existing` was read. */
+  private async writeProfilePatch(
+    id: string,
+    data: Partial<Profile> & { fieldsToDelete?: string[] },
+    existing: Profile,
+  ): Promise<Profile | undefined | typeof PROFILE_WRITE_COLLIDED> {
     // Universal-delete: expand UI keys into the full storage-side alias set,
     // then ALSO strip those keys from every nested group. Without this step,
     // deleting "birthday" on a person profile only removes the top-level
@@ -1955,12 +1999,7 @@ export class SupabaseStorage implements IStorage {
       guarded = existing.updatedAt ? guarded.eq("updated_at", existing.updatedAt as any) : guarded.is("updated_at", null);
       const { data: written, error } = await guarded.select("id");
       if (error) throw error;
-      if (!Array.isArray(written) || written.length === 0) {
-        const retries = ((data as any).__fieldsRetry || 0) + 1;
-        if (retries > 6) throw Object.assign(new Error("Profile edit kept colliding with another writer; try again"), { statusCode: 409 });
-        this.clearRequestMemo();
-        return this.updateProfile(id, { ...data, __fieldsRetry: retries } as any);
-      }
+      if (!Array.isArray(written) || written.length === 0) return PROFILE_WRITE_COLLIDED;
     } else {
       const { error } = await this.supabase.from("profiles").update(updateData).eq("id", id).eq("user_id", this.userId);
       if (error) throw error;
@@ -5928,11 +5967,21 @@ export class SupabaseStorage implements IStorage {
     const p = await this.getProfile(id);
     if (!p || !isAccountProfile(p)) return undefined;
     const today = getUserToday(this._timezone);
-    const { fields, adjustment } = applyBalanceAdjustment(p, input, today);
-    const updated = await this.updateProfile(id, { fields } as any);
+    // The delta is applied to the balance as it is when the write lands, not
+    // as it was when this call read it: two adjustments in flight together
+    // (a bill paid from the account beside a manual correction) used to move
+    // the balance once and keep one history entry.
+    let adjustment: ReturnType<typeof applyBalanceAdjustment>["adjustment"] | null = null;
+    const updated = await this.mutateProfileFields(id, (fresh) => {
+      const out = applyBalanceAdjustment(fresh, input, today);
+      adjustment = out.adjustment;
+      return { fields: out.fields } as any;
+    });
+    if (!updated || !adjustment) return undefined;
+    const adj = adjustment as ReturnType<typeof applyBalanceAdjustment>["adjustment"];
     this.logActivity(
       "profile",
-      `${p.name} balance ${adjustment.delta >= 0 ? "+" : "-"}$${Math.abs(adjustment.delta)} → $${adjustment.newBalance}`,
+      `${p.name} balance ${adj.delta >= 0 ? "+" : "-"}$${Math.abs(adj.delta)} → $${adj.newBalance}`,
     );
     return updated;
   }

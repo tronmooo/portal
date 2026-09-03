@@ -41,6 +41,8 @@ const VERB_OPS: Record<string, "create" | "update" | "delete"> = {
   ensure: "update", copy: "update", migrate: "update", propagate: "update", repair: "update",
   skip: "update", adjust: "update", pause: "update", resume: "update", reschedule: "update",
   merge: "update", unmerge: "update",
+  // mutateProfileFields — a profile update whose patch is planned on the fresh row.
+  mutate: "update",
 };
 
 /**
@@ -116,6 +118,8 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
   // them has to ripple into all four domains or "changed a car's value, the
   // assets list didn't move" comes straight back.
   Profile: { domains: PROFILE_DOMAINS, endpoint: "/api/profiles" },
+  // mutateProfileFields (balance moves, payment splits) — the same profile row.
+  ProfileFields: { domains: PROFILE_DOMAINS, endpoint: "/api/profiles" },
   ProfileTo: { domains: PROFILE_DOMAINS, endpoint: null },     // linkProfileTo
   ProfileFrom: { domains: PROFILE_DOMAINS, endpoint: null },   // unlinkProfileFrom
 

@@ -106,6 +106,13 @@ export function makeFakeStorage(db: FakeDb) {
     // Deliberately a SHALLOW merge of `fields`, mirroring what the real storage
     // does for a partial field patch — a route that means to add one field must
     // not have the double do the merging work the route is being tested for.
+    // Parity with SupabaseStorage: the patch is computed from the row as it is.
+    mutateProfileFields: async (pid: string, fn: (fresh: any) => any) => {
+      const row = db.profiles.find(p => p.id === pid);
+      if (!row) return undefined;
+      const patch = fn(structuredClone(row));
+      return patch ? impl.updateProfile(pid, patch) : row;
+    },
     updateProfile: async (pid: string, patch: any) => {
       const row = db.profiles.find(p => p.id === pid);
       if (!row) return undefined;

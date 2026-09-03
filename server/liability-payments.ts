@@ -72,59 +72,17 @@ function inferPaymentType(
   return "standard";
 }
 
-/**
- * Record a payment against a liability and bring the liability itself up to
- * date, in one place.
- *
- * The liability profile write is deliberately part of this function rather than
- * left to the caller: a payment that moves a balance without updating the
- * liability is exactly the shape of "the payment saved but the balance didn't
- * change", and the write journal can only report a change that actually
- * happened.
- */
-export async function applyLiabilityPayment(
-  storage: IStorage,
-  liability: any,
-  input: LiabilityPaymentInput,
-  timezone: string = DEFAULT_TIMEZONE,
-): Promise<LiabilityPaymentResult> {
+/** Everything a debt payment derives from the liability's CURRENT balance. */
+interface DebtPaymentPlan {
+  balanceBefore: number; principal: number; interest: number; fees: number;
+  paymentType: LiabilityPaymentType; newBalance: number;
+  /** Whether this payment moves the tracked balance at all. */
+  moves: boolean;
+}
+function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaymentPlan {
   const fields = liability.fields || {};
-  const todayISO = getUserToday(timezone);
-  const paymentDate = input.paymentDate || todayISO;
   const amount = Number(input.amount) || 0;
   const escrow = Number(input.escrow) || 0;
-
-  // ── Recurring service bill: no permanent balance ────────────────────────
-  // A phone or utility bill isn't debt; paying it records the charge and moves
-  // the next due date on by one cycle. Reducing a "balance" here would invent
-  // a number, which is what the AI path used to do.
-  // `type_key ?? typeKey` is the canonical way this app names a liability's
-  // family — shared/asset-value.ts decides what counts toward net worth the
-  // same way. Reading `fields.subtype` here instead would let this function
-  // call something a recurring bill while net worth still counted it as debt.
-  if (isRecurringBill((liability as any).type_key ?? (liability as any).typeKey)) {
-    const payment = await storage.createLiabilityPayment({
-      ...(input.id ? { id: input.id } : {}),
-      liabilityProfileId: liability.id,
-      paymentDate,
-      amount,
-      principalPortion: amount,
-      interestPortion: 0,
-      fees: Number(input.fees) || 0,
-      paymentType: input.paymentType || "standard",
-      sourceAccount: input.sourceAccount || null,
-      notes: input.notes || null,
-    } as any);
-    // Series state (dueDate advance, lastPaidDate, occurrence stamp) is owned
-    // by payBillOccurrence, the one entry-point-facing operation. This function
-    // is the ledger core: it records the row, nothing else. It used to advance
-    // the due date here too — unconditionally, anchored on today — which is how
-    // a late catch-up payment skipped a month while the occurrence path
-    // advanced from the occurrence date. One policy now, in one place.
-    return { payment, liability, newBalance: 0, principal: amount, interest: 0, recurring: true };
-  }
-
-  // ── Amortizing / revolving / one-time debt ──────────────────────────────
   const balanceBefore = resolveLiabilityBalance(liability);
   const annualRate = resolveAnnualRate(fields);
   const explicitPrincipal = input.principal != null && Number.isFinite(Number(input.principal));
@@ -186,35 +144,124 @@ export async function applyLiabilityPayment(
     }
   }
 
-  const payment = await storage.createLiabilityPayment({
-    ...(input.id ? { id: input.id } : {}),
-    liabilityProfileId: liability.id,
-    paymentDate,
-    amount,
-    principalPortion: principal,
-    interestPortion: interest,
-    fees: fees + escrow,
-    remainingBalanceAfter: balanceBefore > 0 ? newBalance : undefined,
-    paymentType,
-    sourceAccount: input.sourceAccount || null,
-    notes: input.notes || null,
-  } as any);
+  return {
+    balanceBefore, principal, interest, fees, paymentType, newBalance,
+    moves: balanceBefore > 0 && paymentType !== "skipped" && paymentType !== "deferred",
+  };
+}
 
-  // Persist the new balance under EVERY name the app reads it by. Writing only
-  // `currentBalance` (what the AI path did) left the liability card, the
-  // dashboard and net worth reading a different field — and therefore a
-  // different, pre-payment number.
+/**
+ * Record a payment against a liability and bring the liability itself up to
+ * date, in one place.
+ *
+ * The liability profile write is deliberately part of this function rather than
+ * left to the caller: a payment that moves a balance without updating the
+ * liability is exactly the shape of "the payment saved but the balance didn't
+ * change", and the write journal can only report a change that actually
+ * happened.
+ */
+export async function applyLiabilityPayment(
+  storage: IStorage,
+  liability: any,
+  input: LiabilityPaymentInput,
+  timezone: string = DEFAULT_TIMEZONE,
+): Promise<LiabilityPaymentResult> {
+  const fields = liability.fields || {};
+  const todayISO = getUserToday(timezone);
+  const paymentDate = input.paymentDate || todayISO;
+  const amount = Number(input.amount) || 0;
+  const escrow = Number(input.escrow) || 0;
+
+  // ── Recurring service bill: no permanent balance ────────────────────────
+  // A phone or utility bill isn't debt; paying it records the charge and moves
+  // the next due date on by one cycle. Reducing a "balance" here would invent
+  // a number, which is what the AI path used to do.
+  // `type_key ?? typeKey` is the canonical way this app names a liability's
+  // family — shared/asset-value.ts decides what counts toward net worth the
+  // same way. Reading `fields.subtype` here instead would let this function
+  // call something a recurring bill while net worth still counted it as debt.
+  if (isRecurringBill((liability as any).type_key ?? (liability as any).typeKey)) {
+    const payment = await storage.createLiabilityPayment({
+      ...(input.id ? { id: input.id } : {}),
+      liabilityProfileId: liability.id,
+      paymentDate,
+      amount,
+      principalPortion: amount,
+      interestPortion: 0,
+      fees: Number(input.fees) || 0,
+      paymentType: input.paymentType || "standard",
+      sourceAccount: input.sourceAccount || null,
+      notes: input.notes || null,
+    } as any);
+    // Series state (dueDate advance, lastPaidDate, occurrence stamp) is owned
+    // by payBillOccurrence, the one entry-point-facing operation. This function
+    // is the ledger core: it records the row, nothing else. It used to advance
+    // the due date here too — unconditionally, anchored on today — which is how
+    // a late catch-up payment skipped a month while the occurrence path
+    // advanced from the occurrence date. One policy now, in one place.
+    return { payment, liability, newBalance: 0, principal: amount, interest: 0, recurring: true };
+  }
+
+  // ── Amortizing / revolving / one-time debt ──────────────────────────────
+  // The split and the balance after are planned against the balance AS IT IS
+  // WHEN THE WRITE LANDS (mutateProfileFields re-plans on a collision), and the
+  // write names only the balance keys. It used to spread the liability's whole
+  // field map, read before the occurrence claim, back over the row — which put
+  // the un-advanced due date back after every payment (so the next payment
+  // targeted the same, already-paid occurrence and was swallowed) — and two
+  // payments in flight together each planned from the same balance, so the
+  // debt dropped by one of them.
+  let plan = planDebtPayment(liability, input);
+  const balancePatch = (pl: DebtPaymentPlan) => ({
+    currentBalance: pl.newBalance, remainingBalance: pl.newBalance, loanBalance: pl.newBalance, lastPaidDate: paymentDate,
+  });
+  const mutate = (storage as any).mutateProfileFields as
+    | ((id: string, fn: (fresh: any) => any) => Promise<any>) | undefined;
   let updated = liability;
-  if (balanceBefore > 0 && paymentType !== "skipped" && paymentType !== "deferred") {
-    updated = (await storage.updateProfile(liability.id, {
-      fields: {
-        ...fields,
-        currentBalance: newBalance,
-        remainingBalance: newBalance,
-        loanBalance: newBalance,
-        lastPaidDate: paymentDate,
-      },
-    } as any)) ?? liability;
+  if (plan.moves) {
+    if (typeof mutate === "function") {
+      updated = (await mutate.call(storage, liability.id, (fresh: any) => {
+        plan = planDebtPayment(fresh, input);
+        return plan.moves ? { fields: balancePatch(plan) } : null;
+      })) ?? liability;
+    } else {
+      updated = (await storage.updateProfile(liability.id, { fields: balancePatch(plan) } as any)) ?? liability;
+    }
+  }
+  const { balanceBefore, principal, interest, fees, paymentType, newBalance } = plan;
+
+  let payment;
+  try {
+    payment = await storage.createLiabilityPayment({
+      ...(input.id ? { id: input.id } : {}),
+      liabilityProfileId: liability.id,
+      paymentDate,
+      amount,
+      principalPortion: principal,
+      interestPortion: interest,
+      fees: fees + escrow,
+      remainingBalanceAfter: balanceBefore > 0 ? newBalance : undefined,
+      paymentType,
+      sourceAccount: input.sourceAccount || null,
+      notes: input.notes || null,
+    } as any);
+  } catch (e) {
+    // The balance moved for a row that never landed: put the money back
+    // (against the current balance, best effort) and surface the failure.
+    if (plan.moves && newBalance !== balanceBefore) {
+      const give = balanceBefore - newBalance;
+      try {
+        if (typeof mutate === "function") {
+          await mutate.call(storage, liability.id, (fresh: any) => {
+            const back = Math.max(0, resolveLiabilityBalance(fresh) + give);
+            return { fields: { currentBalance: back, remainingBalance: back, loanBalance: back } };
+          });
+        } else {
+          await storage.updateProfile(liability.id, { fields: { currentBalance: balanceBefore, remainingBalance: balanceBefore, loanBalance: balanceBefore } } as any);
+        }
+      } catch { /* the ledger failure is the error worth reporting */ }
+    }
+    throw e;
   }
 
   return { payment, liability: updated, newBalance, principal, interest, recurring: false };
@@ -269,6 +316,8 @@ export interface PayBillResult {
   ok: boolean;
   /** Another request settled this occurrence first; `payment` is THAT row. */
   deduped?: boolean;
+  /** A second payment on an occurrence that was already settled: recorded, series state untouched. */
+  additional?: boolean;
   reason?: "not_found" | "not_liability" | "payment_failed";
   payment?: any;
   liability?: any;
@@ -445,6 +494,20 @@ export async function payBillOccurrence(
   const amount = input.amount != null ? Number(input.amount) : money.current;
 
   const account: any = input.accountId ? await storage.getProfile(input.accountId) : null;
+  // An extra-principal payment is not the scheduled one: it moves the balance
+  // and nothing else. Claiming the occurrence for it marked the month paid and
+  // advanced the due date, and when the month was already paid it was folded
+  // into that payment and never recorded.
+  const extraOnly = input.paymentType === "extra_principal";
+  // A payment on an occurrence that is already settled: a double tap when it
+  // is the same money seconds after the winner; otherwise a second payment
+  // (the rest of a partial, an extra amount sent the same day) that is
+  // recorded without touching the series state.
+  const sameTap = (stamp: any) => {
+    const ageMs = stamp && typeof stamp.postedAt === "string" ? Date.now() - Date.parse(stamp.postedAt) : NaN;
+    return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 8000 && Math.abs(Number(stamp.amount) - amount) < 0.005;
+  };
+  let additional = false;
 
   // ── 0a. an implicit "pay what's due" right after a payment is the same tap ─
   // The claim below stops two requests settling ONE occurrence. But a second
@@ -454,13 +517,12 @@ export async function payBillOccurrence(
   // covered one instance; this is the same rule, cross-instance, keyed on
   // the stamp the winner just wrote. Only implicit pays (no occurrenceDate)
   // are folded — an explicit occurrence is an explicit intent.
-  if (!input.occurrenceDate) {
+  if (!input.occurrenceDate && !extraOnly) {
     const stamps = Object.values((f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {}) as any[];
     const latest = stamps
       .filter((o) => o && o.status === "paid" && typeof o.postedAt === "string" && o.paymentId)
       .sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)))[0];
-    const ageMs = latest ? Date.now() - Date.parse(latest.postedAt) : Infinity;
-    if (latest && Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 8000) {
+    if (latest && sameTap(latest)) {
       const winner = await findPaymentWithRetry(storage, liabilityId, latest.paymentId);
       return {
         ok: true, deduped: true, payment: winner, liability, occurrenceDate: curDue || occurrenceDate,
@@ -485,7 +547,7 @@ export async function payBillOccurrence(
   const claimFn = (storage as any).claimBillOccurrence as
     | ((id: string, date: string, stamp: Record<string, any>, extra: Record<string, any>) => Promise<{ status: "claimed" | "already-paid"; occurrences: Record<string, any> }>)
     | undefined;
-  if (typeof claimFn === "function") {
+  if (typeof claimFn === "function" && !extraOnly) {
     const stamp = {
       status: "paid", paymentId, amount, actualAmount: amount, paidAmount: amount,
       postedAt: new Date().toISOString(), ...(account ? { accountId: account.id } : {}),
@@ -500,19 +562,23 @@ export async function payBillOccurrence(
     try {
       const claim = await claimFn.call(storage, liabilityId, occurrenceDate, stamp, extra);
       if (claim.status === "already-paid") {
-        const winnerId = claim.occurrences?.[occurrenceDate]?.paymentId;
-        const winner = await findPaymentWithRetry(storage, liabilityId, winnerId);
-        return {
-          ok: true, deduped: true, payment: winner, liability, occurrenceDate,
-          amount: winner?.amount ?? amount, recurring, dueDateAdvanced: false, nextDueDate: null,
-          accountAdjusted: false, expenseId: null, steps: [{ step: "series_state", ok: true }],
-        };
+        const prior = claim.occurrences?.[occurrenceDate];
+        if (sameTap(prior)) {
+          const winner = await findPaymentWithRetry(storage, liabilityId, prior?.paymentId);
+          return {
+            ok: true, deduped: true, payment: winner, liability, occurrenceDate,
+            amount: winner?.amount ?? amount, recurring, dueDateAdvanced: false, nextDueDate: null,
+            accountAdjusted: false, expenseId: null, steps: [{ step: "series_state", ok: true }],
+          };
+        }
+        additional = true;
+      } else {
+        claimed = true;
+        priorOccurrences = claim.occurrences;
+        dueDateAdvanced = !!advanced;
+        nextDueDate = advanced;
+        steps.push({ step: "series_state", ok: true });
       }
-      claimed = true;
-      priorOccurrences = claim.occurrences;
-      dueDateAdvanced = !!advanced;
-      nextDueDate = advanced;
-      steps.push({ step: "series_state", ok: true });
     } catch (e: any) {
       logger.warn(`[payBillOccurrence] occurrence claim failed for ${liability.name}, using legacy order:`, e?.message || e);
     }
@@ -552,7 +618,7 @@ export async function payBillOccurrence(
 
   // ── 2. series state: occurrence stamp + conditional advance, ONE write ──
   // (legacy order, only when the storage has no compare-and-set claim)
-  if (!claimed) try {
+  if (!claimed && !additional && !extraOnly) try {
     const occ: Record<string, any> =
       (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
     occ[occurrenceDate] = {
@@ -634,6 +700,7 @@ export async function payBillOccurrence(
 
   return {
     ok: true,
+    ...(additional ? { additional: true } : {}),
     payment,
     liability: ledger.liability,
     occurrenceDate,

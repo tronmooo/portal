@@ -1082,3 +1082,106 @@ describe("D181: a tracker entry edit is a compare-and-swap on updated_at", () =>
     await expect(s.updateTrackerEntry("t1", "e1", { values: { systolic: 131 } })).rejects.toThrow(/colliding/);
   });
 });
+
+// ─── D182–D184: money writes plan against the balance the write lands on ────
+import { payBillOccurrence } from "../server/liability-payments";
+function payStorage(seed: any) {
+  const profiles = new Map<string, any>([[seed.id, structuredClone(seed)]]);
+  const payments: any[] = [];
+  const s: any = {
+    getProfile: async (id: string) => (profiles.get(id) ? structuredClone(profiles.get(id)) : undefined),
+    updateProfile: async (id: string, patch: any) => {
+      const p = profiles.get(id); if (!p) return undefined;
+      const next = { ...p, ...patch, fields: { ...p.fields, ...(patch.fields || {}) } };
+      profiles.set(id, next); return structuredClone(next);
+    },
+    mutateProfileFields: async (id: string, fn: any) => {
+      const p = profiles.get(id); if (!p) return undefined;
+      const patch = fn(structuredClone(p)); return patch ? s.updateProfile(id, patch) : structuredClone(p);
+    },
+    claimBillOccurrence: async (id: string, date: string, stamp: any, extra: any) => {
+      const p = profiles.get(id); const prior = p.fields.occurrences || {};
+      if (prior[date]?.status === "paid") return { status: "already-paid", occurrences: prior };
+      await s.updateProfile(id, { fields: { ...extra, occurrences: { ...prior, [date]: { ...(prior[date] || {}), ...stamp } } } });
+      return { status: "claimed", occurrences: prior };
+    },
+    createLiabilityPayment: async (d: any) => { const row = { id: d.id || `pay-${payments.length + 1}`, ...d }; payments.push(row); return row; },
+    getLiabilityPayment: async (id: string) => payments.find((p) => p.id === id),
+    getLiabilityPayments: async () => payments.slice(),
+    getTasks: async () => [],
+    createExpense: async () => ({ id: "exp-1" }),
+  };
+  return { s, payments, profiles };
+}
+describe("D184: a loan payment leaves the advanced due date and the occurrence stamp in place", () => {
+  it("standard payment: due date moves one cycle and STAYS moved after the balance write", async () => {
+    const { s, profiles } = payStorage({ id: "loan-1", name: "Loan", type: "liability", type_key: "loan", fields: { currentBalance: 5000, interestRate: 6, monthlyPayment: 200, dueDate: "2026-09-06", nextDueDate: "2026-09-06", frequency: "monthly" } });
+    const out = await payBillOccurrence(s, "loan-1", { amount: 200, paymentDate: "2026-09-03" }, "UTC");
+    expect(out.ok).toBe(true);
+    const f = profiles.get("loan-1").fields;
+    expect(f.dueDate).toBe("2026-10-06");
+    expect(f.occurrences["2026-09-06"].status).toBe("paid");
+    expect(f.currentBalance).toBeLessThan(5000);
+    expect(f.currentBalance).toBeGreaterThan(4800);
+  });
+});
+describe("D183: a second, different payment on a settled occurrence is recorded, not folded into the first", () => {
+  it("an extra-principal payment after the regular one: two rows, balance down by both, due date untouched", async () => {
+    const { s, payments, profiles } = payStorage({ id: "loan-1", name: "Loan", type: "liability", type_key: "loan", fields: { currentBalance: 5000, interestRate: 6, monthlyPayment: 200, dueDate: "2026-09-06", nextDueDate: "2026-09-06", frequency: "monthly" } });
+    const first = await payBillOccurrence(s, "loan-1", { amount: 200, paymentDate: "2026-09-03" }, "UTC");
+    const after1 = profiles.get("loan-1").fields.currentBalance;
+    const extra = await payBillOccurrence(s, "loan-1", { amount: 100, paymentDate: "2026-09-03", paymentType: "extra_principal" }, "UTC");
+    expect(extra.ok).toBe(true);
+    expect(extra.deduped).toBeFalsy();
+    expect(extra.dueDateAdvanced).toBe(false);
+    expect(payments).toHaveLength(2);
+    expect(profiles.get("loan-1").fields.dueDate).toBe("2026-10-06");
+    expect(profiles.get("loan-1").fields.currentBalance).toBeCloseTo(after1 - 100, 2);
+    expect(first.payment.id).not.toBe(extra.payment.id);
+  });
+  it("loan without a due date: 100 then 300 the same day are two payments; the same 300 again seconds later is the double tap", async () => {
+    const { s, payments, profiles } = payStorage({ id: "loan-2", name: "Loan", type: "liability", type_key: "loan", fields: { currentBalance: 5000, interestRate: 6, monthlyPayment: 200 } });
+    await payBillOccurrence(s, "loan-2", { amount: 100, paymentDate: "2026-09-03", paymentType: "extra_principal" }, "UTC");
+    const second = await payBillOccurrence(s, "loan-2", { amount: 300, paymentDate: "2026-09-03" }, "UTC");
+    expect(second.deduped).toBeFalsy();
+    const tap = await payBillOccurrence(s, "loan-2", { amount: 300, paymentDate: "2026-09-03" }, "UTC");
+    expect(tap.deduped).toBe(true);
+    expect(tap.payment?.id).toBe(second.payment?.id);
+    expect(payments).toHaveLength(2);
+    expect(profiles.get("loan-2").fields.currentBalance).toBeCloseTo(5000 - 100 - second.payment.principalPortion, 2);
+  });
+  it("a bill paid in two goes: the second part is a payment of its own on the same occurrence", async () => {
+    const { s, payments, profiles } = payStorage({ id: "bill-1", name: "Power", type: "liability", type_key: "utility", fields: { monthlyAmount: 100, amount: 100, dueDate: "2026-09-10", nextDueDate: "2026-09-10", frequency: "monthly", autoLogExpense: false } });
+    const a = await payBillOccurrence(s, "bill-1", { amount: 60, occurrenceDate: "2026-09-10", paymentDate: "2026-09-03" }, "UTC");
+    const b = await payBillOccurrence(s, "bill-1", { amount: 40, occurrenceDate: "2026-09-10", paymentDate: "2026-09-04" }, "UTC");
+    expect(a.ok && b.ok).toBe(true);
+    expect(b.deduped).toBeFalsy();
+    expect(b.additional).toBe(true);
+    expect(payments.map((p) => p.amount)).toEqual([60, 40]);
+    expect(profiles.get("bill-1").fields.dueDate).toBe("2026-10-10");
+  });
+});
+describe("D182: an account adjustment applies its delta to the balance the write lands on", () => {
+  it("mutateProfileFields re-plans from the fresh row when the guarded write misses", async () => {
+    let reads = 0;
+    const at = (balance: number, updatedAt: string) => ({ id: "acct-1", type: "account", name: "Checking", fields: { balance, currentValue: balance, accountKind: "checking" }, updatedAt });
+    // read 1: the account guard; read 2: the first plan (1000); read 3: after the miss (another writer left 900)
+    const rows = [at(1000, "2026-09-03T00:00:00Z"), at(1000, "2026-09-03T00:00:00Z"), at(900, "2026-09-03T00:00:01Z")];
+    let updates = 0;
+    const { client, calls } = chainClient((table, op) => {
+      if (table !== "profiles") return { data: [], error: null };
+      if (op === "update") { updates++; return updates === 1 ? { data: [], error: null } : { data: [{ id: "acct-1" }], error: null }; }
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client, getProfile: async () => rows[Math.min(reads++, 2)], clearRequestMemo: () => {}, healOwnerPrefixedProfileNames: (x: any) => x, setOwners: async () => undefined, applyOwnershipPatch: async () => undefined, bumpDataVersion: async () => undefined });
+    await s.adjustAccountBalance("acct-1", { delta: -50, source: "user" });
+    const ups = calls.filter((c) => c.table === "profiles" && c.op === "update");
+    expect(ups).toHaveLength(2);
+    expect(ups[0].payload.fields.balance).toBe(950);
+    expect(ups[0].filters).toEqual(expect.arrayContaining([["eq", ["updated_at", "2026-09-03T00:00:00Z"]]]));
+    expect(ups[1].payload.fields.balance).toBe(850);
+    expect(ups[1].filters).toEqual(expect.arrayContaining([["eq", ["updated_at", "2026-09-03T00:00:01Z"]]]));
+    expect(ups[1].payload.fields.balanceHistory).toHaveLength(1);
+    expect(ups[1].payload.fields.balanceHistory[0]).toMatchObject({ previousBalance: 900, newBalance: 850, delta: -50 });
+  });
+});

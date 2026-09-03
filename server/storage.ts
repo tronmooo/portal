@@ -68,6 +68,8 @@ export interface IStorage {
   updateProfile(id: string, data: Partial<Profile>): Promise<Profile | undefined>;
   /** Optional compare-and-set claim of a bill occurrence (see SupabaseStorage). */
   claimBillOccurrence?(liabilityId: string, occurrenceDate: string, stamp: Record<string, any>, extraFields: Record<string, any>): Promise<{ status: "claimed" | "already-paid"; occurrences: Record<string, any> }>;
+  /** Optional read-modify-write whose patch is recomputed from the fresh row on every retry (see SupabaseStorage). */
+  mutateProfileFields?(id: string, fn: (fresh: Profile) => Partial<Profile> | null): Promise<Profile | undefined>;
   deleteProfile(id: string): Promise<boolean>;
   linkProfileTo(profileId: string, entityType: string, entityId: string): Promise<void>;
   unlinkProfileFrom(profileId: string, entityType: string, entityId: string): Promise<void>;
@@ -1980,6 +1982,13 @@ export class MemStorage implements IStorage {
     this.profiles.set(id, p);
     return this.getLiabilitySchedule(id);
   }
+  async mutateProfileFields(id: string, fn: (fresh: Profile) => Partial<Profile> | null): Promise<Profile | undefined> {
+    const fresh = await this.getProfile(id);
+    if (!fresh) return undefined;
+    const patch = fn(fresh);
+    return patch ? this.updateProfile(id, patch) : fresh;
+  }
+
   async adjustAccountBalance(id: string, input: {
     newBalance?: number | null; delta?: number | null; date?: string | null;
     reason?: string | null; source?: any; linkedRecordId?: string | null;

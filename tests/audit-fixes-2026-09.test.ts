@@ -340,7 +340,9 @@ describe("payBillOccurrence: concurrent payers settle one occurrence once", () =
       createExpense: async (e: any) => { const row = { id: `e${expenses.length + 1}`, ...e }; expenses.push(row); return row; },
       claimBillOccurrence: async (id: string, date: string, stamp: any, extra: any) => {
         claims.push({ id, date, stamp, extra });
-        if (opts.claimResult === "already-paid") return { status: "already-paid", occurrences: { [date]: { status: "paid", paymentId: "winner-1" } } };
+        // The concurrent winner's stamp: the same money, seconds ago (a stamp
+        // without these is a settled occurrence a LATER payment lands beside).
+        if (opts.claimResult === "already-paid") return { status: "already-paid", occurrences: { [date]: { status: "paid", paymentId: "winner-1", amount: 40, postedAt: new Date().toISOString() } } };
         bill.fields = { ...bill.fields, ...extra, occurrences: { [date]: stamp } };
         return { status: "claimed", occurrences: {} };
       },
