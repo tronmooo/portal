@@ -1054,3 +1054,31 @@ describe("D180: a restore brings a record's entity links back with it", () => {
     expect(await bareStorage({ supabase: client }).getEntityLinks("profile", P)).toEqual([]);
   });
 });
+
+// ─── D181: parallel field edits to one tracker entry both land ───────────────
+describe("D181: a tracker entry edit is a compare-and-swap on updated_at", () => {
+  const BP = { id: "t1", name: "BP", category: "health", unit: "mmHg", fields: [{ name: "systolic", type: "number", isPrimary: true }, { name: "diastolic", type: "number" }] };
+  const base = { id: "e1", tracker_id: "t1", entry_values: { systolic: 120, diastolic: 80 }, computed: { validated: true }, timestamp: "2026-09-01T12:00:00Z", updated_at: "2026-09-01T12:00:00Z" };
+  it("retries from the fresh row when the swap misses, keeping the other writer's field", async () => {
+    let reads = 0, updates = 0;
+    const { client, calls } = chainClient((table, op, payload) => {
+      if (table !== "tracker_entries") return { data: [], error: null };
+      if (op === "update") { updates++; return updates === 1 ? { data: [], error: null } : { data: [{ ...base, ...payload }], error: null }; }
+      reads++;
+      return { data: [reads === 1 ? base : { ...base, entry_values: { systolic: 120, diastolic: 91 }, updated_at: "2026-09-01T12:00:05Z" }], error: null };
+    });
+    const s = bareStorage({ supabase: client, getTracker: async () => BP });
+    const out = await s.updateTrackerEntry("t1", "e1", { values: { systolic: 131 } });
+    expect(out.values).toEqual({ systolic: 131, diastolic: 91 });
+    const ups = calls.filter((c) => c.table === "tracker_entries" && c.op === "update");
+    expect(ups).toHaveLength(2);
+    expect(ups[0].filters).toEqual(expect.arrayContaining([["eq", ["updated_at", "2026-09-01T12:00:00Z"]], ["eq", ["user_id", s.userId]]]));
+    expect(ups[1].filters).toEqual(expect.arrayContaining([["eq", ["updated_at", "2026-09-01T12:00:05Z"]]]));
+    expect(ups[1].payload.entry_values).toEqual({ systolic: 131, diastolic: 91 });
+  });
+  it("gives up with an error, never a silent overwrite, when the row keeps moving", async () => {
+    const { client } = chainClient((table, op) => table === "tracker_entries" && op === "update" ? { data: [], error: null } : { data: [base], error: null });
+    const s = bareStorage({ supabase: client, getTracker: async () => BP });
+    await expect(s.updateTrackerEntry("t1", "e1", { values: { systolic: 131 } })).rejects.toThrow(/colliding/);
+  });
+});

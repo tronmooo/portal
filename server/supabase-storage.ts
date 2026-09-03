@@ -3370,8 +3370,10 @@ export class SupabaseStorage implements IStorage {
     // reserved word and was renamed). logEntry + rowToTrackerEntry already use
     // `entry_values`; this method used to read/write `values`, so EVERY edit
     // failed with a column error → the route returned "404 Entry not found".
+    if (patch.timestamp) this.assertEntryNotInFuture(patch.timestamp);
+    const buildUpdate = (row: any) => {
     const mergedValues = mergeAndApplyDeletes(
-      existing.entry_values || {},
+      row.entry_values || {},
       patchValues,
       patch.valuesToDelete
     );
@@ -3379,23 +3381,42 @@ export class SupabaseStorage implements IStorage {
     if (patch.notes !== undefined) update.notes = patch.notes;
     if (patch.mood !== undefined) update.mood = patch.mood;
     if (patch.tags !== undefined) update.tags = patch.tags;
-    if (patch.timestamp) { this.assertEntryNotInFuture(patch.timestamp); update.timestamp = patch.timestamp; }
+    if (patch.timestamp) update.timestamp = patch.timestamp;
     // Recompute derived/computed data from the new values so badges (BP
     // category, sleep quality, pace, calories, etc.) stay correct after an edit.
     try {
       if (tracker) {
         update.computed = {
           ...computeSecondaryData(tracker.name, tracker.category, mergedValues),
-          validated: (existing.computed && existing.computed.validated) ?? true,
+          validated: (row.computed && row.computed.validated) ?? true,
         };
       }
     } catch { /* leave computed untouched if recompute fails */ }
-    const { data, error } = await this.supabase.from("tracker_entries").update(update)
-      .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId)
-      .select().maybeSingle();
-    if (error || !data) return undefined;
-    bustInsightsCacheFor(this.userId); // [P0] entry changed → recompute insights
-    return this.rowToTrackerEntry(data);
+    return update;
+    };
+    // Written only if nobody wrote the row since it was read (compare-and-swap
+    // on updated_at, retried from the fresh row): two field edits in flight
+    // together used to merge against the same stale values, and the later
+    // write put the earlier field back.
+    let fresh: any = existing;
+    for (let attempt = 0; ; attempt++) {
+      const update = buildUpdate(fresh);
+      let q = this.supabase.from("tracker_entries").update({ ...update, updated_at: new Date().toISOString() })
+        .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId);
+      q = fresh.updated_at == null ? q.is("updated_at", null) : q.eq("updated_at", fresh.updated_at);
+      const { data, error } = await q.select().maybeSingle();
+      if (error) return undefined;
+      if (data) {
+        bustInsightsCacheFor(this.userId); // [P0] entry changed → recompute insights
+        return this.rowToTrackerEntry(data);
+      }
+      if (attempt >= 7) throw new Error("Entry edit kept colliding with another writer; try again");
+      const { data: again, error: reread } = await this.supabase.from("tracker_entries")
+        .select("*").eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId).maybeSingle();
+      if (reread || !again) return undefined;
+      fresh = again;
+      await new Promise((r) => setTimeout(r, 10 + attempt * 20));
+    }
   }
 
   async deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean> {
