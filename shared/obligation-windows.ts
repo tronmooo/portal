@@ -12,6 +12,8 @@
 // page — MUST import from this module. Inline 4.33/2.17 or hardcoded
 // 7/30 day constants are bugs.
 
+import { getUserCurrentMonth } from "./timezone";
+
 export const UPCOMING_BILL_WINDOW_DAYS = 30;
 export const MS_PER_DAY = 86_400_000;
 
@@ -165,6 +167,21 @@ export function sumMonthlyIncome(incomes: ReadonlyArray<{ amount?: number | stri
   let total = 0;
   for (const i of incomes || []) total += toMonthlyAmount(Number(i?.amount) || 0, i?.frequency);
   return total;
+}
+
+/**
+ * This month's monthly-equivalent income, in the user's zone — the figure the
+ * Income tile, the savings rate and the KPI strips show. A job that starts
+ * next month is not this month's income: `sumMonthlyIncome` counted every
+ * income regardless of its first pay day, so adding next month's paycheck
+ * inflated this month's income and savings rate on every surface while the
+ * Cash Flow Trend (which reads per month) left it out.
+ */
+export function sumMonthlyIncomeNow(
+  incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null; date?: string | null }> | null | undefined,
+  timezone: string,
+): number {
+  return sumMonthlyIncomeForMonth(incomes, getUserCurrentMonth(timezone));
 }
 
 /**

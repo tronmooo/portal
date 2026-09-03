@@ -1791,3 +1791,22 @@ describe("D213: changedFieldsOnly", () => {
     expect(changedFieldsOnly(undefined, { a: 1 })).toEqual({ a: 1 });
   });
 });
+
+// ─── D215: this month's income leaves out a job that starts next month ───────
+import { sumMonthlyIncome, sumMonthlyIncomeNow } from "../shared/obligation-windows";
+import { getUserCurrentMonth as curMonth } from "../shared/timezone";
+describe("D215: sumMonthlyIncomeNow", () => {
+  it("counts undated and already-started incomes, not one first dated next month", () => {
+    const ym = curMonth(TZ);
+    const [y, m] = ym.split("-").map(Number);
+    const next = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, "0")}-05`;
+    const prev = `${m === 1 ? y - 1 : y}-${String(m === 1 ? 12 : m - 1).padStart(2, "0")}-05`;
+    const incomes = [
+      { amount: 4000, frequency: "monthly", date: prev },
+      { amount: 1000, frequency: "monthly" },
+      { amount: 5000, frequency: "monthly", date: next },
+    ];
+    expect(sumMonthlyIncome(incomes)).toBe(10000);
+    expect(sumMonthlyIncomeNow(incomes, TZ)).toBe(5000);
+  });
+});

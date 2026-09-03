@@ -15,7 +15,7 @@ import { useShowTestData } from "@/lib/showTestData";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
-import { toMonthlyAmount, sumMonthlyIncome } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -1125,7 +1125,7 @@ export default function FinancePage() {
           : (typeof snap.spendTrend === "number" ? null : null);
 
         // Cash flow: monthly income vs (month spend + monthlyized bills).
-        const monthlyIncome = sumMonthlyIncome(incomes || []);
+        const monthlyIncome = sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const cashOut = spendMtd + Number(snap.monthlyObligationTotal || 0);
         const savingsRate = monthlyIncome > 0 ? Math.round(((monthlyIncome - spendMtd) / monthlyIncome) * 100) : null;
@@ -1212,7 +1212,7 @@ export default function FinancePage() {
       {(() => {
         const fc: "all" | "selected" | "everyone" = (filterMode === "selected" ? "selected" : "everyone");
         const snap = enhanced?.financeSnapshot || {};
-        const monthlyIncome = sumMonthlyIncome(incomes || []);
+        const monthlyIncome = sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const recurringOut = Number(snap.monthlyObligationTotal || 0);
         const spendByCat: Record<string, number> = snap.spendByCategory || {};
