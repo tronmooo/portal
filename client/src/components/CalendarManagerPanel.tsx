@@ -22,13 +22,14 @@
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { BROWSER_TIMEZONE, queryClient, apiRequest } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { useProfileScope, profileScopeParam } from "@/hooks/useProfileScope";
 import { scopedKey } from "@shared/query-keys";
 import { withFullLimit } from "@/lib/list-limit";
 import { formatApiError } from "@/lib/formatError";
 import { addMonthsClamped } from "@shared/date-math";
+import { parseQuickWhen } from "@shared/timezone";
 import { useToast } from "@/hooks/use-toast";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -107,9 +108,13 @@ function parseQuickAdd(text: string): { kind: "obligation" | "event" | "task"; p
   else if (/passport|license|expir/.test(t)) kindGuess = "doc_expiration";
 
   // Date hints — pick out a date if present, else first-of-next-month for obligations
-  let dueDate: string | null = null;
+  // Everyday words ("tomorrow at 3pm", "next friday", "in 3 days", "Sept 4
+  // 10:30") → a day and a clock time in the user's zone, stripped from the
+  // title. Explicit "YYYY-MM-DD" and "on the 15th" keep working below.
+  const when = parseQuickWhen(text, BROWSER_TIMEZONE);
+  let dueDate: string | null = when.date || null;
   const dateMatch = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-  if (dateMatch) dueDate = dateMatch[1];
+  if (!dueDate && dateMatch) dueDate = dateMatch[1];
   const dayOfMonthMatch = t.match(/on\s+the\s+(\d{1,2})(?:st|nd|rd|th)?/);
   if (!dueDate && dayOfMonthMatch) {
     // Keep the user's real day-of-month (1–31). It used to be capped at 28,
@@ -128,7 +133,7 @@ function parseQuickAdd(text: string): { kind: "obligation" | "event" | "task"; p
   }
 
   // Extract a clean name: strip the amount, frequency phrase, and date phrase
-  let name = text
+  let name = when.rest
     .replace(/\$\s*[\d,]+(?:\.\d{1,2})?/g, "")
     .replace(/every\s+\w+(?:\s+\w+)?/gi, "")
     .replace(/on\s+the\s+\d{1,2}(?:st|nd|rd|th)?/gi, "")
@@ -158,7 +163,7 @@ function parseQuickAdd(text: string): { kind: "obligation" | "event" | "task"; p
   return {
     kind: "event",
     payload: {
-      title: name, date: dueDate, allDay: true,
+      title: name, date: dueDate, allDay: !when.time, ...(when.time ? { time: when.time } : {}),
       category: kindGuess === "appointment" ? "health" : "personal",
       recurrence: "none",
       source: "manual",

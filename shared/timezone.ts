@@ -447,3 +447,85 @@ export function getTimezoneLabel(timezone: string = DEFAULT_TIMEZONE): string {
   };
   return map[timezone] || timezone.replace(/_/g, ' ');
 }
+
+// ─── Quick-add "when" ───────────────────────────────────────────────────────
+//
+// The calendar manager's quick-add ("haircut tomorrow at 3pm") only knew
+// "YYYY-MM-DD" and "on the 15th", so everything else landed TODAY as an
+// all-day event with the whole sentence as its title. This is the one
+// place that turns the everyday words into a day and a clock time, in the
+// user's zone, and hands back the sentence with those words removed.
+
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+export interface QuickWhen {
+  /** YYYY-MM-DD in the user's zone, when the text named a day. */
+  date?: string;
+  /** HH:MM (24h), when the text named a clock time. */
+  time?: string;
+  /** The text with the day/time words removed (for the title). */
+  rest: string;
+}
+
+export function parseQuickWhen(raw: string, timezone: string = DEFAULT_TIMEZONE): QuickWhen {
+  let text = String(raw || "");
+  let date: string | undefined;
+  let time: string | undefined;
+  const today = getUserToday(timezone);
+  const cut = (m: RegExpMatchArray) => { text = text.slice(0, m.index!) + " " + text.slice(m.index! + m[0].length); };
+
+  // Clock time: "at 3pm", "3:30 pm", "15:00", "noon", "midnight".
+  let m = text.match(/(?:\bat\s+)?\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b/i)
+    || text.match(/(?:\bat\s+)?\b(\d{1,2}):(\d{2})\b(?!\s*(?:am|pm))/i);
+  if (m) {
+    const h = Number(m[1]), mm = m[2] ? Number(m[2]) : 0;
+    const mer = (m[3] || "").toLowerCase().replace(/\./g, "");
+    const hh = mer === "pm" ? (h % 12) + 12 : mer === "am" ? h % 12 : h;
+    if (hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59 && (mer || m[2])) { time = `${pad2(hh)}:${pad2(mm)}`; cut(m); }
+  }
+  if (!time) {
+    m = text.match(/\b(?:at\s+)?(noon|midnight|midday)\b/i);
+    if (m) { time = /noon|midday/i.test(m[1]) ? "12:00" : "00:00"; cut(m); }
+  }
+
+  // Day words.
+  const rel: Array<[RegExp, (mm: RegExpMatchArray) => string]> = [
+    [/\b(?:the\s+)?day\s+after\s+tomorrow\b/i, () => addDays(today, 2)],
+    [/\btomorrow\b/i, () => addDays(today, 1)],
+    [/\b(?:today|tonight|this\s+(?:morning|afternoon|evening))\b/i, () => today],
+    [/\byesterday\b/i, () => addDays(today, -1)],
+    [/\bin\s+(\d{1,3})\s+days?\b/i, (mm) => addDays(today, Number(mm[1]))],
+    [/\bin\s+(a|one|\d{1,2})\s+weeks?\b/i, (mm) => addDays(today, 7 * (/^\d/.test(mm[1]) ? Number(mm[1]) : 1))],
+    [/\bnext\s+week\b/i, () => addDays(today, 7)],
+  ];
+  for (const [re, fn] of rel) {
+    const mm = text.match(re);
+    if (mm) { date = fn(mm); cut(mm); break; }
+  }
+  if (!date) {
+    const wd = text.match(/\b(next|this)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+    if (wd) {
+      const target = WEEKDAYS.indexOf(wd[2].toLowerCase());
+      const todayDow = new Date(`${today}T12:00:00Z`).getUTCDay();
+      let delta = (target - todayDow + 7) % 7;
+      if (wd[1] && wd[1].toLowerCase() === "next" && delta === 0) delta = 7;
+      date = addDays(today, delta);
+      cut(wd);
+    }
+  }
+  if (!date) {
+    const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+    if (iso) { date = iso[1]; cut(iso); }
+  }
+  if (!date) {
+    const monthNames = Object.keys(MONTH_NUMBERS).join("|");
+    const nat = text.match(new RegExp(`\\b(?:on\\s+)?((?:${monthNames})\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s*\\d{4})?|\\d{1,2}(?:st|nd|rd|th)?\\s+(?:${monthNames})\\.?(?:,?\\s*\\d{4})?|\\d{1,2}[/-]\\d{1,2}(?:[/-]\\d{2,4})?)\\b`, "i"));
+    if (nat) {
+      const parsed = parseNaturalCalendarDate(nat[1], timezone);
+      if (parsed) { date = parsed.date; cut(nat); }
+    }
+  }
+
+  const rest = text.replace(/\s+/g, " ").replace(/\s+(at|on|,)\s*$/i, "").replace(/^\s*(at|on)\s+/i, "").trim();
+  return { date, time, rest };
+}

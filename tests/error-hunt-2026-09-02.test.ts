@@ -528,3 +528,30 @@ describe("D123: liability co-ownership widens the selection like asset co-owners
     }
   });
 });
+
+// D137 — the calendar manager's quick-add knew only "YYYY-MM-DD" and "on the
+// 15th"; "haircut tomorrow at 3pm" became an all-day event TODAY titled
+// with the whole sentence.
+import { parseQuickWhen } from "../shared/timezone";
+describe("D137: quick-add day and time words resolve in the user's zone", () => {
+  const tz = "America/Los_Angeles";
+  const fixed = (iso: string) => { vi.useFakeTimers(); vi.setSystemTime(new Date(iso)); };
+  afterEach(() => { vi.useRealTimers(); });
+  it("tomorrow at 3pm (evening in LA, already next day in UTC)", () => {
+    fixed("2026-09-03T01:30:00Z"); // Sep 2 18:30 LA
+    expect(parseQuickWhen("haircut tomorrow at 3pm", tz)).toEqual({ date: "2026-09-03", time: "15:00", rest: "haircut" });
+  });
+  it("weekdays, relative spans and explicit dates", () => {
+    fixed("2026-09-02T20:00:00Z"); // Wednesday Sep 2 in LA
+    expect(parseQuickWhen("dentist next friday 10:30am", tz)).toEqual({ date: "2026-09-04", time: "10:30", rest: "dentist" });
+    expect(parseQuickWhen("call mom this wednesday", tz).date).toBe("2026-09-02");
+    expect(parseQuickWhen("call mom next wednesday", tz).date).toBe("2026-09-09");
+    expect(parseQuickWhen("renew passport in 3 days", tz)).toEqual({ date: "2026-09-05", time: undefined, rest: "renew passport" });
+    expect(parseQuickWhen("flight on Sept 14 at noon", tz)).toEqual({ date: "2026-09-14", time: "12:00", rest: "flight" });
+    expect(parseQuickWhen("team sync 2026-10-01 15:00", tz)).toEqual({ date: "2026-10-01", time: "15:00", rest: "team sync" });
+  });
+  it("no day words → no date, text untouched; a bare number is not a time", () => {
+    expect(parseQuickWhen("buy 3 apples", tz)).toEqual({ date: undefined, time: undefined, rest: "buy 3 apples" });
+    expect(parseQuickWhen("rent $1200 monthly", tz).date).toBeUndefined();
+  });
+});
