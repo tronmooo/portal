@@ -355,6 +355,9 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
+### Revoking a co-signer (probe s152) — verified after D207
+While co-signed, Linda's bills list, snapshot, timeline and bell all carry the overdue bill; once the party link is removed, none of them do.
+
 ### A co-signed bill under the co-signer's scope (probes s150, s150b, s150c) — verified after D207
 With Linda added as co-signer on a bill whose parent is the Self: her bills list, finance snapshot, calendar timeline and bell all list it (before the fix only the profiles list did); paying it records one payment. The probe's "liabilities list" column reads a route that does not exist (the liabilities page reads profiles, which listed the bill throughout).
 
