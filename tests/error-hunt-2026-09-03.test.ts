@@ -1376,3 +1376,19 @@ describe("D194: retracting a spawned occurrence only removes an untouched clone"
     }
   });
 });
+
+// ─── D195: a version conflict on a habit or goal edit answers 409, not 500 ──
+describe("D195: habit and goal edit routes pass a typed refusal through", () => {
+  it("a 409 from the storage reaches the client as 409 with its message", async () => {
+    const conflict = () => { throw Object.assign(new Error("This record was changed by someone else; reload and try again"), { statusCode: 409 }); };
+    const booted = await boot({}, (storage) => { storage.updateHabit = async () => conflict(); storage.updateGoal = async () => conflict(); storage.getHabit = async () => ({ id: "h-1", name: "Stretch", frequency: "daily" }); storage.getGoal = async () => ({ id: "g-1", title: "Read", type: "custom", target: 10, current: 0, status: "active" }); });
+    try {
+      const h = await booted.api("PATCH", "/api/habits/h-1", { name: "Stretch more", expectedUpdatedAt: "2026-09-01T00:00:00Z" });
+      expect(h.status).toBe(409);
+      expect(h.data?.error).toMatch(/changed by someone else/);
+      const g = await booted.api("PATCH", "/api/goals/g-1", { title: "Read more", expectedUpdatedAt: "2026-09-01T00:00:00Z" });
+      expect(g.status).toBe(409);
+      expect(g.data?.error).toMatch(/changed by someone else/);
+    } finally { await booted.close(); }
+  });
+});

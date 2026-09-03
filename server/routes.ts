@@ -7563,7 +7563,12 @@ Rules:
       const uid_h4 = cacheUserKey(req as AuthenticatedRequest);
       bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`);
       res.json(result);
-    } catch (e: any) { console.error("[habits]", e?.message || e); res.status(500).json({ error: "Failed to update habit" }); }
+    } catch (e: any) {
+      // A typed refusal (a 409 version conflict, a 400 from the storage) is
+      // the answer, not a server fault: let the handler map it.
+      if (Number(e?.statusCode) >= 400 && Number(e?.statusCode) < 500) throw e;
+      console.error("[habits]", e?.message || e); res.status(500).json({ error: "Failed to update habit" });
+    }
   }));
   app.delete("/api/habits/:id", asyncHandler(async (req, res) => {
     const existing = await storage.getHabit(req.params.id);
@@ -8517,7 +8522,10 @@ Rules:
       const result = await storage.updateMemory(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Memory not found" });
       res.json(result);
-    } catch (e: any) { console.error("[memories]", e?.message || e); res.status(500).json({ error: "Failed to update memory" }); }
+    } catch (e: any) {
+      if (Number(e?.statusCode) >= 400 && Number(e?.statusCode) < 500) throw e;
+      console.error("[memories]", e?.message || e); res.status(500).json({ error: "Failed to update memory" });
+    }
   }));
   app.delete("/api/memories/:id", asyncHandler(async (req, res) => {
     // Single-call delete — storage.deleteMemory uses .select() to detect
@@ -9839,6 +9847,7 @@ No emojis. No prose outside the JSON.`,
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       res.json(goal);
     } catch (err: any) {
+      if (Number(err?.statusCode) >= 400 && Number(err?.statusCode) < 500) throw err;
       console.error("Update goal error:", err);
       res.status(500).json({ error: "Failed to update goal" });
     }
