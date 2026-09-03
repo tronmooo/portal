@@ -317,6 +317,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Scoped browser crawl under the Linda scope (07:15 UTC) — clean
+Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses; the strip and counts reflect Linda's own (currently empty) records.
+
 ### Browser crawl of every top-level route on the current build (07:09 UTC) — clean
 Nineteen routes (dashboard, finance, tasks, habits, trackers, calendar, goals, journal, wellness, insights, profiles, liabilities, obligations, documents, artifacts, chat, settings, health, linked) visited as user A after today's server changes: no console errors or warnings, no page errors, no failed requests, no 4xx/5xx API responses, and no "NaN", "undefined", "Invalid Date", "[object Object]", "$-" or "Infinity" in any page's text.
 
