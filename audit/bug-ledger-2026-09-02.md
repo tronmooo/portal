@@ -801,3 +801,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s165: the finance snapshot's `totalMonthlySpend` equals the sum of this month's expenses and `spendByCategory` sums to it (2/2). A leftover probe income ("Acme s128") is test residue on the replica, not app data.
 - s166: a $30 food expense added today raises the food bucket by 30; recategorising moves it to transport; redating it to last month removes it from this month; back to today at $45 shows +45; deleting restores the buckets (5/5).
 - flows18 (after D215): the Finance "Income · MTD" tile reads $6,500 before and after adding a 5,000/month income first dated next month (3/3, no page errors). Before the fix the same tile rose by 5,000.
+
+### Browser crawl after D208–D218 — verified
+- crawl.mjs: all 19 routes (dashboard, finance, tasks, habits, trackers, calendar, goals, journal, wellness, insights, profiles, liabilities, obligations, documents, artifacts, chat, settings, health, linked) load with no page errors and no 5xx.
+- scoped.mjs (Linda Carter's scope): net worth 0, cash flow −24, tasks due 0; the −24 is Linda's one linked expense ("Linda pharmacy" 23.50, probe residue), so the scoped strip is right. No failures, no leaks.
