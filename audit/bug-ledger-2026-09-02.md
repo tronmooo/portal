@@ -329,6 +329,21 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Search freshness and trash (probe s107) — verified working
+A renamed task is found by its new title right away and no longer by the old one; a trashed task and a trashed document are not returned by search.
+
+### Re-homing to a missing profile (probe s105) — verified working
+A task or expense cannot be moved to, or created for, a profile id that does not exist.
+
+### Impossible calendar days everywhere (probe s106) — verified working
+A task due date (create and edit), an expense date, an income date, an event date, a habit start date and a goal deadline of "2026-02-30" are all refused with 400.
+
+### Deleting a person (probe s104) — verified working
+Deleting a person leaves a co-owned task to its remaining owner, removes the records only they owned (task, expense, document answer 404, nothing is left ownerless) and drops the entity link that pointed at them.
+
+### Bill reminder tasks across due-scan runs (probe s103) — verified working
+A non-autopay bill due in two days gets one "Bill due" task across two due-scan runs; paying the bill closes the task and a later run neither re-opens nor re-creates it.
+
 ### Tracker totals across local midnight (probe s102) — verified working
 A water entry at 23:30 last night (America/Los_Angeles) stays on yesterday; today's total counts only the 00:30 entry, and the two entries sit on two local days.
 
