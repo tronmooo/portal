@@ -563,3 +563,44 @@ describe("D157: an impossible calendar day is refused on documents and profile f
     expect(writes[0].extractedData.expirationDate).toBe("2028-02-29");
   });
 });
+
+// ─── D158: a restored backup keeps what the backup carries ──────────────────
+describe("D158: /api/import restores status, times, ends, progress, schedule and the journal", () => {
+  it("passes every carried field to the storage writers", async () => {
+    const calls: Record<string, any[]> = {};
+    const rec = (k: string) => (...a: any[]) => { (calls[k] ||= []).push(a); return { id: `${k}-${calls[k].length}`, current: 0, status: "active", ...a[0] }; };
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.createTask = async (d: any) => rec("createTask")(d);
+      storage.createEvent = async (d: any) => rec("createEvent")(d);
+      storage.createGoal = async (d: any) => ({ ...rec("createGoal")(d), current: 0, status: "active" });
+      storage.updateGoal = async (id: string, patch: any) => rec("updateGoal")(id, patch);
+      storage.createJournalEntry = async (d: any) => rec("createJournalEntry")(d);
+      storage.createHabit = async (d: any) => rec("createHabit")(d);
+      storage.createIncome = async (d: any) => rec("createIncome")(d);
+    });
+    const r = await h.api("POST", "/api/import", {
+      version: 1,
+      tasks: [{ title: "Chore", dueDate: "2026-09-01", dueTime: "09:30", status: "done", completedAt: "2026-09-01T17:00:00.000Z", linkedProfiles: ["self-1"] }],
+      events: [{ title: "Trip", date: "2026-09-05", endDate: "2026-09-07", allDay: true, recurrence: "none" }, { title: "Yoga", date: "2026-09-03", time: "07:00", endTime: "08:00", recurrence: "weekly", recurrenceEnd: "2026-09-24" }],
+      goals: [{ title: "Pts", type: "custom", target: 100, current: 40, unit: "pts", status: "completed" }, { title: "Fresh", type: "custom", target: 10, unit: "x" }],
+      journal: [{ date: "2026-08-30", mood: "good", content: "restored" }],
+      habits: [{ name: "Gym", frequency: "weekly", targetDays: [1, 3], targetPerDay: 1, timeOfDay: "morning", scheduledTime: "07:00", checkins: [] }],
+    });
+    expect(r.status).toBe(200);
+    expect(calls.createTask[0][0]).toMatchObject({ title: "Chore", dueTime: "09:30", status: "done", completedAt: "2026-09-01T17:00:00.000Z" });
+    expect(calls.createEvent[0][0]).toMatchObject({ title: "Trip", endDate: "2026-09-07" });
+    expect(calls.createEvent[1][0]).toMatchObject({ title: "Yoga", recurrence: "weekly", recurrenceEnd: "2026-09-24" });
+    expect(calls.updateGoal).toEqual([["createGoal-1", { current: 40, status: "completed" }]]);
+    expect(calls.createJournalEntry[0][0]).toMatchObject({ date: "2026-08-30", mood: "good", content: "restored" });
+    expect(calls.createHabit[0][0]).toMatchObject({ name: "Gym", targetDays: [1, 3], timeOfDay: "morning", scheduledTime: "07:00" });
+  });
+  it("storage folds a category and a cadence whichever door they come through", async () => {
+    const s = new MemStorage();
+    const e = await s.createExpense({ amount: 20, category: "Groceries", description: "milk", date: "2026-09-02" } as any);
+    expect(e.category).toBe("food");
+    expect((await s.updateExpense(e.id, { category: "Utility Bill" } as any))?.category).toBe("utilities");
+    const i = await s.createIncome({ description: "Salary", amount: 1000, frequency: "bi-weekly" } as any);
+    expect(i.frequency).toBe("biweekly");
+    expect((await s.updateIncome(i.id, { frequency: "Annually" } as any))?.frequency).toBe("yearly");
+  });
+});

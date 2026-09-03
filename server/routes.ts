@@ -8850,7 +8850,9 @@ Rules:
       // Import tasks
       if (data.tasks && Array.isArray(data.tasks)) {
         for (const t of data.tasks) {
-          await tryImport("tasks", t.title || "unnamed", () => storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, tags: t.tags, linkedProfiles: remap(t.linkedProfiles) } as any));
+          // A backup restores the task as it was: a finished chore came back
+          // open (and lost its clock time) because status/dueTime were dropped.
+          await tryImport("tasks", t.title || "unnamed", () => storage.createTask({ title: t.title, description: t.description, priority: t.priority, dueDate: t.dueDate, dueTime: t.dueTime || undefined, status: t.status || undefined, completedAt: t.completedAt || undefined, tags: t.tags, linkedProfiles: remap(t.linkedProfiles) } as any));
         }
       }
       // Import expenses
@@ -8869,7 +8871,16 @@ Rules:
       }
       if (data.goals && Array.isArray(data.goals)) {
         for (const g of data.goals) {
-          await tryImport("goals", g.title || "unnamed", () => storage.createGoal({ title: g.title, type: g.type || "custom", target: Number(g.target), unit: g.unit || "", startValue: g.startValue, deadline: g.deadline || undefined, category: g.category, milestones: g.milestones || [], linkedProfiles: remap(g.linkedProfiles) } as any));
+          await tryImport("goals", g.title || "unnamed", async () => {
+            const created = await storage.createGoal({ title: g.title, type: g.type || "custom", target: Number(g.target), unit: g.unit || "", startValue: g.startValue, deadline: g.deadline || undefined, category: g.category, milestones: g.milestones || [], linkedProfiles: remap(g.linkedProfiles) } as any);
+            // createGoal starts every goal at its start value and "active";
+            // the backup's progress and a completed status must come back too.
+            const patch: Record<string, any> = {};
+            if (typeof g.current === "number" && Number.isFinite(g.current) && g.current !== created.current) patch.current = g.current;
+            if (typeof g.status === "string" && g.status && g.status !== created.status) patch.status = g.status;
+            if (Object.keys(patch).length > 0) await storage.updateGoal(created.id, patch);
+            return created;
+          });
         }
       }
       if (data.paychecks && Array.isArray(data.paychecks)) {
@@ -8891,7 +8902,9 @@ Rules:
       // Import events
       if (data.events && Array.isArray(data.events)) {
         for (const e of data.events) {
-          await tryImport("events", e.title || "unnamed", () => storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", tags: e.tags || [], source: e.source || "manual", linkedProfiles: remap(e.linkedProfiles), linkedDocuments: [] }));
+          // endDate and recurrenceEnd used to be dropped: a multi-day event
+          // shrank to one day and a series that had an end became endless.
+          await tryImport("events", e.title || "unnamed", () => storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, endDate: e.endDate || undefined, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", recurrenceEnd: e.recurrenceEnd || undefined, tags: e.tags || [], source: e.source || "manual", linkedProfiles: remap(e.linkedProfiles), linkedDocuments: [] }));
         }
       }
       // Import documents
@@ -8904,7 +8917,8 @@ Rules:
       if (data.habits && Array.isArray(data.habits)) {
         for (const h of data.habits) {
           await tryImport("habits", h.name || "unnamed", async () => {
-            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency, targetPerDay: h.targetPerDay, linkedProfiles: remap(h.linkedProfiles) } as any);
+            // The schedule (which days, the window, the time slot) is part of the habit.
+            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency, targetPerDay: h.targetPerDay, targetDays: Array.isArray(h.targetDays) ? h.targetDays : undefined, startDate: h.startDate || undefined, endDate: h.endDate || undefined, timeOfDay: h.timeOfDay || undefined, scheduledTime: h.scheduledTime || undefined, linkedProfiles: remap(h.linkedProfiles) } as any);
             if (h.checkins) {
               for (const c of h.checkins) {
                 await tryImport("habitCheckins", `${h.name} checkin`, () => storage.checkinHabit(created.id, c.date, c.value, c.notes));
@@ -8945,8 +8959,11 @@ Rules:
         }
       }
       // Import journal entries
-      if (data.journalEntries && Array.isArray(data.journalEntries)) {
-        for (const j of data.journalEntries) {
+      // The export writes the entries under `journal`; the import only ever
+      // read `journalEntries`, so a restored backup had no journal at all.
+      const journalRows = Array.isArray(data.journalEntries) ? data.journalEntries : Array.isArray(data.journal) ? data.journal : null;
+      if (journalRows) {
+        for (const j of journalRows) {
           await tryImport("journalEntries", j.date || "unnamed", () => storage.createJournalEntry({ date: j.date, mood: j.mood, content: j.content, tags: j.tags, energy: j.energy, gratitude: j.gratitude, highlights: j.highlights }));
         }
       }

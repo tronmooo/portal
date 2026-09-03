@@ -8,6 +8,8 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 import { assertEventSpan } from "@shared/event-span";
+import { canonicalExpenseCategory } from "@shared/category-canon";
+import { canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
@@ -1347,7 +1349,7 @@ export class MemStorage implements IStorage {
   async getExpenses() { return Array.from(this.expenses.values()); }
   async getExpense(id: string) { return this.expenses.get(id); }
   async createExpense(data: InsertExpense): Promise<Expense> {
-    const expense: Expense = { id: randomUUID(), ...data, category: data.category || "general", linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], date: data.date || new Date().toISOString(), createdAt: new Date().toISOString() };
+    const expense: Expense = { id: randomUUID(), ...data, category: canonicalExpenseCategory(data.category), linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], date: data.date || new Date().toISOString(), createdAt: new Date().toISOString() };
     this.expenses.set(expense.id, expense);
     this.logActivity("expense", `${data.description} - $${data.amount}${data.vendor ? ` at ${data.vendor}` : ""}`);
     return expense;
@@ -1355,7 +1357,7 @@ export class MemStorage implements IStorage {
   async updateExpense(id: string, data: Partial<Expense>): Promise<Expense | undefined> {
     const expense = this.expenses.get(id);
     if (!expense) return undefined;
-    const updated = { ...expense, ...data };
+    const updated = { ...expense, ...data, ...(data.category !== undefined ? { category: canonicalExpenseCategory(data.category) } : {}) };
     this.expenses.set(id, updated);
     this.logActivity("expense", `Updated expense: ${updated.description}`);
     return updated;
@@ -2585,14 +2587,14 @@ export class MemStorage implements IStorage {
   private incomes = new Map<string, Income>();
   async getIncomes(): Promise<Income[]> { return Array.from(this.incomes.values()); }
   async createIncome(data: InsertIncome): Promise<Income> {
-    const income: Income = { ...data, id: randomUUID(), createdAt: new Date().toISOString() } as Income;
+    const income: Income = { ...data, frequency: canonicalIncomeFrequency((data as any).frequency) ?? ((data as any).frequency || "monthly"), id: randomUUID(), createdAt: new Date().toISOString() } as Income;
     this.incomes.set(income.id, income);
     return income;
   }
   async updateIncome(id: string, data: Partial<Income>): Promise<Income | undefined> {
     const existing = this.incomes.get(id);
     if (!existing) return undefined;
-    const updated = { ...existing, ...data };
+    const updated = { ...existing, ...data, ...(data.frequency !== undefined ? { frequency: canonicalIncomeFrequency(data.frequency) ?? data.frequency } : {}) };
     this.incomes.set(id, updated);
     return updated;
   }

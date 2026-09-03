@@ -3,6 +3,7 @@ import { randomUUID, createHash } from "crypto";
 
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 import { assertEventSpan } from "@shared/event-span";
+import { canonicalExpenseCategory } from "@shared/category-canon";
 // ---- Shared Supabase client (PERF) ----
 // One client per (url, key) pair per warm container. The Supabase SDK keeps
 // internal Fetch/Auth/Realtime state that's safe to share across requests
@@ -3668,7 +3669,7 @@ export class SupabaseStorage implements IStorage {
     //   lag: linkProfileTo's read-back can come from a stale replica and skip
     //   the junction write entirely. Going through setOwners avoids that.
     const { error } = await this.supabase.from("expenses").insert({
-      id, user_id: this.userId, amount: data.amount, category: data.category || "general",
+      id, user_id: this.userId, amount: data.amount, category: canonicalExpenseCategory(data.category),
       description: data.description, vendor: data.vendor || null,
       is_recurring: data.isRecurring || false, linked_profiles: [],
       // A missing date is TODAY in the user's zone. `now` is a UTC instant,
@@ -3699,7 +3700,7 @@ export class SupabaseStorage implements IStorage {
     const expenseVersion = await this.assertNoWriteConflictFor("expenses", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
     const { error } = await this.guardedWrite(this.supabase.from("expenses").update({
-      amount: merged.amount, category: merged.category, description: merged.description,
+      amount: merged.amount, category: canonicalExpenseCategory(merged.category), description: merged.description,
       vendor: merged.vendor || null, is_recurring: merged.isRecurring || false,
       tags: merged.tags, date: merged.date,
     }).eq("id", id).eq("user_id", this.userId), expenseVersion);
@@ -3763,7 +3764,7 @@ export class SupabaseStorage implements IStorage {
     const { error } = await this.supabase.from("incomes").insert({
       id, user_id: this.userId, description: data.description,
       amount: data.amount, category: data.category || "salary",
-      frequency: data.frequency || "monthly", date: data.date || null,
+      frequency: canonicalIncomeFrequency(data.frequency) ?? (data.frequency || "monthly"), date: data.date || null,
       linked_profiles: linkedProfiles, tags: data.tags || [],
       source: "manual", created_at: now,
     });
@@ -3779,7 +3780,7 @@ export class SupabaseStorage implements IStorage {
     if (data.description !== undefined) updates.description = data.description;
     if (data.amount !== undefined) updates.amount = data.amount;
     if (data.category !== undefined) updates.category = data.category;
-    if (data.frequency !== undefined) updates.frequency = data.frequency;
+    if (data.frequency !== undefined) updates.frequency = canonicalIncomeFrequency(data.frequency) ?? data.frequency;
     if (data.date !== undefined) updates.date = data.date;
     // Bug #4: linkedProfiles and tags were silently dropped on update, so any
     // edit (manual or via AI updateEntityLinkedProfiles → updateIncome path,
