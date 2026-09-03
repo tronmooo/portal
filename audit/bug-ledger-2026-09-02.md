@@ -937,3 +937,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Browser regression sweep after D233–D236 — verified
 
 - crawl: 19 routes, no page errors or 5xx; flows14 6/6, flows15 7/7, flows16 6/6, flows17 6/6, flows20 5/5, flows21 4/4, flows22 5/5, flows23 2/2.
+
+### Bill "Last paid" after two payments — verified (s217)
+
+- Pay the current occurrence dated −10d, then the next occurrence via the occurrence status route today: the bill schedule's `lastPaid` and `fields.lastPaidDate` both read today. (A second `POST /obligations/:id/pay` within seconds is answered with the first payment — the double-tap guard, D18 — so the second occurrence must be named explicitly.)
