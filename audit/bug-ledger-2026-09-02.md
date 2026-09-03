@@ -353,6 +353,9 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
+### Imported cadence spellings (probe s145) — verified after D205
+A bill imported as "fortnightly" / "Utility" lands biweekly / utilities and an income imported as "every 2 weeks" lands biweekly; the import probes s64 and s128 still pass.
+
 ### Capture and general round trips on the rebuilt replica (probes s143, s79) — verified after D203
 A capture rides through export and import and lands owned by the importing account's Self; the general export → import round trip still passes 7/7.
 
