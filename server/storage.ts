@@ -1276,7 +1276,7 @@ export class MemStorage implements IStorage {
     // (best-effort — see server/habit-completion.ts). Skipped when this write
     // IS the mirror of a habit check-in, which would otherwise loop.
     if (!(data as any).__skipHabitSync) {
-      await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: stored.timestamp, values: stored.values });
+      await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: stored.timestamp, values: stored.values, entryId: stored.id });
     }
     return stored;
   }

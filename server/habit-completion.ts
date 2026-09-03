@@ -562,9 +562,9 @@ function primaryNumericValue(values: Record<string, any> | undefined): number | 
  * Never throws: the tracker entry itself has already landed.
  */
 export async function autoCheckinLinkedHabits(
-  storage: HabitCompletionStorage,
+  storage: HabitCompletionStorage & { updateTrackerEntry?: (trackerId: string, entryId: string, patch: { values?: Record<string, any> }) => Promise<any> },
   trackerId: string,
-  opts: { timestamp?: string; values?: Record<string, any>; timezone?: string } = {},
+  opts: { timestamp?: string; values?: Record<string, any>; timezone?: string; entryId?: string } = {},
 ): Promise<HabitSyncResult[]> {
   const results: HabitSyncResult[] = [];
   try {
@@ -594,6 +594,15 @@ export async function autoCheckinLinkedHabits(
         });
         if (res.ok && res.recorded > 0) {
           results.push({ habitId: habit.id, habitName: habit.name, date, progress: res.progress });
+          // Pair the entry with the check-in it produced, the way a habit
+          // check-in's mirror entry is paired: deleting this entry then
+          // un-completes the habit (removeTrackerEntry). Without the pairing
+          // the habit stayed "done" off a record the user had removed (D226).
+          if (opts.entryId && typeof storage.updateTrackerEntry === "function") {
+            try {
+              await storage.updateTrackerEntry(trackerId, opts.entryId, { values: { ...(opts.values || {}), [HABIT_MIRROR_KEY]: habit.id } });
+            } catch { /* pairing is best-effort; the completion already landed */ }
+          }
         }
       } catch { /* one habit failing must not stop the others */ }
     }

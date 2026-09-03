@@ -3356,7 +3356,7 @@ export class SupabaseStorage implements IStorage {
       // Covered because logEntry's own noun (Entry) maps to the habits domain;
       // passing the proxy here would resolve through AsyncLocalStorage and
       // could bind a different instance for direct-instance callers.
-      await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: ts, values, timezone: this._timezone });
+      await autoCheckinLinkedHabits(this, data.trackerId, { timestamp: ts, values, timezone: this._timezone, entryId: inserted?.id });
     }
     // Return the DATABASE's version of the row, not our intended one.
     return this.rowToTrackerEntry(inserted);

@@ -2088,3 +2088,26 @@ describe("D225: off-schedule check-in", () => {
     expect(fresh?.currentStreak || 0).toBe(0);
   });
 });
+
+// ─── D226: a tracker-logged entry that completed a habit un-completes it when removed ─
+import { autoCheckinLinkedHabits, HABIT_MIRROR_KEY } from "../server/habit-completion";
+import { removeTrackerEntry } from "../server/tracker-entries";
+describe("D226: tracker entry ↔ habit pairing in both directions", () => {
+  it("logging on the linked tracker completes the habit and pairs the entry; removing the entry un-completes it", async () => {
+    const s = new MemStorage();
+    (s as any)._timezone = TZ;
+    const today = getUserToday(TZ);
+    const tracker = await s.createTracker({ name: "Meditation", category: "wellness", unit: "min", fields: [{ name: "minutes", type: "number" }] } as any);
+    const habit = await s.createHabit({ name: "Meditate", frequency: "daily", targetPerDay: 1, linkedTrackerId: tracker.id } as any);
+    const entry = await s.logEntry({ trackerId: tracker.id, values: { minutes: 10 }, timestamp: new Date().toISOString() } as any);
+    let h = await s.getHabit(habit.id);
+    expect((h?.checkins || []).map((c: any) => c.date)).toEqual([today]);
+    const stored = await s.getTrackerEntry(entry!.id);
+    expect((stored?.values as any)?.[HABIT_MIRROR_KEY]).toBe(habit.id);
+    const removed = await removeTrackerEntry(s, { trackerId: tracker.id, entryId: entry!.id }, TZ);
+    expect(removed.ok).toBe(true);
+    expect(removed.habitId).toBe(habit.id);
+    h = await s.getHabit(habit.id);
+    expect(h?.checkins || []).toEqual([]);
+  });
+});
