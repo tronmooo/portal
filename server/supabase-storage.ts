@@ -8174,6 +8174,9 @@ export class SupabaseStorage implements IStorage {
    *  Exported so tests can diff it against the live schema instead of trusting
    *  a hand-maintained list nobody re-checks. */
   static readonly ALL_USER_TABLES: readonly string[] = [
+    // captures — the universal capture layer (added 2026-06); missed by the
+    // wipe until 2026-09-03, so "delete all data" left a user's captures behind.
+    "captures",
     // Child / link / bookkeeping tables first
     "tracker_entries", "habit_checkins", "domain_entries", "entity_links",
     "event_documents", "extraction_corrections", "liability_payments",

@@ -1450,3 +1450,16 @@ describe("D198: reversal rows store magnitudes and readers apply the direction b
     expect(profiles.get("card-2").fields.currentBalance).toBe(300);
   });
 });
+
+// ─── D200: "delete all data" covers every table that carries a user_id ──────
+describe("D200: the account wipe covers captures", () => {
+  it("ALL_USER_TABLES lists captures ahead of profiles", () => {
+    const list = (SupabaseStorage as any).ALL_USER_TABLES as string[];
+    expect(list).toContain("captures");
+    expect(list.indexOf("captures")).toBeLessThan(list.indexOf("profiles"));
+    // Every table the app writes per user (production schema, 2026-09-03).
+    for (const t of ["ai_action_log", "artifacts", "captures", "cashflow_projections", "documents", "entity_links", "events", "expenses", "finance_imports", "goals", "habit_checkins", "habits", "incomes", "journal_entries", "liability_payments", "memories", "net_worth_snapshots", "paychecks", "preferences", "profiles", "tasks", "tracker_entries", "trackers", "user_notifications"]) {
+      expect(list, t).toContain(t);
+    }
+  });
+});
