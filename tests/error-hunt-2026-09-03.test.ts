@@ -364,3 +364,30 @@ describe("D149: caps stored before folding, and the AI tools, meet the same buck
     expect(missing.error).toMatch(/No budget found/);
   });
 });
+
+// ─── D150: an extra-principal payment is all principal ──────────────────────
+import { applyLiabilityPayment } from "../server/liability-payments";
+describe("D150: paymentType 'extra_principal' without an explicit split", () => {
+  const LOAN = { id: "liab-1", name: "Car loan", type: "liability", type_key: "auto_loan", fields: { currentBalance: 8000, annualInterestRate: 5.955, monthlyPayment: 300 } };
+  function ledgerStorage(liability: any) {
+    return {
+      createLiabilityPayment: async (data: any) => ({ id: "pay-1", ...data }),
+      updateProfile: async (_id: string, patch: any) => ({ ...liability, ...patch, fields: { ...liability.fields, ...patch.fields } }),
+    } as any;
+  }
+  it("sends the whole payment to principal and drops the balance by the money sent", async () => {
+    const out = await applyLiabilityPayment(ledgerStorage(LOAN), LOAN, { amount: 100, paymentType: "extra_principal" }, "UTC");
+    expect(out.interest).toBe(0);
+    expect(out.principal).toBe(100);
+    expect(out.newBalance).toBeCloseTo(7900, 2);
+    expect(out.payment.paymentType).toBe("extra_principal");
+  });
+  it("fees still come off the top, and a standard payment keeps the canonical split", async () => {
+    const withFee = await applyLiabilityPayment(ledgerStorage(LOAN), LOAN, { amount: 100, fees: 5, paymentType: "extra_principal" }, "UTC");
+    expect(withFee.principal).toBe(95);
+    expect(withFee.interest).toBe(0);
+    const standard = await applyLiabilityPayment(ledgerStorage(LOAN), LOAN, { amount: 100 }, "UTC");
+    expect(standard.interest).toBeGreaterThan(0);
+    expect(standard.principal + standard.interest).toBeCloseTo(100, 2);
+  });
+});

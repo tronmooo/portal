@@ -139,6 +139,13 @@ export async function applyLiabilityPayment(
     // The caller (or the model) split it. Honor that, filling in the other half.
     principal = explicitPrincipal ? Number(input.principal) : Math.max(0, cashTowardLoan - Number(input.interest || 0));
     interest = explicitInterest ? Number(input.interest) : Math.max(0, cashTowardLoan - principal);
+  } else if (input.paymentType === "extra_principal") {
+    // "An extra $100 toward the principal" is principal by definition. The
+    // canonical split below charges a period's interest on every payment, so
+    // an extra payment used to lose a month of interest ($39.70 of $100 on an
+    // $8,000 loan) and the balance dropped by less than the money sent.
+    principal = Math.max(0, cashTowardLoan);
+    interest = 0;
   } else if (balanceBefore > 0) {
     // The canonical split — the same function the amortization schedule uses,
     // so a payment and the schedule that predicted it agree.
