@@ -43,7 +43,7 @@ export const OWNERSHIP_EPSILON = 0.05;
  *  share math. */
 const OWNER_ROLES = new Set(["owner", "co_owner", "co-owner", ""]);
 
-function isOwnerRole(role?: string): boolean {
+export function isOwnerRole(role?: string): boolean {
   return OWNER_ROLES.has((role || "owner").toLowerCase());
 }
 

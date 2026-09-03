@@ -2160,3 +2160,51 @@ describe("D228: habit deletion and the user's own tracker", () => {
     expect(entries).toHaveLength(2);
   });
 });
+
+// ─── D229: a backup restores habit↔tracker links, entry pairings and co-signer rows ─
+describe("D229: POST /api/import keeps the links a backup carries", () => {
+  it("remaps the habit's tracker, rewrites the entry pairing to the new habit ids, and keeps a co-signer row", async () => {
+    const created: Record<string, any[]> = { trackers: [], habits: [], entries: [], entryUpdates: [], liabLinks: [], owners: [] };
+    let seq = 0; const nid = (p: string) => `${p}-${++seq}`;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getProfiles = async () => [{ id: "self-1", type: "self", name: "Me", fields: {} }];
+      storage.getSelfProfile = async () => ({ id: "self-1", type: "self", name: "Me", fields: {} });
+      storage.createProfile = async (p: any) => ({ id: nid("p"), ...p });
+      storage.createTracker = async (t: any) => { const row = { id: nid("tr"), ...t, entries: [] }; created.trackers.push(row); return row; };
+      storage.logEntry = async (e: any) => { const row = { id: nid("en"), ...e }; created.entries.push(row); return row; };
+      storage.updateTrackerEntry = async (trackerId: string, entryId: string, patch: any) => { created.entryUpdates.push([trackerId, entryId, patch]); return { id: entryId, ...patch }; };
+      storage.createHabit = async (hb: any) => { const row = { id: nid("hb"), ...hb, checkins: [] }; created.habits.push(row); return row; };
+      storage.checkinHabit = async () => ({ id: nid("ck") });
+      storage.setLiabilityOwners = async (id: string, owners: any[]) => { created.owners.push([id, owners]); return owners; };
+      storage.createLiabilityProfileLink = async (l: any) => { created.liabLinks.push(l); return { id: nid("ll"), ...l }; };
+    });
+    const payload = {
+      version: "2",
+      profiles: [
+        { id: "old-self", type: "self", name: "Me", fields: {} },
+        { id: "old-linda", type: "person", name: "Linda", parentProfileId: "old-self", fields: {} },
+        { id: "old-bill", type: "liability", type_key: "utility", name: "Gas", parentProfileId: "old-self", fields: { monthlyAmount: 40 } },
+      ],
+      liabilityProfileLinks: [
+        { liabilityProfileId: "old-bill", partyProfileId: "old-self", role: "owner", ownershipPercentage: 100 },
+        { liabilityProfileId: "old-bill", partyProfileId: "old-linda", role: "co_signer", ownershipPercentage: 50 },
+      ],
+      trackers: [{ id: "old-tr", name: "Run", category: "fitness", unit: "km", fields: [], entries: [{ values: { km: 3, _habitId: "old-a", _habitIds: ["old-a", "old-b"] }, timestamp: "2026-09-01T10:00:00Z" }] }],
+      habits: [
+        { id: "old-a", name: "Run daily", frequency: "daily", targetPerDay: 1, linkedTrackerId: "old-tr", checkins: [] },
+        { id: "old-b", name: "Move daily", frequency: "daily", targetPerDay: 1, linkedTrackerId: "old-tr", checkins: [] },
+      ],
+    };
+    const r = await h.api("POST", "/api/import", payload);
+    expect(r.status).toBe(200);
+    const tr = created.trackers[0];
+    expect(created.habits.map((x) => x.linkedTrackerId)).toEqual([tr.id, tr.id]);
+    expect(mirrorHabitIds(created.entries[0].values)).toEqual([]);
+    const [a, b] = created.habits;
+    expect(created.entryUpdates).toEqual([[tr.id, created.entries[0].id, { values: { _habitId: a.id, _habitIds: [a.id, b.id] } }]]);
+    expect(created.owners).toHaveLength(1);
+    expect(created.owners[0][1]).toEqual([{ partyProfileId: expect.any(String), ownershipPercentage: 100 }]);
+    expect(created.liabLinks).toHaveLength(1);
+    expect(created.liabLinks[0]).toMatchObject({ role: "co_signer", ownershipPercentage: 50 });
+  });
+});

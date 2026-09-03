@@ -10,13 +10,13 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { getUserToday, getUserCurrentMonth, toLocalDateStr, parseLocalDate, parseUserDateTime, zonedTimeToUTC, DEFAULT_TIMEZONE } from "@shared/timezone";
-import { completeHabitOccurrence, uncompleteHabitOccurrence } from "./habit-completion";
+import { completeHabitOccurrence, uncompleteHabitOccurrence, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { computeKeyFindings } from "@shared/tracker-insights";
 import { ownedAssetIds } from "@shared/cost-of-ownership";
-import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord } from "@shared/ownership-model";
+import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord, isOwnerRole } from "@shared/ownership-model";
 import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
 import { summarizeAccounts, isAccountProfile } from "@shared/finance-accounts";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
@@ -8902,6 +8902,7 @@ Rules:
       // are remapped (parents are created first), and every section's
       // linkedProfiles goes through the map.
       const idMap = new Map<string, string>();
+      const pairedEntries: Array<{ trackerId: string; entryId: string; habitIds: string[] }> = [];
       const remap = (ids: unknown): string[] =>
         (Array.isArray(ids) ? ids : []).map((id) => idMap.get(String(id))).filter((id): id is string => !!id);
       if (data.profiles && Array.isArray(data.profiles)) {
@@ -8942,16 +8943,27 @@ Rules:
       ) => {
         const rows: any[] = Array.isArray(data[section]) ? data[section] : [];
         const bySubject = new Map<string, any[]>();
+        // Only OWNER roles belong in the atomic owner set (it must total 100).
+        // A co-signer or guarantor row is a party, not a share of ownership:
+        // fed into the set it failed validation and the whole bill's links —
+        // the co-signer included — were dropped on restore (D229).
+        const parties: Array<{ subject: string; party: string; role: string; pct: number; notes?: string }> = [];
         for (const l of rows) {
           const subject = l && l[subjectKey] ? idMap.get(String(l[subjectKey])) : undefined;
           const party = l && l.partyProfileId ? idMap.get(String(l.partyProfileId)) : undefined;
           if (!subject || !party) continue;
+          if (!isOwnerRole(l.role)) { parties.push({ subject, party, role: String(l.role), pct: Number(l.ownershipPercentage ?? 0), notes: l.notes ?? undefined }); continue; }
           const arr = bySubject.get(subject) || [];
           arr.push({ partyProfileId: party, ownershipPercentage: Number(l.ownershipPercentage ?? 100) });
           bySubject.set(subject, arr);
         }
         for (const [subject, owners] of bySubject) {
           await tryImport(section, subject, () => write(subject, owners));
+        }
+        for (const p of parties) {
+          await tryImport(section, `${p.subject} ${p.role}`, () => section === "assetPartyLinks"
+            ? storage.createAssetPartyLink({ assetProfileId: p.subject, partyProfileId: p.party, role: p.role, ownershipPercentage: p.pct, notes: p.notes } as any)
+            : storage.createLiabilityProfileLink({ liabilityProfileId: p.subject, partyProfileId: p.party, role: p.role, ownershipPercentage: p.pct, notes: p.notes } as any));
         }
       };
       await importOwners("assetPartyLinks", "assetProfileId", (id, owners) => storage.setAssetOwners(id, owners));
@@ -8960,9 +8972,21 @@ Rules:
         for (const t of data.trackers) {
           await tryImport("trackers", t.name || "unnamed", async () => {
             const created = await storage.createTracker({ name: t.name, category: t.category, unit: t.unit, icon: t.icon, fields: t.fields, linkedProfiles: remap(t.linkedProfiles) } as any);
+            if (t.id && created?.id) idMap.set(String(t.id), created.id);
             if (t.entries) {
               for (const e of t.entries) {
-                await tryImport("trackerEntries", `${t.name} entry`, () => storage.logEntry({ trackerId: created.id, values: e.values, notes: e.notes, mood: e.mood, tags: e.tags }));
+                // An entry paired with a habit (a mirror or a tracker log that
+                // completed one) names the ORIGINAL habit ids; those habits are
+                // imported later under new ids, so the pairing is stripped here
+                // and rewritten once they exist (D229).
+                const paired = mirrorHabitIds(e.values);
+                const values = { ...(e.values || {}) };
+                delete (values as any)[HABIT_MIRROR_KEY]; delete (values as any)[HABIT_MIRROR_IDS_KEY];
+                await tryImport("trackerEntries", `${t.name} entry`, async () => {
+                  const logged = await storage.logEntry({ trackerId: created.id, values, notes: e.notes, mood: e.mood, tags: e.tags, timestamp: e.timestamp, __skipHabitSync: true } as any);
+                  if (logged?.id && paired.length > 0) pairedEntries.push({ trackerId: created.id, entryId: logged.id, habitIds: paired });
+                  return logged;
+                });
               }
             }
           });
@@ -9039,13 +9063,22 @@ Rules:
         for (const h of data.habits) {
           await tryImport("habits", h.name || "unnamed", async () => {
             // The schedule (which days, the window, the time slot) is part of the habit.
-            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency, targetPerDay: h.targetPerDay, targetDays: Array.isArray(h.targetDays) ? h.targetDays : undefined, startDate: h.startDate || undefined, endDate: h.endDate || undefined, timeOfDay: h.timeOfDay || undefined, scheduledTime: h.scheduledTime || undefined, linkedProfiles: remap(h.linkedProfiles) } as any);
+            const created = await storage.createHabit({ name: h.name, icon: h.icon, color: h.color, frequency: h.frequency, targetPerDay: h.targetPerDay, targetDays: Array.isArray(h.targetDays) ? h.targetDays : undefined, linkedTrackerId: h.linkedTrackerId ? idMap.get(String(h.linkedTrackerId)) : undefined, startDate: h.startDate || undefined, endDate: h.endDate || undefined, timeOfDay: h.timeOfDay || undefined, scheduledTime: h.scheduledTime || undefined, linkedProfiles: remap(h.linkedProfiles) } as any);
+            if (h.id && created?.id) idMap.set(String(h.id), created.id);
             if (h.checkins) {
               for (const c of h.checkins) {
                 await tryImport("habitCheckins", `${h.name} checkin`, () => storage.checkinHabit(created.id, c.date, c.value, c.notes));
               }
             }
           });
+        }
+        // The habits exist now: rewrite each paired entry to the new ids.
+        for (const pe of pairedEntries) {
+          const ids = pe.habitIds.map((id) => idMap.get(id)).filter((id): id is string => !!id);
+          if (ids.length === 0) continue;
+          const values: Record<string, any> = { [HABIT_MIRROR_KEY]: ids[0] };
+          if (ids.length > 1) values[HABIT_MIRROR_IDS_KEY] = ids;
+          await tryImport("trackerEntries", "pairing", () => storage.updateTrackerEntry(pe.trackerId, pe.entryId, { values }));
         }
       }
       // Import obligations
