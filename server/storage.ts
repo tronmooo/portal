@@ -8,7 +8,7 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 import { assertEventSpan } from "@shared/event-span";
-import { canonicalExpenseCategory } from "@shared/category-canon";
+import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
@@ -1865,7 +1865,7 @@ export class MemStorage implements IStorage {
       id: randomUUID(),
       name: d.name, amount: d.amount, nextDueDate: d.nextDueDate,
       notes: d.notes,
-      category: d.category || "general",
+      category: canonicalObligationCategory(d.category),
       frequency: d.frequency || "monthly",
       autopay: d.autopay ?? false,
       status: "active",

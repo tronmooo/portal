@@ -19,6 +19,7 @@
 // data came from.
 
 import { randomUUID } from "crypto";
+import { normalizeMonthKey } from "@shared/budget-ledger";
 import {
   type FinanceImportPayload,
   FINANCE_IMPORT_SOURCE,
@@ -96,6 +97,8 @@ export interface ImportSummary {
   skipped: number;
   warnings: number;
   bySection: Record<string, SectionCount>;
+  /** Records the commit could not write (reported per record, never aborting the batch). */
+  failed?: number;
 }
 export interface ImportPlan {
   batchId: string;
@@ -279,14 +282,25 @@ function summarize(bySection: Record<string, SectionCount>, warnings: number): I
  * alone. Every row is tagged with the source + batch id + confidence. The set of
  * created ids is persisted so the batch can be undone cleanly.
  */
+export interface ImportFailure { section: string; uniqueId: string; label: string; error: string }
+
 export async function applyImport(
   store: FinanceImportStore,
   payload: FinanceImportPayload,
   profileId: string,
   plan: ImportPlan,
-): Promise<{ batchId: string; summary: ImportSummary; record: FinanceImportRecord }> {
+  opts: { month?: string } = {},
+): Promise<{ batchId: string; summary: ImportSummary; record: FinanceImportRecord; failed: ImportFailure[] }> {
   const batchId = plan.batchId;
   const created: CreatedRecords = { expenses: [], obligations: [], incomes: [], profiles: [], budgets: [] };
+  // One record that fails to write must not abort the batch with the rows
+  // already written and no batch record to undo them with: each write is
+  // attempted on its own, failures are reported, and the batch record is
+  // written for whatever landed so "undo" still covers it.
+  const failed: ImportFailure[] = [];
+  const attempt = async (section: string, uniqueId: string, label: string, fn: () => Promise<void>) => {
+    try { await fn(); } catch (e: any) { failed.push({ section, uniqueId, label, error: String(e?.message || e) }); }
+  };
   const actionByUid = new Map(plan.ops.map((o) => [o.uniqueId, o.action] as const));
   const tag = (conf: number | undefined) => [`source:${FINANCE_IMPORT_SOURCE}`, `import:${batchId}`, `conf:${conf ?? 0.8}`];
   const importMeta = (conf: number | undefined) => ({ source: FINANCE_IMPORT_SOURCE, importBatchId: batchId, confidence: conf ?? 0.8 });
@@ -294,43 +308,49 @@ export async function applyImport(
   // transactions
   for (const t of payload.transactions) {
     if (actionByUid.get(t.unique_id) !== "create") continue;
-    if (t.type === "income") {
-      const row = await store.createIncome({
-        description: t.merchant, amount: t.amount, category: normalizeCategory(t.category), frequency: "once",
-        date: t.date.slice(0, 10), linkedProfiles: [profileId], tags: tag(t.confidence),
-      });
-      created.incomes.push(row.id);
-    } else {
-      const row = await store.createExpense({
-        amount: t.amount, category: normalizeCategory(t.category), description: t.merchant, vendor: t.merchant,
-        date: t.date.slice(0, 10), isRecurring: false, linkedProfiles: [profileId], tags: tag(t.confidence),
-        source: FINANCE_IMPORT_SOURCE,
-      });
-      created.expenses.push(row.id);
-    }
+    await attempt("transactions", t.unique_id, `${t.merchant} ${fmtMoney(t.amount)}`, async () => {
+      if (t.type === "income") {
+        const row = await store.createIncome({
+          description: t.merchant, amount: t.amount, category: normalizeCategory(t.category), frequency: "once",
+          date: t.date.slice(0, 10), linkedProfiles: [profileId], tags: tag(t.confidence),
+        });
+        created.incomes.push(row.id);
+      } else {
+        const row = await store.createExpense({
+          amount: t.amount, category: normalizeCategory(t.category), description: t.merchant, vendor: t.merchant,
+          date: t.date.slice(0, 10), isRecurring: false, linkedProfiles: [profileId], tags: tag(t.confidence),
+          source: FINANCE_IMPORT_SOURCE,
+        });
+        created.expenses.push(row.id);
+      }
+    });
   }
 
   // subscriptions + recurring_bills → obligations
   for (const [kind, rows] of [["subscription", payload.subscriptions], ["bill", payload.recurring_bills]] as const) {
     for (const r of rows) {
       if (actionByUid.get(r.unique_id) !== "create") continue;
-      const row = await store.createObligation({
-        name: r.name, amount: r.amount, frequency: r.frequency, category: r.category || (kind === "subscription" ? "subscription" : "general"),
-        kind, nextDueDate: r.next_due_date || nextDueFallback(r.frequency), currency: r.currency || "USD",
-        linkedProfiles: [profileId], notes: r.notes || "", fields: { _import: importMeta(r.confidence) },
+      await attempt(kind === "subscription" ? "subscriptions" : "recurring_bills", r.unique_id, `${r.name} ${fmtMoney(r.amount)}`, async () => {
+        const row = await store.createObligation({
+          name: r.name, amount: r.amount, frequency: r.frequency, category: r.category || (kind === "subscription" ? "subscription" : "general"),
+          kind, nextDueDate: r.next_due_date || nextDueFallback(r.frequency), currency: r.currency || "USD",
+          linkedProfiles: [profileId], notes: r.notes || "", fields: { _import: importMeta(r.confidence) },
+        });
+        created.obligations.push(row.id);
       });
-      created.obligations.push(row.id);
     }
   }
 
   // income section
   for (const inc of payload.income) {
     if (actionByUid.get(inc.unique_id) !== "create") continue;
-    const row = await store.createIncome({
-      description: inc.source_name, amount: inc.amount, category: inc.category || "salary", frequency: inc.frequency,
-      date: inc.date?.slice(0, 10), linkedProfiles: [profileId], tags: tag(inc.confidence),
+    await attempt("income", inc.unique_id, `${inc.source_name} ${fmtMoney(inc.amount)}`, async () => {
+      const row = await store.createIncome({
+        description: inc.source_name, amount: inc.amount, category: inc.category || "salary", frequency: inc.frequency,
+        date: inc.date?.slice(0, 10), linkedProfiles: [profileId], tags: tag(inc.confidence),
+      });
+      created.incomes.push(row.id);
     });
-    created.incomes.push(row.id);
   }
 
   // accounts / assets / liabilities / investments → profiles (owned by profileId)
@@ -340,39 +360,44 @@ export async function applyImport(
   for (const [profileType, rows] of holdingSections) {
     for (const r of rows) {
       if (actionByUid.get(r.unique_id) !== "create") continue;
-      const value = Number(r.value ?? r.balance ?? 0);
-      const fields: Record<string, any> = { _import: importMeta(r.confidence) };
-      if (profileType === "liability") fields.balance = value; else fields.value = value;
-      if (r.symbol) fields.symbol = r.symbol;
-      if (r.currency) fields.currency = r.currency;
-      const row = await store.createProfile({
-        type: profileType, name: r.name, parentProfileId: profileId,
-        fields, notes: r.notes || "", tags: [`source:${FINANCE_IMPORT_SOURCE}`, `import:${batchId}`],
+      await attempt(`${profileType}s`, r.unique_id, String(r.name), async () => {
+        const value = Number(r.value ?? r.balance ?? 0);
+        const fields: Record<string, any> = { _import: importMeta(r.confidence) };
+        if (profileType === "liability") fields.balance = value; else fields.value = value;
+        if (r.symbol) fields.symbol = r.symbol;
+        if (r.currency) fields.currency = r.currency;
+        const row = await store.createProfile({
+          type: profileType, name: r.name, parentProfileId: profileId,
+          fields, notes: r.notes || "", tags: [`source:${FINANCE_IMPORT_SOURCE}`, `import:${batchId}`],
+        });
+        created.profiles.push(row.id);
       });
-      created.profiles.push(row.id);
     }
   }
 
   // budgets
-  const defaultMonth = new Date().toISOString().slice(0, 7);
+  // The caller's month (the user's calendar), not the host's UTC month.
+  const defaultMonth = normalizeMonthKey(opts.month) || new Date().toISOString().slice(0, 7);
   for (const b of payload.budgets) {
     const action = actionByUid.get(b.unique_id);
     if (action !== "create" && action !== "update") continue;
-    const month = b.month || defaultMonth;
-    if (action === "update") {
-      const existing = (await store.getBudgets(month).catch(() => [])).find((x) => normalizeMerchant(x.category) === normalizeMerchant(b.category) && (!x.profileId || x.profileId === profileId));
-      if (existing) { await store.updateBudget(month, existing.id, { amount: b.amount, notes: `${FINANCE_IMPORT_SOURCE}:${batchId}` }); continue; }
-    }
-    const row = await store.addBudget(month, normalizeCategory(b.category), b.amount, `${FINANCE_IMPORT_SOURCE}:${batchId}`, profileId);
-    created.budgets.push({ month, id: row.id });
+    const month = normalizeMonthKey(b.month) || defaultMonth;
+    await attempt("budgets", b.unique_id, `${b.category} ${fmtMoney(b.amount)} (${month})`, async () => {
+      if (action === "update") {
+        const existing = (await store.getBudgets(month).catch(() => [])).find((x) => normalizeMerchant(x.category) === normalizeMerchant(b.category) && (!x.profileId || x.profileId === profileId));
+        if (existing) { await store.updateBudget(month, existing.id, { amount: b.amount, notes: `${FINANCE_IMPORT_SOURCE}:${batchId}` }); return; }
+      }
+      const row = await store.addBudget(month, normalizeCategory(b.category), b.amount, `${FINANCE_IMPORT_SOURCE}:${batchId}`, profileId);
+      created.budgets.push({ month, id: row.id });
+    });
   }
 
   const record = await store.createFinanceImport({
-    id: batchId, profileId, status: "committed", summary: { ...plan.summary, signals: plan.signals },
+    id: batchId, profileId, status: "committed", summary: { ...plan.summary, signals: plan.signals, failed: failed.length },
     recordCount: created.expenses.length + created.obligations.length + created.incomes.length + created.profiles.length + created.budgets.length,
     createdRecords: created,
   });
-  return { batchId, summary: plan.summary, record };
+  return { batchId, summary: plan.summary, record, failed };
 }
 
 /** Reverse a committed import: delete every row it created, mark it undone. */

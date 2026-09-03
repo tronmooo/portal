@@ -6460,8 +6460,10 @@ Rules:
       return res.status(422).json({ ok: false, errors: validation.errors });
     }
     const plan = await planImport(storage, validation.data, profileId);
-    const result = await applyImport(storage, validation.data, profileId, plan);
-    res.json({ ok: true, batchId: result.batchId, summary: result.summary, plan, profileId });
+    const result = await applyImport(storage, validation.data, profileId, plan, { month: getUserCurrentMonth(getTimezone(req)) });
+    // `failed` names the records the commit could not write (the batch is
+    // still recorded and undoable for everything that landed).
+    res.json({ ok: result.failed.length === 0, batchId: result.batchId, summary: result.summary, failed: result.failed, plan, profileId });
   }));
 
   // Import history (most recent first).
@@ -6783,7 +6785,8 @@ Rules:
     // The client sends no ?month; storage's own default is the UTC month, which
     // is next month for an evening caller west of Greenwich on the last day.
     // Default here, in the user's zone, and pass it explicitly.
-    const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
+    const month = budgetMonthParam(req.query.month, req);
+    if (!month) return res.status(400).json({ error: "month must be YYYY-MM" });
     const profileIdsParam = req.query.profileIds as string | undefined;
     const profileId = req.query.profileId as string | undefined;
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
@@ -6805,9 +6808,14 @@ Rules:
   }));
 
   app.post("/api/cashflow", asyncHandler(async (req, res) => {
-    const { month, week, projected_income, projected_expenses, actual_income, actual_expenses } = req.body;
-    if (!month || typeof month !== "string") return res.status(400).json({ error: "month is required" });
-    if (week === undefined || week === null) return res.status(400).json({ error: "week is required" });
+    const { month: rawMonth, week: rawWeek, projected_income, projected_expenses, actual_income, actual_expenses } = req.body;
+    if (!rawMonth || typeof rawMonth !== "string") return res.status(400).json({ error: "month is required" });
+    // "2026-9" used to be stored verbatim and never read back under "2026-09".
+    const month = normalizeMonthKey(rawMonth);
+    if (!month) return res.status(400).json({ error: "month must be YYYY-MM" });
+    if (rawWeek === undefined || rawWeek === null) return res.status(400).json({ error: "week is required" });
+    const week = typeof rawWeek === "number" ? rawWeek : Number(rawWeek);
+    if (!Number.isInteger(week) || week < 1 || week > 6) return res.status(400).json({ error: "week must be an integer from 1 to 6" });
     // Bug fix: previously the four numeric fields were written through with no
     // validation. A bad payload could insert non-numeric values into the
     // cashflow_projections table and corrupt every downstream net-cashflow

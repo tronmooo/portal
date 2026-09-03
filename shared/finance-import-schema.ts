@@ -30,9 +30,21 @@ export const FINANCE_IMPORT_SOURCE = "chatgpt_import";
 const money = z
   .number({ invalid_type_error: "amount must be a number" })
   .finite("amount must be a finite number");
+// A real calendar day, not merely the shape of one: "2026-02-30" passed the
+// regex, was planned as "create", and then blew up the commit halfway
+// through the writes ("Invalid date or time value") with the rows already
+// written and no batch record to undo them with.
+const realDay = (v: string): boolean => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const t = new Date(Date.UTC(y, mo - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d;
+};
 const isoDate = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}/, "date must be in YYYY-MM-DD format");
+  .regex(/^\d{4}-\d{2}-\d{2}/, "date must be in YYYY-MM-DD format")
+  .refine(realDay, "date must be a real calendar day");
 const currency = z
   .string()
   .regex(/^[A-Z]{3}$/, "currency must be a 3-letter ISO code, e.g. USD");

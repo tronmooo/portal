@@ -3,7 +3,7 @@ import { randomUUID, createHash } from "crypto";
 
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 import { assertEventSpan } from "@shared/event-span";
-import { canonicalExpenseCategory } from "@shared/category-canon";
+import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 // ---- Shared Supabase client (PERF) ----
 // One client per (url, key) pair per warm container. The Supabase SDK keeps
 // internal Fetch/Auth/Realtime state that's safe to share across requests
@@ -5347,7 +5347,8 @@ export class SupabaseStorage implements IStorage {
 
   async createObligation(data: InsertObligation): Promise<Obligation> {
     const kind = (data as any).kind || "bill";
-    const category = (data as any).category || "general";
+    // Folded here so every door (import, chat, API) stores the canon's spelling.
+    const category = canonicalObligationCategory((data as any).category);
     const rawName = String(data.name || "").trim();
     const typeKey = this.billTypeKey(kind, category, rawName);
     let parent: string | undefined = ((data as any).linkedProfiles || [])[0];
@@ -5442,7 +5443,7 @@ export class SupabaseStorage implements IStorage {
       fieldsPatch.firstPaymentDate = data.nextDueDate;
     }
     if (data.autopay !== undefined) fieldsPatch.autopay = data.autopay;
-    if ((data as any).category !== undefined) fieldsPatch.category = (data as any).category;
+    if ((data as any).category !== undefined) fieldsPatch.category = canonicalObligationCategory((data as any).category);
     if (data.status !== undefined) fieldsPatch.status = data.status;
     if (data.notes !== undefined) fieldsPatch.notes = data.notes;
     // Ownership reassignment: an obligation is a liability profile whose owner

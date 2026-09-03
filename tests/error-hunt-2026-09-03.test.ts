@@ -654,3 +654,70 @@ describe("D162: deleteCapture answers what the database did", () => {
     expect(await bareStorage({ supabase: c2, _captures: new Map() }).deleteCapture("cap-1")).toBe(true);
   });
 });
+
+// ─── D163/D164: a failing import record does not abort the batch; cashflow month ─
+import { validateFinanceImport } from "../shared/finance-import-schema";
+import { planImport, applyImport } from "../server/finance-import";
+describe("D163: finance import — impossible dates are refused up front, a failing write does not abort the batch", () => {
+  it("validateFinanceImport rejects 2026-02-30 and accepts a real day", () => {
+    const bad = validateFinanceImport(JSON.stringify({ version: "1.0", transactions: [{ unique_id: "t1", date: "2026-02-30", merchant: "X", amount: 5 }] }));
+    expect(bad.ok).toBe(false);
+    expect(bad.errors[0].path).toBe("transactions[0].date");
+    expect(validateFinanceImport(JSON.stringify({ version: "1.0", transactions: [{ unique_id: "t1", date: "2026-02-28", merchant: "X", amount: 5 }] })).ok).toBe(true);
+  });
+  it("applyImport writes the batch record for what landed, reports the failure, and the rest still commits", async () => {
+    const created: any[] = []; let imports: any[] = [];
+    const store: any = {
+      getExpenses: async () => [], getObligations: async () => [], getIncomes: async () => [], getProfiles: async () => [], getBudgets: async () => [],
+      createExpense: async (d: any) => { if (d.description === "Boom") throw new Error("Invalid date or time value"); const r = { id: `e${created.length + 1}`, ...d }; created.push(r); return r; },
+      createIncome: async (d: any) => { const r = { id: `i${created.length + 1}`, ...d }; created.push(r); return r; },
+      createObligation: async (d: any) => { const r = { id: `o${created.length + 1}`, ...d }; created.push(r); return r; },
+      createProfile: async (d: any) => { const r = { id: `p${created.length + 1}`, ...d }; created.push(r); return r; },
+      addBudget: async (month: string, category: string, amount: number) => { const r = { id: `b${created.length + 1}`, month, category, amount }; created.push(r); return r; },
+      updateBudget: async () => true,
+      createFinanceImport: async (rec: any) => { imports.push(rec); return rec; },
+    };
+    const validated = validateFinanceImport(JSON.stringify({ version: "1.0",
+      transactions: [{ unique_id: "t1", date: "2026-09-01", merchant: "Boom", amount: 5 }, { unique_id: "t2", date: "2026-09-01", merchant: "Fine", amount: 7 }],
+      income: [{ unique_id: "i1", source_name: "Acme", amount: 3000, frequency: "biweekly" }],
+      budgets: [{ unique_id: "bg1", category: "Groceries", amount: 400 }],
+    }));
+    expect(validated.ok, JSON.stringify(validated.errors)).toBe(true);
+    const payload = validated.data!;
+    const plan = await planImport(store, payload, "self-1");
+    const out = await applyImport(store, payload, "self-1", plan, { month: "2026-10" });
+    expect(out.failed).toEqual([{ section: "transactions", uniqueId: "t1", label: "Boom $5", error: "Invalid date or time value" }]);
+    expect(created.map((r) => r.description || r.category)).toEqual(["Fine", "Acme", "food"]);
+    expect(created[2].month).toBe("2026-10"); // the caller's month, not the host's UTC month
+    expect(imports).toHaveLength(1);
+    expect(imports[0].createdRecords.expenses).toEqual(["e1"]);
+    expect(imports[0].summary.failed).toBe(1);
+  });
+});
+describe("D164: /api/cashflow stores and reads the month as YYYY-MM", () => {
+  it("POST folds 2026-9, refuses garbage and a non-integer week; GET folds too", async () => {
+    const rows: any[] = [];
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.upsertCashflow = async (d: any) => { rows.push(d); return { id: "cf-1", ...d }; };
+      storage.getCashflow = async (month: string) => rows.filter((r) => r.month === month);
+    });
+    const ok = await h.api("POST", "/api/cashflow", { month: "2026-9", week: "1", projected_income: 100 });
+    expect(ok.status).toBe(200);
+    expect(rows[0]).toMatchObject({ month: "2026-09", week: 1, projected_income: 100 });
+    expect((await h.api("POST", "/api/cashflow", { month: "sept", week: 1 })).status).toBe(400);
+    expect((await h.api("POST", "/api/cashflow", { month: "2026-09", week: "x" })).status).toBe(400);
+    expect((await h.api("POST", "/api/cashflow", { month: "2026-09", week: 1.5 })).status).toBe(400);
+    const got = await h.api("GET", "/api/cashflow?month=2026-9");
+    expect(got.status).toBe(200);
+    expect((await h.api("GET", "/api/cashflow?month=2026-13")).status).toBe(400);
+  });
+});
+
+// ─── D165: an obligation's category is folded whichever door it comes through ─
+describe("D165: createObligation folds the category", () => {
+  it("MemStorage stores 'Utility' as utilities", async () => {
+    const s = new MemStorage();
+    const o = await s.createObligation({ name: "Water", amount: 30, frequency: "monthly", category: "Utility", nextDueDate: "2026-09-10" } as any);
+    expect(o.category).toBe("utilities");
+  });
+});
