@@ -1,7 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID, createHash } from "crypto";
 
-import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy, type BudgetEntry } from "@shared/budget-ledger";
+import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy, spendByCategory, spendByCategory as spendByCategoryOf, type BudgetEntry } from "@shared/budget-ledger";
 // One writer at a time per (user, month) within this process; see mutateBudgets.
 const budgetWriteLocks = new Map<string, Promise<void>>();
 import { assertEventSpan } from "@shared/event-span";
@@ -462,7 +462,7 @@ function generateInsights(
   const monthlyExpenses = expenses.filter(e => String(e.date || "").slice(0, 7) === thisMonthKey);
   const monthTotal = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
   if (monthTotal > 0) {
-    const topCat = Object.entries(monthlyExpenses.reduce((acc: Record<string, number>, e) => { acc[e.category] = (acc[e.category] || 0) + e.amount; return acc; }, {})).sort((a, b) => b[1] - a[1])[0];
+    const topCat = Object.entries(spendByCategory(monthlyExpenses)).sort((a, b) => b[1] - a[1])[0];
     if (topCat) {
       insights.push({ id: randomUUID(), type: "spending_trend", title: `$${monthTotal.toFixed(0)} spent this month`, description: `Top category: ${topCat[0]} ($${topCat[1].toFixed(0)}).`, severity: monthTotal > 1000 ? "warning" : "info", data: { total: monthTotal, topCategory: topCat[0] }, createdAt: now.toISOString() });
     }
@@ -7388,8 +7388,9 @@ export class SupabaseStorage implements IStorage {
     }
 
     const monthlyExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === userYearMonth);
-    const spendByCategory: Record<string, number> = {};
-    for (const e of monthlyExpenses) spendByCategory[e.category] = (spendByCategory[e.category] || 0) + e.amount;
+    // Keyed like the budget caps (budgetCategoryKey): the finance page reads a
+    // cap's spending straight out of this map by the cap's category.
+    const spendByCategory = spendByCategoryOf(monthlyExpenses);
     const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
 
     // Previous month YYYY-MM, computed in the user's timezone

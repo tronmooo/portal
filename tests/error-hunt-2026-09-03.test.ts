@@ -1230,3 +1230,15 @@ describe("D186: unpay adds the principal back to the balance as it is when the w
     expect(payments.map((p) => p.id)).toEqual(["pay-other"]);
   });
 });
+
+// ─── D187: spending is keyed like the caps it is measured against ───────────
+import { spendByCategory } from "../shared/budget-ledger";
+describe("D187: spendByCategory folds every spelling onto the budget key", () => {
+  it("'transportation', 'Transport' and 'transport' rows meet under one key; unknown words keep their own", () => {
+    const out = spendByCategory([
+      { category: "transportation", amount: 40 }, { category: "Transport", amount: 12.1 }, { category: "transport", amount: 5 },
+      { category: "Groceries", amount: 30 }, { category: "food", amount: 20 }, { category: "Lego", amount: 9 }, { category: null, amount: 1 },
+    ]);
+    expect(out).toEqual({ transport: 57.1, food: 50, lego: 9, general: 1 });
+  });
+});

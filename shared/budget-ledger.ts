@@ -130,3 +130,19 @@ export function mergeBudgetsForCopy(
   }
   return { list, added };
 }
+
+/**
+ * Spend totals keyed the way budget caps are keyed (budgetCategoryKey), so a
+ * cap and the spending it governs always meet on one key. Aggregating by the
+ * raw stored category split "transportation" rows (written before categories
+ * were folded at write time) from the "transport" cap they belong to: the cap
+ * showed 0 spent while the month's rides sat under a key nothing read.
+ */
+export function spendByCategory(expenses: Array<{ category?: string | null; amount?: number | null }>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of expenses) {
+    const key = budgetCategoryKey(e.category) || "general";
+    out[key] = (out[key] || 0) + (Number(e.amount) || 0);
+  }
+  return out;
+}

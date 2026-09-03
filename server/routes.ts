@@ -435,7 +435,7 @@ import {
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
-import { normalizeMonthKey, budgetCategoryKey } from "@shared/budget-ledger";
+import { normalizeMonthKey, budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
@@ -9251,10 +9251,7 @@ If unsure, use "other". Use "subscription" for recurring services; "vehicle" for
       const expensesThisMonth = expenses.filter(e => e.date >= monthAgoStr);
       const weekExpenseTotal = expensesThisWeek.reduce((s, e) => s + e.amount, 0);
       const monthExpenseTotal = expensesThisMonth.reduce((s, e) => s + e.amount, 0);
-      const categoryTotals: Record<string, number> = {};
-      for (const e of expensesThisWeek) {
-        categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount;
-      }
+      const categoryTotals = spendByCategory(expensesThisWeek);
       const topExpenseCategory = Object.entries(categoryTotals).sort((a, b) => b[1] - a[1])[0]?.[0] || "none";
 
       // Habits this week

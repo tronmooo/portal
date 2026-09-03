@@ -57,7 +57,7 @@ import {
 } from "@shared/finance-accounts";
 import { createHash, randomUUID } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
-import { budgetCategoryKey } from "@shared/budget-ledger";
+import { budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
@@ -13135,13 +13135,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       });
 
       // Group by category
-      const byCategory: Record<string, number> = {};
+      const byCategory = spendByCategory(currentExpenses);
       let total = 0;
-      for (const e of currentExpenses) {
-        const cat = e.category || "general";
-        byCategory[cat] = (byCategory[cat] || 0) + e.amount;
-        total += e.amount;
-      }
+      for (const e of currentExpenses) total += e.amount;
       const byCategoryArr = Object.entries(byCategory)
         .sort((a, b) => b[1] - a[1])
         .map(([name, amount]) => ({ name, amount: Math.round(amount * 100) / 100 }));
@@ -14092,8 +14088,7 @@ async function buildReportSpec(input: Record<string, any>): Promise<ReportSpec> 
     const expenses = await storage.getExpenses();
     const filtered = expenses.filter(e => new Date(e.date||e.createdAt) >= since && (!profileId || e.linkedProfiles?.includes(profileId)));
     const total = filtered.reduce((s,e)=>s+e.amount,0);
-    const byCategory: Record<string,number> = {};
-    for (const e of filtered) byCategory[e.category||"general"] = (byCategory[e.category||"general"]||0)+e.amount;
+    const byCategory = spendByCategory(filtered);
     const topCategory = Object.entries(byCategory).sort((a,b)=>b[1]-a[1])[0]?.[0] || "\u2014";
     sections.push({ heading:"Summary", metrics:[
       {label:"Total Spent",value:`$${total.toFixed(2)}`,changeType:"neutral"},
