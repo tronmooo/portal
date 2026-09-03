@@ -989,3 +989,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - Three consecutive check-ins → streak 3; moving today's mirror entry to −5d (D233) leaves check-ins on −5/−2/−1 and the streak at 2; checking today again → 3; removing yesterday's → 1. Streaks are derived from the check-ins, never left stale. s208 (D229) 5/5 again after re-minting user B's expired replica token.
 - Browser flows after the D242/D243 builds: flows14 6/6, flows15 7/7, flows16 6/6, flows17 6/6, flows20 5/5, flows21 4/4, flows22 5/5, flows23 2/2.
+
+### Bell dismissals against new facts — verified (s225)
+
+- Before: a dismissed "due soon" hid the bill after its due day moved, and a dismissed expiry stayed hidden after the date was corrected (3/5). After: both raise fresh notices (5/5). Bell probes unchanged: s158 3/3, s159 4/4, s163 9/9. Full suite 260 files / 4661 tests green.
