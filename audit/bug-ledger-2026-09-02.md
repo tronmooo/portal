@@ -942,3 +942,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Bill "Last paid" after two payments — verified (s217)
 
 - Pay the current occurrence dated −10d, then the next occurrence via the occurrence status route today: the bill schedule's `lastPaid` and `fields.lastPaidDate` both read today. (A second `POST /obligations/:id/pay` within seconds is answered with the first payment — the double-tap guard, D18 — so the second occurrence must be named explicitly.)
+
+### Document provenance across a restore — verified (s218)
+
+- Before the fix: B's Kim carried `_docFields` keyed by A's document id, and deleting B's restored licence left the copied expiry behind (3/5). After: keyed by B's new document id, the cascade takes the copy, the calendar shows the expiry once (5/5). s208 (D229 restore of habit links, pairings and co-signers) unchanged 5/5. (User A's replica token had expired mid-run; re-minted with the same subject.)
