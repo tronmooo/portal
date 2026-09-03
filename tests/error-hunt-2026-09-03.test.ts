@@ -1539,6 +1539,8 @@ describe("D203: export and import cover captures", () => {
       expect(created).toHaveLength(1);
       expect(created[0].rawInput).toBe("call the dentist");
       expect(created[0].source).toBe("manual");
+      // The foreign owner did not remap: the capture lands on this account's Self, never ownerless.
+      expect(created[0].ownerProfileId).toBe("self-1");
     } finally { await booted.close(); }
   });
 });

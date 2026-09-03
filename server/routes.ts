@@ -9043,13 +9043,17 @@ Rules:
         }
       }
       if (data.captures && Array.isArray(data.captures) && typeof (storage as any).createCapture === "function") {
+        // An owner that does not remap (another account's Self, a profile the
+        // backup does not carry) falls back to this account's Self — the same
+        // default the capture route applies — rather than landing ownerless.
+        const importSelf = await (storage.getSelfProfile?.() ?? Promise.resolve(undefined)).catch(() => undefined);
         for (const c of data.captures) {
           if (!c || typeof c.rawInput !== "string" || !c.rawInput.trim()) continue;
           await tryImport("captures", c.title || c.rawInput.slice(0, 40), () => (storage as any).createCapture({
             type: c.type, title: c.title, rawInput: c.rawInput, structuredData: c.structuredData, metadata: c.metadata,
             relationships: c.relationships, source: c.source || "import", confidence: c.confidence, status: c.status,
             projections: c.projections, clarifyingQuestion: c.clarifyingQuestion,
-            ownerProfileId: remap(c.ownerProfileId ? [c.ownerProfileId] : [])[0] ?? null,
+            ownerProfileId: remap(c.ownerProfileId ? [c.ownerProfileId] : [])[0] ?? importSelf?.id ?? null,
           }));
         }
       }
