@@ -2765,3 +2765,20 @@ describe("D251: a name shared by two profiles is a question, not a guess", () =>
     expect(son.id).toBeTruthy();
   });
 });
+
+describe("D251: the ownership tools ask too when two people share a name", () => {
+  it("link_asset_owner with two people named Max asks which, and creates no link", async () => {
+    const s = new MemStorage();
+    const run = <T,>(fn: () => Promise<T>) => new Promise<T>((resolve, reject) => requestStorageContext.run(s, () => fn().then(resolve, reject)));
+    await s.createProfile({ name: "Me", type: "self", fields: {} } as any);
+    await s.createProfile({ name: "Max", type: "person", fields: {} } as any);
+    await s.createProfile({ name: "Max", type: "person", fields: { relationship: "nephew" } } as any);
+    await s.createProfile({ name: "Honda Civic", type: "asset", fields: {} } as any);
+    const calls: any[] = [];
+    (s as any).createAssetPartyLink = async (l: any) => { calls.push(l); return { id: "l1", ...l }; };
+    const out = await run(() => executeTool("link_asset_owner", { assetName: "Civic", partyName: "Max", ownershipPct: 50, role: "co_owner" }, "u-1"));
+    expect(out.error).toMatch(/Several profiles match "Max"/);
+    expect(calls).toEqual([]);
+    expect((await s.getProfiles()).filter((p) => p.name === "Max")).toHaveLength(2);
+  });
+});

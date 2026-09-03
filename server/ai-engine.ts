@@ -9949,8 +9949,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           return { result: { removed: input.removeOwnerName }, actions: [{ type: "unlink", category: "liability_owner", data: { name: input.removeOwnerName } }] };
         }
       }
-      let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase() === pNameLC)
-        || profiles.find((p: any) => (p.type === "person" || p.type === "self") && nameLooselyMatches(p.name, pNameLC));
+      // Two people with the same name are a question, not a guess (D251).
+      const partyPick = pickProfileByName(profiles.filter((p: any) => p.type === "person" || p.type === "self"), pNameLC, input.partyName);
+      if ("error" in partyPick && /^Several profiles match/.test(partyPick.error)) return { error: partyPick.error };
+      let party: any = "profile" in partyPick ? partyPick.profile : undefined;
       // Auto-create the person profile if missing — same UX gap as the asset link.
       if (!party && input.partyName) {
         const partyName = String(input.partyName).trim();
@@ -10093,8 +10095,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         } catch (e: any) { logger.warn("ai", `removeOwner asset cleanup failed: ${e?.message}`); }
         if (!input.partyName) return { result: { removed: input.removeOwnerName }, actions: [{ type: "unlink", category: "asset_owner", data: { name: input.removeOwnerName } }] };
       }
-      let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase() === pNameLC)
-        || profiles.find((p: any) => (p.type === "person" || p.type === "self") && nameLooselyMatches(p.name, pNameLC));
+      // Two people with the same name are a question, not a guess (D251).
+      const partyPick = pickProfileByName(profiles.filter((p: any) => p.type === "person" || p.type === "self"), pNameLC, input.partyName);
+      if ("error" in partyPick && /^Several profiles match/.test(partyPick.error)) return { error: partyPick.error };
+      let party: any = "profile" in partyPick ? partyPick.profile : undefined;
       if (!party && input.partyName) {
         const partyName = String(input.partyName).trim();
         if (!/^(me|myself|i|self)$/i.test(partyName)) {
@@ -10148,7 +10152,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           const selfP = profiles.find((p: any) => p.type === "self");
           if (selfP) pNameLC = selfP.name.toLowerCase();
         }
-        let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && (p.name.toLowerCase() === pNameLC || nameLooselyMatches(p.name, pNameLC)));
+        const partyPick = pickProfileByName(profiles.filter((p: any) => p.type === "person" || p.type === "self"), pNameLC, s.partyName);
+        if ("error" in partyPick && /^Several profiles match/.test(partyPick.error)) return { error: partyPick.error };
+        let party: any = "profile" in partyPick ? partyPick.profile : undefined;
         if (!party) {
           try {
             party = await storage.createProfile({ name: String(s.partyName).trim(), type: "person", fields: {}, tags: [], notes: null } as any);
