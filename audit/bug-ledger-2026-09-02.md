@@ -891,3 +891,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - Monthly event anchored on the 31st: Sep 30, Oct 31, Nov 30 with `recurrenceEnd` inclusive; yearly Feb-29 event: Feb 28 in common years, Feb 29 in 2028; a weekly event two years old still yields its next two occurrences.
 - Entity links: B cannot delete, create against, or read A's task→expense link (404/404/empty); deleting the expense removes the link from the task.
 - move-liability: B moving A's loan onto B's asset answers 404 and leaves the link untouched; A's move re-points the collateral edge to car2, and (after D231) every graph edge joins two returned nodes.
+
+### Goal deadline day counting in the browser — verified (flows22)
+
+- Browser pinned to Pacific/Kiritimati (UTC+14, local day ahead of UTC all morning): a goal due today reads `0d left` (the replaced arithmetic showed `1d left`), a goal due yesterday reads `OVERDUE · 1d late` (it showed `0d left`); no page errors. Same section reached at `/#/dashboard/goals` and `/#/goals`; the dashboard's Next Important row already named the day correctly.
+- Paychecks and accounts (s212): B confirming/deleting A's paycheck is 404, A's paycheck untouched; confirm records the actual amount and today's received date; a missing paycheck is 404; account delta/set-to adjustments land (1000 → 800 → 950); B cannot adjust, edit or delete A's account. A paycheck `expected_date` typed as `9/5/2026` is stored as 2026-09-05 (Postgres MDY parse) — the client date input sends ISO, so noted, not fixed.
