@@ -335,6 +335,15 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Owner re-homing scope and a shortened series (probe s119) — verified working
+Moving an expense from Linda to Self takes it out of Linda's list and scoped snapshot and into Self's right away; a weekly event ending in 30 days yields five occurrences within 45 days and shortening it to 10 days leaves two, none after the new end.
+
+### Spending-limit goal and a legacy category spelling (probe s118) — verified after D153/D187
+A Transportation spending-limit goal counts a row stored as "transportation".
+
+### Tokyo user-day probe re-run (s76 at 10:01 UTC) — 6/6, boundary case still pending
+Dateless check-ins, journal entries and expenses land on the Tokyo day and the bell does not call a task due today overdue. At 10:01 UTC the Tokyo and UTC dates still coincide; the east-of-UTC boundary (Tokyo's next day begins at 15:00 UTC) needs a run after 15:00 UTC.
+
 ### Income list freshness (probe s116) — verified working
 A new monthly income is listed right away with its folded cadence; an edit to 1500 "every 2 weeks" shows immediately as biweekly; a deleted income leaves the list.
 
