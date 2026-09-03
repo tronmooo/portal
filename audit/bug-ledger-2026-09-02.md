@@ -1064,3 +1064,7 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - Full suite after the create_tracker guard: 260 files / 4667 tests green.
 - Replica after the last build: s209 15/15, s213 3/3, s225 5/5, s226 2/2.
 - Full suite after the non-tool caller guards: 260 files / 4667 tests green.
+
+### Final replica sweep for the day — verified
+
+- crawl clean; flows15 7/7, flows21 4/4, flows24 5/5 on the last build. Integrity: no mirror entries without a habit, no paid stamps without a payment row, no `_docFields` naming a missing document, no tracker owner pointing at a missing profile. Nine probe leftover profiles (from runs that crashed on expired tokens or rate limits) removed through the cascade function.
