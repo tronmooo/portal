@@ -976,3 +976,4 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Co-signed loan in per-person net worth — verified (s223)
 
 - A 10,000 loan co-signed Self 50 / Linda 50: the household carries 10,000, Self-scoped 5,000, Linda-scoped 5,000; Linda leaving hands her half back (Self 10,000, D224 for liabilities); deleting the loan returns net worth to the baseline. Found D242 on the way: the generic owners route silently wrote asset rows for the loan.
+- After D242: s223 4/4 through the generic `/owners` route as well; no stray asset rows on liabilities in the replica or in production (read-only check); full suite 260 files / 4658 tests green.
