@@ -436,6 +436,45 @@ export async function rescheduleBillOccurrence(
   return result;
 }
 
+/**
+ * Ids of the surplus copies among open "Bill due" reminders that share a title
+ * and due day. Two due-scan runs that overlap (a scheduled run beside a retry
+ * or a manual trigger) each read "no reminder yet" and each create one; both
+ * runs then collapse the pair the same way — the earliest-created copy (ties
+ * broken by id) survives on both sides, so nothing is lost and nothing is
+ * left doubled. Pure: exported for tests.
+ */
+export function pickDuplicateBillReminders(tasks: any[]): string[] {
+  const groups = new Map<string, any[]>();
+  for (const t of tasks || []) {
+    if (!t || t.status === "done") continue;
+    if (typeof t.title !== "string" || !t.title.startsWith(BILL_REMINDER_TASK_PREFIX)) continue;
+    const key = `${t.title}|${String(t.dueDate || "").slice(0, 10)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(t);
+  }
+  const extras: string[] = [];
+  for (const rows of groups.values()) {
+    if (rows.length < 2) continue;
+    const sorted = [...rows].sort((a, b) => {
+      const ca = String(a.createdAt || ""), cb = String(b.createdAt || "");
+      return ca < cb ? -1 : ca > cb ? 1 : String(a.id).localeCompare(String(b.id));
+    });
+    for (const t of sorted.slice(1)) extras.push(String(t.id));
+  }
+  return extras;
+}
+
+/** Deletes the surplus reminder copies (see pickDuplicateBillReminders). Returns how many went. */
+export async function collapseDuplicateBillReminders(storage: IStorage, logger: PaymentLogger = noopLogger): Promise<number> {
+  const tasks = await storage.getTasks().catch(() => [] as any[]);
+  let removed = 0;
+  for (const id of pickDuplicateBillReminders(tasks as any[])) {
+    try { if (await storage.deleteTask(id)) removed++; } catch (e: any) { logger.warn?.(`[bill-reminders] could not drop duplicate ${id}: ${e?.message || e}`); }
+  }
+  return removed;
+}
+
 /** True for an open "Bill due" reminder task that belongs to this bill. */
 export function isOpenBillReminderTask(t: any, liabilityId: string): boolean {
   if (!t || t.status === "done") return false;

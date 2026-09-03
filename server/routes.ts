@@ -32,7 +32,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
+import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -805,6 +805,10 @@ const USER_CACHE_PREFIXES = [
   "obligations:", "journal:", "documents:", "goals:", "insights:",
   "insights-data:", "activity:", "ai-digest:", "artifacts:", "notifications:",
   "cashflow:", "calendar:",
+  // The incomes list is cached under "incomes:" (2026-08-17) and was never in
+  // this list: version stamps covered it, but a bump that failed open left it
+  // stale for its full TTL while every other list was busted on this instance.
+  "incomes:",
   // The calendar timeline's key prefix is "caltimeline:", not "calendar:", so
   // it matched nothing in this list and no write ever busted it on the writing
   // instance. Version-stamped keys made that survivable (a write bumps the
@@ -2444,7 +2448,12 @@ export async function registerRoutes(
                     }
                   }
                 }
-                if (userWrote) await afterCronWrites(u.id);
+                if (userWrote) {
+                  // An overlapping run may have created the same reminder
+                  // beside ours (D260): keep one copy, then invalidate.
+                  await collapseDuplicateBillReminders(scoped, log).catch(() => 0);
+                  await afterCronWrites(u.id);
+                }
               } catch { /* per-user failure shouldn't abort the run */ }
               resolve();
             });

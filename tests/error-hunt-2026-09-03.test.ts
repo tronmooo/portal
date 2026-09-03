@@ -3013,3 +3013,37 @@ describe("D259 tracker cleanup keeps legitimate negative entries", () => {
     expect(block).toContain("healthType && Object.values(vals).some((v: any) => typeof v === 'number' && v < 0)");
   });
 });
+
+// ── D260: two overlapping due-scan runs must not leave two "Bill due" reminders.
+describe("D260 duplicate bill reminders collapse to one", async () => {
+  const { pickDuplicateBillReminders, collapseDuplicateBillReminders } = await import("../server/liability-payments");
+  const t = (id: string, title: string, dueDate: string, createdAt: string, status = "pending") => ({ id, title, dueDate, createdAt, status, linkedProfiles: ["bill1"] });
+  it("keeps the earliest copy (ties by id) and names the rest", () => {
+    const tasks = [
+      t("b", "Bill due: Water", "2026-09-05", "2026-09-03T10:00:01Z"),
+      t("a", "Bill due: Water", "2026-09-05", "2026-09-03T10:00:00Z"),
+      t("c", "Bill due: Water", "2026-09-05", "2026-09-03T10:00:00Z"),
+      t("d", "Bill due: Water", "2026-10-05", "2026-09-03T10:00:00Z"), // another day: not a duplicate
+      t("e", "Bill due: Gas", "2026-09-05", "2026-09-03T10:00:00Z"),
+      t("f", "Bill due: Water", "2026-09-05", "2026-09-01T10:00:00Z", "done"), // closed: ignored
+      { id: "g", title: "Call mom", dueDate: "2026-09-05", createdAt: "", status: "pending" },
+    ];
+    expect(pickDuplicateBillReminders(tasks).sort()).toEqual(["b", "c"]);
+    // Both overlapping runs compute the same survivor whatever order they read the rows in.
+    expect(pickDuplicateBillReminders([...tasks].reverse()).sort()).toEqual(["b", "c"]);
+  });
+  it("deletes only the surplus copies", async () => {
+    const deleted: string[] = [];
+    const storage: any = { getTasks: async () => [t("a", "Bill due: Water", "2026-09-05", "1"), t("b", "Bill due: Water", "2026-09-05", "2")], deleteTask: async (id: string) => { deleted.push(id); return true; } };
+    expect(await collapseDuplicateBillReminders(storage)).toBe(1);
+    expect(deleted).toEqual(["b"]);
+  });
+  it("the due scan collapses duplicates for a user it wrote for, before invalidating", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    const a = src.indexOf("async function runLiabilityDueScan"); const b = src.indexOf("const cronLiabilityDueScan", a);
+    const scan = src.slice(a, b);
+    const c = scan.indexOf("await collapseDuplicateBillReminders(scoped, log)");
+    expect(c).toBeGreaterThan(0);
+    expect(scan.indexOf("await afterCronWrites(u.id)")).toBeGreaterThan(c);
+  });
+});
