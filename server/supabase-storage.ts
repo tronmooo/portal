@@ -8205,6 +8205,28 @@ export class SupabaseStorage implements IStorage {
     const errors: Record<string, string> = {};
     const uid = this.userId;
 
+    // The bytes first: uploaded documents live in the storage bucket under
+    // `${userId}/…` and are not rows, so the table sweep below never touched
+    // them — "delete all data" left every uploaded file (and its preview)
+    // behind. Sweep the user's folder, reporting the count like a table.
+    try {
+      const bucket = this.supabase.storage.from(DOCUMENTS_BUCKET);
+      let removed = 0;
+      for (let offset = 0; ; offset += 1000) {
+        const { data: files, error: listErr } = await bucket.list(uid, { limit: 1000, offset });
+        if (listErr) throw listErr;
+        const names = (files || []).map((f: any) => f?.name).filter((n: any) => typeof n === "string" && n.length > 0);
+        if (names.length === 0) break;
+        const { error: rmErr } = await bucket.remove(names.map((n: string) => `${uid}/${n}`));
+        if (rmErr) throw rmErr;
+        removed += names.length;
+        if (names.length < 1000) break;
+      }
+      deleted.storage_files = removed;
+    } catch (e: any) {
+      errors.storage_files = e?.message || String(e);
+    }
+
     for (const table of SupabaseStorage.ALL_USER_TABLES) {
       try {
         const { count, error } = await this.supabase

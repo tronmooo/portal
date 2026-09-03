@@ -1463,3 +1463,29 @@ describe("D200: the account wipe covers captures", () => {
     }
   });
 });
+
+// ─── D201: "delete all data" removes uploaded files, not only rows ──────────
+describe("D201: the account wipe sweeps the user's folder in the documents bucket", () => {
+  it("lists the folder, removes every file (and preview) under the user's prefix, and reports the count", async () => {
+    const removed: string[][] = []; const listed: any[] = [];
+    const { client } = chainClient((_t, op) => op === "delete" ? { data: null, error: null, count: 0 } : { data: [], error: null });
+    (client as any).storage = { from: (bucket: string) => ({
+      list: async (prefix: string, opts: any) => { listed.push([bucket, prefix, opts]); return { data: opts.offset === 0 ? [{ name: "doc-1.pdf" }, { name: "doc-1.pdf.prev.jpg" }, { name: "doc-2.png" }] : [], error: null }; },
+      remove: async (paths: string[]) => { removed.push(paths); return { data: paths, error: null }; },
+    }) };
+    const s = bareStorage({ supabase: client });
+    const out = await s.deleteAllUserData();
+    expect(listed[0]).toEqual(["documents", s.userId, { limit: 1000, offset: 0 }]);
+    expect(removed.flat()).toEqual([`${s.userId}/doc-1.pdf`, `${s.userId}/doc-1.pdf.prev.jpg`, `${s.userId}/doc-2.png`]);
+    expect(out.deleted.storage_files).toBe(3);
+    expect(out.errors.storage_files).toBeUndefined();
+  });
+  it("a bucket failure is reported loudly and does not stop the table sweep", async () => {
+    let tables = 0;
+    const { client } = chainClient((_t, op) => { if (op === "delete") tables++; return { data: null, error: null, count: 0 }; });
+    (client as any).storage = { from: () => ({ list: async () => ({ data: null, error: { message: "bucket offline" } }), remove: async () => ({ data: null, error: null }) }) };
+    const out = await bareStorage({ supabase: client }).deleteAllUserData();
+    expect(out.errors.storage_files).toMatch(/bucket offline/);
+    expect(tables).toBeGreaterThan(10);
+  });
+});
