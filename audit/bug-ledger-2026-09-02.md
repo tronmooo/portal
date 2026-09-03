@@ -1170,3 +1170,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - s255 (3/3): a backup restores a 529's beneficiary link and a card's authorized-user link with their roles, pointed at the restored person, beside the owner share.
 - Production cross-user sweep (read-only, 23:55 UTC): no asset, liability, liability-asset or entity link and no task, expense or document links a profile of another user.
 - s256 (7/7): user B cannot undo A's finance import, move A's collateral link, rewrite A's owners, read A's ownership history or profile-bootstrap, or see A's caps; B's dismissals touch only B's list; A's data is unchanged afterwards.
+- Replica batch on the final build (cache on): s230–s235, s237–s239, s242–s244, s247, s248, s250, s251, s253, s254, s256 all green.
