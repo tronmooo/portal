@@ -4,6 +4,7 @@ import { fieldPatchBetween } from "../shared/field-patch";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { deleteDocumentEverywhere } from "./document-deletion";
+import { propagateDocumentFieldChange } from "./document-provenance";
 import { storage } from "./storage";
 import {
   createNote, updateNote, deleteNote, listNotes,
@@ -2746,6 +2747,13 @@ Return ONLY the JSON object, nothing else.`;
         tags: Array.from(new Set([...(existingDoc.tags || []), parsed.documentType || "uploaded", uploadHashTag, ...(discardImage ? [discardTag] : [])])),
       } as any);
       console.log(`[Upload] Updated existing document "${docName}" (${existingDoc.id}) instead of creating duplicate`);
+      // The re-read replaced the document's fields wholesale; the copies the
+      // first upload wrote onto profiles follow (server/document-provenance).
+      try {
+        await propagateDocumentFieldChange(storage, existingDoc.id, existingDoc.extractedData as any, parsed.extractedData || {});
+      } catch (e: any) {
+        console.warn(`[Upload] could not move document-written profile fields for ${existingDoc.id}: ${e?.message || e}`);
+      }
     } else {
       // P0.3a: validate the model-derived parts (name/type from the extraction
       // JSON) before persisting. On failure, fall back to a safe payload so the

@@ -2208,3 +2208,72 @@ describe("D229: POST /api/import keeps the links a backup carries", () => {
     expect(created.liabLinks[0]).toMatchObject({ role: "co_signer", ownershipPercentage: 50 });
   });
 });
+
+// ─── D230: a document's edited fields move the copies it wrote onto profiles ─
+//
+// confirm-extraction copies a licence's expiration onto the person and records
+// the write in `_docFields`. Editing the document afterwards (viewer field
+// editor, the calendar's edit/clear of a document date, a re-upload) changed
+// the document alone: the person's copy kept the old date, so the calendar
+// showed two expirations for one licence, the bell warned about the wrong day,
+// and a date cleared from the calendar came back from the copy.
+import { propagateDocumentFieldChange } from "../server/document-provenance";
+
+describe("D230: editing a document's fields moves the copies it wrote onto profiles", () => {
+  const silent = { info: () => {}, warn: () => {}, error: () => {} };
+  async function person(fields: Record<string, any>) {
+    const s = new MemStorage();
+    const p = await s.createProfile({ name: "Kim", type: "person", fields } as any);
+    return { s, id: p.id };
+  }
+  it("a corrected date moves the copy and its provenance record", async () => {
+    const { s, id } = await person({ expirationDate: "2026-09-08", city: "Austin", _docFields: { "doc-1": { expirationDate: "2026-09-08" } } });
+    const out = await propagateDocumentFieldChange(s, "doc-1", { expirationDate: "2026-09-08" }, { expirationDate: "2026-09-11" }, silent);
+    const f = (await s.getProfile(id))!.fields as any;
+    expect(f.expirationDate).toBe("2026-09-11");
+    expect(f._docFields["doc-1"]).toEqual({ expirationDate: "2026-09-11" });
+    expect(f.city).toBe("Austin");
+    expect(out.affectedProfileIds).toEqual([id]);
+  });
+  it("a date cleared from the document is taken back from the copy, like the delete cascade", async () => {
+    const { s, id } = await person({ expirationDate: "2026-09-08", _docFields: { "doc-1": { expirationDate: "2026-09-08" } } });
+    await propagateDocumentFieldChange(s, "doc-1", { expirationDate: "2026-09-08" }, {}, silent);
+    const f = (await s.getProfile(id))!.fields as any;
+    expect(f.expirationDate).toBeUndefined();
+    expect(f._docFields).toBeUndefined();
+  });
+  it("a copy the user edited since is theirs and stays; a value the document never carried is left alone", async () => {
+    const { s, id } = await person({ expirationDate: "2027-01-01", policyNumber: "P-1", _docFields: { "doc-1": { expirationDate: "2026-09-08", policyNumber: "P-1" } } });
+    const out = await propagateDocumentFieldChange(s, "doc-1", { expirationDate: "2026-09-08" }, { expirationDate: "2026-09-11", policyNumber: "P-2" }, silent);
+    const f = (await s.getProfile(id))!.fields as any;
+    expect(f.expirationDate).toBe("2027-01-01");
+    expect(f.policyNumber).toBe("P-1");
+    expect(out.affectedProfileIds).toEqual([]);
+  });
+  it("matches by field identity inside nested groups and only the profiles this document wrote", async () => {
+    const s = new MemStorage();
+    const kim = await s.createProfile({ name: "Kim", type: "person", fields: { identity: { expirationDate: "2026-09-08" }, _docFields: { "doc-1": { expirationDate: "2026-09-08" } } } } as any);
+    const lee = await s.createProfile({ name: "Lee", type: "person", fields: { expirationDate: "2026-09-08" } } as any);
+    await propagateDocumentFieldChange(s, "doc-1", { expirationDate: "2026-09-08" }, { expirationDate: "2026-09-11" }, silent);
+    expect(((await s.getProfile(kim.id))!.fields as any).identity.expirationDate).toBe("2026-09-11");
+    expect(((await s.getProfile(lee.id))!.fields as any).expirationDate).toBe("2026-09-08");
+  });
+  it("route: PATCH /api/documents/:id with new extractedData moves the copy; a rename does not touch profiles", async () => {
+    const profileWrites: any[] = [];
+    h = await boot({
+      profiles: [{ id: "kim-1", type: "person", name: "Kim", fields: { expirationDate: "2026-09-08", _docFields: { "doc-1": { expirationDate: "2026-09-08" } } } }],
+      documents: [{ id: "doc-1", name: "Licence", type: "identity", extractedData: { expirationDate: "2026-09-08" }, linkedProfiles: ["kim-1"], tags: [] }],
+    }, (storage, db) => {
+      const base = storage.updateProfile;
+      storage.updateProfile = async (pid: string, patch: any) => { profileWrites.push(patch); return base(pid, patch); };
+    });
+    const renamed = await h.api("PATCH", "/api/documents/doc-1", { name: "Kim's licence" });
+    expect(renamed.status).toBe(200);
+    expect(profileWrites).toEqual([]);
+    const edited = await h.api("PATCH", "/api/documents/doc-1", { extractedData: { expirationDate: "2026-09-11" } });
+    expect(edited.status).toBe(200);
+    const kim = (await h.api("GET", "/api/profiles/kim-1")).data;
+    expect(kim.fields.expirationDate).toBe("2026-09-11");
+    expect(kim.fields._docFields["doc-1"].expirationDate).toBe("2026-09-11");
+  });
+});

@@ -167,6 +167,7 @@ interface AuthenticatedRequest extends Request {
   userId?: string;
 }
 import { computeDocumentDeletionImpact, deleteDocumentEverywhere, parseDeletionMode, repairOrphanedDocumentEvents } from "./document-deletion";
+import { propagateDocumentFieldChange } from "./document-provenance";
 import { storage, type IStorage } from "./storage";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
@@ -7229,9 +7230,19 @@ Rules:
       const impossible = impossibleCalendarDays(req.body.extractedData, { contextKey: String(req.body.type ?? "") });
       if (impossible.length > 0) return res.status(400).json({ error: `${impossible.join(", ")} must be a real calendar day (YYYY-MM-DD)` });
     }
+    // What the document held before the edit: the copies it wrote onto
+    // profiles (confirm-extraction's `_docFields` provenance) follow the
+    // document's fields, and the rule needs both sides. See
+    // server/document-provenance.
+    const editsFields = !!(req.body.extractedData && typeof req.body.extractedData === "object");
+    const beforeEdit = editsFields ? await storage.getDocumentMeta(req.params.id).catch(() => undefined) : undefined;
     const updated = await storage.updateDocument(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_d2 = cacheUserKey(req as AuthenticatedRequest);
+    if (editsFields) {
+      const followed = await propagateDocumentFieldChange(storage, req.params.id, beforeEdit?.extractedData as any, (updated as any).extractedData, log);
+      if (followed.affectedProfileIds.length > 0) bustCache(`profiles:${uid_d2}`);
+    }
     bustCache(`documents:${uid_d2}`); bustCache(`stats:${uid_d2}`); bustCache(`profile-detail:${uid_d2}:`); bustCache(`notifications:${uid_d2}`);
     // A document's dates are calendar items, so an edit to them is a calendar
     // change too.
