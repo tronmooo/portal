@@ -809,3 +809,32 @@ describe("D171: deletePaycheck reports the row count and the route maps none to 
     expect((await h.api("DELETE", "/api/paychecks/pc-1")).status).toBe(200);
   });
 });
+
+// ─── D172: every delete answers what the database did ───────────────────────
+describe("D172: deletes of tasks, expenses, events, tracker entries and entity links report the row count", () => {
+  it("storage: no matching row → false, one row → true, user filter on every delete", async () => {
+    const rec = (table: string, rows: any[]) => chainClient((t, op) => t === table && (op === "delete" || op === "update") ? { data: rows, error: null } : { data: [], error: null });
+    for (const [table, call] of [
+      ["tracker_entries", (s: any) => s.deleteTrackerEntry("tr-1", "en-1")],
+      ["events", (s: any) => s.deleteEvent("ev-1")],
+      ["entity_links", (s: any) => s.deleteEntityLink("ln-1")],
+    ] as const) {
+      const none = rec(table, []);
+      const s0 = bareStorage({ supabase: none.client, cleanupEntityLinks: async () => undefined, getEvent: async () => ({ id: "ev-1" }) });
+      expect(await call(s0), table).toBe(false);
+      const op = none.calls.find((c) => c.table === table && (c.op === "delete" || c.op === "update"))!;
+      expect(op.filters, table).toEqual(expect.arrayContaining([["eq", ["user_id", s0.userId]]]));
+      const one = rec(table, [{ id: "x" }]);
+      expect(await call(bareStorage({ supabase: one.client, cleanupEntityLinks: async () => undefined, getEvent: async () => ({ id: "ev-1" }) })), table).toBe(true);
+    }
+  });
+  it("routes: DELETE /api/tasks/:id and /api/expenses/:id answer 404 when the storage removed nothing", async () => {
+    let removed = false;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => { storage.deleteTask = async () => removed; storage.deleteExpense = async () => removed; });
+    expect((await h.api("DELETE", "/api/tasks/t-1")).status).toBe(404);
+    expect((await h.api("DELETE", "/api/expenses/e-1")).status).toBe(404);
+    removed = true;
+    expect((await h.api("DELETE", "/api/tasks/t-1")).status).toBe(200);
+    expect((await h.api("DELETE", "/api/expenses/e-1")).status).toBe(200);
+  });
+});

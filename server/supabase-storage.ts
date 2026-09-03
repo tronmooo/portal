@@ -3352,10 +3352,12 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean> {
-    const { error } = await this.supabase.from("tracker_entries").delete()
-      .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId);
+    // `.select` so a delete that matched no row (another user's entry, a
+    // missing id) reports false instead of "no error, so success".
+    const { data, error } = await this.supabase.from("tracker_entries").delete()
+      .eq("id", entryId).eq("tracker_id", trackerId).eq("user_id", this.userId).select("id");
     if (!error) bustInsightsCacheFor(this.userId); // [P0] entry removed → recompute insights
-    return !error;
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   /**
@@ -3608,7 +3610,7 @@ export class SupabaseStorage implements IStorage {
     // scope, permanently. `.select` so 0 rows matched reports false.
     const { data, error } = await this.supabase.from("tasks")
       .update({ deleted_at: new Date().toISOString() })
-      .eq("id", id).eq("user_id", this.userId).select("id");
+      .eq("id", id).eq("user_id", this.userId).is("deleted_at", null).select("id");
     return !error && Array.isArray(data) && data.length > 0;
   }
 
@@ -3720,7 +3722,7 @@ export class SupabaseStorage implements IStorage {
     // expense to its owner's scope; `.select` so 0 rows reports false.
     const { data, error } = await this.supabase.from("expenses")
       .update({ deleted_at: new Date().toISOString() })
-      .eq("id", id).eq("user_id", this.userId).select("id");
+      .eq("id", id).eq("user_id", this.userId).is("deleted_at", null).select("id");
     return !error && Array.isArray(data) && data.length > 0;
   }
 
@@ -3804,7 +3806,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteIncome(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("incomes").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
+    const { error } = await this.supabase.from("incomes").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId).is("deleted_at", null);
     return !error;
   }
 
@@ -3892,8 +3894,8 @@ export class SupabaseStorage implements IStorage {
     // [P6.3] Soft delete — parity with every other entity (the live events
     // table has had a deleted_at column all along; the old "no such column"
     // comment was wrong). Profile-cascade deletion still hard-deletes.
-    const { error } = await this.supabase.from("events").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId);
-    return !error;
+    const { data, error } = await this.supabase.from("events").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId).is("deleted_at", null).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================
@@ -4833,7 +4835,7 @@ export class SupabaseStorage implements IStorage {
     }
     const { data, error } = await this.supabase.from("documents")
       .update({ deleted_at: new Date().toISOString() })
-      .eq("id", id).eq("user_id", this.userId).select("id");
+      .eq("id", id).eq("user_id", this.userId).is("deleted_at", null).select("id");
     if (error) {
       console.error(`[deleteDocument] Supabase error for ${id}:`, error.message);
       return false;
@@ -6422,7 +6424,7 @@ export class SupabaseStorage implements IStorage {
     // making goals the one entity that was unrecoverable by accident.
     const { data, error } = await this.supabase.from("goals")
       .update({ deleted_at: new Date().toISOString() })
-      .eq("id", id).eq("user_id", this.userId).select("id");
+      .eq("id", id).eq("user_id", this.userId).is("deleted_at", null).select("id");
     return !error && Array.isArray(data) && data.length > 0;
   }
 
@@ -6630,8 +6632,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteEntityLink(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("entity_links").delete().eq("id", id).eq("user_id", this.userId);
-    return !error;
+    const { data, error } = await this.supabase.from("entity_links").delete().eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   /**

@@ -6278,8 +6278,9 @@ Rules:
     res.json({ ...updated, ...(rules_t2 ? { dateRules: rules_t2.rules } : {}) });
   }));
   app.delete("/api/tasks/:id", asyncHandler(async (req, res) => {
-    // Idempotent: soft-delete succeeds even if already deleted
-    await storage.deleteTask(req.params.id);
+    // The storage reports whether a live row of this user's was retired; a
+    // task that is not yours, or is already gone, is a 404 — not a success.
+    if (!(await storage.deleteTask(req.params.id))) return res.status(404).json({ error: "Task not found" });
     const uid_t3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t3}`); bustCache(`stats:${uid_t3}`); bustCache(`calendar:${uid_t3}`); bustCache(`notifications:${uid_t3}`);
     res.json({ success: true });
@@ -6632,8 +6633,7 @@ Rules:
     res.json(updated);
   }));
   app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
-    // Idempotent: soft-delete succeeds even if already deleted
-    await storage.deleteExpense(req.params.id);
+    if (!(await storage.deleteExpense(req.params.id))) return res.status(404).json({ error: "Expense not found" });
     const uid_e3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`);
     res.json({ success: true });
