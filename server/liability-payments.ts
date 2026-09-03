@@ -866,17 +866,26 @@ export async function unpayBillOccurrence(
     // Debt: put the principal back, under every name readers use. A reversal-
     // type row carries negative principal, so plain addition also handles it.
     const principal = Number(target.principalPortion) || 0;
-    if (!recurring && principal !== 0 && target.paymentType !== "skipped" && target.paymentType !== "deferred") {
-      const restored = resolveLiabilityBalance(liability) + principal;
-      patch.currentBalance = restored;
-      patch.remainingBalance = restored;
-      patch.loanBalance = restored;
-      restoredBalance = true;
-    }
+    const restores = !recurring && principal !== 0 && target.paymentType !== "skipped" && target.paymentType !== "deferred";
     // lastPaidDate: the latest remaining payment, or gone.
     const remaining = payments.filter((p: any) => p.id !== target.id).sort(byRecency);
     patch.lastPaidDate = remaining[0]?.paymentDate ?? null;
-    await storage.updateProfile(liabilityId, { fields: patch } as any);
+    const withBalance = (base: any) => {
+      if (!restores) return patch;
+      // The principal goes back onto the balance AS IT IS when the write
+      // lands, not onto the figure this call read: an undo beside another
+      // payment used to put the pre-undo balance back over that payment.
+      const restored = resolveLiabilityBalance(base) + principal;
+      return { ...patch, currentBalance: restored, remainingBalance: restored, loanBalance: restored };
+    };
+    const mutate = (storage as any).mutateProfileFields as
+      | ((id: string, fn: (fresh: any) => any) => Promise<any>) | undefined;
+    if (restores && typeof mutate === "function") {
+      await mutate.call(storage, liabilityId, (fresh: any) => ({ fields: withBalance(fresh) }));
+    } else {
+      await storage.updateProfile(liabilityId, { fields: withBalance(liability) } as any);
+    }
+    restoredBalance = restores;
     steps.push({ step: "series_rollback", ok: true });
     if (restoredBalance) steps.push({ step: "balance_restore", ok: true });
   } catch (e: any) {

@@ -1209,3 +1209,24 @@ describe("D185: a read's alias cleanup (and every other snapshot write-back) wri
     expect(Object.keys(patch).length).toBeGreaterThan(0);
   });
 });
+
+// ─── D186: an undone payment restores its principal onto the live balance ───
+import { unpayBillOccurrence } from "../server/liability-payments";
+describe("D186: unpay adds the principal back to the balance as it is when the write lands", () => {
+  it("an undo beside another payment keeps that payment's effect", async () => {
+    const { s, payments, profiles } = payStorage({ id: "loan-3", name: "Loan", type: "liability", type_key: "loan", fields: { currentBalance: 5000, interestRate: 6, monthlyPayment: 200 } });
+    const first = await payBillOccurrence(s, "loan-3", { amount: 100, paymentDate: "2026-09-03", paymentType: "extra_principal" }, "UTC");
+    expect(profiles.get("loan-3").fields.currentBalance).toBe(4900);
+    // The undo reads the loan at 4900; a 300 payment lands before its write.
+    const realGet = s.getProfile;
+    let stale = 0;
+    s.getProfile = async (id: string) => { const p = await realGet(id); if (id === "loan-3" && stale++ === 0) { profiles.get("loan-3").fields.currentBalance = 4600; payments.push({ id: "pay-other", liabilityProfileId: "loan-3", paymentDate: "2026-09-03", amount: 300, principalPortion: 300, paymentType: "extra_principal" }); } return p; };
+    s.deleteLiabilityPayment = async (id: string) => { const i = payments.findIndex((p) => p.id === id); if (i < 0) return false; payments.splice(i, 1); return true; };
+    s.getLiabilityPayments = async () => payments.slice();
+    const undone = await unpayBillOccurrence(s, "loan-3", { paymentId: first.payment.id, source: "route" }, "UTC");
+    expect(undone.ok).toBe(true);
+    expect(undone.balanceRestored).toBe(true);
+    expect(profiles.get("loan-3").fields.currentBalance).toBe(4700);
+    expect(payments.map((p) => p.id)).toEqual(["pay-other"]);
+  });
+});
