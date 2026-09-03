@@ -351,6 +351,9 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
+### Capture and general round trips on the rebuilt replica (probes s143, s79) — verified after D203
+A capture rides through export and import and lands owned by the importing account's Self; the general export → import round trip still passes 7/7.
+
 ### Wipe with a failing file sweep (probe s142) — verified after D202
 On the replica (whose storage stub answers "storage not available locally") a wipe reports the file-sweep failure with 500 and every table's count, the rows are gone, and the account has exactly one Self again; before the fix it had none.
 
