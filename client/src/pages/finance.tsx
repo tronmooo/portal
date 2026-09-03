@@ -619,8 +619,11 @@ export default function FinancePage() {
     },
   });
 
-  const editIncomeMut = useMutation<void, Error, { id: string }, { prev: [readonly unknown[], unknown][] }>({
-    mutationFn: async (input: { id: string }) => {
+  const editIncomeMut = useMutation<void, Error, { id: string; before: any }, { prev: [readonly unknown[], unknown][] }>({
+    // `before` travels with the call: the save handler clears `editingIncome`
+    // right after `mutate`, and the mutation runs after that re-render, so
+    // reading the state here saw null and the whole form went out again.
+    mutationFn: async (input: { id: string; before: any }) => {
       const amt = parseFloat(editIncomeForm.amount);
       if (!isFinite(amt) || amt <= 0) throw new Error("Amount must be a positive number");
       const desc = editIncomeForm.description.trim();
@@ -628,7 +631,19 @@ export default function FinancePage() {
       // Bug #5: Edit Income previously never sent linkedProfiles, so users
       // could not re-attribute an income without delete+recreate. Now sends
       // the chosen profile (or [] to clear). Pairs with bug #4 server fix.
-      await apiRequest("PATCH", `/api/incomes/${input.id}`, {
+      // Only what changed (D213): the form was seeded from the income and
+      // used to write every field back, reverting whatever another device
+      // changed while this dialog sat open.
+      const before = input.before;
+      const seededIncome = before ? {
+        description: before.description ?? "",
+        amount: Number(before.amount ?? 0),
+        category: before.category ?? "salary",
+        frequency: before.frequency ?? "monthly",
+        date: before.date?.slice(0, 10) ?? "",
+        linkedProfiles: before.linkedProfiles ?? [],
+      } : undefined;
+      const incomePatch = changedFieldsOnly(seededIncome, {
         description: desc,
         amount: amt,
         category: editIncomeForm.category,
@@ -636,6 +651,7 @@ export default function FinancePage() {
         ...(editIncomeForm.date ? { date: editIncomeForm.date } : {}),
         linkedProfiles: editIncomeForm.profileId ? [editIncomeForm.profileId] : [],
       });
+      if (Object.keys(incomePatch).length > 0) await apiRequest("PATCH", `/api/incomes/${input.id}`, incomePatch);
     },
     onMutate: async ({ id }) => {
       const amt = parseFloat(editIncomeForm.amount);
@@ -1903,7 +1919,7 @@ export default function FinancePage() {
               onClick={() => {
                 if (!editingIncome) return;
                 // Close immediately for snappy UX — optimistic edit is in onMutate.
-                editIncomeMut.mutate({ id: editingIncome.id });
+                editIncomeMut.mutate({ id: editingIncome.id, before: editingIncome });
                 setEditingIncome(null);
               }}
               disabled={!editIncomeForm.description.trim() || !editIncomeForm.amount || parseFloat(editIncomeForm.amount) <= 0 || editIncomeMut.isPending}

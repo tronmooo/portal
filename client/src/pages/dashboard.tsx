@@ -1,3 +1,4 @@
+import { changedFieldsOnly } from "@shared/field-patch";
 import { sumMonthlyIncome } from "@shared/obligation-windows";
 import { localTodayISO } from "@/lib/dates";
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
@@ -3051,7 +3052,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
     },
     onSuccess: (_data, variables) => {
       setEditGoal(null); resetForm();
-      toast({ title: `"${variables.title || "Goal"}" updated` });
+      toast({ title: `"${variables.title || editGoal?.title || "Goal"}" updated` });
     },
     onError: (err: Error, variables, ctx: any) => {
       if (ctx?.prev !== undefined) queryClient.setQueryData(goalsKey, ctx.prev);
@@ -3085,7 +3086,13 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
   const handleSave = () => {
     if (!formTitle.trim() || !formTarget || Number(formTarget) <= 0) return;
     const payload = { title: formTitle.trim(), type: formType, target: Number(formTarget), unit: formUnit || "units", deadline: formDeadline || undefined };
-    if (editGoal) updateMutation.mutate({ id: editGoal.id, ...payload });
+    if (editGoal) {
+      // Only what changed (D213); a cleared deadline goes as "" (D214).
+      const seeded = { title: editGoal.title, type: editGoal.type, target: Number(editGoal.target), unit: editGoal.unit, deadline: editGoal.deadline || "" };
+      const patch = changedFieldsOnly(seeded, { ...payload, deadline: formDeadline || "" });
+      updateMutation.mutate({ id: editGoal.id, ...patch });
+      return;
+    }
     else createMutation.mutate(payload);
   };
 

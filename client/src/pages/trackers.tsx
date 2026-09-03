@@ -1,3 +1,4 @@
+import { changedFieldsOnly } from "@shared/field-patch";
 import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
 import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
 import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
@@ -5235,7 +5236,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
     onSuccess: (_data, variables) => {
       invalidateDomains("goals", "trackers");
       setEditGoal(null); resetForm();
-      toast({ title: `"${variables.title || "Goal"}" updated` });
+      toast({ title: `"${variables.title || editGoal?.title || "Goal"}" updated` });
     },
     onError: (e: Error) => toast({ title: "Failed to update goal", description: formatApiError(e), variant: "destructive" }),
   });
@@ -5269,7 +5270,13 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
       unit: formUnit || tracker.unit || "units", deadline: formDeadline || undefined,
       trackerId: tracker.id,
     };
-    if (editGoal) updateMutation.mutate({ id: editGoal.id, ...payload });
+    if (editGoal) {
+      // Only what changed (D213); a cleared deadline goes as "" (D214).
+      const seeded = { title: editGoal.title, type: editGoal.type, target: Number(editGoal.target), unit: editGoal.unit, deadline: editGoal.deadline || "", trackerId: editGoal.trackerId };
+      const patch = changedFieldsOnly(seeded, { ...payload, deadline: formDeadline || "" });
+      updateMutation.mutate({ id: editGoal.id, ...patch });
+      return;
+    }
     else createMutation.mutate(payload);
   };
 
