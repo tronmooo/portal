@@ -7011,6 +7011,38 @@ export type ProfileResolution<T extends { name: string }> =
   | { kind: "ambiguous"; matches: T[] }
   | { kind: "none" };
 
+/**
+ * One name → one profile, or a question. The inline `find(exact) ||
+ * find(loose)` lookups took the FIRST loose match when several profiles
+ * shared a name ("Max" the son and "Max" the dog), so the expense, the
+ * ownership link or the move went to whichever came first (D251). The shared
+ * resolver already knows ambiguity; this turns it into the tool's answer.
+ */
+function pickProfileByName<T extends { id: string; name: string }>(
+  profiles: T[],
+  _needleLC: string,
+  rawName: unknown,
+): { profile: T } | { error: string } {
+  const lc = safeLC(rawName).trim();
+  const ask = (matches: T[]) => ({
+    error: `Several profiles match "${String(rawName)}": ${matches.slice(0, 5).map((m: any) => `${m.name}${m.type ? ` (${m.type})` : ""}`).join(", ")}. Which one did you mean?`,
+  });
+  // Two records with the SAME name are the clearest ambiguity of all; the
+  // shared resolver's exact step would hand back the first.
+  const exacts = profiles.filter((p) => p.name.toLowerCase() === lc);
+  if (exacts.length > 1) return ask(exacts);
+  if (exacts.length === 1) return { profile: exacts[0] };
+  const r = resolveProfileByName(profiles, rawName);
+  if (r.kind === "found") return { profile: r.profile };
+  if (r.kind === "ambiguous") return ask(r.matches);
+  // The resolver matches whole words; a partial ("Joan" for Joanna) still
+  // counts when it starts a word of exactly one name (D243's rule).
+  const loose = profiles.filter((p) => nameLooselyMatches(p.name, lc));
+  if (loose.length === 1) return { profile: loose[0] };
+  if (loose.length > 1) return ask(loose);
+  return { error: `I couldn't find a profile named "${String(rawName)}".` };
+}
+
 export function resolveProfileByName<T extends { name: string }>(
   profiles: T[],
   rawName: any,
@@ -11442,9 +11474,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       let ownerProfileId: string | undefined;
       if (input.forProfile) {
         const fpLC = safeLC(String(input.forProfile)).trim();
-        const owner = profiles.find(p => p.name.toLowerCase() === fpLC)
-          || profiles.find(p => nameLooselyMatches(p.name, fpLC));
-        if (!owner) return { error: `I couldn't find a profile named "${input.forProfile}". Who does this account belong to?` };
+        const ownerPick = pickProfileByName(profiles, fpLC, input.forProfile);
+       if ("error" in ownerPick) return { error: ownerPick.error + " Who does this account belong to?" };
+       const owner = ownerPick.profile;
         ownerProfileId = owner.id;
       }
       const created = await (storage as any).createAccount({
@@ -11984,9 +12016,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
         const fpLC = safeLC(String(input.forProfile)).trim();
-        const target = profiles.find(p => p.name.toLowerCase() === fpLC)
-          || profiles.find(p => nameLooselyMatches(p.name, fpLC));
-        if (!target) return { error: `I couldn't find a profile named "${input.forProfile}". Which person/pet did you mean?` };
+        const targetPick = pickProfileByName(profiles, fpLC, input.forProfile);
+       if ("error" in targetPick) return { error: targetPick.error + " Which person/pet did you mean?" };
+       const target = targetPick.profile;
         changes.linkedProfiles = [target.id];
       }
       if (Object.keys(changes).length === 0) return { error: "No changes provided" };
@@ -12006,9 +12038,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
         const fpLC = safeLC(String(input.forProfile)).trim();
-        const target = profiles.find(p => p.name.toLowerCase() === fpLC)
-          || profiles.find(p => nameLooselyMatches(p.name, fpLC));
-        if (!target) return { error: `I couldn't find a profile named "${input.forProfile}". Which person/pet did you mean?` };
+        const targetPick = pickProfileByName(profiles, fpLC, input.forProfile);
+       if ("error" in targetPick) return { error: targetPick.error + " Which person/pet did you mean?" };
+       const target = targetPick.profile;
         const selfProfile = profiles.find(p => p.type === "self");
         changes.linkedProfiles = (selfProfile && target.id !== selfProfile.id)
           ? [target.id, selfProfile.id]

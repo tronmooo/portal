@@ -2746,3 +2746,22 @@ describe("D250: a shared tracker survives one owner's deletion; a sole-owner tra
     expect(entryDelete).toMatch(/jsonb_array_length\(t\.linked_profiles\) <= 1/);
   });
 });
+
+// ─── D251: two profiles sharing a name — the first one silently won ─────────
+describe("D251: a name shared by two profiles is a question, not a guess", () => {
+  it("update_expense for 'Max' with a son and a dog both named Max asks which; a unique name still resolves", async () => {
+    const s = new MemStorage();
+    (s as any)._timezone = TZ;
+    const run = <T,>(fn: () => Promise<T>) => new Promise<T>((resolve, reject) => requestStorageContext.run(s, () => fn().then(resolve, reject)));
+    await s.createProfile({ name: "Me", type: "self", fields: {} } as any);
+    const son = await s.createProfile({ name: "Max", type: "person", fields: {} } as any);
+    await s.createProfile({ name: "Max", type: "pet", fields: {} } as any);
+    const lunch = await s.createExpense({ amount: 12, category: "food", description: "lunch", date: "2026-09-03", linkedProfiles: [] } as any);
+    const out = await run(() => executeTool("update_expense", { description: "lunch", changes: { amount: 13 }, forProfile: "Max" }, "u-1"));
+    expect(out.error).toMatch(/Several profiles match "Max"/);
+    expect((await s.getExpense(lunch.id))!.amount).toBe(12);
+    const ok = await run(() => executeTool("update_expense", { description: "lunch", changes: { amount: 13 }, forProfile: "Me" }, "u-1"));
+    expect(ok.updated).toBe(true);
+    expect(son.id).toBeTruthy();
+  });
+});
