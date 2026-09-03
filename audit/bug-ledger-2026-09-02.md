@@ -317,6 +317,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Chat tools and impossible days — verified working
+Through the real `executeTool` over the in-memory harness, `create_expense` (date 2026-09-31), `create_task` (dueDate 2026-02-30) and `create_event` (date 2026-02-30) each answer "Use YYYY-MM-DD" and write nothing — the tool payload schemas already gate on a real calendar day.
+
 ### Bulk delete date filters — by design (checked, not changed)
 "Delete everything before <date>" matches a row's own date and, for a row without one (an undated task, a habit, a tracker), its creation date — pinned by tests/bulk-actions.test.ts ("applies a before_date cutoff on createdAt") and mitigated by the two-phase preview that names the rows before the confirm. Noted as a design choice.
 

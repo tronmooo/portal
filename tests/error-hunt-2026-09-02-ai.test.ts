@@ -247,3 +247,4 @@ describe("D68: editing 'my last entry' on a shared tracker edits the user's row"
     expect(hers.values.hours).toBe(9);
   });
 });
+
