@@ -2656,3 +2656,34 @@ describe("D241: POST /api/import re-links restored events to the restored docume
     expect(created.eventUpdates).toEqual([[ev.id, { linkedDocuments: [doc.id] }]]);
   });
 });
+
+// ─── D242: the generic owners route wrote asset rows for a liability ────────
+describe("D242: PUT /api/profiles/:id/owners and /liability-owners write the table the profile's type uses", () => {
+  function wire(storage: any, calls: any[]) {
+    storage.setAssetOwners = async (id: string, owners: any[]) => { calls.push(["asset", id, owners]); return owners.map((o) => ({ assetProfileId: id, ...o })); };
+    storage.setLiabilityOwners = async (id: string, owners: any[]) => { calls.push(["liability", id, owners]); return owners.map((o) => ({ liabilityProfileId: id, ...o })); };
+  }
+  const seed = { profiles: [
+    { id: "self-1", type: "self", name: "Me", fields: {} },
+    { id: "linda-1", type: "person", name: "Linda", fields: {} },
+    { id: "loan-1", type: "liability", type_key: "auto_loan", name: "Auto loan", fields: {} },
+    { id: "car-1", type: "asset", type_key: "vehicle", name: "Car", fields: {} },
+  ] };
+  const owners = [{ partyProfileId: "self-1", ownershipPercentage: 50 }, { partyProfileId: "linda-1", ownershipPercentage: 50, role: "co_signer" }];
+  it("a loan sent to /owners lands in liability_profile_links", async () => {
+    const calls: any[] = [];
+    h = await boot(seed, (s) => wire(s, calls));
+    const r = await h.api("PUT", "/api/profiles/loan-1/owners", { owners });
+    expect(r.status).toBe(200);
+    expect(r.data.liabilityProfileId).toBe("loan-1");
+    expect(calls.map((c) => c[0])).toEqual(["liability"]);
+  });
+  it("an asset sent to /liability-owners lands in asset_party_links; each type on its own route is unchanged", async () => {
+    const calls: any[] = [];
+    h = await boot(seed, (s) => wire(s, calls));
+    expect((await h.api("PUT", "/api/profiles/car-1/liability-owners", { owners })).data.ownerProfileId).toBe("car-1");
+    expect((await h.api("PUT", "/api/profiles/car-1/owners", { owners })).data.ownerProfileId).toBe("car-1");
+    expect((await h.api("PUT", "/api/profiles/loan-1/liability-owners", { owners })).data.liabilityProfileId).toBe("loan-1");
+    expect(calls.map((c) => c[0])).toEqual(["asset", "asset", "liability"]);
+  });
+});

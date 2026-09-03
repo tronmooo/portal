@@ -11204,6 +11204,11 @@ No emojis. No prose outside the JSON.`,
   // Atomic, validated ownership write — the single source of truth used by the
   // redesigned ownership editor. Body: { owners: [{ partyProfileId, ownershipPercentage }] }
   // An empty array clears ownership (asset reverts to Self-100%).
+  /** Liabilities and loans keep their owners in liability_profile_links. */
+  const isLiabilityLikeProfile = (p: any): boolean => {
+    const t = String(p?.type || "").toLowerCase();
+    return t === "liability" || t === "loan";
+  };
   app.put("/api/profiles/:id/owners", asyncHandler(async (req, res) => {
     const asset = await storage.getProfile(req.params.id);
     if (!asset) return res.status(404).json({ error: "Profile not found" });
@@ -11217,6 +11222,14 @@ No emojis. No prose outside the JSON.`,
       if (!party) return res.status(404).json({ error: "Owner profile not found" });
     }
     try {
+      // The owner table follows the PROFILE, not the URL. A liability sent
+      // here used to get asset-party rows nobody reads (net worth, the bills
+      // list and the co-signer set all read liability_profile_links), so the
+      // write answered 200 and changed nothing the user could see (D242).
+      if (isLiabilityLikeProfile(asset)) {
+        const links = await storage.setLiabilityOwners(req.params.id, owners);
+        return res.json({ liabilityProfileId: req.params.id, owners: links });
+      }
       const links = await storage.setAssetOwners(req.params.id, owners);
       res.json({ ownerProfileId: req.params.id, owners: links });
     } catch (e: any) {
@@ -11242,6 +11255,11 @@ No emojis. No prose outside the JSON.`,
       if (!party) return res.status(404).json({ error: "Owner profile not found" });
     }
     try {
+      // Same rule in the other direction: an asset sent here gets asset rows.
+      if (!isLiabilityLikeProfile(liability)) {
+        const links = await storage.setAssetOwners(req.params.id, owners);
+        return res.json({ ownerProfileId: req.params.id, owners: links });
+      }
       const links = await storage.setLiabilityOwners(req.params.id, owners);
       res.json({ liabilityProfileId: req.params.id, owners: links });
     } catch (e: any) {
