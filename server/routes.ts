@@ -8925,6 +8925,16 @@ Rules:
       const idMap = new Map<string, string>();
       /** Profiles whose `_docFields` waits for the documents' new ids (D237). */
       const heldProvenance: Array<{ profileId: string; sources: Record<string, any> }> = [];
+      /** Liabilities whose paid stamps wait for the payments' new ids (D240). */
+      const heldStamps: Array<{ profileId: string; occurrences: Record<string, any> }> = [];
+      /** Expenses whose `liability:`/`payment:` tags wait for new ids (D240). */
+      const heldExpenseTags: Array<{ expenseId: string; tags: string[] }> = [];
+      const remapTag = (tag: string): string => {
+        const m = /^(liability|payment):(.+)$/.exec(tag);
+        if (!m) return tag;
+        const mapped = idMap.get(m[2]);
+        return mapped ? `${m[1]}:${mapped}` : tag;
+      };
       const pairedEntries: Array<{ trackerId: string; entryId: string; habitIds: string[] }> = [];
       const remap = (ids: unknown): string[] =>
         (Array.isArray(ids) ? ids : []).map((id) => idMap.get(String(id))).filter((id): id is string => !!id);
@@ -8960,6 +8970,13 @@ Rules:
             if (p.id && created?.id) idMap.set(String(p.id), created.id);
             if (created?.id && docSources && typeof docSources === "object" && Object.keys(docSources).length > 0) {
               heldProvenance.push({ profileId: created.id, sources: docSources as Record<string, any> });
+            }
+            // Paid-occurrence stamps name a payment row and a paying account by
+            // id; both get new ids here, so the stamps are rewritten once the
+            // payments exist (D240).
+            const occ = (fieldsWithoutProvenance as any)?.occurrences;
+            if (created?.id && occ && typeof occ === "object" && Object.values(occ).some((o: any) => o && (o.paymentId || o.accountId))) {
+              heldStamps.push({ profileId: created.id, occurrences: occ as Record<string, any> });
             }
           });
         }
@@ -9035,7 +9052,12 @@ Rules:
       // Import expenses
       if (data.expenses && Array.isArray(data.expenses)) {
         for (const e of data.expenses) {
-          await tryImport("expenses", e.description || "unnamed", () => storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags, linkedProfiles: remap(e.linkedProfiles) } as any));
+          await tryImport("expenses", e.description || "unnamed", async () => {
+            const created = await storage.createExpense({ amount: e.amount, category: e.category, description: e.description, vendor: e.vendor, date: e.date, tags: e.tags, linkedProfiles: remap(e.linkedProfiles) } as any);
+            const tags: string[] = Array.isArray(e.tags) ? e.tags.map((t: any) => String(t)) : [];
+            if (created?.id && tags.some((t) => /^(liability|payment):/.test(t))) heldExpenseTags.push({ expenseId: created.id, tags });
+            return created;
+          });
         }
       }
       // Import incomes, goals, paychecks and budgets — the money model the
@@ -9145,7 +9167,8 @@ Rules:
                 // Restoring HISTORY: raw ledger rows only, deliberately not
                 // payBillOccurrence — an import must not advance due dates,
                 // debit accounts, or log fresh expenses for old payments.
-                await tryImport("obligationPayments", `${o.name} payment`, () => storage.createLiabilityPayment({
+                await tryImport("obligationPayments", `${o.name} payment`, async () => {
+                  const row = await storage.createLiabilityPayment({
                   liabilityProfileId: created.id,
                   paymentDate: String(p.date || p.paymentDate || getUserToday(getTimezone(req))).slice(0, 10),
                   amount: Number(p.amount) || 0,
@@ -9154,11 +9177,66 @@ Rules:
                   paymentType: "standard",
                   sourceAccount: p.method || null,
                   notes: p.confirmationNumber ? `Confirmation ${p.confirmationNumber}` : null,
-                } as any));
+                  } as any);
+                  if (p.id && row?.id) idMap.set(String(p.id), row.id);
+                  return row;
+                });
               }
             }
           });
         }
+      }
+      // The full payment ledger the export carries (`liabilityPayments`): the
+      // rows for loans and cards, and any bill row the obligations block did
+      // not already restore (matched by old id). Raw rows only — an import
+      // never advances due dates, debits accounts or logs expenses (D240).
+      if (data.liabilityPayments && Array.isArray(data.liabilityPayments)) {
+        for (const lp of data.liabilityPayments) {
+          if (!lp || typeof lp !== "object") continue;
+          if (lp.id && idMap.has(String(lp.id))) continue;
+          const liabilityProfileId = lp.liabilityProfileId ? idMap.get(String(lp.liabilityProfileId)) : undefined;
+          if (!liabilityProfileId) continue;
+          await tryImport("liabilityPayments", `${lp.paymentDate || "payment"} ${lp.amount ?? ""}`, async () => {
+            const row = await storage.createLiabilityPayment({
+              liabilityProfileId,
+              paymentDate: String(lp.paymentDate || getUserToday(getTimezone(req))).slice(0, 10),
+              amount: Number(lp.amount) || 0,
+              principalPortion: Number(lp.principalPortion) || 0,
+              interestPortion: Number(lp.interestPortion) || 0,
+              fees: Number(lp.fees) || 0,
+              remainingBalanceAfter: lp.remainingBalanceAfter ?? null,
+              paymentType: lp.paymentType || "standard",
+              sourceAccount: lp.sourceAccount ?? null,
+              documentId: lp.documentId ? (idMap.get(String(lp.documentId)) ?? null) : null,
+              notes: lp.notes ?? null,
+            } as any);
+            if (lp.id && row?.id) idMap.set(String(lp.id), row.id);
+            return row;
+          });
+        }
+      }
+      // Paid stamps and bill-payment expense tags, now that payments and
+      // accounts have their new ids. An id the file did not carry stays as it
+      // was — the stamp still says "paid"; only its join to a row is lost.
+      for (const held of heldStamps) {
+        const next: Record<string, any> = {};
+        let changed = false;
+        for (const [day, stamp] of Object.entries(held.occurrences)) {
+          if (!stamp || typeof stamp !== "object") { next[day] = stamp; continue; }
+          const copy: Record<string, any> = { ...stamp };
+          for (const key of ["paymentId", "accountId"]) {
+            const mapped = copy[key] ? idMap.get(String(copy[key])) : undefined;
+            if (mapped && mapped !== copy[key]) { copy[key] = mapped; changed = true; }
+          }
+          next[day] = copy;
+        }
+        if (!changed) continue;
+        await tryImport("profiles", "paid stamps", () => storage.updateProfile(held.profileId, { fields: { occurrences: next } } as any));
+      }
+      for (const held of heldExpenseTags) {
+        const tags = held.tags.map(remapTag);
+        if (tags.every((t, i) => t === held.tags[i])) continue;
+        await tryImport("expenses", "payment tags", () => storage.updateExpense(held.expenseId, { tags } as any));
       }
       // Import artifacts
       if (data.artifacts && Array.isArray(data.artifacts)) {

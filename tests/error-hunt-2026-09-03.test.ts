@@ -2592,3 +2592,39 @@ describe("D238/D239: POST /api/import keeps a goal's tracker/habit and a journal
     expect(created.journal[0].linkedProfiles).toEqual([expect.stringMatching(/^p-/)]);
   });
 });
+
+// ─── D240: a restored bill's paid stamp and expense tags named the source ids ─
+describe("D240: POST /api/import re-keys paid stamps and bill-payment expense tags to the restored ids", () => {
+  it("restores the payment ledger, rewrites stamp paymentId/accountId and the expense's liability:/payment: tags", async () => {
+    const created: Record<string, any[]> = { profiles: [], payments: [], profileUpdates: [], expenses: [], expenseUpdates: [] };
+    let seq = 0; const nid = (p: string) => `${p}-${++seq}`;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getProfiles = async () => [{ id: "self-1", type: "self", name: "Me", fields: {} }];
+      storage.getSelfProfile = async () => ({ id: "self-1", type: "self", name: "Me", fields: {} });
+      storage.createProfile = async (p: any) => { const row = { id: nid("p"), ...p }; created.profiles.push(row); return row; };
+      storage.updateProfile = async (id: string, patch: any) => { created.profileUpdates.push([id, patch]); return { id, ...patch }; };
+      storage.createLiabilityPayment = async (d: any) => { const row = { id: nid("pay"), ...d }; created.payments.push(row); return row; };
+      storage.createExpense = async (e: any) => { const row = { id: nid("exp"), ...e }; created.expenses.push(row); return row; };
+      storage.updateExpense = async (id: string, patch: any) => { created.expenseUpdates.push([id, patch]); return { id, ...patch }; };
+    });
+    const payload = {
+      version: "2",
+      profiles: [
+        { id: "old-self", type: "self", name: "Me", fields: {} },
+        { id: "old-acct", type: "account", name: "Checking", parentProfileId: "old-self", fields: { accountKind: "checking", balance: 960 } },
+        { id: "old-bill", type: "liability", type_key: "utility", name: "Power", parentProfileId: "old-self", fields: { monthlyAmount: 40, occurrences: { "2026-09-06": { status: "paid", paymentId: "old-pay", accountId: "old-acct", amount: 40 } } } },
+      ],
+      expenses: [{ id: "old-exp", amount: 40, category: "bills", description: "Power — 2026-09-06", date: "2026-09-03", tags: ["bill-payment", "liability:old-bill", "payment:old-pay"], linkedProfiles: ["old-self"] }],
+      liabilityPayments: [{ id: "old-pay", liabilityProfileId: "old-bill", paymentDate: "2026-09-03", amount: 40, principalPortion: 40, interestPortion: 0, fees: 0, paymentType: "standard" }],
+    };
+    const r = await h.api("POST", "/api/import", payload);
+    expect(r.status).toBe(200);
+    const bill = created.profiles.find((p) => p.name === "Power")!, acct = created.profiles.find((p) => p.name === "Checking")!;
+    expect(created.payments).toHaveLength(1);
+    const pay = created.payments[0];
+    expect(pay.liabilityProfileId).toBe(bill.id);
+    const stampWrite = created.profileUpdates.find((u) => u[0] === bill.id && u[1].fields?.occurrences);
+    expect(stampWrite![1].fields.occurrences["2026-09-06"]).toMatchObject({ status: "paid", paymentId: pay.id, accountId: acct.id, amount: 40 });
+    expect(created.expenseUpdates).toEqual([[created.expenses[0].id, { tags: ["bill-payment", `liability:${bill.id}`, `payment:${pay.id}`] }]]);
+  });
+});
