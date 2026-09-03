@@ -869,6 +869,27 @@ describe("D134: journal, goals and bill occurrences use the shared scope rule", 
   });
 });
 
+// D140 — under a Self scope, ⌘K could not find any other person: profile
+// rows were dropped unless the person was already selected.
+describe("D140: search always finds people; entities stay scoped", () => {
+  it("lists Linda under a Self scope but not Linda's own expense", async () => {
+    const LINDA = { id: "linda-1", type: "person", name: "Linda Carter" };
+    h = await boot({ profiles: [SELF, LINDA] }, (storage) => {
+      storage.search = async () => [
+        { _type: "profile", id: LINDA.id, type: "person", name: "Linda Carter" },
+        { _type: "expense", id: "e-1", description: "Linda pharmacy", amount: 23.5, linkedProfiles: [LINDA.id] },
+        { _type: "expense", id: "e-2", description: "Linda gift (mine)", amount: 40, linkedProfiles: [SELF.id] },
+      ];
+    });
+    const r = await h.api("GET", `/api/search?q=Linda&profileIds=${SELF.id}`);
+    expect(r.status).toBe(200);
+    const ids = (r.data as any[]).map((x) => x.id);
+    expect(ids).toContain(LINDA.id);
+    expect(ids).toContain("e-2");
+    expect(ids).not.toContain("e-1");
+  });
+});
+
 // D97 — the bill-create dedupe was written only after the insert finished,
 // so two identical creates arriving together both inserted.
 describe("D97: two identical bill creates arriving together insert once", () => {

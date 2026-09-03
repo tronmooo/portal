@@ -8527,6 +8527,12 @@ Rules:
         const isAssetOrLiability = (type?: string) => !!type && (ASSET_PROFILE_TYPES.has(type) || LIABILITY_PROFILE_TYPES.has(type));
         results = results.filter((r: any) => {
           if (r._type === "profile") {
+            // People are what the scope switcher and the Info pages are
+            // made of: a person you are not currently scoped to must still
+            // be findable by name (to open them or switch to them), so
+            // self/person/pet rows ignore the scope. Everything else —
+            // assets, loans and every linked entity — stays scoped.
+            if (r.type === "self" || r.type === "person" || r.type === "pet") return true;
             if (ids.includes(r.id)) return true;
             // Asset/liability profiles surface for any selected co-owner (or for
             // Self when unowned). Other profile types match by id only.
