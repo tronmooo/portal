@@ -114,16 +114,19 @@ async function loadDismissedIds(): Promise<string[]> {
   }
 }
 
-async function saveDismissedIds(ids: string[]): Promise<void> {
+/**
+ * Sends only the ids being dismissed; the server merges them into the stored
+ * list and answers with the whole list. Writing back the list this bell
+ * loaded at mount overwrote dismissals made meanwhile in another tab, in the
+ * briefing or by chat (D263). Resolves to the merged list, or null on failure.
+ */
+async function dismissOnServer(ids: string[]): Promise<string[] | null> {
   try {
-    // Audit fix: same auth issue as loadDismissedIds — raw fetch bypassed
-    // the bearer-token interceptor and the PUT silently 401'd, so dismissals
-    // never persisted across reloads.
-    await apiRequest("PUT", `/api/preferences/${DISMISSED_PREF_KEY}`, {
-      value: JSON.stringify(ids),
-    });
+    const res = await apiRequest("POST", "/api/notifications/dismiss", { ids });
+    const json = await res.json().catch(() => null);
+    return Array.isArray(json?.ids) ? json.ids : null;
   } catch {
-    // Silently fail — local state is still correct
+    return null; // local state still hides the item for this session
   }
 }
 
@@ -174,19 +177,16 @@ export function NotificationBell() {
 
   const handleDismissAll = useCallback(() => {
     const allIds = notifications.map(n => n.id);
-    setDismissedIds(prev => {
-      const merged = new Set([...Array.from(prev), ...allIds]);
-      saveDismissedIds(Array.from(merged));
-      return merged;
-    });
+    setDismissedIds(prev => new Set([...Array.from(prev), ...allIds]));
+    void dismissOnServer(allIds).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
   }, [notifications]);
 
   const handleDismiss = useCallback((id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    void dismissOnServer([id]).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
     setDismissedIds(prev => {
       const next = new Set(Array.from(prev));
       next.add(id);
-      saveDismissedIds(Array.from(next));
       return next;
     });
   }, []);
@@ -199,9 +199,9 @@ export function NotificationBell() {
         if (prev.has(notification.id)) return prev;
         const next = new Set(Array.from(prev));
         next.add(notification.id);
-        saveDismissedIds(Array.from(next));
         return next;
       });
+      void dismissOnServer([notification.id]).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
       // Deep-link based on notification type/entity
       switch (notification.type) {
         case "task_overdue":

@@ -172,7 +172,7 @@ import { storage, type IStorage } from "./storage";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
-import { buildNotifications } from "./notification-service";
+import { buildNotifications, mergeDismissedNotifications } from "./notification-service";
 import {
   createNote, updateNote, deleteNote, listNotes,
   upsertJournalEntry, syncDateRulesForEntity,
@@ -8673,6 +8673,15 @@ Rules:
   }));
 
   // ---- Notifications (computed on each request) ----
+  // Dismissals merge on the server (D263): the client sends only the ids it
+  // is dismissing and gets the whole stored list back.
+  app.post("/api/notifications/dismiss", asyncHandler(async (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : (typeof req.body?.id === "string" ? [req.body.id] : []);
+    if (ids.length === 0) return res.status(400).json({ error: "ids required" });
+    const merged = await mergeDismissedNotifications(storage, ids.slice(0, 500));
+    res.json({ ids: merged });
+  }));
+
   app.get("/api/notifications", asyncHandler(async (req, res) => {
     try {
       const userId = cacheUserKey(req as AuthenticatedRequest, "notifications:");

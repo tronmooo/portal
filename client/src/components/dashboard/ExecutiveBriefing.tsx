@@ -891,10 +891,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   });
   const dismissAlert = useMutation({
     // Same store the bell and the AI's dismiss_notifications tool write to.
-    mutationFn: async (id: string) => {
-      const merged = Array.from(new Set([...(dismissedIds || []), id]));
-      await apiRequest("PUT", "/api/preferences/dismissed_notifications", { value: JSON.stringify(merged) });
-    },
+    // The server merges the id into the stored list (D263): writing back
+    // the list this component last read dropped dismissals made elsewhere.
+    mutationFn: async (id: string) => { await apiRequest("POST", "/api/notifications/dismiss", { ids: [id] }); },
     onSuccess: () => {
       toast({ title: "Alert dismissed" });
       queryClient.invalidateQueries({ queryKey: ["/api/preferences/dismissed_notifications"] });

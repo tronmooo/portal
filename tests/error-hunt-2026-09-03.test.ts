@@ -3108,3 +3108,32 @@ describe("D262 never-amortizing loan is labelled in the detail page", async () =
     expect(src).toContain("amortization.neverAmortizes");
   });
 });
+
+// ── D263: dismissals merge on the server; a client never writes back the list it last read.
+describe("D263 notification dismissals merge on the server", () => {
+  it("POST /api/notifications/dismiss unions ids into the stored list and answers with the whole list", async () => {
+    h = await boot({}, (storage) => {
+      const prefs = new Map<string, string>();
+      storage.getPreference = async (k: string) => prefs.get(k) ?? null;
+      storage.setPreference = async (k: string, v: string) => { prefs.set(k, v); };
+    });
+    const a = await h.api("POST", "/api/notifications/dismiss", { ids: ["doc-exp-1-expirationDate-2026-09-23"] });
+    expect(a.status).toBe(200);
+    // A second client that never saw the first dismissal adds its own.
+    const b = await h.api("POST", "/api/notifications/dismiss", { ids: ["bill-soon-2-2026-09-05"] });
+    expect(b.status).toBe(200);
+    expect((b.data as any).ids.sort()).toEqual(["bill-soon-2-2026-09-05", "doc-exp-1-expirationDate-2026-09-23"]);
+    const stored = await h.api("GET", "/api/preferences/dismissed_notifications");
+    expect(JSON.parse((stored.data as any).value).sort()).toEqual(["bill-soon-2-2026-09-05", "doc-exp-1-expirationDate-2026-09-23"]);
+    const empty = await h.api("POST", "/api/notifications/dismiss", { ids: [] });
+    expect(empty.status).toBe(400);
+  });
+  it("the bell and the briefing send only the ids they dismiss", () => {
+    const bell = readFileSync(new URL("../client/src/components/NotificationBell.tsx", import.meta.url), "utf8");
+    expect(bell).not.toMatch(/apiRequest\("PUT", `\/api\/preferences\/\$\{DISMISSED_PREF_KEY\}`/);
+    expect((bell.match(/dismissOnServer\(/g) || []).length).toBeGreaterThanOrEqual(4);
+    const briefing = readFileSync(new URL("../client/src/components/dashboard/ExecutiveBriefing.tsx", import.meta.url), "utf8");
+    expect(briefing).toContain('apiRequest("POST", "/api/notifications/dismiss", { ids: [id] })');
+    expect(briefing).not.toContain('apiRequest("PUT", "/api/preferences/dismissed_notifications"');
+  });
+});

@@ -31,6 +31,21 @@ export interface AppNotification {
 /** Preference key holding the dismissed-notification ids (JSON string array). */
 export const DISMISSED_NOTIFICATIONS_PREF = "dismissed_notifications";
 
+/**
+ * Adds ids to the stored dismissed list and returns the merged list. Every
+ * writer (the bell, the briefing, the chat tool) goes through this instead of
+ * PUTting the whole list it last read: the bell kept the list it loaded at
+ * mount, so a dismissal made in another tab, in the briefing or by chat was
+ * overwritten by the bell's next dismissal (D263).
+ */
+export async function mergeDismissedNotifications(storage: IStorage, ids: string[]): Promise<string[]> {
+  const add = (ids || []).filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
+  const current = Array.from(await readDismissedNotificationIds(storage));
+  const merged = Array.from(new Set([...current, ...add]));
+  if (merged.length !== current.length) await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(merged));
+  return merged;
+}
+
 /** Preference key holding notification filters: {muted_severities?, muted_types?}. */
 export const NOTIFICATION_PREFS_PREF = "notification_prefs";
 
