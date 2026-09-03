@@ -341,6 +341,12 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
+Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
+
+### Captures across users (probe s137) — verified working
+B cannot read, edit or delete A's capture (404s), B's capture list has none of A's, and A's capture is untouched.
+
 ### Habit names across owners and a memory key clash (probe s136) — verified working
 The same habit name for two different owners is allowed, the same name (case-insensitive) for one owner is refused with 409, a rename works, and renaming a memory onto an existing key answers a 4xx.
 
