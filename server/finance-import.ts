@@ -19,7 +19,7 @@
 // data came from.
 
 import { randomUUID } from "crypto";
-import { normalizeMonthKey } from "@shared/budget-ledger";
+import { normalizeMonthKey, budgetCategoryKey } from "@shared/budget-ledger";
 import {
   type FinanceImportPayload,
   FINANCE_IMPORT_SOURCE,
@@ -225,7 +225,9 @@ export async function planImport(
     const s = sec("budgets");
     const month = b.month || defaultMonth;
     if (!budgetMonths.has(month)) budgetMonths.set(month, await store.getBudgets(month).catch(() => []));
-    const existing = budgetMonths.get(month)!.find((x) => normalizeMerchant(x.category) === normalizeMerchant(b.category));
+    // The same bucket rule the caps themselves use (budgetCategoryKey): an
+    // imported "Groceries" cap is the month's food cap, not a second one.
+    const existing = budgetMonths.get(month)!.find((x) => budgetCategoryKey(x.category) === budgetCategoryKey(b.category));
     if (existing) {
       ops.push({ section: "budgets", action: "update", uniqueId: b.unique_id, label: `${b.category} ${fmtMoney(b.amount)} (${month})`, reason: "updates the existing budget for this category" });
       s.update++;
@@ -384,7 +386,7 @@ export async function applyImport(
     const month = normalizeMonthKey(b.month) || defaultMonth;
     await attempt("budgets", b.unique_id, `${b.category} ${fmtMoney(b.amount)} (${month})`, async () => {
       if (action === "update") {
-        const existing = (await store.getBudgets(month).catch(() => [])).find((x) => normalizeMerchant(x.category) === normalizeMerchant(b.category) && (!x.profileId || x.profileId === profileId));
+        const existing = (await store.getBudgets(month).catch(() => [])).find((x) => budgetCategoryKey(x.category) === budgetCategoryKey(b.category) && (!x.profileId || x.profileId === profileId));
         if (existing) { await store.updateBudget(month, existing.id, { amount: b.amount, notes: `${FINANCE_IMPORT_SOURCE}:${batchId}` }); return; }
       }
       const row = await store.addBudget(month, normalizeCategory(b.category), b.amount, `${FINANCE_IMPORT_SOURCE}:${batchId}`, profileId);

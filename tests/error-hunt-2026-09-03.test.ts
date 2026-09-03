@@ -1582,3 +1582,38 @@ describe("D205: finance import folds cadence spellings before validating", () =>
     expect(JSON.stringify(bad)).toContain("income[0].frequency");
   });
 });
+
+// ─── D206: an imported cap for a known category updates the month's existing cap ─
+import { planImport, applyImport } from "../server/finance-import";
+describe("D206: the importer matches caps by the budget bucket, not the raw word", () => {
+  function capStore() {
+    const caps = [{ id: "cap-food", category: "food", amount: 300 }];
+    const updates: any[] = []; const adds: any[] = [];
+    const store: any = {
+      getExpenses: async () => [], getIncomes: async () => [], getObligations: async () => [], getProfiles: async () => [{ id: "self-1", type: "self", name: "Me" }],
+      getBudgets: async () => caps,
+      updateBudget: async (month: string, id: string, u: any) => { updates.push([month, id, u]); return true; },
+      addBudget: async (month: string, category: string, amount: number, notes?: string, profileId?: string) => { adds.push([month, category, amount, profileId]); return { id: "cap-new", category, amount }; },
+      createFinanceImport: async (d: any) => ({ id: "batch-1", ...d }), deleteBudget: async () => true,
+    };
+    return { store, updates, adds };
+  }
+  const parsed = validateFinanceImport(JSON.stringify({ version: "1.0", budgets: [{ unique_id: "bg1", category: "Groceries", amount: 450, month: "2031-03" }] }));
+  if (!parsed.ok) throw new Error("fixture payload invalid: " + JSON.stringify(parsed));
+  const payload: any = (parsed as any).data;
+  it("plan: 'Groceries' beside an existing 'food' cap is an update", async () => {
+    const { store } = capStore();
+    const plan = await planImport(store, payload, "self-1");
+    const op = plan.ops.find((o: any) => o.section === "budgets");
+    expect(op?.action).toBe("update");
+  });
+  it("apply: the existing food cap is updated to 450; no second cap is added", async () => {
+    const { store, updates, adds } = capStore();
+    const plan = await planImport(store, payload, "self-1");
+    await applyImport(store, payload, "self-1", plan, { month: "2031-03" });
+    expect(updates).toHaveLength(1);
+    expect(updates[0][1]).toBe("cap-food");
+    expect(updates[0][2]).toMatchObject({ amount: 450 });
+    expect(adds).toHaveLength(0);
+  });
+});
