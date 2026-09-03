@@ -872,3 +872,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s206 (streak goal across habit deletion): a `habit_streak` goal reads the habit's 3-day streak, keeps 3 when the habit is deleted (D147), and still reads 3 after restore (3/3).
 - s207 (tracker-value goal across tracker deletion): a `weight_loss` goal reads the tracker's latest value and keeps it when the tracker is deleted (D147) (2/2). Trackers have no restore route (permanent delete, as noted earlier), so the follow-again check does not apply.
 - s208 after D229 (export A → import into B): the rescheduled occurrence keeps `movedTo` and B's bills list reports the moved day; Linda's co-signer link is recreated beside Self's owner link; the imported entry's pairing points at B's new habit ids and both habits link B's tracker (5/5). The import still answers `success: false` only because B already held habits with the same names from earlier imports (`idx_habits_name_owner`), which it reports per row — importing into a non-empty account skips name collisions rather than merging them (noted, not changed).
+
+### Regression sweep after D221–D229 — verified
+- crawl.mjs: all 19 routes load with no page errors and no 5xx.
+- flows15 (task dialog 7/7), flows16 (income dialog 6/6), flows17 (event dialog 6/6), flows21 (weekly habit tap 4/4), flows20 (co-signer removal 5/5), flows14 (document viewer badges 6/6) unchanged.
