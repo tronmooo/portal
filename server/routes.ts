@@ -10555,6 +10555,10 @@ No emojis. No prose outside the JSON.`,
     if (!liability) return res.status(404).json({ error: "Resource not found" });
     const parsed = insertLiabilityPaymentSchema.safeParse({ ...req.body, liabilityProfileId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    // The shared payment schema allows 0 because a $0 bill can be marked
+    // paid; a LOAN payment of $0 is a slip (a ledger row, a $0 expense and a
+    // "paid" stamp with no money moved), so this route refuses it.
+    if (!(Number(parsed.data.amount) > 0)) return res.status(400).json({ error: "Payment amount must be greater than zero" });
 
     // SINGLE SOURCE OF TRUTH: the server — not the client — owns the
     // principal/interest split AND the resulting balance, and it owns them in

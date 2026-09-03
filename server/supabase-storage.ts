@@ -3000,6 +3000,24 @@ export class SupabaseStorage implements IStorage {
     return this.getTracker(id);
   }
 
+  /**
+   * An entry dated after today in the user's zone is a slip (a weight "for
+   * Friday" typed on Tuesday, or a wrong year): it sat at the top of every
+   * list as the latest value, drove goal progress and the wellness score,
+   * and could not be told apart from a real reading. Refused with a 400 on
+   * the API and the chat path alike (both create through logEntry, edits
+   * through updateTrackerEntry). Same-day entries at any clock time stay
+   * allowed.
+   */
+  private assertEntryNotInFuture(ts: string | Date): void {
+    const day = localDayOf(ts, this._timezone);
+    if (day && day > getUserToday(this._timezone)) {
+      const e: any = new Error("Entries can't be logged for a future date");
+      e.statusCode = 400;
+      throw e;
+    }
+  }
+
   async logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined> {
     const tracker = await this.getTracker(data.trackerId);
     if (!tracker) return undefined;
@@ -3068,6 +3086,7 @@ export class SupabaseStorage implements IStorage {
     // W4-4: honor an explicit entry timestamp when the caller supplies one
     // (already parsed to ISO upstream); otherwise stamp NOW().
     const ts = data.timestamp || new Date().toISOString();
+    this.assertEntryNotInFuture(ts);
 
     // Dedup check: reject entries with same values logged within 5 minutes.
     // Use a key-sorted canonical form so {a:1,b:2} and {b:2,a:1} dedup the same way.
@@ -3253,7 +3272,7 @@ export class SupabaseStorage implements IStorage {
     if (patch.notes !== undefined) update.notes = patch.notes;
     if (patch.mood !== undefined) update.mood = patch.mood;
     if (patch.tags !== undefined) update.tags = patch.tags;
-    if (patch.timestamp) update.timestamp = patch.timestamp;
+    if (patch.timestamp) { this.assertEntryNotInFuture(patch.timestamp); update.timestamp = patch.timestamp; }
     // Recompute derived/computed data from the new values so badges (BP
     // category, sleep quality, pace, calories, etc.) stay correct after an edit.
     try {

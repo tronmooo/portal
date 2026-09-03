@@ -1024,3 +1024,34 @@ describe("D128: a tracker_target goal follows a fields-less tracker's latest ent
     expect((await s.getGoal("g1"))?.current).toBe(7200);
   });
 });
+
+// D131 — a tracker entry dated after today (user's zone) was accepted and
+// became the "latest" reading everywhere.
+describe("D131: tracker entries cannot be dated in the future", () => {
+  const tracker = { id: "tr-1", name: "Weight", fields: [{ name: "weight", type: "number", isPrimary: true }], entries: [] };
+  function entryStorage() {
+    const inserts: any[] = [];
+    const { client } = chainClient((table, op, payload) => {
+      if (table === "tracker_entries" && op === "insert") { inserts.push(payload); return { data: [{ id: "e1", ...payload }], error: null }; }
+      if (table === "tracker_entries" && op === "update") return { data: [{ id: "e1", ...payload }], error: null };
+      if (table === "tracker_entries" && op === "select") return { data: [{ id: "e1", tracker_id: "tr-1", user_id: USER, entry_values: { weight: 170 }, timestamp: "2026-09-01T10:00:00Z" }], error: null };
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client, getTracker: async () => tracker, _timezone: "America/Los_Angeles", logActivity: () => {}, _reownRestoredRow: async () => {} });
+    return { s, inserts };
+  }
+  it("refuses a create dated tomorrow with a 400, keeps today at any clock time", async () => {
+    const { s, inserts } = entryStorage();
+    const tomorrow = new Date(Date.now() + 36 * 3600 * 1000).toISOString();
+    await expect(s.logEntry({ trackerId: "tr-1", values: { weight: 180 }, timestamp: tomorrow })).rejects.toMatchObject({ statusCode: 400 });
+    expect(inserts).toHaveLength(0);
+    const earlierToday = new Date(Date.now() - 60 * 1000).toISOString();
+    await s.logEntry({ trackerId: "tr-1", values: { weight: 180 }, timestamp: earlierToday, __skipDedupe: true } as any);
+    expect(inserts).toHaveLength(1);
+  });
+  it("refuses moving an existing entry into the future", async () => {
+    const { s } = entryStorage();
+    const nextWeek = new Date(Date.now() + 7 * 86400 * 1000).toISOString();
+    await expect(s.updateTrackerEntry("tr-1", "e1", { timestamp: nextWeek })).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
