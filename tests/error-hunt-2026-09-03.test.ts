@@ -869,3 +869,4 @@ describe("D174: POST /api/profiles/:id/unlink and /api/obligations/:id/materiali
     expect((await h.api("POST", "/api/obligations/bill-mine/materialize")).status).toBe(200);
   });
 });
+

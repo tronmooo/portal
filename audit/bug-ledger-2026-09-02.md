@@ -317,6 +317,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Bulk delete date filters — by design (checked, not changed)
+"Delete everything before <date>" matches a row's own date and, for a row without one (an undated task, a habit, a tracker), its creation date — pinned by tests/bulk-actions.test.ts ("applies a before_date cutoff on createdAt") and mitigated by the two-phase preview that names the rows before the confirm. Noted as a design choice.
+
 ### Cross-user profile links (probe s74) — verified working
 User B cannot link their task to A's person nor A's task to their own person; neither task carries a foreign link afterwards.
 
