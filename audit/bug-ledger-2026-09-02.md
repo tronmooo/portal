@@ -846,3 +846,4 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s192 (recurring task cadence change): completing a daily task spawns tomorrow's; switching the open occurrence to weekly and completing it spawns one a week later; exactly one open occurrence exists at any time (3/3). (Recurrence on tasks is a `recur:<cadence>` tag, not a field.)
 - s193 (recurring task undo): un-completing the original retracts the untouched clone, and a clone the user already edited survives an undo (3/3).
 - s194 (timed recurring task): the bell says "due today · 9:30 PM", the spawned occurrence keeps 21:30 on tomorrow, and the calendar places it at 21:30 (4/4).
+- s195 (timed task under Tokyo at 00:xx Tokyo / 08:xx Los Angeles the day before): a task due "today 09:00" in Tokyo is stored on the Tokyo day with 09:00; the bell under Tokyo says due today · 9:00 AM; the calendar shows it on the Tokyo day at 09:00 (4/4).
