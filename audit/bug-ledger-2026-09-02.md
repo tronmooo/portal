@@ -336,6 +336,15 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Browser crawl on the rebuilt client (10:18 UTC, after D189/D191) — clean
+Every top-level route visited as user A: no console errors, page errors, failed requests or bad text.
+
+### Re-importing the same finance file (probe s128) — verified working
+The first import lands two expenses, an income and a bill; a second preview flags each as a duplicate of an existing row and the second commit creates nothing; undoing both batches leaves nothing of the import.
+
+### Deletes that are permanent say so — verified working
+Tracker, journal-entry and memory deletes are hard deletes; the tracker and journal dialogs say "permanently … cannot be undone", and no restore route exists for them, so the promise matches the storage.
+
 ### Deleting a document after editing a field it contributed — verified by code
 The cascade removes a contributed field only while the stored value still equals what the document saved (`removeDocumentContributedFields` compares values), so a value the user edited since stays.
 
