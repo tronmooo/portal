@@ -1908,3 +1908,28 @@ describe("D219: remembered timezone", () => {
     expect(writes).toContainEqual([USER_TIMEZONE_PREF, "Asia/Tokyo"]);
   });
 });
+
+// ─── D220: the journal create answers with the owner it stored ───────────────
+import { upsertJournalEntry } from "../server/content-service";
+describe("D220: journal create response carries the linked profile", () => {
+  it("upsertJournalEntry returns the row as linked", async () => {
+    const s = new MemStorage();
+    const { entry, appended } = await upsertJournalEntry(s, { content: "Linda had a good day", mood: "good", entryDate: "2025-01-15", profileId: "linda-1" } as any);
+    expect(appended).toBe(false);
+    expect(entry.linkedProfiles).toEqual(["linda-1"]);
+    const stored = (await s.getJournalEntries()).find((e) => e.id === entry.id);
+    expect(stored?.linkedProfiles).toEqual(["linda-1"]);
+  });
+  it("POST /api/journal under an active profile answers with that owner", async () => {
+    const mem = new MemStorage();
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }, { id: "linda-1", type: "person", name: "Linda" }] }, (storage) => {
+      storage.getJournalEntries = () => mem.getJournalEntries();
+      storage.createJournalEntry = (e: any) => mem.createJournalEntry(e);
+      storage.updateJournalEntry = (id: string, p: any) => mem.updateJournalEntry(id, p);
+      storage.linkProfileTo = async () => undefined;
+    });
+    const r = await h.api("POST", "/api/journal", { content: "Linda had a good day", mood: "good", date: "2025-01-16" }, { "x-active-profile-ids": "linda-1" });
+    expect(r.status).toBeLessThan(300);
+    expect(r.data.linkedProfiles).toEqual(["linda-1"]);
+  });
+});

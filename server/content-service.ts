@@ -224,8 +224,13 @@ export async function upsertJournalEntry(
     highlights: input.highlights,
   } as any);
   if (input.profileId) {
-    await storage.updateJournalEntry(created.id, { linkedProfiles: [input.profileId] } as any);
+    // Return the row AS LINKED, not the pre-link row: the create answered
+    // with Self as owner while the store held Linda, so the journal page's
+    // optimistic cache (and the write manifest) filed the entry under the
+    // wrong person until a refetch — under Linda's scope it vanished.
+    const linkedRow = await storage.updateJournalEntry(created.id, { linkedProfiles: [input.profileId] } as any);
     await storage.linkProfileTo(input.profileId, "journal", created.id).catch(() => { /* non-fatal */ });
+    return { entry: linkedRow || { ...created, linkedProfiles: [input.profileId] }, appended: false };
   }
   return { entry: created, appended: false };
 }

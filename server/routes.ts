@@ -8482,7 +8482,7 @@ Rules:
     applyActiveProfileScope(req, req.body);
     const linkedProfileId = Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0
       ? String(req.body.linkedProfiles[0]) : null;
-    const { entry: newEntry, appended } = await upsertJournalEntry(storage, {
+    let { entry: newEntry, appended } = await upsertJournalEntry(storage, {
       content: parsed.data.content || "",
       mood: parsed.data.mood,
       entryDate,
@@ -8494,7 +8494,8 @@ Rules:
     // Additional owners beyond the first (the service links only the primary).
     if (Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 1) {
       const merged = Array.from(new Set([...(((newEntry as any).linkedProfiles) || []), ...req.body.linkedProfiles.map(String)]));
-      await storage.updateJournalEntry(newEntry.id, { linkedProfiles: merged } as any);
+      const withAll = await storage.updateJournalEntry(newEntry.id, { linkedProfiles: merged } as any);
+      newEntry = withAll || { ...newEntry, linkedProfiles: merged };
     }
     const uid_j1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`stats:${uid_j1}`);
