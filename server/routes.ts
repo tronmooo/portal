@@ -7808,12 +7808,16 @@ Rules:
     const obligations = await storage.getObligations();
     const payByLiab = new Map<string, any[]>();
     for (const ob of obligations) payByLiab.set(ob.id, (ob.payments || []).map((p: any) => ({ paymentDate: p.date, id: p.id })));
+    // Scope with the same rule as the scoped bills list (owner chain and
+    // co-ownership included — D120/D133); the raw "immediate parent is in
+    // the selection" test hid a co-owned car's bill from the calendar.
+    const allowedBillIds = ids && ids.length > 0 ? new Set((await storage.getObligations(ids)).map((o: any) => o.id)) : null;
     const selfId = profiles.find(p => p.type === "self")?.id;
     const items: any[] = [];
     for (const p of profiles as any[]) {
       if (!isRecurringBillType(p.type_key ?? p.typeKey)) continue;
+      if (allowedBillIds && !allowedBillIds.has(p.id)) continue;
       const owner = p.parentProfileId || selfId;
-      if (ids && !(owner && ids.includes(owner))) continue;
       const occ = generateSchedule({ id: p.id, fields: p.fields }, payByLiab.get(p.id) || [], { todayISO: today, windowStart: start, windowEnd: end });
       for (const o of occ) {
         items.push({
@@ -8301,14 +8305,10 @@ Rules:
       if (ids.length > 0) {
         // Filter by linkedProfiles; entries with no linked profiles only show
         // when the selection includes a self-type profile (treat them as the user's own).
-        const allProfiles = await storage.getProfiles();
-        const selfIds = new Set(allProfiles.filter(p => p.type === "self").map(p => p.id));
-        const includesSelf = ids.some(id => selfIds.has(id));
-        items = items.filter((j: any) => {
-          const lp: string[] = j.linkedProfiles || [];
-          if (lp.length === 0) return includesSelf;
-          return lp.some(pid => ids.includes(pid));
-        });
+        // The canonical rule (orphans are Self's, owner chain, co-ownership)
+        // instead of an inline id match that missed a pet's entry under its
+        // owner and a co-owned car's under its co-owner.
+        items = await filterByProfileScope(items, ids, cacheUserKey(req as AuthenticatedRequest));
       }
     } else if (fp) {
       const allProfiles = await storage.getProfiles();
@@ -9477,7 +9477,10 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
 
       // Scope the snapshot to the active profile filter so AI advice is relevant.
       if (filterIds.length > 0) {
-        const inProfile = (lp: string[] | undefined | null) => (lp || []).some(id => filterIds.includes(id));
+        // Canonical rule (orphans, owner chain, co-ownership) — the inline id
+        // match dropped a co-owned car's rows from the suggestions.
+        const sugCtx = await profileFilterCtx(filterIds, profiles as any[]);
+        const inProfile = (lp: string[] | undefined | null) => passesProfileFilter(lp, sugCtx);
         const inExpense = (e: any) => {
           const lp = e.linkedProfiles || (e.linkedProfileId ? [e.linkedProfileId] : []);
           return inProfile(lp);
@@ -9643,13 +9646,8 @@ No emojis. No prose outside the JSON.`,
       const profileId = req.query.profileId as string | undefined;
       const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
       if (ids.length > 0) {
-        const allProfiles = await storage.getProfiles();
-        const selfMatch = ids.some(id => allProfiles.find(p => p.id === id)?.type === "self");
-        goals = goals.filter(g => {
-          const lp = g.linkedProfiles || [];
-          if (lp.length === 0) return selfMatch;
-          return lp.some(id => ids.includes(id));
-        });
+        // Canonical rule (see /api/journal above).
+        goals = await filterByProfileScope(goals, ids, cacheUserKey(req as AuthenticatedRequest));
       }
       res.json(paginateFull(goals, req, res));
     } catch (err: any) {

@@ -833,6 +833,42 @@ describe("D123: GET /api/tasks?profileIds=<party> lists tasks of a co-owned loan
   });
 });
 
+// D134 — four more scoped reads matched raw ids: bill occurrences for the
+// calendar, the journal list, the goals list and the dashboard suggestions.
+describe("D134: journal, goals and bill occurrences use the shared scope rule", () => {
+  const LINDA = { id: "linda-1", type: "person", name: "Linda" };
+  const CAR = { id: "car-1", type: "vehicle", name: "Honda", parentProfileId: SELF.id };
+  const link = (storage: any) => { storage.getAssetPartyLinks = async () => [{ id: "apl-1", assetProfileId: "car-1", partyProfileId: "linda-1", ownershipPercentage: 50 }]; };
+  it("a co-owner's journal and goals include the car's rows; a stranger's do not", async () => {
+    const journal = [{ id: "j-car", content: "Car wash", date: "2026-09-01", linkedProfiles: ["car-1"] }, { id: "j-self", content: "Mine", date: "2026-09-01", linkedProfiles: [SELF.id] }];
+    const goals = [{ id: "g-car", title: "Pay off the car", type: "custom", target: 1, unit: "x", status: "active", linkedProfiles: ["car-1"] }, { id: "g-self", title: "Run", type: "custom", target: 1, unit: "x", status: "active", linkedProfiles: [SELF.id] }];
+    h = await boot({ profiles: [SELF, MIKE, LINDA, CAR] }, (storage) => { link(storage); storage.getJournalEntries = async () => journal; storage.getGoals = async () => goals; });
+    expect((await h.api("GET", `/api/journal?profileIds=${LINDA.id}`)).data.map((j: any) => j.id)).toEqual(["j-car"]);
+    expect((await h.api("GET", `/api/goals?profileIds=${LINDA.id}`)).data.map((g: any) => g.id)).toEqual(["g-car"]);
+    expect((await h.api("GET", `/api/journal?profileIds=${MIKE.id}`)).data).toEqual([]);
+    expect((await h.api("GET", `/api/goals?profileIds=${MIKE.id}`)).data).toEqual([]);
+  });
+  it("bill occurrences for a person come from the scoped bill list, not the immediate parent", async () => {
+    const bill = { id: "bill-car", type: "liability", type_key: "utility", name: "Car insurance", parentProfileId: "car-1", fields: { monthlyAmount: 118, dueDate: "2026-09-22", frequency: "monthly" } };
+    const calls: any[] = [];
+    h = await boot({ profiles: [SELF, MIKE, LINDA, CAR, bill] }, (storage) => {
+      link(storage);
+      storage.getObligations = async (ids?: string[]) => {
+        calls.push(ids);
+        const all = [{ id: "bill-car", name: "Car insurance", amount: 118, frequency: "monthly", nextDueDate: "2026-09-22", status: "active", linkedProfiles: ["car-1"], payments: [] }];
+        if (!ids) return all;
+        return ids.includes(LINDA.id) || ids.includes(SELF.id) ? all : [];
+      };
+    });
+    const l = await h.api("GET", `/api/obligation-occurrences?start=2026-09-01&end=2026-10-31&profileIds=${LINDA.id}`);
+    expect(l.status).toBe(200);
+    expect((l.data as any[]).map((o) => o.obligationId ?? o.liabilityId ?? o.id).some((id) => String(id).includes("bill-car"))).toBe(true);
+    expect(calls).toContainEqual([LINDA.id]);
+    const m = await h.api("GET", `/api/obligation-occurrences?start=2026-09-01&end=2026-10-31&profileIds=${MIKE.id}`);
+    expect(m.data).toEqual([]);
+  });
+});
+
 // D97 — the bill-create dedupe was written only after the insert finished,
 // so two identical creates arriving together both inserted.
 describe("D97: two identical bill creates arriving together insert once", () => {
