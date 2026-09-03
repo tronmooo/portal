@@ -55,6 +55,7 @@ let harnessSeq = 0;
  * implemented explicitly below.
  */
 export function makeFakeStorage(db: FakeDb) {
+  const locks = new Map<string, number>();
   const impl: Record<string, any> = {
     _timezone: "America/Los_Angeles",
 
@@ -64,6 +65,9 @@ export function makeFakeStorage(db: FakeDb) {
     // caller after it. These two make the double behave like a cold cache.
     getResponseCache: async () => null,
     setResponseCache: async () => undefined,
+    // Per-account lock (D261): a real map so two concurrent restores in a test contend like production.
+    acquireUserLock: async (name: string, ttlMs: number) => { const held = locks.get(name); if (held !== undefined && held > Date.now() - ttlMs) return false; locks.set(name, Date.now()); return true; },
+    releaseUserLock: async (name: string) => { locks.delete(name); },
     getDataVersion: async () => 0,
 
     bumpDataVersion: async () => {

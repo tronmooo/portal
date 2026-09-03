@@ -8942,6 +8942,8 @@ Rules:
     }
   }));
 
+  /** A restore that has not released its lock in this long is treated as dead. */
+  const IMPORT_LOCK_TTL_MS = 10 * 60 * 1000;
   app.post("/api/import", asyncHandler(async (req, res) => {
     try {
       const importUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
@@ -8952,6 +8954,14 @@ Rules:
       if (!data || !data.version) {
         return res.status(400).json({ error: "Invalid import file — missing version field" });
       }
+      // One restore at a time per account (D261): the duplicate checks below
+      // read the account as it was when the run started, so two restores of
+      // one backup running together (a double-submitted form, a retried
+      // request) each restored every profile, task and expense.
+      if (!(await storage.acquireUserLock("import", IMPORT_LOCK_TTL_MS))) {
+        return res.status(409).json({ error: "A restore is already running for this account. Wait for it to finish, then check your data before restoring again." });
+      }
+      try {
       const imported: Record<string, number> = {};
       const failed: Record<string, string[]> = {};
 
@@ -9352,6 +9362,9 @@ Rules:
 
       const totalFailed = Object.values(failed).reduce((s, arr) => s + arr.length, 0);
       res.json({ success: totalFailed === 0, imported, failed: totalFailed > 0 ? failed : undefined, totalFailed });
+      } finally {
+        await storage.releaseUserLock("import").catch(() => {});
+      }
     } catch (err: any) {
       log.error("[Import]", err?.message || "unknown error");
       res.status(500).json({ error: "Import failed" });

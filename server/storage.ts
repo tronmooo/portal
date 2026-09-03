@@ -263,6 +263,13 @@ export interface IStorage {
   // Preferences
   getPreference(key: string): Promise<string | null>;
   setPreference(key: string, value: string): Promise<void>;
+  /**
+   * Per-account mutual exclusion for long multi-row operations (a backup
+   * restore). True when this call now holds the lock; false while another
+   * holder has it and its ttl has not passed. Release with releaseUserLock.
+   */
+  acquireUserLock(name: string, ttlMs: number): Promise<boolean>;
+  releaseUserLock(name: string): Promise<void>;
 
   // Income
   getIncomes(profileIds?: string[]): Promise<Income[]>;
@@ -2630,6 +2637,14 @@ export class MemStorage implements IStorage {
     return this.preferences.get(key) ?? null;
   }
 
+  private userLocks = new Map<string, number>();
+  async acquireUserLock(name: string, ttlMs: number): Promise<boolean> {
+    const held = this.userLocks.get(name);
+    if (held !== undefined && held > Date.now() - ttlMs) return false;
+    this.userLocks.set(name, Date.now());
+    return true;
+  }
+  async releaseUserLock(name: string): Promise<void> { this.userLocks.delete(name); }
   async setPreference(key: string, value: string): Promise<void> {
     this.preferences.set(key, value);
   }

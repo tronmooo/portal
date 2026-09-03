@@ -3049,3 +3049,33 @@ describe("D260 duplicate bill reminders collapse to one", async () => {
     expect(scan).toContain("collapseDuplicateBillReminders(scoped, log, existingTasks)");
   });
 });
+
+// ── D261: one restore at a time per account.
+describe("D261 a backup restore submitted twice at once is applied once", () => {
+  it("MemStorage lock: the second claim waits, a released or expired claim is taken over", async () => {
+    const s = new MemStorage();
+    expect(await s.acquireUserLock("import", 60_000)).toBe(true);
+    expect(await s.acquireUserLock("import", 60_000)).toBe(false);
+    await s.releaseUserLock("import");
+    expect(await s.acquireUserLock("import", 60_000)).toBe(true);
+    // A holder that died: its claim is older than the ttl.
+    expect(await s.acquireUserLock("import", 0)).toBe(true);
+  });
+  it("route: two concurrent imports of one payload → one 200 and one 409, rows created once; a later import is accepted", async () => {
+    const created: any[] = [];
+    let seq = 0;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getProfiles = async () => [{ id: "self-1", type: "self", name: "Me", fields: {} }];
+      storage.getSelfProfile = async () => ({ id: "self-1", type: "self", name: "Me", fields: {} });
+      storage.createProfile = async (p: any) => { await new Promise((r) => setTimeout(r, 20)); const row = { id: `p-${++seq}`, ...p }; created.push(row); return row; };
+    });
+    const payload = { version: "2", profiles: [{ id: "old-self", type: "self", name: "Me", fields: {} }, { id: "old-kim", type: "person", name: "Kim", parentProfileId: "old-self", fields: {} }] };
+    const [a, b] = await Promise.all([h.api("POST", "/api/import", payload), h.api("POST", "/api/import", payload)]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    expect(created.filter((p) => p.name === "Kim")).toHaveLength(1);
+    const refused = a.status === 409 ? a : b;
+    expect(String(refused.data?.error || refused.body?.error || JSON.stringify(refused))).toMatch(/already running/);
+    const later = await h.api("POST", "/api/import", payload);
+    expect(later.status).toBe(200);
+  });
+});

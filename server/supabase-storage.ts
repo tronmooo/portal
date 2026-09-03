@@ -7951,6 +7951,28 @@ export class SupabaseStorage implements IStorage {
     return data ? data.value : null;
   }
 
+  /**
+   * The lock is a preferences row `lock:<name>` whose value is the claim time.
+   * (user_id, key) is unique, so of two concurrent claims exactly one insert
+   * lands; the loser may still take over a claim older than `ttlMs` (a holder
+   * that died) through a conditional update, which is atomic per row.
+   */
+  async acquireUserLock(name: string, ttlMs: number): Promise<boolean> {
+    const key = `lock:${name}`;
+    const now = new Date().toISOString();
+    const { error } = await this.supabase.from("preferences").insert({ user_id: this.userId, key, value: now });
+    if (!error) return true;
+    if (!isUniqueViolationError(error)) throw error;
+    const cutoff = new Date(Date.now() - ttlMs).toISOString();
+    const { data, error: takeErr } = await this.supabase.from("preferences").update({ value: now })
+      .eq("user_id", this.userId).eq("key", key).lt("value", cutoff).select("key");
+    if (takeErr) throw takeErr;
+    return Array.isArray(data) && data.length > 0;
+  }
+  async releaseUserLock(name: string): Promise<void> {
+    await this.supabase.from("preferences").delete().eq("user_id", this.userId).eq("key", `lock:${name}`);
+  }
+
   async setPreference(key: string, value: string): Promise<void> {
     // Upsert: try update, then insert. maybeSingle — a missing row is the
     // expected insert path, not an error (avoids the 406 that single() raises).
