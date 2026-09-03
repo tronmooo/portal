@@ -22,6 +22,7 @@
 //   the same internal records without changing the dashboard.
 
 import { z } from "zod";
+import { canonicalIncomeFrequency } from "./obligation-windows";
 
 export const FINANCE_IMPORT_SCHEMA_VERSION = "1.0";
 export const FINANCE_IMPORT_SOURCE = "chatgpt_import";
@@ -75,6 +76,18 @@ export const importTransactionSchema = z
   })
   .strict();
 
+/**
+ * A cadence spelled the way people write it ("fortnightly", "every 2 weeks",
+ * "bi-weekly") folds onto the import's enum through the app's one cadence
+ * canon; a spelling the canon does not know still fails with the enum's
+ * message naming the field.
+ */
+const IMPORT_CADENCES = ["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"] as const;
+const importCadence = z.preprocess(
+  (v) => (typeof v === "string" ? (canonicalIncomeFrequency(v) ?? v) : v),
+  z.enum(IMPORT_CADENCES),
+).default("monthly");
+
 export const importAccountSchema = z
   .object({
     unique_id: z.string().min(1, "unique_id is required"),
@@ -92,7 +105,7 @@ const recurringBase = {
   name: z.string().min(1, "name is required"),
   amount: money.refine((n) => n >= 0, "amount must be >= 0"),
   currency: currency.default("USD"),
-  frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"]).default("monthly"),
+  frequency: importCadence,
   category: z.string().default("general"),
   next_due_date: isoDate.optional(),
   account: z.string().optional().default(""),
@@ -108,7 +121,7 @@ export const importIncomeSchema = z
     source_name: z.string().min(1, "source_name is required"),
     amount: money.refine((n) => n >= 0, "amount must be >= 0"),
     currency: currency.default("USD"),
-    frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"]).default("monthly"),
+    frequency: importCadence,
     category: z.string().default("salary"),
     date: isoDate.optional(),
     confidence: confidence.optional().default(0.8),

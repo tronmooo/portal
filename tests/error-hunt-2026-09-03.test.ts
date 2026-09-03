@@ -1568,3 +1568,17 @@ describe("D204: captures follow their owner on delete (to the Self) and on merge
     expect(calls.indexOf(move!)).toBeLessThan(rpcAt);
   });
 });
+
+// ─── D205: an imported cadence spelled the human way folds onto the import enum ─
+import { validateFinanceImport } from "../shared/finance-import-schema";
+describe("D205: finance import folds cadence spellings before validating", () => {
+  it("'fortnightly' and 'every 2 weeks' become biweekly; an unknown word still fails naming the field", () => {
+    const ok = validateFinanceImport(JSON.stringify({ version: "1.0", recurring_bills: [{ unique_id: "b1", name: "Gas", amount: 45, frequency: "fortnightly", category: "Utility" }], income: [{ unique_id: "i1", source_name: "Acme", amount: 2000, frequency: "every 2 weeks" }] }));
+    expect(ok.ok).toBe(true);
+    expect((ok as any).data.recurring_bills[0].frequency).toBe("biweekly");
+    expect((ok as any).data.income[0].frequency).toBe("biweekly");
+    const bad = validateFinanceImport(JSON.stringify({ version: "1.0", income: [{ unique_id: "i1", source_name: "Acme", amount: 2000, frequency: "whenever" }] }));
+    expect(bad.ok).toBe(false);
+    expect(JSON.stringify(bad)).toContain("income[0].frequency");
+  });
+});
