@@ -311,6 +311,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Artifact public share (probe s66) — verified working
+A made-up token is 404; share issues a 32–64-hex token; the public read needs no auth and returns title/content/items only (no owner or token fields); an edit is visible through the link; sharing again keeps the token; user B cannot share or unshare A's artifact and A's link stays live; unshare revokes it (404) and re-sharing issues a new token; a deleted artifact's link goes dark. The public route allows 10 reads a minute per IP (the first probe run tripped it). Noted, by design: artifact delete is permanent (no restore route); chat undo of a delete recreates it from the ledger's snapshot.
+
 ### Browser flows 1–10 on the current build — verified
 Flows 1–9 (dashboard, finance, asset and person pages, hub switcher, ⌘K search, journal and the bell, Settings export/import, wellness quick log) all pass on the rebuilt bundle. Flow 10: the calendar manager shows the server's "cannot end (14:00) before it starts (15:00)" and keeps the draft (D168); fixing the end time creates the event with 15:00–15:45; the Finance page's budget section appears once a cap exists and opens its popup (its category control is a fixed list, so the folding is exercised through the API probes instead).
 
