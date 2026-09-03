@@ -341,6 +341,15 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Same-day journal entries about two people (probe s134) — verified working
+An entry about me and one about Linda on the same day stay findable under each scope and neither is hidden by the one-entry-per-day rule.
+
+### A second journal entry on one day (probe s133) — verified working / by design
+The journal keeps one entry per user per day (unique index on user_id + date): a second entry the same day is appended to the first (both texts readable) and the day's mood becomes the later one; no server error.
+
+### Replica schema aligned with production (10:50 UTC)
+Eight CHECK constraints production has (payment principal/interest/fees ≥ 0, cashflow week 1–5, ownership percentages, artifact/finance status enums) were missing on the replica, which is how D192 passed locally while reversals failed live (D198) and week 6 passed locally (D199); they are now on the replica. Unique indexes match except three link-table uniques the replica names differently and Stripe tables it does not exercise.
+
 ### Production on 8675840, second pass (p7 7/7, p8 6/7, 10:45 UTC)
 Live on the smoke account: delete honesty and foreign-id guards (D171–D174), six parallel caps (D176), parallel field edits (D178), a link across the trash (D180), parallel entry edits (D181), parallel account deltas (D182), a regular then a same-day second loan payment with the due date moved once (D183/D184/D188), undo of the second payment (D186), an edited next occurrence surviving un-complete (D194), stale-version 409s (D195/D196) all hold. A reversal after a payoff answered 500 on production (balance stayed 0): see D198.
 
