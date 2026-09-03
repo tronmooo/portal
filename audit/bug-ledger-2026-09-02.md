@@ -919,3 +919,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - s214 before the fix: the amount edit re-logged the expense as `general` with the generated description (4/5). After: one expense at 45 keeping `utilities` and the user's description, one payment row at 45 (5/5).
 - Unchanged after D233–D235: s213 3/3 (mirror move, expense-side re-price), s188 4/4 and s183 6/6 (loan second-payment paths still go through unpay + pay), s16 11/11 (undo of a loan/card payment restores the account).
+
+### Goal progress against back-dated and re-dated entries — verified (s215)
+
+- Weight-loss and tracker-target goals read the newest entry by TIME: a back-dated entry logged later (184 @ −7d) does not become "latest", and re-dating today's 178 to yesterday (the D233 path) keeps 178. Entries are served ascending by timestamp; the list path re-sorts per tracker.
