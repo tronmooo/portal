@@ -6,7 +6,7 @@ import { autoCheckinLinkedHabits } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
-import { budgetMonthOrThrow, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
+import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
@@ -2689,6 +2689,7 @@ export class MemStorage implements IStorage {
   private budgetStore = new Map<string, Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>>();
   async getBudgets(month: string, profileIds?: string[]) {
     const all = this.budgetStore.get(budgetMonthOrThrow(month)) || [];
+    for (const b of all) b.category = budgetCategoryKey(b.category) || String(b.category || "");
     if (!profileIds) return all;
     const wanted = new Set(profileIds);
     return all.filter(b => !b.profileId || wanted.has(b.profileId));

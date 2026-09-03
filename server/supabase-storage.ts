@@ -7620,6 +7620,10 @@ export class SupabaseStorage implements IStorage {
     if (!data?.value) return [];
     let parsed: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>;
     try { parsed = JSON.parse(data.value); } catch { return []; }
+    if (!Array.isArray(parsed)) return [];
+    // Caps stored before categories were folded ("Groceries") read as their
+    // bucket ("food") so every consumer meets the spend the same way.
+    parsed = parsed.map(b => ({ ...b, category: budgetCategoryKey(b.category) || String(b.category || "") }));
     if (!profileIds) return parsed;
     // Entries with no profileId are shared/all and always returned; otherwise
     // only entries whose profileId is in the requested set.

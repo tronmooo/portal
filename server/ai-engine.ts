@@ -56,6 +56,7 @@ import {
 } from "@shared/finance-accounts";
 import { createHash, randomUUID } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
+import { budgetCategoryKey } from "@shared/budget-ledger";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
 import { matchHabitByName } from "@shared/habit-match";
@@ -9159,7 +9160,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "delete_budget": {
       const month = input.month || getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE);
       const budgets = await storage.getBudgets(month);
-      const target = budgets.find(b => b.category.toLowerCase() === safeLC(input.category));
+      // The same folding the budgets are stored with: "groceries" finds the
+      // "food" cap instead of answering "no budget found".
+      const wanted = budgetCategoryKey(input.category);
+      const target = wanted ? budgets.find(b => budgetCategoryKey(b.category) === wanted) : undefined;
       if (!target) return { error: `No budget found for category "${input.category}" in ${month}` };
       await storage.deleteBudget(month, target.id);
       return { deleted: true, category: target.category, month };
@@ -9202,16 +9206,19 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const expenses = await storage.getExpenses(summaryProfileIds);
       const monthExpenses = expenses.filter(e => e.date?.startsWith(month));
       const byCategory: Record<string, number> = {};
-      monthExpenses.forEach(e => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
+      monthExpenses.forEach(e => { const k = budgetCategoryKey(e.category) || "general"; byCategory[k] = (byCategory[k] || 0) + e.amount; });
       const totalBudget = budgets.reduce((s, b) => s + b.amount, 0);
       const totalSpent = Object.values(byCategory).reduce((s, v) => s + v, 0);
-      const categories = budgets.map(b => ({
-        category: b.category,
-        budgeted: b.amount,
-        actual: byCategory[b.category] || 0,
-        remaining: b.amount - (byCategory[b.category] || 0),
-        percentUsed: b.amount > 0 ? Math.round(((byCategory[b.category] || 0) / b.amount) * 100) : 0,
-      }));
+      const categories = budgets.map(b => {
+        const actual = byCategory[budgetCategoryKey(b.category)] || 0;
+        return {
+          category: b.category,
+          budgeted: b.amount,
+          actual,
+          remaining: b.amount - actual,
+          percentUsed: b.amount > 0 ? Math.round((actual / b.amount) * 100) : 0,
+        };
+      });
       return { month, totalBudget, totalSpent, remaining: totalBudget - totalSpent, categories };
     }
 

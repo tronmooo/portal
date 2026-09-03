@@ -339,3 +339,28 @@ describe("D148: /api/net-worth/history sums the selected profiles' own rows", ()
     expect(asked[2]).toEqual([undefined, 120]);
   });
 });
+
+// ─── D149: legacy spellings and the AI budget tools ─────────────────────────
+import { executeTool } from "../server/ai-engine";
+describe("D149: caps stored before folding, and the AI tools, meet the same bucket", () => {
+  it("getBudgets folds a legacy 'Groceries' cap to 'food' on read", async () => {
+    const s = new MemStorage();
+    await s.setBudgets("2026-09", [{ id: "legacy", category: "Groceries", amount: 300 }, { id: "k", category: "Kids", amount: 50 }]);
+    expect((await s.getBudgets("2026-09")).map((b) => b.category)).toEqual(["food", "kids"]);
+  });
+  it("delete_budget finds the food cap when asked for 'groceries'; get_budget_summary matches its spend", async () => {
+    const s = new MemStorage();
+    (s as any)._timezone = TZ;
+    const month = getUserCurrentMonth(TZ);
+    await s.setBudgets(month, [{ id: "legacy", category: "Groceries", amount: 300 }]);
+    await s.createExpense({ amount: 45, category: "food", description: "market", date: `${month}-03` } as any);
+    const run = <T,>(fn: () => Promise<T>) => new Promise<T>((resolve, reject) => requestStorageContext.run(s, () => fn().then(resolve, reject)));
+    const summary = await run(() => executeTool("get_budget_summary", {}, "u-1"));
+    expect(summary.categories).toEqual([{ category: "food", budgeted: 300, actual: 45, remaining: 255, percentUsed: 15 }]);
+    const deleted = await run(() => executeTool("delete_budget", { category: "groceries" }, "u-1"));
+    expect(deleted).toMatchObject({ deleted: true, category: "food" });
+    expect(await s.getBudgets(month)).toEqual([]);
+    const missing = await run(() => executeTool("delete_budget", { category: "kids" }, "u-1"));
+    expect(missing.error).toMatch(/No budget found/);
+  });
+});
