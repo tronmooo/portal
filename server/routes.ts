@@ -2164,6 +2164,19 @@ export async function registerRoutes(
       return require("crypto").timingSafeEqual(ba, bb);
     } catch { return false; }
   };
+  /**
+   * Cron writes happen outside any user request, so the write middleware never
+   * bumps the user's data version or busts this instance's caches for them:
+   * every cached list and aggregate (tasks, expenses, profiles, stats, the
+   * shared dashboard rows) kept serving the pre-cron data until its TTL or the
+   * user's next write — an autopaid bill still due, a new reminder missing.
+   * Called inside the user's storage context after a cron wrote for them.
+   */
+  async function afterCronWrites(uid: string): Promise<void> {
+    try { await bumpDataVersionNow(uid); } catch { /* the next GET resolves from the DB */ }
+    bustUserCaches(uid);
+  }
+
   const cronWeeklyReview: any = asyncHandler(async (req: any, res: any) => {
     const secret = process.env.CRON_SECRET;
     const provided = (req.headers.authorization || "").replace("Bearer ", "").trim();
@@ -2192,7 +2205,11 @@ export async function registerRoutes(
           (scoped as any)._timezone = await userTimezoneFor(scoped);
           const result = await new Promise<any>((resolve, reject) => {
             requestStorageContext.run(scoped, async () => {
-              try { resolve(await generateWeeklyReview(scoped)); } catch (e) { reject(e); }
+              try {
+                const out = await generateWeeklyReview(scoped);
+                await afterCronWrites(u.id);
+                resolve(out);
+              } catch (e) { reject(e); }
             });
           });
           results.push({ userId: u.id, ok: true, artifactId: result.artifactId });
@@ -2299,7 +2316,7 @@ export async function registerRoutes(
                 const ownerTypes = new Set(["self", "person", "vehicle", "asset", "investment", "property", "loan", "liability", "account"]);
                 const profileIds = profiles.filter(p => ownerTypes.has((p as any).type)).map(p => p.id);
                 const rows = await scoped.takeNetWorthSnapshot(profileIds);
-                if (rows.length > 0) snapped++;
+                if (rows.length > 0) { snapped++; await afterCronWrites(u.id); }
               } catch { /* per-user failure shouldn't abort the run */ }
               resolve();
             });
@@ -2361,6 +2378,7 @@ export async function registerRoutes(
                 // scan kept reminding — and auto-paying — a paused bill.
                 const bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey) && !isPausedBillFields(p.fields) && !isEndedBillFields(p.fields));
                 const existingTasks = await scoped.getTasks().catch(() => [] as any[]);
+                let userWrote = false;
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
                   // `dueKey` addresses the occurrence (its anchor day); `due`
@@ -2373,6 +2391,7 @@ export async function registerRoutes(
                   // left open.
                   if (existingTasks.some((t: any) => isOpenBillReminderTask(t, bill.id))) {
                     const occ = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {};
+                    userWrote = true;
                     await closeBillReminderTasksWhere(scoped, bill.id, (day) => {
                       const st = occ[day]?.status;
                       return st === "paid" || st === "skipped" || (!!day && !!due && day < due);
@@ -2394,6 +2413,7 @@ export async function registerRoutes(
                         notes: "Autopay",
                         source: "autopay",
                       });
+                      if (paid.ok) userWrote = true;
                       if (paid.ok && paid.amount > 0) autopaid++;
                     } catch { /* per-bill best effort */ }
                   } else {
@@ -2419,10 +2439,12 @@ export async function registerRoutes(
                           linkedProfiles: [bill.id],
                         } as any);
                         reminded++;
+                        userWrote = true;
                       } catch { /* best effort */ }
                     }
                   }
                 }
+                if (userWrote) await afterCronWrites(u.id);
               } catch { /* per-user failure shouldn't abort the run */ }
               resolve();
             });

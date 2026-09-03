@@ -2952,3 +2952,24 @@ describe("D256 warm-up pins the user's timezone before warming stats", () => {
     expect(src).toMatch(/"X-Timezone": BROWSER_TIMEZONE/);
   });
 });
+
+// ── D257: every cron that writes for a user bumps that user's data version and
+// busts the instance caches, so the lists served right after are fresh.
+describe("D257 cron writes invalidate the user's caches", () => {
+  const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+  const between = (from: string, to: string) => { const a = src.indexOf(from); const b = src.indexOf(to, a); expect(a).toBeGreaterThan(0); expect(b).toBeGreaterThan(a); return src.slice(a, b); };
+  it("the helper bumps the version and busts the per-user caches", () => {
+    const helper = between("async function afterCronWrites", "const cronWeeklyReview");
+    expect(helper).toContain("bumpDataVersionNow(uid)");
+    expect(helper).toContain("bustUserCaches(uid)");
+  });
+  it("weekly review, net-worth snapshot and the due scan call it after writing", () => {
+    expect(between("const cronWeeklyReview", 'app.get("/api/cron/weekly-review"')).toContain("await afterCronWrites(u.id)");
+    expect(between("async function runNetWorthSnapshot", "const cronSnapshotNetWorth")).toContain("await afterCronWrites(u.id)");
+    const scan = between("async function runLiabilityDueScan", "const cronLiabilityDueScan");
+    expect(scan).toContain("if (userWrote) await afterCronWrites(u.id)");
+    // Every write path in the scan marks the user as written to.
+    expect(scan.indexOf("userWrote = true")).toBeLessThan(scan.indexOf("closeBillReminderTasksWhere("));
+    expect((scan.match(/userWrote = true/g) || []).length).toBe(3);
+  });
+});
