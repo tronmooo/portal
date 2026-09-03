@@ -495,3 +495,36 @@ describe("D155: income frequencies are stored as one word", () => {
     expect((await h.api("POST", "/api/incomes", { description: "Tips", amount: 50, frequency: "hourly" })).status).toBe(400);
   });
 });
+
+// ─── D156: an event's span runs forwards ────────────────────────────────────
+import { eventSpanError } from "../shared/event-span";
+describe("D156: events cannot end before they start", () => {
+  it("eventSpanError names the impossible span and accepts the possible ones", () => {
+    expect(eventSpanError({ date: "2026-09-05", time: "15:00", endTime: "14:00" })).toMatch(/cannot end \(14:00\) before it starts \(15:00\)/);
+    expect(eventSpanError({ date: "2026-09-05", endDate: "2026-09-03" })).toMatch(/cannot end \(2026-09-03\) before/);
+    expect(eventSpanError({ date: "2026-09-05", recurrence: "weekly", recurrenceEnd: "2026-09-02" })).toMatch(/cannot stop/);
+    expect(eventSpanError({ date: "2026-09-05", time: "15:00", endTime: "15:00" })).toBeNull();
+    expect(eventSpanError({ date: "2026-09-05", time: "23:00", endTime: "01:00", endDate: "2026-09-06" })).toBeNull(); // overnight
+    expect(eventSpanError({ date: "2026-09-05", time: "15:00", endTime: "14:00", allDay: true })).toBeNull(); // clock ignored
+    expect(eventSpanError({ date: "2026-09-05", recurrence: "none", recurrenceEnd: "2026-09-02" })).toBeNull();
+    expect(eventSpanError({ date: "not-a-day", time: "15:00", endTime: "14:00" })).toBeNull(); // the schema owns that
+  });
+  it("both create and edit refuse through the routes with a 400, and the record is left as it was", async () => {
+    const mem = new MemStorage();
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      for (const k of ["createEvent", "updateEvent", "getEvent", "getEvents", "deleteEvent"] as const) storage[k] = (...a: any[]) => (mem as any)[k](...a);
+    });
+    expect((await h.api("POST", "/api/events", { title: "Dentist", date: "2026-09-05", time: "15:00", endTime: "14:00" })).status).toBe(400);
+    expect((await h.api("POST", "/api/events", { title: "Trip", date: "2026-09-05", endDate: "2026-09-03" })).status).toBe(400);
+    expect((await h.api("POST", "/api/events", { title: "Yoga", date: "2026-09-05", recurrence: "weekly", recurrenceEnd: "2026-09-02" })).status).toBe(400);
+    const ok = await h.api("POST", "/api/events", { title: "Dentist", date: "2026-09-05", time: "15:00", endTime: "15:45" });
+    expect(ok.status).toBe(201);
+    const bad = await h.api("PATCH", `/api/events/${ok.data.id}`, { endTime: "14:00" });
+    expect(bad.status).toBe(400);
+    expect(bad.data.error).toMatch(/cannot end/);
+    expect((await h.api("GET", `/api/events/${ok.data.id}`)).data.endTime).toBe("15:45");
+    // Moving the start past the end is refused too; moving both together is fine.
+    expect((await h.api("PATCH", `/api/events/${ok.data.id}`, { time: "16:00" })).status).toBe(400);
+    expect((await h.api("PATCH", `/api/events/${ok.data.id}`, { time: "16:00", endTime: "16:30" })).status).toBe(200);
+  });
+});

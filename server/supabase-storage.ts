@@ -2,6 +2,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID, createHash } from "crypto";
 
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
+import { assertEventSpan } from "@shared/event-span";
 // ---- Shared Supabase client (PERF) ----
 // One client per (url, key) pair per warm container. The Supabase SDK keeps
 // internal Fetch/Auth/Realtime state that's safe to share across requests
@@ -3830,6 +3831,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createEvent(data: InsertEvent): Promise<CalendarEvent> {
+    assertEventSpan(data as any); // ends before it starts → 400 (shared/event-span)
     const id = randomUUID();
     const now = new Date().toISOString();
     // Auto-link to self profile if no profiles specified
@@ -3863,6 +3865,7 @@ export class SupabaseStorage implements IStorage {
     // updated_at column (fetched only when the caller sent expectedUpdatedAt).
     const eventVersion = await this.assertNoWriteConflictFor("events", id, data as Record<string, any>);
     const merged = { ...existing, ...data };
+    assertEventSpan(merged as any); // the edited record as a whole must still run forwards
     const { error } = await this.guardedWrite(this.supabase.from("events").update({
       title: merged.title, date: merged.date, time: merged.time || null,
       end_time: merged.endTime || null, end_date: merged.endDate || null,

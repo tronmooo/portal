@@ -7,6 +7,7 @@ import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
+import { assertEventSpan } from "@shared/event-span";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
@@ -1365,6 +1366,7 @@ export class MemStorage implements IStorage {
   async getEvents() { return Array.from(this.events.values()); }
   async getEvent(id: string) { return this.events.get(id); }
   async createEvent(data: InsertEvent): Promise<CalendarEvent> {
+    assertEventSpan(data as any);
     const event: CalendarEvent = {
       id: randomUUID(),
       title: data.title,
@@ -1398,6 +1400,7 @@ export class MemStorage implements IStorage {
     const event = this.events.get(id);
     if (!event) return undefined;
     const updated = { ...event, ...data };
+    assertEventSpan(updated as any);
     this.events.set(id, updated);
     this.logActivity("event", `Updated event: ${updated.title}`);
     return updated;
