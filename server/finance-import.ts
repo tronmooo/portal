@@ -44,7 +44,7 @@ export interface FinanceImportStore {
   createIncome(data: any): Promise<Income>;
   createProfile(data: any): Promise<Profile>;
   addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string): Promise<{ id: string; category: string; amount: number }>;
-  updateBudget(month: string, budgetId: string, updates: { amount?: number; category?: string; notes?: string; profileId?: string }): Promise<boolean>;
+  updateBudget(month: string, budgetId: string, updates: { amount?: number; category?: string; notes?: string | null; profileId?: string }): Promise<boolean>;
 
   deleteExpense(id: string): Promise<boolean>;
   deleteObligation(id: string): Promise<boolean>;
@@ -78,8 +78,15 @@ export interface CreatedRecords {
   obligations: string[];
   incomes: string[];
   profiles: string[];
-  budgets: Array<{ month: string; id: string }>;
+  /** A cap the import wrote. `previous` is set when the write landed on a cap
+   *  the user already had (its amount and note before the import), so undo
+   *  restores that cap instead of deleting it. */
+  budgets: Array<{ month: string; id: string; previous?: { amount: number; notes?: string } }>;
 }
+
+/** The caller's calendar: the month budgets default to and the day a bill's
+ *  fallback due date counts from. Both are the user's, never the host's UTC. */
+export interface ImportClock { month?: string; today?: string }
 
 export type OpAction = "create" | "duplicate" | "update" | "skip";
 export interface PlannedOp {
@@ -121,6 +128,7 @@ export async function planImport(
   store: FinanceImportStore,
   payload: FinanceImportPayload,
   profileId: string,
+  clock: ImportClock = {},
 ): Promise<ImportPlan> {
   const ops: PlannedOp[] = [];
   const warnings: string[] = [];
@@ -220,10 +228,13 @@ export async function planImport(
 
   // ── budgets → addBudget / updateBudget ─────────────────────────────────────
   const budgetMonths = new Map<string, Array<{ id: string; category: string; amount: number }>>();
-  const defaultMonth = new Date().toISOString().slice(0, 7);
+  // The same month the commit writes to (the user's calendar month): the plan
+  // used to default to the host's UTC month, so near midnight the preview
+  // checked one month's caps while the commit wrote another's.
+  const defaultMonth = defaultBudgetMonth(clock);
   for (const b of payload.budgets) {
     const s = sec("budgets");
-    const month = b.month || defaultMonth;
+    const month = normalizeMonthKey(b.month) || defaultMonth;
     if (!budgetMonths.has(month)) budgetMonths.set(month, await store.getBudgets(month).catch(() => []));
     // The same bucket rule the caps themselves use (budgetCategoryKey): an
     // imported "Groceries" cap is the month's food cap, not a second one.
@@ -245,7 +256,7 @@ export async function planImport(
 
   // ── Smart detection ─────────────────────────────────────────────────────────
   // Run the deterministic signal detector over the payload + existing data.
-  const importMonth = dominantMonth(payload.transactions.map((t) => t.date)) || new Date().toISOString().slice(0, 7);
+  const importMonth = dominantMonth(payload.transactions.map((t) => t.date)) || defaultMonth;
   const monthBudgets = budgetMonths.get(importMonth) || (await store.getBudgets(importMonth).catch(() => []));
   const signals = detectImportSignals({
     payload,
@@ -272,6 +283,11 @@ function dominantMonth(dates: string[]): string {
   return best;
 }
 
+/** The month a budget without one lands in: the caller's month, else the host's. */
+function defaultBudgetMonth(clock: ImportClock): string {
+  return normalizeMonthKey(clock.month) || new Date().toISOString().slice(0, 7);
+}
+
 function summarize(bySection: Record<string, SectionCount>, warnings: number): ImportSummary {
   let created = 0, duplicates = 0, updated = 0, skipped = 0;
   for (const s of Object.values(bySection)) { created += s.create; duplicates += s.duplicate; updated += s.update; skipped += s.skip; }
@@ -291,7 +307,7 @@ export async function applyImport(
   payload: FinanceImportPayload,
   profileId: string,
   plan: ImportPlan,
-  opts: { month?: string } = {},
+  opts: ImportClock = {},
 ): Promise<{ batchId: string; summary: ImportSummary; record: FinanceImportRecord; failed: ImportFailure[] }> {
   const batchId = plan.batchId;
   const created: CreatedRecords = { expenses: [], obligations: [], incomes: [], profiles: [], budgets: [] };
@@ -335,7 +351,7 @@ export async function applyImport(
       await attempt(kind === "subscription" ? "subscriptions" : "recurring_bills", r.unique_id, `${r.name} ${fmtMoney(r.amount)}`, async () => {
         const row = await store.createObligation({
           name: r.name, amount: r.amount, frequency: r.frequency, category: r.category || (kind === "subscription" ? "subscription" : "general"),
-          kind, nextDueDate: r.next_due_date || nextDueFallback(r.frequency), currency: r.currency || "USD",
+          kind, nextDueDate: r.next_due_date || nextDueFallback(r.frequency, opts.today), currency: r.currency || "USD",
           linkedProfiles: [profileId], notes: r.notes || "", fields: { _import: importMeta(r.confidence) },
         });
         created.obligations.push(row.id);
@@ -379,17 +395,29 @@ export async function applyImport(
 
   // budgets
   // The caller's month (the user's calendar), not the host's UTC month.
-  const defaultMonth = normalizeMonthKey(opts.month) || new Date().toISOString().slice(0, 7);
+  const defaultMonth = defaultBudgetMonth(opts);
   for (const b of payload.budgets) {
     const action = actionByUid.get(b.unique_id);
     if (action !== "create" && action !== "update") continue;
     const month = normalizeMonthKey(b.month) || defaultMonth;
     await attempt("budgets", b.unique_id, `${b.category} ${fmtMoney(b.amount)} (${month})`, async () => {
-      if (action === "update") {
-        const existing = (await store.getBudgets(month).catch(() => [])).find((x) => budgetCategoryKey(x.category) === budgetCategoryKey(b.category) && (!x.profileId || x.profileId === profileId));
-        if (existing) { await store.updateBudget(month, existing.id, { amount: b.amount, notes: `${FINANCE_IMPORT_SOURCE}:${batchId}` }); return; }
+      // The cap this write lands on, whatever the plan called it: the owner's
+      // own bucket (which addBudget would silently overwrite) or the shared
+      // cap for the category. Its amount and note are kept so undo can put
+      // them back — undo used to leave the import's figure in place, or
+      // delete the user's hand-set cap outright when the plan (built against
+      // another month) had called the write a create.
+      const key = budgetCategoryKey(b.category);
+      const caps = await store.getBudgets(month).catch(() => []);
+      const existing = caps.find((x) => budgetCategoryKey(x.category) === key && (x.profileId || null) === (profileId || null))
+        || caps.find((x) => budgetCategoryKey(x.category) === key && !x.profileId);
+      const note = `${FINANCE_IMPORT_SOURCE}:${batchId}`;
+      if (existing) {
+        await store.updateBudget(month, existing.id, { amount: b.amount, notes: note });
+        created.budgets.push({ month, id: existing.id, previous: { amount: existing.amount, notes: existing.notes } });
+        return;
       }
-      const row = await store.addBudget(month, normalizeCategory(b.category), b.amount, `${FINANCE_IMPORT_SOURCE}:${batchId}`, profileId);
+      const row = await store.addBudget(month, normalizeCategory(b.category), b.amount, note, profileId);
       created.budgets.push({ month, id: row.id });
     });
   }
@@ -402,30 +430,38 @@ export async function applyImport(
   return { batchId, summary: plan.summary, record, failed };
 }
 
-/** Reverse a committed import: delete every row it created, mark it undone. */
-export async function undoImport(store: FinanceImportStore, batchId: string): Promise<{ removed: number }> {
+/** Reverse a committed import: delete every row it created, put back every
+ *  cap it overwrote (amount and note as they were), mark it undone. */
+export async function undoImport(store: FinanceImportStore, batchId: string): Promise<{ removed: number; restored: number }> {
   const batch = await store.getFinanceImport(batchId);
   if (!batch) throw new Error("Import not found");
-  if (batch.status === "undone") return { removed: 0 };
+  if (batch.status === "undone") return { removed: 0, restored: 0 };
   const cr = batch.createdRecords;
-  let removed = 0;
+  let removed = 0, restored = 0;
   for (const id of cr.expenses) if (await store.deleteExpense(id).catch(() => false)) removed++;
   for (const id of cr.obligations) if (await store.deleteObligation(id).catch(() => false)) removed++;
   for (const id of cr.incomes) if (await store.deleteIncome(id).catch(() => false)) removed++;
   for (const id of cr.profiles) if (await store.deleteProfile(id).catch(() => false)) removed++;
-  for (const b of cr.budgets) if (await store.deleteBudget(b.month, b.id).catch(() => false)) removed++;
+  for (const b of cr.budgets || []) {
+    if (b.previous) {
+      if (await store.updateBudget(b.month, b.id, { amount: b.previous.amount, notes: b.previous.notes ?? null }).catch(() => false)) restored++;
+    } else if (await store.deleteBudget(b.month, b.id).catch(() => false)) removed++;
+  }
   await store.setFinanceImportStatus(batchId, "undone");
-  return { removed };
+  return { removed, restored };
 }
 
 function looseHash(date: string, merchant: string, amount: number): string {
   return `${(date || "").slice(0, 10)}|${normalizeMerchant(merchant)}|${Math.round(Number(amount) * 100)}`;
 }
 
-function nextDueFallback(frequency: string): string {
-  const d = new Date();
+/** One cadence out from the caller's today (the host's UTC day only as a last resort). */
+function nextDueFallback(frequency: string, today?: string): string {
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(String(today || "")) ? String(today) : new Date().toISOString().slice(0, 10);
+  const [y, m, dd] = base.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1, dd));
   const add = frequency === "weekly" ? 7 : frequency === "biweekly" ? 14 : frequency === "quarterly" ? 90 : frequency === "yearly" ? 365 : 30;
-  d.setDate(d.getDate() + add);
+  d.setUTCDate(d.getUTCDate() + add);
   return d.toISOString().slice(0, 10);
 }
 

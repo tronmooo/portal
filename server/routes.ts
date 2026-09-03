@@ -6513,7 +6513,8 @@ Rules:
     if (!validation.ok || !validation.data) {
       return res.status(422).json({ ok: false, errors: validation.errors });
     }
-    const plan = await planImport(storage, validation.data, profileId);
+    const tz = getTimezone(req);
+    const plan = await planImport(storage, validation.data, profileId, { month: getUserCurrentMonth(tz), today: getUserToday(tz) });
     res.json({ ok: true, profileId, recordCount: validation.recordCount, plan });
   }));
 
@@ -6525,8 +6526,10 @@ Rules:
     if (!validation.ok || !validation.data) {
       return res.status(422).json({ ok: false, errors: validation.errors });
     }
-    const plan = await planImport(storage, validation.data, profileId);
-    const result = await applyImport(storage, validation.data, profileId, plan, { month: getUserCurrentMonth(getTimezone(req)) });
+    const tz = getTimezone(req);
+    const clock = { month: getUserCurrentMonth(tz), today: getUserToday(tz) };
+    const plan = await planImport(storage, validation.data, profileId, clock);
+    const result = await applyImport(storage, validation.data, profileId, plan, clock);
     // `failed` names the records the commit could not write (the batch is
     // still recorded and undoable for everything that landed).
     res.json({ ok: result.failed.length === 0, batchId: result.batchId, summary: result.summary, failed: result.failed, plan, profileId });
@@ -6542,7 +6545,7 @@ Rules:
   app.post("/api/finance-import/:id/undo", asyncHandler(async (req, res) => {
     try {
       const result = await undoImport(storage, req.params.id);
-      res.json({ ok: true, removed: result.removed });
+      res.json({ ok: true, removed: result.removed, restored: result.restored });
     } catch (e: any) {
       res.status(404).json({ ok: false, error: e?.message || "Import not found" });
     }

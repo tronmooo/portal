@@ -2826,3 +2826,94 @@ describe("D252: a finite series past its recurrenceEnd is ended everywhere, not 
     expect(s.liabilityToObligation(plan)).toMatchObject({ status: "ended", nextDueDate: "" });
   });
 });
+
+// ── D254: a ChatGPT finance import that overwrites a budget cap must be undoable,
+// and the preview must plan against the user's month, not the host's UTC month.
+describe("D254 finance-import budgets: undo restores overwritten caps; plan uses the user's month", async () => {
+  const { planImport, applyImport, undoImport } = await import("../server/finance-import");
+  const { validateFinanceImport } = await import("../shared/finance-import-schema");
+  function budgetStore(seed: Record<string, any[]>) {
+    const months: Record<string, any[]> = JSON.parse(JSON.stringify(seed));
+    const imports = new Map<string, any>();
+    const asked: string[] = [];
+    const created: any[] = [];
+    const store: any = {
+      getExpenses: async () => [], getObligations: async () => [], getIncomes: async () => [],
+      getProfiles: async () => [{ id: "p1", type: "self", name: "Me" }],
+      getBudgets: async (m: string) => { asked.push(m); return (months[m] ||= []).map((b) => ({ ...b })); },
+      createExpense: async (d: any) => ({ id: "e", ...d }),
+      createObligation: async (d: any) => { created.push(d); return { id: "o", ...d }; },
+      createIncome: async (d: any) => ({ id: "i", ...d }), createProfile: async (d: any) => ({ id: "pr", ...d }),
+      addBudget: async (m: string, category: string, amount: number, notes?: string, profileId?: string) => {
+        const list = (months[m] ||= []);
+        const hit = list.find((b) => b.category === category && (b.profileId || null) === (profileId || null));
+        if (hit) { hit.amount = amount; hit.notes = notes; return { ...hit }; }
+        const row = { id: `b${list.length + 1}`, category, amount, notes, profileId }; list.push(row); return { ...row };
+      },
+      updateBudget: async (m: string, id: string, u: any) => {
+        const hit = (months[m] || []).find((b) => b.id === id); if (!hit) return false;
+        if (u.amount !== undefined) hit.amount = u.amount; if (u.notes !== undefined) hit.notes = u.notes ?? undefined; return true;
+      },
+      deleteBudget: async (m: string, id: string) => { const l = months[m] || []; const i = l.findIndex((b) => b.id === id); if (i < 0) return false; l.splice(i, 1); return true; },
+      deleteExpense: async () => true, deleteObligation: async () => true, deleteIncome: async () => true, deleteProfile: async () => true,
+      createFinanceImport: async (r: any) => { imports.set(r.id, { ...r, createdAt: "" }); return imports.get(r.id); },
+      listFinanceImports: async () => [...imports.values()],
+      getFinanceImport: async (id: string) => imports.get(id) || null,
+      setFinanceImportStatus: async (id: string, status: string) => { imports.get(id).status = status; },
+    };
+    return { store, months, asked, created };
+  }
+  const payload = (budgets: any[], extra: any = {}) => validateFinanceImport(JSON.stringify({ version: "1.0", base_currency: "USD", budgets, ...extra })).data!;
+
+  it("undo puts an overwritten cap back to its hand-set amount and note", async () => {
+    const { store, months } = budgetStore({ "2026-09": [{ id: "food", category: "food", amount: 300, notes: "hand-set" }] });
+    const p = payload([{ unique_id: "b1", category: "Groceries", amount: 500, month: "2026-09" }]);
+    const plan = await planImport(store, p, "p1");
+    expect(plan.ops[0].action).toBe("update");
+    const res = await applyImport(store, p, "p1", plan, { month: "2026-09" });
+    expect(months["2026-09"][0]).toMatchObject({ id: "food", amount: 500 });
+    expect(res.record.createdRecords.budgets[0]).toEqual({ month: "2026-09", id: "food", previous: { amount: 300, notes: "hand-set" } });
+    const undo = await undoImport(store, res.batchId);
+    expect(undo).toEqual({ removed: 0, restored: 1 });
+    expect(months["2026-09"]).toEqual([{ id: "food", category: "food", amount: 300, notes: "hand-set" }]);
+  });
+
+  it("a plan that called the write a create still keeps the cap it lands on (undo restores, never deletes)", async () => {
+    // The plan was built against a month with no cap; the commit month has one.
+    const { store, months } = budgetStore({ "2026-09": [{ id: "food", category: "food", amount: 300, profileId: "p1" }] });
+    const p = payload([{ unique_id: "b1", category: "food", amount: 500 }]);
+    const plan = await planImport(store, p, "p1", { month: "2026-10" });
+    expect(plan.ops[0].action).toBe("create");
+    const res = await applyImport(store, p, "p1", plan, { month: "2026-09" });
+    expect(months["2026-09"]).toHaveLength(1);
+    expect(res.record.createdRecords.budgets[0].previous).toEqual({ amount: 300, notes: undefined });
+    await undoImport(store, res.batchId);
+    expect(months["2026-09"]).toEqual([{ id: "food", category: "food", amount: 300, profileId: "p1", notes: undefined }]);
+  });
+
+  it("a cap the import created is removed on undo", async () => {
+    const { store, months } = budgetStore({});
+    const p = payload([{ unique_id: "b1", category: "travel", amount: 120, month: "2026-09" }]);
+    const plan = await planImport(store, p, "p1");
+    const res = await applyImport(store, p, "p1", plan, { month: "2026-09" });
+    expect(months["2026-09"]).toHaveLength(1);
+    expect(await undoImport(store, res.batchId)).toEqual({ removed: 1, restored: 0 });
+    expect(months["2026-09"]).toEqual([]);
+  });
+
+  it("the preview plans a month-less cap against the caller's month, the same month the commit writes", async () => {
+    const { store, asked } = budgetStore({ "2026-08": [{ id: "food", category: "food", amount: 300 }] });
+    const p = payload([{ unique_id: "b1", category: "food", amount: 500 }]);
+    const plan = await planImport(store, p, "p1", { month: "2026-08" });
+    expect(asked).toContain("2026-08");
+    expect(plan.ops[0]).toMatchObject({ action: "update", label: "food $500 (2026-08)" });
+  });
+
+  it("a bill without a due date falls due one cadence out from the caller's today", async () => {
+    const { store, created } = budgetStore({});
+    const p = payload([], { recurring_bills: [{ unique_id: "r1", name: "Water", amount: 40, frequency: "monthly" }] });
+    const plan = await planImport(store, p, "p1", { today: "2026-08-31" });
+    await applyImport(store, p, "p1", plan, { month: "2026-08", today: "2026-08-31" });
+    expect(created[0].nextDueDate).toBe("2026-09-30");
+  });
+});

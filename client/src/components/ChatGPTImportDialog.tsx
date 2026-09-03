@@ -259,7 +259,7 @@ export function ChatGPTImportHistory() {
   const undoMut = useMutation({
     mutationFn: async (id: string) => (await apiRequest("POST", `/api/finance-import/${id}/undo`)).json(),
     onSuccess: (d: any) => {
-      toast({ title: "Import undone", description: `${d.removed} record${d.removed === 1 ? "" : "s"} removed` });
+      toast({ title: "Import undone", description: `${d.removed} record${d.removed === 1 ? "" : "s"} removed${d.restored ? `, ${d.restored} budget${d.restored === 1 ? "" : "s"} restored` : ""}` });
       queryClient.invalidateQueries({ queryKey: ["finance-import-history"] });
       queryClient.invalidateQueries({ predicate: (q) => String(q.queryKey?.[0] || "").startsWith("/api/") });
     },

@@ -302,7 +302,7 @@ export interface IStorage {
   getAllBudgets(): Promise<Record<string, Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>>>;
   setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>): Promise<void>;
   addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string): Promise<{id: string; category: string; amount: number; notes?: string; profileId?: string}>;
-  updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}): Promise<boolean>;
+  updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string | null; profileId?: string}): Promise<boolean>;
   deleteBudget(month: string, budgetId: string): Promise<boolean>;
   copyBudgetsToMonth(fromMonth: string, toMonth: string): Promise<number>;
 
@@ -2758,7 +2758,7 @@ export class MemStorage implements IStorage {
     await this.setBudgets(month, list);
     return entry;
   }
-  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}) {
+  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string | null; profileId?: string}) {
     const list = await this.getBudgets(month);
     const entry = applyBudgetUpdate(list, budgetId, updates);
     if (!entry) return false;

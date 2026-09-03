@@ -8101,7 +8101,7 @@ export class SupabaseStorage implements IStorage {
     return this.mutateBudgets(month, (list) => ({ ...upsertBudget(list, { category, amount, notes, profileId }, () => crypto.randomUUID()) }));
   }
 
-  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}): Promise<boolean> {
+  async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string | null; profileId?: string}): Promise<boolean> {
     // Throws a 409 when the edit would leave two caps for one bucket.
     return this.mutateBudgets(month, (list) => !!applyBudgetUpdate(list, budgetId, updates));
   }
