@@ -1423,7 +1423,9 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
           ? `"${habit.name}" was already done for today.`
           : done.progress.required > 1
             ? `Checked in "${habit.name}" — ${done.progress.completed} of ${done.progress.required} today.`
-            : `Checked in "${habit.name}" — ${done.currentStreak}-day streak.`;
+            : done.reason === "not_scheduled"
+              ? `Checked in "${habit.name}" — recorded, though today isn't one of its scheduled days.`
+              : `Checked in "${habit.name}" — ${done.currentStreak}-day streak.`;
         return { matched: true, reply, actions, results };
       }
       if (done.reason === "not_scheduled") {

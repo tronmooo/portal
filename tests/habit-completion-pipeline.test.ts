@@ -353,14 +353,18 @@ describe("completeHabitOccurrence — one pipeline, every source", () => {
     expect(res.reason).toBe("not_found");
   });
 
-  it("refuses a day the habit isn't scheduled on", async () => {
-    // Sundays only; ask for a day that is not a Sunday.
+  it("keeps a check-in on a day the habit isn't scheduled on, flagged not_scheduled (D225)", async () => {
+    // Sundays only; ask for a day that is not a Sunday. The tap used to be
+    // refused with recorded 0 while the route still answered 201 and the
+    // habits page had already toasted "complete!" — a lost check-in.
     const h = await makeHabit({ frequency: "custom", targetDays: [0] });
     const res = await run(storage, () => completeHabitOccurrence(storage, {
       habitId: h.id, date: "2026-08-19", source: "api", // a Wednesday
     }));
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
     expect(res.reason).toBe("not_scheduled");
+    expect(res.recorded).toBe(1);
+    expect(res.progress.isScheduled).toBe(false);
   });
 
   it("records every source identically", async () => {

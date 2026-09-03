@@ -254,26 +254,29 @@ export async function completeHabitOccurrence(
   }
 
   const before = habitDayProgress(habit as any, date);
-  if (!before.isScheduled) {
-    return {
-      ok: false, reason: "not_scheduled", habitId: habit.id, habitName: habit.name, date,
-      source: opts.source, recorded: 0, alreadyComplete: false,
-      progress: before, currentStreak: habit.currentStreak || 0, trackerEntries: [],
-    };
-  }
+  // An off-schedule day (a "weekly" habit — Mondays unless days are set —
+  // tapped on a Friday, a Mon/Wed/Fri habit done on a Tuesday) used to be
+  // refused with `recorded: 0` while the route still answered 201 and the
+  // habits page had already toasted "complete!" — the tap was lost and the
+  // card reverted a moment later (D225). A check-in is a record of something
+  // done: it is kept, flagged `not_scheduled`, and stays out of the streak
+  // (the streak walk only visits scheduled days) and the weekly rollup.
+  const offSchedule = !before.isScheduled;
 
   // ── 1. Record check-ins, clamped to what the day still needs ─────────────
   const asked = Number.isFinite(Number(opts.count)) && Number(opts.count) > 0
     ? Math.floor(Number(opts.count))
     : 1;
-  const toRecord = Math.max(0, Math.min(asked, before.remaining));
+  const toRecord = offSchedule ? asked : Math.max(0, Math.min(asked, before.remaining));
   for (let i = 0; i < toRecord; i++) {
     await storage.checkinHabit(habit.id, date, opts.value, opts.notes);
   }
 
   const fresh = (await storage.getHabit(habit.id)) || habit;
   const after = habitDayProgress(fresh as any, date);
-  const recorded = Math.max(0, after.completed - before.completed);
+  const recorded = offSchedule
+    ? Math.max(0, (after.rawCompleted ?? 0) - (before.rawCompleted ?? 0))
+    : Math.max(0, after.completed - before.completed);
 
   // ── 2. Mirror into the linked tracker ────────────────────────────────────
   // Skipped when a tracker entry is what got us here (it already exists), and
@@ -389,6 +392,7 @@ export async function completeHabitOccurrence(
 
   return {
     ok: true,
+    ...(offSchedule ? { reason: "not_scheduled" as const } : {}),
     habitId: habit.id,
     habitName: habit.name,
     date,

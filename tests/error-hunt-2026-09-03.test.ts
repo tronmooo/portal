@@ -2071,3 +2071,20 @@ describe("D224: scaleSharesTo100 and link removal", () => {
     expect(written).toEqual([["boat-1", [{ partyProfileId: "self-1", ownershipPercentage: 57.14 }, { partyProfileId: "bob-1", ownershipPercentage: 42.86 }]]]);
   });
 });
+
+// ─── D225: an off-schedule habit check-in is kept, not silently dropped ──────
+describe("D225: off-schedule check-in", () => {
+  it("a weekly habit (Mondays by default) checked in on a Friday keeps the check-in, flagged not_scheduled, streak untouched", async () => {
+    const s = new MemStorage();
+    (s as any)._timezone = TZ;
+    const h = await s.createHabit({ name: "Run", frequency: "weekly", targetPerDay: 1 } as any);
+    const friday = "2026-08-28"; // a Friday, in the past
+    const r = await completeHabitOccurrence(s, { habitId: h.id, date: friday, source: "habit_ui", timezone: TZ, ensureTracker: false } as any);
+    expect(r.ok).toBe(true);
+    expect(r.reason).toBe("not_scheduled");
+    expect(r.recorded).toBe(1);
+    const fresh = await s.getHabit(h.id);
+    expect((fresh?.checkins || []).map((c: any) => c.date)).toEqual([friday]);
+    expect(fresh?.currentStreak || 0).toBe(0);
+  });
+});

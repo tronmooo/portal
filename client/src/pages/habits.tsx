@@ -94,6 +94,12 @@ function HabitCard({ habit }: { habit: Habit }) {
       return { prev };
     },
     onSuccess: (serverHabit: any) => {
+      // The tap landed on a day this habit isn't scheduled for (a weekly
+      // habit is due on Mondays unless days are set): it is recorded, but the
+      // optimistic "complete!" above overstated it — say what really happened.
+      if (serverHabit?.completion?.notScheduled) {
+        toast({ title: `${habit.name} — recorded`, description: "Not one of its scheduled days, so it doesn't count toward the streak." });
+      }
       // BUG-HAB-001: Reconcile with server-truth so the displayed streak
       // doesn't pop down a second later when invalidate refetches.
       if (serverHabit && typeof serverHabit === "object" && serverHabit.id) {
