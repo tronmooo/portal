@@ -449,3 +449,49 @@ describe("D152: completeHabitOccurrence refuses a day that has not happened yet"
     expect(habit.checkins.map((c: any) => c.date)).toEqual([today, tzAddDays(today, -1)]);
   });
 });
+
+// ─── D153–D155: edits go through the same gates as creates ──────────────────
+import { canonicalIncomeFrequency } from "../shared/obligation-windows";
+describe("D153/D154: expense PATCH folds the category and refuses a blank description", () => {
+  it("routes", async () => {
+    const rows: any[] = [{ id: "x-1", amount: 12.5, category: "food", description: "milk", date: "2026-09-02", linkedProfiles: ["self-1"] }];
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getExpense = async (id: string) => rows.find((r) => r.id === id);
+      storage.updateExpense = async (id: string, patch: any) => { const r = rows.find((x) => x.id === id); Object.assign(r, patch); return r; };
+    });
+    const folded = await h.api("PATCH", "/api/expenses/x-1", { category: "Utility Bill" });
+    expect(folded.status).toBe(200);
+    expect(folded.data.category).toBe("utilities");
+    expect((await h.api("PATCH", "/api/expenses/x-1", { category: "Subscriptions" })).data.category).toBe("subscription");
+    const blank = await h.api("PATCH", "/api/expenses/x-1", { description: "   " });
+    expect(blank.status).toBe(400);
+    expect(rows[0].description).toBe("milk");
+    expect((await h.api("PATCH", "/api/expenses/x-1", { description: "  oat milk " })).data.description).toBe("oat milk");
+  });
+});
+describe("D155: income frequencies are stored as one word", () => {
+  it("canonicalIncomeFrequency folds every alias the converter knows and refuses the rest", () => {
+    expect(canonicalIncomeFrequency("bi-weekly")).toBe("biweekly");
+    expect(canonicalIncomeFrequency("Fortnightly")).toBe("biweekly");
+    expect(canonicalIncomeFrequency("one_time")).toBe("once");
+    expect(canonicalIncomeFrequency("Annually")).toBe("yearly");
+    expect(canonicalIncomeFrequency("twice a month")).toBe("semimonthly");
+    expect(canonicalIncomeFrequency("hourly")).toBeNull();
+    expect(canonicalIncomeFrequency("")).toBeNull();
+  });
+  it("POST and PATCH /api/incomes store the canonical word and refuse an unknown cadence", async () => {
+    const rows: any[] = [];
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.createIncome = async (d: any) => { const r = { id: `inc-${rows.length + 1}`, ...d }; rows.push(r); return r; };
+      storage.getIncome = async (id: string) => rows.find((r) => r.id === id);
+      storage.updateIncome = async (id: string, patch: any) => { const r = rows.find((x) => x.id === id); Object.assign(r, patch); return r; };
+    });
+    const created = await h.api("POST", "/api/incomes", { description: "Salary", amount: 2600, frequency: "bi-weekly" });
+    expect(created.status).toBe(201);
+    expect(created.data.frequency).toBe("biweekly");
+    expect((await h.api("PATCH", `/api/incomes/${created.data.id}`, { frequency: "fortnightly" })).data.frequency).toBe("biweekly");
+    expect((await h.api("PATCH", `/api/incomes/${created.data.id}`, { frequency: "Monthly" })).data.frequency).toBe("monthly");
+    expect((await h.api("PATCH", `/api/incomes/${created.data.id}`, { frequency: "hourly" })).status).toBe(400);
+    expect((await h.api("POST", "/api/incomes", { description: "Tips", amount: 50, frequency: "hourly" })).status).toBe(400);
+  });
+});

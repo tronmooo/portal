@@ -90,7 +90,7 @@ import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { autoCheckinLinkedHabits } from "./habit-completion";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
-import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation } from "../shared/obligation-windows";
+import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency } from "../shared/obligation-windows";
 
 // PostgREST `.or()` filters are built by string concatenation, so a value
 // containing `,` `(` `)` or `.` breaks out of its operand and appends
@@ -3741,7 +3741,10 @@ export class SupabaseStorage implements IStorage {
   private rowToIncome(r: any): Income {
     return {
       id: r.id, description: r.description, amount: Number(r.amount),
-      category: r.category || "salary", frequency: r.frequency || "monthly",
+      category: r.category || "salary",
+      // Rows stored before the cadence was folded ("bi-weekly") read as the
+      // canonical word every projection switches on.
+      frequency: canonicalIncomeFrequency(r.frequency) ?? (r.frequency || "monthly"),
       date: r.date || undefined, linkedProfiles: r.linked_profiles || [],
       tags: r.tags || [], deletedAt: r.deleted_at, createdAt: r.created_at,
       updatedAt: r.updated_at || undefined,

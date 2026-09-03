@@ -434,6 +434,7 @@ import {
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
 import { normalizeMonthKey, budgetCategoryKey } from "@shared/budget-ledger";
+import { canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
 import { generateSmartInsights } from "./insights-engine";
@@ -6597,7 +6598,14 @@ Rules:
       const amountError = validateTransactionAmount(req.body.amount);
       if (amountError) return res.status(400).json({ error: amountError });
     }
-    if (req.body.description) req.body.description = sanitize(req.body.description);
+    // The same gates the create route runs: an edit could blank the
+    // description and store a raw category ("Utility Bill" next to
+    // "utilities"), re-splitting the buckets the canon folds on create.
+    if (req.body.description !== undefined) {
+      if (typeof req.body.description !== "string" || !req.body.description.trim()) return res.status(400).json({ error: "Description required" });
+      req.body.description = sanitize(req.body.description);
+    }
+    if (req.body.category !== undefined) req.body.category = canonicalExpenseCategory(req.body.category);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
     const updated = await storage.updateExpense(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
@@ -9868,13 +9876,14 @@ No emojis. No prose outside the JSON.`,
   // counted as a monthly paycheck. "custom" is the converter's documented
   // treat-as-monthly value. (insertIncomeSchema types frequency as a bare
   // string; the vocabulary belongs there eventually.)
-  const normalizeIncomeFrequency = (raw: unknown): string => String(raw ?? "").trim().toLowerCase();
+  // Stored as the canonical word: "bi-weekly" and "fortnightly" converted
+  // correctly but were stored verbatim, and the paycheck projection, the
+  // calendar and the monthly-total filters switch on "biweekly" only.
+  const normalizeIncomeFrequency = (raw: unknown): string => canonicalIncomeFrequency(raw) ?? String(raw ?? "").trim().toLowerCase();
   const validateIncomeFrequency = (raw: unknown): string | null => {
     if (typeof raw !== "string") return "frequency must be a string";
-    const f = normalizeIncomeFrequency(raw);
-    if (!f) return "frequency must not be empty";
-    const known = f === "monthly" || f === "month" || f === "custom" || toMonthlyAmount(1, f) !== 1;
-    return known ? null : `Unknown frequency "${raw}" — use once, daily, weekly, biweekly, monthly, quarterly or yearly`;
+    if (!raw.trim()) return "frequency must not be empty";
+    return canonicalIncomeFrequency(raw) ? null : `Unknown frequency "${raw}" — use once, daily, weekly, biweekly, monthly, quarterly or yearly`;
   };
 
   app.post("/api/incomes", asyncHandler(async (req, res) => {

@@ -124,6 +124,37 @@ export function toMonthlyAmount(amount: number | string, frequency?: string | nu
 }
 
 /**
+ * The stored spelling of an income/obligation cadence. Every alias
+ * toMonthlyAmount accepts folds to one word, so "bi-weekly", "fortnightly"
+ * and "biweekly" are one bucket: the paycheck projection, the calendar
+ * series and the monthly-total filters switch on the canonical word and an
+ * alias that slipped through fell to their monthly default. Unknown → null.
+ */
+export const INCOME_FREQUENCIES = [
+  "once", "daily", "weekly", "biweekly", "semimonthly", "monthly", "bimonthly",
+  "quarterly", "semiannual", "yearly", "custom",
+] as const;
+export type IncomeFrequency = (typeof INCOME_FREQUENCIES)[number];
+
+export function canonicalIncomeFrequency(raw: unknown): IncomeFrequency | null {
+  const k = String(raw ?? "").trim().toLowerCase().replace(/[\s_]+/g, "-");
+  switch (k) {
+    case "once": case "one-time": case "onetime": case "single": return "once";
+    case "daily": case "day": return "daily";
+    case "weekly": case "week": return "weekly";
+    case "biweekly": case "bi-weekly": case "fortnightly": case "every-2-weeks": case "every-other-week": return "biweekly";
+    case "semimonthly": case "semi-monthly": case "twice-monthly": case "twice-a-month": return "semimonthly";
+    case "monthly": case "month": return "monthly";
+    case "bimonthly": case "bi-monthly": case "every-2-months": case "every-other-month": return "bimonthly";
+    case "quarterly": case "quarter": case "every-3-months": return "quarterly";
+    case "semiannual": case "semi-annual": case "semiannually": case "semi-annually": case "biannual": case "biannually": case "every-6-months": return "semiannual";
+    case "yearly": case "annual": case "annually": case "year": return "yearly";
+    case "custom": return "custom";
+    default: return null;
+  }
+}
+
+/**
  * The monthly-equivalent total of a set of incomes. ONE definition: the hero
  * cash-flow tile, the executive overview and the Cash Flow popup used to add
  * incomes at face value while the Finance tab converted them with
