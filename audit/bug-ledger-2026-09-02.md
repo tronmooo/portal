@@ -317,6 +317,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Export → import round trip into an empty account (probe s79) — verified working after D158/D159
+User A's export (18 profiles, tasks, expenses, incomes, goals, events, documents, habits, trackers, obligations, artifacts, budgets by month, co-ownership links) imported into user B's empty account with no failures: every section's row count matches (artifacts differ only by B's own two pre-existing weekly reviews), a done timed task keeps its status and time, the co-ownership links arrive, budgets arrive month by month, and B still has exactly one Self. B was wiped afterwards (Self recreated).
+
 ### An empty account's read surface (probe s78, user B with only a Self) — verified working
 Thirty-two read routes (dashboard, stats, bootstrap, bell, calendar, insights, search, anomalies, cashflow, net-worth history, occurrences, budgets, every list, onboarding, activity, date rules, import history, profile types) answer 200 with empty shapes; net worth is 0 with no NaN; search answers an empty list; generating a weekly review does not 500.
 
