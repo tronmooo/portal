@@ -2782,3 +2782,17 @@ describe("D251: the ownership tools ask too when two people share a name", () =>
     expect((await s.getProfiles()).filter((p) => p.name === "Max")).toHaveLength(2);
   });
 });
+
+describe("D251: the legacy name matcher behind forty tools asks on an exact duplicate", () => {
+  it("create_expense for 'Max' with two people named Max asks and creates nothing", async () => {
+    const s = new MemStorage();
+    (s as any)._timezone = TZ;
+    const run = <T,>(fn: () => Promise<T>) => new Promise<T>((resolve, reject) => requestStorageContext.run(s, () => fn().then(resolve, reject)));
+    await s.createProfile({ name: "Me", type: "self", fields: {} } as any);
+    await s.createProfile({ name: "Max", type: "person", fields: {} } as any);
+    await s.createProfile({ name: "Max", type: "pet", fields: {} } as any);
+    const out = await run(() => executeTool("create_expense", { amount: 20, category: "food", description: "treats", forProfile: "Max" }, "u-1"));
+    expect(out.error).toMatch(/Several profiles match "Max"/);
+    expect(await s.getExpenses()).toHaveLength(0);
+  });
+});

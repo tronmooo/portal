@@ -6978,7 +6978,23 @@ function entriesForPerson<T extends { profileId?: string | null }>(entries: T[],
   return mine.length > 0 ? mine : entries.filter((e) => !e.profileId);
 }
 
+/** Thrown when a typed name matches two records exactly; executeTool turns it
+ *  into the tool's error so the assistant asks instead of guessing (D251). */
+export class AmbiguousProfileError extends Error {
+  constructor(public readonly rawName: string, public readonly matches: Array<{ name: string; type?: string }>) {
+    super(`Several profiles match "${rawName}": ${matches.slice(0, 5).map((m) => `${m.name}${m.type ? ` (${m.type})` : ""}`).join(", ")}. Which one did you mean?`);
+    this.name = "AmbiguousProfileError";
+  }
+}
+
 function matchProfileByName<T extends { name: string }>(profiles: T[], rawName: any): T | undefined {
+  // Two records with the SAME name: the resolver's exact step would hand back
+  // the first, and forty legacy callers would write to it (D251).
+  const lc = safeLC(rawName).trim();
+  if (lc) {
+    const exacts = profiles.filter((p) => p.name.toLowerCase() === lc);
+    if (exacts.length > 1) throw new AmbiguousProfileError(String(rawName), exacts as any);
+  }
   const result = resolveProfileByName(profiles, rawName);
   if (result.kind === "found") return result.profile;
   if (result.kind === "ambiguous") {
@@ -7120,6 +7136,15 @@ export function computeDocProfileLinks(
 }
 
 export async function executeTool(name: string, input: any, userId?: string): Promise<any> {
+  try {
+    return await executeToolInner(name, input, userId);
+  } catch (e: any) {
+    if (e instanceof AmbiguousProfileError) return { error: e.message, candidates: e.matches.slice(0, 5).map((m: any) => ({ id: m.id, name: m.name, type: m.type })) };
+    throw e;
+  }
+}
+
+async function executeToolInner(name: string, input: any, userId?: string): Promise<any> {
   // A2 fix: userId scopes the in-memory dedup map; without this two users
   // sending the same command within 30s would collide.
   const dedupUser = userId || "_global";
@@ -10349,8 +10374,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const profiles = await storage.getProfiles();
         const search = safeLC(input.forProfile).trim();
         const wordRe = new RegExp(`(^|\\b)${search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\b|$)`);
-        const target = profiles.find(p => p.name.toLowerCase() === search)
-          || profiles.find(p => wordRe.test(p.name.toLowerCase()));
+        // Two profiles with this name is a question, not a guess (D251); no
+        // match keeps the old behaviour (the expense goes unattributed).
+        const pick = pickProfileByName(profiles, search, input.forProfile);
+        if ("error" in pick && /^Several profiles match/.test(pick.error)) return { error: pick.error };
+        const target = "profile" in pick ? pick.profile : profiles.find(p => wordRe.test(p.name.toLowerCase()));
         if (target) expenseLinkedProfiles.push(target.id);
       }
       // ATTRIBUTION SAFETY NET (2026-07, user report: "grocery expense for
