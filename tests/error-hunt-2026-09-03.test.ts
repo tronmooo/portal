@@ -2554,3 +2554,41 @@ describe("D237: POST /api/import re-keys `_docFields` to the restored documents'
     expect(created.profileUpdates).toEqual([[kim.id, { fields: { _docFields: { [doc.id]: { expirationDate: "2026-09-08" } } } }]]);
   });
 });
+
+// ─── D238/D239: a backup's goals lost their source; journal entries their people ─
+describe("D238/D239: POST /api/import keeps a goal's tracker/habit and a journal entry's people, remapped", () => {
+  it("goal sources point at the restored tracker and habit; the journal entry links the restored person", async () => {
+    const created: Record<string, any[]> = { goals: [], journal: [], trackers: [], habits: [] };
+    let seq = 0; const nid = (p: string) => `${p}-${++seq}`;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getProfiles = async () => [{ id: "self-1", type: "self", name: "Me", fields: {} }];
+      storage.getSelfProfile = async () => ({ id: "self-1", type: "self", name: "Me", fields: {} });
+      storage.createProfile = async (p: any) => ({ id: nid("p"), ...p });
+      storage.createTracker = async (t: any) => { const row = { id: nid("tr"), ...t, entries: [] }; created.trackers.push(row); return row; };
+      storage.createHabit = async (hb: any) => { const row = { id: nid("hb"), ...hb, checkins: [] }; created.habits.push(row); return row; };
+      storage.createGoal = async (g: any) => { const row = { id: nid("g"), current: 0, status: "active", ...g }; created.goals.push(row); return row; };
+      storage.updateGoal = async (id: string, patch: any) => ({ id, ...patch });
+      storage.createJournalEntry = async (j: any) => { const row = { id: nid("j"), ...j }; created.journal.push(row); return row; };
+    });
+    const payload = {
+      version: "2",
+      profiles: [
+        { id: "old-self", type: "self", name: "Me", fields: {} },
+        { id: "old-kim", type: "person", name: "Kim", parentProfileId: "old-self", fields: {} },
+      ],
+      trackers: [{ id: "old-tr", name: "Weight", category: "health", unit: "lbs", fields: [], entries: [] }],
+      habits: [{ id: "old-hb", name: "Walk", frequency: "daily", targetPerDay: 1, checkins: [] }],
+      goals: [
+        { id: "old-g1", title: "Get to 170", type: "weight_loss", unit: "lbs", target: 170, trackerId: "old-tr", linkedProfiles: ["old-kim"] },
+        { id: "old-g2", title: "30-day walk", type: "habit_streak", unit: "days", target: 30, habitId: "old-hb" },
+      ],
+      journalEntries: [{ id: "old-j", date: "2026-09-03", content: "Kim's day", linkedProfiles: ["old-kim"] }],
+    };
+    const r = await h.api("POST", "/api/import", payload);
+    expect(r.status).toBe(200);
+    const tr = created.trackers[0], hb = created.habits[0];
+    expect(created.goals.map((g) => [g.title, g.trackerId, g.habitId])).toEqual([["Get to 170", tr.id, undefined], ["30-day walk", undefined, hb.id]]);
+    expect(created.goals[0].linkedProfiles).toEqual([expect.stringMatching(/^p-/)]);
+    expect(created.journal[0].linkedProfiles).toEqual([expect.stringMatching(/^p-/)]);
+  });
+});

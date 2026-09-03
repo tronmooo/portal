@@ -9046,20 +9046,6 @@ Rules:
           await tryImport("incomes", i.description || "unnamed", () => storage.createIncome({ description: i.description, amount: Number(i.amount), category: i.category || "salary", frequency: i.frequency || "monthly", date: i.date || undefined, tags: i.tags || [], linkedProfiles: remap(i.linkedProfiles) } as any));
         }
       }
-      if (data.goals && Array.isArray(data.goals)) {
-        for (const g of data.goals) {
-          await tryImport("goals", g.title || "unnamed", async () => {
-            const created = await storage.createGoal({ title: g.title, type: g.type || "custom", target: Number(g.target), unit: g.unit || "", startValue: g.startValue, deadline: g.deadline || undefined, category: g.category, milestones: g.milestones || [], linkedProfiles: remap(g.linkedProfiles) } as any);
-            // createGoal starts every goal at its start value and "active";
-            // the backup's progress and a completed status must come back too.
-            const patch: Record<string, any> = {};
-            if (typeof g.current === "number" && Number.isFinite(g.current) && g.current !== created.current) patch.current = g.current;
-            if (typeof g.status === "string" && g.status && g.status !== created.status) patch.status = g.status;
-            if (Object.keys(patch).length > 0) await storage.updateGoal(created.id, patch);
-            return created;
-          });
-        }
-      }
       if (data.paychecks && Array.isArray(data.paychecks)) {
         for (const p of data.paychecks) {
           await tryImport("paychecks", p.source || "unnamed", () => storage.createPaycheck({ source: p.source, amount: Number(p.amount), expected_date: p.expected_date || p.expectedDate, notes: p.notes }));
@@ -9129,6 +9115,26 @@ Rules:
           await tryImport("trackerEntries", "pairing", () => storage.updateTrackerEntry(pe.trackerId, pe.entryId, { values }));
         }
       }
+      // Goals AFTER trackers and habits: their sources must have new ids.
+      if (data.goals && Array.isArray(data.goals)) {
+        for (const g of data.goals) {
+          await tryImport("goals", g.title || "unnamed", async () => {
+            const created = await storage.createGoal({ title: g.title, type: g.type || "custom", target: Number(g.target), unit: g.unit || "", startValue: g.startValue, deadline: g.deadline || undefined, category: g.category, milestones: g.milestones || [], linkedProfiles: remap(g.linkedProfiles),
+              // The goal's source (a tracker, a habit) by its restored id. Left off,
+              // a weight or streak goal came back with no source and stopped
+              // tracking anything (D238).
+              trackerId: g.trackerId ? idMap.get(String(g.trackerId)) : undefined,
+              habitId: g.habitId ? idMap.get(String(g.habitId)) : undefined } as any);
+            // createGoal starts every goal at its start value and "active";
+            // the backup's progress and a completed status must come back too.
+            const patch: Record<string, any> = {};
+            if (typeof g.current === "number" && Number.isFinite(g.current) && g.current !== created.current) patch.current = g.current;
+            if (typeof g.status === "string" && g.status && g.status !== created.status) patch.status = g.status;
+            if (Object.keys(patch).length > 0) await storage.updateGoal(created.id, patch);
+            return created;
+          });
+        }
+      }
       // Import obligations
       if (data.obligations && Array.isArray(data.obligations)) {
         for (const o of data.obligations) {
@@ -9166,7 +9172,7 @@ Rules:
       const journalRows = Array.isArray(data.journalEntries) ? data.journalEntries : Array.isArray(data.journal) ? data.journal : null;
       if (journalRows) {
         for (const j of journalRows) {
-          await tryImport("journalEntries", j.date || "unnamed", () => storage.createJournalEntry({ date: j.date, mood: j.mood, content: j.content, tags: j.tags, energy: j.energy, gratitude: j.gratitude, highlights: j.highlights }));
+          await tryImport("journalEntries", j.date || "unnamed", () => storage.createJournalEntry({ date: j.date, mood: j.mood, content: j.content, tags: j.tags, energy: j.energy, gratitude: j.gratitude, highlights: j.highlights, linkedProfiles: remap(j.linkedProfiles) } as any));
         }
       }
       // Import memories
