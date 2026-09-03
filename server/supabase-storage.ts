@@ -135,7 +135,7 @@ import { type IStorage, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
-import { shareForParty, shareForParties, validateOwnership, roundPct, type OwnershipLink } from "../shared/ownership-model";
+import { shareForParty, shareForParties, validateOwnership, roundPct, type OwnershipLink, scaleSharesTo100 } from "../shared/ownership-model";
 
 const DOCUMENTS_BUCKET = "documents";
 
@@ -2066,22 +2066,29 @@ export class SupabaseStorage implements IStorage {
   private async redistributePartyShares(shares: Array<{ kind: "asset" | "liability"; subjectId: string; others: Array<{ partyProfileId: string; ownershipPercentage: number }> }>): Promise<void> {
     for (const sh of shares) {
       try {
-        const live = sh.others.filter((o) => o.partyProfileId && o.ownershipPercentage > 0);
-        if (live.length === 0) continue;
-        const total = live.reduce((n, o) => n + o.ownershipPercentage, 0);
-        if (total <= 0 || total >= 99.995) continue;
-        const scaled = live.map((o) => ({ partyProfileId: o.partyProfileId, ownershipPercentage: Math.round((o.ownershipPercentage / total) * 10000) / 100 }));
-        const drift = Math.round((100 - scaled.reduce((n, o) => n + o.ownershipPercentage, 0)) * 100) / 100;
-        if (drift !== 0) {
-          const biggest = scaled.reduce((a, b) => (b.ownershipPercentage > a.ownershipPercentage ? b : a));
-          biggest.ownershipPercentage = Math.round((biggest.ownershipPercentage + drift) * 100) / 100;
-        }
+        const scaled = scaleSharesTo100(sh.others.filter((o) => o.partyProfileId));
+        if (!scaled) continue;
         if (sh.kind === "asset") await this.setAssetOwners(sh.subjectId, scaled);
         else await this.setLiabilityOwners(sh.subjectId, scaled);
       } catch (e: any) {
-        console.warn(`[deleteProfile] could not redistribute shares on ${sh.kind} ${sh.subjectId}: ${e?.message || e}`);
+        console.warn(`[ownership] could not redistribute shares on ${sh.kind} ${sh.subjectId}: ${e?.message || e}`);
       }
     }
+  }
+
+  /**
+   * After one owner's link is removed, hand their share back to the owners
+   * that remain — the same rule as deleting the person (D139). Without it the
+   * "Remove" button on the owners panel left the asset partly owned by nobody
+   * (D224): Self kept 40% of a boat that was now entirely theirs.
+   */
+  private async redistributeAfterLinkRemoval(kind: "asset" | "liability", subjectId: string): Promise<void> {
+    const rows = kind === "asset"
+      ? await this.getAssetPartyLinks(subjectId).catch(() => [] as any[])
+      : await this.getLiabilityProfileLinks(subjectId).catch(() => [] as any[]);
+    const others = (rows || []).filter((l: any) => l?.partyProfileId)
+      .map((l: any) => ({ partyProfileId: String(l.partyProfileId), ownershipPercentage: Number(l.ownershipPercentage ?? 0) }));
+    await this.redistributePartyShares([{ kind, subjectId, others }]);
   }
 
   async deleteProfile(id: string): Promise<boolean> {
@@ -8552,6 +8559,7 @@ export class SupabaseStorage implements IStorage {
         newValue: null, changedBy: "user", note: null,
       });
     } catch (e) { /* best-effort */ }
+    await this.redistributeAfterLinkRemoval("liability", String(existing.liability_profile_id));
     return true;
   }
 
@@ -8893,6 +8901,7 @@ export class SupabaseStorage implements IStorage {
       oldValue: JSON.stringify({ pct: existing.ownership_percentage, role: existing.role }),
       newValue: null, changedBy: "user", note: null,
     }).catch(() => { /* history is best-effort */ });
+    await this.redistributeAfterLinkRemoval("asset", String(existing.asset_profile_id));
     return true;
   }
 

@@ -13215,35 +13215,20 @@ export default function ProfileDetailPage() {
 
   const saveOwnersMutation = useMutation({
     mutationFn: async (selectedIds: string[]) => {
-      const pct = selectedIds.length > 0 ? Math.round(10000 / selectedIds.length) / 100 : 100;
-      // Determine which links to add and which to remove
-      const toAdd = selectedIds.filter(sid => !linkedPersonIdSet.has(sid));
-      const toRemove = (currentPartyLinks || []).filter((l: any) => {
-        const lid = l.partyProfileId || l.party?.id;
-        return lid && !selectedIds.includes(lid);
-      });
-      // Delete removed links
-      for (const link of toRemove) {
-        await apiRequest("DELETE", `/api/asset-party-links/${link.id || link.linkId}`);
-      }
-      // Add new links
-      for (const sid of toAdd) {
-        await apiRequest("POST", "/api/asset-party-links", {
-          assetProfileId: id,
-          partyProfileId: sid,
-          ownershipPercentage: pct,
-          role: "owner",
-        });
-      }
-      // Update ownership pct for existing kept links to equalize
-      const toKeep = (currentPartyLinks || []).filter((l: any) => {
-        const lid = l.partyProfileId || l.party?.id;
-        return lid && selectedIds.includes(lid);
-      });
-      for (const link of toKeep) {
-        await apiRequest("PATCH", `/api/asset-party-links/${link.id || link.linkId}`, {
-          ownershipPercentage: pct,
-        });
+      // One atomic write of the whole owner set (equal shares that total
+      // exactly 100). This used to delete, add and patch link by link; now
+      // that removing a link hands its share to the survivors (D224), the
+      // add that followed would have overflowed 100%.
+      if (selectedIds.length > 0) {
+        const base = Math.floor(10000 / selectedIds.length) / 100;
+        const owners = selectedIds.map((sid) => ({ partyProfileId: sid, ownershipPercentage: base, role: "owner" }));
+        const drift = Math.round((100 - base * selectedIds.length) * 100) / 100;
+        if (drift !== 0) owners[0].ownershipPercentage = Math.round((owners[0].ownershipPercentage + drift) * 100) / 100;
+        await apiRequest("PUT", `/api/profiles/${id}/owners`, { owners });
+      } else {
+        for (const link of (currentPartyLinks || [])) {
+          await apiRequest("DELETE", `/api/asset-party-links/${link.id || link.linkId}`);
+        }
       }
       // Update ownerName display fallback and parent column for single-owner case.
       // Note: ownerProfileId is intentionally NOT written — no reader consumes it

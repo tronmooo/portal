@@ -263,3 +263,25 @@ export function itemVisibleForSelection(
   for (const s of sel) if (selfSet.has(s)) return true;
   return false;
 }
+
+/**
+ * Scale a set of surviving shares so they total exactly 100, pro rata.
+ *
+ * Used when an owner leaves an asset or loan — by deletion of the person
+ * (D139) or by removing their link (D224): the share they held returns to the
+ * remaining owners in proportion, never to nobody. Empty, all-zero, or
+ * already-complete inputs come back unchanged (`null` means nothing to do).
+ */
+export function scaleSharesTo100<T extends { ownershipPercentage: number }>(shares: readonly T[]): T[] | null {
+  const live = shares.filter((o) => Number(o.ownershipPercentage) > 0);
+  if (live.length === 0) return null;
+  const total = live.reduce((n, o) => n + Number(o.ownershipPercentage), 0);
+  if (total <= 0 || total >= 99.995) return null;
+  const scaled = live.map((o) => ({ ...o, ownershipPercentage: Math.round((Number(o.ownershipPercentage) / total) * 10000) / 100 }));
+  const drift = Math.round((100 - scaled.reduce((n, o) => n + o.ownershipPercentage, 0)) * 100) / 100;
+  if (drift !== 0) {
+    const biggest = scaled.reduce((a, b) => (b.ownershipPercentage > a.ownershipPercentage ? b : a));
+    biggest.ownershipPercentage = Math.round((biggest.ownershipPercentage + drift) * 100) / 100;
+  }
+  return scaled;
+}

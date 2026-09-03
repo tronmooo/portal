@@ -2044,3 +2044,30 @@ describe("D223: the logged expense carries the bill's parties", () => {
     expect(created[0].linkedProfiles).toEqual(["self-1", "linda-1"]);
   });
 });
+
+// ─── D224: removing a co-owner's link hands their share to the survivors ─────
+import { scaleSharesTo100 } from "../shared/ownership-model";
+describe("D224: scaleSharesTo100 and link removal", () => {
+  it("scales survivors pro rata to exactly 100 and leaves complete or empty sets alone", () => {
+    expect(scaleSharesTo100([{ partyProfileId: "self", ownershipPercentage: 40 }, { partyProfileId: "bob", ownershipPercentage: 30 }]))
+      .toEqual([{ partyProfileId: "self", ownershipPercentage: 57.14 }, { partyProfileId: "bob", ownershipPercentage: 42.86 }]);
+    expect(scaleSharesTo100([{ partyProfileId: "self", ownershipPercentage: 40 }])).toEqual([{ partyProfileId: "self", ownershipPercentage: 100 }]);
+    expect(scaleSharesTo100([{ partyProfileId: "self", ownershipPercentage: 100 }])).toBeNull();
+    expect(scaleSharesTo100([])).toBeNull();
+    expect(scaleSharesTo100([{ partyProfileId: "x", ownershipPercentage: 0 }])).toBeNull();
+  });
+  it("deleteAssetPartyLink rewrites the survivors' shares", async () => {
+    const link = { id: "l-linda", user_id: "u", asset_profile_id: "boat-1", party_profile_id: "linda-1", ownership_percentage: 30, role: "co_owner" };
+    const { client, calls } = chainClient((table, op) => (table === "asset_party_links" && op === "select" ? { data: link, error: null } : { data: null, error: null }));
+    const written: any[] = [];
+    const s = bareStorage({
+      supabase: client,
+      recordOwnershipHistory: async () => undefined,
+      getAssetPartyLinks: async () => [{ id: "l-self", assetProfileId: "boat-1", partyProfileId: "self-1", ownershipPercentage: 40 }, { id: "l-bob", assetProfileId: "boat-1", partyProfileId: "bob-1", ownershipPercentage: 30 }],
+      setAssetOwners: async (id: string, owners: any[]) => { written.push([id, owners]); return owners; },
+    });
+    expect(await s.deleteAssetPartyLink("l-linda")).toBe(true);
+    expect(calls.some((c: any) => c.table === "asset_party_links" && c.op === "delete")).toBe(true);
+    expect(written).toEqual([["boat-1", [{ partyProfileId: "self-1", ownershipPercentage: 57.14 }, { partyProfileId: "bob-1", ownershipPercentage: 42.86 }]]]);
+  });
+});
