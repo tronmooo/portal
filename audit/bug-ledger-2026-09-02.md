@@ -908,3 +908,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - Before the fixes: a mirror entry moved to yesterday left the habit's check-in on today; a bill-payment expense edited 40 → 45 left the payment row and stamp at 40. After: check-in on yesterday only; payment row 45, stamp 45.
 - Neighbours unchanged: s202 3/3, s203 5/5, s204 5/5, s208 5/5.
+
+### Replica integrity sweep after D230–D234 — verified
+
+- Zero rows: tracker entries mirroring a missing habit, check-ins without a habit, paid occurrence stamps without a payment row, payment amount ≠ its logged expense, `_docFields` naming a missing document, documents linked to missing profiles, dangling liability-asset links, probe leftovers.
+- 118 expenses carry a `payment:<id>` tag whose payment row is gone: every one belongs to a probe bill that was hard-deleted (`DELETE /api/profiles`), which cascades the payment rows and keeps the spend history — by design, the tag is inert. 4 entity links point at soft-deleted expenses, kept for restore and hidden on read (same rule as events).
