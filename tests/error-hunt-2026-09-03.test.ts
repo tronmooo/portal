@@ -775,3 +775,14 @@ describe("D168: CalendarManagerPanel restores the typed form when a create is re
     expect(ignoring).toBeLessThanOrEqual(4);
   });
 });
+
+// ─── D169: a shared artifact page must not be CDN-cached past its unshare ───
+describe("D169: /api/public/artifacts/:token is not cacheable by the CDN", () => {
+  it("source guard: the public viewer answers with a no-store policy, never public max-age", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    const start = src.indexOf('app.get("/api/public/artifacts/:token"');
+    const body = src.slice(start, start + 4000);
+    expect(body).toContain('res.setHeader("Cache-Control", "private, no-store")');
+    expect(body).not.toMatch(/Cache-Control", "public, max-age=/);
+  });
+});

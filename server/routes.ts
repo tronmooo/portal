@@ -8347,7 +8347,11 @@ Rules:
     if (error) return deny(500);
     const row = (data || [])[0] as Record<string, any> | undefined;
     if (!row) return deny();
-    res.setHeader("Cache-Control", "public, max-age=60");
+    // Not CDN-cacheable: with `public, max-age=60` Vercel kept serving the
+    // page for up to a minute after the owner unshared (or deleted) it —
+    // production timing 2026-09-03: HIT right after unshare, 404 only 70 s
+    // later. Enumeration is already throttled by the per-IP limit above.
+    res.setHeader("Cache-Control", "private, no-store");
     // Whitelisted response fields ONLY — never the raw metadata object or
     // shareToken.
     res.json({
