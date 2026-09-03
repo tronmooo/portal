@@ -10009,11 +10009,26 @@ No emojis. No prose outside the JSON.`,
       const result = await storage.deleteAllUserData();
       clearAllCache();
       const failed = Object.keys((result as any).errors || {});
+      // The wipe takes the Self profile with everything else, and the auth
+      // middleware only auto-creates a Self once per process per user — so
+      // on a warm instance the account stayed Self-less: every new task and
+      // expense linked to nobody and the orphan rule had no Self to fall back
+      // to. Give the account its Self back as part of the wipe.
+      let selfRecreated = false;
+      if (failed.length === 0) {
+        try {
+          await storage.createProfile({ name: "Me", type: "self", notes: "", fields: {}, tags: [] } as any);
+          selfRecreated = true;
+        } catch (e: any) {
+          log.warn(`[delete-all] could not recreate the Self profile: ${e?.message || e}`);
+        }
+      }
       // Erasure is the one operation that must not claim success it can't
       // prove: any table that errored is named, and success flips off.
       res.status(failed.length > 0 ? 500 : 200).json({
         success: failed.length === 0,
         deleted: result.deleted,
+        selfRecreated,
         ...(failed.length > 0 ? { errors: (result as any).errors } : {}),
       });
     } catch (err: any) {

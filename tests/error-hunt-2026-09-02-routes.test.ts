@@ -1042,10 +1042,14 @@ describe("D105: import remaps profiles, parents, Self and every link", () => {
 describe("D106: a mistyped delete-all confirmation does not spend the hourly allowance", () => {
   it("400 first, then the real request runs", async () => {
     let deleted = 0;
-    h = await boot({ profiles: [SELF] }, (storage) => { storage.deleteAllUserData = async () => { deleted++; return { errors: {} }; }; });
+    h = await boot({ profiles: [SELF] }, (storage, db) => { storage.deleteAllUserData = async () => { deleted++; db.profiles.length = 0; return { errors: {} }; }; });
     expect((await h.api("DELETE", "/api/data/all", { confirmation: "yes" })).status).toBe(400);
     const ok = await h.api("DELETE", "/api/data/all", { confirmation: "DELETE" });
     expect(ok.status, JSON.stringify(ok.data)).toBe(200);
+    // D130 — the wipe gives the account its Self back (the auth middleware
+    // only auto-creates one once per process, so a warm instance stayed Self-less).
+    expect(ok.data.selfRecreated).toBe(true);
+    expect(h.db.profiles.filter((p: any) => p.type === "self")).toHaveLength(1);
     expect(deleted).toBe(1);
     expect((await h.api("DELETE", "/api/data/all", { confirmation: "DELETE" })).status).toBe(429);
   });
