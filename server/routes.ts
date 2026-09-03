@@ -8929,6 +8929,11 @@ Rules:
       const heldStamps: Array<{ profileId: string; occurrences: Record<string, any> }> = [];
       /** Expenses whose `liability:`/`payment:` tags wait for new ids (D240). */
       const heldExpenseTags: Array<{ expenseId: string; tags: string[] }> = [];
+      // The ONE raw ledger write in this file (see bill-entry-point-parity):
+      // a backup restores HISTORY rows as they were — never through
+      // payBillOccurrence, which would advance due dates, debit accounts and
+      // log fresh expenses for old payments.
+      const restoreLedgerRow = (row: Record<string, any>) => storage.createLiabilityPayment(row as any);
       const remapTag = (tag: string): string => {
         const m = /^(liability|payment):(.+)$/.exec(tag);
         if (!m) return tag;
@@ -9168,7 +9173,7 @@ Rules:
                 // payBillOccurrence — an import must not advance due dates,
                 // debit accounts, or log fresh expenses for old payments.
                 await tryImport("obligationPayments", `${o.name} payment`, async () => {
-                  const row = await storage.createLiabilityPayment({
+                  const row = await restoreLedgerRow({
                   liabilityProfileId: created.id,
                   paymentDate: String(p.date || p.paymentDate || getUserToday(getTimezone(req))).slice(0, 10),
                   amount: Number(p.amount) || 0,
@@ -9197,7 +9202,7 @@ Rules:
           const liabilityProfileId = lp.liabilityProfileId ? idMap.get(String(lp.liabilityProfileId)) : undefined;
           if (!liabilityProfileId) continue;
           await tryImport("liabilityPayments", `${lp.paymentDate || "payment"} ${lp.amount ?? ""}`, async () => {
-            const row = await storage.createLiabilityPayment({
+            const row = await restoreLedgerRow({
               liabilityProfileId,
               paymentDate: String(lp.paymentDate || getUserToday(getTimezone(req))).slice(0, 10),
               amount: Number(lp.amount) || 0,
