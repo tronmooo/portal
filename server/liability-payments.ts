@@ -416,6 +416,26 @@ export async function closeBillReminderTasks(storage: IStorage, liabilityId: str
   return closeBillReminderTasksWhere(storage, liabilityId, (due) => !due || due <= occurrenceDate, logger);
 }
 
+/**
+ * Move one occurrence to another day AND retire the reminder task that was
+ * raised for its old day. One entry point for the two REST routes and the
+ * AI tool: each used to call the storage move alone, so the "Bill due" task
+ * for the old day stayed open on the dashboard until the nightly scan.
+ */
+export async function rescheduleBillOccurrence(
+  storage: IStorage,
+  liabilityId: string,
+  occurrenceDate: string,
+  newDate: string,
+  logger: PaymentLogger = noopLogger,
+): Promise<any> {
+  const result = await storage.rescheduleOccurrence(liabilityId, occurrenceDate, newDate);
+  if (!result) return result;
+  const moved = String(newDate).slice(0, 10);
+  await closeBillReminderTasksWhere(storage, liabilityId, (day) => !!day && day < moved, logger).catch(() => 0);
+  return result;
+}
+
 /** True for an open "Bill due" reminder task that belongs to this bill. */
 export function isOpenBillReminderTask(t: any, liabilityId: string): boolean {
   if (!t || t.status === "done") return false;

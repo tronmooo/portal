@@ -1978,6 +1978,11 @@ describe("D221: POST /obligation-occurrences/:occ/reschedule closes the stale re
     const r = await h.api("POST", "/api/obligation-occurrences/bill-1:2026-09-05/reschedule", { newDueAt: "2026-09-12" });
     expect(r.status).toBe(200);
     expect(updates.map(([id, p]) => `${id}:${p.status}`)).toEqual(["t-old:done"]);
+    // The other entry point (the liability page's move) goes through the same helper.
+    updates.length = 0;
+    const r2 = await h.api("PATCH", "/api/liabilities/bill-1/occurrences/2026-09-05", { movedTo: "2026-09-12" });
+    expect(r2.status).toBe(200);
+    expect(updates.map(([id, p]) => `${id}:${p.status}`)).toEqual(["t-old:done"]);
   });
 });
 

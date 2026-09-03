@@ -32,7 +32,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask } from "./liability-payments";
+import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, rescheduleBillOccurrence } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -8012,12 +8012,8 @@ Rules:
     if (!isCalendarDay(String(newDueAt || ""))) return res.status(400).json({ error: "newDueAt must be YYYY-MM-DD" });
     const parsed = parseOccId(req.params.occId);
     if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
-    const result = await storage.rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
+    const result = await rescheduleBillOccurrence(storage, parsed.liabilityId, parsed.date, newDueAt, log);
     if (!result) return res.status(404).json({ error: "Bill not found" });
-    // The "Bill due" reminder for the old day is stale the moment the
-    // occurrence moves — the pay path closes reminders the same way, and
-    // waiting for the nightly scan left it open on the dashboard all day.
-    await closeBillReminderTasksWhere(storage, parsed.liabilityId, (day) => !!day && day < String(newDueAt).slice(0, 10), log).catch(() => 0);
     bustBillCaches(uid);
     res.json(result);
   }));
@@ -8061,7 +8057,7 @@ Rules:
     let result;
     if (movedTo !== undefined) {
       if (!isCalendarDay(String(movedTo))) return res.status(400).json({ error: "movedTo must be YYYY-MM-DD" });
-      result = await storage.rescheduleOccurrence(req.params.id, req.params.date, movedTo);
+      result = await rescheduleBillOccurrence(storage, req.params.id, req.params.date, movedTo, log);
     }
     if (amount !== undefined || notes !== undefined) {
       result = await storage.setOccurrenceFields(req.params.id, req.params.date, { amount, notes });

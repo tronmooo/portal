@@ -123,7 +123,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
-import { signedPrincipal, payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
+import { signedPrincipal, payBillOccurrence, unpayBillOccurrence, rescheduleBillOccurrence } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries, stemKey } from "@shared/series-detect";
@@ -12052,7 +12052,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (input.rescheduleTo) {
           const to = String(input.rescheduleTo).slice(0, 10);
           if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return { error: `rescheduleTo must be YYYY-MM-DD (got "${input.rescheduleTo}")` };
-          const r = await storage.rescheduleOccurrence(match.id, target.date, to);
+          const r = await rescheduleBillOccurrence(storage, match.id, target.date, to);
           return { updated: true, action: "rescheduled", from: target.date, to, obligation: r };
         }
         const patch: any = {};
