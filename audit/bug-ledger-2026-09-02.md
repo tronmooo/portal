@@ -1008,3 +1008,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Production integrity sweep after today's fixes — verified (read-only)
 
 - Zero: entries mirroring a missing habit, paid stamps without a payment row, payment ≠ logged expense amount, `_docFields` naming a missing document, asset-party rows on liabilities, goals or habits pointing at a missing tracker. One liability-asset link points at a soft-deleted (trashed) liability from May — kept for restore, by design.
+
+### Liability dialogs under concurrent edits — verified (flows24)
+
+- Loan terms: with the editor open, a balance change lands (5000 → 4800); changing only the lender sends `{"fields":{"lender":…}}` and the balance stays 4800. Bill schedule: with the editor open, the due date is moved; changing only the reminder lead sends `{"fields":{"reminderLeadDays":5}}` and the moved due date stays. (Before the fix both dialogs sent every field; the server folds `currentBalance` into `balance` on write, which the flow accounts for.)
