@@ -1021,3 +1021,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - With D249 the vehicle's Money tab renders ("Loan Summary · Edit · Clear …"). With the loan editor open, the balance moves 5000 → 4800 elsewhere; changing only the lender sends `{"fields":{"lender":"New Credit Union"}}`, the balance stays 4800 and `originalAmount` stays 8000 (D248). Before D249 the flow could not reach the editor at all.
 - Browser regression after D246–D249: crawl 19 routes clean; flows14 6/6, flows15 7/7, flows16 6/6, flows17 6/6, flows20 5/5, flows21 4/4, flows22 5/5, flows23 2/2, flows24 5/5, flows25 3/3.
 - Full suite after D246–D249: one source-shape test (`bill-payments-tab`) looked for the due-date keys inside the save mutation; they now live in `buildBillFields`, so the test reads the builder. 260 files green after that.
+
+### Replica API regression across today's probes (after the D249 build)
+
+- s209 15/15, s210 11/11, s211 15/15, s213 3/3, s214 5/5, s215 4/4, s216 3/3, s217 2/2, s222 5/5, s223 4/4, s224 4/4, s225 5/5, s226 2/2, s227 4/4. s212 11/12: the one miss is the probe's own wrong endpoint (`/api/cashflow` is the weekly projection table, not a paycheck feed), noted when it was written.
