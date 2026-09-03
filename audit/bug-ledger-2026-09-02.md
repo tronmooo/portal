@@ -1042,3 +1042,4 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - House Self 60 / Kim 40 and loan Self 50 / Kim 50: deleting Kim hands both shares back to Self (house `self:100`, loan `self:100`) and the Self-scoped net worth counts the whole house and the whole loan (D224 holds through the profile cascade too).
 - Replica daily-maintenance cron after today's builds: `{"swept":0,"snapshot":{"snapped":5},"dueScan":{"autopaid":0,"reminded":0}}`, no errors or warnings in the server log.
+- Full suite after D251: 260 files / 4665 tests green.
