@@ -2524,3 +2524,33 @@ describe("D236: profile detail embeds tracker entries oldest → newest whether 
     expect(out.relatedTrackers[0].entriesTotal).toBe(60);
   });
 });
+
+// ─── D237: a backup's document provenance named the source account's ids ────
+describe("D237: POST /api/import re-keys `_docFields` to the restored documents' ids", () => {
+  it("writes the provenance after the documents exist, keyed by their new ids; unknown documents drop out", async () => {
+    const created: Record<string, any[]> = { profiles: [], documents: [], profileUpdates: [] };
+    let seq = 0; const nid = (p: string) => `${p}-${++seq}`;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getProfiles = async () => [{ id: "self-1", type: "self", name: "Me", fields: {} }];
+      storage.getSelfProfile = async () => ({ id: "self-1", type: "self", name: "Me", fields: {} });
+      storage.createProfile = async (p: any) => { const row = { id: nid("p"), ...p }; created.profiles.push(row); return row; };
+      storage.createDocument = async (d: any) => { const row = { id: nid("doc"), ...d }; created.documents.push(row); return row; };
+      storage.updateProfile = async (id: string, patch: any) => { created.profileUpdates.push([id, patch]); return { id, ...patch }; };
+    });
+    const payload = {
+      version: "2",
+      profiles: [
+        { id: "old-self", type: "self", name: "Me", fields: {} },
+        { id: "old-kim", type: "person", name: "Kim", parentProfileId: "old-self", fields: { expirationDate: "2026-09-08", _docFields: { "old-doc": { expirationDate: "2026-09-08" }, "gone-doc": { policyNumber: "P-1" } } } },
+      ],
+      documents: [{ id: "old-doc", name: "Licence", type: "identity", mimeType: "image/jpeg", fileData: "", extractedData: { expirationDate: "2026-09-08" }, tags: [], linkedProfiles: ["old-kim"] }],
+    };
+    const r = await h.api("POST", "/api/import", payload);
+    expect(r.status).toBe(200);
+    const kim = created.profiles.find((p) => p.name === "Kim")!;
+    expect(kim.fields).toEqual({ expirationDate: "2026-09-08" });
+    const doc = created.documents[0];
+    expect(doc.linkedProfiles).toEqual([kim.id]);
+    expect(created.profileUpdates).toEqual([[kim.id, { fields: { _docFields: { [doc.id]: { expirationDate: "2026-09-08" } } } }]]);
+  });
+});

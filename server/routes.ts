@@ -8923,6 +8923,8 @@ Rules:
       // are remapped (parents are created first), and every section's
       // linkedProfiles goes through the map.
       const idMap = new Map<string, string>();
+      /** Profiles whose `_docFields` waits for the documents' new ids (D237). */
+      const heldProvenance: Array<{ profileId: string; sources: Record<string, any> }> = [];
       const pairedEntries: Array<{ trackerId: string; entryId: string; habitIds: string[] }> = [];
       const remap = (ids: unknown): string[] =>
         (Array.isArray(ids) ? ids : []).map((id) => idMap.get(String(id))).filter((id): id is string => !!id);
@@ -8948,8 +8950,17 @@ Rules:
           }
           await tryImport("profiles", p.name || "unnamed", async () => {
             const parentProfileId = p.parentProfileId ? idMap.get(String(p.parentProfileId)) : undefined;
-            const created = await storage.createProfile({ type: p.type, name: p.name, fields: p.fields, tags: p.tags, notes: p.notes, ...(parentProfileId ? { parentProfileId } : {}) } as any);
+            // Document provenance (`_docFields`, keyed by DOCUMENT id) is held
+            // back until the documents exist and their new ids are known
+            // (D237). Written as-is it named the source account's document
+            // ids, so deleting or editing the restored document never found
+            // the copies it had written.
+            const { _docFields: docSources, ...fieldsWithoutProvenance } = (p.fields && typeof p.fields === "object" ? p.fields : {}) as Record<string, any>;
+            const created = await storage.createProfile({ type: p.type, name: p.name, fields: fieldsWithoutProvenance, tags: p.tags, notes: p.notes, ...(parentProfileId ? { parentProfileId } : {}) } as any);
             if (p.id && created?.id) idMap.set(String(p.id), created.id);
+            if (created?.id && docSources && typeof docSources === "object" && Object.keys(docSources).length > 0) {
+              heldProvenance.push({ profileId: created.id, sources: docSources as Record<string, any> });
+            }
           });
         }
       }
@@ -9076,8 +9087,24 @@ Rules:
       // Import documents
       if (data.documents && Array.isArray(data.documents)) {
         for (const d of data.documents) {
-          await tryImport("documents", d.name || "unnamed", () => storage.createDocument({ name: d.name, type: d.type, mimeType: d.mimeType, fileData: d.fileData, extractedData: d.extractedData, tags: d.tags, linkedProfiles: remap(d.linkedProfiles) } as any));
+          await tryImport("documents", d.name || "unnamed", async () => {
+            const created = await storage.createDocument({ name: d.name, type: d.type, mimeType: d.mimeType, fileData: d.fileData, extractedData: d.extractedData, tags: d.tags, linkedProfiles: remap(d.linkedProfiles) } as any);
+            if (d.id && created?.id) idMap.set(String(d.id), created.id);
+          });
         }
+      }
+      // Document provenance, now that the documents have their new ids. A
+      // document the file did not carry (or that failed to import) drops out:
+      // a provenance link to nothing is what the delete cascade treats as
+      // stale anyway.
+      for (const held of heldProvenance) {
+        const remapped: Record<string, any> = {};
+        for (const [oldDocId, saved] of Object.entries(held.sources)) {
+          const newId = idMap.get(String(oldDocId));
+          if (newId && saved && typeof saved === "object") remapped[newId] = saved;
+        }
+        if (Object.keys(remapped).length === 0) continue;
+        await tryImport("profiles", "document provenance", () => storage.updateProfile(held.profileId, { fields: { _docFields: remapped } } as any));
       }
       // Import habits
       if (data.habits && Array.isArray(data.habits)) {
