@@ -1025,3 +1025,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Replica API regression across today's probes (after the D249 build)
 
 - s209 15/15, s210 11/11, s211 15/15, s213 3/3, s214 5/5, s215 4/4, s216 3/3, s217 2/2, s222 5/5, s223 4/4, s224 4/4, s225 5/5, s226 2/2, s227 4/4. s212 11/12: the one miss is the probe's own wrong endpoint (`/api/cashflow` is the weekly projection table, not a paycheck feed), noted when it was written.
+
+### Deleting a parent asset — verified (s228)
+
+- Deleting a house: the contained HVAC goes with it, the mortgage's collateral link is removed, the mortgage itself (owned by Self) stays on the calendar, net worth drops by the house's value. The deed and the roof-repair expense that were linked ONLY to the house are deleted with it — the cascade's documented rule (rows solely linked to the profile are removed, co-owned rows are unlinked, incomes soft-delete) and the page's confirmation says "This will permanently delete this profile and all its data." Profiles have no restore route (`POST /api/profiles/:id/restore` is 404), as noted before. By design; not changed.
