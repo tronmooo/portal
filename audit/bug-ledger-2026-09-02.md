@@ -283,6 +283,9 @@ The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 a
 ### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
 A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
 
+### Real-user browser flows 3 (flows3.mjs, asset profile page) — verified working
+On a throwaway vehicle: the header edit dialog renames it and the header updates at once; the Tasks page shows its tasks; the delete dialog's confirm removes it (404), the task linked only to it goes with it, a task shared with Self survives linked to Self alone, the app leaves the dead page, and the Tasks page in the same tab no longer lists the removed task. No page errors. (A person's `/profiles/:id` URL redirects to the person's Info page, which has its own controls — covered by flows4.)
+
 ### Real-user browser flows 2 (flows2.mjs) — verified working
 Finance: the expense dialog saves 1234.56 on today's date (the amount field is a numeric input, so a comma is not typeable — the browser's doing, not the app's), month-to-date spend rises by exactly that amount and the list shows it at once. Tasks: a far-future due date (2099) shows the wrong-year warning, the dialog saves a task due tomorrow (user's day), the list shows it at once and after a reload. No page errors.
 
