@@ -1,0 +1,212 @@
+// Error hunt 2026-09-03 — budgets (D142–D146).
+//
+// D142  "Copy last month" replaced the destination month's list, so a cap set
+//       for next month before the copy was lost.
+// D143  A month written "2026-9" (or anything else) went to its own bucket no
+//       reader looked at; now folded to "2026-09" or refused with a 400.
+// D144  A budget/goal category was stored verbatim ("Groceries") while the
+//       expenses carry the canonical "food", so the cap and the spending goal
+//       never met their spend.
+// D145  Renaming a cap onto an existing category left two caps for one bucket.
+// D146  The AI budget tools defaulted the month to Los Angeles time for every
+//       user; they now use the requesting user's timezone.
+import { describe, it, expect, afterEach } from "vitest";
+import express from "express";
+import { createServer, type Server } from "http";
+import type { AddressInfo } from "net";
+import { readFileSync } from "node:fs";
+import { requestStorageContext, MemStorage } from "../server/storage";
+import { registerRoutes } from "../server/routes";
+import { makeFakeStorage, type FakeDb, type Harness } from "./helpers/route-harness";
+import {
+  normalizeMonthKey, budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy,
+  type BudgetEntry,
+} from "../shared/budget-ledger";
+import { foldExpenseCategory } from "../shared/category-canon";
+import { getUserCurrentMonth } from "../shared/timezone";
+
+let n = 0;
+const nextId = () => `id-${++n}`;
+
+describe("D143: the month key", () => {
+  it("folds a non-padded month and refuses anything that is not a month", () => {
+    expect(normalizeMonthKey("2026-9")).toBe("2026-09");
+    expect(normalizeMonthKey(" 2026-09 ")).toBe("2026-09");
+    expect(normalizeMonthKey("2026-13")).toBeNull();
+    expect(normalizeMonthKey("2026-00")).toBeNull();
+    expect(normalizeMonthKey("not-a-month")).toBeNull();
+    expect(normalizeMonthKey("2026-09-01")).toBeNull();
+    expect(normalizeMonthKey(undefined)).toBeNull();
+    expect(() => budgetMonthOrThrow("nope")).toThrow(expect.objectContaining({ statusCode: 400 }));
+    expect(budgetMonthOrThrow("2026-1")).toBe("2026-01");
+  });
+});
+
+describe("D144: the category bucket", () => {
+  it("folds spellings the expense canon knows and keeps unknown words as their own bucket", () => {
+    expect(foldExpenseCategory("Groceries")).toBe("food");
+    expect(foldExpenseCategory("kids")).toBeNull();
+    expect(budgetCategoryKey("Groceries")).toBe("food");
+    expect(budgetCategoryKey("FOOD ")).toBe("food");
+    expect(budgetCategoryKey("Misc")).toBe("general");
+    // Two unknown words must not collapse into one "general" cap.
+    expect(budgetCategoryKey("Kids")).toBe("kids");
+    expect(budgetCategoryKey("Toys")).toBe("toys");
+    expect(budgetCategoryKey("")).toBe("");
+  });
+  it("upsert treats 'Groceries' and 'food' as one cap per owner", () => {
+    const list: BudgetEntry[] = [];
+    upsertBudget(list, { category: "food", amount: 300 }, nextId);
+    upsertBudget(list, { category: "Groceries", amount: 350 }, nextId);
+    upsertBudget(list, { category: "Groceries", amount: 100, profileId: "p-1" }, nextId);
+    expect(list.map((b) => [b.category, b.amount, b.profileId ?? null])).toEqual([["food", 350, null], ["food", 100, "p-1"]]);
+  });
+});
+
+describe("D145: an edit cannot leave two caps for one bucket", () => {
+  it("throws a 409 on a rename that collides and applies a clean edit", () => {
+    const list: BudgetEntry[] = [
+      { id: "a", category: "transport", amount: 150 },
+      { id: "b", category: "travel", amount: 100 },
+    ];
+    expect(() => applyBudgetUpdate(list, "b", { category: "transport" })).toThrow(expect.objectContaining({ statusCode: 409 }));
+    expect(list[1]).toEqual({ id: "b", category: "travel", amount: 100 });
+    expect(applyBudgetUpdate(list, "b", { category: "Hobbies", amount: 120 })?.category).toBe("hobbies");
+    expect(applyBudgetUpdate(list, "missing", { amount: 1 })).toBeNull();
+    // Moving a cap to another owner is fine when that owner has no such cap.
+    expect(applyBudgetUpdate(list, "a", { profileId: "p-1" })?.profileId).toBe("p-1");
+    expect(() => applyBudgetUpdate(list, "a", { profileId: null })).not.toThrow();
+  });
+});
+
+describe("D142: copying a month keeps what the destination already has", () => {
+  it("adds only the buckets the destination lacks and reports that count", () => {
+    const destination: BudgetEntry[] = [{ id: "d1", category: "entertainment", amount: 90 }, { id: "d2", category: "food", amount: 500 }];
+    const source: BudgetEntry[] = [
+      { id: "s1", category: "Groceries", amount: 400 },
+      { id: "s2", category: "transport", amount: 150 },
+      { id: "s3", category: "food", amount: 200, profileId: "p-1" },
+    ];
+    const { list, added } = mergeBudgetsForCopy(destination, source, nextId);
+    expect(added).toBe(2);
+    expect(list.map((b) => [b.category, b.amount, b.profileId ?? null])).toEqual([
+      ["entertainment", 90, null], ["food", 500, null], ["transport", 150, null], ["food", 200, "p-1"],
+    ]);
+    expect(list.slice(2).every((b) => !["s1", "s2", "s3"].includes(b.id))).toBe(true);
+    // The inputs are untouched.
+    expect(destination).toHaveLength(2);
+    expect(mergeBudgetsForCopy(list, source, nextId).added).toBe(0);
+  });
+
+  it("MemStorage copies additively, folds the month and refuses garbage", async () => {
+    const s = new MemStorage();
+    await s.addBudget("2026-08", "food", 400);
+    await s.addBudget("2026-8", "transport", 150);
+    expect((await s.getBudgets("2026-08")).map((b) => b.category).sort()).toEqual(["food", "transport"]);
+    await s.addBudget("2026-09", "entertainment", 90);
+    expect(await s.copyBudgetsToMonth("2026-08", "2026-09")).toBe(2);
+    expect((await s.getBudgets("2026-09")).map((b) => b.category).sort()).toEqual(["entertainment", "food", "transport"]);
+    expect(await s.copyBudgetsToMonth("2026-08", "2026-09")).toBe(0);
+    expect((await s.getBudgets("2026-09"))).toHaveLength(3);
+    await expect(s.getBudgets("2026-9-01")).rejects.toMatchObject({ statusCode: 400 });
+    const travel = await s.addBudget("2026-09", "travel", 100);
+    await expect(s.updateBudget("2026-09", travel.id, { category: "food" })).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+// ─── The real routes over the in-memory storage ─────────────────────────────
+const TZ = "America/Los_Angeles";
+let seq = 0;
+interface Booted extends Harness { storage: any }
+async function boot(seed: Partial<FakeDb> = {}, extend?: (storage: any, db: FakeDb) => void): Promise<Booted> {
+  const db: FakeDb = {
+    profiles: [], liabilityPayments: [], expenses: [], incomes: [], obligations: [],
+    tasks: [], events: [], documents: [], getDocumentCalls: 0,
+    bumpDataVersionCalls: 0, domainVersions: {}, lastBumpedDomains: [], ...seed,
+  };
+  const storage: any = makeFakeStorage(db);
+  extend?.(storage, db);
+  const app = express();
+  app.use(express.json());
+  const userId = `eh3-user-${++seq}`;
+  app.use((req, _res, next) => { (req as any).userId = userId; requestStorageContext.run(storage, () => next()); });
+  const httpServer: Server = createServer(app);
+  await registerRoutes(httpServer, app);
+  await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+  const api: Harness["api"] = async (method, path, body, headers = {}) => {
+    const r = await fetch(`${base}${path}`, { method, headers: { "Content-Type": "application/json", "X-Timezone": TZ, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const text = await r.text();
+    let data: any = null; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    return { status: r.status, ok: r.ok, data, headers: {} };
+  };
+  return { db, api, storage, close: () => new Promise<void>((resolve) => httpServer.close(() => resolve())) };
+}
+let h: Booted;
+afterEach(async () => { if (h) await h.close(); });
+
+/** Route the budget methods to a real MemStorage so the list rules apply. */
+function budgetsViaMem(storage: any) {
+  const mem = new MemStorage();
+  for (const k of ["getBudgets", "getAllBudgets", "setBudgets", "addBudget", "updateBudget", "deleteBudget", "copyBudgetsToMonth"] as const) {
+    storage[k] = (...args: any[]) => (mem as any)[k](...args);
+  }
+  return mem;
+}
+
+describe("D142/D143/D145 through the routes", () => {
+  it("normalises the month on every budget route and answers 400 for a non-month", async () => {
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => budgetsViaMem(storage));
+    const created = await h.api("POST", "/api/budgets", { month: "2026-9", category: "pet", amount: 20 });
+    expect(created.status).toBe(200);
+    expect((await h.api("GET", "/api/budgets?month=2026-09")).data.budgets.map((b: any) => b.category)).toEqual(["pet"]);
+    expect((await h.api("GET", "/api/budgets?month=2026-9")).data.month).toBe("2026-09");
+    expect((await h.api("POST", "/api/budgets", { month: "not-a-month", category: "pet", amount: 20 })).status).toBe(400);
+    expect((await h.api("GET", "/api/budgets?month=2026-13")).status).toBe(400);
+    expect((await h.api("PATCH", `/api/budgets/${created.data.id}?month=garbage`, { amount: 30 })).status).toBe(400);
+    expect((await h.api("DELETE", `/api/budgets/${created.data.id}?month=2026-9`)).status).toBe(200);
+    expect((await h.api("GET", "/api/budgets?month=2026-09")).data.budgets).toEqual([]);
+    expect((await h.api("POST", "/api/budgets/copy", { fromMonth: "2026-08", toMonth: "sept" })).status).toBe(400);
+    // No month at all still means the caller's current month.
+    const now = await h.api("GET", "/api/budgets");
+    expect(now.data.month).toBe(getUserCurrentMonth(TZ));
+  });
+
+  it("copy keeps the destination's own caps and a colliding rename is a 409", async () => {
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => budgetsViaMem(storage));
+    await h.api("POST", "/api/budgets", { month: "2026-08", category: "Groceries", amount: 400 });
+    await h.api("POST", "/api/budgets", { month: "2026-08", category: "transport", amount: 150 });
+    await h.api("POST", "/api/budgets", { month: "2026-10", category: "entertainment", amount: 90 });
+    const copy = await h.api("POST", "/api/budgets/copy", { fromMonth: "2026-8", toMonth: "2026-10" });
+    expect(copy.status).toBe(200);
+    expect(copy.data).toEqual({ copied: 2, fromMonth: "2026-08", toMonth: "2026-10" });
+    const after = await h.api("GET", "/api/budgets?month=2026-10");
+    expect(after.data.budgets.map((b: any) => b.category).sort()).toEqual(["entertainment", "food", "transport"]);
+    const travel = await h.api("POST", "/api/budgets", { month: "2026-10", category: "travel", amount: 100 });
+    const clash = await h.api("PATCH", `/api/budgets/${travel.data.id}?month=2026-10`, { category: "transport" });
+    expect(clash.status).toBe(409);
+    expect(clash.data.error).toMatch(/transport budget already exists/);
+    expect((await h.api("GET", "/api/budgets?month=2026-10")).data.budgets.filter((b: any) => b.category === "transport")).toHaveLength(1);
+  });
+
+  it("D144: a spending goal's category is folded like the budgets", async () => {
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage, db) => {
+      storage.createGoal = async (g: any) => ({ id: "goal-1", status: "active", ...g });
+      storage.updateGoal = async (_id: string, patch: any) => ({ id: "goal-1", ...patch });
+    });
+    const g = await h.api("POST", "/api/goals", { title: "Eat cheaper", type: "spending_limit", target: 300, unit: "$", category: "Groceries" });
+    expect(g.status).toBe(200);
+    expect(g.data.category).toBe("food");
+    const p = await h.api("PATCH", "/api/goals/goal-1", { category: "Dining Out" });
+    expect(p.status).toBe(200);
+    expect(p.data.category).toBe(budgetCategoryKey("Dining Out"));
+  });
+});
+
+describe("D146: the AI budget tools do not hard-code a Los Angeles month", () => {
+  it("source guard: every month default goes through the user's timezone", () => {
+    const src = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
+    expect(src).not.toMatch(/timeZone: 'America\/Los_Angeles' \}\)\.slice\(0, 7\)/);
+    expect((src.match(/getUserCurrentMonth\(\(storage as any\)\._timezone/g) || []).length).toBeGreaterThanOrEqual(7);
+  });
+});

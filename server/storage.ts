@@ -6,6 +6,7 @@ import { autoCheckinLinkedHabits } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
+import { budgetMonthOrThrow, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
@@ -2687,47 +2688,40 @@ export class MemStorage implements IStorage {
   // Budget stubs
   private budgetStore = new Map<string, Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>>();
   async getBudgets(month: string, profileIds?: string[]) {
-    const all = this.budgetStore.get(month) || [];
+    const all = this.budgetStore.get(budgetMonthOrThrow(month)) || [];
     if (!profileIds) return all;
     const wanted = new Set(profileIds);
     return all.filter(b => !b.profileId || wanted.has(b.profileId));
   }
   async getAllBudgets() { return Object.fromEntries(this.budgetStore.entries()); }
-  async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>) { this.budgetStore.set(month, budgets); }
+  async setBudgets(month: string, budgets: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>) { this.budgetStore.set(budgetMonthOrThrow(month), budgets); }
   async addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string) {
-    const list = this.budgetStore.get(month) || [];
-    const existing = list.find(b => b.category.toLowerCase() === category.toLowerCase() && (b.profileId || null) === (profileId || null));
-    if (existing) {
-      existing.amount = amount;
-      if (notes) existing.notes = notes;
-      this.budgetStore.set(month, list);
-      return existing;
-    }
-    const budget = { id: crypto.randomUUID(), category, amount, notes, profileId };
-    list.push(budget);
-    this.budgetStore.set(month, list);
-    return budget;
+    const list = await this.getBudgets(month);
+    const entry = upsertBudget(list, { category, amount, notes, profileId }, () => crypto.randomUUID());
+    await this.setBudgets(month, list);
+    return entry;
   }
   async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}) {
-    const list = this.budgetStore.get(month) || [];
-    const idx = list.findIndex(b => b.id === budgetId);
-    if (idx === -1) return false;
-    Object.assign(list[idx], updates);
+    const list = await this.getBudgets(month);
+    const entry = applyBudgetUpdate(list, budgetId, updates);
+    if (!entry) return false;
+    await this.setBudgets(month, list);
     return true;
   }
   async deleteBudget(month: string, budgetId: string) {
-    const list = this.budgetStore.get(month) || [];
+    const list = await this.getBudgets(month);
     const idx = list.findIndex(b => b.id === budgetId);
     if (idx === -1) return false;
     list.splice(idx, 1);
-    this.budgetStore.set(month, list);
+    await this.setBudgets(month, list);
     return true;
   }
   async copyBudgetsToMonth(fromMonth: string, toMonth: string) {
-    const source = this.budgetStore.get(fromMonth) || [];
-    const copied = source.map(b => ({ ...b, id: crypto.randomUUID() }));
-    this.budgetStore.set(toMonth, copied);
-    return copied.length;
+    const source = await this.getBudgets(fromMonth);
+    if (source.length === 0) return 0;
+    const { list, added } = mergeBudgetsForCopy(await this.getBudgets(toMonth), source, () => crypto.randomUUID());
+    if (added > 0) await this.setBudgets(toMonth, list);
+    return added;
   }
 
   // Finance imports (in-memory; MemStorage is dev-only).

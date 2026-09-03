@@ -290,6 +290,7 @@ export default defineConfig({
       'tests/error-hunt-2026-09-02.test.ts',
       'tests/error-hunt-2026-09-02-storage.test.ts',
       'tests/error-hunt-2026-09-02-merge.test.ts',
+      'tests/error-hunt-2026-09-03.test.ts',
       'tests/error-hunt-2026-09-02-hub.dom.test.tsx',
       'tests/error-hunt-2026-09-02-client.test.tsx',
       'tests/error-hunt-2026-09-02-client-logic.test.ts',

@@ -141,6 +141,16 @@ export function canonicalExpenseCategory(raw: unknown): CanonicalExpenseCategory
   return resolve(raw, EXPENSE_CATEGORIES, "general") as CanonicalExpenseCategory;
 }
 
+/**
+ * The canonical expense category for `raw`, or null when neither the
+ * vocabulary nor the alias table knows the spelling (canonicalExpenseCategory
+ * answers "general" for those).
+ */
+export function foldExpenseCategory(raw: unknown): CanonicalExpenseCategory | null {
+  const folded = resolve(raw, EXPENSE_CATEGORIES, "");
+  return folded ? (folded as CanonicalExpenseCategory) : null;
+}
+
 /** Fold any obligation/bill-category spelling to its canonical form. */
 export function canonicalObligationCategory(raw: unknown): CanonicalObligationCategory {
   return resolve(raw, OBLIGATION_CATEGORIES, "general") as CanonicalObligationCategory;

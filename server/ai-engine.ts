@@ -119,7 +119,7 @@ import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossess
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
-import { DEFAULT_TIMEZONE, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
+import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
 import { payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
@@ -9143,7 +9143,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "set_budget": {
-      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const month = input.month || getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE);
       // BUG 1: resolve an optional forProfile name to a profileId so budgets can
       // be scoped per-person. Omitted/unresolved means a shared/household budget.
       let budgetProfileId: string | undefined;
@@ -9157,7 +9157,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "delete_budget": {
-      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const month = input.month || getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE);
       const budgets = await storage.getBudgets(month);
       const target = budgets.find(b => b.category.toLowerCase() === safeLC(input.category));
       if (!target) return { error: `No budget found for category "${input.category}" in ${month}` };
@@ -9172,12 +9172,16 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const [y, m] = toMonth.split("-").map(Number);
       const fromMonth = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
       const copied = await storage.copyBudgetsToMonth(fromMonth, toMonth);
-      if (copied === 0) return { error: `No budgets exist in ${fromMonth} to copy` };
+      if (copied === 0) {
+        const sourceCount = (await storage.getBudgets(fromMonth)).length;
+        if (sourceCount === 0) return { error: `No budgets exist in ${fromMonth} to copy` };
+        return { copied: 0, fromMonth, toMonth, message: `${toMonth} already carries every budget ${fromMonth} has; nothing to add` };
+      }
       return { copied, fromMonth, toMonth, message: `Copied ${copied} budget${copied === 1 ? "" : "s"} from ${fromMonth} to ${toMonth}` };
     }
 
     case "get_budget_summary": {
-      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const month = input.month || getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE);
       // W4-3: scope BOTH the budget side and the spend side to a profile when the
       // question is about a specific person ("how much of Bob's grocery budget is left").
       // Resolve forProfile if the model set it; otherwise fall back to a server-side
@@ -10191,7 +10195,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "get_cashflow": {
       const cf = await storage.getCashflow(input.month);
-      return { result: { month: input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7), weeks: cf } };
+      return { result: { month: input.month || getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE), weeks: cf } };
     }
 
     case "create_expense": {
@@ -13425,7 +13429,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "create_budget": {
-      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const month = input.month || getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE);
       // BUG 1: resolve an optional forProfile name to a profileId so budgets can
       // be scoped per-person. Omitted/unresolved means a shared/household budget.
       let budgetProfileId: string | undefined;
@@ -13439,7 +13443,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     }
 
     case "update_budget": {
-      const month = input.month || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const month = input.month || getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE);
       const updates: Record<string, any> = {};
       if (input.amount !== undefined) updates.amount = Number(input.amount);
       if (input.category) updates.category = input.category;
@@ -13471,7 +13475,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "refresh_ai_summary": {
       const profiles = await storage.getProfiles();
       const expenses = await storage.getExpenses();
-      const budgetMonth = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0, 7);
+      const budgetMonth = getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE);
       const budgets = await storage.getBudgets(budgetMonth);
       const tasks = await storage.getTasks();
       const trackers = await storage.getTrackers();

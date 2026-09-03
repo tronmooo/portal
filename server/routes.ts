@@ -433,6 +433,7 @@ import {
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
+import { normalizeMonthKey, budgetCategoryKey } from "@shared/budget-ledger";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
 import { generateSmartInsights } from "./insights-engine";
@@ -6275,8 +6276,14 @@ Rules:
   }));
 
   // ---- Budgets ----
+  // A month is "YYYY-MM": "2026-9" is folded to "2026-09" and anything else is
+  // a 400, so a budget can no longer be written to a bucket no reader shows.
+  const budgetMonthParam = (raw: unknown, req: any): string | null =>
+    raw === undefined || raw === null || raw === "" ? getUserCurrentMonth(getTimezone(req)) : normalizeMonthKey(raw);
+
   app.get("/api/budgets", asyncHandler(async (req, res) => {
-    const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
+    const month = budgetMonthParam(req.query.month, req);
+    if (!month) return res.status(400).json({ error: "month must be YYYY-MM" });
     const fps = req.query.profileIds as string | undefined;
     const fp = req.query.profileId as string | undefined;
     const filterProfileIds = fps ? fps.split(",").filter(Boolean) : fp ? [fp] : [];
@@ -6319,13 +6326,15 @@ Rules:
     if (profileId !== undefined && profileId !== null && typeof profileId !== "string") {
       return res.status(400).json({ error: "profileId must be a string" });
     }
-    const m = month || getUserCurrentMonth(getTimezone(req));
+    const m = budgetMonthParam(month, req);
+    if (!m) return res.status(400).json({ error: "month must be YYYY-MM" });
     const budget = await storage.addBudget(m, category.trim(), parsedAmount, notes, profileId || undefined);
     res.json(budget);
   }));
 
   app.patch("/api/budgets/:id", asyncHandler(async (req, res) => {
-    const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
+    const month = budgetMonthParam(req.query.month, req);
+    if (!month) return res.status(400).json({ error: "month must be YYYY-MM" });
     // Bug fix: PATCH body was forwarded raw to storage.updateBudget which then
     // spread it onto the budget. A bad amount would silently land in DB.
     if (req.body && typeof req.body === "object") {
@@ -6349,17 +6358,20 @@ Rules:
   }));
 
   app.delete("/api/budgets/:id", asyncHandler(async (req, res) => {
-    const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
+    const month = budgetMonthParam(req.query.month, req);
+    if (!month) return res.status(400).json({ error: "month must be YYYY-MM" });
     const ok = await storage.deleteBudget(month, req.params.id);
     if (!ok) return res.status(404).json({ error: "Budget not found" });
     res.json({ success: true });
   }));
 
   app.post("/api/budgets/copy", asyncHandler(async (req, res) => {
-    const { fromMonth, toMonth } = req.body;
-    if (!fromMonth || !toMonth) return res.status(400).json({ error: "fromMonth and toMonth required" });
+    const fromMonth = normalizeMonthKey(req.body?.fromMonth);
+    const toMonth = normalizeMonthKey(req.body?.toMonth);
+    if (!fromMonth || !toMonth) return res.status(400).json({ error: "fromMonth and toMonth are required as YYYY-MM" });
+    // Adds the caps the destination month lacks; caps already set there stay.
     const count = await storage.copyBudgetsToMonth(fromMonth, toMonth);
-    res.json({ copied: count, toMonth });
+    res.json({ copied: count, fromMonth, toMonth });
   }));
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -9699,6 +9711,9 @@ No emojis. No prose outside the JSON.`,
       const goalOwners = Array.isArray(req.body.linkedProfiles)
         ? (req.body.linkedProfiles as any[]).filter((x) => typeof x === "string" && x.length > 0)
         : [];
+      // A spending goal's category is compared against the canonical expense
+      // categories, so fold it the way the budgets do ("Groceries" → "food").
+      if (parsed.data.category) parsed.data.category = budgetCategoryKey(parsed.data.category);
       const goal = await storage.createGoal({ ...parsed.data, ...(goalOwners.length > 0 ? { linkedProfiles: goalOwners } : {}) } as any);
       res.json(goal);
     } catch (err: any) {
@@ -9723,6 +9738,7 @@ No emojis. No prose outside the JSON.`,
     if (req.body.current !== undefined && (typeof req.body.current !== "number" || req.body.current < 0)) {
       return res.status(400).json({ error: "Current progress cannot be negative" });
     }
+    if (typeof req.body.category === "string") req.body.category = budgetCategoryKey(req.body.category);
     try {
       const goal = await storage.updateGoal(req.params.id, req.body);
       if (!goal) return res.status(404).json({ error: "Goal not found" });

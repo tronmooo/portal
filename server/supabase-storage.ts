@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID, createHash } from "crypto";
 
+import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 // ---- Shared Supabase client (PERF) ----
 // One client per (url, key) pair per warm container. The Supabase SDK keeps
 // internal Fetch/Auth/Realtime state that's safe to share across requests
@@ -6449,9 +6450,13 @@ export class SupabaseStorage implements IStorage {
       case "spending_limit": {
         if (!goal.category) return goal.current;
         const expenses = await this.getExpenses();
+        // Expenses carry canonical categories; the goal's category is folded
+        // the same way so "Groceries" meets the "food" spend (the goal stayed
+        // at $0 forever when the spellings differed).
+        const goalBucket = budgetCategoryKey(goal.category);
         return expenses.filter(e =>
           inThisMonth(e.date) &&
-          e.category.toLowerCase() === (goal.category || "").toLowerCase(),
+          budgetCategoryKey(e.category) === goalBucket,
         ).reduce((sum, e) => sum + e.amount, 0);
       }
       case "tracker_target": {
@@ -7559,10 +7564,13 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
 
   async getBudgets(month: string, profileIds?: string[]): Promise<Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>> {
+    // Every budget reader and writer goes through the same month key: "2026-9"
+    // used to be stored under its own `budget:2026-9` bucket that no reader
+    // (all of which ask for "2026-09") ever showed again.
     const { data } = await this.supabase.from("preferences")
       .select("value")
       .eq("user_id", this.userId)
-      .eq("key", `budget:${month}`)
+      .eq("key", `budget:${budgetMonthOrThrow(month)}`)
       .maybeSingle();
     if (!data?.value) return [];
     let parsed: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>;
@@ -7594,10 +7602,11 @@ export class SupabaseStorage implements IStorage {
     // updateBudget — which both funnel here) used to discard `error`, so a
     // failed write answered success and the UI showed a cap the DB never got.
     // The routes map a thrown error to a 500 like every other storage write.
+    const key = `budget:${budgetMonthOrThrow(month)}`;
     const { data: existing, error: readErr } = await this.supabase.from("preferences")
       .select("id")
       .eq("user_id", this.userId)
-      .eq("key", `budget:${month}`)
+      .eq("key", key)
       .maybeSingle();
     if (readErr) throw readErr;
     if (existing) {
@@ -7609,7 +7618,7 @@ export class SupabaseStorage implements IStorage {
     } else {
       const { error } = await this.supabase.from("preferences").insert({
         user_id: this.userId,
-        key: `budget:${month}`,
+        key,
         value: JSON.stringify(budgets),
       });
       if (error) throw error;
@@ -7617,30 +7626,19 @@ export class SupabaseStorage implements IStorage {
   }
 
   async addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string): Promise<{id: string; category: string; amount: number; notes?: string; profileId?: string}> {
+    // One cap per (category, owner) bucket, with the category folded to the
+    // expense canon so the cap meets the spend (shared/budget-ledger.ts).
     const budgets = await this.getBudgets(month);
-    // Dedupe on (category, profileId) so the same category can carry a
-    // different cap per profile (shared entries use a null profileId).
-    const existing = budgets.find(b => b.category.toLowerCase() === category.toLowerCase() && (b.profileId || null) === (profileId || null));
-    if (existing) {
-      existing.amount = amount;
-      if (notes) existing.notes = notes;
-      await this.setBudgets(month, budgets);
-      return existing;
-    }
-    const entry = { id: crypto.randomUUID(), category, amount, notes, profileId };
-    budgets.push(entry);
+    const entry = upsertBudget(budgets, { category, amount, notes, profileId }, () => crypto.randomUUID());
     await this.setBudgets(month, budgets);
     return entry;
   }
 
   async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}): Promise<boolean> {
     const budgets = await this.getBudgets(month);
-    const b = budgets.find(x => x.id === budgetId);
-    if (!b) return false;
-    if (updates.amount !== undefined) b.amount = updates.amount;
-    if (updates.category) b.category = updates.category;
-    if (updates.notes !== undefined) b.notes = updates.notes;
-    if (updates.profileId !== undefined) b.profileId = updates.profileId;
+    // Throws a 409 when the edit would leave two caps for one bucket.
+    const entry = applyBudgetUpdate(budgets, budgetId, updates);
+    if (!entry) return false;
     await this.setBudgets(month, budgets);
     return true;
   }
@@ -7655,11 +7653,15 @@ export class SupabaseStorage implements IStorage {
   }
 
   async copyBudgetsToMonth(fromMonth: string, toMonth: string): Promise<number> {
+    // "Copy last month" adds what the destination lacks and keeps what it
+    // already has; it used to replace the destination list, so caps set for
+    // next month before the copy were lost. Returns the number added.
     const source = await this.getBudgets(fromMonth);
     if (source.length === 0) return 0;
-    const newBudgets = source.map(b => ({ ...b, id: crypto.randomUUID() }));
-    await this.setBudgets(toMonth, newBudgets);
-    return newBudgets.length;
+    const destination = await this.getBudgets(toMonth);
+    const { list, added } = mergeBudgetsForCopy(destination, source, () => crypto.randomUUID());
+    if (added > 0) await this.setBudgets(toMonth, list);
+    return added;
   }
 
   // ============================================================
