@@ -1868,7 +1868,7 @@ export class MemStorage implements IStorage {
       name: d.name, amount: d.amount, nextDueDate: d.nextDueDate,
       notes: d.notes,
       category: canonicalObligationCategory(d.category),
-      frequency: d.frequency || "monthly",
+      frequency: (() => { const f = canonicalIncomeFrequency(d.frequency); return f && (["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"] as string[]).includes(f) ? f : (d.frequency || "monthly"); })(),
       autopay: d.autopay ?? false,
       status: "active",
       kind: d.kind || "bill",

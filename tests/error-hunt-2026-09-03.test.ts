@@ -715,10 +715,13 @@ describe("D164: /api/cashflow stores and reads the month as YYYY-MM", () => {
 
 // ─── D165: an obligation's category is folded whichever door it comes through ─
 describe("D165: createObligation folds the category", () => {
-  it("MemStorage stores 'Utility' as utilities", async () => {
+  it("MemStorage stores 'Utility' as utilities and 'fortnightly' as biweekly", async () => {
     const s = new MemStorage();
-    const o = await s.createObligation({ name: "Water", amount: 30, frequency: "monthly", category: "Utility", nextDueDate: "2026-09-10" } as any);
+    const o = await s.createObligation({ name: "Water", amount: 30, frequency: "fortnightly", category: "Utility", nextDueDate: "2026-09-10" } as any);
     expect(o.category).toBe("utilities");
+    expect(o.frequency).toBe("biweekly");
+    // A cadence outside the bill vocabulary is left as given rather than mislabelled.
+    expect((await s.createObligation({ name: "Twice", amount: 5, frequency: "semimonthly", category: "general", nextDueDate: "2026-09-10" } as any)).frequency).toBe("semimonthly");
   });
 });
 

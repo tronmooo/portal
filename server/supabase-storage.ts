@@ -5349,6 +5349,10 @@ export class SupabaseStorage implements IStorage {
     const kind = (data as any).kind || "bill";
     // Folded here so every door (import, chat, API) stores the canon's spelling.
     const category = canonicalObligationCategory((data as any).category);
+    // A cadence typed as an alias ("fortnightly", "annual") folds to the
+    // obligation vocabulary when it names one of its six cadences; the route
+    // enum refuses it for the form, but chat and imports write here directly.
+    const foldedFrequency = (() => { const f = canonicalIncomeFrequency((data as any).frequency); return f && (["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"] as string[]).includes(f) ? f : (data as any).frequency; })();
     const rawName = String(data.name || "").trim();
     const typeKey = this.billTypeKey(kind, category, rawName);
     let parent: string | undefined = ((data as any).linkedProfiles || [])[0];
@@ -5357,7 +5361,7 @@ export class SupabaseStorage implements IStorage {
       parent = self?.id;
     }
     const amount = Number(data.amount) || 0;
-    const freq = data.frequency || "monthly";
+    const freq = foldedFrequency || "monthly";
     const nextDue = String((data as any).nextDueDate || getUserToday(this._timezone)).slice(0, 10);
     const billFields: Record<string, any> = {
       monthlyAmount: amount, amount,
@@ -5433,7 +5437,7 @@ export class SupabaseStorage implements IStorage {
     if (!existing || !isRecurringBill((existing as any).type_key ?? (existing as any).typeKey)) return undefined;
     const fieldsPatch: any = {};
     if (data.amount !== undefined) { fieldsPatch.monthlyAmount = data.amount; fieldsPatch.amount = data.amount; }
-    if (data.frequency !== undefined) { fieldsPatch.frequency = data.frequency; fieldsPatch.billingFrequency = data.frequency; }
+    if (data.frequency !== undefined) { const f0 = canonicalIncomeFrequency(data.frequency); const f = f0 && (["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"] as string[]).includes(f0) ? f0 : data.frequency; fieldsPatch.frequency = f; fieldsPatch.billingFrequency = f; }
     if (data.nextDueDate !== undefined) {
       fieldsPatch.dueDate = data.nextDueDate; fieldsPatch.nextDueDate = data.nextDueDate;
       // An explicit due-date edit re-anchors the series. The schedule anchors on
