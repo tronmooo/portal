@@ -317,6 +317,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### One user-day east of UTC (probe s76, Asia/Tokyo) — verified working
+A dateless check-in, journal entry, tracker entry and expense all land on the Tokyo day; the bell calls the task "due today", not overdue; the calendar shows it on that day. (Run at 06:40 UTC, when Tokyo and UTC share a date; the west-of-UTC boundary is what every other probe exercised, since they all ran as America/Los_Angeles while UTC was already the next day. To be re-run after 10:00 UTC for the east-of-UTC boundary.)
+
 ### Read-only relationship, date-rule and bootstrap routes as another user (probe s75) — verified working
 User B cannot read A's relationship graph (self or car), A's date rules, A's profile bootstrap or detail, nor the car's parties or liabilities; A reads their own graph and rules.
 
