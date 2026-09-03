@@ -8927,6 +8927,8 @@ Rules:
       const heldProvenance: Array<{ profileId: string; sources: Record<string, any> }> = [];
       /** Liabilities whose paid stamps wait for the payments' new ids (D240). */
       const heldStamps: Array<{ profileId: string; occurrences: Record<string, any> }> = [];
+      /** Events whose `linkedDocuments` wait for the documents' new ids (D241). */
+      const heldEventDocs: Array<{ eventId: string; docIds: string[] }> = [];
       /** Expenses whose `liability:`/`payment:` tags wait for new ids (D240). */
       const heldExpenseTags: Array<{ expenseId: string; tags: string[] }> = [];
       // The ONE raw ledger write in this file (see bill-entry-point-parity):
@@ -9094,7 +9096,17 @@ Rules:
         for (const e of data.events) {
           // endDate and recurrenceEnd used to be dropped: a multi-day event
           // shrank to one day and a series that had an end became endless.
-          await tryImport("events", e.title || "unnamed", () => storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, endDate: e.endDate || undefined, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", recurrenceEnd: e.recurrenceEnd || undefined, tags: e.tags || [], source: e.source || "manual", linkedProfiles: remap(e.linkedProfiles), linkedDocuments: [] }));
+          await tryImport("events", e.title || "unnamed", async () => {
+            // `linkedDocuments` waits for the documents' new ids (they are
+            // imported after events). Dropped, a document-derived event lost
+            // its source: the calendar showed the expiry twice (the document's
+            // rule and the event no longer shadowed by it) and deleting the
+            // document left the event behind (D241).
+            const created = await storage.createEvent({ title: e.title, date: e.date, time: e.time, endTime: e.endTime, endDate: e.endDate || undefined, allDay: e.allDay, description: e.description, location: e.location, category: e.category || "personal", recurrence: e.recurrence || "none", recurrenceEnd: e.recurrenceEnd || undefined, tags: e.tags || [], source: e.source || "manual", linkedProfiles: remap(e.linkedProfiles), linkedDocuments: [] });
+            const docIds: string[] = Array.isArray(e.linkedDocuments) ? e.linkedDocuments.map((d: any) => String(d)).filter(Boolean) : [];
+            if (created?.id && docIds.length > 0) heldEventDocs.push({ eventId: created.id, docIds });
+            return created;
+          });
         }
       }
       // Import documents
@@ -9110,6 +9122,11 @@ Rules:
       // document the file did not carry (or that failed to import) drops out:
       // a provenance link to nothing is what the delete cascade treats as
       // stale anyway.
+      for (const held of heldEventDocs) {
+        const linkedDocuments = held.docIds.map((id) => idMap.get(id)).filter((id): id is string => !!id);
+        if (linkedDocuments.length === 0) continue;
+        await tryImport("events", "document links", () => storage.updateEvent(held.eventId, { linkedDocuments } as any));
+      }
       for (const held of heldProvenance) {
         const remapped: Record<string, any> = {};
         for (const [oldDocId, saved] of Object.entries(held.sources)) {

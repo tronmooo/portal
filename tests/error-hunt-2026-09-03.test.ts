@@ -2628,3 +2628,31 @@ describe("D240: POST /api/import re-keys paid stamps and bill-payment expense ta
     expect(created.expenseUpdates).toEqual([[created.expenses[0].id, { tags: ["bill-payment", `liability:${bill.id}`, `payment:${pay.id}`] }]]);
   });
 });
+
+// ─── D241: a restored document-derived event lost its document link ─────────
+describe("D241: POST /api/import re-links restored events to the restored documents", () => {
+  it("writes linkedDocuments after the documents exist, keyed by their new ids", async () => {
+    const created: Record<string, any[]> = { events: [], documents: [], eventUpdates: [] };
+    let seq = 0; const nid = (p: string) => `${p}-${++seq}`;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getProfiles = async () => [{ id: "self-1", type: "self", name: "Me", fields: {} }];
+      storage.getSelfProfile = async () => ({ id: "self-1", type: "self", name: "Me", fields: {} });
+      storage.createEvent = async (e: any) => { const row = { id: nid("ev"), ...e }; created.events.push(row); return row; };
+      storage.createDocument = async (d: any) => { const row = { id: nid("doc"), ...d }; created.documents.push(row); return row; };
+      storage.updateEvent = async (id: string, patch: any) => { created.eventUpdates.push([id, patch]); return { id, ...patch }; };
+    });
+    const payload = {
+      version: "2",
+      profiles: [{ id: "old-self", type: "self", name: "Me", fields: {} }],
+      events: [
+        { id: "old-ev", title: "Permit expires", date: "2026-09-09", category: "other", tags: ["document-extraction"], linkedProfiles: ["old-self"], linkedDocuments: ["old-doc", "gone-doc"] },
+        { id: "old-ev2", title: "Dinner", date: "2026-09-10", category: "social", linkedProfiles: ["old-self"], linkedDocuments: [] },
+      ],
+      documents: [{ id: "old-doc", name: "Permit", type: "other", mimeType: "application/pdf", fileData: "", extractedData: { expirationDate: "2026-09-09" }, tags: [], linkedProfiles: ["old-self"] }],
+    };
+    const r = await h.api("POST", "/api/import", payload);
+    expect(r.status).toBe(200);
+    const ev = created.events.find((e) => e.title === "Permit expires")!, doc = created.documents[0];
+    expect(created.eventUpdates).toEqual([[ev.id, { linkedDocuments: [doc.id] }]]);
+  });
+});
