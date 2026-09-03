@@ -307,6 +307,9 @@ A document expiring in 5 days (expiry under `extractedData.expirationDate`, the 
 ### Bill occurrences (probe s29) — verified working
 Skipping the first occurrence marks it skipped on the calendar and moves next-due a month; rescheduling the next one (`movedTo`) moves its calendar day; paying by the original occurrence key stamps the moved occurrence paid, logs one expense and advances next-due; paying the same key again is folded into the first payment. (The probe's "upcoming shows the following occurrence" expectation ignored the 30-day window; not a bug.)
 
+### Integrity sweep after probes s31–s50 (replica)
+Fifteen checks clean: no live children of deleted parents, no party/liability link naming a missing or deleted profile, no asset or loan over 100%, no entity link to a missing profile, no tracker entry for a missing profile, no live task/expense linked only to missing profiles, no payment without a live liability, one Self per user, no duplicate live task title+date, no goal or habit pointing at a missing tracker. One budget entry named a profile deleted by the first (crashed) run of the merge probe before D127 existed; removed through the budgets API.
+
 ### Final integrity sweep on the replica
 No live children of deleted parents, no entries without a tracker, no payments without a liability, no live task or expense linked only to missing profiles, no duplicate live task title+date, one Self per user, one journal entry per day. The 25 check-ins whose habit is gone all belong to soft-deleted habits (kept for restore — by design).
 
