@@ -336,6 +336,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Deleting a document after editing a field it contributed — verified by code
+The cascade removes a contributed field only while the stored value still equals what the document saved (`removeDocumentContributedFields` compares values), so a value the user edited since stays.
+
 ### Un-completing a chore after editing next week's (probe s127) — verified after D194
 Completing a weekly chore spawns next week's; a note added to next week's survives un-completing and re-completing this week's, and there is still exactly one occurrence next week (before the fix the edited occurrence was purged and a blank one spawned).
 
