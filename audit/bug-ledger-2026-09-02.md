@@ -285,6 +285,9 @@ The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 a
 ### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
 A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
 
+### Real-user browser flows 5 (flows5.mjs, person Info page fields) — verified working
+On a throwaway person: the add-field form saves a custom field (shown at once), a tag typed with Enter is saved, changing the type to pet is saved and the person's linked task survives it; after a reload the page shows the field, the tag and the new type. No page errors.
+
 ### Real-user browser flows 4 (flows4.mjs, person Info page) — verified after D138
 A freshly created person's `#/profiles/<id>` stays on their Info page (before D138 it was replaced by Self's), the page shows their name, the inline title editor renames them, the delete confirm removes them (404) and no share still names them. Observed: the car they half-owned is left at "Self 50%" with the other half held by nobody (D139).
 
