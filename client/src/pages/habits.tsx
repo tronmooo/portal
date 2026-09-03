@@ -64,7 +64,10 @@ function HabitCard({ habit }: { habit: Habit }) {
     .sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
 
   const checkinMutation = useMutation<any, Error, void>({
-    mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }),
+    // Parse the reply: onSuccess reconciles from `serverHabit.id` and reads
+    // `completion.notScheduled`, neither of which exists on a raw Response —
+    // the reconcile below had silently never run.
+    mutationFn: () => apiRequest("POST", `/api/habits/${habit.id}/checkin`, { date: today }).then((r) => r.json()),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
       const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
