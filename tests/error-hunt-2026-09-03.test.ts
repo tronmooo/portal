@@ -2970,7 +2970,7 @@ describe("D257 cron writes invalidate the user's caches", () => {
     expect(scan).toMatch(/if \(userWrote\) \{[\s\S]{0,400}await afterCronWrites\(u\.id\)/);
     // Every write path in the scan marks the user as written to.
     expect(scan.indexOf("userWrote = true")).toBeLessThan(scan.indexOf("closeBillReminderTasksWhere("));
-    expect((scan.match(/userWrote = true/g) || []).length).toBe(3);
+    expect((scan.match(/userWrote = true/g) || []).length).toBe(4);
   });
 });
 
@@ -3045,5 +3045,7 @@ describe("D260 duplicate bill reminders collapse to one", async () => {
     const c = scan.indexOf("await collapseDuplicateBillReminders(scoped, log)");
     expect(c).toBeGreaterThan(0);
     expect(scan.indexOf("await afterCronWrites(u.id)")).toBeGreaterThan(c);
+    // Legacy doubles heal at the start of the user's loop from the list already read.
+    expect(scan).toContain("collapseDuplicateBillReminders(scoped, log, existingTasks)");
   });
 });

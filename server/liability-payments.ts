@@ -466,8 +466,8 @@ export function pickDuplicateBillReminders(tasks: any[]): string[] {
 }
 
 /** Deletes the surplus reminder copies (see pickDuplicateBillReminders). Returns how many went. */
-export async function collapseDuplicateBillReminders(storage: IStorage, logger: PaymentLogger = noopLogger): Promise<number> {
-  const tasks = await storage.getTasks().catch(() => [] as any[]);
+export async function collapseDuplicateBillReminders(storage: IStorage, logger: PaymentLogger = noopLogger, tasks?: any[]): Promise<number> {
+  if (!tasks) tasks = await storage.getTasks().catch(() => [] as any[]);
   let removed = 0;
   for (const id of pickDuplicateBillReminders(tasks as any[])) {
     try { if (await storage.deleteTask(id)) removed++; } catch (e: any) { logger.warn?.(`[bill-reminders] could not drop duplicate ${id}: ${e?.message || e}`); }

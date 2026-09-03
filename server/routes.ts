@@ -2383,6 +2383,9 @@ export async function registerRoutes(
                 const bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey) && !isPausedBillFields(p.fields) && !isEndedBillFields(p.fields));
                 const existingTasks = await scoped.getTasks().catch(() => [] as any[]);
                 let userWrote = false;
+                // Doubles left by earlier overlapping runs (D260) heal here,
+                // whether or not this run writes anything else for the user.
+                if (await collapseDuplicateBillReminders(scoped, log, existingTasks).catch(() => 0)) userWrote = true;
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
                   // `dueKey` addresses the occurrence (its anchor day); `due`
