@@ -354,6 +354,9 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
+### The finance snapshot's due list across a payment (probe s148) — verified working
+A bill due today is listed; once paid it moves to next month's date; an additional same-day payment does not re-list it; no open reminder task remains.
+
 ### Legacy-spelled cap beside a new one, and the month copy (probe s147) — verified working
 A stored "Groceries" cap and a new "food" cap read back as one food bucket (the later write updates it) and copying the month forward lands one food cap.
 
