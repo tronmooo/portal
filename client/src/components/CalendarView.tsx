@@ -207,7 +207,11 @@ function EventFormDialog({
   const isEdit = !!eventId;
   const todayStr = toLocalDateStr(new Date());
 
-  const seededForm: EventFormData = {
+  // Captured ONCE, like `form` below: the submit handler closes the dialog
+  // right after `mutate`, and the mutation runs after the re-render in which
+  // `initial` is already gone — re-deriving the seed there would diff the
+  // form against blanks and send nearly everything again.
+  const [seededForm] = useState<EventFormData>(() => ({
     title: initial?.title ?? "",
     date: initial?.date ?? defaultDate ?? todayStr,
     time: initial?.time ?? "",
@@ -219,7 +223,7 @@ function EventFormDialog({
     recurrence: initial?.recurrence ?? "none",
     recurrenceEnd: initial?.recurrenceEnd ?? "",
     linkedProfiles: initial?.linkedProfiles ?? [],
-  };
+  }));
   const [form, setForm] = useState<EventFormData>(seededForm);
 
   const { data: profiles = [] } = useQuery<Profile[]>({
