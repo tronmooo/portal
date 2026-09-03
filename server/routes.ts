@@ -30,9 +30,9 @@ import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
-import { removeTrackerEntry } from "./tracker-entries";
+import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, rescheduleBillOccurrence } from "./liability-payments";
+import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -6042,10 +6042,13 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     }
     const built = buildTrackerEntryPatch(req, trackerFields);
     if (built.error) return res.status(400).json({ error: built.error });
-    const updated = await storage.updateTrackerEntry(req.params.id, req.params.entryId, built.patch);
-    if (!updated) return res.status(404).json({ error: "Entry not found" });
+    // A mirror entry re-dated to another day takes its habit check-in along
+    // (server/tracker-entries).
+    const moved = await updateTrackerEntryEverywhere(storage, { trackerId: req.params.id, entryId: req.params.entryId, patch: built.patch }, getTimezone(req), log);
+    if (!moved.ok) return res.status(404).json({ error: "Entry not found" });
     const uid_tep = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_tep}`);
-    res.json(updated);
+    if (moved.movedHabitIds.length > 0) bustCache(`habits:${uid_tep}`);
+    res.json(moved.entry);
   }));
   app.delete("/api/trackers/:id/entries/:entryId", asyncHandler(async (req, res) => {
     // One remove operation: deletes the entry AND, when it mirrors a habit
@@ -6073,10 +6076,11 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // Same value gate + timestamp rule as the tracker-scoped PATCH above.
     const built = buildTrackerEntryPatch(req, located.tracker.fields);
     if (built.error) return res.status(400).json({ error: built.error });
-    const updated = await storage.updateTrackerEntry(located.tracker.id, req.params.entryId, built.patch);
-    if (!updated) return res.status(404).json({ error: "Entry not found" });
+    const moved = await updateTrackerEntryEverywhere(storage, { trackerId: located.tracker.id, entryId: req.params.entryId, patch: built.patch }, getTimezone(req), log);
+    if (!moved.ok) return res.status(404).json({ error: "Entry not found" });
     const uid_tep2 = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_tep2}`); bustCache(`profile-detail:${uid_tep2}:`);
-    return res.json(updated);
+    if (moved.movedHabitIds.length > 0) bustCache(`habits:${uid_tep2}`);
+    return res.json(moved.entry);
   }));
   app.delete("/api/tracker-entries/:entryId", asyncHandler(async (req, res) => {
     const located = await locateTrackerEntry(req.params.entryId);
@@ -6690,6 +6694,12 @@ Rules:
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_e2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e2}`); bustCache(`stats:${uid_e2}`);
+    // An expense a bill payment logged: its amount IS the payment's, so the
+    // ledger row, the paid stamp and the paying account follow the edit.
+    if (req.body.amount !== undefined && paymentIdOfExpense(updated)) {
+      const repriced = await repriceBillPaymentFromExpense(storage, updated as any, Number(req.body.amount), log);
+      if (repriced.ok && repriced.reason !== "unchanged") bustBillCaches(uid_e2);
+    }
     res.json(updated);
   }));
   app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {

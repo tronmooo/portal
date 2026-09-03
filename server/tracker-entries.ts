@@ -9,7 +9,7 @@
 // autoCheckinLinkedHabits) had no inverse. This is that inverse.
 
 import type { IStorage } from "./storage";
-import { HABIT_MIRROR_KEY, mirrorHabitIds, uncompleteHabitOccurrence, type HabitLogger } from "./habit-completion";
+import { HABIT_MIRROR_KEY, mirrorHabitIds, completeHabitOccurrence, uncompleteHabitOccurrence, type HabitLogger } from "./habit-completion";
 import { toLocalDateStr, DEFAULT_TIMEZONE } from "@shared/timezone";
 
 const noopLogger: HabitLogger = { warn: () => {} };
@@ -75,4 +75,63 @@ export async function removeTrackerEntry(
     logger.warn(`[tracker-entries] paired check-in removal failed:`, e?.message || e);
     return { ...base, ok: true, habitId };
   }
+}
+
+export interface UpdateTrackerEntryResult {
+  ok: boolean;
+  reason?: "not_found";
+  entry?: any;
+  /** Habits whose check-in moved with the entry's day. */
+  movedHabitIds: string[];
+}
+
+/**
+ * Edit one tracker entry and, when the entry mirrors a habit check-in and the
+ * edit moves it to another day, move the check-in with it.
+ *
+ * The forward edge (a check-in writes its mirror entry) and its inverse
+ * (deleting the mirror retracts the check-in, above) both existed; a MOVE had
+ * neither. Re-dating the 00:10 water log to "yesterday, actually" moved the
+ * measurement and left the habit done for today — the day it did not happen —
+ * and the streak counted it there. The check-in follows the entry's day, the
+ * way the entry followed the check-in.
+ *
+ * Order matters: the new day's check-in is written first (the entry already
+ * carries the mirror key, so no second entry is created), and the old day's
+ * is removed only after that succeeded. A refused new day (in the future)
+ * leaves the old check-in standing rather than losing the completion.
+ */
+export async function updateTrackerEntryEverywhere(
+  storage: IStorage,
+  input: { trackerId: string; entryId: string; patch: Record<string, any> },
+  timezone: string = DEFAULT_TIMEZONE,
+  logger: HabitLogger = noopLogger,
+): Promise<UpdateTrackerEntryResult> {
+  const before = await storage.getTrackerEntry(input.entryId);
+  const habitIds = before ? mirrorHabitIds(before.values) : [];
+  const oldDay = before?.timestamp ? toLocalDateStr(new Date(String(before.timestamp)), timezone) : "";
+
+  const entry = await storage.updateTrackerEntry(input.trackerId, input.entryId, input.patch as any);
+  if (!entry) return { ok: false, reason: "not_found", movedHabitIds: [] };
+
+  const newDay = entry.timestamp ? toLocalDateStr(new Date(String(entry.timestamp)), timezone) : "";
+  if (habitIds.length === 0 || !oldDay || !newDay || oldDay === newDay) return { ok: true, entry, movedHabitIds: [] };
+
+  const moved: string[] = [];
+  for (const habitId of habitIds) {
+    try {
+      const done = await completeHabitOccurrence(storage, {
+        habitId, date: newDay, source: "tracker", skipTrackerWrite: true, ensureTracker: false, timezone,
+      }, logger);
+      if (!done.ok) {
+        logger.warn(`[tracker-entries] check-in could not follow entry ${input.entryId} to ${newDay} for ${habitId}: ${done.reason}`);
+        continue;
+      }
+      await uncompleteHabitOccurrence(storage, { habitId, date: oldDay, source: "tracker", skipTrackerRemoval: true, timezone }, logger);
+      moved.push(habitId);
+    } catch (e: any) {
+      logger.warn(`[tracker-entries] paired check-in move failed for ${habitId}:`, e?.message || e);
+    }
+  }
+  return { ok: true, entry, movedHabitIds: moved };
 }

@@ -2332,3 +2332,104 @@ describe("D232: days until a stored day are counted as days in the user's zone",
     expect(daysUntilISO("2026-09-03", "2026-09-03")).toBe(0);
   });
 });
+
+// ─── D233: a mirror entry re-dated to another day takes its check-in along ──
+import { updateTrackerEntryEverywhere } from "../server/tracker-entries";
+import { DEFAULT_TIMEZONE as HABIT_TZ } from "../shared/timezone";
+describe("D233: moving a habit's mirror tracker entry moves the check-in with it", () => {
+  const silent = { warn: () => {} };
+  const run = <T,>(s: MemStorage, fn: () => Promise<T>) => requestStorageContext.run(s, fn);
+  async function fixture() {
+    const s = new MemStorage();
+    const tr = await run(s, () => s.createTracker({ name: "Water", category: "health", fields: [{ name: "ml", type: "number" }] } as any));
+    const h = await run(s, () => s.createHabit({ name: "Drink", frequency: "daily", targetPerDay: 1, linkedTrackerId: tr.id } as any));
+    const done = await run(s, () => completeHabitOccurrence(s, { habitId: h.id, source: "manual", timezone: HABIT_TZ }, silent));
+    expect(done.recorded).toBe(1);
+    const entries = (await run(s, () => s.getTracker(tr.id)))!.entries;
+    expect(entries).toHaveLength(1);
+    return { s, tr, h, entry: entries[0], today: getUserToday(HABIT_TZ) };
+  }
+  const days = async (s: MemStorage, id: string) => ((await run(s, () => s.getHabit(id)))!.checkins || []).map((c: any) => String(c.date).slice(0, 10));
+  it("re-dating the mirror to yesterday leaves one check-in, on yesterday; the entry keeps its mirror key", async () => {
+    const { s, tr, h, entry, today } = await fixture();
+    const y = tzAddDays(today, -1);
+    const out = await run(s, () => updateTrackerEntryEverywhere(s, { trackerId: tr.id, entryId: entry.id, patch: { timestamp: `${y}T20:00:00.000Z` } }, HABIT_TZ, silent));
+    expect(out.ok).toBe(true);
+    expect(out.movedHabitIds).toEqual([h.id]);
+    expect(await days(s, h.id)).toEqual([y]);
+    const entries = (await run(s, () => s.getTracker(tr.id)))!.entries;
+    expect(entries).toHaveLength(1);
+    expect((entries[0].values as any)._habitId).toBe(h.id);
+  });
+  it("an edit that keeps the day, or an entry that mirrors nothing, moves no check-in", async () => {
+    const { s, tr, h, entry, today } = await fixture();
+    const same = await run(s, () => updateTrackerEntryEverywhere(s, { trackerId: tr.id, entryId: entry.id, patch: { values: { ml: 300, _habitId: h.id } } }, HABIT_TZ, silent));
+    expect(same.movedHabitIds).toEqual([]);
+    expect(await days(s, h.id)).toEqual([today]);
+    const own = (await run(s, () => s.logEntry({ trackerId: tr.id, values: { ml: 100 }, timestamp: `${today}T20:00:00.000Z`, __skipHabitSync: true } as any)))!;
+    const moved = await run(s, () => updateTrackerEntryEverywhere(s, { trackerId: tr.id, entryId: own.id, patch: { timestamp: `${tzAddDays(today, -2)}T20:00:00.000Z` } }, HABIT_TZ, silent));
+    expect(moved.ok).toBe(true);
+    expect(moved.movedHabitIds).toEqual([]);
+    expect(await days(s, h.id)).toEqual([today]);
+  });
+  it("a day the habit refuses (the future) keeps the old check-in rather than losing the completion", async () => {
+    const { s, tr, h, entry, today } = await fixture();
+    const out = await run(s, () => updateTrackerEntryEverywhere(s, { trackerId: tr.id, entryId: entry.id, patch: { timestamp: `${tzAddDays(today, 3)}T20:00:00.000Z` } }, HABIT_TZ, silent));
+    expect(out.ok).toBe(true);
+    expect(out.movedHabitIds).toEqual([]);
+    expect(await days(s, h.id)).toEqual([today]);
+  });
+});
+
+// ─── D234: editing a bill-payment expense's amount re-prices the payment ────
+import { repriceBillPaymentFromExpense, paymentIdOfExpense } from "../server/liability-payments";
+describe("D234: the payment behind an edited bill-payment expense follows the new amount", () => {
+  function stubs(over: Record<string, any> = {}) {
+    const writes: any[] = [];
+    const liability = { id: "bill-1", name: "Power", type: "liability", fields: { occurrences: { "2026-09-06": { status: "paid", paymentId: "pay-1", amount: 40, actualAmount: 40, paidAmount: 40, accountId: "acct-1" } } } };
+    const account = { id: "acct-1", name: "Checking", type: "account", fields: { accountKind: "checking", balance: 960 } };
+    const s: any = {
+      getLiabilityPayment: async (id: string) => id === "pay-1" ? { id: "pay-1", liabilityProfileId: "bill-1", amount: 40, principalPortion: 40, interestPortion: 0 } : undefined,
+      updateLiabilityPayment: async (id: string, patch: any) => { writes.push(["payment", id, patch]); return { id, amount: 40, ...patch }; },
+      getProfile: async (id: string) => id === "bill-1" ? liability : id === "acct-1" ? account : undefined,
+      mutateProfileFields: async (id: string, fn: any) => { const p = fn(liability); writes.push(["stamp", id, p]); return { ...liability, ...p }; },
+      adjustAccountBalance: async (id: string, adj: any) => { writes.push(["account", id, adj]); return account; },
+      ...over,
+    };
+    return { s, writes };
+  }
+  it("finds the payment by tag", () => {
+    expect(paymentIdOfExpense({ tags: ["bill-payment", "liability:bill-1", "payment:pay-1"] })).toBe("pay-1");
+    expect(paymentIdOfExpense({ tags: ["bill-payment"] })).toBeNull();
+    expect(paymentIdOfExpense({})).toBeNull();
+  });
+  it("40 → 45 moves the ledger row, the paid stamp and the paying account by 5", async () => {
+    const { s, writes } = stubs();
+    const out = await repriceBillPaymentFromExpense(s, { id: "exp-1", tags: ["payment:pay-1"], amount: 40 }, 45, { warn: () => {}, error: () => {} });
+    expect(out).toMatchObject({ ok: true, previousAmount: 40, amount: 45, stampMoved: true, accountAdjusted: true });
+    expect(writes[0]).toEqual(["payment", "pay-1", { amount: 45, principalPortion: 45 }]);
+    expect(writes[1][2].fields.occurrences["2026-09-06"]).toMatchObject({ amount: 45, actualAmount: 45, paidAmount: 45, status: "paid", paymentId: "pay-1" });
+    expect(writes[2][2]).toMatchObject({ delta: -5, source: "payment", linkedRecordId: "pay-1" });
+  });
+  it("an unchanged amount, an unknown payment or an untagged expense writes nothing", async () => {
+    const { s, writes } = stubs();
+    expect((await repriceBillPaymentFromExpense(s, { tags: ["payment:pay-1"] }, 40)).reason).toBe("unchanged");
+    expect((await repriceBillPaymentFromExpense(s, { tags: ["payment:pay-9"] }, 45)).reason).toBe("not_found");
+    expect((await repriceBillPaymentFromExpense(s, { tags: ["bill-payment"] }, 45)).ok).toBe(false);
+    expect(writes).toEqual([]);
+  });
+  it("route: PATCH /api/expenses/:id amount on a bill-payment expense re-prices; a description edit does not", async () => {
+    const { s: st, writes } = stubs();
+    h = await boot({ expenses: [{ id: "exp-1", description: "Power — 2026-09-06", amount: 40, category: "bills", date: "2026-09-03", tags: ["bill-payment", "liability:bill-1", "payment:pay-1"], linkedProfiles: [] }] }, (storage) => {
+      for (const k of ["getLiabilityPayment", "updateLiabilityPayment", "mutateProfileFields", "adjustAccountBalance"]) storage[k] = st[k];
+      const baseGet = storage.getProfile; storage.getProfile = async (id: string) => (await st.getProfile(id)) ?? baseGet(id);
+    });
+    const r1 = await h.api("PATCH", "/api/expenses/exp-1", { description: "Power bill" });
+    expect(r1.status).toBe(200);
+    expect(writes).toEqual([]);
+    const r2 = await h.api("PATCH", "/api/expenses/exp-1", { amount: 45 });
+    expect(r2.status).toBe(200);
+    expect(r2.data.amount).toBe(45);
+    expect(writes.map((w) => w[0])).toEqual(["payment", "stamp", "account"]);
+  });
+});

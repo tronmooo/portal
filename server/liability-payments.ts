@@ -1032,3 +1032,106 @@ function curDueEqualsAdvanceFrom(fields: any, occDate: string): boolean {
   );
   return expected === cur;
 }
+
+// ─── The expense a payment logged, edited afterwards ─────────────────────────
+//
+// payBillOccurrence logs a recurring bill's payment as an expense tagged
+// `payment:<id>` — the join key unpayBillOccurrence retracts by. That made the
+// expense a COPY of the payment with one inverse (delete) and no forward edge
+// for an edit: correcting the amount on the Finance page ("the power bill was
+// actually $45") left the bill's history, the occurrence stamp and the paying
+// account at $40. Two views of one payment disagreed about how much was paid.
+//
+// The edit is applied in place — the ledger row, the occurrence stamp and the
+// account that paid all move by the same delta — rather than by unpay + pay,
+// which would delete the expense the user just edited and re-log a fresh one
+// without their other changes.
+
+export const PAYMENT_TAG_PREFIX = "payment:";
+
+/** The payment id an expense carries when a bill payment logged it. */
+export function paymentIdOfExpense(expense: { tags?: unknown } | null | undefined): string | null {
+  const tags = Array.isArray(expense?.tags) ? (expense!.tags as unknown[]) : [];
+  const tag = tags.find((t) => typeof t === "string" && t.startsWith(PAYMENT_TAG_PREFIX)) as string | undefined;
+  const id = tag ? tag.slice(PAYMENT_TAG_PREFIX.length).trim() : "";
+  return id || null;
+}
+
+export interface RepriceBillPaymentResult {
+  ok: boolean;
+  reason?: "not_found" | "unchanged";
+  paymentId: string;
+  previousAmount?: number;
+  amount?: number;
+  stampMoved: boolean;
+  accountAdjusted: boolean;
+}
+
+/**
+ * Re-price the payment behind an edited bill-payment expense: the ledger row's
+ * amount, the paid occurrence's stamp and the paying account's balance follow
+ * the expense. A bill payment is all principal (see planDebtPayment: no
+ * balance → principal = amount), so the split moves with it.
+ */
+export async function repriceBillPaymentFromExpense(
+  storage: IStorage,
+  expense: { id?: string; tags?: unknown; amount?: unknown },
+  newAmount: number,
+  logger: PaymentLogger = noopLogger,
+): Promise<RepriceBillPaymentResult> {
+  const paymentId = paymentIdOfExpense(expense) || "";
+  const base: RepriceBillPaymentResult = { ok: false, paymentId, stampMoved: false, accountAdjusted: false };
+  if (!paymentId || !Number.isFinite(newAmount) || newAmount <= 0) return base;
+  const row: any = await Promise.resolve((storage as any).getLiabilityPayment?.(paymentId)).catch(() => undefined);
+  if (!row) return { ...base, reason: "not_found" };
+  const previousAmount = Number(row.amount) || 0;
+  if (previousAmount === newAmount) return { ...base, ok: true, reason: "unchanged", previousAmount, amount: newAmount };
+  const delta = newAmount - previousAmount;
+
+  const rowPatch: Record<string, any> = { amount: newAmount };
+  if (Number(row.principalPortion) === previousAmount) rowPatch.principalPortion = newAmount;
+  const updatedRow = await storage.updateLiabilityPayment(paymentId, rowPatch as any);
+  if (!updatedRow) return { ...base, reason: "not_found" };
+  const result: RepriceBillPaymentResult = { ...base, ok: true, previousAmount, amount: newAmount };
+
+  let accountId: string | null = null;
+  try {
+    const liability: any = await storage.getProfile(row.liabilityProfileId);
+    const occ = liability?.fields?.occurrences;
+    const hit = occ && typeof occ === "object"
+      ? Object.entries(occ as Record<string, any>).find(([, ov]) => ov && ov.paymentId === paymentId) : undefined;
+    if (hit) {
+      const [date, stamp] = hit as [string, any];
+      accountId = stamp?.accountId || null;
+      const mutate = (storage as any).mutateProfileFields;
+      const next = (fresh: any) => {
+        const cur = fresh?.fields?.occurrences && typeof fresh.fields.occurrences === "object" ? { ...fresh.fields.occurrences } : {};
+        cur[date] = { ...(cur[date] || {}), amount: newAmount, actualAmount: newAmount, paidAmount: newAmount };
+        return { fields: { occurrences: cur } };
+      };
+      if (typeof mutate === "function") await mutate.call(storage, row.liabilityProfileId, next);
+      else await storage.updateProfile(row.liabilityProfileId, next(liability) as any);
+      result.stampMoved = true;
+    }
+  } catch (e: any) {
+    logger.warn(`[repriceBillPayment] occurrence stamp update failed for ${paymentId}:`, e?.message || e);
+  }
+
+  if (accountId) {
+    try {
+      const account: any = await storage.getProfile(accountId);
+      if (account && isAccountProfile(account)) {
+        await storage.adjustAccountBalance(account.id, {
+          delta: isDebtAccount(account) ? delta : -delta,
+          reason: `Payment corrected — ${previousAmount} → ${newAmount}`,
+          source: "payment",
+          linkedRecordId: paymentId,
+        });
+        result.accountAdjusted = true;
+      }
+    } catch (e: any) {
+      logger.warn(`[repriceBillPayment] account adjustment failed for ${paymentId}:`, e?.message || e);
+    }
+  }
+  return result;
+}
