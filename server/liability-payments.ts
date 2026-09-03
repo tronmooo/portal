@@ -731,12 +731,20 @@ export async function payBillOccurrence(
   const logExpense = input.logExpense ?? (recurring && f.autoLogExpense !== false);
   if (recurring && logExpense && amount > 0) {
     try {
+      // The bill's owners, as the bills list reports them (D207): its parent
+      // AND everyone on it through liability_profile_links. Linked to the
+      // parent alone, a co-signed rent's payments never reached the
+      // co-signer's scoped spend while the bill itself showed there (D223).
+      const parties = await Promise.resolve((storage as any).getLiabilityProfileLinks?.(liabilityId))
+        .then((rows: any) => (Array.isArray(rows) ? rows.map((l: any) => l?.partyProfileId).filter((x: any) => typeof x === "string" && x) : []))
+        .catch(() => [] as string[]);
+      const owners = Array.from(new Set([(liability as any).parentProfileId || liabilityId, ...parties]));
       const expense = await storage.createExpense({
         amount,
         category: String(f.category || "bills"),
         description: `${liability.name} — ${occurrenceDate}`,
         date: paymentDate,
-        linkedProfiles: [(liability as any).parentProfileId || liabilityId],
+        linkedProfiles: owners,
         // The payment:<id> tag is the join key unpayBillOccurrence uses to
         // retract this exact expense. Not display metadata — an inverse's key.
         tags: ["bill-payment", `liability:${liabilityId}`, `payment:${payment?.id}`],

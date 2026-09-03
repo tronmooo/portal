@@ -2030,3 +2030,17 @@ describe("D222: paused bill", () => {
     expect(bills).toEqual(["ob-live"]);
   });
 });
+
+// ─── D223: a paid bill's expense belongs to everyone on the bill ─────────────
+describe("D223: the logged expense carries the bill's parties", () => {
+  it("parent and co-signer both own the expense", async () => {
+    const { s } = payStorage({ id: "bill-1", type: "liability", type_key: "utility", name: "Rent", parentProfileId: "self-1", fields: { monthlyAmount: 1000, dueDate: "2026-09-04", nextDueDate: "2026-09-04", frequency: "monthly" } });
+    const created: any[] = [];
+    s.createExpense = async (e: any) => { created.push(e); return { id: "exp-1", ...e }; };
+    s.getLiabilityProfileLinks = async () => [{ liabilityProfileId: "bill-1", partyProfileId: "linda-1", role: "co_signer", ownershipPercentage: 50 }];
+    const r = await payBillOccurrence(s, "bill-1", { occurrenceDate: "2026-09-04", paymentDate: "2026-09-03", source: "route" } as any, TZ);
+    expect(r.ok).toBe(true);
+    expect(created).toHaveLength(1);
+    expect(created[0].linkedProfiles).toEqual(["self-1", "linda-1"]);
+  });
+});
