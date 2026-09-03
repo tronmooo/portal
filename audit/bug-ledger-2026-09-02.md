@@ -1056,3 +1056,7 @@ Fixed and pushed to `main` (each row above carries repro, root cause, fix and ve
 Verified live on production (55006e9 + the D250 migration): D208–D236 rows via p9/p10/p11/p12/p13. Awaiting the next deploy for D237–D251 (import fixes verifiable only with a disposable account; the rest via p-probes when the sha moves past 55006e9).
 
 By design, left as-is: profile delete cascade removes sole-linked expenses/documents (warned in the UI); trackers hard-delete with no restore; document restore is API-only; household net worth counts shared assets in full (per-person scoping applies the shares).
+
+### Cron writes and the tasks cache — verified (s231)
+
+- A non-autopay bill due in 2 days: the daily cron creates one "Bill due" reminder task; the tasks list served immediately afterwards already includes it and the calendar shows it once.
