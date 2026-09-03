@@ -953,3 +953,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Cross-record references across a restore — verified (s219)
 
 - Before: the restored weight goal and streak goal had no `trackerId`/`habitId`; the journal entry had no people (3/5). After: goals point at the restored tracker and habit, the journal entry links the restored Kim, tasks/events/expenses link her too (5/5). Imports are limited to 3 per account per hour, so a third replica account (`local-tester3`) was added for this probe.
+
+### Paid bills across a restore — verified (s220)
+
+- Before: the restored bill's stamp kept A's `paymentId`/`accountId` and deleting the restored payment left it paid; the expense's tags named A's ids (3/5). After: stamp names the restored payment and account, unpay clears it, the expense's `liability:`/`payment:` tags name the restored ids (5/5). A fourth replica account (`local-tester4`) was added to stay under the 3-imports-per-hour limit.
