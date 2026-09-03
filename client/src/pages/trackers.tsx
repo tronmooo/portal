@@ -2,6 +2,7 @@ import { changedFieldsOnly } from "@shared/field-patch";
 import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
 import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
 import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
+import { daysUntilISO } from "@shared/date-rules";
 
 // "Today" in the browser's zone. The UTC-date prefix test reset the Today
 // calories / hydration / dose tiles at 5-8 PM local for US users.
@@ -5294,7 +5295,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
         <>
           {trackerGoals.map(g => {
             const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
-            const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
+            const daysLeft = daysUntilISO(g.deadline, tzUserToday(TRACKER_TZ));
             return (
               <div key={g.id} role="button" tabIndex={0} aria-label={`Edit goal: ${g.title}`} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors pressable" onClick={() => openEdit(g)} onKeyDown={onEnterOrSpace(() => openEdit(g))} data-testid={`tracker-goal-${g.id}`}>
                 <div className="flex items-center justify-between">

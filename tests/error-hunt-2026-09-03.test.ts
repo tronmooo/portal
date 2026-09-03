@@ -2312,3 +2312,23 @@ describe("D231: /api/relationships/graph returns only edges whose both ends are 
     expect(g.edges.map((e: any) => e.linkId).sort()).toEqual(["ap-1", "lp-1"]);
   });
 });
+
+// ─── D232: goal "days left" / "Due …" parsed a bare day as UTC midnight ──────
+import { daysUntilISO } from "../shared/date-rules";
+describe("D232: days until a stored day are counted as days in the user's zone", () => {
+  it("today is 0, tomorrow 1, yesterday -1, a timestamp counts by its day, junk is null", () => {
+    expect(daysUntilISO("2026-09-03", "2026-09-03")).toBe(0);
+    expect(daysUntilISO("2026-09-08", "2026-09-03")).toBe(5);
+    expect(daysUntilISO("2026-09-02", "2026-09-03")).toBe(-1);
+    expect(daysUntilISO("2026-09-08T00:00:00Z", "2026-09-03")).toBe(5);
+    expect(daysUntilISO("next month", "2026-09-03")).toBeNull();
+    expect(daysUntilISO("", "2026-09-03")).toBeNull();
+    expect(daysUntilISO("2026-09-08", "")).toBeNull();
+  });
+  it("the old epoch arithmetic is what it replaces: a goal due today read overdue after dark in Los Angeles", () => {
+    const eveningLA = new Date("2026-09-03T20:30:00-07:00").getTime();
+    const old = Math.ceil((new Date("2026-09-03").getTime() - eveningLA) / 86400000);
+    expect(old).toBe(-1);
+    expect(daysUntilISO("2026-09-03", "2026-09-03")).toBe(0);
+  });
+});

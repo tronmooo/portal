@@ -5125,7 +5125,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const performanceHistory: any[] = Array.isArray(profile.fields.performanceHistory) ? profile.fields.performanceHistory : [];
   const perfChartData = performanceHistory
     .filter(p => p.date && p.value != null)
-    .map(p => ({ date: new Date(p.date).toLocaleDateString(undefined, { month: "short", year: "2-digit" }), value: Number(p.value) }));
+    .map(p => ({ date: (parseLocalDate(p.date) ?? new Date(p.date)).toLocaleDateString(undefined, { month: "short", year: "2-digit" }), value: Number(p.value) }));
 
   // ── mutations ──────────────────────────────────────────────────
   const createExpenseMutation = useMutation({

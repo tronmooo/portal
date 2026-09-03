@@ -15,6 +15,9 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { formatMoneyRound } from "@/lib/format";
 import { resolveAssetValue, resolveLiabilityBalance, isNetWorthLiabilityProfile } from "@shared/asset-value";
 import { parseISODate } from "@shared/date-math";
+import { daysUntilISO } from "@shared/date-rules";
+import { getUserToday as tzUserToday } from "@shared/timezone";
+import { formatFullDate, parseLocalDate } from "@/lib/format";
 import { goalsQueryKey } from "@shared/query-keys";
 import {
   RECUR_PRESETS, parseRecurrence, recurrenceToTags, isRecurring as isRecurringRule,
@@ -2945,7 +2948,7 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
   const hasValidTarget = goal.target > 0;
   const pct = hasValidTarget ? Math.min(100, Math.round((goal.current / goal.target) * 100)) : 0;
   const isComplete = normalizeFilter(goal.status) === normalizeFilter("completed") || pct >= 100;
-  const daysLeft = goal.deadline ? Math.ceil((new Date(goal.deadline).getTime() - Date.now()) / 86400000) : null;
+  const daysLeft = daysUntilISO(goal.deadline, tzUserToday(BROWSER_TIMEZONE));
 
   if (!hasValidTarget) {
     return (
@@ -3124,7 +3127,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
             const decorated = activeGoals.map(g => {
               const goalCurrent = g.current || g.startValue || 0;
               const pct = g.target > 0 ? Math.min(100, Math.round((goalCurrent / g.target) * 100)) : 0;
-              const daysLeft = g.deadline ? Math.ceil((new Date(g.deadline).getTime() - Date.now()) / 86400000) : null;
+              const daysLeft = daysUntilISO(g.deadline, tzUserToday(BROWSER_TIMEZONE));
               const isOverdue = daysLeft !== null && daysLeft < 0;
               const isAtRisk = !isOverdue && daysLeft !== null && daysLeft <= 30 && pct < 50 && daysLeft > 0;
               const explicitlyCompleted = normalizeFilter(g.status) === normalizeFilter("completed");
@@ -3234,13 +3237,11 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
             const pct = actionGoal.target > 0 ? Math.min(100, Math.round((currentVal / actionGoal.target) * 100)) : 0;
             const remaining = Math.max(0, actionGoal.target - currentVal);
             // Pace analysis — only when both deadline and createdAt exist (no fabrication).
-            const daysLeft = actionGoal.deadline
-              ? Math.ceil((new Date(actionGoal.deadline).getTime() - Date.now()) / 86400000)
-              : null;
+            const daysLeft = daysUntilISO(actionGoal.deadline, tzUserToday(BROWSER_TIMEZONE));
             let pace: { label: string; tone: 'good' | 'warn' | 'bad' | 'neutral'; detail: string } | null = null;
             if (actionGoal.deadline && actionGoal.createdAt && actionGoal.target > 0) {
               const startMs = new Date(actionGoal.createdAt).getTime();
-              const endMs = new Date(actionGoal.deadline).getTime();
+              const endMs = (parseLocalDate(actionGoal.deadline) ?? new Date(actionGoal.deadline)).getTime();
               const totalDays = Math.max(1, Math.round((endMs - startMs) / 86400000));
               const elapsed = Math.max(0, Math.min(totalDays, Math.round((Date.now() - startMs) / 86400000)));
               const expectedPct = Math.round((elapsed / totalDays) * 100);
@@ -3287,12 +3288,12 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                         <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded bg-muted/60 border">
                           <Clock className="h-2.5 w-2.5" />
                           {daysLeft !== null && daysLeft > 0
-                            ? `${daysLeft}d left · due ${new Date(actionGoal.deadline).toLocaleDateString()}`
+                            ? `${daysLeft}d left · due ${formatFullDate(actionGoal.deadline)}`
                             : daysLeft !== null && daysLeft === 0
                             ? `Due today`
                             : daysLeft !== null && daysLeft < 0
                             ? `${Math.abs(daysLeft)}d overdue`
-                            : `Due ${new Date(actionGoal.deadline).toLocaleDateString()}`}
+                            : `Due ${formatFullDate(actionGoal.deadline)}`}
                         </span>
                       )}
                       {pace && (
@@ -3422,8 +3423,8 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                 )}
               </div>
               {formDeadline && formTarget && Number(formTarget) > 0 && (() => {
-                const daysToDeadline = Math.ceil((new Date(formDeadline).getTime() - Date.now()) / 86400000);
-                if (daysToDeadline <= 0) return null;
+                const daysToDeadline = daysUntilISO(formDeadline, tzUserToday(BROWSER_TIMEZONE));
+                if (daysToDeadline === null || daysToDeadline <= 0) return null;
                 const perDay = Number(formTarget) / daysToDeadline;
                 return (
                   <p className="text-[11px] text-muted-foreground/80 italic">

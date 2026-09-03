@@ -545,6 +545,22 @@ export function daysBetweenISO(fromISO: string, toISO: string): number {
 }
 
 /**
+ * Whole calendar days from `todayISO` to a stored day — 0 for today, negative
+ * once it has passed, null when the value is not a day.
+ *
+ * The client used to do `Math.ceil((new Date(deadline) - Date.now()) / 86400000)`
+ * on a bare "YYYY-MM-DD": that parses as UTC midnight, so west of Greenwich a
+ * goal due today read "1d overdue" from the early evening, every count was a
+ * day short after dark, and the "Due …" label named the day before. Days are
+ * compared as days, in the user's zone, or not at all.
+ */
+export function daysUntilISO(value: unknown, todayISO: string): number | null {
+  const day = bareDateOf(value);
+  if (!day || !/^\d{4}-\d{2}-\d{2}$/.test(String(todayISO || ""))) return null;
+  return daysBetweenISO(todayISO, day);
+}
+
+/**
  * The distance to a date in years + months + days, computed by calendar
  * arithmetic rather than by dividing days (365-day years drift by a week over
  * a decade — a 2034 licence would have read "in 7 years, 9 months" when the
