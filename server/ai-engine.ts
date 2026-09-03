@@ -1203,7 +1203,11 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
     }
     if (nameScope) {
       const profiles = await storage.getProfiles().catch(() => [] as any[]);
-      const match = matchProfileByName(profiles, nameScope);
+      // Two profiles with this name: the fast path steps aside and the full
+      // tool path asks which one (D251) — never a thrown error mid-chat.
+      let match: any;
+      try { match = matchProfileByName(profiles, nameScope); }
+      catch (e) { if (!(e instanceof AmbiguousProfileError)) throw e; match = undefined; }
       if (match) {
         return { matched: true, reply: `Dashboard now scoped to ${match.name} only. Every Executive section shows just ${match.name}'s data.`, actions: [{ type: "set_dashboard_scope", category: "ai", data: { profileName: match.name } } as any], results: [{ scope: { mode: "selected", profileId: match.id, profileName: match.name } }] };
       }
@@ -16914,7 +16918,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         userMessage,
         writes: trackerWritesThisTurn,
         resolveName: (name) => {
-          const m = matchProfileByName((profiles || []) as any[], name);
+          // Two people with this name: no fan-out target (the tool path asks).
+          let m: any;
+          try { m = matchProfileByName((profiles || []) as any[], name); }
+          catch (e) { if (!(e instanceof AmbiguousProfileError)) throw e; return null; }
           return m ? { id: m.id, name: m.name, weightKg: profileWeightKg(m) } : null;
         },
         selfProfile: selfP ? { id: selfP.id, name: selfP.name, weightKg: profileWeightKg(selfP) } : null,
