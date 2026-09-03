@@ -281,6 +281,7 @@ import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomains, patchQueries, patchProfileDetailList, composeRestores } from "@/lib/cache-bus";
 import { useResyncedState } from "@/hooks/useResyncedState";
 import { checkProfileRename } from "@shared/profile-rename";
+import { allocatePayment } from "@shared/liability-calc";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -762,7 +763,9 @@ function LocationEditor({
   const locationMut = useMutation({
     mutationFn: async (loc: string) => {
       const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
-        fields: { ...profile.fields, location: loc },
+        // Only the field being changed: the server merges, and the page's copy
+        // of the map may be stale (another tab, a chat turn).
+        fields: { location: loc },
       });
       return res.json();
     },
@@ -3219,7 +3222,7 @@ function StaticInfoTab({
   const saveCustomFieldMutation = useMutation({
     mutationFn: async (field: { key: string; value: string }) => {
       const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
-        fields: { ...profile.fields, [field.key]: field.value },
+        fields: { [field.key]: field.value },
       });
       return res.json();
     },
@@ -8271,7 +8274,7 @@ function EditProfileDialog({
       const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
         name: rename.name,
         notes,
-        fields: { ...profile.fields, ...parsedFields },
+        fields: parsedFields,
       });
       return { row: await res.json(), renamed: rename.status === "ok" };
     },
@@ -8873,17 +8876,19 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
       if (paid > 0) {
         // Reduce the principal balance by the principal portion (pmt minus interest)
         // For early payoff (paid > monthlyPayment), the extra goes 100% to principal.
-        const interestThisMonth = (loanBalance * (interestRate / 100)) / 12;
-        const principalPortion = Math.max(0, paid - interestThisMonth);
-        const newBalance = Math.max(0, loanBalance - principalPortion);
-        const fields: any = { ...(profile.fields || {}) };
-        // Write to the same path the loan tab reads from.
-        if (fields.loan && typeof fields.loan === "object") {
-          fields.loan = { ...fields.loan, remainingBalance: Math.round(newBalance * 100) / 100, balance: Math.round(newBalance * 100) / 100 };
-        } else if (fields.finance && typeof fields.finance === "object") {
-          fields.finance = { ...fields.finance, balance: Math.round(newBalance * 100) / 100 };
+        // The same split the server's ledger uses (shared/liability-calc), not
+        // a second formula of this page's own; and only the balance key the
+        // loan tab reads, never the page's whole (possibly stale) field map.
+        const split = allocatePayment(paid, loanBalance, interestRate, 0);
+        const newBalance = Math.round(Math.max(0, loanBalance - split.principal) * 100) / 100;
+        const current: any = profile.fields || {};
+        const fields: any = {};
+        if (current.loan && typeof current.loan === "object") {
+          fields.loan = { ...current.loan, remainingBalance: newBalance, balance: newBalance };
+        } else if (current.finance && typeof current.finance === "object") {
+          fields.finance = { ...current.finance, balance: newBalance };
         } else {
-          fields.loanBalance = Math.round(newBalance * 100) / 100;
+          fields.loanBalance = newBalance;
         }
         await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
       }
