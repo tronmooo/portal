@@ -1074,3 +1074,7 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 ### Ended bill series — verified (s232)
 
 - Before: the bill listed `active | 2026-09-05` and the cron wrote a "Bill due" reminder (1/3). After: not listed as upcoming, no calendar occurrence, no bell notice, no reminder task (3/3). Neighbours unchanged: s217 2/2, s225 5/5, s231 2/2. Full suite 260 files / 4669 tests green.
+
+### Installment plan after its last payment — verified (s233)
+
+- Before: after two of two payments the bill still listed `active` with a third due date (2/3). After: finished, no reminder (3/3). Neighbours unchanged: s232 3/3, s217 2/2, s214 5/5. Full suite 260 files / 4669 tests green.
