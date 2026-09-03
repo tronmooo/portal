@@ -4,6 +4,7 @@ import { fieldPatchBetween } from "../shared/field-patch";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { deleteDocumentEverywhere } from "./document-deletion";
+import { nameLooselyMatches } from "@shared/name-match";
 import { propagateDocumentFieldChange } from "./document-provenance";
 import { storage } from "./storage";
 import {
@@ -220,7 +221,7 @@ async function resolveBillByName(
   if (!needle) return { error: "Which bill did you mean?" };
   const obligations = await storage.getObligations();
   const exact = obligations.find(o => o.name.toLowerCase() === needle);
-  const partial = obligations.filter(o => o.name.toLowerCase().includes(needle));
+  const partial = obligations.filter(o => nameLooselyMatches(o.name, needle));
   const bill = exact ?? (partial.length === 1 ? partial[0] : partial[0]);
   if (!bill) {
     const names = obligations.map(o => o.name).slice(0, 12);
@@ -994,7 +995,7 @@ function safeMatchEntity<T extends { id: string }>(
   if (startsWith.length === 1) return { match: startsWith[0] };
 
   // 3. Contains match
-  const contains = eligible.filter(item => getField(item).toLowerCase().includes(search));
+  const contains = eligible.filter(item => nameLooselyMatches(getField(item), search));
   if (contains.length === 1) return { match: contains[0] };
   if (contains.length === 0) {
     // 4. Word match. The model paraphrases: "call the plumber" for a task
@@ -1239,7 +1240,7 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
     const mood: string = detectMoodFromText(content);
     const profiles = await storage.getProfiles();
     const profile = profiles.find(p => p.name.toLowerCase() === profileName.toLowerCase())
-      || profiles.find(p => p.name.toLowerCase().includes(profileName.toLowerCase()));
+      || profiles.find(p => nameLooselyMatches(p.name, profileName));
     const entry = await storage.createJournalEntry({ mood: mood as any, content, tags: [] });
     if (profile) {
       try {
@@ -7755,7 +7756,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           // Resolve new parent by name
           const parentNameLC = input.parentProfileName.toLowerCase().trim();
           const newParent = profiles.find(p => p.name.toLowerCase() === parentNameLC)
-            || profiles.find(p => p.name.toLowerCase().includes(parentNameLC));
+            || profiles.find(p => nameLooselyMatches(p.name, parentNameLC));
           if (!newParent) {
             return { error: `Parent profile '${input.parentProfileName}' not found.` };
           }
@@ -7894,7 +7895,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (deleted.length === 0) return { error: "No recently deleted habits to restore" };
       const needle = safeLC(input.name || "").trim();
       const target = needle
-        ? deleted.find(h => h.name.toLowerCase().includes(needle))
+        ? deleted.find(h => nameLooselyMatches(h.name, needle))
         : deleted[0];
       if (!target) return { error: `No deleted habit found matching "${input.name}"`, candidates: deleted.slice(0, 5).map(h => h.name) };
       const ok = await storage.restoreHabit(target.id);
@@ -8440,7 +8441,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.forProfile) {
         const fpLC = String(input.forProfile).toLowerCase();
         const match = profiles.find(p => p.name.toLowerCase() === fpLC)
-          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
+          || profiles.find(p => nameLooselyMatches(p.name, fpLC));
         if (match) targetProfileId = match.id;
         else if (explicitProfile) {
           return { error: `I couldn't find a profile named '${input.forProfile}'. Which person/pet did you mean?` };
@@ -9387,7 +9388,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.forProfile) {
         const fp = String(input.forProfile).toLowerCase().trim();
         const parent = profiles.find((p: any) => p.name.toLowerCase() === fp)
-          || profiles.find((p: any) => p.name.toLowerCase().includes(fp));
+          || profiles.find((p: any) => nameLooselyMatches(p.name, fp));
         if (parent) parentProfileId = parent.id;
       }
       if (!parentProfileId) {
@@ -9517,7 +9518,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (!asset) {
           const subMatches = profiles.filter((p: any) =>
             ASSET_TYPES.has(p.type) && (
-              p.name.toLowerCase().includes(linkLC) ||
+              nameLooselyMatches(p.name, linkLC) ||
               linkLC.includes(p.name.toLowerCase())
             )
           );
@@ -9720,7 +9721,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const nameLC = String(input.name || "").toLowerCase().trim();
       const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
       const target = liabs.find((p: any) => p.name.toLowerCase() === nameLC)
-        || liabs.find((p: any) => p.name.toLowerCase().includes(nameLC))
+        || liabs.find((p: any) => nameLooselyMatches(p.name, nameLC))
         || liabs.find((p: any) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()))
         || liabs.find((p: any) => String((p.fields || {}).lender || "").toLowerCase() === nameLC)
         || liabs.find((p: any) => {
@@ -9767,7 +9768,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Match strategy (most specific first): exact name, name-includes-query, query-includes-name (e.g. AI says "Affirm Peloton" but record is "Affirm Peloton Purchase"), lender match, token-overlap.
       const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
       let liability = liabs.find((p: any) => p.name.toLowerCase() === nameLC)
-        || liabs.find((p: any) => p.name.toLowerCase().includes(nameLC))
+        || liabs.find((p: any) => nameLooselyMatches(p.name, nameLC))
         || liabs.find((p: any) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()))
         || liabs.find((p: any) => String((p.fields || {}).lender || "").toLowerCase() === nameLC)
         || liabs.find((p: any) => {
@@ -9839,10 +9840,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const aNameRaw = String(input.assetName || "").trim();
       const aNameLC = aNameRaw.toLowerCase();
       const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === lNameLC)
-        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase().includes(lNameLC));
+        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && nameLooselyMatches(p.name, lNameLC));
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
       let asset = profiles.find((p: any) => p.name.toLowerCase() === aNameLC && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self")
-        || profiles.find((p: any) => p.name.toLowerCase().includes(aNameLC) && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self");
+        || profiles.find((p: any) => nameLooselyMatches(p.name, aNameLC) && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self");
       // Auto-create the asset if missing — this is the most common UX gap.
       // Heuristic: addresses (digits + street word) → property; vehicle keywords → vehicle; otherwise generic asset.
       if (!asset && aNameRaw) {
@@ -9880,7 +9881,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
       const liability = liabs.find((p: any) => p.name.toLowerCase() === lNameLC)
-        || liabs.find((p: any) => p.name.toLowerCase().includes(lNameLC))
+        || liabs.find((p: any) => nameLooselyMatches(p.name, lNameLC))
         || liabs.find((p: any) => lNameLC.length >= 3 && lNameLC.includes(p.name.toLowerCase()))
         || liabs.find((p: any) => String((p.fields || {}).lender || "").toLowerCase() === lNameLC)
         || liabs.find((p: any) => {
@@ -9906,7 +9907,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           const existing = await storage.getLiabilityProfileLinks(liability.id);
           for (const ex of existing || []) {
             const partyP = profiles.find((p: any) => p.id === ex.partyProfileId);
-            if (partyP && (partyP.name.toLowerCase() === removeLC || partyP.name.toLowerCase().includes(removeLC))) {
+            if (partyP && (partyP.name.toLowerCase() === removeLC || nameLooselyMatches(partyP.name, removeLC))) {
               await storage.deleteLiabilityProfileLink(ex.id);
             }
           }
@@ -9917,7 +9918,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         }
       }
       let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase() === pNameLC)
-        || profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase().includes(pNameLC));
+        || profiles.find((p: any) => (p.type === "person" || p.type === "self") && nameLooselyMatches(p.name, pNameLC));
       // Auto-create the person profile if missing — same UX gap as the asset link.
       if (!party && input.partyName) {
         const partyName = String(input.partyName).trim();
@@ -9955,10 +9956,10 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
       const aNameLC = String(input.assetName || "").toLowerCase().trim();
       const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
-      const liability = liabs.find((p: any) => p.name.toLowerCase() === lNameLC) || liabs.find((p: any) => p.name.toLowerCase().includes(lNameLC));
+      const liability = liabs.find((p: any) => p.name.toLowerCase() === lNameLC) || liabs.find((p: any) => nameLooselyMatches(p.name, lNameLC));
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
       const assets = profiles.filter((p: any) => ["asset", "vehicle", "property"].includes(p.type));
-      let asset = assets.find((p: any) => p.name.toLowerCase() === aNameLC) || assets.find((p: any) => p.name.toLowerCase().includes(aNameLC));
+      let asset = assets.find((p: any) => p.name.toLowerCase() === aNameLC) || assets.find((p: any) => nameLooselyMatches(p.name, aNameLC));
       if (!asset && (input.createIfMissing !== false)) {
         // smart-infer type
         const aname = String(input.assetName).trim();
@@ -9993,9 +9994,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const profiles = await storage.getProfiles();
       const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
       const aNameLC = String(input.assetName || "").toLowerCase().trim();
-      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && (p.name.toLowerCase() === lNameLC || p.name.toLowerCase().includes(lNameLC)));
+      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && (p.name.toLowerCase() === lNameLC || nameLooselyMatches(p.name, lNameLC)));
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
-      const asset = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === aNameLC || p.name.toLowerCase().includes(aNameLC)));
+      const asset = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === aNameLC || nameLooselyMatches(p.name, aNameLC)));
       if (!asset) return { error: `Asset not found: ${input.assetName}` };
       const links = await storage.getLiabilityAssetLinks(liability.id);
       const target = links.find((l: any) => l.assetProfileId === asset.id);
@@ -10009,11 +10010,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
       const fromLC = String(input.fromAssetName || "").toLowerCase().trim();
       const toLC = String(input.toAssetName || "").toLowerCase().trim();
-      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && (p.name.toLowerCase() === lNameLC || p.name.toLowerCase().includes(lNameLC)));
+      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && (p.name.toLowerCase() === lNameLC || nameLooselyMatches(p.name, lNameLC)));
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
-      const fromAsset = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === fromLC || p.name.toLowerCase().includes(fromLC)));
+      const fromAsset = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === fromLC || nameLooselyMatches(p.name, fromLC)));
       if (!fromAsset) return { error: `Source asset not found: ${input.fromAssetName}` };
-      let toAsset = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === toLC || p.name.toLowerCase().includes(toLC)));
+      let toAsset = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === toLC || nameLooselyMatches(p.name, toLC)));
       if (!toAsset && (input.createIfMissing !== false)) {
         try {
           toAsset = await storage.createProfile({
@@ -10039,7 +10040,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (selfP) pNameLC = selfP.name.toLowerCase();
       }
       const assets = profiles.filter((p: any) => ["asset", "vehicle", "property"].includes(p.type));
-      const asset = assets.find((p: any) => p.name.toLowerCase() === aNameLC) || assets.find((p: any) => p.name.toLowerCase().includes(aNameLC));
+      const asset = assets.find((p: any) => p.name.toLowerCase() === aNameLC) || assets.find((p: any) => nameLooselyMatches(p.name, aNameLC));
       if (!asset) return { error: `Asset not found: ${input.assetName}` };
       if (input.replaceExisting) {
         try {
@@ -10053,7 +10054,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           const existing = await storage.getAssetPartyLinks(asset.id);
           for (const ex of existing || []) {
             const partyP = profiles.find((p: any) => p.id === ex.partyProfileId);
-            if (partyP && (partyP.name.toLowerCase() === removeLC || partyP.name.toLowerCase().includes(removeLC))) {
+            if (partyP && (partyP.name.toLowerCase() === removeLC || nameLooselyMatches(partyP.name, removeLC))) {
               await storage.deleteAssetPartyLink(ex.id);
             }
           }
@@ -10061,7 +10062,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         if (!input.partyName) return { result: { removed: input.removeOwnerName }, actions: [{ type: "unlink", category: "asset_owner", data: { name: input.removeOwnerName } }] };
       }
       let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase() === pNameLC)
-        || profiles.find((p: any) => (p.type === "person" || p.type === "self") && p.name.toLowerCase().includes(pNameLC));
+        || profiles.find((p: any) => (p.type === "person" || p.type === "self") && nameLooselyMatches(p.name, pNameLC));
       if (!party && input.partyName) {
         const partyName = String(input.partyName).trim();
         if (!/^(me|myself|i|self)$/i.test(partyName)) {
@@ -10093,9 +10094,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (!splits.length) return { error: "splits array is required" };
       let subject: any;
       if (kind === "asset") {
-        subject = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === sNameLC || p.name.toLowerCase().includes(sNameLC)));
+        subject = profiles.find((p: any) => ["asset","vehicle","property"].includes(p.type) && (p.name.toLowerCase() === sNameLC || nameLooselyMatches(p.name, sNameLC)));
       } else {
-        subject = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && (p.name.toLowerCase() === sNameLC || p.name.toLowerCase().includes(sNameLC)));
+        subject = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && (p.name.toLowerCase() === sNameLC || nameLooselyMatches(p.name, sNameLC)));
       }
       if (!subject) return { error: `${kind} not found: ${input.subjectName}` };
       // wipe
@@ -10115,7 +10116,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           const selfP = profiles.find((p: any) => p.type === "self");
           if (selfP) pNameLC = selfP.name.toLowerCase();
         }
-        let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && (p.name.toLowerCase() === pNameLC || p.name.toLowerCase().includes(pNameLC)));
+        let party = profiles.find((p: any) => (p.type === "person" || p.type === "self") && (p.name.toLowerCase() === pNameLC || nameLooselyMatches(p.name, pNameLC)));
         if (!party) {
           try {
             party = await storage.createProfile({ name: String(s.partyName).trim(), type: "person", fields: {}, tags: [], notes: null } as any);
@@ -10143,7 +10144,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "get_relationships": {
       const profiles = await storage.getProfiles();
       const nameLC = String(input.profileName || "").toLowerCase().trim();
-      const subject = profiles.find((p: any) => p.name.toLowerCase() === nameLC) || profiles.find((p: any) => p.name.toLowerCase().includes(nameLC));
+      const subject = profiles.find((p: any) => p.name.toLowerCase() === nameLC) || profiles.find((p: any) => nameLooselyMatches(p.name, nameLC));
       if (!subject) return { error: `Profile not found: ${input.profileName}` };
       const profById = new Map(profiles.map((p: any) => [p.id, p]));
       const summary: any = { subject: { id: subject.id, name: subject.name, type: subject.type }, linkedAssets: [], linkedLiabilities: [], linkedPeople: [] };
@@ -10207,7 +10208,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.name) {
         const nameLC = String(input.name).toLowerCase().trim();
         const lp = liabilities.find((p: any) => p.name.toLowerCase() === nameLC)
-          || liabilities.find((p: any) => p.name.toLowerCase().includes(nameLC));
+          || liabilities.find((p: any) => nameLooselyMatches(p.name, nameLC));
         if (!lp) return { error: `Liability not found: ${input.name}` };
         return { result: await summarize(lp) };
       }
@@ -10280,7 +10281,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             const profilesForCat = await storage.getProfiles();
             const lc = safeLC(input.forProfile).trim();
             const profMatch = profilesForCat.find(p => p.name.toLowerCase() === lc)
-              || profilesForCat.find(p => p.name.toLowerCase().includes(lc));
+              || profilesForCat.find(p => nameLooselyMatches(p.name, lc));
             if (profMatch) {
               const typeMap: Record<string, string> = {
                 pet: "pet",
@@ -11442,7 +11443,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.forProfile) {
         const fpLC = safeLC(String(input.forProfile)).trim();
         const owner = profiles.find(p => p.name.toLowerCase() === fpLC)
-          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
+          || profiles.find(p => nameLooselyMatches(p.name, fpLC));
         if (!owner) return { error: `I couldn't find a profile named "${input.forProfile}". Who does this account belong to?` };
         ownerProfileId = owner.id;
       }
@@ -11794,7 +11795,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       let trackerId = input.trackerId;
       if (trackerId) {
         const trackers = await storage.getTrackers();
-        const found = trackers.find(t => t.name.toLowerCase().includes(trackerId.toLowerCase()));
+        const found = trackers.find(t => nameLooselyMatches(t.name, trackerId));
         trackerId = found?.id || undefined;
       }
       // Resolve habit name to ID (stem-aware, so "running" links a "Run" habit)
@@ -11892,7 +11893,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Link to tracker by name
       if (input.trackerId) {
         const trackers = await storage.getTrackers();
-        const found = trackers.find(t => t.name.toLowerCase().includes((input.trackerId || "").toLowerCase()));
+        const found = trackers.find(t => nameLooselyMatches(t.name, input.trackerId || ""));
         if (found) {
           changes.trackerId = found.id;
           logger.info("ai", `Linked goal "${goal.title}" to tracker "${found.name}"`);
@@ -11984,7 +11985,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const profiles = await storage.getProfiles();
         const fpLC = safeLC(String(input.forProfile)).trim();
         const target = profiles.find(p => p.name.toLowerCase() === fpLC)
-          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
+          || profiles.find(p => nameLooselyMatches(p.name, fpLC));
         if (!target) return { error: `I couldn't find a profile named "${input.forProfile}". Which person/pet did you mean?` };
         changes.linkedProfiles = [target.id];
       }
@@ -12006,7 +12007,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const profiles = await storage.getProfiles();
         const fpLC = safeLC(String(input.forProfile)).trim();
         const target = profiles.find(p => p.name.toLowerCase() === fpLC)
-          || profiles.find(p => p.name.toLowerCase().includes(fpLC));
+          || profiles.find(p => nameLooselyMatches(p.name, fpLC));
         if (!target) return { error: `I couldn't find a profile named "${input.forProfile}". Which person/pet did you mean?` };
         const selfProfile = profiles.find(p => p.type === "self");
         changes.linkedProfiles = (selfProfile && target.id !== selfProfile.id)
@@ -12124,7 +12125,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const nameLC = safeLC(input.liabilityName).trim();
       const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
       const liability = liabs.find((p: any) => p.name.toLowerCase() === nameLC)
-        || liabs.find((p: any) => p.name.toLowerCase().includes(nameLC))
+        || liabs.find((p: any) => nameLooselyMatches(p.name, nameLC))
         || liabs.find((p: any) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()));
       if (!liability) return { error: `Liability not found: ${input.liabilityName}`, candidates: liabs.slice(0, 5).map((p: any) => p.name) };
       const payments = await storage.getLiabilityPayments(liability.id); // newest first
@@ -12920,7 +12921,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "update_domain": {
       const domains = await storage.getDomains();
-      const domain = domains.find((d: any) => d.name.toLowerCase().includes(safeLC(input.name)));
+      const domain = domains.find((d: any) => nameLooselyMatches(d.name, safeLC(input.name)));
       if (!domain) return { error: `No domain found matching "${input.name}"` };
       const updated = await storage.updateDomain(domain.id, input.changes);
       return { updated: true, domain: updated };
@@ -12928,7 +12929,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "delete_domain": {
       const domains = await storage.getDomains();
-      const domain = domains.find((d: any) => d.name.toLowerCase().includes(safeLC(input.name)));
+      const domain = domains.find((d: any) => nameLooselyMatches(d.name, safeLC(input.name)));
       if (!domain) return { error: `No domain found matching "${input.name}"` };
       await storage.deleteDomain(domain.id);
       return { deleted: true, name: domain.name, id: domain.id };
@@ -13488,7 +13489,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const allProfilesUpload = await storage.getProfiles();
         const forProfileLC = (input.forProfile || "").toLowerCase().trim();
         const matchedUploadProfile = allProfilesUpload.find(p => p.name.toLowerCase() === forProfileLC)
-          || allProfilesUpload.find(p => p.name.toLowerCase().includes(forProfileLC));
+          || allProfilesUpload.find(p => nameLooselyMatches(p.name, forProfileLC));
         if (matchedUploadProfile) uploadProfileId = matchedUploadProfile.id;
       }
       return {
@@ -13554,7 +13555,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const searchNameRollup = (input.profileName || "").toLowerCase().trim();
       // Exact then partial match
       const rootProfile = allProfiles.find(p => p.name.toLowerCase() === searchNameRollup)
-        || allProfiles.find(p => p.name.toLowerCase().includes(searchNameRollup));
+        || allProfiles.find(p => nameLooselyMatches(p.name, searchNameRollup));
       if (!rootProfile) {
         return { error: `Profile "${input.profileName}" not found.` };
       }

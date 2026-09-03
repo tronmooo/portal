@@ -2687,3 +2687,32 @@ describe("D242: PUT /api/profiles/:id/owners and /liability-owners write the tab
     expect(calls.map((c) => c[0])).toEqual(["asset", "asset", "liability"]);
   });
 });
+
+// ─── D243: a typed name inside an existing name was taken for it ─────────────
+import { nameLooselyMatches } from "../shared/name-match";
+describe("D243: the AI's name fallback matches whole names and word starts, never a fragment inside a word", () => {
+  it("rule", () => {
+    expect(nameLooselyMatches("Joanna", "joanna")).toBe(true);
+    expect(nameLooselyMatches("Joanna", "joan")).toBe(true);
+    expect(nameLooselyMatches("Joanna", "ann")).toBe(false);
+    expect(nameLooselyMatches("Honda Civic", "civic")).toBe(true);
+    expect(nameLooselyMatches("Honda Civic", "vic")).toBe(false);
+    expect(nameLooselyMatches("Car Loan (Toyota)", "car loan")).toBe(true);
+    expect(nameLooselyMatches("Car Loan (Toyota)", "toyota")).toBe(true);
+    expect(nameLooselyMatches("Ann", "ann")).toBe(true);
+    expect(nameLooselyMatches("Joanna", "")).toBe(false);
+  });
+  it("update_expense 'for Ann' no longer files the lunch under Joanna; 'for Joan' still does", async () => {
+    const s = new MemStorage();
+    const run = <T,>(fn: () => Promise<T>) => new Promise<T>((resolve, reject) => requestStorageContext.run(s, () => fn().then(resolve, reject)));
+    await s.createProfile({ name: "Me", type: "self", fields: {} } as any);
+    const joanna = await s.createProfile({ name: "Joanna", type: "person", fields: {} } as any);
+    const lunch = await s.createExpense({ amount: 12, category: "food", description: "lunch", date: "2026-09-03", linkedProfiles: [] } as any);
+    const ann = await run(() => executeTool("update_expense", { description: "lunch", changes: { amount: 13 }, forProfile: "Ann" }, "u-1"));
+    expect(ann.error).toMatch(/couldn't find a profile named "Ann"/);
+    expect((await s.getExpense(lunch.id))!.amount).toBe(12);
+    const joan = await run(() => executeTool("update_expense", { description: "lunch", changes: { amount: 13 }, forProfile: "Joan" }, "u-1"));
+    expect(joan.updated).toBe(true);
+    expect((await s.getExpense(lunch.id))!.linkedProfiles).toContain(joanna.id);
+  });
+});
