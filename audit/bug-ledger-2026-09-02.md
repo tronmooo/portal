@@ -1175,3 +1175,7 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - Replica batch on the final build (cache on): s230–s235, s237–s239, s242–s244, s247, s248, s250, s251, s253, s254, s256 all green.
 - s257 (3/3, cache on): three simultaneous edits of different profile fields all land; an edit carrying a stale version is refused with 409 and the newer value stays; two simultaneous task edits of different fields both land.
 - s258 (4/5): client audit entries land and are scoped to their owner, absurd paging is clamped, onboarding status answers. The one miss was a replica artifact: `profile_type_definitions` was empty on the replica (production has 80 rows), so the create-profile dialog's type picker had nothing to show here; the table is now seeded from a read-only production export.
+
+### Create Profile dialog — verified (flows29, D264)
+
+- Before: Dashboard → Assets → Add Asset → Vehicle → a numeric registry field typed as 12500 was stored as `{ year: "12500" }` (4/4 flow checks passed, the value was a string). After the rebuild: `{ year: 12500 }`, the vehicle is created under Self, the dialog closes and the card appears (4/4). The replica's empty `profile_type_definitions` table was seeded from a read-only production export so this dialog could be driven at all.
