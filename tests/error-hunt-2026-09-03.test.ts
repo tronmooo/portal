@@ -838,3 +838,19 @@ describe("D172: deletes of tasks, expenses, events, tracker entries and entity l
     expect((await h.api("DELETE", "/api/expenses/e-1")).status).toBe(200);
   });
 });
+
+// ─── D173: deleting a document that is not yours is a 404, not a cascade ────
+describe("D173: DELETE /api/documents/:id checks ownership before the cascade", () => {
+  it("404 when the document is not this user's; the cascade is not run", async () => {
+    let cascaded = 0;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getDocumentMeta = async (id: string) => (id === "doc-mine" ? { id, name: "Mine", type: "other" } : undefined);
+      storage.getDocument = storage.getDocumentMeta;
+      storage.deleteDocument = async () => { cascaded++; return true; };
+      storage.getProfiles = async () => [];
+      storage.getEvents = async () => [];
+    });
+    expect((await h.api("DELETE", "/api/documents/doc-theirs")).status).toBe(404);
+    expect(cascaded).toBe(0);
+  });
+});

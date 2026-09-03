@@ -7198,6 +7198,11 @@ Rules:
     // too. The client asks the user which, showing the counts from
     // /delete-impact.
     const docIdToDelete = req.params.id;
+    // The cascade runs under this user's storage and reports "done" when it
+    // finds nothing to remove, so another user's document id (or a missing
+    // one) answered 200 while the owner's document stayed put.
+    const owned = (await storage.getDocumentMeta(docIdToDelete)) || (await storage.getDocument(docIdToDelete));
+    if (!owned) return res.status(404).json({ error: "Not found" });
     const mode = parseDeletionMode(req.query.mode);
     const outcome = await deleteDocumentEverywhere(storage as any, docIdToDelete, mode, log);
     const uid_d3 = cacheUserKey(req as AuthenticatedRequest);
