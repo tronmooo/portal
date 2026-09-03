@@ -282,6 +282,9 @@ The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 a
 ### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
 A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
 
+### Anomalies and the weekly review under a co-owner scope (probe s51) — verified after D135/D136
+A $2,700 vehicle spike this week reaches Linda's anomalies once she co-owns the car (and not before); every category on the replica reports the same 1186% because all of its spending falls inside the last seven days (current week = whole 90-day total ÷ 12.86 weeks) — a data artifact, not a calculation bug. Two consecutive review generations for Linda return the same artifact id ("Weekly Review · Aug 26 – Sep 2", the user's day) and the document mentions the car's repairs.
+
 ### Co-owner cross-system consistency (probes s49, s50) — verified working after D133/D134
 With Linda half-owning the Honda (which carries a task due today, an overdue task, a registration expiring in 10 days, a daily habit, its insurance bill, a journal entry and a goal): her calendar bill occurrences, journal and goals carry the car's rows; stats (`activeTasks`, `totalHabits`, `totalObligations`), the enhanced snapshot (`overdueTasks`, `expiringDocuments`, `totalDocuments`) and the bootstrap seeds (tasks, habits) agree with the scoped list routes; the AI-suggestions route answers 200.
 
