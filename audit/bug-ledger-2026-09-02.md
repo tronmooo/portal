@@ -334,6 +334,12 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Skip then pay (probe s115) — verified working
+Skipping today's occurrence advances the due date one cycle and stamps it skipped; a following "Mark paid" settles the next occurrence, moves the due date once more, and the schedule shows today skipped and the next occurrence paid.
+
+### A streak goal across a habit's delete and restore (probe s114) — verified working
+A habit-streak goal reads the live 2-day streak, keeps 2 while the habit sits in the trash, still reads 2 after the restore, and the habit comes back with both check-ins and its streak.
+
 ### Card payment types (probe s113) — verified after D192
 On a credit card a "skipped" row moves no balance, a payoff zeroes it, a reversal after the payoff puts the 100 back, and the schedule lists the three rows once each.
 
