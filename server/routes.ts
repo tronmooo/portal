@@ -4057,10 +4057,11 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileId = req.query.profileId as string | undefined;
     const ids = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : []);
     const lookbackDays = Math.min(400, Math.max(1, parseInt(String(req.query.lookbackDays || "120"), 10) || 120));
-    const pid = ids.length === 1 ? ids[0] : undefined;
+    // Several ids → the storage sums their per-profile rows by day (it used
+    // to answer the account aggregate for any selection larger than one).
     try {
       const rows = typeof (storage as any).getNetWorthHistory === "function"
-        ? await (storage as any).getNetWorthHistory(pid, lookbackDays)
+        ? await (storage as any).getNetWorthHistory(ids.length > 0 ? ids : undefined, lookbackDays)
         : [];
       res.json(Array.isArray(rows) ? rows : []);
     } catch {

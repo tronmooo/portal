@@ -7366,22 +7366,34 @@ export class SupabaseStorage implements IStorage {
 
   // Read snapshot history for a profile (or the aggregate when profileId is
   // omitted) within the lookback window, newest first.
-  async getNetWorthHistory(profileId?: string, lookbackDays: number = 1): Promise<Array<{ snapshotDate: string; assetsTotal: number; liabilitiesTotal: number; netWorth: number }>> {
+  // `profileIds`: none → the aggregate rows (profile_id NULL); one → that
+  // profile's own rows; several → the per-profile rows summed by day. A
+  // multi-profile selection used to fall back to the aggregate, so "Self +
+  // Linda" drew the whole account's trend (a third person's holdings
+  // included) under a header that showed only the two of them. Per-profile
+  // rows carry each owner's share (takeNetWorthSnapshot reuses the share-aware
+  // dashboard math), so their sum is the selection's total.
+  async getNetWorthHistory(profileIds?: string | string[], lookbackDays: number = 1): Promise<Array<{ snapshotDate: string; assetsTotal: number; liabilitiesTotal: number; netWorth: number }>> {
+    const ids = (Array.isArray(profileIds) ? profileIds : profileIds ? [profileIds] : []).filter(Boolean);
     const today = getUserToday(this._timezone);
     const since = tzAddDays(today, -Math.max(1, lookbackDays));
     let q = this.supabase.from("net_worth_snapshots")
-      .select("snapshot_date, assets_total, liabilities_total, net_worth")
+      .select("snapshot_date, profile_id, assets_total, liabilities_total, net_worth")
       .eq("user_id", this.userId)
       .gte("snapshot_date", since);
-    q = profileId ? q.eq("profile_id", profileId) : q.is("profile_id", null);
+    q = ids.length === 0 ? q.is("profile_id", null) : ids.length === 1 ? q.eq("profile_id", ids[0]) : q.in("profile_id", ids);
     const { data, error } = await q.order("snapshot_date", { ascending: false });
     if (error) throw error;
-    return (data || []).map((r: any) => ({
-      snapshotDate: r.snapshot_date,
-      assetsTotal: Number(r.assets_total || 0),
-      liabilitiesTotal: Number(r.liabilities_total || 0),
-      netWorth: Number(r.net_worth || 0),
-    }));
+    const byDay = new Map<string, { snapshotDate: string; assetsTotal: number; liabilitiesTotal: number; netWorth: number }>();
+    for (const r of data || []) {
+      const day = String(r.snapshot_date);
+      const row = byDay.get(day) || { snapshotDate: day, assetsTotal: 0, liabilitiesTotal: 0, netWorth: 0 };
+      row.assetsTotal += Number(r.assets_total || 0);
+      row.liabilitiesTotal += Number(r.liabilities_total || 0);
+      row.netWorth += Number(r.net_worth || 0);
+      byDay.set(day, row);
+    }
+    return Array.from(byDay.values()).sort((a, b) => (a.snapshotDate < b.snapshotDate ? 1 : a.snapshotDate > b.snapshotDate ? -1 : 0));
   }
 
   // ============================================================

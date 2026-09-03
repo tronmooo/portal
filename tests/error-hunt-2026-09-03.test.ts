@@ -303,3 +303,39 @@ describe("D147: goal progress survives its source", () => {
     expect(writes[0]).not.toHaveProperty("status");
   });
 });
+
+// ─── D148: net-worth history for a multi-profile selection ──────────────────
+describe("D148: /api/net-worth/history sums the selected profiles' own rows", () => {
+  const rows = [
+    { snapshot_date: "2026-09-02", profile_id: "self-1", assets_total: 10000, liabilities_total: 4000, net_worth: 6000 },
+    { snapshot_date: "2026-09-02", profile_id: "linda-1", assets_total: 5000, liabilities_total: 1000, net_worth: 4000 },
+    { snapshot_date: "2026-09-01", profile_id: "self-1", assets_total: 9000, liabilities_total: 4000, net_worth: 5000 },
+  ];
+  it("storage: several ids → per-day sums, newest first; one id → its rows; none → the aggregate", async () => {
+    const { client, calls } = chainClient((table, op) => table === "net_worth_snapshots" && op === "select" ? { data: rows, error: null } : { data: [], error: null });
+    const s = bareStorage({ supabase: client });
+    const two = await s.getNetWorthHistory(["self-1", "linda-1"], 120);
+    expect(two).toEqual([
+      { snapshotDate: "2026-09-02", assetsTotal: 15000, liabilitiesTotal: 5000, netWorth: 10000 },
+      { snapshotDate: "2026-09-01", assetsTotal: 9000, liabilitiesTotal: 4000, netWorth: 5000 },
+    ]);
+    expect(calls[0].filters).toEqual(expect.arrayContaining([["in", ["profile_id", ["self-1", "linda-1"]]]]));
+    await s.getNetWorthHistory("self-1", 30);
+    expect(calls[1].filters).toEqual(expect.arrayContaining([["eq", ["profile_id", "self-1"]]]));
+    await s.getNetWorthHistory(undefined, 30);
+    expect(calls[2].filters).toEqual(expect.arrayContaining([["is", ["profile_id", null]]]));
+  });
+  it("route: a two-profile selection asks the storage for both ids, not the aggregate", async () => {
+    const asked: any[] = [];
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }, { id: "linda-1", type: "person", name: "Linda" }] }, (storage) => {
+      storage.getNetWorthHistory = async (ids: any, days: number) => { asked.push([ids, days]); return [{ snapshotDate: "2026-09-02", assetsTotal: 1, liabilitiesTotal: 0, netWorth: 1 }]; };
+    });
+    const r = await h.api("GET", "/api/net-worth/history?profileIds=self-1,linda-1&lookbackDays=35");
+    expect(r.status).toBe(200);
+    expect(asked).toEqual([[["self-1", "linda-1"], 35]]);
+    await h.api("GET", "/api/net-worth/history?profileId=linda-1");
+    expect(asked[1]).toEqual([["linda-1"], 120]);
+    await h.api("GET", "/api/net-worth/history");
+    expect(asked[2]).toEqual([undefined, 120]);
+  });
+});

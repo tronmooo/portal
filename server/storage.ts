@@ -247,7 +247,7 @@ export interface IStorage {
 
   // Net-worth snapshots (W4-5)
   takeNetWorthSnapshot(profileIds?: string[]): Promise<Array<{ profileId: string | null; assetsTotal: number; liabilitiesTotal: number; netWorth: number; snapshotDate: string }>>;
-  getNetWorthHistory(profileId?: string, lookbackDays?: number): Promise<Array<{ snapshotDate: string; assetsTotal: number; liabilitiesTotal: number; netWorth: number }>>;
+  getNetWorthHistory(profileIds?: string | string[], lookbackDays?: number): Promise<Array<{ snapshotDate: string; assetsTotal: number; liabilitiesTotal: number; netWorth: number }>>;
 
   // Insights
   getInsights(): Promise<Insight[]>;
