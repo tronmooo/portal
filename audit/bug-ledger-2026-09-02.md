@@ -896,3 +896,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - Browser pinned to Pacific/Kiritimati (UTC+14, local day ahead of UTC all morning): a goal due today reads `0d left` (the replaced arithmetic showed `1d left`), a goal due yesterday reads `OVERDUE · 1d late` (it showed `0d left`); no page errors. Same section reached at `/#/dashboard/goals` and `/#/goals`; the dashboard's Next Important row already named the day correctly.
 - Paychecks and accounts (s212): B confirming/deleting A's paycheck is 404, A's paycheck untouched; confirm records the actual amount and today's received date; a missing paycheck is 404; account delta/set-to adjustments land (1000 → 800 → 950); B cannot adjust, edit or delete A's account. A paycheck `expected_date` typed as `9/5/2026` is stored as 2026-09-05 (Postgres MDY parse) — the client date input sends ISO, so noted, not fixed.
+
+### Production re-verification on 4c8d651 (deployed ~17:55 UTC) — verified live
+
+- p9 11/11: the D227 row that waited on deploy (deleting a shared tracker entry un-completes both habits) now passes live; D208–D226 rows unchanged.
+- p10 7/7: D230 (a corrected document date moves Kim's copy and the calendar shows one row on the new date), D231 (no graph edge without both nodes; the collateral edge present), D228 (deleting a habit retires its mirror entry, restoring brings it back). All probe rows cleaned up.
