@@ -217,3 +217,35 @@ describe("a mutation never guesses between two records of the same name", () => 
     expect(picked.ambiguous?.length).toBe(2);
   });
 });
+
+// D123 — "mark Linda's loan paperwork done": the task is linked to the loan
+// Linda half-owns, not to Linda, so the person scope missed it.
+describe("D123: a named person's scope reaches records of assets and loans they co-own", () => {
+  const profiles = [
+    { id: "self-1", type: "self", name: "Me" },
+    { id: "linda-1", type: "person", name: "Linda" },
+    { id: "car-1", type: "vehicle", name: "Honda", parentProfileId: "self-1" },
+    { id: "loan-1", type: "liability", name: "Car loan", parentProfileId: "self-1" },
+  ];
+  const rows = [
+    { id: "t-loan", title: "Loan paperwork", status: "todo", linkedProfiles: ["loan-1"] },
+    { id: "t-car", title: "Oil change", status: "todo", linkedProfiles: ["car-1"] },
+    { id: "t-self", title: "Loan paperwork", status: "todo", linkedProfiles: ["self-1"] },
+  ];
+  const linkedStorage = {
+    getHabits: async () => [], getTasks: async () => rows, getProfiles: async () => profiles,
+    getAssetPartyLinks: async () => [{ assetProfileId: "car-1", partyProfileId: "linda-1" }],
+    getLiabilityProfileLinks: async () => [{ liabilityProfileId: "loan-1", partyProfileId: "linda-1" }],
+  };
+  it("resolves the loan's task and the car's task for Linda, never Self's own", async () => {
+    const loan = await resolveActionable(linkedStorage, { name: "Loan paperwork", forProfile: "Linda" });
+    expect(loan.candidates.map((c) => c.id)).toEqual(["t-loan"]);
+    const car = await resolveActionable(linkedStorage, { name: "Oil change", forProfile: "Linda" });
+    expect(car.candidates.map((c) => c.id)).toEqual(["t-car"]);
+  });
+  it("without the link tables Linda's scope stays empty", async () => {
+    const bare = { getHabits: async () => [], getTasks: async () => rows, getProfiles: async () => profiles };
+    const res = await resolveActionable(bare, { name: "Loan paperwork", forProfile: "Linda" });
+    expect(res.candidates).toHaveLength(0);
+  });
+});

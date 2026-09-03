@@ -26,6 +26,9 @@ export interface ResolverStorage {
   getGoals?(): Promise<any[]>;
   getEvents?(): Promise<any[]>;
   getProfiles(): Promise<any[]>;
+  /** Co-ownership tables — "Linda's car insurance" reaches the car she half-owns. */
+  getAssetPartyLinks?(): Promise<any[]>;
+  getLiabilityProfileLinks?(): Promise<any[]>;
 }
 
 export interface ResolveOptions {
@@ -63,7 +66,12 @@ function matchProfile(profiles: any[], name: string): any | undefined {
  * while the dashboard showed them all), and orphan records fall through to
  * "me", exactly as they do on screen.
  */
-function scopeToProfile(records: any[], profiles: any[], forProfile?: string): any[] {
+function scopeToProfile(
+  records: any[],
+  profiles: any[],
+  forProfile?: string,
+  links?: { assetPartyLinks: any[]; liabilityProfileLinks: any[] },
+): any[] {
   let selectedIds: string[];
   if (forProfile) {
     const prof = matchProfile(profiles, forProfile);
@@ -73,7 +81,7 @@ function scopeToProfile(records: any[], profiles: any[], forProfile?: string): a
     selectedIds = [...selfIdsFrom(profiles)];
   }
   if (selectedIds.length === 0) return records;   // no profiles at all — no filter to apply
-  return records.filter(r => passesProfileFilter(r?.linkedProfiles, { selectedIds, allProfiles: profiles }));
+  return records.filter(r => passesProfileFilter(r?.linkedProfiles, { selectedIds, allProfiles: profiles, ...(links || {}) }));
 }
 
 const isDoneTask = (t: any) => String(t?.status || "").trim().toLowerCase() === "done";
@@ -102,6 +110,14 @@ export async function resolveActionable(
   if (!queryName) return { candidates: [], explicit, searched, queryName };
 
   const profiles = await storage.getProfiles().catch(() => []);
+  // Only a named person needs the link tables (self scope reaches its own
+  // assets through the parent chain already).
+  const links = opts.forProfile
+    ? {
+        assetPartyLinks: await (storage.getAssetPartyLinks?.() ?? Promise.resolve([])).catch(() => [] as any[]),
+        liabilityProfileLinks: await (storage.getLiabilityProfileLinks?.() ?? Promise.resolve([])).catch(() => [] as any[]),
+      }
+    : undefined;
   const candidates: ResolvedCandidate[] = [];
 
   const collect = async (
@@ -112,7 +128,7 @@ export async function resolveActionable(
   ) => {
     if (!searched.includes(kind) || !load) return;
     const rows = await load().catch(() => []);
-    const scoped = scopeToProfile(rows || [], profiles, opts.forProfile);
+    const scoped = scopeToProfile(rows || [], profiles, opts.forProfile, links);
     const open = opts.includeCompleted ? scoped : scoped.filter(r => !isClosed(r));
     for (const r of rankByName(open, opts.name, getName)) {
       candidates.push({ kind, id: r.id, name: getName(r), record: r });

@@ -813,6 +813,26 @@ describe("D122: inline server contexts carry co-ownership (incomes)", () => {
   });
 });
 
+// D123 — a task on the loan Linda half-owns is listed under Linda.
+describe("D123: GET /api/tasks?profileIds=<party> lists tasks of a co-owned loan", () => {
+  const LINDA = { id: "linda-1", type: "person", name: "Linda" };
+  const LOAN = { id: "loan-1", type: "liability", type_key: "auto_loan", name: "Car loan", parentProfileId: SELF.id };
+  const tasks = [
+    { id: "t-loan", title: "Send loan statement", status: "todo", dueDate: "2026-09-10", linkedProfiles: ["loan-1"] },
+    { id: "t-self", title: "Gym", status: "todo", dueDate: "2026-09-10", linkedProfiles: [SELF.id] },
+  ];
+  it("with the liability link the loan's task is hers; without it, not", async () => {
+    h = await boot({ profiles: [SELF, LINDA, LOAN], tasks }, (storage) => {
+      storage.getLiabilityProfileLinks = async () => [{ id: "lpl-1", liabilityProfileId: "loan-1", partyProfileId: "linda-1", ownershipPercentage: 50 }];
+    });
+    const r = await h.api("GET", `/api/tasks?profileIds=${LINDA.id}`);
+    expect(r.status).toBe(200);
+    expect(r.data.map((t: any) => t.title)).toEqual(["Send loan statement"]);
+    h = await boot({ profiles: [SELF, LINDA, LOAN], tasks });
+    expect((await h.api("GET", `/api/tasks?profileIds=${LINDA.id}`)).data).toEqual([]);
+  });
+});
+
 // D97 — the bill-create dedupe was written only after the insert finished,
 // so two identical creates arriving together both inserted.
 describe("D97: two identical bill creates arriving together insert once", () => {

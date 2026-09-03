@@ -90,7 +90,12 @@ function rowBelongsInScope(row: Record<string, any>, selectedIds: string[]): boo
   // Co-ownership widens the selection (a co-owner's car): read the cached
   // links so a new car task lands in Linda's list the same way a refetch would.
   const cachedLinks = queryClient.getQueryData<any[]>(["/api/asset-party-links"]);
-  return passesProfileFilter(linked, { selectedIds, allProfiles, assetPartyLinks: Array.isArray(cachedLinks) ? cachedLinks : [] });
+  const cachedLiabLinks = queryClient.getQueryData<any[]>(["/api/liability-profile-links"]);
+  return passesProfileFilter(linked, {
+    selectedIds, allProfiles,
+    assetPartyLinks: Array.isArray(cachedLinks) ? cachedLinks : [],
+    liabilityProfileLinks: Array.isArray(cachedLiabLinks) ? cachedLiabLinks : [],
+  });
 }
 
 /** Apply one mutation to one cached list. Returns the new list, or the old one. */

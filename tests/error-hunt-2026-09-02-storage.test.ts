@@ -921,9 +921,10 @@ describe("D120: containment pushdowns match the owner chain and co-ownership", (
     { id: "dog-1", type: "pet", name: "Rex", parentProfileId: "mike" },
   ];
   const links = [{ id: "apl-1", assetProfileId: "car-1", partyProfileId: "linda", ownershipPercentage: 50 }];
+  const liabLinks = [{ id: "lpl-1", liabilityProfileId: "loan-1", partyProfileId: "linda", ownershipPercentage: 50 }];
   function scoped() {
     const { client, calls } = chainClient(() => ({ data: [], error: null, count: 0 }));
-    const s = bareStorage({ supabase: client, getProfilesLite: async () => profiles, getAssetPartyLinks: async () => links });
+    const s = bareStorage({ supabase: client, getProfilesLite: async () => [...profiles, { id: "loan-1", type: "liability", name: "Car loan", parentProfileId: "self" }], getAssetPartyLinks: async () => links, getLiabilityProfileLinks: async () => liabLinks });
     const orClause = (table: string) => {
       const c = calls.find((x) => x.table === table);
       const f = c?.filters.find(([k]) => k === "or");
@@ -938,7 +939,7 @@ describe("D120: containment pushdowns match the owner chain and co-ownership", (
     await s.getDocumentsPage({ profileIds: ["linda"], limit: 10 });
     await s.getEvents(["linda"]);
     for (const t of ["tasks", "documents", "events"]) {
-      expect(orClause(t), t).toBe('linked_profiles.cs.["linda"],linked_profiles.cs.["car-1"]');
+      expect(orClause(t), t).toBe('linked_profiles.cs.["linda"],linked_profiles.cs.["car-1"],linked_profiles.cs.["loan-1"]');
     }
   });
   it("an owner's fetch reaches a nested pet; the array-column tables use the array literal", async () => {
@@ -954,6 +955,6 @@ describe("D120: containment pushdowns match the owner chain and co-ownership", (
     expect(orClause("tasks")).toBeUndefined();
     expect(calls.some((c) => c.table === "profiles" || c.table === "asset_party_links")).toBe(false);
     await s.getGoals(["mike", "linda"]);
-    expect(orClause("goals")!.split(",").sort()).toEqual(['linked_profiles.cs.["car-1"]', 'linked_profiles.cs.["dog-1"]', 'linked_profiles.cs.["linda"]', 'linked_profiles.cs.["mike"]']);
+    expect(orClause("goals")!.split(",").sort()).toEqual(['linked_profiles.cs.["car-1"]', 'linked_profiles.cs.["dog-1"]', 'linked_profiles.cs.["linda"]', 'linked_profiles.cs.["loan-1"]', 'linked_profiles.cs.["mike"]']);
   });
 });

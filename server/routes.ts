@@ -1324,11 +1324,16 @@ async function profileFilterCtx(
   ids: string[],
   allProfiles: Array<{ id: string; type?: string; parentProfileId?: string | null }>,
   assetPartyLinks?: any[] | null,
-): Promise<{ selectedIds: string[]; allProfiles: any[]; assetPartyLinks: any[] }> {
-  const links = Array.isArray(assetPartyLinks)
-    ? assetPartyLinks
-    : (ids.length > 0 ? await (storage.getAssetPartyLinks?.() ?? Promise.resolve([])).catch(() => [] as any[]) : []);
-  return { selectedIds: ids, allProfiles, assetPartyLinks: links || [] };
+  liabilityProfileLinks?: any[] | null,
+): Promise<{ selectedIds: string[]; allProfiles: any[]; assetPartyLinks: any[]; liabilityProfileLinks: any[] }> {
+  const need = ids.length > 0;
+  const [links, liabLinks] = await Promise.all([
+    Array.isArray(assetPartyLinks) ? assetPartyLinks
+      : (need ? (storage.getAssetPartyLinks?.() ?? Promise.resolve([])).catch(() => [] as any[]) : []),
+    Array.isArray(liabilityProfileLinks) ? liabilityProfileLinks
+      : (need ? (storage.getLiabilityProfileLinks?.() ?? Promise.resolve([])).catch(() => [] as any[]) : []),
+  ]);
+  return { selectedIds: ids, allProfiles, assetPartyLinks: links || [], liabilityProfileLinks: liabLinks || [] };
 }
 
 export async function registerRoutes(
@@ -4223,7 +4228,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // BUG-20260528-profile-filter-leakage: previously inline orphan check
       // diverged from canonical passesProfileFilter. Replaced with shared
       // function so /api/dashboard-bootstrap matches /api/expenses exactly.
-      const bootCtx = await profileFilterCtx(filterIds || [], profiles, assetPartyLinks);
+      const bootCtx = await profileFilterCtx(filterIds || [], profiles, assetPartyLinks, liabilityProfileLinks);
       const filteredExpenses = (!filterIds || filterIds.length === 0)
         ? expensesForBudget
         : expensesForBudget.filter((e: any) => passesProfileFilter(e.linkedProfiles, bootCtx));
@@ -8528,7 +8533,7 @@ Rules:
             if (isAssetOrLiability(r.type)) return itemVisibleForSelection(r.id, ids, ownerIndex, selfIds);
             return false;
           }
-          return passesProfileFilter(r.linkedProfiles, { selectedIds: ids, allProfiles: allProfiles as any[], assetPartyLinks: assetLinks });
+          return passesProfileFilter(r.linkedProfiles, { selectedIds: ids, allProfiles: allProfiles as any[], assetPartyLinks: assetLinks, liabilityProfileLinks: liabLinks });
         });
       }
       res.json(results);

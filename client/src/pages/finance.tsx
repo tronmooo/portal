@@ -817,7 +817,8 @@ export default function FinancePage() {
     selectedIds: filterMode === "everyone" ? [] : filterIds,
     allProfiles: (profiles || []).map((p: any) => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
     assetPartyLinks: assetPartyLinks || [],
-  }), [filterMode, filterIds, profiles]);
+    liabilityProfileLinks: liabilityProfileLinks || [],
+  }), [filterMode, filterIds, profiles, assetPartyLinks, liabilityProfileLinks]);
   const showTestData = useShowTestData();
   const profileFiltered = useMemo(
     () => (expenses || []).filter(e => passesProfileFilter(e.linkedProfiles, filterCtx) && (showTestData || !isTestEntity(e))),

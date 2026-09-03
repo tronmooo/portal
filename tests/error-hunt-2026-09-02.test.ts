@@ -502,3 +502,29 @@ describe("D120: pushdownSelection is the containment-side form of the same rule"
     expect(pushdownSelection({ selectedIds: ["a"], allProfiles: cyc }).sort()).toEqual(["a", "b"]);
   });
 });
+
+// D123 — co-owned LIABILITIES: Linda's half of the car loan. The widening
+// knew asset_party_links only, so the loan's tasks and documents were hers
+// nowhere while the car's were.
+describe("D123: liability co-ownership widens the selection like asset co-ownership", () => {
+  const profiles = [
+    { id: "self", type: "self" },
+    { id: "linda", type: "person" },
+    { id: "loan-1", type: "liability", parentProfileId: "self" },
+  ];
+  const liabLinks = [{ liabilityProfileId: "loan-1", partyProfileId: "linda" }];
+  it("a loan-linked item passes for a party on the loan, not without the link", () => {
+    expect(passesProfileFilter(["loan-1"], { selectedIds: ["linda"], allProfiles: profiles, liabilityProfileLinks: liabLinks })).toBe(true);
+    expect(passesProfileFilter(["loan-1"], { selectedIds: ["linda"], allProfiles: profiles })).toBe(false);
+    expect(effectiveSelection({ selectedIds: ["linda"], allProfiles: profiles, liabilityProfileLinks: liabLinks }).sort()).toEqual(["linda", "loan-1"]);
+    // A link naming a non-liability profile is ignored.
+    expect(effectiveSelection({ selectedIds: ["linda"], allProfiles: profiles, liabilityProfileLinks: [{ liabilityProfileId: "self", partyProfileId: "linda" }] })).toEqual(["linda"]);
+  });
+  it("pushdownSelection agrees with the filter for the loan too", () => {
+    const ctx = { selectedIds: ["linda"], allProfiles: profiles, liabilityProfileLinks: liabLinks };
+    const push = new Set(pushdownSelection(ctx));
+    for (const linked of [["loan-1"], ["self"], ["linda"]]) {
+      expect(linked.some((id) => push.has(id)), linked.join()).toBe(passesProfileFilter(linked, ctx));
+    }
+  });
+});

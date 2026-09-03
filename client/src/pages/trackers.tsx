@@ -5895,7 +5895,7 @@ export default function TrackersPage() {
     if (filterMode === "selected" && filterIds.length > 0) {
       // Canonical rule (orphan docs with no linkedProfiles belong to self) —
       // the inline `.some(includes)` used to hide them when filtering to self.
-      return passesProfileFilter(d.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [], assetPartyLinks });
+      return passesProfileFilter(d.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [], assetPartyLinks, liabilityProfileLinks });
     }
     return true;
   }), [allDocuments, filterMode, filterIds, profiles]);
@@ -5996,7 +5996,7 @@ export default function TrackersPage() {
   const filteredTrackers = useMemo(() => (trackers || []).filter(t => {
     if (filterMode === "selected" && filterIds.length > 0) {
       // Canonical rule so orphan trackers (no linkedProfiles) still show for self.
-      if (!passesProfileFilter(t.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [], assetPartyLinks })) return false;
+      if (!passesProfileFilter(t.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [], assetPartyLinks, liabilityProfileLinks })) return false;
     }
     // The tracker-category chip filter only applies when the user is actually
     // on the Trackers tab. If they’re viewing "All" or some other section, a
@@ -6006,7 +6006,7 @@ export default function TrackersPage() {
     if (sectionFilter === "trackers" && trackerCatFilter !== "all" && normalizeFilter(getCanonicalGroup(t.category)) !== normalizeFilter(trackerCatFilter)) return false;
     return true;
   }).sort((a, b) => cleanTrackerName(a.name).toLowerCase().localeCompare(cleanTrackerName(b.name).toLowerCase())
-  ), [trackers, filterMode, filterIds, trackerCatFilter, sectionFilter, profiles, assetPartyLinks]);
+  ), [trackers, filterMode, filterIds, trackerCatFilter, sectionFilter, profiles, assetPartyLinks, liabilityProfileLinks]);
 
   // Group trackers by canonical group — memoized
   const { grouped, sortedCats } = useMemo(() => {
@@ -6568,7 +6568,7 @@ export default function TrackersPage() {
               // Canonical rule: orphan docs (no linked person) belong to self —
               // consistent with finalOwners above, which already attributes them
               // to self. The old `.some(includes)` hid them when filtering to self.
-              if (!passesProfileFilter(linked, { selectedIds: filterIds, allProfiles: profiles || [], assetPartyLinks })) return;
+              if (!passesProfileFilter(linked, { selectedIds: filterIds, allProfiles: profiles || [], assetPartyLinks, liabilityProfileLinks })) return;
             }
             const sub = ((d as any).type || "Document").toString();
             const dt = d.createdAt ? new Date(d.createdAt).toLocaleDateString() : "";
@@ -7724,7 +7724,7 @@ export default function TrackersPage() {
           const reachOf = new Map<string, Set<string>>();
           if (activeFilterIds) {
             for (const sid of filterIds) {
-              reachOf.set(sid, new Set(pushdownSelection({ selectedIds: [sid], allProfiles: (profiles || []) as any, assetPartyLinks })));
+              reachOf.set(sid, new Set(pushdownSelection({ selectedIds: [sid], allProfiles: (profiles || []) as any, assetPartyLinks, liabilityProfileLinks })));
             }
           }
           const groupsFor = (pid: string): string[] => {

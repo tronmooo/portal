@@ -79,6 +79,15 @@ export function entityDate(type: string, r: any): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
 }
 
+/** The co-ownership tables, so "Linda's" reaches the car and loan she half-owns. */
+async function ownershipLinks(storage: IStorage): Promise<{ assetPartyLinks: any[]; liabilityProfileLinks: any[] }> {
+  const [assetPartyLinks, liabilityProfileLinks] = await Promise.all([
+    Promise.resolve((storage as any).getAssetPartyLinks?.()).catch(() => []),
+    Promise.resolve((storage as any).getLiabilityProfileLinks?.()).catch(() => []),
+  ]);
+  return { assetPartyLinks: Array.isArray(assetPartyLinks) ? assetPartyLinks : [], liabilityProfileLinks: Array.isArray(liabilityProfileLinks) ? liabilityProfileLinks : [] };
+}
+
 /** Derive the affected id set for the criteria. Pure read. */
 export async function deriveBulkSet(
   storage: IStorage,
@@ -112,7 +121,7 @@ export async function deriveBulkSet(
     let rows: any[] = [];
     try { rows = await listP; } catch { continue; }
     const filterCtx = profileId && profiles.length
-      ? { selectedIds: [profileId], allProfiles: profiles }
+      ? { selectedIds: [profileId], allProfiles: profiles, ...(await ownershipLinks(storage)) }
       : null;
     const hits = rows.filter((r: any) => {
       if (needle && !normalize(getEntityName(type, r)).includes(needle)) return false;

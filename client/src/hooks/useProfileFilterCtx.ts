@@ -26,6 +26,16 @@ export function useAssetPartyLinks(): any[] {
   return Array.isArray(data) ? data : EMPTY;
 }
 
+/** The user's liability_profile_links (loan co-ownership), cached for 5 minutes. */
+export function useLiabilityProfileLinks(): any[] {
+  const { data } = useQuery<any[]>({
+    queryKey: ["/api/liability-profile-links"],
+    queryFn: () => apiRequest("GET", "/api/liability-profile-links").then(r => r.json()),
+    staleTime: 5 * 60_000,
+  });
+  return Array.isArray(data) ? data : EMPTY;
+}
+
 type ProfileLite = { id: string; type?: string; parentProfileId?: string | null };
 
 /**
@@ -37,9 +47,11 @@ export function useProfileFilterCtx(
   profiles: ReadonlyArray<ProfileLite> | null | undefined,
 ): ProfileFilterContext {
   const assetPartyLinks = useAssetPartyLinks();
+  const liabilityProfileLinks = useLiabilityProfileLinks();
   return useMemo(() => ({
     selectedIds,
     allProfiles: (profiles || []).map(p => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
     assetPartyLinks,
-  }), [selectedIds, profiles, assetPartyLinks]);
+    liabilityProfileLinks,
+  }), [selectedIds, profiles, assetPartyLinks, liabilityProfileLinks]);
 }

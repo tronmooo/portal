@@ -747,11 +747,12 @@ export class SupabaseStorage implements IStorage {
    */
   private async pushdownIds(profileIds?: string[]): Promise<string[] | undefined> {
     if (!profileIds || profileIds.length === 0) return profileIds;
-    const [allProfiles, assetPartyLinks] = await Promise.all([
+    const [allProfiles, assetPartyLinks, liabilityProfileLinks] = await Promise.all([
       this.memo("getProfilesLite", () => this.getProfilesLite()).catch(() => [] as Profile[]),
       this.getAssetPartyLinks().catch(() => [] as any[]),
+      this.getLiabilityProfileLinks().catch(() => [] as any[]),
     ]);
-    return pushdownSelection({ selectedIds: profileIds, allProfiles: allProfiles as any, assetPartyLinks: assetPartyLinks as any });
+    return pushdownSelection({ selectedIds: profileIds, allProfiles: allProfiles as any, assetPartyLinks: assetPartyLinks as any, liabilityProfileLinks: liabilityProfileLinks as any });
   }
 
   private _applyProfileFilter<Q extends { or: (clause: string) => Q }>(
@@ -3794,8 +3795,10 @@ export class SupabaseStorage implements IStorage {
     const _selfIds = selfIdsFrom(profiles);
     // A person's selection also covers the assets they own or co-own
     // (shared/profile-filter.effectiveSelection), like every other list.
-    const timelineLinks = filterActive ? await this.getAssetPartyLinks().catch(() => [] as any[]) : [];
-    const timelineSelection = filterActive ? effectiveSelection({ selectedIds: profileIds!, allProfiles: profiles as any, assetPartyLinks: timelineLinks as any[] }) : [];
+    const [timelineLinks, timelineLiabLinks] = filterActive
+      ? await Promise.all([this.getAssetPartyLinks().catch(() => [] as any[]), this.getLiabilityProfileLinks().catch(() => [] as any[])])
+      : [[], []];
+    const timelineSelection = filterActive ? effectiveSelection({ selectedIds: profileIds!, allProfiles: profiles as any, assetPartyLinks: timelineLinks as any[], liabilityProfileLinks: timelineLiabLinks as any[] }) : [];
     const matchesProfile = (linked: string[] | null | undefined) => {
       if (!filterActive) return true;
       // Owner chain, same as passesProfileFilter: the car's insurance bill and
@@ -6584,8 +6587,11 @@ export class SupabaseStorage implements IStorage {
     // Use the unified rule (shared/profile-filter.ts) so server stats agree
     // with the client's Finance/Calendar views — see getDashboardEnhanced for
     // the full rationale.
-    const statsAssetLinks = await this.getAssetPartyLinks().catch(() => [] as any[]);
-    const filterCtxStats = { selectedIds: fpIds || [], allProfiles, assetPartyLinks: statsAssetLinks as any[] };
+    const [statsAssetLinks, statsLiabLinks] = await Promise.all([
+      this.getAssetPartyLinks().catch(() => [] as any[]),
+      this.getLiabilityProfileLinks().catch(() => [] as any[]),
+    ]);
+    const filterCtxStats = { selectedIds: fpIds || [], allProfiles, assetPartyLinks: statsAssetLinks as any[], liabilityProfileLinks: statsLiabLinks as any[] };
     const matchesProfile = (linkedProfiles: string[]) =>
       passesProfileFilter(linkedProfiles, filterCtxStats);
     const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
@@ -6890,7 +6896,7 @@ export class SupabaseStorage implements IStorage {
     // selecting the same Me filter — the client was including orphan
     // expenses (no linkedProfiles) under the self profile while the server
     // silently dropped them.
-    const filterCtx = { selectedIds: fpIds || [], allProfiles, assetPartyLinks: allAssetLinks as any[] };
+    const filterCtx = { selectedIds: fpIds || [], allProfiles, assetPartyLinks: allAssetLinks as any[], liabilityProfileLinks: allLiabLinks as any[] };
     const matchesProfileEnhanced = (linkedProfiles: string[]) =>
       passesProfileFilter(linkedProfiles, filterCtx);
     const allTrackers = rawTrackers.filter(t => matchesProfileEnhanced(t.linkedProfiles));

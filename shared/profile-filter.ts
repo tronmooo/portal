@@ -43,6 +43,13 @@ export interface ProfileFilterContext {
    * and documents show for its co-owner the way its expenses always did.
    */
   assetPartyLinks?: ReadonlyArray<AssetPartyLinkLike> | null;
+  /** Liability co-ownership (liability_profile_links): Linda's half of the car loan. */
+  liabilityProfileLinks?: ReadonlyArray<LiabilityProfileLinkLike> | null;
+}
+
+export interface LiabilityProfileLinkLike {
+  liabilityProfileId?: string | null;
+  partyProfileId?: string | null;
 }
 
 /**
@@ -53,9 +60,22 @@ export interface ProfileFilterContext {
 export function effectiveSelection(ctx: ProfileFilterContext): string[] {
   const ids = ctx.selectedIds || [];
   if (ids.length === 0) return ids;
-  const owned = ownedAssetIds(ids, ctx.allProfiles as any, (ctx.assetPartyLinks || []) as any);
-  if (owned.size === 0) return ids;
-  return Array.from(new Set([...ids, ...owned]));
+  const out = new Set<string>([...ids, ...ownedAssetIds(ids, ctx.allProfiles as any, (ctx.assetPartyLinks || []) as any)]);
+  // Co-owned liabilities: the loan's tasks, documents and payments belong to
+  // every party on it, the way the co-owned car's do.
+  const links = ctx.liabilityProfileLinks || [];
+  if (links.length > 0) {
+    const selected = new Set(ids);
+    const byId = new Map((ctx.allProfiles || []).map((p) => [p.id, p] as const));
+    for (const l of links) {
+      if (!l || typeof l.liabilityProfileId !== "string" || typeof l.partyProfileId !== "string") continue;
+      if (!selected.has(l.partyProfileId)) continue;
+      const p = byId.get(l.liabilityProfileId);
+      if (!p || String(p.type) === "liability") out.add(l.liabilityProfileId);
+    }
+  }
+  if (out.size === ids.length) return ids;
+  return Array.from(out);
 }
 
 /**

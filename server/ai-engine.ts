@@ -65,6 +65,16 @@ import { completeHabitOccurrence, uncompleteHabitOccurrence, resolveTrackerForHa
 import { removeTrackerEntry } from "./tracker-entries";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
+
+/** The co-ownership tables for a scoped rule (shared/profile-filter): a
+ * habit on the car Self half-owns is Self's to check in. */
+async function ownershipLinksFor(storage: any): Promise<{ assetPartyLinks: any[]; liabilityProfileLinks: any[] }> {
+  const [a, l] = await Promise.all([
+    Promise.resolve(storage?.getAssetPartyLinks?.()).catch(() => []),
+    Promise.resolve(storage?.getLiabilityProfileLinks?.()).catch(() => []),
+  ]);
+  return { assetPartyLinks: Array.isArray(a) ? a : [], liabilityProfileLinks: Array.isArray(l) ? l : [] };
+}
 import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompletionCount, parseOccurrencePosition } from "@shared/habit-intent";
 import { parseTurnIntent, parseTurnPlan, parseDailyTarget, parseDurationDays, isActionable, type ParsedIntent, type TurnIntentPlan } from "@shared/ai-intent";
 import {
@@ -10894,8 +10904,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const allProfiles = await storage.getProfiles();
         const selfIds = [...selfIdsFrom(allProfiles)];
         if (selfIds.length > 0) {
+          const scopeLinks = await ownershipLinksFor(storage);
           eligible = habits.filter(h =>
-            passesProfileFilter(h.linkedProfiles, { selectedIds: selfIds, allProfiles }));
+            passesProfileFilter(h.linkedProfiles, { selectedIds: selfIds, allProfiles, ...scopeLinks }));
         }
       }
       // Fuzzy, stem-aware match so "mark off my pooping" resolves the "POOP"
@@ -14155,8 +14166,9 @@ async function syncHabitsForTrackerLog(
       // Same ownership rule as checkin_habit: the user's own habits (or the
       // profile this entry was logged for). Never another person's.
       const scopeIds = ctx.targetProfileId ? [ctx.targetProfileId] : [...selfIdsFrom(allProfiles)];
+      const scopeLinks = scopeIds.length > 0 ? await ownershipLinksFor(storage) : { assetPartyLinks: [], liabilityProfileLinks: [] };
       const eligible = scopeIds.length > 0
-        ? allHabits.filter(h => passesProfileFilter(h.linkedProfiles, { selectedIds: scopeIds, allProfiles }))
+        ? allHabits.filter(h => passesProfileFilter(h.linkedProfiles, { selectedIds: scopeIds, allProfiles, ...scopeLinks }))
         : allHabits;
       // Match against the sentence, and against the activity name as a
       // fallback for a report worded differently than the habit. The fallback
@@ -15625,7 +15637,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       storage.getAssetPartyLinks().catch(() => [] as any[]),
       storage.getLiabilityProfileLinks().catch(() => [] as any[]),
     ]);
-    const filterCtx = { selectedIds: profileFilterIds, allProfiles, assetPartyLinks: allAssetLinks };
+    const filterCtx = { selectedIds: profileFilterIds, allProfiles, assetPartyLinks: allAssetLinks, liabilityProfileLinks: allLiabLinks };
     // Entities: same rule the UI and REST APIs use (shared/profile-filter.ts).
     // Orphans (no linkedProfiles) count as self's per the longstanding rule.
     const entityInScope = (e: any) => passesProfileFilter(e?.linkedProfiles, filterCtx);
