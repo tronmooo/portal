@@ -948,3 +948,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Document provenance across a restore — verified (s218)
 
 - Before the fix: B's Kim carried `_docFields` keyed by A's document id, and deleting B's restored licence left the copied expiry behind (3/5). After: keyed by B's new document id, the cascade takes the copy, the calendar shows the expiry once (5/5). s208 (D229 restore of habit links, pairings and co-signers) unchanged 5/5. (User A's replica token had expired mid-run; re-minted with the same subject.)
+
+### Cross-record references across a restore — verified (s219)
+
+- Before: the restored weight goal and streak goal had no `trackerId`/`habitId`; the journal entry had no people (3/5). After: goals point at the restored tracker and habit, the journal entry links the restored Kim, tasks/events/expenses link her too (5/5). Imports are limited to 3 per account per hour, so a third replica account (`local-tester3`) was added for this probe.
