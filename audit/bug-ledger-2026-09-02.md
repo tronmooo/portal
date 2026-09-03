@@ -312,6 +312,12 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### The bell (probe s67) — verified working
+An expired document linked to two people appears once; a document expiring in 10 days, an overdue weekly chore, a bill due today and a person's expired passport field each appear once; completing the chore late leaves no chore entry (its next occurrence is not overdue — D151); deleting the document and paying the bill clear their entries at once despite the 2-minute bell cache.
+
+### Deployment note (05:52 UTC Sep 3)
+Production is at fccd3c3 (D158–D168). Smoke-account probes: p2 11/11 again, p6 5/5 (D158 restored done task with its time, D161 captures persist, D162 foreign capture delete 404, D163 impossible import date refused, D164 non-month cashflow refused). D169 (no-store public viewer) awaits the next deploy; p5 will re-time the unshare then.
+
 ### Artifact public share (probe s66) — verified working
 A made-up token is 404; share issues a 32–64-hex token; the public read needs no auth and returns title/content/items only (no owner or token fields); an edit is visible through the link; sharing again keeps the token; user B cannot share or unshare A's artifact and A's link stays live; unshare revokes it (404) and re-sharing issues a new token; a deleted artifact's link goes dark. The public route allows 10 reads a minute per IP (the first probe run tripped it). Noted, by design: artifact delete is permanent (no restore route); chat undo of a delete recreates it from the ledger's snapshot.
 
