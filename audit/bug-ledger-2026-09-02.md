@@ -355,6 +355,9 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
+### A policy's renewal on the calendar (probe s157) — verified working
+The renewal shows once on its date, moving it moves the calendar item with no leftover, an impossible day is refused, and deleting the policy removes the item.
+
 ### An insurance policy as the form creates it (probe s156) — verified working
 Created as an asset with a premium, frequency and renewal date: total asset value and net worth are unchanged (a policy is not worth its premium), the renewal date shows on the calendar, and the premium counts in no money surface (monthly obligations unchanged) — the product question stands under open items.
 
