@@ -1063,3 +1063,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - Replica after a dozen cron runs today: 150 snapshot rows for today with no duplicate (user, profile, day) key; no bill has more than one open "Bill due" reminder. Observation: with dated notice ids (D244) the `dismissed_notifications` preference grows by one id per dismissed day and is never pruned — small strings, unbounded in principle; a prune-on-read of ids no longer in the list would keep it flat. Not changed.
 - Full suite after the create_tracker guard: 260 files / 4667 tests green.
 - Replica after the last build: s209 15/15, s213 3/3, s225 5/5, s226 2/2.
+- Full suite after the non-tool caller guards: 260 files / 4667 tests green.
