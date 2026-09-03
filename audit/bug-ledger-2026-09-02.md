@@ -490,6 +490,14 @@ The 16 GB sandbox restarted twice (OOM) when a production build, the full vitest
 ### Replica caveat found this round
 The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production has them — "verified live 2026-06-10" in the storage comments), so until they were added locally every guarded edit compared against a version that never moved. Installed a generic touch trigger on all 30 tables that carry the column before re-testing D90. No client sends `expectedUpdatedAt` today; the fix makes the existing server contract usable and atomic.
 
+### Open items added 2026-09-03
+- The weekly-review and net-worth-snapshot crons still build each user's storage without a timezone (default zone); a stored timezone preference would close this.
+- Bulk delete "before <date>" matches an undated row by its creation date (pinned by tests; the preview lists the rows first) — left as designed.
+- A `spending_limit` goal counts the whole account's spend in its category, not only the goal owner's — left as designed, noted for the owner.
+- `longestStreak` is an all-time record and an undo never lowers it — documented design.
+- Chat "undo" of an artifact delete recreates it from the ledger's snapshot; there is no artifact trash.
+- Production carries `trackers_name_backup_20260824` and `rename_backup_bob_20260825` without RLS (see the advisory above) — for the owner to drop or lock.
+
 ### Open / not attempted this round
 - The weekly-review cron builds each user's scoped storage without a timezone (the app only learns it from the request header), so cron-generated reviews use the default zone; the manual generate route and the review content are correct for the requesting user. A stored timezone preference would close this.
 - Backup/restore (D129) still does not carry `entity_links` (the relationship graph) nor a goal's `trackerId`/`habitId` or a bill's `linkedLiabilityId`: those reference non-profile rows whose new ids the import does not record. Needs an id map for every imported entity before the links can be rewritten.
