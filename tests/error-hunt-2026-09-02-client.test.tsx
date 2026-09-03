@@ -160,3 +160,4 @@ describe("item 9: CalendarManagerPanel Manage tab reads under the active profile
     expect(qc.getQueryData(["/api/obligations"])).toBeUndefined();
   });
 });
+

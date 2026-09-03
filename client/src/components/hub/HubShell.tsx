@@ -7,7 +7,7 @@
 //
 // Tabs NAVIGATE between existing routes (see hub-routes.ts) — the shell holds
 // no page state, and removing it reverts the app to the pre-hub behavior.
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 // hashNavigate (NOT wouter navigate) — tab routes carry queries ("/linked?tab=assets")
@@ -31,8 +31,17 @@ export function HubShell() {
   // at the previously-selected profile's personal details while every other tab
   // re-aggregated. Correct the URL instead of rendering a stale scope. Replace,
   // don't push, so Back doesn't bounce between the two.
+  // Only a SCOPE change corrects the URL. Running this on every location
+  // change too meant that opening any person's Info page (from search, the
+  // bell, the people grid, a link) while scoped to someone else was replaced
+  // at once by the scoped person's page — every person but the selected one
+  // was unreachable, and the dispatcher deliberately does not repoint the
+  // scope when a person is opened.
   const selectedKey = [...scope.selectedIds].join(",");
+  const lastSelectedKey = useRef(selectedKey);
   useEffect(() => {
+    if (lastSelectedKey.current === selectedKey) return;
+    lastSelectedKey.current = selectedKey;
     const target = reconcileInfoRoute(location, [...scope.selectedIds]);
     if (target) hashReplace(target);
     // eslint-disable-next-line react-hooks/exhaustive-deps
