@@ -16,6 +16,8 @@
  * excluded, what is uncertain, and whether the period is still running.
  */
 
+import { storage } from "./storage";
+import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import {
@@ -181,7 +183,9 @@ function disclosure(
   extra: Record<string, unknown> = {},
 ) {
   const freshness = dataFreshness(accounts);
-  const today = new Date().toISOString().slice(0, 10);
+  // The user's own day: at 5 PM Pacific the UTC day had rolled, so a period
+  // ending today was called complete an evening early (D218 class).
+  const today = getUserToday((storage as any)._timezone || DEFAULT_TIMEZONE);
   return {
     date_range: { start: scope.startDate ?? null, end: scope.endDate ?? null },
     accounts_in_scope: accounts.map((a) => ({

@@ -266,7 +266,8 @@ async function syncLiabilityObligation(profileId: string): Promise<void> {
       amount: monthly,
       frequency: "monthly",
       category,
-      nextDueDate: nextDueDate || new Date().toISOString().slice(0, 10),
+      // The user's own day, not the UTC day (D218 class).
+      nextDueDate: nextDueDate || getUserToday((storage as any)._timezone || DEFAULT_TIMEZONE),
       autopay: false,
       linkedProfiles: [profileId],
       notes: "Auto-created from liability monthly payment",
