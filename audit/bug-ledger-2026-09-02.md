@@ -855,3 +855,4 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - flows21 (D225 UI): on the habits page, tapping the check-in segment of a weekly habit on a non-Monday records the check-in and, after the optimistic "complete!", shows "recorded — not one of its scheduled days" (4/4, no page errors).
 - Sweep after D225: no other client mutation returns a raw Response to an onSuccess that reads fields off it (regex sweep of client/src, 0 hits).
 - s198 (off-schedule check-in lifecycle): the check-in is recorded and flagged, the streak stays 0, it is mirrored into the habit's tracker, and undoing it removes both the check-in and the mirrored entry (5/5).
+- s199 after D226: logging on the habit's linked tracker completes the habit (streak 1) and deleting that entry un-completes it (streak 0) (4/4). s198 (5/5) and s161 (4/4) unchanged.
