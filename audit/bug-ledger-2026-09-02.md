@@ -1147,3 +1147,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - s247 (3/3): this month's spend agrees across `/api/stats`, the dashboard snapshot and the expense list for everyone, for Self and for a person who shares one expense.
 - s248 (3/3): a "Groceries" cap is stored under the food bucket, a "Groceries" expense folds into food, and the dashboard's food spend includes both, so the cap meets the spend.
 - s249 (by design): a `tracker_target` goal reads the tracker's latest value (a level goal such as a weight target); cumulative distance is the `fitness_distance` type. Deleting or editing the latest entry moves the goal accordingly.
+- s250 (5/5): a one-field profile PATCH keeps the other fields, tags and notes; a notes-only PATCH leaves fields alone; an empty `fields` PATCH wipes nothing; a null field clears only that field; a task priority PATCH keeps its date, time, links, tags and description.
