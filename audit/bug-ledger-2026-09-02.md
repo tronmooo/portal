@@ -1159,3 +1159,9 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - Full suite after D263: 260 files / 4693 tests green.
 - Same-class sweep for D263: the other client preference writers (attention-filter config, dashboard layout, AI and reminder toggles) write a single scalar or one whole config with last-write-wins semantics and no accumulated list — not the lost-update pattern.
 - Browser flows on the D263 build: flows15 7/7, flows21 4/4, flows24 5/5, flows27 5/5, flows28 3/3. The chat `dismiss_notifications` tool now uses the same server-side merge.
+
+### Production re-verification on 555b88a — verified (p14, p15)
+
+- Deployed 23:40 UTC (sha 555b88a, everything through D263). p14 (5/6): D245 an unknown graph root answers 404; D244 the bell notice id ends with the due date; D253 a two-payment plan is ended with no next due date after the second payment; D254 a ChatGPT import overwrote a hand-set cap in place and undo restored 300 with its note; D263 two dismiss calls merge on the server. The one miss was p14's D261 check reading statuses only: on Vercel the two requests ran one after the other (200/200, no overlap, the second planned the cap as an update).
+- p15 (2/2): six transactions committed twice concurrently → 409 + 200, six expense rows for six; both batches undone and cleaned.
+- Verified on the replica and by tests only: D255–D260 (weekly-review cron, warm-up, cron cache invalidation, admin cleanup, overlapping cron runs — the production crons cannot be fired without their secret) and the client-only rows D246–D249 and D262.
