@@ -8793,7 +8793,12 @@ export class SupabaseStorage implements IStorage {
         return this._rowToCapture(inserted);
       }
     }
-    const capture = this._rowToCapture(row);
+    // No `captures` table on this deployment (the 20260615 migration has not
+    // run): the row lives only in this process's memory. The chat pipeline
+    // treats a capture as best-effort and carries on; the public route reads
+    // this marker and refuses instead of answering 200 for a record that is
+    // gone on the next request.
+    const capture = { ...this._rowToCapture(row), ephemeral: true as const };
     this._captures.set(capture.id, capture);
     return capture;
   }
@@ -8829,12 +8834,15 @@ export class SupabaseStorage implements IStorage {
 
   async deleteCapture(id: string) {
     if (!this._capturesTableMissing) {
-      const { error } = await this.supabase.from("captures").delete().eq("id", id).eq("user_id", this.userId);
+      // `.select` so a delete that matched no row (another user's id, a
+      // missing id) reports false and the route answers 404 — it used to
+      // answer success for a row that was never this user's to delete.
+      const { data, error } = await this.supabase.from("captures").delete().eq("id", id).eq("user_id", this.userId).select("id");
       if (error) {
         if (this._isMissingTable(error)) { this._capturesTableMissing = true; }
         else { throw error; }
       } else {
-        return true;
+        return Array.isArray(data) && data.length > 0;
       }
     }
     return this._captures.delete(id);

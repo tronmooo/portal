@@ -622,3 +622,35 @@ describe("D160: 'undo' of a profile edit re-applies the before-state including a
     expect(after).not.toHaveProperty("email");
   });
 });
+
+// ─── D161: a capture that could not be stored is not reported as saved ──────
+describe("D161: POST /api/captures answers 503 when the storage could only keep the row in memory", () => {
+  it("ephemeral → 503 and no id; a persisted row → 201/200 with the row", async () => {
+    let ephemeral = true;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getSelfProfile = async () => ({ id: "self-1", type: "self", name: "Me" });
+      storage.createCapture = async (d: any) => ({ id: "cap-1", ...d, ...(ephemeral ? { ephemeral: true } : {}) });
+    });
+    const lost = await h.api("POST", "/api/captures", { type: "note", title: "x", rawInput: "hello" });
+    expect(lost.status).toBe(503);
+    expect(lost.data.error).toMatch(/captures table is missing/);
+    expect(lost.data.id).toBeUndefined();
+    ephemeral = false;
+    const kept = await h.api("POST", "/api/captures", { type: "note", title: "x", rawInput: "hello" });
+    expect([200, 201]).toContain(kept.status);
+    expect(kept.data.id).toBe("cap-1");
+  });
+});
+
+// ─── D162: deleting a capture that is not yours reports false ───────────────
+describe("D162: deleteCapture answers what the database did", () => {
+  it("no matching row → false; one row → true; the user filter is on the delete", async () => {
+    const { client, calls } = chainClient((table, op) => table === "captures" && op === "delete" ? { data: [], error: null } : { data: [], error: null });
+    const s = bareStorage({ supabase: client, _captures: new Map() });
+    expect(await s.deleteCapture("cap-1")).toBe(false);
+    const del = calls.find((c) => c.table === "captures" && c.op === "delete")!;
+    expect(del.filters).toEqual(expect.arrayContaining([["eq", ["id", "cap-1"]], ["eq", ["user_id", s.userId]]]));
+    const { client: c2 } = chainClient((table, op) => table === "captures" && op === "delete" ? { data: [{ id: "cap-1" }], error: null } : { data: [], error: null });
+    expect(await bareStorage({ supabase: c2, _captures: new Map() }).deleteCapture("cap-1")).toBe(true);
+  });
+});

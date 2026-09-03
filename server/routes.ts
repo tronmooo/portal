@@ -1243,7 +1243,14 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
     try {
       await fn(req, res, next);
     } catch (err: any) {
-      log.error(`[API Error] ${req.method} ${req.path}:`, err?.message || err);
+      // A PostgREST error is a plain object whose enumerable fields are
+      // message/code/details/hint — `err?.message || err` printed "{}" for
+      // any thrown value whose message was empty, which hid the cause of every
+      // storage 500 from the log.
+      const errText = err?.message || err?.details || err?.code
+        ? [err?.code, err?.message, err?.details, err?.hint].filter(Boolean).join(" — ")
+        : (typeof err === "string" ? err : (() => { try { return JSON.stringify(err); } catch { return String(err); } })());
+      log.error(`[API Error] ${req.method} ${req.path}:`, errText);
       if (!res.headersSent) {
         // Honor explicit client-error status codes thrown by lower layers
         // (e.g. the storage layer's optimistic-concurrency ConflictError sets
@@ -11040,6 +11047,12 @@ No emojis. No prose outside the JSON.`,
       if (self) ownerProfileId = self.id;
     }
     const capture = await storage.createCapture({ ...parsed.data, ownerProfileId });
+    // A capture that could not be stored (no `captures` table on this
+    // deployment) must not be reported as saved: it answered 200 with an id
+    // that GET and DELETE then could not find.
+    if ((capture as any)?.ephemeral) {
+      return res.status(503).json({ error: "Captures are not set up on this deployment (the captures table is missing); nothing was saved" });
+    }
     res.json(capture);
   }));
 
