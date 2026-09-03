@@ -6564,6 +6564,8 @@ Rules:
     res.json({ ok: true, profileId, recordCount: validation.recordCount, plan });
   }));
 
+  /** A restore or import that has not released its lock in this long is treated as dead. */
+  const IMPORT_LOCK_TTL_MS = 10 * 60 * 1000;
   // Validate + commit atomically. Re-validates server-side (never trusts the client preview).
   app.post("/api/finance-import/commit", asyncHandler(async (req, res) => {
     const profileId = await resolveImportProfileId(req);
@@ -6572,13 +6574,23 @@ Rules:
     if (!validation.ok || !validation.data) {
       return res.status(422).json({ ok: false, errors: validation.errors });
     }
-    const tz = getTimezone(req);
-    const clock = { month: getUserCurrentMonth(tz), today: getUserToday(tz) };
-    const plan = await planImport(storage, validation.data, profileId, clock);
-    const result = await applyImport(storage, validation.data, profileId, plan, clock);
-    // `failed` names the records the commit could not write (the batch is
-    // still recorded and undoable for everything that landed).
-    res.json({ ok: result.failed.length === 0, batchId: result.batchId, summary: result.summary, failed: result.failed, plan, profileId });
+    // One commit at a time per account (D261): the plan's duplicate check
+    // reads the account as it was when the run started, so two commits of
+    // one payload running together each wrote every transaction.
+    if (!(await storage.acquireUserLock("finance-import", IMPORT_LOCK_TTL_MS))) {
+      return res.status(409).json({ ok: false, error: "An import is already being applied to this account. Wait for it to finish, then review the result before importing again." });
+    }
+    try {
+      const tz = getTimezone(req);
+      const clock = { month: getUserCurrentMonth(tz), today: getUserToday(tz) };
+      const plan = await planImport(storage, validation.data, profileId, clock);
+      const result = await applyImport(storage, validation.data, profileId, plan, clock);
+      // `failed` names the records the commit could not write (the batch is
+      // still recorded and undoable for everything that landed).
+      res.json({ ok: result.failed.length === 0, batchId: result.batchId, summary: result.summary, failed: result.failed, plan, profileId });
+    } finally {
+      await storage.releaseUserLock("finance-import").catch(() => {});
+    }
   }));
 
   // Import history (most recent first).
@@ -8942,8 +8954,6 @@ Rules:
     }
   }));
 
-  /** A restore that has not released its lock in this long is treated as dead. */
-  const IMPORT_LOCK_TTL_MS = 10 * 60 * 1000;
   app.post("/api/import", asyncHandler(async (req, res) => {
     try {
       const importUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';

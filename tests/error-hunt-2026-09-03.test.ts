@@ -3079,3 +3079,17 @@ describe("D261 a backup restore submitted twice at once is applied once", () => 
     expect(later.status).toBe(200);
   });
 });
+
+// ── D261 (related system): the ChatGPT finance import commit takes the same per-account lock.
+describe("D261 finance-import commit is serialised per account", () => {
+  it("acquires the lock before planning and releases it after", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    const a = src.indexOf('app.post("/api/finance-import/commit"'); const b = src.indexOf('app.get("/api/finance-import/history"', a);
+    const block = src.slice(a, b);
+    const lock = block.indexOf('acquireUserLock("finance-import"');
+    expect(lock).toBeGreaterThan(0);
+    expect(block.indexOf("planImport(")).toBeGreaterThan(lock);
+    expect(block).toContain('releaseUserLock("finance-import")');
+    expect(block).toContain("status(409)");
+  });
+});
