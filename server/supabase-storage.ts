@@ -5194,7 +5194,12 @@ export class SupabaseStorage implements IStorage {
       const profiles = await this.getProfiles();
       let bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey));
       if (profileIds && profileIds.length > 0) {
-        const set = new Set(profileIds);
+        // The raw selection only matched a bill or its immediate parent, so a
+        // co-owned car's insurance (D120) or a bill two levels down (bill →
+        // car → Mike) vanished from the scoped dashboard snapshot and stats
+        // while /api/obligations (which filters after mapping) listed it.
+        // pushdownIds is the same widening every other scoped read uses.
+        const set = new Set((await this.pushdownIds(profileIds)) || profileIds);
         bills = bills.filter((p: any) => set.has(p.id) || (p.parentProfileId && set.has(p.parentProfileId)));
       }
       if (bills.length === 0) return [];

@@ -1055,3 +1055,32 @@ describe("D131: tracker entries cannot be dated in the future", () => {
     await expect(s.updateTrackerEntry("tr-1", "e1", { timestamp: nextWeek })).rejects.toMatchObject({ statusCode: 400 });
   });
 });
+
+// D133 — the scoped bill list behind the dashboard snapshot and stats matched
+// only the raw selection or a bill's immediate parent.
+describe("D133: scoped getObligations reaches a co-owned car's bill and a bill nested two levels down", () => {
+  const profiles = [
+    { id: "self", type: "self", name: "Me" },
+    { id: "mike", type: "person", name: "Mike" },
+    { id: "linda", type: "person", name: "Linda" },
+    { id: "car-1", type: "vehicle", name: "Honda", parentProfileId: "self" },
+    { id: "truck-1", type: "vehicle", name: "Truck", parentProfileId: "mike" },
+    { id: "bill-car", type: "liability", type_key: "utility", name: "Car insurance", parentProfileId: "car-1", fields: { monthlyAmount: 118, dueDate: "2026-09-22", frequency: "monthly" } },
+    { id: "bill-truck", type: "liability", type_key: "utility", name: "Truck insurance", parentProfileId: "truck-1", fields: { monthlyAmount: 90, dueDate: "2026-09-10", frequency: "monthly" } },
+    { id: "bill-self", type: "liability", type_key: "utility", name: "Internet", parentProfileId: "self", fields: { monthlyAmount: 60, dueDate: "2026-09-05", frequency: "monthly" } },
+  ];
+  function billStorage(links: any[]) {
+    const { client } = chainClient(() => ({ data: [], error: null }));
+    return bareStorage({ supabase: client, getProfiles: async () => profiles, getProfilesLite: async () => profiles, getAssetPartyLinks: async () => links, getLiabilityProfileLinks: async () => [] });
+  }
+  it("Linda (co-owner of the car) gets the car's bill; Mike gets the bill under his truck", async () => {
+    const s = billStorage([{ id: "apl", assetProfileId: "car-1", partyProfileId: "linda", ownershipPercentage: 50 }]);
+    expect((await s.getObligations(["linda"])).map((o: any) => o.name)).toEqual(["Car insurance"]);
+    expect((await s.getObligations(["mike"])).map((o: any) => o.name)).toEqual(["Truck insurance"]);
+    expect((await s.getObligations(["self"])).map((o: any) => o.name).sort()).toEqual(["Car insurance", "Internet"]);
+  });
+  it("without the link Linda gets nothing", async () => {
+    const s = billStorage([]);
+    expect(await s.getObligations(["linda"])).toEqual([]);
+  });
+});
