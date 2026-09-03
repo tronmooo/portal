@@ -5,6 +5,7 @@ import type {
 } from "@shared/schema";
 import { MOOD_SCORES } from "@shared/schema";
 import { getUserToday, addDays as tzAddDays, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords } from "@shared/date-rules";
 import {
   currentMonthYM,
   previousMonthYM,
@@ -46,7 +47,7 @@ export function generateSmartInsights(data: InsightsInput, timezone: string = DE
   analyzeTasks(data.tasks, now, insights, todayStr, timezone);
 
   // --- Document Expirations ---
-  analyzeDocuments(data.documents, data.profiles, now, insights);
+  analyzeDocuments(data.documents, data.profiles, todayStr, insights);
 
   // --- Goal Progress ---
   analyzeGoals(data.goals, now, insights);
@@ -242,55 +243,46 @@ function analyzeTasks(tasks: Task[], now: Date, insights: Insight[], todayStr: s
 
 // ─── Documents ───────────────────────────────────────────────────────────────
 
-function analyzeDocuments(documents: Document[], profiles: Profile[], now: Date, insights: Insight[]) {
-  const expirationKeywords = ["expir", "exp date", "exp_date", "expdate", "valid until", "valid through", "valid_until", "valid_through", "expires", "expiration"];
-
-  const checkFields = (fields: Record<string, any>, entityId: string, entityType: string, entityName: string) => {
-    for (const [key, value] of Object.entries(fields)) {
-      if (!value || typeof value !== "string") continue;
-      const keyLower = key.toLowerCase();
-      if (!expirationKeywords.some(kw => keyLower.includes(kw))) continue;
-      const expDate = parseFlexDate(value);
-      if (!expDate) continue;
-      const diff = daysDiff(expDate, now);
-      if (diff < 0) {
-        insights.push({
-          id: randomUUID(),
-          type: "reminder",
-          title: `Expired: ${entityName}`,
-          description: `${key} expired ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago (${value})`,
-          severity: "negative",
-          relatedEntityType: entityType,
-          relatedEntityId: entityId,
-          data: { field: key, date: value, daysOverdue: Math.abs(diff) },
-          createdAt: now.toISOString(),
-        });
-      } else if (diff <= 30) {
-        insights.push({
-          id: randomUUID(),
-          type: "reminder",
-          title: `${diff <= 7 ? "Expiring soon" : "Expiring"}: ${entityName}`,
-          description: `${key} expires in ${diff} day${diff !== 1 ? "s" : ""} (${value})`,
-          severity: diff <= 7 ? "warning" : "info",
-          relatedEntityType: entityType,
-          relatedEntityId: entityId,
-          data: { field: key, date: value, daysUntil: diff },
-          createdAt: now.toISOString(),
-        });
-      }
-    }
-  };
-
-  for (const doc of documents) {
-    if (doc.extractedData && typeof doc.extractedData === "object") {
-      checkFields(doc.extractedData, doc.id, "document", doc.name);
-    }
-  }
-  for (const profile of profiles) {
-    // Skip self profile — self's expiration fields are usually driver's license data, not meaningful alerts
-    if (profile.type === "self") continue;
-    if (profile.fields && typeof profile.fields === "object") {
-      checkFields(profile.fields as Record<string, any>, profile.id, "profile", profile.name);
+function analyzeDocuments(documents: Document[], profiles: Profile[], todayStr: string, insights: Insight[]) {
+  // The ONE Date Rule engine, the same selection the bell makes
+  // (`isAlertDateRule`). This used to be a private ten-spelling expiry keyword
+  // list over `extractedData`/`fields`, which every insurance policy's
+  // `renewal_date` and every membership's `contract_end_date` slipped past,
+  // and it counted days from the SERVER clock: at 5 PM Pacific a document
+  // expiring today already read "expired 1 day ago".
+  const now = new Date();
+  for (const rule of rulesFromAll({ profiles, documents })) {
+    if (!rule.active || !isAlertDateRule(rule)) continue;
+    const diff = daysBetweenISO(todayStr, rule.date);
+    if (diff > 30) continue;
+    const [pastTitle, soonTitle, laterTitle, futureVerb, pastVerb] = dateRuleAlertWords(rule.ruleType);
+    const isDoc = rule.sourceEntityType === "document";
+    const key = rule.sourcePath || rule.sourceField;
+    const name = rule.subtitle || rule.label;
+    const shown = rule.rawValue || rule.date;
+    const base = {
+      id: randomUUID(),
+      type: "reminder" as const,
+      relatedEntityType: isDoc ? "document" : "profile",
+      relatedEntityId: rule.sourceEntityId,
+      createdAt: now.toISOString(),
+    };
+    if (diff < 0) {
+      insights.push({
+        ...base,
+        title: `${pastTitle}: ${name}`,
+        description: `${key} ${pastVerb} ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago (${shown})`,
+        severity: "negative",
+        data: { field: key, date: shown, daysOverdue: Math.abs(diff), ruleType: rule.ruleType },
+      });
+    } else {
+      insights.push({
+        ...base,
+        title: `${diff <= 7 ? soonTitle : laterTitle}: ${name}`,
+        description: `${key} ${futureVerb} ${diff === 0 ? "today" : `in ${diff} day${diff !== 1 ? "s" : ""}`} (${shown})`,
+        severity: diff <= 7 ? "warning" : "info",
+        data: { field: key, date: shown, daysUntil: diff, ruleType: rule.ruleType },
+      });
     }
   }
 }
@@ -589,27 +581,6 @@ function analyzeTrackerStaleness(trackers: Tracker[], now: Date, insights: Insig
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function parseFlexDate(val: string): Date | null {
-  if (!val || typeof val !== "string") return null;
-  const trimmed = val.trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
-    const d = new Date(trimmed);
-    return isNaN(d.getTime()) ? null : d;
-  }
-  const slashMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (slashMatch) {
-    const d = new Date(Number(slashMatch[3]), Number(slashMatch[1]) - 1, Number(slashMatch[2]));
-    return isNaN(d.getTime()) ? null : d;
-  }
-  const dashMatch = trimmed.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
-  if (dashMatch) {
-    const d = new Date(Number(dashMatch[3]), Number(dashMatch[1]) - 1, Number(dashMatch[2]));
-    return isNaN(d.getTime()) ? null : d;
-  }
-  const d = new Date(trimmed);
-  return isNaN(d.getTime()) ? null : d;
-}
 
 function daysDiff(dateA: Date, dateB: Date): number {
   const a = new Date(dateA); a.setHours(0, 0, 0, 0);

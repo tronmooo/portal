@@ -363,6 +363,42 @@ export function isDocumentAttentionRule(
 }
 
 /**
+ * Does this rule belong in an ALERT surface — the notification bell and the
+ * dashboard's insight cards? Something running out anywhere (expiration, end,
+ * cancellation), a renewal, a deadline — and, on a DOCUMENT, anything it says
+ * is due (a parking citation). Money dates on a PROFILE (`payment`, `due`)
+ * belong to the bills surface, and a profile's maintenance or appointment
+ * dates are calendar entries, so neither raises an alert here.
+ *
+ * Wider than `isDocumentAttentionRule` on purpose: that list is "documents
+ * about to lapse", where a renewal does not belong because the thing carries
+ * on. An alert is about ACTING before a date, and every insurance definition
+ * in the app names its only date `renewal_date` — a policy renewing in two
+ * days, or lapsed three days ago, is exactly what a bell is for.
+ */
+export function isAlertDateRule(
+  rule: { ruleType: DateRuleType; sourceEntityType?: DateRuleSourceType },
+): boolean {
+  if (ALERT_RULE_TYPES.has(rule.ruleType)) return true;
+  return rule.sourceEntityType === "document" && DOCUMENT_DUE_RULE_TYPES.has(rule.ruleType);
+}
+const ALERT_RULE_TYPES = new Set<DateRuleType>(["expiration", "end", "cancellation", "renewal", "deadline"]);
+
+/**
+ * How an alert reads for each kind of date:
+ * `[past title, ≤7-day title, later title, future verb, past verb]`.
+ */
+export function dateRuleAlertWords(ruleType: DateRuleType): [string, string, string, string, string] {
+  return ALERT_WORDS[ruleType] || ["Overdue", "Due soon", "Due", "is due", "was due"];
+}
+const ALERT_WORDS: Partial<Record<DateRuleType, [string, string, string, string, string]>> = {
+  expiration: ["Expired", "Expiring soon", "Expiring", "expires", "expired"],
+  end: ["Ended", "Ending soon", "Ending", "ends", "ended"],
+  cancellation: ["Cancelled", "Cancelling soon", "Cancelling", "cancels", "was cancelled"],
+  renewal: ["Renewal passed", "Renews soon", "Renewing", "renews", "was due to renew"],
+};
+
+/**
  * The verb a countdown on this kind of date reads with — so a due date says
  * "Due in 31 days" and never "Expires in 31 days". `[future, past]`.
  */

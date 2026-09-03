@@ -4400,7 +4400,13 @@ ${JSON.stringify(ctx, null, 2)}`;
       const filterCtx = await profileFilterCtx(ids, allProfiles);
       const mp = (linked: string[] | null | undefined) =>
         !filterActive || passesProfileFilter(linked, filterCtx);
-      const profiles = allProfiles;
+      // Profiles go through the filter too — on the profile AND its parent,
+      // exactly as the Executive tab scopes expirations. They were passed
+      // unfiltered, so under Linda's scope the insight cards still carried
+      // every other profile's expiring warranty and lapsed policy while the
+      // documents beside them were scoped.
+      const profiles = allProfiles.filter(p =>
+        mp([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
       const trackers = allTrackers.filter(t => mp(t.linkedProfiles));
       const tasks = allTasks.filter(t => mp(t.linkedProfiles));
       const expenses = allExpenses.filter(e => mp(e.linkedProfiles));

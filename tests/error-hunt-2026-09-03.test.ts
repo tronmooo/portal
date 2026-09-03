@@ -1691,3 +1691,53 @@ describe("D208: a policy's renewal_date reaches the bell like a document's expir
     expect(list.filter((n) => n.type === "document_expiring")).toHaveLength(1);
   });
 });
+
+// ─── D209/D210: the insight cards read the same dates, in the user's day, in scope ─
+import { vi } from "vitest";
+import { generateSmartInsights } from "../server/insights-engine";
+describe("D209: insight cards read the date-rules engine, in the user's day", () => {
+  const empty = { profiles: [], trackers: [], tasks: [], expenses: [], habits: [], obligations: [], journal: [], documents: [], goals: [], events: [] };
+  it("a policy's renewal_date and a membership's contract end raise cards; a start date does not", () => {
+    const today = getUserToday(TZ);
+    const insights = generateSmartInsights({ ...empty, profiles: [
+      { id: "p-auto", type: "asset", type_key: "auto_insurance", name: "Geico", fields: { renewal_date: tzAddDays(today, 2) } },
+      { id: "p-gym", type: "asset", type_key: "gym_membership", name: "24 Hour", fields: { contract_end_date: tzAddDays(today, -1) } },
+      { id: "p-water", type: "asset", type_key: "utility", name: "Water", fields: { start_date: tzAddDays(today, 1) } },
+    ] } as any, TZ);
+    const titles = insights.filter((i) => i.type === "reminder").map((i) => i.title);
+    expect(titles).toContain("Renews soon: Geico");
+    expect(titles).toContain("Ended: 24 Hour");
+    expect(titles.some((t) => t.includes("Water"))).toBe(false);
+  });
+  it("counts the days from the user's today, not the server clock", () => {
+    vi.useFakeTimers();
+    try {
+      // 02:00 UTC on Sep 4 is 7 PM on Sep 3 in Los Angeles.
+      vi.setSystemTime(new Date("2026-09-04T02:00:00Z"));
+      const insights = generateSmartInsights({ ...empty, documents: [
+        { id: "d-1", name: "Passport", type: "identity", extractedData: { expirationDate: "2026-09-03" } },
+      ] } as any, TZ);
+      const card = insights.find((i) => i.relatedEntityId === "d-1");
+      expect(card?.severity).toBe("warning");
+      expect(card?.description).toMatch(/expires today/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+describe("D210: /api/insights scopes profile dates like everything else", () => {
+  it("under Linda's scope, Self's laptop warranty is not a card", async () => {
+    const today = getUserToday(TZ);
+    h = await boot({ profiles: [
+      { id: "self-1", type: "self", name: "Me" },
+      { id: "linda-1", type: "person", name: "Linda", parentProfileId: "self-1", fields: {} },
+      { id: "laptop-1", type: "asset", type_key: "electronics", name: "Laptop", parentProfileId: "self-1", fields: { warranty_expiry: tzAddDays(today, 3) } },
+    ] });
+    const all = await h.api("GET", "/api/insights");
+    expect(all.status).toBe(200);
+    expect(all.data.some((i: any) => i.relatedEntityId === "laptop-1")).toBe(true);
+    const scoped = await h.api("GET", "/api/insights?profileIds=linda-1");
+    expect(scoped.status).toBe(200);
+    expect(scoped.data.some((i: any) => i.relatedEntityId === "laptop-1")).toBe(false);
+  });
+});

@@ -11,7 +11,7 @@ import { getUserToday, parseLocalDate } from "@shared/timezone";
 import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "@shared/recurring-dates";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
-import { rulesFromAll, daysBetweenISO, DOCUMENT_DUE_RULE_TYPES, type DateRuleType } from "@shared/date-rules";
+import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords } from "@shared/date-rules";
 
 export interface AppNotification {
   id: string;
@@ -115,30 +115,12 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   // engine classifies every spelling and every value format the calendar does,
   // so the bell now sees exactly what the calendar sees for these types.
   //
-  // What counts: something running out (expiration, end, cancellation), a
-  // renewal, a deadline — and, on a DOCUMENT, anything it says is due (a
-  // parking citation). Money dates on a PROFILE (`payment`, `due`) stay with
-  // the bills surface below, exactly as the Executive tab keeps them;
-  // maintenance and appointment dates on a profile are calendar entries, not
-  // bell alarms.
-  const BELL_RULE_TYPES = new Set<DateRuleType>(["expiration", "end", "cancellation", "renewal", "deadline"]);
-  // [past title, ≤7-day title, ≤30-day title, future verb, past verb]
-  const BELL_WORDS: Partial<Record<DateRuleType, [string, string, string, string, string]>> = {
-    expiration: ["Expired", "Expiring soon", "Expiring", "expires", "expired"],
-    end: ["Ended", "Ending soon", "Ending", "ends", "ended"],
-    cancellation: ["Cancelled", "Cancelling soon", "Cancelling", "cancels", "was cancelled"],
-    renewal: ["Renewal passed", "Renews soon", "Renewing", "renews", "was due to renew"],
-    deadline: ["Overdue", "Due soon", "Due", "is due", "was due"],
-    due: ["Overdue", "Due soon", "Due", "is due", "was due"],
-    payment: ["Overdue", "Due soon", "Due", "is due", "was due"],
-    maintenance: ["Overdue", "Due soon", "Due", "is due", "was due"],
-  };
+  // What counts is `isAlertDateRule` (shared/date-rules) — the one answer the
+  // dashboard's insight cards read too.
   for (const rule of rulesFromAll({ profiles, documents })) {
-    if (!rule.active) continue;
+    if (!rule.active || !isAlertDateRule(rule)) continue;
     const isDoc = rule.sourceEntityType === "document";
-    if (!BELL_RULE_TYPES.has(rule.ruleType) && !(isDoc && DOCUMENT_DUE_RULE_TYPES.has(rule.ruleType))) continue;
-    const words = BELL_WORDS[rule.ruleType];
-    if (!words) continue;
+    const words = dateRuleAlertWords(rule.ruleType);
     const diff = daysBetweenISO(todayStr, rule.date);
     if (diff > 30) continue;
     // The PATH, so a nested date keeps a stable id; for a top-level field it is
