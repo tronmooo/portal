@@ -1003,3 +1003,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Deleting a tracker a habit mirrors into — verified (s227)
 
 - The habit is unlinked (no dangling `linkedTrackerId`), its check-ins survive, and a later check-in records normally and re-creates a tracker to mirror into; goal progress on the deleted tracker is frozen before the rows go. (Trackers are hard-deleted with their entries — noted before as having no restore path.)
+
+### Production integrity sweep after today's fixes — verified (read-only)
+
+- Zero: entries mirroring a missing habit, paid stamps without a payment row, payment ≠ logged expense amount, `_docFields` naming a missing document, asset-party rows on liabilities, goals or habits pointing at a missing tracker. One liability-asset link points at a soft-deleted (trashed) liability from May — kept for restore, by design.
