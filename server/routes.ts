@@ -21,7 +21,7 @@ import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance }
 import { summarizeAccounts, isAccountProfile } from "@shared/finance-accounts";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
-import { advanceLiabilityDueDate, readDueDate, isSettledOccurrence } from "@shared/liability-recurrence";
+import { advanceLiabilityDueDate, readDueDate, isSettledOccurrence, effectiveDueDate } from "@shared/liability-recurrence";
 import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
 import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
 import { selfIdsFrom } from "@shared/scope";
@@ -2347,7 +2347,10 @@ export async function registerRoutes(
                 const existingTasks = await scoped.getTasks().catch(() => [] as any[]);
                 for (const bill of bills) {
                   const f: any = bill.fields || {};
-                  const due = readDueDate(f);
+                  // `dueKey` addresses the occurrence (its anchor day); `due`
+                  // is the day it actually falls on after a reschedule (D221).
+                  const dueKey = readDueDate(f);
+                  const due = dueKey ? effectiveDueDate(f, dueKey) : dueKey;
                   // A reminder whose occurrence was paid or skipped, or that the
                   // schedule has already rolled past, is finished. Closing it
                   // here (not only at pay time) heals the ones an older build
@@ -2363,14 +2366,14 @@ export async function registerRoutes(
                   const autopay = f.autopay === true || f.autoPay === true || String(f.autopay ?? "").toLowerCase() === "true";
                   if (autopay) {
                     // Already settled (manually or by a prior run)? Never pay twice.
-                    const ov = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences[due] : null;
+                    const ov = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences[dueKey] : null;
                     if (ov?.status === "paid" || ov?.status === "skipped") continue;
                     // The one pay operation: real occurrence total (not the
                     // definition's base price), occurrence stamped, due date
                     // advanced from the occurrence, expense logged.
                     try {
                       const paid = await payBillOccurrence(scoped, bill.id, {
-                        occurrenceDate: due,
+                        occurrenceDate: dueKey,
                         paymentDate: todayISO,
                         notes: "Autopay",
                         source: "autopay",
@@ -2387,7 +2390,7 @@ export async function registerRoutes(
                     // Creating one anyway made the next run close it (D92) and
                     // the run after that create it again — a churn of reminder
                     // tasks for a bill whose date sits on a settled day.
-                    if (isSettledOccurrence(f, due)) continue;
+                    if (isSettledOccurrence(f, dueKey)) continue;
                     const dup = (existingTasks || []).some((t: any) =>
                       t.title === title && String(t.dueDate || "").slice(0, 10) === due && t.status !== "done");
                     if (!dup) {

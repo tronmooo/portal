@@ -14,7 +14,7 @@
 // answering one question. Both callers now land here.
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
-import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate } from "@shared/liability-recurrence";
+import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
 import { deriveScheduleFields, liabilityAmount } from "@shared/liability-schedule";
@@ -492,6 +492,9 @@ export async function payBillOccurrence(
   const curDue = readDueDate(f);
   let occurrenceDate =
     String(input.occurrenceDate || curDue || input.paymentDate || todayISO).slice(0, 10);
+  // A payment aimed at a rescheduled occurrence's MOVED day settles the
+  // occurrence under its anchor key (D221).
+  if (input.occurrenceDate) occurrenceDate = resolveOccurrenceKey(f, occurrenceDate);
   // Default the payment date to the occurrence's due date only when that day
   // has arrived; paying a future bill early is money that left TODAY. The old
   // default dated "Mark paid" on a bill due next week as next week's expense.

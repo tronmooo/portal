@@ -1933,3 +1933,32 @@ describe("D220: journal create response carries the linked profile", () => {
     expect(r.data.linkedProfiles).toEqual(["linda-1"]);
   });
 });
+
+// ─── D221: a rescheduled occurrence is due on the day it was moved to ────────
+import { effectiveDueDate, readEffectiveDueDate, resolveOccurrenceKey } from "../shared/liability-recurrence";
+describe("D221: rescheduled occurrence", () => {
+  const fields = { monthlyAmount: 50, dueDate: "2026-09-05", nextDueDate: "2026-09-05", frequency: "monthly", occurrences: { "2026-09-05": { movedTo: "2026-09-12" } } };
+  it("the shared readers apply movedTo and resolve the moved day back to its anchor", () => {
+    expect(effectiveDueDate(fields, "2026-09-05")).toBe("2026-09-12");
+    expect(effectiveDueDate(fields, "2026-10-05")).toBe("2026-10-05");
+    expect(readEffectiveDueDate(fields)).toBe("2026-09-12");
+    expect(resolveOccurrenceKey(fields, "2026-09-12")).toBe("2026-09-05");
+    expect(resolveOccurrenceKey(fields, "2026-09-05")).toBe("2026-09-05");
+    expect(resolveOccurrenceKey({}, "2026-09-12")).toBe("2026-09-12");
+  });
+  it("the bills list says the bill is next due on the moved day", async () => {
+    const bill = { id: "bill-1", user_id: "u", type: "liability", type_key: "utility", name: "Gas", parent_profile_id: "self-1", fields, linked_profiles: [], documents: [], tags: [] };
+    const { client } = chainClient((table) => (table === "profiles" ? { data: [bill], error: null } : { data: [], error: null }));
+    const s = bareStorage({ supabase: client, getProfile: async () => ({ id: "bill-1", type: "liability", type_key: "utility", name: "Gas", parentProfileId: "self-1", fields, documents: [], tags: [] }) });
+    const ob = await s.getObligation("bill-1");
+    expect(ob?.nextDueDate).toBe("2026-09-12");
+  });
+  it("paying the moved day settles the occurrence under its anchor and advances the bill", async () => {
+    const { s, profiles } = payStorage({ id: "bill-1", type: "liability", type_key: "utility", name: "Gas", fields: { ...fields, occurrences: { "2026-09-05": { movedTo: "2026-09-12" } } } });
+    const r = await payBillOccurrence(s, "bill-1", { occurrenceDate: "2026-09-12", paymentDate: "2026-09-12", amount: 50, source: "occurrence_route" } as any, TZ);
+    expect(r.ok).toBe(true);
+    const after = profiles.get("bill-1")!.fields;
+    expect(after.occurrences["2026-09-05"].status).toBe("paid");
+    expect(String(after.nextDueDate ?? after.dueDate).slice(0, 10)).toBe("2026-10-05");
+  });
+});

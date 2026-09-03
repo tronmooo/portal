@@ -105,6 +105,49 @@ export function readDueDate(fields: any): string {
   return String(f.dueDate ?? f.due_date ?? f.nextDueDate ?? f.next_due_date ?? f.renewalDate ?? f.renewal_date ?? "").slice(0, 10);
 }
 
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The day an occurrence actually falls on: its `movedTo` override when the
+ * user rescheduled it, else the occurrence's own (anchor) day.
+ *
+ * Occurrences are KEYED by their anchor day (`fields.occurrences[anchor]`);
+ * a reschedule stores `movedTo` under that key and the schedule generator
+ * shows the moved day as `effectiveDate`. Every other reader (the bills list,
+ * the bell, the due-scan cron, the reminder task) kept using the anchor, so a
+ * bill moved from the 5th to the 12th stayed "due on the 5th" everywhere but
+ * the schedule.
+ */
+export function effectiveDueDate(fields: any, anchorISO: string): string {
+  const anchor = String(anchorISO || "").slice(0, 10);
+  const ov = (fields || {}).occurrences?.[anchor];
+  const moved = ov && typeof ov === "object" ? String(ov.movedTo || "").slice(0, 10) : "";
+  return DAY_RE.test(moved) ? moved : anchor;
+}
+
+/** `readDueDate`, with the current occurrence's reschedule applied. */
+export function readEffectiveDueDate(fields: any): string {
+  const anchor = readDueDate(fields);
+  return anchor ? effectiveDueDate(fields, anchor) : anchor;
+}
+
+/**
+ * The anchor key for a day the caller addresses: a payment or skip aimed at
+ * the MOVED day (the one the calendar and the bills list show) must settle
+ * the occurrence under its anchor key, or the anchor stays unsettled and the
+ * bill is offered again.
+ */
+export function resolveOccurrenceKey(fields: any, dateISO: string): string {
+  const day = String(dateISO || "").slice(0, 10);
+  const occ = (fields || {}).occurrences;
+  if (!occ || typeof occ !== "object") return day;
+  if (occ[day]) return day;
+  for (const [key, ov] of Object.entries(occ as Record<string, any>)) {
+    if (ov && typeof ov === "object" && String(ov.movedTo || "").slice(0, 10) === day) return key;
+  }
+  return day;
+}
+
 /**
  * Advance a recurring liability's due date by one cycle.
  * `todayISO` is the caller's local YYYY-MM-DD; when the stored due date is

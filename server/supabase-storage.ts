@@ -87,7 +87,7 @@ import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-owne
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
-import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence } from "../shared/liability-recurrence";
+import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, resolveOccurrenceKey } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
@@ -5396,6 +5396,8 @@ export class SupabaseStorage implements IStorage {
       // instead of offering to pay a day that is already paid.
       nextDueDate = advanceLiabilityDueDate(f, nextDueDate);
     }
+    // A rescheduled occurrence is due on the day it was moved to (D221).
+    if (nextDueDate) nextDueDate = effectiveDueDate(f, nextDueDate);
     // `amount` is what the NEXT BILLING PERIOD actually costs, not the
     // definition's figure. For a fixed bill those are identical; for a
     // usage-based one the definition says $20 while August says $62, and every
@@ -5848,7 +5850,10 @@ export class SupabaseStorage implements IStorage {
   // (server/liability-payments.ts), which every entry point calls.
 
   async skipOccurrence(id: string, date: string): Promise<any> {
-    const occDate = String(date).slice(0, 10);
+    // The caller may address the MOVED day (what the calendar shows); the
+    // occurrence lives under its anchor key (D221).
+    const target = await this.getProfile(id);
+    const occDate = resolveOccurrenceKey(target?.fields, String(date).slice(0, 10));
     const result = await this.updateOccurrenceOverride(id, occDate, { status: "skipped", paymentId: null });
     // If skipping the current due date, advance so the next occurrence becomes due.
     const p = await this.getProfile(id);
