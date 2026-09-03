@@ -245,7 +245,16 @@ export function nextRecurringTaskSpawn(
   if (!rule.freq || !rule.unit) return null;
   const base = String(prev.dueDate || todayISO || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return null;
-  const next = advance(base, rule);
+  let next = advance(base, rule);
+  // A chore finished late steps forward on its own anchor until it lands on
+  // today or later: a weekly chore due ten days ago, done today, used to
+  // spawn its next occurrence three days in the past — a brand-new overdue
+  // row the moment the old one was ticked off. The anchor (weekday, day of
+  // month) is kept; only the occurrences already missed are skipped.
+  const today = /^\d{4}-\d{2}-\d{2}$/.test(String(todayISO || "")) ? String(todayISO) : null;
+  if (today) {
+    for (let guard = 0; next < today && guard < 1000; guard++) next = advance(next, rule);
+  }
   if (seriesEnded(rule, next)) return null;
   return { dueDate: next, tags: recurrenceToTags({ ...rule, done: rule.done + 1 }, tags) };
 }

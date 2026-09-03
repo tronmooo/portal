@@ -603,6 +603,10 @@ describe("#14 spawnNextRecurringTask follows shared/recurrence", () => {
   });
 
   it("monthly keeps the 31st through February", async () => {
+    // Pinned clock: a late completion steps to the first anchor date on or
+    // after the user's today (D151), so the chore must not be overdue here.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-31T20:00:00Z"));
     const { s, created } = spawnStorage();
     await s.spawnNextRecurringTask(prev({ dueDate: "2026-01-31", tags: ["recur:monthly"] }), "monthly");
     expect(created[0].dueDate).toBe("2026-02-28");

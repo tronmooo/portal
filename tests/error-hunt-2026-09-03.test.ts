@@ -391,3 +391,24 @@ describe("D150: paymentType 'extra_principal' without an explicit split", () => 
     expect(standard.principal + standard.interest).toBeCloseTo(100, 2);
   });
 });
+
+// ─── D151: a chore finished late does not spawn an already-overdue next ─────
+import { nextRecurringTaskSpawn } from "../shared/recurrence";
+describe("D151: the next occurrence of a late-completed chore lands on today or later, on the series' own anchor", () => {
+  it("weekly, due 10 days ago, done today → the first anchor date on/after today", () => {
+    expect(nextRecurringTaskSpawn({ dueDate: "2026-08-23", tags: ["recur:weekly"] }, "2026-09-02")?.dueDate).toBe("2026-09-06");
+    // Exactly a week ago → due today (today counts, it is not overdue).
+    expect(nextRecurringTaskSpawn({ dueDate: "2026-08-26", tags: ["recur:weekly"] }, "2026-09-02")?.dueDate).toBe("2026-09-02");
+    // On time: unchanged.
+    expect(nextRecurringTaskSpawn({ dueDate: "2026-09-02", tags: ["recur:weekly"] }, "2026-09-02")?.dueDate).toBe("2026-09-09");
+    // Ahead of time: the series' next date, in the future, unchanged.
+    expect(nextRecurringTaskSpawn({ dueDate: "2026-09-10", tags: ["recur:weekly"] }, "2026-09-02")?.dueDate).toBe("2026-09-17");
+  });
+  it("monthly on the 31st, done months late, keeps the anchor day", () => {
+    expect(nextRecurringTaskSpawn({ dueDate: "2026-05-31", tags: ["recur:monthly"] }, "2026-09-02")?.dueDate).toBe("2026-09-30");
+  });
+  it("a series that would end before catching up spawns nothing; no today → the plain step", () => {
+    expect(nextRecurringTaskSpawn({ dueDate: "2026-08-01", tags: ["recur:weekly", "runtil:2026-08-20"] }, "2026-09-02")).toBeNull();
+    expect(nextRecurringTaskSpawn({ dueDate: "2026-08-23", tags: ["recur:weekly"] })?.dueDate).toBe("2026-08-30");
+  });
+});
