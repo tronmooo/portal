@@ -332,6 +332,9 @@ Tracker-target goal follows the latest entry (a backdated smaller entry does not
 ### Budgets and spending goals (probe s53) — verified after D142–D146
 Copy keeps the destination's caps and adds only what it lacks (a second copy adds nothing); "2026-9" folds to 2026-09 and "not-a-month" is a 400; "Groceries" is stored as the canonical "food"; a rename onto an existing category is refused; a numeric-string amount stores as a number. Two malformed `budget:` preference rows the pre-fix probe created on the replica were deleted.
 
+### Deployment note — resolved (05:02 UTC Sep 3)
+`GET https://portol.me/api/version` now reports sha 18a56ce (the D157 build); the backlog cleared on its own, consistent with a per-day deployment cap. Production probes on the smoke account's throwaway rows: p1 8/8 (D111, D120, D131 ×2, D139, D140) and p2 11/11 (D142, D143, D144, D147, D151, D152, D153, D154, D155, D156, D157) — every row created by the probes was deleted afterwards. D158/D159 (pushed after that build) await the next deployment.
+
 ### Deployment note (03:35 UTC Sep 3)
 `GET https://portol.me/api/version` reports sha fd71957 (pushed 00:32 UTC); the 30 commits on main since then, CI green for each, have not reached production. This session has no Vercel team access (the Vercel MCP lists no teams), so the deployment queue cannot be inspected from here. 111 commits were pushed to main and the branch in the last 24 h, each a deployment; a per-day deployment cap is the likeliest cause and would lift on its own. Until production catches up, D131/D139/D140 (and everything after) can only be verified on the replica. Pushes are batched from here on to spend fewer deployments.
 
