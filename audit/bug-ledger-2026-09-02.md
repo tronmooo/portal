@@ -1046,3 +1046,13 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - Full suite after the ownership-tool guard: 260 files / 4666 tests green.
 - Replica after the final D251 build: s227 4/4, s229 4/4, s230 4/4, s225 5/5, s223 4/4; s228 4/6 (the two misses are the documented cascade design — sole-linked deed and expense go with the house).
 - Full suite after the legacy-matcher guard: 260 files / 4667 tests green.
+
+## Session summary — 2026-09-03 (this segment)
+
+Fixed and pushed to `main` (each row above carries repro, root cause, fix and verification):
+
+- D230 document edits move the copies they wrote onto profiles · D231 relationships graph edges · D232 goal deadline day counting in the browser · D233 mirror tracker entries re-dated take the habit check-in along · D234/D235 bill payment ↔ logged expense edits re-price each other without re-logging · D236 profile detail serves tracker entries oldest → newest · D237–D241 backup restore re-keys document provenance, goal sources, journal people, the payment ledger with paid stamps and expense tags, and document-derived events · D242 owners routes dispatch by profile type · D243 AI name lookups never match a fragment inside a word · D244 bell notice ids carry their date so a dismissal is of one fact · D245 graph 404 for a foreign root · D246–D248 liability and loan dialogs write only what changed · D249 the Money tab renders again · D250 profile delete keeps trackers shared with other owners (migration applied in production) · D251 duplicate names are a question for every AI tool.
+
+Verified live on production (55006e9 + the D250 migration): D208–D236 rows via p9/p10/p11/p12/p13. Awaiting the next deploy for D237–D251 (import fixes verifiable only with a disposable account; the rest via p-probes when the sha moves past 55006e9).
+
+By design, left as-is: profile delete cascade removes sole-linked expenses/documents (warned in the UI); trackers hard-delete with no restore; document restore is API-only; household net worth counts shared assets in full (per-person scoping applies the shares).
