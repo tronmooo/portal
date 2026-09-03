@@ -3139,3 +3139,24 @@ describe("D263 notification dismissals merge on the server", () => {
     expect(ai).toContain("await mergeDismissedNotifications(storage, computedIds)");
   });
 });
+
+// ── D264: numeric registry fields are stored as numbers, not the input's string.
+describe("D264 registry-form numeric fields are coerced at submit", async () => {
+  const { coerceRegistryFields, coerceRegistryFieldValue } = await import("../shared/registry-fields");
+  it("coerces number, currency and percentage fields and leaves the rest alone", () => {
+    const schema = [{ key: "year", type: "number" }, { key: "purchasePrice", type: "currency" }, { key: "ownership", type: "percentage" }, { key: "vin", type: "text" }, { key: "purchaseDate", type: "date" }];
+    expect(coerceRegistryFields(schema, { year: "2019", purchasePrice: "$12,500.50", ownership: "50%", vin: "12345", purchaseDate: "2026-09-03", extra: "7" }))
+      .toEqual({ year: 2019, purchasePrice: 12500.5, ownership: 50, vin: "12345", purchaseDate: "2026-09-03", extra: "7" });
+  });
+  it("keeps a value it cannot parse and an empty string as they are", () => {
+    expect(coerceRegistryFieldValue("number", "abc")).toBe("abc");
+    expect(coerceRegistryFieldValue("number", "")).toBe("");
+    expect(coerceRegistryFieldValue("number", 42)).toBe(42);
+    expect(coerceRegistryFieldValue(undefined, "42")).toBe("42");
+  });
+  it("the create-profile dialog coerces by the selected type's schema", () => {
+    const src = readFileSync(new URL("../client/src/components/CreateProfileDialog.tsx", import.meta.url), "utf8");
+    expect(src).toContain("coerceRegistryFields(");
+    expect(src).toContain("selectedTypeDef.field_schema");
+  });
+});

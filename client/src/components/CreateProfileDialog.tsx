@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import ProfileTypeSelector from "@/components/registry/ProfileTypeSelector";
+import { coerceRegistryFields } from "@shared/registry-fields";
 import type { TypeDefinition } from "@/components/registry/ProfileTypeSelector";
 import DynamicProfileForm from "@/components/registry/DynamicProfileForm";
 import { Button } from "@/components/ui/button";
@@ -181,8 +182,11 @@ export function CreateProfileDialog({
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-    const cleanFields = Object.fromEntries(
-      Object.entries(fields).filter(([_, v]) => v !== "" && v !== null && v !== undefined)
+    // Numeric registry fields arrive as strings from <input type="number">;
+    // store them as numbers like every other form does (D264).
+    const cleanFields = coerceRegistryFields(
+      selectedTypeDef.field_schema as any,
+      Object.fromEntries(Object.entries(fields).filter(([_, v]) => v !== "" && v !== null && v !== undefined)),
     );
     const legacyType = mapTypeKeyToLegacyType(selectedTypeDef.type_key, selectedTypeDef.category);
     createMutation.mutate({
