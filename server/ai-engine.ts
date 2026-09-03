@@ -11036,8 +11036,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         date: checkinDate,
         count: askedFor,
         source: completionSource,
+        timezone: (storage as any)._timezone || DEFAULT_TIMEZONE,
       });
 
+      if (!done.ok && done.reason === "in_future") {
+        return { error: `${checkinDate} has not happened yet, so "${habit.name}" cannot be checked in for it. Tell the user; do NOT retry with a different date unless they give one.` };
+      }
       if (done.recorded === 0) {
         return {
           alreadyComplete: true,

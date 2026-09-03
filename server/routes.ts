@@ -7445,6 +7445,7 @@ Rules:
       timezone: getTimezone(req),
     });
     if (!result.ok && result.reason === "not_found") return res.status(404).json({ error: "Habit not found" });
+    if (!result.ok && result.reason === "in_future") return res.status(400).json({ error: `Cannot check in for ${result.date}: that day has not happened yet` });
     const updatedHabit = result.habit || await storage.getHabit(req.params.id);
     if (!updatedHabit) return res.status(404).json({ error: "Habit not found" });
     const uid_h1 = cacheUserKey(req as AuthenticatedRequest);

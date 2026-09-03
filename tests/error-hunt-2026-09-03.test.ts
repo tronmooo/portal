@@ -412,3 +412,40 @@ describe("D151: the next occurrence of a late-completed chore lands on today or 
     expect(nextRecurringTaskSpawn({ dueDate: "2026-08-23", tags: ["recur:weekly"] })?.dueDate).toBe("2026-08-30");
   });
 });
+
+// ─── D152: a habit check-in cannot be dated in the future ───────────────────
+import { completeHabitOccurrence } from "../server/habit-completion";
+import { addDays as tzAddDays, getUserToday } from "../shared/timezone";
+describe("D152: completeHabitOccurrence refuses a day that has not happened yet", () => {
+  function habitStorage() {
+    const habit: any = { id: "h1", name: "Stretch", frequency: "daily", targetPerDay: 1, checkins: [], linkedProfiles: [], currentStreak: 2 };
+    const storage: any = {
+      getHabit: async () => habit, getHabits: async () => [habit],
+      checkinHabit: async (_id: string, date: string) => { const c = { id: `c${habit.checkins.length + 1}`, date, timestamp: new Date().toISOString() }; habit.checkins.push(c); return c; },
+      deleteHabitCheckin: async () => true, updateHabit: async () => habit,
+      getTracker: async () => undefined, getTrackers: async () => [], createTracker: async () => ({ id: "t1", name: "Stretch", fields: [] }),
+      updateTracker: async () => undefined, logEntry: async (d: any) => ({ id: "e1", values: d.values, timestamp: d.timestamp }),
+      deleteTrackerEntry: async () => true, getProfiles: async () => [],
+    };
+    return { habit, storage };
+  }
+  it("tomorrow in the user's zone is refused with reason in_future and nothing recorded", async () => {
+    const { habit, storage } = habitStorage();
+    const tz = "Pacific/Kiritimati"; // UTC+14: "tomorrow" here is still today in most of the world
+    const tomorrow = tzAddDays(getUserToday(tz), 1);
+    const res = await completeHabitOccurrence(storage, { habitId: "h1", date: tomorrow, source: "habit_ui", timezone: tz });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("in_future");
+    expect(res.recorded).toBe(0);
+    expect(res.currentStreak).toBe(2);
+    expect(habit.checkins).toHaveLength(0);
+  });
+  it("today and yesterday still record", async () => {
+    const { habit, storage } = habitStorage();
+    const tz = "America/Los_Angeles";
+    const today = getUserToday(tz);
+    expect((await completeHabitOccurrence(storage, { habitId: "h1", date: today, source: "habit_ui", timezone: tz })).recorded).toBe(1);
+    expect((await completeHabitOccurrence(storage, { habitId: "h1", date: tzAddDays(today, -1), source: "habit_ui", timezone: tz })).recorded).toBe(1);
+    expect(habit.checkins.map((c: any) => c.date)).toEqual([today, tzAddDays(today, -1)]);
+  });
+});

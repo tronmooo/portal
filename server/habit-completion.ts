@@ -101,7 +101,7 @@ export interface CompleteHabitOptions {
 export interface HabitCompletionResult {
   ok: boolean;
   /** Set when ok is false. */
-  reason?: "not_found" | "not_scheduled";
+  reason?: "not_found" | "not_scheduled" | "in_future";
   habitId: string;
   habitName: string;
   date: string;
@@ -237,6 +237,19 @@ export async function completeHabitOccurrence(
       ok: false, reason: "not_found", habitId: opts.habitId, habitName: "", date,
       source: opts.source, recorded: 0, alreadyComplete: false,
       progress: habitDayProgress({} as any, date), currentStreak: 0, trackerEntries: [],
+    };
+  }
+
+  // A check-in is a record of something done; a day that has not happened
+  // yet in the user's zone cannot carry one (the tracker log refuses future
+  // entries the same way). It used to be accepted, and "done Thursday" on a
+  // Tuesday inflated the streak with days that were never lived.
+  const userToday = getUserToday(tz);
+  if (date > userToday) {
+    return {
+      ok: false, reason: "in_future", habitId: habit.id, habitName: habit.name, date,
+      source: opts.source, recorded: 0, alreadyComplete: false,
+      progress: habitDayProgress(habit as any, date), currentStreak: habit.currentStreak || 0, trackerEntries: [],
     };
   }
 
