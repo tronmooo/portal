@@ -354,6 +354,9 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
+### An autopay bill through the due-scan (probe s149) — verified working
+An autopay bill due today is listed with autopay on and status due today; the due-scan pays it without raising a reminder task, and the snapshot then shows next month's occurrence.
+
 ### The finance snapshot's due list across a payment (probe s148) — verified working
 A bill due today is listed; once paid it moves to next month's date; an additional same-day payment does not re-list it; no open reminder task remains.
 
