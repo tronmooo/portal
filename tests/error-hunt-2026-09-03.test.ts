@@ -3093,3 +3093,18 @@ describe("D261 finance-import commit is serialised per account", () => {
     expect(block).toContain("status(409)");
   });
 });
+
+// ── D262: a loan whose payment does not cover the interest is told so, not "$0 remaining interest".
+describe("D262 never-amortizing loan is labelled in the detail page", async () => {
+  const { summarizeLiability, buildAmortization } = await import("../shared/liability-calc");
+  it("the calc flags it and reports no payoff", () => {
+    const s = summarizeLiability({ currentBalance: 1200, originalBalance: 1200, monthlyPayment: 20, annualRate: 24, firstPaymentDate: "2026-10-01" });
+    expect(s.neverAmortizes).toBe(true);
+    expect(buildAmortization({ currentBalance: 1200, annualInterestRate: 24, monthlyPayment: 20, firstPaymentDate: "2026-10-01" }).neverAmortizes).toBe(true);
+  });
+  it("the page shows the flag instead of $0.00 in both places", () => {
+    const src = readFileSync(new URL("../client/src/pages/liability-detail.tsx", import.meta.url), "utf8");
+    expect(src).toContain('summary.neverAmortizes ? "Never pays off at this payment" : fmtUSD(summary.totalRemainingInterest)');
+    expect(src).toContain("amortization.neverAmortizes");
+  });
+});

@@ -1296,7 +1296,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
                   <Row label="Remaining interest"
-                    value={fmtUSD(summary.totalRemainingInterest)} />
+                    value={summary.neverAmortizes ? "Never pays off at this payment" : fmtUSD(summary.totalRemainingInterest)} />
                   <Row label="Interest paid (history)"
                     value={fmtUSD(interestPaidToDate)} />
                   <Row label="Total payments made"
@@ -1641,8 +1641,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Amortization schedule</CardTitle>
                   <div className="text-xs text-muted-foreground">
-                    {amortization.rows.length} period{amortization.rows.length === 1 ? "" : "s"} ·
-                    total interest {fmtUSD(amortization.totalInterest)}
+                    {amortization.neverAmortizes
+                      ? "the payment does not cover the monthly interest — the balance never falls"
+                      : <>{amortization.rows.length} period{amortization.rows.length === 1 ? "" : "s"} · total interest {fmtUSD(amortization.totalInterest)}</>}
                   </div>
                 </CardHeader>
                 <CardContent className="p-0">
