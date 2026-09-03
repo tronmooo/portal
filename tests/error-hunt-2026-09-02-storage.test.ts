@@ -686,8 +686,11 @@ describe("#15 setBudgets / addBudget / updateBudget throw on a failed write", ()
     await expect(s.setBudgets("2026-09", budgets)).rejects.toMatchObject({ message: "read boom" });
   });
   it("addBudget / updateBudget propagate the failure instead of answering success", async () => {
-    const { s } = budgetStorage({ update: true }, { id: "pref-1" });
-    await expect(s.addBudget("2026-09", "Food", 250)).rejects.toMatchObject({ message: "update boom" });
+    // The row carries the current list (the atomic writer reads and
+    // compare-and-swaps the row's value), so both writes have a change to
+    // make and meet the failing UPDATE.
+    const { s } = budgetStorage({ update: true }, { id: "pref-1", value: JSON.stringify(budgets) });
+    await expect(s.addBudget("2026-09", "Fuel", 250)).rejects.toMatchObject({ message: "update boom" });
     await expect(s.updateBudget("2026-09", "b1", { amount: 250 })).rejects.toMatchObject({ message: "update boom" });
   });
   it("a successful write resolves, and the update is scoped to the user", async () => {
@@ -1000,7 +1003,8 @@ describe("D127: deleting a profile prunes its budget entries", () => {
       getProfile: async () => ({ id: "gone", type: "person", name: "X" }),
       getProfilesLite: async () => [{ id: "self", type: "self", name: "Me" }],
       getAllBudgets: async () => months,
-      setBudgets: async (month: string, arr: any[]) => { writes.push([month, arr]); },
+      // The prune goes through the atomic writer; capture what it leaves per month.
+      mutateBudgets: async (month: string, fn: (list: any[]) => any) => { const list = months[month].map((b) => ({ ...b })); const out = await fn(list); writes.push([month, list]); return out; },
     });
     expect(await s.deleteProfile("gone")).toBe(true);
     expect(writes.map(([m]) => m).sort()).toEqual(["2026-09", "2026-10"]);

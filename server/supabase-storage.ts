@@ -1,7 +1,9 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID, createHash } from "crypto";
 
-import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
+import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy, type BudgetEntry } from "@shared/budget-ledger";
+// One writer at a time per (user, month) within this process; see mutateBudgets.
+const budgetWriteLocks = new Map<string, Promise<void>>();
 import { assertEventSpan } from "@shared/event-span";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 // ---- Shared Supabase client (PERF) ----
@@ -1939,7 +1941,7 @@ export class SupabaseStorage implements IStorage {
       const all = await this.getAllBudgets();
       for (const [month, arr] of Object.entries(all)) {
         if (!Array.isArray(arr) || !arr.some((b: any) => b?.profileId === profileId)) continue;
-        await this.setBudgets(month, arr.filter((b: any) => b?.profileId !== profileId));
+        await this.mutateBudgets(month, (list) => { const kept = list.filter((b: any) => b?.profileId !== profileId); list.splice(0, list.length, ...kept); });
       }
     } catch (e: any) {
       console.warn(`[deleteProfile] budget prune for ${profileId} failed: ${e?.message || e}`);
@@ -7622,19 +7624,82 @@ export class SupabaseStorage implements IStorage {
   // BUDGETS (stored in preferences table as JSON)
   // ============================================================
 
+  /**
+   * The month's raw budget row(s). One row per (user, month) is the rule, but
+   * the table has no unique key, so two first writes racing across instances
+   * can leave two rows; the extras are merged into the oldest and removed so
+   * readers see one list.
+   */
+  private async readBudgetRow(month: string): Promise<{ id: string | null; value: string | null; list: BudgetEntry[] }> {
+    const key = `budget:${budgetMonthOrThrow(month)}`;
+    const { data, error } = await this.supabase.from("preferences")
+      .select("id, value")
+      .eq("user_id", this.userId)
+      .eq("key", key)
+      .order("id", { ascending: true });
+    if (error) throw error;
+    const rows: Array<{ id: string; value: string | null }> = data || [];
+    const parse = (v: string | null): BudgetEntry[] => { try { const p = JSON.parse(v || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } };
+    if (rows.length === 0) return { id: null, value: null, list: [] };
+    if (rows.length === 1) return { id: rows[0].id, value: rows[0].value, list: parse(rows[0].value) };
+    const merged: BudgetEntry[] = [];
+    for (const r of rows) for (const b of parse(r.value)) {
+      if (!merged.some((m) => budgetCategoryKey(m.category) === budgetCategoryKey(b.category) && (m.profileId || null) === (b.profileId || null))) merged.push(b);
+    }
+    const keep = rows[0];
+    const value = JSON.stringify(merged);
+    await this.supabase.from("preferences").update({ value }).eq("id", keep.id).eq("user_id", this.userId);
+    await this.supabase.from("preferences").delete().in("id", rows.slice(1).map((r) => r.id)).eq("user_id", this.userId);
+    return { id: keep.id, value, list: merged };
+  }
+
+  /**
+   * Apply `fn` to the month's list atomically: the write is a compare-and-swap
+   * on the row's previous value (the table carries no version column), retried
+   * when another writer got in first, behind a per-process lock on the same
+   * month. Six caps added at once used to leave one: every request read the
+   * empty list and wrote back only its own cap.
+   */
+  private async mutateBudgets<T>(month: string, fn: (list: BudgetEntry[]) => T | Promise<T>): Promise<T> {
+    const lockKey = `${this.userId}:${budgetMonthOrThrow(month)}`;
+    const prev = budgetWriteLocks.get(lockKey) || Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((r) => { release = r; });
+    budgetWriteLocks.set(lockKey, prev.then(() => mine));
+    await prev;
+    try {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const row = await this.readBudgetRow(month);
+        const list = row.list.map((b) => ({ ...b }));
+        const out = await fn(list);
+        const next = JSON.stringify(list);
+        if (next === (row.value ?? "[]") && row.id) return out; // nothing changed
+        const key = `budget:${budgetMonthOrThrow(month)}`;
+        if (row.id) {
+          let q = this.supabase.from("preferences").update({ value: next }).eq("id", row.id).eq("user_id", this.userId);
+          q = row.value === null ? q.is("value", null) : q.eq("value", row.value);
+          const { data, error } = await q.select("id");
+          if (error) throw error;
+          if (Array.isArray(data) && data.length > 0) return out;
+        } else {
+          const { error } = await this.supabase.from("preferences").insert({ user_id: this.userId, key, value: next });
+          if (!error) return out;
+          if (!/duplicate|unique|23505/i.test(`${(error as any).code} ${(error as any).message}`)) throw error;
+        }
+        await new Promise((r) => setTimeout(r, 10 + attempt * 25));
+      }
+      throw new Error(`Budget write for ${month} kept colliding with another writer; try again`);
+    } finally {
+      release();
+      if (budgetWriteLocks.get(lockKey) === prev.then(() => mine)) budgetWriteLocks.delete(lockKey);
+    }
+  }
+
   async getBudgets(month: string, profileIds?: string[]): Promise<Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>> {
     // Every budget reader and writer goes through the same month key: "2026-9"
     // used to be stored under its own `budget:2026-9` bucket that no reader
     // (all of which ask for "2026-09") ever showed again.
-    const { data } = await this.supabase.from("preferences")
-      .select("value")
-      .eq("user_id", this.userId)
-      .eq("key", `budget:${budgetMonthOrThrow(month)}`)
-      .maybeSingle();
-    if (!data?.value) return [];
-    let parsed: Array<{id: string; category: string; amount: number; notes?: string; profileId?: string}>;
-    try { parsed = JSON.parse(data.value); } catch { return []; }
-    if (!Array.isArray(parsed)) return [];
+    let parsed = (await this.readBudgetRow(month)).list;
     // Caps stored before categories were folded ("Groceries") read as their
     // bucket ("food") so every consumer meets the spend the same way.
     parsed = parsed.map(b => ({ ...b, category: budgetCategoryKey(b.category) || String(b.category || "") }));
@@ -7691,28 +7756,21 @@ export class SupabaseStorage implements IStorage {
   async addBudget(month: string, category: string, amount: number, notes?: string, profileId?: string): Promise<{id: string; category: string; amount: number; notes?: string; profileId?: string}> {
     // One cap per (category, owner) bucket, with the category folded to the
     // expense canon so the cap meets the spend (shared/budget-ledger.ts).
-    const budgets = await this.getBudgets(month);
-    const entry = upsertBudget(budgets, { category, amount, notes, profileId }, () => crypto.randomUUID());
-    await this.setBudgets(month, budgets);
-    return entry;
+    return this.mutateBudgets(month, (list) => ({ ...upsertBudget(list, { category, amount, notes, profileId }, () => crypto.randomUUID()) }));
   }
 
   async updateBudget(month: string, budgetId: string, updates: {amount?: number; category?: string; notes?: string; profileId?: string}): Promise<boolean> {
-    const budgets = await this.getBudgets(month);
     // Throws a 409 when the edit would leave two caps for one bucket.
-    const entry = applyBudgetUpdate(budgets, budgetId, updates);
-    if (!entry) return false;
-    await this.setBudgets(month, budgets);
-    return true;
+    return this.mutateBudgets(month, (list) => !!applyBudgetUpdate(list, budgetId, updates));
   }
 
   async deleteBudget(month: string, budgetId: string): Promise<boolean> {
-    const budgets = await this.getBudgets(month);
-    const idx = budgets.findIndex(b => b.id === budgetId);
-    if (idx === -1) return false;
-    budgets.splice(idx, 1);
-    await this.setBudgets(month, budgets);
-    return true;
+    return this.mutateBudgets(month, (list) => {
+      const idx = list.findIndex(b => b.id === budgetId);
+      if (idx === -1) return false;
+      list.splice(idx, 1);
+      return true;
+    });
   }
 
   async copyBudgetsToMonth(fromMonth: string, toMonth: string): Promise<number> {
@@ -7721,10 +7779,11 @@ export class SupabaseStorage implements IStorage {
     // next month before the copy were lost. Returns the number added.
     const source = await this.getBudgets(fromMonth);
     if (source.length === 0) return 0;
-    const destination = await this.getBudgets(toMonth);
-    const { list, added } = mergeBudgetsForCopy(destination, source, () => crypto.randomUUID());
-    if (added > 0) await this.setBudgets(toMonth, list);
-    return added;
+    return this.mutateBudgets(toMonth, (list) => {
+      const { list: merged, added } = mergeBudgetsForCopy(list, source, () => crypto.randomUUID());
+      list.splice(0, list.length, ...merged);
+      return added;
+    });
   }
 
   // ============================================================

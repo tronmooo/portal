@@ -870,3 +870,38 @@ describe("D174: POST /api/profiles/:id/unlink and /api/obligations/:id/materiali
   });
 });
 
+
+// ─── D176: concurrent budget writes do not lose caps ─────────────────────────
+describe("D176: budget writes are a compare-and-swap on the month's row", () => {
+  it("a write that lost the race re-reads and re-applies; the final list holds both caps", async () => {
+    // Row state as another writer would leave it: first read sees [], the CAS
+    // update matches nothing (someone wrote "food" meanwhile), the re-read
+    // sees [food], and the second CAS succeeds.
+    let reads = 0; const updates: any[] = [];
+    const foodRow = { id: "row-1", value: JSON.stringify([{ id: "f", category: "food", amount: 100 }]) };
+    const { client } = chainClient((table, op, payload) => {
+      if (table !== "preferences") return { data: [], error: null };
+      if (op === "select") { reads++; return { data: [reads === 1 ? { id: "row-1", value: "[]" } : foodRow], error: null }; }
+      if (op === "update") { updates.push(payload); return { data: updates.length === 1 ? [] : [{ id: "row-1" }], error: null }; }
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client });
+    const added = await s.addBudget("2026-10", "transport", 150);
+    expect(added.category).toBe("transport");
+    expect(updates).toHaveLength(2);
+    const final = JSON.parse(updates[1].value).map((b: any) => b.category).sort();
+    expect(final).toEqual(["food", "transport"]);
+  });
+  it("two rows for one month (an insert race) are merged into the oldest and the extra removed", async () => {
+    const calls: any[] = [];
+    const { client } = chainClient((table, op, payload) => {
+      calls.push([table, op]);
+      if (table === "preferences" && op === "select") return { data: [{ id: "a", value: JSON.stringify([{ id: "1", category: "food", amount: 100 }]) }, { id: "b", value: JSON.stringify([{ id: "2", category: "pet", amount: 20 }, { id: "3", category: "food", amount: 999 }]) }], error: null };
+      return { data: [], error: null };
+    });
+    const list = await bareStorage({ supabase: client }).getBudgets("2026-10");
+    expect(list.map((b) => [b.category, b.amount])).toEqual([["food", 100], ["pet", 20]]);
+    expect(calls.some(([t, op]) => t === "preferences" && op === "update")).toBe(true);
+    expect(calls.some(([t, op]) => t === "preferences" && op === "delete")).toBe(true);
+  });
+});
