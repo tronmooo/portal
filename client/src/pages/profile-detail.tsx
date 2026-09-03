@@ -12385,7 +12385,10 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
       withData.push(tab);
     } else {
       // Hide truly empty low-value tabs; keep high-value ones with CTAs
-      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "contained", "financials", "payments", "history", "belongings", "health-trackers", "tasks-schedule", "finance", "person-trackers", "person-documents", "person-history"];
+      // "money" (Loan + Costs collapsed) and "all-trackers" have no data rule
+      // above; without a place in this list they never rendered at all, and the
+      // loan editor on a vehicle or property was unreachable (D249).
+      const alwaysShow = ["info", "finances", "trackers", "tasks", "activity", "health", "loan-detail", "money", "all-trackers", "billing", "impact", "details", "warranty", "rewards", "access", "insights", "valuation", "linked-subs", "linked-liabilities", "contained", "financials", "payments", "history", "belongings", "health-trackers", "tasks-schedule", "finance", "person-trackers", "person-documents", "person-history"];
       if (alwaysShow.includes(tab.value)) {
         withoutData.push(tab);
       }
