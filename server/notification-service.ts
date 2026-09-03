@@ -130,7 +130,10 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     const name = rule.subtitle || rule.label;
     const [pastTitle, soonTitle, laterTitle, futureVerb, pastVerb] = words;
     const base = {
-      id: `${isDoc ? "doc" : "profile"}-exp-${rule.sourceEntityId}-${key}`,
+      // The DATE is part of the id (D244): a dismissal is of one fact — this
+      // expiry, this due day — never of every later one. Correct the date, or
+      // let the next occurrence arrive, and the notice is new again.
+      id: `${isDoc ? "doc" : "profile"}-exp-${rule.sourceEntityId}-${key}-${rule.date}`,
       type: "document_expiring" as const,
       entityId: rule.sourceEntityId,
       entityType: isDoc ? "document" : "profile",
@@ -179,7 +182,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     const diff = daysDiff(due, today);
     if (diff < 0) {
       notifications.push({
-        id: `task-overdue-${task.id}`,
+        id: `task-overdue-${task.id}-${String(task.dueDate).slice(0, 10)}`,
         type: "task_overdue",
         severity: "critical",
         title: `Overdue: ${task.title}`,
@@ -190,7 +193,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       });
     } else if (diff === 0) {
       notifications.push({
-        id: `task-today-${task.id}`,
+        id: `task-today-${task.id}-${String(task.dueDate).slice(0, 10)}`,
         type: "task_due_today",
         severity: "warning",
         title: `${task.title} is due today`,
@@ -201,7 +204,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       });
     } else if (diff <= 3) {
       notifications.push({
-        id: `task-soon-${task.id}`,
+        id: `task-soon-${task.id}-${String(task.dueDate).slice(0, 10)}`,
         type: "task_due_today",
         severity: "info",
         title: `${task.title} due in ${diff} day${diff !== 1 ? "s" : ""}`,
@@ -224,7 +227,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     const diff = daysDiff(due, today);
     if (diff < 0) {
       notifications.push({
-        id: `bill-overdue-${ob.id}`,
+        id: `bill-overdue-${ob.id}-${String(ob.nextDueDate).slice(0, 10)}`,
         type: "bill_due",
         severity: "critical",
         title: `Overdue bill: ${ob.name}`,
@@ -235,7 +238,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       });
     } else if (diff <= 3) {
       notifications.push({
-        id: `bill-soon-${ob.id}`,
+        id: `bill-soon-${ob.id}-${String(ob.nextDueDate).slice(0, 10)}`,
         type: "bill_due",
         severity: "warning",
         title: `Bill due soon: ${ob.name}`,
@@ -246,7 +249,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       });
     } else if (diff <= 7 && !ob.autopay) {
       notifications.push({
-        id: `bill-upcoming-${ob.id}`,
+        id: `bill-upcoming-${ob.id}-${String(ob.nextDueDate).slice(0, 10)}`,
         type: "bill_due",
         severity: "info",
         title: `Upcoming bill: ${ob.name}`,
@@ -275,7 +278,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       // nothing had been recorded; say what is actually left.
       const p = habitDayProgress(habit as any, todayStr);
       notifications.push({
-        id: `habit-risk-${habit.id}`,
+        id: `habit-risk-${habit.id}-${todayStr}`,
         type: "habit_at_risk",
         severity: "warning",
         title: `Don't break your ${habit.name} streak!`,

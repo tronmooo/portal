@@ -1661,12 +1661,12 @@ describe("D208: a policy's renewal_date reaches the bell like a document's expir
       ],
     });
     const byId = Object.fromEntries(list.map((n) => [n.id, n]));
-    expect(byId["profile-exp-p-auto-renewal_date"]).toMatchObject({ severity: "warning", type: "document_expiring", entityType: "profile" });
-    expect(byId["profile-exp-p-auto-renewal_date"].message).toMatch(/renews in 2 days/);
-    expect(byId["profile-exp-p-home-renewal_date"]).toMatchObject({ severity: "critical" });
-    expect(byId["profile-exp-p-home-renewal_date"].message).toMatch(/3 days ago/);
-    expect(byId["profile-exp-p-gym-contract_end_date"]).toMatchObject({ severity: "info" });
-    expect(byId["profile-exp-p-far-renewal_date"]).toBeUndefined();
+    expect(byId[`profile-exp-p-auto-renewal_date-${tzAddDays2(today, 2)}`]).toMatchObject({ severity: "warning", type: "document_expiring", entityType: "profile" });
+    expect(byId[`profile-exp-p-auto-renewal_date-${tzAddDays2(today, 2)}`].message).toMatch(/renews in 2 days/);
+    expect(byId[`profile-exp-p-home-renewal_date-${tzAddDays2(today, -3)}`]).toMatchObject({ severity: "critical" });
+    expect(byId[`profile-exp-p-home-renewal_date-${tzAddDays2(today, -3)}`].message).toMatch(/3 days ago/);
+    expect(byId[`profile-exp-p-gym-contract_end_date-${tzAddDays2(today, 20)}`]).toMatchObject({ severity: "info" });
+    expect(Object.keys(byId).some((k) => k.startsWith("profile-exp-p-far-"))).toBe(false);
     expect(list.some((n) => n.entityId === "p-start")).toBe(false);
   });
   it("documents keep their ids, and a due date on a citation now counts", async () => {
@@ -1678,8 +1678,8 @@ describe("D208: a policy's renewal_date reaches the bell like a document's expir
       ],
     });
     const ids = list.map((n) => n.id);
-    expect(ids).toContain("doc-exp-d-pass-expirationDate");
-    expect(ids).toContain("doc-exp-d-cite-dueDate");
+    expect(ids).toContain(`doc-exp-d-pass-expirationDate-${tzAddDays2(today, 2)}`);
+    expect(ids).toContain(`doc-exp-d-cite-dueDate-${tzAddDays2(today, 5)}`);
     expect(ids.some((i) => i.includes("d-old"))).toBe(false);
   });
   it("a licence expiration copied from its document is one bell row, not two", async () => {

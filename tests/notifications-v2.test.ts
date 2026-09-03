@@ -98,15 +98,32 @@ describe("buildNotifications — dismissed ids", () => {
       getTasks: async () => [OVERDUE_TASK, { ...OVERDUE_TASK, id: "t2", title: "Renew tags" }],
     });
     let list = await buildNotifications(storage, "America/New_York");
-    expect(list.map((n) => n.id).sort()).toEqual(["task-overdue-t1", "task-overdue-t2"]);
-    storage._prefs.set(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(["task-overdue-t1"]));
+    const due = OVERDUE_TASK.dueDate;
+    expect(list.map((n) => n.id).sort()).toEqual([`task-overdue-t1-${due}`, `task-overdue-t2-${due}`]);
+    storage._prefs.set(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify([`task-overdue-t1-${due}`]));
     list = await buildNotifications(storage, "America/New_York");
-    expect(list.map((n) => n.id)).toEqual(["task-overdue-t2"]);
+    expect(list.map((n) => n.id)).toEqual([`task-overdue-t2-${due}`]);
   });
   it("a malformed preference dismisses nothing", async () => {
     const storage = stubStorage({ getTasks: async () => [OVERDUE_TASK] });
     storage._prefs.set(DISMISSED_NOTIFICATIONS_PREF, "{not json");
     const list = await buildNotifications(storage, "America/New_York");
     expect(list.length).toBe(1);
+  });
+});
+
+// D244: a dismissal is of one fact. The ids used to carry only the entity, so
+// dismissing "due soon" for a bill hid every later occurrence of it, and a
+// dismissed expiry stayed hidden after the date was corrected.
+describe("buildNotifications — a dismissal does not outlive the fact it was about", () => {
+  it("a task whose due date moved is a new notice despite the old dismissal", async () => {
+    const storage = stubStorage({ getTasks: async () => [OVERDUE_TASK] });
+    storage._prefs.set(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify([`task-overdue-t1-${OVERDUE_TASK.dueDate}`]));
+    expect((await buildNotifications(storage, "America/New_York")).some((n) => n.type === "task_overdue")).toBe(false);
+    const moved = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const storage2 = stubStorage({ getTasks: async () => [{ ...OVERDUE_TASK, dueDate: moved }] });
+    storage2._prefs.set(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify([`task-overdue-t1-${OVERDUE_TASK.dueDate}`]));
+    const list = await buildNotifications(storage2, "America/New_York");
+    expect(list.map((n) => n.id)).toContain(`task-overdue-t1-${moved}`);
   });
 });
