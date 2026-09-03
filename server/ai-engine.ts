@@ -201,7 +201,9 @@ const REDACTED = "[REDACTED]";
  * user's UTC offset (QA 2026-07-29 CRUD-T2-001).
  */
 function aiUserTimezone(): string {
-  try { return (storage as any)._timezone || DEFAULT_TIMEZONE; } catch { return DEFAULT_TIMEZONE; }
+  // Only a real zone name counts: a storage double that answers every
+  // property with a function must not become the "timezone".
+  try { const tz = (storage as any)._timezone; return typeof tz === "string" && tz.trim() ? tz.trim() : DEFAULT_TIMEZONE; } catch { return DEFAULT_TIMEZONE; }
 }
 
 /**
