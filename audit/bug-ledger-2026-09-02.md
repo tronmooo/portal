@@ -285,6 +285,9 @@ The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 a
 ### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
 A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
 
+### Real-user browser flows 6 (flows6.mjs, hub profile switcher) — verified working
+The default (Self) net-worth tile equals the scoped API figure; switching to Linda through the switcher names her in the header, shows her figure, persists the scope, and the Bills view under her shows none of Self's bills; switching to Everyone shows the account figure. No page errors.
+
 ### Real-user browser flows 5 (flows5.mjs, person Info page fields) — verified working
 On a throwaway person: the add-field form saves a custom field (shown at once), a tag typed with Enter is saved, changing the type to pet is saved and the person's linked task survives it; after a reload the page shows the field, the tag and the new type. No page errors.
 
