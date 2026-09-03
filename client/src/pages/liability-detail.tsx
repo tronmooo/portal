@@ -912,22 +912,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     });
   }
 
-  // Reverse a payment — deletes the row and adds the principal+fees back to the balance.
+  // Reverse a payment. The server's unpay operation puts the principal back on
+  // the balance, rolls the due date back and clears the occurrence stamp. This
+  // used to follow with a profile PATCH of its own: the page's whole field map
+  // (stale by then: it still held the advanced due date the server had just
+  // rolled back) plus a balance it computed itself, fees included, though a
+  // fee never reduced the balance. Nothing to write here.
   const reversePaymentMutation = useMutation({
     mutationFn: async (payment: LiabilityPayment) => {
-      // Restore principal + fees to the balance (interest doesn't change balance,
-      // it accrued separately).
-      const restoreAmount = (Number(payment.principalPortion) || 0) + (Number(payment.fees) || 0);
-      const newBalance = (terms.currentBalance || 0) + restoreAmount;
       await apiRequest("DELETE", `/api/liability-payments/${payment.id}`);
-      await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
-        fields: {
-          ...(profile.fields || {}),
-          currentBalance: newBalance,
-          remainingBalance: newBalance,
-          loanBalance: newBalance,
-        },
-      });
     },
     onSuccess: () => {
       toast({ title: "Payment reversed" });

@@ -1254,3 +1254,51 @@ describe("D187: spendByCategory folds every spelling onto the budget key", () =>
     expect(out).toEqual({ transport: 57.1, food: 50, lego: 9, general: 1 });
   });
 });
+
+// ─── D188: a second payment the same day belongs to the occurrence just paid ─
+describe("D188: an implicit payment dated on or before the last paid occurrence attaches to it", () => {
+  const LOAN = { id: "loan-4", name: "Loan", type: "liability", type_key: "loan", fields: { currentBalance: 5000, interestRate: 6, monthlyPayment: 200, dueDate: "2026-09-08", nextDueDate: "2026-09-08", frequency: "monthly" } };
+  it("regular 200 on the 3rd, then 100 the same day: due date moves once, both rows recorded", async () => {
+    const { s, payments, profiles } = payStorage(LOAN);
+    await payBillOccurrence(s, "loan-4", { amount: 200, paymentDate: "2026-09-03", source: "route" }, "UTC");
+    expect(profiles.get("loan-4").fields.dueDate).toBe("2026-10-08");
+    const second = await payBillOccurrence(s, "loan-4", { amount: 100, paymentDate: "2026-09-03", source: "route" }, "UTC");
+    expect(second.ok).toBe(true);
+    expect(second.deduped).toBeFalsy();
+    expect(second.additional).toBe(true);
+    expect(second.occurrenceDate).toBe("2026-09-08");
+    expect(profiles.get("loan-4").fields.dueDate).toBe("2026-10-08");
+    expect(payments).toHaveLength(2);
+  });
+  it("catching up two overdue months claims them one after another", async () => {
+    const { s, profiles } = payStorage({ ...LOAN, id: "loan-5", fields: { ...LOAN.fields, dueDate: "2026-07-08", nextDueDate: "2026-07-08" } });
+    await payBillOccurrence(s, "loan-5", { amount: 200, paymentDate: "2026-09-03", source: "route" }, "UTC");
+    expect(profiles.get("loan-5").fields.dueDate).toBe("2026-08-08");
+    const again = await payBillOccurrence(s, "loan-5", { amount: 201, paymentDate: "2026-09-03", source: "route" }, "UTC");
+    expect(again.additional).toBeFalsy();
+    expect(again.occurrenceDate).toBe("2026-08-08");
+    expect(profiles.get("loan-5").fields.dueDate).toBe("2026-09-08");
+  });
+  it("a payment dated after the last paid occurrence is the next cycle's", async () => {
+    const { s, profiles } = payStorage({ ...LOAN, id: "loan-6" });
+    await payBillOccurrence(s, "loan-6", { amount: 200, paymentDate: "2026-09-03", source: "route" }, "UTC");
+    const next = await payBillOccurrence(s, "loan-6", { amount: 210, paymentDate: "2026-09-20", source: "route" }, "UTC");
+    expect(next.additional).toBeFalsy();
+    expect(next.occurrenceDate).toBe("2026-10-08");
+    expect(profiles.get("loan-6").fields.dueDate).toBe("2026-11-08");
+  });
+});
+
+// ─── D190: an owner that names no profile is a 404, not a 500 ───────────────
+import { setOwners } from "../server/ownership-writer";
+describe("D190: the ownership writer maps the guard's rejection to a 404", () => {
+  it("rejects with statusCode 404 naming the profile", async () => {
+    const { client } = chainClient((table, op) => {
+      if (op === "update") return { data: null, error: { message: "linked_profiles on public.tasks references profile 11111111-2222-4333-8444-555555555555 which does not exist" } };
+      if (table === "tasks") return { data: [{ id: "t-1", linked_profiles: ["22222222-2222-4222-8222-222222222222"] }], error: null };
+      return { data: [], error: null };
+    });
+    await expect(setOwners(client as any, "u-1", "task", "t-1", ["11111111-2222-4333-8444-555555555555"], "22222222-2222-4222-8222-222222222222"))
+      .rejects.toMatchObject({ statusCode: 404, message: expect.stringContaining("11111111-2222-4333-8444-555555555555") });
+  });
+});

@@ -182,7 +182,14 @@ export async function setOwners(
       .update({ linked_profiles: after })
       .eq("id", entityId)
       .eq("user_id", userId);
-    if (updErr) throw new Error(`setOwners update ${spec.entityTable} failed: ${updErr.message}`);
+    if (updErr) {
+      // The ownership guard (migration 20260729) refuses an owner id that
+      // names no profile. That is the caller's bad input, not a server fault:
+      // answer 404 like every other "no such profile", not a 500.
+      const missing = /references profile ([0-9a-f-]+) which does not exist/i.exec(updErr.message || "");
+      if (missing) throw Object.assign(new Error(`Profile ${missing[1]} not found`), { statusCode: 404 });
+      throw new Error(`setOwners update ${spec.entityTable} failed: ${updErr.message}`);
+    }
   }
 
   // Always reconcile the junction — even when JSONB was already correct, the

@@ -475,12 +475,25 @@ export async function payBillOccurrence(
   const recurring = isRecurringBill(typeKey);
   const todayISO = getUserToday(timezone);
   const curDue = readDueDate(f);
-  const occurrenceDate =
+  let occurrenceDate =
     String(input.occurrenceDate || curDue || input.paymentDate || todayISO).slice(0, 10);
   // Default the payment date to the occurrence's due date only when that day
   // has arrived; paying a future bill early is money that left TODAY. The old
   // default dated "Mark paid" on a bill due next week as next week's expense.
   const paymentDate = String(input.paymentDate || (occurrenceDate > todayISO ? todayISO : occurrenceDate)).slice(0, 10);
+  // An implicit "pay what's due" dated on or before the occurrence that was
+  // paid last belongs to THAT occurrence: the regular payment on the 3rd
+  // advanced the due date to next month, so a second amount sent the same day
+  // used to be booked as next month's payment and the due date skipped a
+  // month. A payment dated after the last paid occurrence is the next cycle's
+  // (a catch-up on two overdue months still claims them one after another).
+  if (!input.occurrenceDate && input.paymentType !== "extra_principal") {
+    const paidDates = Object.entries((f.occurrences && typeof f.occurrences === "object") ? f.occurrences : {})
+      .filter(([d, o]: [string, any]) => o && o.status === "paid" && /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .map(([d]) => d).sort();
+    const lastPaid = paidDates[paidDates.length - 1];
+    if (lastPaid && paymentDate <= lastPaid && occurrenceDate > lastPaid) occurrenceDate = lastPaid;
+  }
 
   // ONE amount resolver for every entry point: the occurrence's real total —
   // base + this period's charges, or the posted actual — through the billing
