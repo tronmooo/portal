@@ -1150,6 +1150,18 @@ describe("D183: a second, different payment on a settled occurrence is recorded,
     expect(payments).toHaveLength(2);
     expect(profiles.get("loan-2").fields.currentBalance).toBeCloseTo(5000 - 100 - second.payment.principalPortion, 2);
   });
+  it("automation re-paying a settled occurrence stays idempotent (extraction, ai, autopay)", async () => {
+    for (const source of ["extraction", "ai", "autopay"] as const) {
+      const { s, payments } = payStorage({ id: "bill-2", name: "Water", type: "liability", type_key: "utility", fields: { monthlyAmount: 40, amount: 40, dueDate: "2026-09-10", nextDueDate: "2026-09-10", frequency: "monthly", autoLogExpense: false } });
+      const first = await payBillOccurrence(s, "bill-2", { occurrenceDate: "2026-09-10", paymentDate: "2026-09-01", source: "route" }, "UTC");
+      // Well past the double-tap window, a different amount: still the same occurrence for automation.
+      s.getProfile = (((orig) => async (id: string) => { const p = await orig(id); if (p?.fields?.occurrences?.["2026-09-10"]) p.fields.occurrences["2026-09-10"].postedAt = "2026-09-01T00:00:00Z"; return p; })(s.getProfile));
+      const again = await payBillOccurrence(s, "bill-2", { occurrenceDate: "2026-09-10", amount: 45, paymentDate: "2026-09-02", source }, "UTC");
+      expect(again.deduped, source).toBe(true);
+      expect(again.payment?.id, source).toBe(first.payment.id);
+      expect(payments, source).toHaveLength(1);
+    }
+  });
   it("a bill paid in two goes: the second part is a payment of its own on the same occurrence", async () => {
     const { s, payments, profiles } = payStorage({ id: "bill-1", name: "Power", type: "liability", type_key: "utility", fields: { monthlyAmount: 100, amount: 100, dueDate: "2026-09-10", nextDueDate: "2026-09-10", frequency: "monthly", autoLogExpense: false } });
     const a = await payBillOccurrence(s, "bill-1", { amount: 60, occurrenceDate: "2026-09-10", paymentDate: "2026-09-03" }, "UTC");

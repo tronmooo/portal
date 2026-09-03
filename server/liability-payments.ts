@@ -507,6 +507,10 @@ export async function payBillOccurrence(
     const ageMs = stamp && typeof stamp.postedAt === "string" ? Date.now() - Date.parse(stamp.postedAt) : NaN;
     return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 8000 && Math.abs(Number(stamp.amount) - amount) < 0.005;
   };
+  // Only an explicit form submission means "pay this again": automation
+  // (autopay, a confirmed extraction, a chat tool the model may call twice)
+  // keeps the old idempotent answer on a settled occurrence.
+  const automated = input.source === "autopay" || input.source === "extraction" || input.source === "ai" || input.source === "shim";
   let additional = false;
 
   // ── 0a. an implicit "pay what's due" right after a payment is the same tap ─
@@ -563,7 +567,7 @@ export async function payBillOccurrence(
       const claim = await claimFn.call(storage, liabilityId, occurrenceDate, stamp, extra);
       if (claim.status === "already-paid") {
         const prior = claim.occurrences?.[occurrenceDate];
-        if (sameTap(prior)) {
+        if (sameTap(prior) || automated) {
           const winner = await findPaymentWithRetry(storage, liabilityId, prior?.paymentId);
           return {
             ok: true, deduped: true, payment: winner, liability, occurrenceDate,
