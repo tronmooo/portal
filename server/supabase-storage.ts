@@ -2246,17 +2246,27 @@ export class SupabaseStorage implements IStorage {
     const cascadeTrackers = async (): Promise<void> => {
       if (!allTrackers) return;
       try {
-        const trackerIds = allTrackers.filter(t => (t.linkedProfiles || []).includes(id)).map(t => t.id);
+        // The same rule as every other multi-owner table (D250): a tracker
+        // this profile owns ALONE goes entirely; one it SHARES keeps the other
+        // owners' data and only loses this profile (and the entries logged
+        // for it). Mirrors migrations/20260903_shared_tracker_cascade.sql.
+        const linked = allTrackers.filter(t => (t.linkedProfiles || []).includes(id));
+        const soleIds = linked.filter(t => (t.linkedProfiles || []).length <= 1).map(t => t.id);
+        const shared = linked.filter(t => (t.linkedProfiles || []).length > 1);
         // FK ordering: entries (children) before trackers (parents).
-        for (const c of chunk(trackerIds)) {
+        for (const c of chunk(soleIds)) {
           const { error } = await this.supabase.from("tracker_entries").delete().in("tracker_id", c).eq("user_id", this.userId);
           if (error) throw error;
         }
-        // Also catch orphaned entries carrying this profile_id on trackers
-        // that aren't directly linked.
+        // Entries logged for this profile on any tracker, shared ones included.
         const { error: orphanErr } = await this.supabase.from("tracker_entries").delete().eq("profile_id", id).eq("user_id", this.userId);
         if (orphanErr) throw orphanErr;
-        await bulkDeleteByIds("trackers", trackerIds);
+        await bulkDeleteByIds("trackers", soleIds);
+        await Promise.all(shared.map(async (t) => {
+          const remaining = (t.linkedProfiles || []).filter(pid => pid !== id);
+          const { error } = await this.supabase.from("trackers").update({ linked_profiles: remaining }).eq("id", t.id).eq("user_id", this.userId);
+          if (error) throw error;
+        }));
       } catch (e) { errors.push("trackers"); }
     };
 

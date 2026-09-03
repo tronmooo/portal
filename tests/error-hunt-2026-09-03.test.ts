@@ -2721,3 +2721,28 @@ describe("D243: the AI's name fallback matches whole names and word starts, neve
     expect((await s.getExpense(lunch.id))!.linkedProfiles).toContain(joanna.id);
   });
 });
+
+// ─── D250: deleting a person deleted the trackers she shared with Self ──────
+describe("D250: a shared tracker survives one owner's deletion; a sole-owner tracker goes with them", () => {
+  it("MemStorage applies the multi-owner rule to trackers", async () => {
+    const s = new MemStorage();
+    const self = await s.createProfile({ name: "Me", type: "self", fields: {} } as any);
+    const kim = await s.createProfile({ name: "Kim", type: "person", fields: {} } as any);
+    const shared = await s.createTracker({ name: "Family steps", category: "fitness", fields: [{ name: "steps", type: "number" }], linkedProfiles: [self.id, kim.id] } as any);
+    const own = await s.createTracker({ name: "Kim weight", category: "health", fields: [{ name: "weight", type: "number" }], linkedProfiles: [kim.id] } as any);
+    await s.logEntry({ trackerId: shared.id, values: { steps: 8000 }, __skipHabitSync: true } as any);
+    expect(await s.deleteProfile(kim.id)).toBe(true);
+    const kept = await s.getTracker(shared.id);
+    expect(kept?.linkedProfiles).toEqual([self.id]);
+    expect(kept?.entries).toHaveLength(1);
+    expect(await s.getTracker(own.id)).toBeUndefined();
+  });
+  it("the cascade migration deletes only sole-owner trackers and unlinks the rest", () => {
+    const sql = readFileSync("migrations/20260903_shared_tracker_cascade.sql", "utf8");
+    const trackerDelete = sql.match(/DELETE FROM trackers[\s\S]*?;/)?.[0] ?? "";
+    expect(trackerDelete).toMatch(/jsonb_array_length\(linked_profiles\) <= 1/);
+    expect(sql).toMatch(/UPDATE trackers[\s\S]*?linked_profiles @> jsonb_build_array\(v_pid\)/);
+    const entryDelete = sql.match(/DELETE FROM tracker_entries te[\s\S]*?;/)?.[0] ?? "";
+    expect(entryDelete).toMatch(/jsonb_array_length\(t\.linked_profiles\) <= 1/);
+  });
+});

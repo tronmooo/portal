@@ -1235,7 +1235,9 @@ export class MemStorage implements IStorage {
     return cleaned === t.name ? t : { ...t, name: cleaned };
   }
   async createTracker(data: InsertTracker): Promise<Tracker> {
-    const tracker: Tracker = { id: randomUUID(), ...data, fields: data.fields || [], entries: [], linkedProfiles: [], createdAt: new Date().toISOString() };
+    // Parity with SupabaseStorage: the owners the caller names are kept (a
+    // shared tracker is one with two owners — see the D250 cascade rule).
+    const tracker: Tracker = { id: randomUUID(), ...data, fields: data.fields || [], entries: [], linkedProfiles: Array.isArray((data as any).linkedProfiles) ? [...(data as any).linkedProfiles] : [], createdAt: new Date().toISOString() };
     this.trackers.set(tracker.id, tracker);
     this.logActivity("tracker", `Created tracker: ${tracker.name}`);
     return tracker;
