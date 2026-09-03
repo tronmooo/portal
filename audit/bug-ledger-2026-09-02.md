@@ -1130,3 +1130,8 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 
 - Before: two concurrent restores of one export into an empty replica account both answered 200 and left 5 profiles for 3, 2 tasks for 1, 2 expenses for 1 (1/2). After the rebuild: 200 + 409 and exactly one copy of each row, one Self (2/2).
 - Related system, same class (s241): two concurrent `POST /api/finance-import/commit` of one payload — before: both 200, 4 expenses for 2 and 2 subscriptions for 1; after the lock: 200 + 409, one copy of each.
+
+### More concurrency and a production integrity sweep — verified (s242)
+
+- Budgets month row under concurrent writes (s242, 3/3): two adds of different categories both survive; two edits of different caps both land; a delete and an add at once both land.
+- Production (read-only, 22:45 UTC): no open reminder for a missing bill, no open task linking a missing profile, no budget month with a doubled (category, owner) bucket. The client surfaces the new 409 refusals (D261) through the shared request helper's error toast on both the backup restore and the ChatGPT import.
