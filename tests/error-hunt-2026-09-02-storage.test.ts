@@ -857,9 +857,14 @@ describe("D103: a settled one-time bill has no next due date; recurrenceEnd ride
     expect(s.liabilityToObligation(unpaid).nextDueDate).toBe("2026-09-05");
     const monthly = { ...once, fields: { amount: 30, frequency: "monthly", dueDate: "2026-09-05", recurrenceEnd: "2026-09-01", occurrences: { "2026-09-05": { status: "paid" } } } };
     const o = s.liabilityToObligation(monthly);
-    // D119: a recurring bill on a paid occurrence maps to its next unsettled date
-    expect(o.nextDueDate).toBe("2026-10-05");
+    // D119: a recurring bill on a paid occurrence maps to its next unsettled
+    // date — unless that date falls past recurrenceEnd, in which case the
+    // series has ended (D252): no next due date, status "ended".
+    expect(o.nextDueDate).toBe("");
+    expect(o.status).toBe("ended");
     expect(o.recurrenceEnd).toBe("2026-09-01");
+    const stillRunning = { ...monthly, fields: { ...monthly.fields, recurrenceEnd: "2026-12-31" } };
+    expect(s.liabilityToObligation(stillRunning).nextDueDate).toBe("2026-10-05");
   });
 });
 

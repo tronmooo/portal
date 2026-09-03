@@ -87,7 +87,7 @@ import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-owne
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
-import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, resolveOccurrenceKey } from "../shared/liability-recurrence";
+import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, resolveOccurrenceKey, isEndedBillFields } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
@@ -648,10 +648,11 @@ function isUniqueViolationError(e: any): boolean {
 }
 
 /** Fold any liability lifecycle word into the obligation status enum. */
-export function canonicalObligationStatus(raw: unknown): "active" | "paused" | "cancelled" {
+export function canonicalObligationStatus(raw: unknown): "active" | "paused" | "cancelled" | "ended" {
   const v = String(raw ?? "").trim().toLowerCase();
   if (v === "paused") return "paused";
   if (v === "cancelled" || v === "canceled") return "cancelled";
+  if (v === "ended") return "ended";
   return "active";
 }
 
@@ -5463,6 +5464,11 @@ export class SupabaseStorage implements IStorage {
     }
     // A rescheduled occurrence is due on the day it was moved to (D221).
     if (nextDueDate) nextDueDate = effectiveDueDate(f, nextDueDate);
+    // A finite series with no occurrence left is ended: no next due date, and
+    // a status the bills list, the totals and the due-scan all recognise
+    // (D252). The calendar already drew nothing for it.
+    const seriesEnded = !!nextDueDate && isEndedBillFields(f, nextDueDate);
+    if (seriesEnded) nextDueDate = "";
     // `amount` is what the NEXT BILLING PERIOD actually costs, not the
     // definition's figure. For a fixed bill those are identical; for a
     // usage-based one the definition says $20 while August says $62, and every
@@ -5489,7 +5495,7 @@ export class SupabaseStorage implements IStorage {
       // liability fields also carry lifecycle words ("upcoming", "overdue",
       // written by the pay path). Echoing those back made an edit form that
       // round-trips the record fail validation with a 400.
-      status: canonicalObligationStatus(f.status),
+      status: seriesEnded ? "ended" : canonicalObligationStatus(f.status),
       recurrenceEnd: typeof f.recurrenceEnd === "string" && f.recurrenceEnd ? String(f.recurrenceEnd).slice(0, 10) : undefined,
       kind: kind as any,
       leadTimeDays: 3,

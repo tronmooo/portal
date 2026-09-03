@@ -31,7 +31,7 @@ export function isActiveObligation(
   o: { status?: string | null; nextDueDate?: string | Date | null; recurrenceEnd?: string | null } | null | undefined,
 ): boolean {
   const s = o?.status;
-  if (s === "paused" || s === "cancelled") return false;
+  if (s === "paused" || s === "cancelled" || s === "ended") return false;
   // A finite series whose next occurrence falls after its end date has no
   // occurrence left: the calendar already drew nothing for it, but the bills
   // list and the monthly total still counted it.

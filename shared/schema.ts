@@ -748,7 +748,7 @@ export const insertObligationSchema = z.object({
   kind: z.enum(["bill","subscription","loan_payment","medication","maintenance","appointment","habit","doc_expiration","task"]).default("bill"),
   nextDueDate: calendarDay,
   autopay: z.boolean().default(false),
-  status: z.enum(["active", "paused", "cancelled"]).optional(),
+  status: z.enum(["active", "paused", "cancelled", "ended"]).optional(),
   notes: z.string().optional(),
   leadTimeDays: z.number().int().min(0).max(365).optional(),
   autoLogExpense: z.boolean().optional(),

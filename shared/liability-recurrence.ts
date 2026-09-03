@@ -192,6 +192,20 @@ export function isSettledOccurrence(fields: any, dateISO: string): boolean {
  * and the due-scan cron read the profile rows directly and kept warning,
  * reminding — and, for an autopay bill, paying — while it was paused.
  */
+/**
+ * A finite series with no occurrence left: its `recurrenceEnd` is before the
+ * occurrence that would come next. The calendar already draws nothing for it;
+ * the bills list still called it "active" with a next due date and the daily
+ * due-scan still wrote a "Bill due" reminder for it (D252).
+ */
+export function isEndedBillFields(fields: any, nextDueISO?: string | null): boolean {
+  const f = fields || {};
+  const end = typeof f.recurrenceEnd === "string" ? f.recurrenceEnd.slice(0, 10) : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return false;
+  const next = String(nextDueISO || readDueDate(f) || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(next) && next > end;
+}
+
 export function isPausedBillFields(fields: any): boolean {
   const f = fields || {};
   if (f.paused === true) return true;

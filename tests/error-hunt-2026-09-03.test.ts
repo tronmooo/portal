@@ -2796,3 +2796,25 @@ describe("D251: the legacy name matcher behind forty tools asks on an exact dupl
     expect(await s.getExpenses()).toHaveLength(0);
   });
 });
+
+// ─── D252: a bill whose series ended kept coming due ────────────────────────
+import { isEndedBillFields } from "../shared/liability-recurrence";
+import { isActiveObligation } from "../shared/obligation-windows";
+describe("D252: a finite series past its recurrenceEnd is ended everywhere, not just on the calendar", () => {
+  it("rule: ended when the next occurrence falls after recurrenceEnd", () => {
+    expect(isEndedBillFields({ recurrenceEnd: "2026-08-14", dueDate: "2026-09-05" })).toBe(true);
+    expect(isEndedBillFields({ recurrenceEnd: "2026-09-30", dueDate: "2026-09-05" })).toBe(false);
+    expect(isEndedBillFields({ dueDate: "2026-09-05" })).toBe(false);
+    expect(isEndedBillFields({ recurrenceEnd: "2026-08-14" }, "2026-09-05")).toBe(true);
+    expect(isActiveObligation({ status: "ended", nextDueDate: "" })).toBe(false);
+  });
+  it("the bills projection reports it ended with no next due date", () => {
+    const s = bareStorage();
+    const gym = { id: "g1", name: "Old gym", type: "liability", type_key: "subscription", fields: { monthlyAmount: 25, frequency: "monthly", dueDate: "2026-09-05", nextDueDate: "2026-09-05", recurrenceEnd: "2026-08-14" } };
+    const o = s.liabilityToObligation(gym);
+    expect(o.status).toBe("ended");
+    expect(o.nextDueDate).toBe("");
+    const live = { ...gym, fields: { ...gym.fields, recurrenceEnd: "2026-12-31" } };
+    expect(s.liabilityToObligation(live)).toMatchObject({ status: "active", nextDueDate: "2026-09-05" });
+  });
+});
