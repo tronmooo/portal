@@ -355,8 +355,8 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
-### Insurance policies and the bills surfaces (probe s155) — open item, not a fix
-The type registry carries insurance definitions (auto, home, health, …, category "insurance") but no production account has created one. A liability-typed policy with a monthly premium due in three days appears on the calendar timeline (which builds occurrences from liability rows) yet not in the bills list or the snapshot's upcoming bills (insurance keys are outside the recurring family). Recorded for the owner as a product decision: whether a premium is a recurring bill.
+### Insurance policies and the bills surfaces (probe s155) — probe artifact, corrected
+The type registry carries insurance definitions (auto, home, health, …, category "insurance") and the create dialog stores a picked one as an ASSET (`mapTypeKeyToLegacyType`: assets and insurance → asset), never as a liability; no production account has one. The probe had created a liability-typed policy by hand, a shape the form cannot produce, so its finding (on the calendar, not in the bills list) does not apply to real data. Whether a policy's premium should feed cash flow is a product question, noted under open items.
 
 ### A bill on a co-owned car under the co-owner's scope (probes s153, s154) — verified working, with two probe artifacts
 With Linda a 50% co-owner of a car, a recurring bill attached to the car shows under Linda's bills list, snapshot and timeline. Two earlier misreadings were the probes' own: the bulk party-link listing ignores an `?assetProfileId=` query and returns every link (the "duplicate owner link" was another car's), and a liability created with type_key "insurance" is not in the recurring family, so it never reaches the bills list at all (see the note on liability families under open items).
