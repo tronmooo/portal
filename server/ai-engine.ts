@@ -65,6 +65,7 @@ import { matchHabitForCompletionReport, classifyCompletionReport, isHardCompleti
 import { resolveReferent, buildReferentDirective, type ReferentCandidate } from "@shared/referent-resolution";
 import { completeHabitOccurrence, uncompleteHabitOccurrence, resolveTrackerForHabit, type HabitCompletionSource } from "./habit-completion";
 import { removeTrackerEntry } from "./tracker-entries";
+import { financialSnapshotLine } from "./ai-financial-snapshot";
 // One resolver for "does a thing by this name exist?" — see server/entity-resolver.ts.
 import { resolveActionable, ofKind, crossKindHint } from "./entity-resolver";
 
@@ -15908,21 +15909,20 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     `Goals: ${goals.filter(g => g.status === "active").slice(0, 15).map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
     // Journal entries intentionally EXCLUDED from context — the journal_entry tool handles all checks.
     // Including them caused the AI to hallucinate that profiles "already have entries" based on content similarity.
-    // Financial intelligence — net worth and burn rate for AI diagnostics
-    (() => {
-      const selfProf = profiles.find((p: any) => p.type === "self");
-      if (!selfProf) return "";
-      const children = profiles.filter((p: any) => p.parentProfileId === selfProf.id);
-      const assetTypes = ["vehicle","property","investment","asset","account","banking"];
-      const totalAssets = children.filter((c: any) => assetTypes.includes(c.type))
-        .reduce((s, c) => s + Number(c.fields?.currentValue || c.fields?.value || c.fields?.purchasePrice || c.fields?.balance || 0), 0);
-      const totalLiabs = children.filter((c: any) => c.type === "loan" || c.type === "liability" || c.fields?.loanBalance)
-        .reduce((s, c) => s + Number(c.fields?.remainingBalance || c.fields?.loanBalance || 0), 0);
-      const monthlySubs = obligations.filter((o: any) => o.status !== "cancelled")
-        .reduce((s, o) => s + toMonthlyAmount(Number(o.amount || 0), o.frequency), 0);
-      const thisMonthSpend = expenses.filter(e => e.date?.startsWith(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }).slice(0,7)))
-        .reduce((s, e) => s + Number(e.amount || 0), 0);
-      return `Financial Snapshot: Net Worth ~$${(totalAssets - totalLiabs).toLocaleString()}, Assets $${totalAssets.toLocaleString()}, Liabilities $${totalLiabs.toLocaleString()}, Monthly subscriptions $${Math.round(monthlySubs)}/mo, This month's spending $${Math.round(thisMonthSpend)}`;
+    // Financial intelligence — the SAME net-worth model as the dashboard
+    // (server/ai-financial-snapshot.ts), scoped like the rest of the context.
+    (async () => {
+      try {
+        const links = await ownershipLinksFor(storage);
+        return financialSnapshotLine({
+          allProfiles,
+          selectedIds: profileFilterIds,
+          ownership: { assetLinks: links.assetPartyLinks, liabilityLinks: links.liabilityProfileLinks, selfProfileId },
+          obligations,
+          expenses,
+          timezone: aiUserTimezone(),
+        });
+      } catch { return ""; }
     })(),
     // Medication trackers — special category for the AI to reference
     (() => {

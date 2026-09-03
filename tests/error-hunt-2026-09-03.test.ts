@@ -1829,3 +1829,40 @@ describe("D216: get_summary incomes.monthlyRecurring", () => {
     expect(Math.round(summary.incomes.monthlyRecurring)).toBe(2600);
   });
 });
+
+// ─── D217: the AI's financial snapshot is the dashboard's ────────────────────
+import { financialSnapshot } from "../server/ai-financial-snapshot";
+import { computeNetWorth as nwCompute } from "../shared/net-worth";
+describe("D217: financialSnapshot", () => {
+  const self = { id: "self", type: "self", name: "Me", fields: {} };
+  const linda = { id: "linda", type: "person", name: "Linda", parentProfileId: "self", fields: {} };
+  const car = { id: "car", type: "asset", type_key: "vehicle", name: "Civic", parentProfileId: "linda", fields: { value: 12000 } };
+  const house = { id: "house", type: "asset", type_key: "primary_residence", name: "House", parentProfileId: "self", fields: { currentValue: 400000 } };
+  const card = { id: "card", type: "liability", type_key: "credit_card", name: "Visa", parentProfileId: "self", fields: { currentBalance: 2500 } };
+  const profiles = [self, linda, car, house, card];
+  // As the API writes them: every asset/liability gets its parent's owner
+  // link on creation (s160), so the car is Linda's outright.
+  const ownership = { assetLinks: [
+    { assetProfileId: "car", partyProfileId: "linda", ownershipPercentage: 100, role: "owner" },
+    { assetProfileId: "house", partyProfileId: "self", ownershipPercentage: 50, role: "owner" },
+    { assetProfileId: "house", partyProfileId: "linda", ownershipPercentage: 50, role: "co_owner" },
+  ], liabilityLinks: [{ liabilityProfileId: "card", partyProfileId: "self", ownershipPercentage: 100, role: "owner" }], selfProfileId: "self" };
+  it("matches computeNetWorth for everyone, nested car and co-owned house included", () => {
+    const tile = nwCompute(profiles, { mode: "everyone", selectedIds: [], ownership });
+    const s = financialSnapshot({ allProfiles: profiles, obligations: [], expenses: [], ownership, timezone: TZ });
+    expect(s.assets).toBe(tile.assets);
+    expect(s.liabilities).toBe(tile.liabilities);
+    expect(s.netWorth).toBe(tile.netWorth);
+    expect(s.assets).toBe(412000);
+    expect(s.liabilities).toBe(2500);
+  });
+  it("scopes to Linda like the tile does and counts this month's spend in the user's zone", () => {
+    const tile = nwCompute(profiles, { mode: "selected", selectedIds: ["linda"], ownership });
+    const ym = curMonth(TZ);
+    const s = financialSnapshot({ allProfiles: profiles, selectedIds: ["linda"], obligations: [{ amount: 120, frequency: "yearly", status: "active" }], expenses: [{ amount: 40, date: `${ym}-02` }, { amount: 99, date: "2020-01-02" }], ownership, timezone: TZ });
+    expect(s.netWorth).toBe(tile.netWorth);
+    expect(s.assets).toBe(212000);
+    expect(s.monthlySubs).toBe(10);
+    expect(s.thisMonthSpend).toBe(40);
+  });
+});
