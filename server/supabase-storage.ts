@@ -5561,18 +5561,50 @@ export class SupabaseStorage implements IStorage {
   /** Merge a per-occurrence override into fields.occurrences (shallow-replaced).
    *  A key set to null in `patch` is REMOVED — this is how unpayBillOccurrence
    *  clears a paid stamp without touching the rest of the period's history. */
-  async updateOccurrenceOverride(id: string, date: string, patch: Record<string, any>): Promise<any> {
+  /**
+   * Change ONE billing period's override. `patch` is merged over the stored
+   * override, or — as a function — computed from the FRESH override, so a
+   * charge appended by two requests at once keeps both charges.
+   *
+   * Written with the same optimistic-concurrency loop the pay claim uses
+   * (read `fields, updated_at`, write only if nobody else wrote the row since,
+   * retry): two skips on different occurrences used to race through a plain
+   * read-merge-write of the whole `fields` map and one skip was lost.
+   */
+  async updateOccurrenceOverride(
+    id: string,
+    date: string,
+    patch: Record<string, any> | ((current: Record<string, any>) => Record<string, any>),
+  ): Promise<any> {
     const p = await this.getProfile(id);
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
-    const f: any = p.fields || {};
-    const occ: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
-    const existing = occ[date] || {};
-    const merged = { ...existing, ...patch };
-    // Drop keys explicitly nulled so an override can be cleared.
-    for (const k of Object.keys(merged)) if (merged[k] === null) delete merged[k];
-    occ[date] = merged;
-    await this.updateProfile(id, { fields: { occurrences: occ } } as any);
-    return this.getLiabilitySchedule(id);
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const { data: fresh, error: readErr } = await this.supabase.from("profiles").select("fields, updated_at")
+        .eq("id", id).eq("user_id", this.userId).maybeSingle();
+      if (readErr) throw readErr;
+      if (!fresh) return null;
+      const f: any = (fresh.fields && typeof fresh.fields === "object") ? fresh.fields : {};
+      const occ: Record<string, any> = (f.occurrences && typeof f.occurrences === "object") ? { ...f.occurrences } : {};
+      const existing = occ[date] || {};
+      const delta = typeof patch === "function" ? patch(existing) : patch;
+      const merged: Record<string, any> = { ...existing, ...delta };
+      // Drop keys explicitly nulled so an override can be cleared.
+      for (const k of Object.keys(merged)) if (merged[k] === null) delete merged[k];
+      occ[date] = merged;
+      const nextFields = mergeFieldWrite(f, { occurrences: occ }).fields;
+      const now = new Date().toISOString();
+      let q = this.supabase.from("profiles").update({ fields: nextFields, updated_at: now }).eq("id", id).eq("user_id", this.userId);
+      q = fresh.updated_at == null ? q.is("updated_at", null) : q.eq("updated_at", fresh.updated_at);
+      const { data, error } = await q.select("id");
+      if (error) throw error;
+      if (Array.isArray(data) && data.length > 0) {
+        this.clearRequestMemo();
+        bustInsightsCacheFor(this.userId);
+        return this.getLiabilitySchedule(id);
+      }
+      await new Promise((r) => setTimeout(r, 10 + attempt * 20));
+    }
+    throw new Error(`Occurrence write for ${id} on ${date} kept colliding with another writer; try again`);
   }
 
   /** The stored override for ONE billing period, or null. */
@@ -5596,8 +5628,7 @@ export class SupabaseStorage implements IStorage {
     const p = await this.getProfile(id);
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const occDate = String(date).slice(0, 10);
-    const next = addCharge(this._occurrenceOverride(p, occDate), charge as any);
-    const result = await this.updateOccurrenceOverride(id, occDate, { charges: next.charges });
+    const result = await this.updateOccurrenceOverride(id, occDate, (current) => ({ charges: addCharge(current, charge as any).charges }));
     this.logActivity("obligation", `Added ${charge.kind || "charge"} of $${charge.amount} to ${p.name} ${occDate}`);
     return result;
   }
@@ -5606,8 +5637,7 @@ export class SupabaseStorage implements IStorage {
     const p = await this.getProfile(id);
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const occDate = String(date).slice(0, 10);
-    const next = removeCharge(this._occurrenceOverride(p, occDate), chargeId);
-    return this.updateOccurrenceOverride(id, occDate, { charges: next.charges });
+    return this.updateOccurrenceOverride(id, occDate, (current) => ({ charges: removeCharge(current, chargeId).charges }));
   }
 
   /** What we EXPECT this period to cost. Never touches other periods. */

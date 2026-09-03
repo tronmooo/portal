@@ -905,3 +905,36 @@ describe("D176: budget writes are a compare-and-swap on the month's row", () => 
     expect(calls.some(([t, op]) => t === "preferences" && op === "delete")).toBe(true);
   });
 });
+
+// ─── D177: parallel skips on one bill do not lose each other ────────────────
+describe("D177: updateOccurrenceOverride is an optimistic-concurrency write", () => {
+  it("a write that lost the race re-reads the fresh map and re-applies its own change", async () => {
+    let reads = 0; const updates: any[] = [];
+    const first = { fields: { occurrences: {} }, updated_at: "t1" };
+    const second = { fields: { occurrences: { "2026-09-10": { status: "skipped" } } }, updated_at: "t2" };
+    const { client } = chainClient((table, op, payload) => {
+      if (table !== "profiles") return { data: [], error: null };
+      if (op === "select") { reads++; return { data: [reads === 1 ? first : second], error: null }; }
+      if (op === "update") { updates.push(payload); return { data: updates.length === 1 ? [] : [{ id: "bill-1" }], error: null }; }
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client, getProfile: async () => ({ id: "bill-1", type: "liability", fields: {} }), getLiabilitySchedule: async () => ({ ok: true }), clearRequestMemo: () => {} });
+    const out = await s.updateOccurrenceOverride("bill-1", "2026-09-17", { status: "skipped" });
+    expect(out).toEqual({ ok: true });
+    expect(updates).toHaveLength(2);
+    expect(updates[1].fields.occurrences).toEqual({ "2026-09-10": { status: "skipped" }, "2026-09-17": { status: "skipped" } });
+  });
+  it("a function patch sees the fresh occurrence (a second charge keeps the first)", async () => {
+    const updates: any[] = [];
+    const row = { fields: { occurrences: { "2026-09-10": { charges: [{ id: "c1", amount: 5 }] } } }, updated_at: "t1" };
+    const { client } = chainClient((table, op, payload) => {
+      if (table !== "profiles") return { data: [], error: null };
+      if (op === "select") return { data: [row], error: null };
+      if (op === "update") { updates.push(payload); return { data: [{ id: "bill-1" }], error: null }; }
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client, getProfile: async () => ({ id: "bill-1", type: "liability", fields: {} }), getLiabilitySchedule: async () => ({ ok: true }), clearRequestMemo: () => {} });
+    await s.updateOccurrenceOverride("bill-1", "2026-09-10", (cur: any) => ({ charges: [...(cur.charges || []), { id: "c2", amount: 7 }] }));
+    expect(updates[0].fields.occurrences["2026-09-10"].charges.map((c: any) => c.id)).toEqual(["c1", "c2"]);
+  });
+});
