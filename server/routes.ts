@@ -32,7 +32,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense } from "./liability-payments";
+import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -10911,6 +10911,19 @@ No emojis. No prose outside the JSON.`,
     // the original payment left, so the same period is settled again.
     const liability: any = await storage.getProfile(row.liabilityProfileId);
     if (!liability) return res.status(404).json({ error: "Liability not found" });
+    // A recurring bill's payment is re-priced IN PLACE (ledger row, paid
+    // stamp, paying account and the logged expense move together). Unpay +
+    // pay, kept below for debts whose split and balance must be recomputed,
+    // deleted the logged expense and re-logged a fresh one — the category and
+    // description the user had given it were thrown away (D235).
+    if (isRecurringBill(liability.type_key ?? liability.typeKey)) {
+      const repriced = await repriceBillPayment(storage, row.id, { amount, paymentDate }, { expense: "sync" }, log);
+      if (!repriced.ok) return res.status(404).json({ error: "Payment not found" });
+      let payment = repriced.payment;
+      if (Object.keys(cosmetic).length > 0) payment = (await storage.updateLiabilityPayment(row.id, cosmetic)) ?? payment;
+      bustBillCaches(uid);
+      return res.json(payment);
+    }
     const occ = (liability.fields?.occurrences && typeof liability.fields.occurrences === "object") ? liability.fields.occurrences : {};
     const stamped = Object.entries(occ).find(([, ov]: [string, any]) => ov && ov.paymentId === row.id);
     const occurrenceDate = stamped?.[0] || String(row.paymentDate || "").slice(0, 10) || null;

@@ -2451,3 +2451,53 @@ describe("D234: the AI's update_expense re-prices a bill payment the same way", 
     expect(stamp).toMatchObject({ amount: 45, actualAmount: 45, paidAmount: 45, status: "paid" });
   });
 });
+
+// ─── D235: a bill payment edited from the bill page re-logged its expense ──
+import { repriceBillPayment } from "../server/liability-payments";
+describe("D235: editing a bill payment's amount or date re-prices in place and keeps the logged expense", () => {
+  const silent = { warn: () => {}, error: () => {} };
+  function world() {
+    const writes: any[] = [];
+    const liability: any = { id: "bill-1", name: "Power", type: "liability", type_key: "utility", fields: { lastPaidDate: "2026-09-03", occurrences: { "2026-09-06": { status: "paid", paymentId: "pay-1", amount: 40, actualAmount: 40, paidAmount: 40 } } } };
+    const expense: any = { id: "exp-1", amount: 40, date: "2026-09-03", category: "utilities", description: "Power (September)", tags: ["bill-payment", "liability:bill-1", "payment:pay-1"], linkedProfiles: [] };
+    const row: any = { id: "pay-1", liabilityProfileId: "bill-1", amount: 40, principalPortion: 40, interestPortion: 0, paymentDate: "2026-09-03" };
+    const s: any = {
+      getLiabilityPayment: async (id: string) => id === "pay-1" ? row : undefined,
+      updateLiabilityPayment: async (id: string, patch: any) => { writes.push(["payment", patch]); Object.assign(row, patch); return row; },
+      getProfile: async (id: string) => id === "bill-1" ? liability : undefined,
+      mutateProfileFields: async (_id: string, fn: any) => { const p = fn(liability); writes.push(["liability", p]); if (p?.fields) liability.fields = { ...liability.fields, ...p.fields }; return liability; },
+      getExpenses: async () => [expense],
+      updateExpense: async (id: string, patch: any) => { writes.push(["expense", id, patch]); Object.assign(expense, patch); return expense; },
+      adjustAccountBalance: async () => undefined,
+    };
+    return { s, writes, liability, expense, row };
+  }
+  it("amount 40 → 45: ledger row, stamp and the expense's amount move; its category and description stay", async () => {
+    const { s, expense, liability } = world();
+    const out = await repriceBillPayment(s, "pay-1", { amount: 45 }, { expense: "sync" }, silent);
+    expect(out).toMatchObject({ ok: true, stampMoved: true, expenseUpdated: true, amount: 45 });
+    expect(expense).toMatchObject({ id: "exp-1", amount: 45, category: "utilities", description: "Power (September)" });
+    expect(liability.fields.occurrences["2026-09-06"]).toMatchObject({ paidAmount: 45, status: "paid" });
+  });
+  it("date 09-03 → 09-04: the row, the expense date and lastPaidDate follow; the stamp's amount is untouched", async () => {
+    const { s, expense, liability, row, writes } = world();
+    const out = await repriceBillPayment(s, "pay-1", { paymentDate: "2026-09-04" }, { expense: "sync" }, silent);
+    expect(out).toMatchObject({ ok: true, stampMoved: false, expenseUpdated: true, paymentDate: "2026-09-04" });
+    expect(row.paymentDate).toBe("2026-09-04");
+    expect(expense.date).toBe("2026-09-04");
+    expect(liability.fields.lastPaidDate).toBe("2026-09-04");
+    expect(writes.filter((w) => w[0] === "payment")).toEqual([["payment", { paymentDate: "2026-09-04" }]]);
+  });
+  it("route: PATCH /api/liability-payments/:id on a recurring bill keeps the expense the user edited", async () => {
+    const { s: st, expense, writes } = world();
+    h = await boot({ profiles: [{ id: "bill-1", name: "Power", type: "liability", type_key: "utility", fields: { lastPaidDate: "2026-09-03", occurrences: { "2026-09-06": { status: "paid", paymentId: "pay-1", amount: 40 } } } }] }, (storage) => {
+      for (const k of ["getLiabilityPayment", "updateLiabilityPayment", "mutateProfileFields", "getExpenses", "updateExpense", "adjustAccountBalance"]) storage[k] = st[k];
+      storage.unpayBillOccurrence = () => { throw new Error("unpay must not run for a bill re-price"); };
+    });
+    const r = await h.api("PATCH", "/api/liability-payments/pay-1", { amount: 45 });
+    expect(r.status).toBe(200);
+    expect(r.data).toMatchObject({ id: "pay-1", amount: 45 });
+    expect(expense).toMatchObject({ id: "exp-1", amount: 45, category: "utilities", description: "Power (September)" });
+    expect(writes.some((w) => w[0] === "expense")).toBe(true);
+  });
+});
