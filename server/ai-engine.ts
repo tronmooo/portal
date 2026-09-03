@@ -7978,14 +7978,6 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           ? { dismissed: 0, message: "No notifications to dismiss — the bell is already clear." }
           : { error: `No notifications match "${which}"`, candidates: current.slice(0, 5).map(n => n.title) };
       }
-      // Same read/merge/write contract as the bell UI (NotificationBell.tsx):
-      // the preference holds a JSON array of dismissed notification ids.
-      let existing: string[] = [];
-      try {
-        const raw = await storage.getPreference(DISMISSED_NOTIFICATIONS_PREF);
-        const parsed = raw ? JSON.parse(raw) : [];
-        if (Array.isArray(parsed)) existing = parsed.filter((x) => typeof x === "string");
-      } catch { /* start fresh on unparseable value */ }
       // Custom (persisted) rows get a dismissed_at stamp; computed ids go
       // into the preference like the bell UI does.
       const customIds = targets.filter(n => n.id.startsWith("custom:")).map(n => n.id.slice("custom:".length));
