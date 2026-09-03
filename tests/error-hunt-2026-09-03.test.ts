@@ -970,3 +970,35 @@ describe("D178: partial edits do not overwrite each other", () => {
     expect(Object.keys(updates[1]).sort()).toEqual(["fields", "updated_at"]);
   });
 });
+
+// ─── D179: artifact edits and checklist toggles in flight together ──────────
+describe("D179: an artifact rename does not rewrite items; a toggle is a compare-and-swap", () => {
+  it("updateArtifact with only a title writes only title (and updated_at)", async () => {
+    const updates: any[] = [];
+    const { client } = chainClient((table, op, payload) => {
+      if (table === "artifacts" && op === "select") return { data: [{ metadata: {} }], error: null };
+      if (table === "artifacts" && op === "update") { updates.push(payload); return { data: [{ id: "a-1" }], error: null }; }
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client, getArtifact: async () => ({ id: "a-1", type: "checklist", title: "List", content: "", items: [{ id: "i1", text: "milk", checked: false }], tags: [], pinned: false, linkedProfiles: [] }), applyOwnershipPatch: async () => undefined, clearRequestMemo: () => {} });
+    await s.updateArtifact("a-1", { title: "List renamed" });
+    expect(Object.keys(updates[0]).sort()).toEqual(["title", "updated_at"]);
+  });
+  it("toggleChecklistItem re-reads when it lost the race and flips the fresh list", async () => {
+    let reads = 0; const updates: any[] = [];
+    const rows = [
+      { items: [{ id: "i1", text: "milk", checked: false }, { id: "i2", text: "eggs", checked: false }], updated_at: "u1" },
+      { items: [{ id: "i1", text: "milk", checked: false }, { id: "i2", text: "eggs", checked: true }], updated_at: "u2" },
+    ];
+    const { client } = chainClient((table, op, payload) => {
+      if (table !== "artifacts") return { data: [], error: null };
+      if (op === "select") { reads++; return { data: [rows[Math.min(reads - 1, 1)]], error: null }; }
+      if (op === "update") { updates.push(payload); return { data: updates.length === 1 ? [] : [{ id: "a-1" }], error: null }; }
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client, getArtifact: async () => ({ id: "a-1" }), clearRequestMemo: () => {} });
+    await s.toggleChecklistItem("a-1", "i1");
+    expect(updates).toHaveLength(2);
+    expect(updates[1].items).toEqual([{ id: "i1", text: "milk", checked: true }, { id: "i2", text: "eggs", checked: true }]);
+  });
+});

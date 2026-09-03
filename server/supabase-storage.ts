@@ -6028,13 +6028,17 @@ export class SupabaseStorage implements IStorage {
 
     const metadata = mergeAndApplyDeletes(existingMeta, incomingMeta, data.metadataToDelete);
 
-    const { error } = await this.supabase.from("artifacts").update({
+    // Only the columns this patch names: a rename in flight with an item
+    // toggle used to write the stale items back over the toggle.
+    const metaPatched = metaKeys.some((k) => (data as any)[k] !== undefined) || !!data.metadataToDelete?.length;
+    const artifactUpdate: Record<string, any> = onlyPatched({
       type: merged.type, title: merged.title, content: merged.content,
       items: merged.items, tags: merged.tags,
       pinned: merged.pinned,
-      metadata,
       updated_at: now,
-    }).eq("id", id).eq("user_id", this.userId);
+    }, data as Record<string, any>, { type: "type", title: "title", content: "content", items: "items", tags: "tags", pinned: "pinned" });
+    if (metaPatched) artifactUpdate.metadata = metadata;
+    const { error } = await this.supabase.from("artifacts").update(artifactUpdate).eq("id", id).eq("user_id", this.userId);
     if (error) throw error;
     // [P2.2] Ownership patches go through the single writer (setOwners), not a
     // raw linked_profiles write merged from a possibly-stale read.
@@ -6045,13 +6049,28 @@ export class SupabaseStorage implements IStorage {
   }
 
   async toggleChecklistItem(artifactId: string, itemId: string): Promise<Artifact | undefined> {
-    const a = await this.getArtifact(artifactId);
-    if (!a) return undefined;
-    const item = a.items.find(i => i.id === itemId);
-    if (item) item.checked = !item.checked;
-    const now = new Date().toISOString();
-    await this.supabase.from("artifacts").update({ items: a.items, updated_at: now }).eq("id", artifactId).eq("user_id", this.userId);
-    return this.getArtifact(artifactId);
+    // Flip ONE item against the fresh list, written only if nobody wrote the
+    // row since the read (compare-and-swap on updated_at, retried): two
+    // toggles in flight together used to read the same list and the later
+    // write put the earlier item back.
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const { data: fresh, error: readErr } = await this.supabase.from("artifacts").select("items, updated_at")
+        .eq("id", artifactId).eq("user_id", this.userId).maybeSingle();
+      if (readErr) throw readErr;
+      if (!fresh) return undefined;
+      const items: any[] = Array.isArray(fresh.items) ? fresh.items.map((i: any) => ({ ...i })) : [];
+      const item = items.find((i) => i.id === itemId);
+      if (!item) return this.getArtifact(artifactId);
+      item.checked = !item.checked;
+      const now = new Date().toISOString();
+      let q = this.supabase.from("artifacts").update({ items, updated_at: now }).eq("id", artifactId).eq("user_id", this.userId);
+      q = fresh.updated_at == null ? q.is("updated_at", null) : q.eq("updated_at", fresh.updated_at);
+      const { data, error } = await q.select("id");
+      if (error) throw error;
+      if (Array.isArray(data) && data.length > 0) { this.clearRequestMemo(); return this.getArtifact(artifactId); }
+      await new Promise((r) => setTimeout(r, 10 + attempt * 20));
+    }
+    throw new Error("Checklist toggle kept colliding with another writer; try again");
   }
 
   async deleteArtifact(id: string): Promise<boolean> {
