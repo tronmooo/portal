@@ -1105,3 +1105,8 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 ### Replica sweep with the response cache on — verified
 
 - s200–s229 re-run under the production cache configuration: all green except the two documented probe expectations (s212's paycheck check reads `/api/cashflow`, which is the weekly projection table; s228's sole-linked deed and expense go with the house by the cascade design). s230: 4 passed, 0 failed. s231 green after D257.
+
+### Read-after-write freshness with the cache on — verified (s237, s238)
+
+- s237 (11/11): one of everything created (task, expense, event, habit, tracker + entry, goal, journal, note, memory, capture, artifact, document, income, account, budget, entity link); every list served right after includes the row; the calendar timeline shows the event and the task; `/api/stats` counts them (tasks, expense total, month spend, events, habits, trackers, artifacts, memories, journal streak); edits (task title, expense amount, note body, account balance) show in the lists and the stats right after; after the deletes no list shows a row and the stats are back at the baseline.
+- s238 (10/10 on the first run): a bill's `profile-bootstrap` right after create, a field edit, an owner change, a linked document and expense, a payment and the document's deletion reflects each write; a share link answers 200, is refused right after unsharing, a re-share issues a different working token, and the link is refused right after the artifact is deleted. Repeat runs within minutes hit the public viewer's per-IP rate limit (429), which is the endpoint's design, not staleness.
