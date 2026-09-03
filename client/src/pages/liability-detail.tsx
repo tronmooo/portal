@@ -1,3 +1,4 @@
+import { changedFieldsOnly } from "@shared/field-patch";
 /**
  * Dedicated profile page for liabilities (mortgage / auto loan / credit card / etc.).
  *
@@ -479,39 +480,40 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const [tDueDay, setTDueDay] = useState("");
   const [tFirstPayment, setTFirstPayment] = useState("");
   const [tLender, setTLender] = useState("");
+  /** The terms form → the field patch it means. Pure, so the SAME builder can
+   *  run on the values the form opened with: only what the user changed is
+   *  written, and a balance moved by a payment while the dialog sat open is
+   *  not put back (D246). */
+  const buildTermsFields = (v: { balance: string; original: string; rate: string; term: string; monthly: string; dueDay: string; firstPayment: string; lender: string }): Record<string, any> => {
+    const fields: Record<string, any> = {};
+    const num = (s: string) => (s.trim() === "" ? null : Number(s));
+    if (v.balance !== "") fields.currentBalance = num(v.balance);
+    if (v.original !== "") fields.originalBalance = num(v.original);
+    if (v.rate !== "") {
+      const r = num(v.rate);
+      if (r != null) fields.annualInterestRate = r > 1 ? r / 100 : r;
+    }
+    if (v.term !== "") fields.remainingTermMonths = num(v.term);
+    if (v.monthly !== "") fields.monthlyPayment = num(v.monthly);
+    const clearOrSet = (key: string, raw: string, stored: boolean, value: any) => {
+      if (raw.trim() === "") { if (stored) fields[key] = null; return; }
+      if (value !== undefined) fields[key] = value;
+    };
+    {
+      const d = num(v.dueDay);
+      clearOrSet("dueDay", v.dueDay, f2.dueDay != null, d != null && d >= 1 && d <= 31 ? d : undefined);
+    }
+    clearOrSet("firstPaymentDate", v.firstPayment, f2.firstPaymentDate != null,
+      /^\d{4}-\d{2}-\d{2}$/.test(v.firstPayment.trim()) ? v.firstPayment.trim() : undefined);
+    clearOrSet("lender", v.lender, f2.lender != null, v.lender.trim());
+    return fields;
+  };
+  const [seededTerms, setSeededTerms] = useState<Parameters<typeof buildTermsFields>[0] | null>(null);
   const saveTermsMutation = useMutation({
     mutationFn: async () => {
-      const fields: Record<string, any> = {};
-      const num = (s: string) => (s.trim() === "" ? null : Number(s));
-      if (tBalance !== "") fields.currentBalance = num(tBalance);
-      if (tOriginal !== "") fields.originalBalance = num(tOriginal);
-      if (tRate !== "") {
-        // Accept either 6 or 0.06 — store as decimal (0.06) consistent with
-        // existing fields.annualInterestRate.
-        const r = num(tRate);
-        if (r != null) fields.annualInterestRate = r > 1 ? r / 100 : r;
-      }
-      if (tTerm !== "") fields.remainingTermMonths = num(tTerm);
-      if (tMonthly !== "") fields.monthlyPayment = num(tMonthly);
-      // Due day, first payment and lender: a blanked input is a request to
-      // REMOVE the term, and a null clears the key server-side (the bill
-      // editor below relies on the same rule). Skipping blanks left the old
-      // due day standing after "Loan terms saved" — the calendar kept a due
-      // date the user had just deleted. Blank stays a no-op for a term that
-      // was never stored, so an untouched editor writes nothing. (Money terms
-      // above keep skip-on-blank: a $0 balance opens as a blank input, and
-      // clearing it must not resurrect the original balance.)
-      const clearOrSet = (key: string, raw: string, stored: boolean, value: any) => {
-        if (raw.trim() === "") { if (stored) fields[key] = null; return; }
-        if (value !== undefined) fields[key] = value;
-      };
-      {
-        const d = num(tDueDay);
-        clearOrSet("dueDay", tDueDay, f2.dueDay != null, d != null && d >= 1 && d <= 31 ? d : undefined);
-      }
-      clearOrSet("firstPaymentDate", tFirstPayment, f2.firstPaymentDate != null,
-        /^\d{4}-\d{2}-\d{2}$/.test(tFirstPayment.trim()) ? tFirstPayment.trim() : undefined);
-      clearOrSet("lender", tLender, f2.lender != null, tLender.trim());
+      const current = { balance: tBalance, original: tOriginal, rate: tRate, term: tTerm, monthly: tMonthly, dueDay: tDueDay, firstPayment: tFirstPayment, lender: tLender };
+      const fields = seededTerms ? changedFieldsOnly(buildTermsFields(seededTerms), buildTermsFields(current)) : buildTermsFields(current);
+      if (Object.keys(fields).length === 0) return;
       await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
     },
     onSuccess: () => {
@@ -531,6 +533,16 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setTDueDay(terms.dueDay ? String(terms.dueDay) : "");
     setTFirstPayment(terms.firstPaymentDate || "");
     setTLender(terms.lender || "");
+    setSeededTerms({
+      balance: terms.currentBalance ? String(terms.currentBalance) : "",
+      original: terms.originalBalance ? String(terms.originalBalance) : "",
+      rate: terms.annualRate ? String(terms.annualRate) : "",
+      term: terms.remainingTermMonths ? String(terms.remainingTermMonths) : "",
+      monthly: terms.monthlyPayment ? String(terms.monthlyPayment) : "",
+      dueDay: terms.dueDay ? String(terms.dueDay) : "",
+      firstPayment: terms.firstPaymentDate || "",
+      lender: terms.lender || "",
+    });
     setEditingTerms(true);
   };
 
@@ -552,8 +564,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const [bEnd, setBEnd] = useState("");
   const [bReminder, setBReminder] = useState("");
   const [bAutopay, setBAutopay] = useState(false);
-  const saveBillMutation = useMutation({
-    mutationFn: async () => {
+  /** The bill form → its field patch. Pure for the same reason as
+   *  buildTermsFields: a due date advanced by a payment while the dialog sat
+   *  open must not be put back by a save that only changed the reminder (D246). */
+  const buildBillFields = (v: { amount: string; frequency: string; dueDate: string; count: string; end: string; reminder: string; autopay: boolean }): Record<string, any> => {
       const isoDay = (s: string) => (/^\d{4}-\d{2}-\d{2}$/.test(s.trim()) ? s.trim() : null);
       const num = (s: string) => {
         if (s.trim() === "") return null;
@@ -562,18 +576,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       };
       const fields: Record<string, any> = {};
 
-      const amt = num(bAmount);
+      const amt = num(v.amount);
       if (amt != null && amt >= 0) {
         // liabilityAmount() reads monthlyAmount ?? amount ?? cost — write the
         // first two so no stale alias outranks the edit.
         fields.monthlyAmount = amt;
         fields.amount = amt;
       }
-      if (bFrequency) {
-        fields.frequency = bFrequency;
-        fields.billingFrequency = bFrequency;
+      if (v.frequency) {
+        fields.frequency = v.frequency;
+        fields.billingFrequency = v.frequency;
       }
-      const due = isoDay(bDueDate);
+      const due = isoDay(v.dueDate);
       if (due) {
         // One input, three keys, deliberately: the occurrence series is
         // generated from `firstPaymentDate ?? dueDate ?? nextDueDate`, so
@@ -588,19 +602,27 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       // fields), which is how "ongoing", "no end date" and "no reminder" are
       // said — blanking the input has to actually remove the bound, not leave
       // the old one standing.
-      const count = num(bCount);
+      const count = num(v.count);
       fields.count = count != null && count >= 1 ? Math.floor(count) : null;
-      fields.recurrenceEnd = isoDay(bEnd);
-      const lead = num(bReminder);
+      fields.recurrenceEnd = isoDay(v.end);
+      const lead = num(v.reminder);
       fields.reminderLeadDays = lead != null && lead >= 0 ? Math.floor(lead) : null;
       // Three spellings reach the two surfaces that render this (the schedule
       // reads autopay/autoPay, the Details row also honours autoRenew), so the
       // toggle has to set every one it could be read through — otherwise
       // turning autopay off leaves the row still reading "On".
-      fields.autopay = bAutopay;
-      fields.autoPay = bAutopay;
-      if (f2.autoRenew !== undefined) fields.autoRenew = bAutopay;
+      fields.autopay = v.autopay;
+      fields.autoPay = v.autopay;
+      if (f2.autoRenew !== undefined) fields.autoRenew = v.autopay;
 
+      return fields;
+  };
+  const [seededBill, setSeededBill] = useState<Parameters<typeof buildBillFields>[0] | null>(null);
+  const saveBillMutation = useMutation({
+    mutationFn: async () => {
+      const current = { amount: bAmount, frequency: bFrequency, dueDate: bDueDate, count: bCount, end: bEnd, reminder: bReminder, autopay: bAutopay };
+      const fields = seededBill ? changedFieldsOnly(buildBillFields(seededBill), buildBillFields(current)) : buildBillFields(current);
+      if (Object.keys(fields).length === 0) return;
       await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
     },
     onSuccess: () => {
@@ -622,6 +644,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setBEnd((schedule?.recurrenceEnd || "").slice(0, 10));
     setBReminder(billReminderLead != null ? String(billReminderLead) : "");
     setBAutopay(!!(f2.autopay || f2.autoPay || f2.autoRenew));
+    setSeededBill({
+      amount: String(schedule?.amount ?? billMonthly ?? ""),
+      frequency: billFrequencyLabel || "monthly",
+      dueDate: (schedule?.firstPayment || billNextDueEff || billDueRaw || "").slice(0, 10),
+      count: billTotalTerm != null ? String(billTotalTerm) : "",
+      end: (schedule?.recurrenceEnd || "").slice(0, 10),
+      reminder: billReminderLead != null ? String(billReminderLead) : "",
+      autopay: !!(f2.autopay || f2.autoPay || f2.autoRenew),
+    });
     setEditingBill(true);
   };
 
