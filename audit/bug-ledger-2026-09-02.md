@@ -978,3 +978,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - A 10,000 loan co-signed Self 50 / Linda 50: the household carries 10,000, Self-scoped 5,000, Linda-scoped 5,000; Linda leaving hands her half back (Self 10,000, D224 for liabilities); deleting the loan returns net worth to the baseline. Found D242 on the way: the generic owners route silently wrote asset rows for the loan.
 - After D242: s223 4/4 through the generic `/owners` route as well; no stray asset rows on liabilities in the replica or in production (read-only check); full suite 260 files / 4658 tests green.
+
+### D243 verification and replica regression after D242/D243
+
+- Full suite 260 files / 4660 tests green with the word-boundary matcher; entity-resolver, AI, domain and tracker suites green. Client-side `includes` uses are typed search filters and keyword heuristics (nutrition, hydration…), not entity resolution — left alone.
+- Replica after the D242/D243 builds: s213 3/3, s214 5/5, s216 3/3, s217 2/2, s222 5/5.
