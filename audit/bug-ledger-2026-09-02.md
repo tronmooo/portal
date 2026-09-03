@@ -1044,3 +1044,4 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - Replica daily-maintenance cron after today's builds: `{"swept":0,"snapshot":{"snapped":5},"dueScan":{"autopaid":0,"reminded":0}}`, no errors or warnings in the server log.
 - Full suite after D251: 260 files / 4665 tests green.
 - Full suite after the ownership-tool guard: 260 files / 4666 tests green.
+- Replica after the final D251 build: s227 4/4, s229 4/4, s230 4/4, s225 5/5, s223 4/4; s228 4/6 (the two misses are the documented cascade design — sole-linked deed and expense go with the house).
