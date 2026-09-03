@@ -316,3 +316,22 @@ describe("D117: every client scope filter keeps parentProfileId", () => {
     expect(hook).toMatch(/assetPartyLinks/);
   });
 });
+
+// D132 — an ownership change (party links, owner sets) now changes WHICH rows
+// every scoped list holds (D120–D123), but the writers only rippled the
+// profile keys, so the same tab kept a stale Tasks/Bills view for staleTime.
+import { STORAGE_NOUN_TARGETS } from "../shared/storage-domains";
+describe("D132: ownership writes ripple the whole cache", () => {
+  it("every party/owner link write reports the everything domain to the client", () => {
+    for (const name of ["AssetPartyLink", "AssetOwners", "LiabilityProfileLink", "LiabilityOwnerLink", "LiabilityOwners"]) {
+      expect((STORAGE_NOUN_TARGETS as any)[name]?.domains, name).toEqual(["everything"]);
+    }
+  });
+  it("the ownership editor and the loan-detail link mutations invalidate everything after a write", () => {
+    expect(read("client/src/components/OwnershipEditor.tsx")).toMatch(/invalidateDomain\("everything"\)/);
+    const detail = read("client/src/pages/liability-detail.tsx");
+    const linkKeyInvalidations = detail.match(/queryKey: \["\/api\/liability-profile-links"\]/g) || [];
+    const everything = detail.match(/invalidateDomains\("everything"\)/g) || [];
+    expect(everything.length).toBeGreaterThanOrEqual(linkKeyInvalidations.length);
+  });
+});

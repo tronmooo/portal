@@ -185,11 +185,16 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
   // logActivity — the activity feed the dashboard renders.
   Activity: { domains: ["dashboard"], endpoint: null },
   LiabilityAssetLink: { domains: PROFILE_DOMAINS, endpoint: null },
-  LiabilityProfileLink: { domains: PROFILE_DOMAINS, endpoint: null },
-  LiabilityOwnerLink: { domains: PROFILE_DOMAINS, endpoint: null },
-  LiabilityOwners: { domains: PROFILE_DOMAINS, endpoint: null },
-  AssetPartyLink: { domains: PROFILE_DOMAINS, endpoint: null },
-  AssetOwners: { domains: PROFILE_DOMAINS, endpoint: null },
+  // Co-ownership (party / owner links) changes WHICH rows every scoped list
+  // holds — a person's tasks, bills, documents, trackers, budgets and the
+  // dashboard seeds all widen with the assets and loans they co-own
+  // (shared/profile-filter.effectiveSelection). A profile-only ripple left
+  // every one of those lists stale until its own staleTime.
+  LiabilityProfileLink: { domains: ["everything"], endpoint: null },
+  LiabilityOwnerLink: { domains: ["everything"], endpoint: null },
+  LiabilityOwners: { domains: ["everything"], endpoint: null },
+  AssetPartyLink: { domains: ["everything"], endpoint: null },
+  AssetOwners: { domains: ["everything"], endpoint: null },
   OwnershipHistory: { domains: PROFILE_DOMAINS, endpoint: null },
   OwnershipHistoryEntry: { domains: PROFILE_DOMAINS, endpoint: null },
   OwnershipConsistency: { domains: PROFILE_DOMAINS, endpoint: null },

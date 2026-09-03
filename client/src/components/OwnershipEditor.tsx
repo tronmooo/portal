@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -148,6 +149,11 @@ export function OwnershipEditor({
       queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/ownership-history"] });
+      // Co-ownership changes which rows every scoped list holds (a person's
+      // tasks, bills, documents, trackers, budgets and the dashboard seeds all
+      // widen with the assets and loans they co-own), so the whole cache
+      // ripples — not just the profile keys above.
+      void invalidateDomain("everything");
       // Liability detail page reads from these:
       if (kind === "liability") {
         queryClient.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "parties"] });

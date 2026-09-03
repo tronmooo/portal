@@ -719,6 +719,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       refetchPartyLinks();
       qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "parties"] });
       qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
+      void invalidateDomains("everything"); // co-ownership changes every scoped list (see shared/storage-domains)
       // Bug #1 + #15: the "liabilities" + "people" domains cover the liability
       // profile's detail, the profiles list, the dashboard, rel-people, and
       // every affected owner's detail / ["/api/parties", ownerId, "liabilities"]
@@ -2604,6 +2605,7 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
       void vars;
       qc.invalidateQueries({ queryKey: ["/api/liabilities", liabilityId, "parties"] });
       qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
+      void invalidateDomains("everything"); // co-ownership changes every scoped list (see shared/storage-domains)
       setPickerOpen(false);
       setSelectedPartyId("");
     },
@@ -2649,6 +2651,7 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
       // profiles list, detail keys, /api/parties/* and the dashboard.
       qc.invalidateQueries({ queryKey: ["/api/liabilities", liabilityId, "parties"] });
       qc.invalidateQueries({ queryKey: ["/api/liability-profile-links"] });
+      void invalidateDomains("everything"); // co-ownership changes every scoped list (see shared/storage-domains)
     },
   });
 
