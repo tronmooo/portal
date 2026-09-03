@@ -1157,3 +1157,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 
 - Before (browser, two tabs): tab 2 dismissed the document alert (stored `[doc-exp…]`); tab 1 then dismissed the bill notice from its older bell and the store became `[bill-soon…]` only — the document alert would return on reload (2/3). After the rebuild: both ids stored (3/3).
 - Full suite after D263: 260 files / 4693 tests green.
+- Same-class sweep for D263: the other client preference writers (attention-filter config, dashboard layout, AI and reminder toggles) write a single scalar or one whole config with last-write-wins semantics and no accumulated list — not the lost-update pattern.
