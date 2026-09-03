@@ -2433,3 +2433,21 @@ describe("D234: the payment behind an edited bill-payment expense follows the ne
     expect(writes.map((w) => w[0])).toEqual(["payment", "stamp", "account"]);
   });
 });
+
+describe("D234: the AI's update_expense re-prices a bill payment the same way", () => {
+  it("chat 'the power bill was actually 45' moves the payment row and stamp", async () => {
+    const s = new MemStorage();
+    (s as any)._timezone = TZ;
+    const writes: any[] = [];
+    const bill = await s.createProfile({ name: "Power", type: "liability", fields: { occurrences: { "2026-09-06": { status: "paid", paymentId: "pay-1", amount: 40, actualAmount: 40, paidAmount: 40 } } } } as any);
+    await s.createExpense({ amount: 40, category: "bills", description: "Power — 2026-09-06", date: "2026-09-03", tags: ["bill-payment", `liability:${bill.id}`, "payment:pay-1"] } as any);
+    (s as any).getLiabilityPayment = async (id: string) => id === "pay-1" ? { id: "pay-1", liabilityProfileId: bill.id, amount: 40, principalPortion: 40 } : undefined;
+    (s as any).updateLiabilityPayment = async (id: string, patch: any) => { writes.push([id, patch]); return { id, ...patch }; };
+    const run = <T,>(fn: () => Promise<T>) => new Promise<T>((resolve, reject) => requestStorageContext.run(s, () => fn().then(resolve, reject)));
+    const out = await run(() => executeTool("update_expense", { description: "Power", changes: { amount: 45 } }, "u-1"));
+    expect(out.updated).toBe(true);
+    expect(writes).toEqual([["pay-1", { amount: 45, principalPortion: 45 }]]);
+    const stamp = ((await s.getProfile(bill.id))!.fields as any).occurrences["2026-09-06"];
+    expect(stamp).toMatchObject({ amount: 45, actualAmount: 45, paidAmount: 45, status: "paid" });
+  });
+});

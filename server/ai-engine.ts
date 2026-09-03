@@ -124,7 +124,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
-import { signedPrincipal, payBillOccurrence, unpayBillOccurrence, rescheduleBillOccurrence } from "./liability-payments";
+import { signedPrincipal, payBillOccurrence, unpayBillOccurrence, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries, stemKey } from "@shared/series-detect";
@@ -12015,6 +12015,12 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       }
       if (Object.keys(changes).length === 0) return { error: "No changes given for the expense update." };
       const updated = await storage.updateExpense(match.id, changes);
+      // A bill payment's logged expense: the payment follows the amount (D234),
+      // the same as the Finance page's edit.
+      if (updated && changes.amount !== undefined && paymentIdOfExpense(updated)) {
+        try { await repriceBillPaymentFromExpense(storage, updated as any, Number(changes.amount)); }
+        catch (e: any) { console.warn(`[update_expense] payment re-price failed: ${e?.message || e}`); }
+      }
       return { updated: true, expense: updated, ...(input.forProfile ? { moved_to: input.forProfile } : {}) };
     }
 
