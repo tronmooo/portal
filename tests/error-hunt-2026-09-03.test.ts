@@ -2111,3 +2111,31 @@ describe("D226: tracker entry ↔ habit pairing in both directions", () => {
     expect(h?.checkins || []).toEqual([]);
   });
 });
+
+// ─── D227: a tracker two habits share pairs one entry with both ──────────────
+import { mirrorHabitIds, HABIT_MIRROR_IDS_KEY, uncompleteHabitOccurrence } from "../server/habit-completion";
+describe("D227: shared tracker, two habits", () => {
+  it("one entry completes both; removing it un-completes both; un-completing one habit keeps the shared entry", async () => {
+    const s = new MemStorage();
+    (s as any)._timezone = TZ;
+    const today = getUserToday(TZ);
+    const tracker = await s.createTracker({ name: "Run", category: "fitness", unit: "km", fields: [{ name: "km", type: "number" }] } as any);
+    const a = await s.createHabit({ name: "Run daily", frequency: "daily", targetPerDay: 1, linkedTrackerId: tracker.id } as any);
+    const b = await s.createHabit({ name: "Move daily", frequency: "daily", targetPerDay: 1, linkedTrackerId: tracker.id } as any);
+    const e1 = await s.logEntry({ trackerId: tracker.id, values: { km: 5 }, timestamp: new Date().toISOString() } as any);
+    expect((await s.getHabit(a.id))?.checkins?.map((c: any) => c.date)).toEqual([today]);
+    expect((await s.getHabit(b.id))?.checkins?.map((c: any) => c.date)).toEqual([today]);
+    expect(mirrorHabitIds((await s.getTrackerEntry(e1!.id))?.values).sort()).toEqual([a.id, b.id].sort());
+    // Un-complete A from the habit side: the shared entry stays, paired with B only.
+    const un = await uncompleteHabitOccurrence(s, { habitId: a.id, date: today, source: "habit_ui", timezone: TZ } as any);
+    expect(un.ok).toBe(true);
+    expect(await s.getTrackerEntry(e1!.id)).toBeTruthy();
+    expect(mirrorHabitIds((await s.getTrackerEntry(e1!.id))?.values)).toEqual([b.id]);
+    expect((await s.getHabit(b.id))?.checkins?.length).toBe(1);
+    // Now remove the entry: B is un-completed too.
+    const removed = await removeTrackerEntry(s, { trackerId: tracker.id, entryId: e1!.id }, TZ);
+    expect(removed.ok).toBe(true);
+    expect((await s.getHabit(b.id))?.checkins || []).toEqual([]);
+    expect(HABIT_MIRROR_IDS_KEY).toBe("_habitIds");
+  });
+});

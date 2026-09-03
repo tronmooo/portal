@@ -1295,7 +1295,7 @@ export class MemStorage implements IStorage {
     this.logActivity("tracker", `Updated tracker: ${updated.name}`);
     return updated;
   }
-  async updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; notes?: string; mood?: any; tags?: string[]; timestamp?: string }): Promise<TrackerEntry | undefined> {
+  async updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; valuesToDelete?: string[]; notes?: string; mood?: any; tags?: string[]; timestamp?: string }): Promise<TrackerEntry | undefined> {
     const tracker = this.trackers.get(trackerId);
     if (!tracker) return undefined;
     const idx = tracker.entries.findIndex(e => e.id === entryId);
@@ -1303,7 +1303,12 @@ export class MemStorage implements IStorage {
     const existing = tracker.entries[idx];
     const updated: TrackerEntry = {
       ...existing,
-      values: patch.values ? { ...existing.values, ...patch.values } : existing.values,
+      values: (() => {
+        const merged = patch.values ? { ...existing.values, ...patch.values } : { ...existing.values };
+        // Parity with SupabaseStorage: `valuesToDelete` names keys to drop.
+        for (const k of ((patch as any).valuesToDelete || [])) delete (merged as any)[k];
+        return merged;
+      })(),
       notes: patch.notes !== undefined ? patch.notes : existing.notes,
       mood: patch.mood !== undefined ? patch.mood : existing.mood,
       tags: patch.tags !== undefined ? patch.tags : existing.tags,

@@ -124,6 +124,20 @@ export interface HabitCompletionResult {
  *  prefixed to follow the existing internal-value convention (`_notes`,
  *  `_enrichment`) so display surfaces skip it. */
 export const HABIT_MIRROR_KEY = "_habitId";
+/** Every habit an entry is paired with — a tracker two habits share pairs
+ *  one entry with both (D227). `_habitId` keeps the first for older readers. */
+export const HABIT_MIRROR_IDS_KEY = "_habitIds";
+
+/** The habit ids an entry is paired with (either key, deduplicated). */
+export function mirrorHabitIds(values: unknown): string[] {
+  const v = (values && typeof values === "object" ? values : {}) as Record<string, unknown>;
+  const out: string[] = [];
+  const one = v[HABIT_MIRROR_KEY];
+  if (typeof one === "string" && one) out.push(one);
+  const many = v[HABIT_MIRROR_IDS_KEY];
+  if (Array.isArray(many)) for (const id of many) if (typeof id === "string" && id && !out.includes(id)) out.push(id);
+  return out;
+}
 
 const dayOf = (ts: unknown, tz: string) => {
   const d = new Date(String(ts ?? ""));
@@ -134,7 +148,7 @@ const dayOf = (ts: unknown, tz: string) => {
 function countMirrorEntries(tracker: Tracker | undefined, habitId: string, date: string, tz: string): number {
   if (!tracker) return 0;
   return (tracker.entries || []).filter(
-    (e) => (e.values as any)?.[HABIT_MIRROR_KEY] === habitId && dayOf(e.timestamp, tz) === date,
+    (e) => mirrorHabitIds(e.values).includes(habitId) && dayOf(e.timestamp, tz) === date,
   ).length;
 }
 
@@ -505,12 +519,25 @@ export async function uncompleteHabitOccurrence(
     try {
       const tracker = await storage.getTracker(linkedTrackerId);
       const mirrors = (tracker?.entries || [])
-        .filter((e) => (e.values as any)?.[HABIT_MIRROR_KEY] === habit.id && dayOf(e.timestamp, tz) === date)
+        .filter((e) => mirrorHabitIds(e.values).includes(habit.id) && dayOf(e.timestamp, tz) === date)
         .sort((a, b) => String(b.timestamp ?? "").localeCompare(String(a.timestamp ?? "")));
       const mirror = mirrors[0];
       if (mirror?.id && tracker) {
-        const gone = await storage.deleteTrackerEntry(tracker.id, mirror.id);
-        if (gone) removedTrackerEntryIds.push(mirror.id);
+        const others = mirrorHabitIds(mirror.values).filter((id) => id !== habit.id);
+        if (others.length === 0) {
+          const gone = await storage.deleteTrackerEntry(tracker.id, mirror.id);
+          if (gone) removedTrackerEntryIds.push(mirror.id);
+        } else if (typeof (storage as any).updateTrackerEntry === "function") {
+          // The entry is also another habit's record (a shared tracker): keep
+          // the user's log and just unpair this habit from it (D227).
+          // Storage merges `values`; a key that must go is named in
+          // `valuesToDelete` (the same deletion intent the entry routes use).
+          const values: Record<string, any> = { [HABIT_MIRROR_KEY]: others[0] };
+          const patch: any = { values };
+          if (others.length > 1) values[HABIT_MIRROR_IDS_KEY] = others;
+          else patch.valuesToDelete = [HABIT_MIRROR_IDS_KEY];
+          await (storage as any).updateTrackerEntry(tracker.id, mirror.id, patch);
+        }
       }
     } catch (e: any) {
       logger.warn(`[habit-completion] mirror removal failed for "${habit.name}":`, e?.message || e);
@@ -569,7 +596,7 @@ export async function autoCheckinLinkedHabits(
   const results: HabitSyncResult[] = [];
   try {
     // An entry written BY a habit check-in must not check that habit in again.
-    if ((opts.values as any)?.[HABIT_MIRROR_KEY]) return results;
+    if (mirrorHabitIds(opts.values).length > 0) return results;
 
     const habits = await storage.getHabits();
     const linked = habits.filter((h) => (h as any).linkedTrackerId === trackerId);
@@ -594,17 +621,21 @@ export async function autoCheckinLinkedHabits(
         });
         if (res.ok && res.recorded > 0) {
           results.push({ habitId: habit.id, habitName: habit.name, date, progress: res.progress });
-          // Pair the entry with the check-in it produced, the way a habit
-          // check-in's mirror entry is paired: deleting this entry then
-          // un-completes the habit (removeTrackerEntry). Without the pairing
-          // the habit stayed "done" off a record the user had removed (D226).
-          if (opts.entryId && typeof storage.updateTrackerEntry === "function") {
-            try {
-              await storage.updateTrackerEntry(trackerId, opts.entryId, { values: { ...(opts.values || {}), [HABIT_MIRROR_KEY]: habit.id } });
-            } catch { /* pairing is best-effort; the completion already landed */ }
-          }
         }
       } catch { /* one habit failing must not stop the others */ }
+    }
+    // Pair the entry with every check-in it produced, the way a habit
+    // check-in's mirror entry is paired: deleting this entry then un-completes
+    // those habits (removeTrackerEntry). Without the pairing a habit stayed
+    // "done" off a record the user had removed (D226); with a single id, a
+    // tracker two habits share left the second one done (D227).
+    if (results.length > 0 && opts.entryId && typeof storage.updateTrackerEntry === "function") {
+      try {
+        const ids = results.map((r) => r.habitId);
+        const values: Record<string, any> = { ...(opts.values || {}), [HABIT_MIRROR_KEY]: ids[0] };
+        if (ids.length > 1) values[HABIT_MIRROR_IDS_KEY] = ids;
+        await storage.updateTrackerEntry(trackerId, opts.entryId, { values });
+      } catch { /* pairing is best-effort; the completions already landed */ }
     }
   } catch { /* propagation is best-effort */ }
   return results;

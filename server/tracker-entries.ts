@@ -9,7 +9,7 @@
 // autoCheckinLinkedHabits) had no inverse. This is that inverse.
 
 import type { IStorage } from "./storage";
-import { HABIT_MIRROR_KEY, uncompleteHabitOccurrence, type HabitLogger } from "./habit-completion";
+import { HABIT_MIRROR_KEY, mirrorHabitIds, uncompleteHabitOccurrence, type HabitLogger } from "./habit-completion";
 import { toLocalDateStr, DEFAULT_TIMEZONE } from "@shared/timezone";
 
 const noopLogger: HabitLogger = { warn: () => {} };
@@ -41,13 +41,24 @@ export async function removeTrackerEntry(
   // Read BEFORE deleting — the mirror key and the entry's day are what let us
   // find the paired check-in afterwards.
   const entry = await storage.getTrackerEntry(input.entryId);
-  const habitId = entry ? String((entry.values as any)?.[HABIT_MIRROR_KEY] || "") : "";
+  const habitIds = entry ? mirrorHabitIds(entry.values) : [];
+  const habitId = habitIds[0] || "";
   const entryDay = entry?.timestamp ? toLocalDateStr(new Date(String(entry.timestamp)), timezone) : "";
 
   const deleted = await storage.deleteTrackerEntry(input.trackerId, input.entryId);
   if (!deleted) return { ...base, reason: "not_found" };
 
   if (!habitId || !entryDay) return { ...base, ok: true };
+
+  // A tracker two habits share pairs one entry with both: un-complete every
+  // one of them (D227). The first is reported as before.
+  for (const extra of habitIds.slice(1)) {
+    try {
+      await uncompleteHabitOccurrence(storage, { habitId: extra, date: entryDay, source: "tracker", skipTrackerRemoval: true, timezone }, logger);
+    } catch (e: any) {
+      logger.warn(`[tracker-entries] paired check-in removal failed for ${extra}:`, e?.message || e);
+    }
+  }
 
   // The entry mirrored a habit completion: retract that completion too. The
   // mirror is already gone (we just deleted it), so the pipeline's own mirror
