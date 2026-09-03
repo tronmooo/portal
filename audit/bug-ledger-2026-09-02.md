@@ -332,6 +332,12 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Over-budget alert with a folded category (browser flow 12) — verified after D187
+A 10 Transportation cap and a 40 expense stored as "transportation" raise "Transport spending is over budget (400%)" on the finance page.
+
+### Editing a recorded payment's amount (probe s110) — verified working
+Changing a 200 payment to 250 re-records it once: one payment of 250, the due date stays one cycle on, the balance reflects the new principal, and the occurrence stamp points at the re-recorded payment.
+
 ### Loan payments through the browser (flow 11, probe s109) — verified after D188/D189
 On the loan page a regular payment advances the due date once; a second amount the same day shows as a second row without moving the due date; reversing it from the row puts its principal back and the balance KPI follows; adding 25 on an account page moves the balance to 1,025 on screen and in storage.
 
