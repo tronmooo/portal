@@ -1036,3 +1036,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - Replica: after `migrations/20260903_shared_tracker_cascade.sql`, deleting Kim keeps the family steps tracker with Self's two entries and Self as its only owner; Kim's own tracker goes; the shared habit and task survive unlinked (4/4; before: the shared tracker was gone). The first draft, based on `migrations/009`, referenced the dropped `obligations` table and rolled back — the migration was rewritten from the function as deployed (read via the Supabase connector), so only the tracker section differs.
 - Production: migration `shared_tracker_cascade_d250` applied through the Supabase connector (the cascade is a SQL function called by the app, so the fix reached users with the migration, ahead of the next deploy).
 - Production p13 2/2 after the migration: the shared tracker survives Kim's deletion with Self's entry and Kim unlinked; Kim's own tracker goes. Full suite 260 files / 4664 tests green (MemStorage now keeps a tracker's named owners, for parity).
+
+### Deleting a co-owner — verified (s230)
+
+- House Self 60 / Kim 40 and loan Self 50 / Kim 50: deleting Kim hands both shares back to Self (house `self:100`, loan `self:100`) and the Self-scoped net worth counts the whole house and the whole loan (D224 holds through the profile cascade too).
