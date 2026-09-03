@@ -914,3 +914,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - Zero rows: tracker entries mirroring a missing habit, check-ins without a habit, paid occurrence stamps without a payment row, payment amount ≠ its logged expense, `_docFields` naming a missing document, documents linked to missing profiles, dangling liability-asset links, probe leftovers.
 - 118 expenses carry a `payment:<id>` tag whose payment row is gone: every one belongs to a probe bill that was hard-deleted (`DELETE /api/profiles`), which cascades the payment rows and keeps the spend history — by design, the tag is inert. 4 entity links point at soft-deleted expenses, kept for restore and hidden on read (same rule as events).
+
+### Bill payment re-price — verified (s214) and payment-path regression probes
+
+- s214 before the fix: the amount edit re-logged the expense as `general` with the generated description (4/5). After: one expense at 45 keeping `utilities` and the user's description, one payment row at 45 (5/5).
+- Unchanged after D233–D235: s213 3/3 (mirror move, expense-side re-price), s188 4/4 and s183 6/6 (loan second-payment paths still go through unpay + pay), s16 11/11 (undo of a loan/card payment restores the account).
