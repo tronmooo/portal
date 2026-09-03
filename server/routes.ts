@@ -1524,6 +1524,14 @@ export async function registerRoutes(
 
     const { createScopedStorage, requestStorageContext } = await import("./storage");
     const scoped = createScopedStorage(authed.userId);
+    // The warmed stats are read by the user's real request under the same
+    // cache key, so they must be computed in the user's day: the header when
+    // the warm-up carries one, else the timezone the user's requests saved.
+    // A fresh scoped storage used to default to the server zone, and the
+    // dashboard's first paint then showed the server's "today" (habits done,
+    // journal streak, month spend) until the entry expired.
+    const warmTz = req.headers["x-timezone"];
+    (scoped as any)._timezone = typeof warmTz === "string" && warmTz.trim() ? warmTz.trim() : await userTimezoneFor(scoped);
     await requestStorageContext.run(scoped, async () => {
       try {
         // Version-stamp the cache keys exactly like cacheUserKey() does for a
@@ -2178,6 +2186,10 @@ export async function registerRoutes(
       for (const u of users) {
         try {
           const scoped = createScopedStorage(u.id);
+          // The review is the USER's week: pin their saved timezone like the
+          // other cron jobs do, or every user's review is dated and windowed
+          // in the server default zone (a day off east of it on Sunday night).
+          (scoped as any)._timezone = await userTimezoneFor(scoped);
           const result = await new Promise<any>((resolve, reject) => {
             requestStorageContext.run(scoped, async () => {
               try { resolve(await generateWeeklyReview(scoped)); } catch (e) { reject(e); }

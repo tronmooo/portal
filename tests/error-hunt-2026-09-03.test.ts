@@ -2917,3 +2917,38 @@ describe("D254 finance-import budgets: undo restores overwritten caps; plan uses
     expect(created[0].nextDueDate).toBe("2026-09-30");
   });
 });
+
+// ── D255: the Sunday weekly-review cron must build each user's review in that
+// user's saved timezone, like the daily-maintenance cron does.
+describe("D255 weekly-review cron pins each user's timezone", () => {
+  const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+  const start = src.indexOf("const cronWeeklyReview");
+  const end = src.indexOf('app.get("/api/cron/weekly-review"');
+  const block = src.slice(start, end);
+  it("sets the scoped storage's timezone from the user's preference before generating", () => {
+    expect(start).toBeGreaterThan(0);
+    const pin = block.indexOf("_timezone = await userTimezoneFor(scoped)");
+    const gen = block.indexOf("generateWeeklyReview(scoped)");
+    expect(pin).toBeGreaterThan(0);
+    expect(gen).toBeGreaterThan(pin);
+  });
+});
+
+// ── D256: the dashboard warm-up computes the cached stats in the user's
+// timezone (header, else saved preference), never the server default.
+describe("D256 warm-up pins the user's timezone before warming stats", () => {
+  it("server: the scoped storage gets the header timezone or the saved preference before getStats", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    const start = src.indexOf('app.get("/api/warmup"');
+    const warmStats = src.indexOf("scoped.getStats(", start);
+    const pin = src.indexOf("_timezone =", start);
+    expect(start).toBeGreaterThan(0);
+    expect(pin).toBeGreaterThan(start);
+    expect(pin).toBeLessThan(warmStats);
+    expect(src.slice(pin, pin + 200)).toMatch(/x-timezone|userTimezoneFor/);
+  });
+  it("client: an authed warm-up sends the browser timezone", () => {
+    const src = readFileSync(new URL("../client/src/lib/warmup.ts", import.meta.url), "utf8");
+    expect(src).toMatch(/"X-Timezone": BROWSER_TIMEZONE/);
+  });
+});
