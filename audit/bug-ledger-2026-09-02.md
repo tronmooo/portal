@@ -317,6 +317,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### An empty account's read surface (probe s78, user B with only a Self) — verified working
+Thirty-two read routes (dashboard, stats, bootstrap, bell, calendar, insights, search, anomalies, cashflow, net-worth history, occurrences, budgets, every list, onboarding, activity, date rules, import history, profile types) answer 200 with empty shapes; net worth is 0 with no NaN; search answers an empty list; generating a weekly review does not 500.
+
 ### Duplicate profiles (probe s77) — verified working / by design
 A second person with the same name is refused (409, naming the existing row); renaming a person onto another person's name is refused with the ambiguity explanation; a second vehicle with the same name under one owner is allowed — deliberate (the create route's comment: "everything except PEOPLE — you can legitimately own two" identical items).
 
