@@ -789,3 +789,23 @@ describe("D169: /api/public/artifacts/:token is not cacheable by the CDN", () =>
     expect(body).not.toMatch(/Cache-Control", "public, max-age=/);
   });
 });
+
+// ─── D171: deleting a paycheck that is not yours is not a success ───────────
+describe("D171: deletePaycheck reports the row count and the route maps none to 404", () => {
+  it("storage: no row → false; one row → true; user filter present", async () => {
+    const { client, calls } = chainClient((table, op) => table === "paychecks" && op === "delete" ? { data: [], error: null } : { data: [], error: null });
+    const s = bareStorage({ supabase: client });
+    expect(await s.deletePaycheck("pc-1")).toBe(false);
+    const del = calls.find((c) => c.table === "paychecks" && c.op === "delete")!;
+    expect(del.filters).toEqual(expect.arrayContaining([["eq", ["id", "pc-1"]], ["eq", ["user_id", s.userId]]]));
+    const { client: c2 } = chainClient((table, op) => table === "paychecks" && op === "delete" ? { data: [{ id: "pc-1" }], error: null } : { data: [], error: null });
+    expect(await bareStorage({ supabase: c2 }).deletePaycheck("pc-1")).toBe(true);
+  });
+  it("route: 404 when nothing was removed, 200 otherwise", async () => {
+    let removed = false;
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => { storage.deletePaycheck = async () => removed; });
+    expect((await h.api("DELETE", "/api/paychecks/pc-1")).status).toBe(404);
+    removed = true;
+    expect((await h.api("DELETE", "/api/paychecks/pc-1")).status).toBe(200);
+  });
+});

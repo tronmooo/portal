@@ -308,7 +308,7 @@ export interface IStorage {
   getPaychecks(): Promise<any[]>;
   createPaycheck(paycheck: { source: string; amount: number; expected_date: string; notes?: string }): Promise<any>;
   confirmPaycheck(id: string, actual_amount?: number): Promise<any>;
-  deletePaycheck(id: string): Promise<void>;
+  deletePaycheck(id: string): Promise<boolean>;
 
   // Loan Amortization
   getLoanSchedule(loanId: string): Promise<any[]>;
@@ -2766,7 +2766,7 @@ export class MemStorage implements IStorage {
   async getPaychecks() { return []; }
   async createPaycheck(p: any) { return { id: crypto.randomUUID(), ...p }; }
   async confirmPaycheck(id: string, _actual_amount?: number) { return { id, confirmed: true }; }
-  async deletePaycheck(_id: string) {}
+  async deletePaycheck(_id: string) { return false; } // MemStorage keeps no paychecks (its create is a stub), so nothing is ever removed
 
   // Loan stubs
   async getLoanSchedule(_loanId: string) { return []; }

@@ -6705,12 +6705,10 @@ Rules:
   }));
 
   app.delete("/api/paychecks/:id", asyncHandler(async (req, res) => {
-    // Idempotent: the row is hard-deleted with a user_id filter, so a repeat
-    // DELETE is a no-op that still succeeded. `storage.deletePaycheck` returns
-    // void and cannot distinguish "removed one" from "there was none", so this
-    // handler must not pretend to — it reports success either way rather than
-    // inventing a 404 it has no evidence for.
-    await storage.deletePaycheck(req.params.id);
+    // The storage reports whether a row was removed, so a paycheck that is
+    // not this user's (or is already gone) is a 404 rather than a success.
+    const removed = await storage.deletePaycheck(req.params.id);
+    if (!removed) return res.status(404).json({ error: "Paycheck not found" });
     const uid_pc3 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`paychecks:${uid_pc3}`); bustCache(`stats:${uid_pc3}`); bustCache(`cashflow:${uid_pc3}`);
     res.json({ success: true });

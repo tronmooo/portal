@@ -7754,9 +7754,13 @@ export class SupabaseStorage implements IStorage {
     return data;
   }
 
-  async deletePaycheck(id: string): Promise<void> {
-    await this.supabase.from('paychecks').delete()
-      .eq('id', id).eq('user_id', this.userId);
+  async deletePaycheck(id: string): Promise<boolean> {
+    // `.select` so a delete that matched no row (another user's paycheck, a
+    // missing id) reports false and the route answers 404 instead of success.
+    const { data, error } = await this.supabase.from('paychecks').delete()
+      .eq('id', id).eq('user_id', this.userId).select('id');
+    if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================
