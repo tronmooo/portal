@@ -1156,3 +1156,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 ### Notification dismissals across tabs — verified (flows28, D263)
 
 - Before (browser, two tabs): tab 2 dismissed the document alert (stored `[doc-exp…]`); tab 1 then dismissed the bill notice from its older bell and the store became `[bill-soon…]` only — the document alert would return on reload (2/3). After the rebuild: both ids stored (3/3).
+- Full suite after D263: 260 files / 4693 tests green.
