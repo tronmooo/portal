@@ -315,11 +315,20 @@ function ManualEventSection() {
       invalidateAll();
       toast({ title: "Event added" });
     },
-    onError: (err, _v, ctx) => {
+    onError: (err, vars, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      // The form is cleared the moment "Add" is clicked (the payload is
+      // snapshotted first); a refused create must hand the draft back, or the
+      // server's "ends before it starts" lands on an empty form.
+      restoreDraft(vars);
       toast({ title: "Couldn't add event", description: formatApiError(err), variant: "destructive" });
     },
   });
+  const restoreDraft = (v: any) => {
+    if (!v) return;
+    setTitle(String(v.title || "")); setLocation(String(v.location || "")); setDescription(String(v.description || ""));
+    setRecurrence(v.recurrence || "none"); setLinkedProfile(v.linkedProfiles?.[0] || ""); setLinkedDoc(v.linkedDocuments?.[0] || "");
+  };
   const buildEventPayload = () => ({
     title: title.trim(), date,
     time: !allDay && time ? time : undefined,
@@ -481,12 +490,18 @@ function RecurringObligationSection() {
       invalidateAll();
       toast({ title: "Added", description: `${OBLIGATION_KIND_META[kind].label} · ${frequency}` });
     },
-    onError: (err, _v, ctx) => {
+    onError: (err, vars, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      restoreDraft(vars);
       toast({ title: "Couldn't create", description: formatApiError(err), variant: "destructive" });
     },
   });
 
+  const restoreDraft = (v: any) => {
+    if (!v) return;
+    setName(String(v.name || "")); setAmount(v.amount ? String(v.amount) : ""); setNotes(String(v.notes || ""));
+    setLinkedAsset(v.linkedAssetId || ""); setLinkedLiability(v.linkedLiabilityId || ""); setLinkedDoc(v.linkedDocumentId || "");
+  };
   const buildObligationPayload = () => ({
     name: name.trim(),
     amount: parseFloat(amount || "0"),
@@ -672,8 +687,9 @@ function BirthdaySection() {
       invalidateAll();
       toast({ title: "Added", description: `Recurs every year on ${date}` });
     },
-    onError: (err, _v, ctx) => {
+    onError: (err, vars: any, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      if (vars) { setName(String(vars.title || vars.name || "").replace(/'s birthday$/i, "")); setLinkedPerson(vars.linkedProfiles?.[0] || ""); }
       toast({ title: "Couldn't add", description: formatApiError(err), variant: "destructive" });
     },
   });
@@ -755,8 +771,9 @@ function TaskSection() {
       invalidateAll();
       toast({ title: "Task added" });
     },
-    onError: (err, _v, ctx) => {
+    onError: (err, vars: any, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
+      if (vars) { setTitle(String(vars.title || "")); setDescription(String(vars.description || "")); }
       toast({ title: "Couldn't add", description: formatApiError(err), variant: "destructive" });
     },
   });

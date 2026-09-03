@@ -759,3 +759,19 @@ describe("D167: retracting a payment re-opens the amortization row it had marked
     expect(out.steps.some((s) => s.step === "schedule_unmark" && s.ok)).toBe(true);
   });
 });
+
+// ─── D168: a refused create hands the draft back to the calendar manager ────
+describe("D168: CalendarManagerPanel restores the typed form when a create is refused", () => {
+  it("source guard: every create mutation's onError restores the draft from its variables", () => {
+    const src = readFileSync(new URL("../client/src/components/CalendarManagerPanel.tsx", import.meta.url), "utf8");
+    // The three create forms (event, obligation, task) each clear their fields
+    // right after mutate(); their onError must put the values back.
+    expect((src.match(/restoreDraft\(vars\)/g) || []).length).toBe(2);
+    expect(src).toMatch(/onError: \(err, vars: any, ctx\) => \{[\s\S]{0,200}setTitle\(String\(vars\.title/);
+    expect(src).toMatch(/onError: \(err, vars: any, ctx\) => \{[\s\S]{0,200}setName\(String\(vars\.title/);
+    // Every create form's onError names its variables; only deletes and the
+    // quick-add (which restores its own preview snapshot) keep `_v`.
+    const ignoring = (src.match(/onError: \(err, _v, ctx\)/g) || []).length;
+    expect(ignoring).toBeLessThanOrEqual(4);
+  });
+});
