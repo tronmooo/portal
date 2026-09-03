@@ -39,7 +39,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { fieldExpiryStatus } from "@shared/date-rules";
+import { getUserToday } from "@shared/timezone";
 import { cn } from "@/lib/utils";
 import {
   useDocumentBlobUrl,
@@ -94,22 +96,7 @@ function formatFieldLabel(key: string): string {
 }
 
 function getExpirationStatus(key: string, value: any): "expired" | "soon" | "valid" | null {
-  const lower = key.toLowerCase();
-  if (!lower.includes("expir") && !lower.includes("valid_until") && !lower.includes("expiration")) {
-    return null;
-  }
-  if (!value) return null;
-  try {
-    const date = new Date(value);
-    if (isNaN(date.getTime())) return null;
-    const now = new Date();
-    const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    if (date < now) return "expired";
-    if (date < thirtyDays) return "soon";
-    return "valid";
-  } catch {
-    return null;
-  }
+  return fieldExpiryStatus(key, value, getUserToday(BROWSER_TIMEZONE));
 }
 
 function ExpirationBadge({ status }: { status: "expired" | "soon" | "valid" }) {

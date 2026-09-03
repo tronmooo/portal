@@ -1741,3 +1741,22 @@ describe("D210: /api/insights scopes profile dates like everything else", () => 
     expect(scoped.data.some((i: any) => i.relatedEntityId === "laptop-1")).toBe(false);
   });
 });
+
+// ─── D211: the document viewer's expiry badge counts calendar days in the user's zone ─
+import { fieldExpiryStatus } from "../shared/date-rules";
+describe("D211: fieldExpiryStatus", () => {
+  it("a passport expiring tomorrow is 'soon', not 'expired', whatever the UTC clock says", () => {
+    expect(fieldExpiryStatus("expirationDate", "2026-09-03", "2026-09-02")).toBe("soon");
+    expect(fieldExpiryStatus("expirationDate", "2026-09-03", "2026-09-03")).toBe("soon");
+    expect(fieldExpiryStatus("expirationDate", "2026-09-03", "2026-09-04")).toBe("expired");
+    expect(fieldExpiryStatus("expirationDate", "2026-12-01", "2026-09-04")).toBe("valid");
+  });
+  it("renewals and lease ends wear the badge; purchase dates, birthdays and due dates do not", () => {
+    expect(fieldExpiryStatus("renewal_date", "2026-09-10", "2026-09-03")).toBe("soon");
+    expect(fieldExpiryStatus("lease_end_date", "2026-08-30", "2026-09-03")).toBe("expired");
+    expect(fieldExpiryStatus("purchase_date", "2026-08-30", "2026-09-03")).toBeNull();
+    expect(fieldExpiryStatus("date_of_birth", "1990-08-30", "2026-09-03")).toBeNull();
+    expect(fieldExpiryStatus("dueDate", "2026-09-05", "2026-09-03")).toBeNull();
+    expect(fieldExpiryStatus("expirationDate", "not a date", "2026-09-03")).toBeNull();
+  });
+});

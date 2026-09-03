@@ -399,6 +399,31 @@ const ALERT_WORDS: Partial<Record<DateRuleType, [string, string, string, string,
 };
 
 /**
+ * The badge a dated field wears in a document's field list: expired, running
+ * out within 30 days, or still valid — `null` for a field that is not a
+ * countdown at all (a purchase date, a birthday).
+ *
+ * Calendar days from the USER's today. The viewer used to compare
+ * `new Date("2026-09-03")` — midnight UTC — against the wall clock, so from
+ * 5 PM Pacific on the 2nd a passport expiring on the 3rd wore EXPIRED, a full
+ * day early; and it matched only "expir"/"valid_until", so a renewal or a
+ * lease end wore nothing.
+ */
+export function fieldExpiryStatus(
+  fieldKey: unknown,
+  value: unknown,
+  todayISO: string,
+  contextKey?: unknown,
+): "expired" | "soon" | "valid" | null {
+  const cls = classifyDateField(fieldKey, contextKey);
+  if (!COUNTDOWN_TYPES.has(cls.ruleType) || cls.ruleType === "due" || cls.ruleType === "deadline") return null;
+  const iso = bareDateOf(value);
+  if (!iso) return null;
+  const diff = daysBetweenISO(todayISO, iso);
+  return diff < 0 ? "expired" : diff <= 30 ? "soon" : "valid";
+}
+
+/**
  * The verb a countdown on this kind of date reads with — so a due date says
  * "Due in 31 days" and never "Expires in 31 days". `[future, past]`.
  */
