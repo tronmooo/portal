@@ -2807,6 +2807,11 @@ describe("D252: a finite series past its recurrenceEnd is ended everywhere, not 
     expect(isEndedBillFields({ dueDate: "2026-09-05" })).toBe(false);
     expect(isEndedBillFields({ recurrenceEnd: "2026-08-14" }, "2026-09-05")).toBe(true);
     expect(isActiveObligation({ status: "ended", nextDueDate: "" })).toBe(false);
+    // D253: a fixed number of occurrences, all settled
+    const two = { count: 2, dueDate: "2026-11-05", occurrences: { "2026-09-05": { status: "paid" }, "2026-10-05": { status: "paid" } } };
+    expect(isEndedBillFields(two)).toBe(true);
+    expect(isEndedBillFields({ ...two, occurrences: { "2026-09-05": { status: "paid" } } })).toBe(false);
+    expect(isEndedBillFields({ ...two, count: 3 })).toBe(false);
   });
   it("the bills projection reports it ended with no next due date", () => {
     const s = bareStorage();
@@ -2816,5 +2821,8 @@ describe("D252: a finite series past its recurrenceEnd is ended everywhere, not 
     expect(o.nextDueDate).toBe("");
     const live = { ...gym, fields: { ...gym.fields, recurrenceEnd: "2026-12-31" } };
     expect(s.liabilityToObligation(live)).toMatchObject({ status: "active", nextDueDate: "2026-09-05" });
+    // D253: two of two payments made → ended, no next due date
+    const plan = { id: "p1", name: "Sofa", type: "liability", type_key: "utility", fields: { monthlyAmount: 100, frequency: "monthly", dueDate: "2026-11-05", nextDueDate: "2026-11-05", count: 2, occurrences: { "2026-09-05": { status: "paid" }, "2026-10-05": { status: "paid" } } } };
+    expect(s.liabilityToObligation(plan)).toMatchObject({ status: "ended", nextDueDate: "" });
   });
 });

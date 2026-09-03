@@ -200,10 +200,21 @@ export function isSettledOccurrence(fields: any, dateISO: string): boolean {
  */
 export function isEndedBillFields(fields: any, nextDueISO?: string | null): boolean {
   const f = fields || {};
-  const end = typeof f.recurrenceEnd === "string" ? f.recurrenceEnd.slice(0, 10) : "";
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return false;
   const next = String(nextDueISO || readDueDate(f) || "").slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(next) && next > end;
+  const end = typeof f.recurrenceEnd === "string" ? f.recurrenceEnd.slice(0, 10) : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(end) && /^\d{4}-\d{2}-\d{2}$/.test(next) && next > end) return true;
+  // A fixed number of occurrences ("2 payments"): once that many are settled
+  // (paid or skipped) there is nothing left to come due (D253).
+  const count = parseInt(String(f.count ?? f.totalTerm ?? ""), 10);
+  if (Number.isFinite(count) && count > 0) {
+    const occ = f.occurrences && typeof f.occurrences === "object" ? f.occurrences : {};
+    const settled = Object.values(occ as Record<string, any>).filter((o) => {
+      const st = String(o?.status || "").toLowerCase();
+      return st === "paid" || st === "skipped";
+    }).length;
+    if (settled >= count) return true;
+  }
+  return false;
 }
 
 export function isPausedBillFields(fields: any): boolean {
