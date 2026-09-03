@@ -68,21 +68,44 @@ export interface MergeCriteria {
   target_id: string;
 }
 
+/**
+ * A co-ownership share the source holds (asset_party_links /
+ * liability_profile_links). Merging used to leave these rows pointing at the
+ * archived source: the target lost Linda's half of the car, the dead share
+ * kept counting toward the asset's 100%, and the ownership editor showed an
+ * owner that no longer existed.
+ */
+export interface MovedShare {
+  table: "asset_party_links" | "liability_profile_links";
+  /** The source's link row. */
+  id: string;
+  /** The asset or liability the share is on. */
+  subjectId: string;
+  pct: number;
+  role?: string;
+  /** The target's own link on the same subject, if any — shares are summed into it. */
+  mergeIntoId?: string;
+  mergeIntoPct?: number;
+}
+
 interface MergeSet {
   /** entityType → rows { id, links } whose linked_profiles include the source */
   affected: Record<string, Array<{ id: string; links: string[] }>>;
   childIds: string[];
+  /** Co-ownership shares held by the source (see MovedShare). */
+  shares: MovedShare[];
 }
 
 function hashMergeSet(set: MergeSet): string {
   const flat = [
     ...Object.entries(set.affected).flatMap(([t, rows]) => rows.map((r) => `${t}:${r.id}`)),
     ...set.childIds.map((id) => `child:${id}`),
+    ...(set.shares || []).map((sh) => `share:${sh.table}:${sh.id}:${sh.pct}:${sh.mergeIntoId || ""}:${sh.mergeIntoPct ?? ""}`),
   ].sort().join("|");
   return createHash("sha256").update(flat).digest("hex").slice(0, 32);
 }
 
-async function deriveMergeSet(storage: IStorage, sourceId: string): Promise<MergeSet> {
+async function deriveMergeSet(storage: IStorage, sourceId: string, targetId?: string): Promise<MergeSet> {
   const affected: MergeSet["affected"] = {};
   for (const [type, list] of Object.entries(LIST_BY_TYPE)) {
     let rows: any[] = [];
@@ -94,7 +117,36 @@ async function deriveMergeSet(storage: IStorage, sourceId: string): Promise<Merg
   }
   const profiles = await storage.getProfiles();
   const childIds = profiles.filter((p: any) => p.parentProfileId === sourceId).map((p: any) => p.id);
-  return { affected, childIds };
+  const shares = await deriveShares(storage, sourceId, targetId);
+  return { affected, childIds, shares };
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+async function deriveShares(storage: IStorage, sourceId: string, targetId?: string): Promise<MovedShare[]> {
+  const s: any = storage;
+  const [assetLinks, liabLinks] = await Promise.all([
+    Promise.resolve(s.getAssetPartyLinks?.()).catch(() => []),
+    Promise.resolve(s.getLiabilityProfileLinks?.()).catch(() => []),
+  ]);
+  const out: MovedShare[] = [];
+  const collect = (rows: any[], table: MovedShare["table"], subjectKey: string) => {
+    for (const l of Array.isArray(rows) ? rows : []) {
+      if (!l || l.partyProfileId !== sourceId || typeof l.id !== "string") continue;
+      const subjectId = String(l[subjectKey] || "");
+      if (!subjectId) continue;
+      const existing = targetId
+        ? (rows as any[]).find((o) => o && o.id !== l.id && o.partyProfileId === targetId && String(o[subjectKey] || "") === subjectId)
+        : undefined;
+      out.push({
+        table, id: l.id, subjectId, pct: Number(l.ownershipPercentage ?? 100) || 0, role: l.role || undefined,
+        ...(existing ? { mergeIntoId: existing.id, mergeIntoPct: Number(existing.ownershipPercentage ?? 100) || 0 } : {}),
+      });
+    }
+  };
+  collect(assetLinks, "asset_party_links", "assetProfileId");
+  collect(liabLinks, "liability_profile_links", "liabilityProfileId");
+  return out;
 }
 
 function resolveProfile(profiles: any[], name: string): any | undefined {
@@ -114,7 +166,7 @@ export async function planMergeProfiles(storage: IStorage, sourceName: string, t
   if (source.id === target.id) return { error: "Source and target resolve to the same profile — nothing to merge." };
   if (source.type === "self") return { error: "Refusing to merge your self profile into another profile. Merge the other profile INTO your self profile instead." };
 
-  const set = await deriveMergeSet(storage, source.id);
+  const set = await deriveMergeSet(storage, source.id, target.id);
   const counts = Object.fromEntries(Object.entries(set.affected).map(([t, rows]) => [t, rows.length]));
   const total = Object.values(counts).reduce((s, n) => s + n, 0);
 
@@ -126,6 +178,7 @@ export async function planMergeProfiles(storage: IStorage, sourceName: string, t
   const preview = {
     counts, total,
     child_profiles_moved: set.childIds.length,
+    shares_moved: set.shares.length,
     samples: Object.entries(set.affected).slice(0, 3).map(([t, rows]) => `${rows.length} ${t}${rows.length === 1 ? "" : "s"}`),
   };
   const row = await storage.createAiBulkPlan({
@@ -138,14 +191,14 @@ export async function planMergeProfiles(storage: IStorage, sourceName: string, t
   return {
     plan_id: row.id,
     preview,
-    message: `Merge preview: "${source.name}" → "${target.name}" will re-point ${total} record${total === 1 ? "" : "s"}${set.childIds.length ? ` and move ${set.childIds.length} child profile${set.childIds.length === 1 ? "" : "s"}` : ""}, then archive "${source.name}" (its empty fields fill from the target's are kept; conflicting fields keep the target's values). Nothing has been changed — confirm to proceed (15 min).`,
+    message: `Merge preview: "${source.name}" → "${target.name}" will re-point ${total} record${total === 1 ? "" : "s"}${set.childIds.length ? ` and move ${set.childIds.length} child profile${set.childIds.length === 1 ? "" : "s"}` : ""}${set.shares.length ? ` and move ${set.shares.length} ownership share${set.shares.length === 1 ? "" : "s"} (co-owned assets/loans)` : ""}, then archive "${source.name}" (its empty fields fill from the target's are kept; conflicting fields keep the target's values). Nothing has been changed — confirm to proceed (15 min).`,
   };
 }
 
 /** Phase 2 (called from executeBulkPlan dispatch): re-derive, drift-check, merge. */
 export async function executeMergeProfiles(storage: IStorage, plan: { id: string; criteria: MergeCriteria; planHash: string }): Promise<any> {
   const { source_id, target_id, source_name, target_name } = plan.criteria;
-  const set = await deriveMergeSet(storage, source_id);
+  const set = await deriveMergeSet(storage, source_id, target_id);
   if (hashMergeSet(set) !== plan.planHash) {
     await storage.setAiBulkPlanStatus(plan.id, "expired");
     return { error: "The data changed since the merge preview — the plan was cancelled for safety. Run the merge again to get a fresh preview." };
@@ -179,6 +232,26 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
     if (!error) childrenMoved++;
   }
 
+  // 2b. Move the source's co-ownership shares onto the target. A share the
+  //     target already holds on the same asset/loan absorbs the source's
+  //     (delete first so the per-subject 100% guard never sees both rows).
+  let sharesMoved = 0;
+  for (const sh of set.shares) {
+    try {
+      if (sh.mergeIntoId) {
+        const { error: e1 } = await sb.from(sh.table).delete().eq("id", sh.id).eq("user_id", userId);
+        if (e1) continue;
+        const { error: e2 } = await sb.from(sh.table)
+          .update({ ownership_percentage: Math.min(100, round2((sh.mergeIntoPct || 0) + sh.pct)) })
+          .eq("id", sh.mergeIntoId).eq("user_id", userId);
+        if (!e2) sharesMoved++;
+      } else {
+        const { error } = await sb.from(sh.table).update({ party_profile_id: target_id }).eq("id", sh.id).eq("user_id", userId);
+        if (!error) sharesMoved++;
+      }
+    } catch { /* counted as not moved */ }
+  }
+
   // 3. Fill-empty-only field merge (target keeps its own values on conflict).
   const source = profiles.find((p: any) => p.id === source_id);
   const target = profiles.find((p: any) => p.id === target_id);
@@ -204,7 +277,7 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
     .eq("id", source_id).eq("user_id", userId);
 
   await storage.setAiBulkPlanStatus(plan.id, "executed", {
-    affected: { relinked, childrenMoved, filledFields },
+    affected: { relinked, childrenMoved, filledFields, sharesMoved },
     executedAt: new Date().toISOString(),
   });
 
@@ -219,11 +292,11 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
       entityId: target_id,
       entityName: `merge "${source_name}" → "${target_name}"`,
       input: plan.criteria as any,
-      before: { affected: set.affected, childIds: set.childIds } as any,
+      before: { affected: set.affected, childIds: set.childIds, shares: set.shares } as any,
       reversible: !big,
       reversePlan: big
         ? { op: "none", reason: `merge touched ${totalRelinked} records — undo is best-effort only, ask to re-merge manually` }
-        : { op: "unmerge", source_id, target_id, affected: set.affected, child_ids: set.childIds },
+        : { op: "unmerge", source_id, target_id, affected: set.affected, child_ids: set.childIds, shares: set.shares },
       source: "bulk",
     });
   } catch { /* ledger is best-effort */ }
@@ -233,15 +306,15 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
 
   return {
     executed: true,
-    merged: { relinked, children_moved: childrenMoved, fields_filled: filledFields },
+    merged: { relinked, children_moved: childrenMoved, fields_filled: filledFields, shares_moved: sharesMoved },
     ...(totalFailed > 0 ? { failed } : {}),
     source_archived: !delErr,
-    message: `Merged "${source_name}" into "${target_name}": ${totalRelinked} record${totalRelinked === 1 ? "" : "s"} re-pointed${childrenMoved ? `, ${childrenMoved} child profile${childrenMoved === 1 ? "" : "s"} moved` : ""}${filledFields.length ? `, ${filledFields.length} empty field${filledFields.length === 1 ? "" : "s"} filled from "${source_name}"` : ""}. "${source_name}" was archived (soft-deleted)${big ? "" : " — this can be undone"}.${totalFailed ? ` ${totalFailed} record(s) failed to re-point.` : ""}`,
+    message: `Merged "${source_name}" into "${target_name}": ${totalRelinked} record${totalRelinked === 1 ? "" : "s"} re-pointed${childrenMoved ? `, ${childrenMoved} child profile${childrenMoved === 1 ? "" : "s"} moved` : ""}${sharesMoved ? `, ${sharesMoved} ownership share${sharesMoved === 1 ? "" : "s"} moved` : ""}${filledFields.length ? `, ${filledFields.length} empty field${filledFields.length === 1 ? "" : "s"} filled from "${source_name}"` : ""}. "${source_name}" was archived (soft-deleted)${big ? "" : " — this can be undone"}.${totalFailed ? ` ${totalFailed} record(s) failed to re-point.` : ""}`,
   };
 }
 
 /** Reverse a merge: restore the source profile, re-point links back, move children back. */
-export async function reverseMerge(storage: IStorage, reversePlan: { source_id: string; target_id: string; affected: MergeSet["affected"]; child_ids: string[] }): Promise<{ ok: boolean; description: string }> {
+export async function reverseMerge(storage: IStorage, reversePlan: { source_id: string; target_id: string; affected: MergeSet["affected"]; child_ids: string[]; shares?: MovedShare[] }): Promise<{ ok: boolean; description: string }> {
   const sb = (storage as any).supabase;
   const userId = (storage as any).userId as string;
   if (!sb || !userId) return { ok: false, description: "Unmerge isn't available in this deployment." };
@@ -268,11 +341,31 @@ export async function reverseMerge(storage: IStorage, reversePlan: { source_id: 
       .eq("id", childId).eq("user_id", userId);
   }
 
+  // Give the source its co-ownership shares back (the mirror of step 2b).
+  let sharesRestored = 0;
+  for (const sh of reversePlan.shares || []) {
+    try {
+      if (sh.mergeIntoId) {
+        const { error: e1 } = await sb.from(sh.table).update({ ownership_percentage: sh.mergeIntoPct ?? 0 })
+          .eq("id", sh.mergeIntoId).eq("user_id", userId);
+        if (e1) { failed++; continue; }
+        const subjectCol = sh.table === "asset_party_links" ? "asset_profile_id" : "liability_profile_id";
+        const row: Record<string, any> = { id: sh.id, user_id: userId, [subjectCol]: sh.subjectId, party_profile_id: reversePlan.source_id, ownership_percentage: sh.pct };
+        if (sh.table === "asset_party_links") row.role = sh.role || "co_owner";
+        const { error: e2 } = await sb.from(sh.table).insert(row);
+        if (e2) failed++; else sharesRestored++;
+      } else {
+        const { error } = await sb.from(sh.table).update({ party_profile_id: reversePlan.source_id }).eq("id", sh.id).eq("user_id", userId);
+        if (error) failed++; else sharesRestored++;
+      }
+    } catch { failed++; }
+  }
+
   // Same fan-out as the merge itself: every owned table moved back.
   await reportMergeWrite(storage, "unmergeProfiles", [reversePlan.source_id, reversePlan.target_id], { id: reversePlan.source_id, relinked });
 
   return {
     ok: failed === 0,
-    description: `restored the source profile and re-pointed ${relinked} record(s) back${failed ? ` (${failed} failed)` : ""}`,
+    description: `restored the source profile and re-pointed ${relinked} record(s) back${sharesRestored ? ` with ${sharesRestored} ownership share(s)` : ""}${failed ? ` (${failed} failed)` : ""}`,
   };
 }

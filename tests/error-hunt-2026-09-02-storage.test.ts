@@ -958,3 +958,22 @@ describe("D120: containment pushdowns match the owner chain and co-ownership", (
     expect(orClause("goals")!.split(",").sort()).toEqual(['linked_profiles.cs.["car-1"]', 'linked_profiles.cs.["dog-1"]', 'linked_profiles.cs.["linda"]', 'linked_profiles.cs.["loan-1"]', 'linked_profiles.cs.["mike"]']);
   });
 });
+
+// D125 — reverseMerge starts with restoreEntity("profile", source), which had
+// no profile table: every "this can be undone" merge failed to undo.
+describe("D125: a merge-archived profile can be restored; a hard-deleted one still cannot", () => {
+  it("un-deletes the soft-deleted profile row", async () => {
+    const { client, calls } = chainClient((table, op) => table === "profiles" && op === "update" ? { data: [{ id: "p1", deleted_at: null }], error: null } : { data: [], error: null });
+    const s = bareStorage({ supabase: client });
+    expect(await s.restoreEntity("profile", "p1")).toBe(true);
+    const upd = calls.find((c) => c.table === "profiles" && c.op === "update");
+    expect(upd?.payload).toEqual({ deleted_at: null });
+    expect(upd?.filters).toContainEqual(["eq", ["id", "p1"]]);
+  });
+  it("answers false when no row exists (hard cascade)", async () => {
+    const { client } = chainClient(() => ({ data: [], error: null }));
+    const s = bareStorage({ supabase: client });
+    expect(await s.restoreEntity("profile", "gone")).toBe(false);
+    expect(await s.restoreEntity("obligation", "x")).toBe(false);
+  });
+});

@@ -67,12 +67,16 @@ describe("recoverable means recoverable", () => {
     expect(removers).toBe(1);
   });
 
-  it("restoreEntity delegates documents to restoreDocument and never promises profile/obligation", () => {
+  it("restoreEntity delegates documents to restoreDocument, never promises obligation, and restores a profile only from a soft-deleted row", () => {
     const body = method("restoreEntity");
     expect(body).toContain("restoreDocument");
-    expect(body).not.toMatch(/profile:\s*"profiles"/);
-    expect(body).not.toMatch(/obligation:\s*"profiles"/);
+    expect(body).not.toMatch(/obligation:\s*"(profiles|obligations)"/);
     expect(body).toMatch(/goal:\s*"goals"/);
+    // A merge archives its source with deleted_at (server/merge-profiles.ts),
+    // the one soft-deleted profile path; a hard-cascaded profile matches no
+    // row, and the row-count check below keeps that answering false.
+    expect(body).toMatch(/profile:\s*"profiles"/);
+    expect(body).toMatch(/Array\.isArray\(data\) && data\.length > 0/);
   });
 
   it("SOFT_DELETE_TYPES matches what the storage layer actually does", () => {

@@ -895,13 +895,17 @@ export class SupabaseStorage implements IStorage {
   async restoreEntity(entityType: string, id: string): Promise<boolean> {
     // Documents also need their owners' documents[] arrays re-linked.
     if (entityType === "document") return this.restoreDocument(id);
-    // NOTE: profile/obligation were listed here, but deleteProfile is a hard
-    // cascade (the RPC) and deleteObligation delegates to it — there is no row
-    // to un-delete, so promising restore for them was a lie that surfaced as
-    // "restore succeeded" toasts over permanently gone data.
+    // NOTE: obligation is not listed: deleteProfile is a hard cascade (the
+    // RPC) and deleteObligation delegates to it — there is no row to
+    // un-delete, so promising restore for it was a lie that surfaced as
+    // "restore succeeded" toasts over permanently gone data. `profile` IS
+    // listed for the one path that soft-deletes a profile row — a merge
+    // archives its source with `deleted_at` — so "this can be undone" on a
+    // merge holds; a hard-deleted profile matches no row and still answers
+    // false (the row-count check below), never a false success.
     const TABLES: Record<string, string> = {
       task: "tasks", habit: "habits", expense: "expenses", income: "incomes",
-      event: "events", reminder: "reminders", goal: "goals",
+      event: "events", reminder: "reminders", goal: "goals", profile: "profiles",
     };
     const table = TABLES[entityType];
     if (!table) return false;
