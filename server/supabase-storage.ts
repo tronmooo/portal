@@ -5568,6 +5568,10 @@ export class SupabaseStorage implements IStorage {
   async updateObligation(id: string, data: Partial<Obligation>): Promise<Obligation | undefined> {
     const existing = await this.getProfile(id);
     if (!existing || !isRecurringBill((existing as any).type_key ?? (existing as any).typeKey)) return undefined;
+    // The version the caller read rides through to the profile write, which
+    // is where the conflict check lives; it used to be dropped here, so a bill
+    // edit from a stale tab never got its 409.
+    const expectedUpdatedAt = (data as any).expectedUpdatedAt;
     const fieldsPatch: any = {};
     if (data.amount !== undefined) { fieldsPatch.monthlyAmount = data.amount; fieldsPatch.amount = data.amount; }
     if (data.frequency !== undefined) { const f0 = canonicalIncomeFrequency(data.frequency); const f = f0 && (["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"] as string[]).includes(f0) ? f0 : data.frequency; fieldsPatch.frequency = f; fieldsPatch.billingFrequency = f; }
@@ -5593,6 +5597,7 @@ export class SupabaseStorage implements IStorage {
       ...(data.name !== undefined ? { name: data.name } : {}),
       ...(Object.keys(fieldsPatch).length > 0 ? { fields: fieldsPatch } : {}),
       ...(hasLinked ? { parentProfileId: linked[0] || null } : {}),
+      ...(expectedUpdatedAt !== undefined ? { expectedUpdatedAt } : {}),
     } as any);
     return this.getObligation(id);
   }
@@ -6103,6 +6108,10 @@ export class SupabaseStorage implements IStorage {
   ): Promise<Artifact | undefined> {
     const existing = await this.getArtifact(id);
     if (!existing) return undefined;
+    // [P0.2] optimistic concurrency — 409 if the row moved since the caller
+    // read it (the other updaters already honour expectedUpdatedAt; a stale
+    // tab's checklist rename used to land silently).
+    this.assertNoWriteConflict(data as Record<string, any>, (existing as any).updatedAt);
     const merged = { ...existing, ...data };
     const now = new Date().toISOString();
 

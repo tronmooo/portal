@@ -1392,3 +1392,28 @@ describe("D195: habit and goal edit routes pass a typed refusal through", () => 
     } finally { await booted.close(); }
   });
 });
+
+// ─── D196: artifact and bill edits honour the version the caller read ───────
+describe("D196: updateArtifact and updateObligation refuse a stale expectedUpdatedAt", () => {
+  it("updateArtifact: stale → 409 before any write; fresh → writes", async () => {
+    const row = { id: "a-1", type: "note", title: "Note", content: "a", items: [], tags: [], pinned: false, metadata: {}, updated_at: "2026-09-03T10:00:00Z", created_at: "2026-09-03T09:00:00Z", linked_profiles: [] };
+    const { client, calls } = chainClient((table, op) => table === "artifacts" ? { data: op === "update" ? [{ ...row, title: "New" }] : [row], error: null } : { data: [], error: null });
+    const s = bareStorage({ supabase: client, bumpDataVersion: async () => undefined });
+    await expect(s.updateArtifact("a-1", { title: "New", expectedUpdatedAt: "2026-09-03T09:59:00Z" })).rejects.toMatchObject({ statusCode: 409 });
+    expect(calls.some((c) => c.table === "artifacts" && c.op === "update")).toBe(false);
+    await s.updateArtifact("a-1", { title: "New", expectedUpdatedAt: "2026-09-03T10:00:00Z" });
+    const upd = calls.find((c) => c.table === "artifacts" && c.op === "update");
+    expect(upd?.payload).toMatchObject({ title: "New" });
+    expect(upd?.payload).not.toHaveProperty("expectedUpdatedAt");
+  });
+  it("updateObligation passes the version through to the profile write", async () => {
+    const seen: any[] = [];
+    const s = bareStorage({
+      getProfile: async () => ({ id: "b-1", type: "liability", type_key: "utility", name: "Water", fields: { monthlyAmount: 20 }, updatedAt: "2026-09-03T10:00:00Z" }),
+      updateProfile: async (_id: string, patch: any) => { seen.push(patch); return {}; },
+      getObligation: async () => ({ id: "b-1" }),
+    });
+    await s.updateObligation("b-1", { amount: 21, expectedUpdatedAt: "2026-09-03T09:59:00Z" } as any);
+    expect(seen[0]).toMatchObject({ expectedUpdatedAt: "2026-09-03T09:59:00Z", fields: { monthlyAmount: 21 } });
+  });
+});
