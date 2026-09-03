@@ -2501,3 +2501,26 @@ describe("D235: editing a bill payment's amount or date re-prices in place and k
     expect(writes.some((w) => w[0] === "expense")).toBe(true);
   });
 });
+
+// ─── D236: profile detail served a small tracker's entries newest-first ─────
+import { capProfileDetailLists } from "../server/supabase-storage";
+describe("D236: profile detail embeds tracker entries oldest → newest whether or not the cap applies", () => {
+  const entry = (weight: number, day: string) => ({ id: `e-${weight}`, trackerId: "tr-1", values: { weight }, timestamp: `${day}T15:00:00.000Z` });
+  const base = { relatedExpenses: [], relatedEvents: [], relatedDocuments: [], relatedJournal: [], timeline: [], profileId: "kim-1" } as any;
+  it("two entries delivered newest-first come back oldest-first, so entries[length-1] is today's value", () => {
+    const out = capProfileDetailLists({ ...base, relatedTrackers: [{ id: "tr-1", name: "Weight", fields: [], entries: [entry(178, "2026-09-03"), entry(180, "2026-08-31")] } as any] });
+    const entries = out.relatedTrackers[0].entries;
+    expect(entries.map((e: any) => e.values.weight)).toEqual([180, 178]);
+    expect(entries[entries.length - 1].values.weight).toBe(178);
+    expect(out.relatedTrackers[0].entriesTotal).toBe(2);
+  });
+  it("over the cap: the newest N, oldest-first", () => {
+    const many = Array.from({ length: 60 }, (_, i) => entry(100 + i, `2026-0${i < 30 ? 7 : 8}-${String((i % 30) + 1).padStart(2, "0")}`));
+    const out = capProfileDetailLists({ ...base, relatedTrackers: [{ id: "tr-1", name: "W", fields: [], entries: many.slice().reverse() } as any] });
+    const w = out.relatedTrackers[0].entries.map((e: any) => e.values.weight);
+    expect(w).toHaveLength(50);
+    expect(w[0]).toBe(110);
+    expect(w[49]).toBe(159);
+    expect(out.relatedTrackers[0].entriesTotal).toBe(60);
+  });
+});

@@ -565,17 +565,21 @@ export function capProfileDetailLists(input: {
   const C = PROFILE_DETAIL_CAPS;
   const ts = (d: any) => { const t = new Date(d || 0).getTime(); return Number.isFinite(t) ? t : 0; };
 
-  // Trackers: newest N entries per tracker. Sort defensively — the Supabase
-  // fetch delivers newest-first but MemStorage keeps insertion order.
+  // Trackers: newest N entries per tracker, ALWAYS emitted oldest → newest —
+  // the order every other tracker read uses and the order the profile page
+  // reads (`entries[length - 1]` is "latest"). The detail's entry query is
+  // newest-first (it keeps the newest 1000 across the profile's trackers), so
+  // a tracker under the cap used to pass through newest-first while one over
+  // it was re-sorted — and the page showed a small tracker's OLDEST value as
+  // its latest (D236). Sorting is defensive either way: MemStorage keeps
+  // insertion order.
   let embeddedEntryTotal = 0;
   const cappedTrackers = relatedTrackers.map(t => {
     const all = t.entries || [];
     embeddedEntryTotal += all.length;
-    if (all.length <= C.trackerEntriesPerTracker) return { ...t, entriesTotal: all.length };
     const newestFirst = [...all].sort((a, b) => ts(b.timestamp) - ts(a.timestamp));
-    // Keep the newest N, emitted in chronological (ascending) order — the
-    // codebase convention (getTrackers, slice(-n) consumers) expects ASC.
-    return { ...t, entries: newestFirst.slice(0, C.trackerEntriesPerTracker).reverse(), entriesTotal: all.length };
+    const kept = all.length <= C.trackerEntriesPerTracker ? newestFirst : newestFirst.slice(0, C.trackerEntriesPerTracker);
+    return { ...t, entries: kept.reverse(), entriesTotal: all.length };
   });
 
   // Expenses: newest N by date. Sums/counts computed over the FULL set so
