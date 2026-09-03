@@ -1206,7 +1206,7 @@ export class SupabaseStorage implements IStorage {
       fileData: r.file_data || "", storagePath: r.storage_path || undefined,
       extractedData: r.extracted_data || {},
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [],
-      createdAt: r.created_at,
+      createdAt: r.created_at, updatedAt: r.updated_at || r.created_at,
     };
   }
 

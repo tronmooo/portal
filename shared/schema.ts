@@ -1168,6 +1168,8 @@ export interface CalendarTimelineItem {
 export interface Document {
   id: string;
   deletedAt?: string | null;
+  /** Row version (updated_at); a client echoes it back as expectedUpdatedAt so a stale-tab edit is refused. */
+  updatedAt?: string;
   name: string;
   title?: string; // Display title (extracted or user-provided)
   type: string; // "drivers_license", "medical_report", "receipt", "insurance", "passport", "other"

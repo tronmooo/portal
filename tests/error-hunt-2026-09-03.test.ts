@@ -1417,3 +1417,14 @@ describe("D196: updateArtifact and updateObligation refuse a stale expectedUpdat
     expect(seen[0]).toMatchObject({ expectedUpdatedAt: "2026-09-03T09:59:00Z", fields: { monthlyAmount: 21 } });
   });
 });
+
+// ─── D197: a document read carries its version so a stale-tab edit can be refused ─
+describe("D197: documents expose updatedAt like every other editable record", () => {
+  it("rowToDocument carries updated_at (falling back to created_at)", () => {
+    const s = bareStorage({});
+    const d = s.rowToDocument({ id: "d-1", name: "Passport", type: "identity", linked_profiles: [], created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-03T10:00:00Z" });
+    expect(d.updatedAt).toBe("2026-09-03T10:00:00Z");
+    const d2 = s.rowToDocument({ id: "d-2", name: "Old", type: "other", linked_profiles: [], created_at: "2026-09-01T00:00:00Z" });
+    expect(d2.updatedAt).toBe("2026-09-01T00:00:00Z");
+  });
+});
