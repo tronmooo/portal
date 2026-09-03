@@ -1060,3 +1060,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 ### Cron writes and the tasks cache — verified (s231)
 
 - A non-autopay bill due in 2 days: the daily cron creates one "Bill due" reminder task; the tasks list served immediately afterwards already includes it and the calendar shows it once.
+- Replica after a dozen cron runs today: 150 snapshot rows for today with no duplicate (user, profile, day) key; no bill has more than one open "Bill due" reminder. Observation: with dated notice ids (D244) the `dismissed_notifications` preference grows by one id per dismissed day and is never pruned — small strings, unbounded in principle; a prune-on-read of ids no longer in the list would keep it flat. Not changed.
