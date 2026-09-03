@@ -283,6 +283,9 @@ The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 a
 ### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
 A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
 
+### Real-user browser flows (flows.mjs) — verified after D137
+Habits: the create dialog adds the habit, clicking the day segment records today's check-in (API), a reload keeps the habit and the "completed today" header counts it. Calendar manager: the event form creates the event on the chosen day; quick-add "flows haircut tomorrow at 3pm" now creates "flows haircut" tomorrow at 15:00 (not all-day); the recurring form creates the bill with its amount and due date; the page shows both; no page errors.
+
 ### Co-owner net worth and its snapshot (probe s52) — verified working
 With Linda holding 50% of the Honda (14,500) and 50% of the Civic Loan (8,000): her live snapshot is 7,250 assets / 4,000 liabilities, the net-worth cron writes 3,250 for her, 6,450 for Self (7,250 + 3,200 − 4,000) and 9,700 for the account (17,700 − 8,000); running the cron twice does not duplicate a (user, profile, date) row; the weekly-review cron run twice returns the same artifact per user. Seven pre-fix duplicate reviews were removed from the replica.
 
