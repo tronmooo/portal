@@ -341,6 +341,12 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Habit names across owners and a memory key clash (probe s136) — verified working
+The same habit name for two different owners is allowed, the same name (case-insensitive) for one owner is refused with 409, a rename works, and renaming a memory onto an existing key answers a 4xx.
+
+### Unique keys answered as 4xx (probe s135) — verified working
+Saving a memory under an existing key updates it (one row, later value wins); a second Self profile is refused with 409; exactly one Self remains.
+
 ### Same-day journal entries about two people (probe s134) — verified working
 An entry about me and one about Linda on the same day stay findable under each scope and neither is hidden by the one-entry-per-day rule.
 
