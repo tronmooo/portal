@@ -1073,7 +1073,7 @@ Fixed and pushed to `main` (each row above carries repro, root cause, fix and ve
 - D262 an under-paying loan says it never pays off instead of "$0.00 remaining interest".
 - D263 dismissing a notification no longer brings back ones dismissed in another tab, the briefing or chat (dismissals merge on the server).
 
-Verified live on production (55006e9 + the D250 migration): D208–D236 rows via p9/p10/p11/p12/p13. Awaiting the next deploy for D237–D251 (import fixes verifiable only with a disposable account; the rest via p-probes when the sha moves past 55006e9).
+Verified live on production: D208–D236 via p9–p13 on 55006e9; D244, D245, D253, D254, D261 and D263 via p14/p15 on 555b88a (deployed 23:40 UTC). The cron-driven rows (D255–D260) and the client-only rows are verified on the replica and by tests; production's one doubled reminder heals on its next daily cron.
 
 By design, left as-is: profile delete cascade removes sole-linked expenses/documents (warned in the UI); trackers hard-delete with no restore; document restore is API-only; household net worth counts shared assets in full (per-person scoping applies the shares).
 
@@ -1169,3 +1169,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - s254b (by design): the owners editor's `PUT /profiles/:id/owners` takes party + percentage only and stores every share as role `owner`; `co_owner` is read as an alias on display, and other roles (beneficiary, trustee…) are managed through the party-link routes.
 - s255 (3/3): a backup restores a 529's beneficiary link and a card's authorized-user link with their roles, pointed at the restored person, beside the owner share.
 - Production cross-user sweep (read-only, 23:55 UTC): no asset, liability, liability-asset or entity link and no task, expense or document links a profile of another user.
+- s256 (7/7): user B cannot undo A's finance import, move A's collateral link, rewrite A's owners, read A's ownership history or profile-bootstrap, or see A's caps; B's dismissals touch only B's list; A's data is unchanged afterwards.
