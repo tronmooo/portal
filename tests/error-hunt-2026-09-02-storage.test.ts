@@ -1084,3 +1084,36 @@ describe("D133: scoped getObligations reaches a co-owned car's bill and a bill n
     expect(await s.getObligations(["linda"])).toEqual([]);
   });
 });
+
+// D139 — deleting a co-owner dropped their link row and left the asset
+// partly owned by nobody.
+describe("D139: a deleted co-owner's shares return to the remaining owners", () => {
+  it("one remaining owner gets 100%; several split the share pro rata; a sole owner is left alone", async () => {
+    const { client } = chainClient(() => ({ data: [], error: null }));
+    (client as any).rpc = async () => ({ data: {}, error: null });
+    const assetWrites: any[] = []; const liabWrites: any[] = [];
+    const s = bareStorage({
+      supabase: client,
+      getProfile: async () => ({ id: "linda", type: "person", name: "Linda" }),
+      getProfilesLite: async () => [{ id: "self", type: "self" }],
+      getAllBudgets: async () => ({}),
+      getAssetPartyLinks: async () => [
+        { id: "a1", assetProfileId: "car", partyProfileId: "self", ownershipPercentage: 50 },
+        { id: "a2", assetProfileId: "car", partyProfileId: "linda", ownershipPercentage: 50 },
+        { id: "a3", assetProfileId: "boat", partyProfileId: "linda", ownershipPercentage: 100 },
+      ],
+      getLiabilityProfileLinks: async () => [
+        { id: "l1", liabilityProfileId: "loan", partyProfileId: "self", ownershipPercentage: 40 },
+        { id: "l2", liabilityProfileId: "loan", partyProfileId: "linda", ownershipPercentage: 40 },
+        { id: "l3", liabilityProfileId: "loan", partyProfileId: "mike", ownershipPercentage: 20 },
+      ],
+      setAssetOwners: async (id: string, owners: any[]) => { assetWrites.push([id, owners]); return owners; },
+      setLiabilityOwners: async (id: string, owners: any[]) => { liabWrites.push([id, owners]); return owners; },
+    });
+    expect(await s.deleteProfile("linda")).toBe(true);
+    expect(assetWrites).toEqual([["car", [{ partyProfileId: "self", ownershipPercentage: 100 }]]]);
+    expect(liabWrites).toEqual([["loan", [{ partyProfileId: "self", ownershipPercentage: 66.67 }, { partyProfileId: "mike", ownershipPercentage: 33.33 }]]]);
+    // The boat had no other owner: nothing to write (no rows ⇒ Self's by convention).
+    expect(assetWrites.some(([id]) => id === "boat")).toBe(false);
+  });
+});

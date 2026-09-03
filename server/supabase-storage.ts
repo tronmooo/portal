@@ -1943,9 +1943,64 @@ export class SupabaseStorage implements IStorage {
     }
   }
 
+  /**
+   * The shares a profile holds on other people's assets and loans, keyed by
+   * subject, captured BEFORE the delete cascade drops the link rows.
+   */
+  private async capturePartyShares(partyId: string): Promise<Array<{ kind: "asset" | "liability"; subjectId: string; others: Array<{ partyProfileId: string; ownershipPercentage: number }> }>> {
+    const out: Array<{ kind: "asset" | "liability"; subjectId: string; others: Array<{ partyProfileId: string; ownershipPercentage: number }> }> = [];
+    try {
+      const [assetLinks, liabLinks] = await Promise.all([
+        this.getAssetPartyLinks().catch(() => [] as any[]),
+        this.getLiabilityProfileLinks().catch(() => [] as any[]),
+      ]);
+      const collect = (rows: any[], kind: "asset" | "liability", subjectKey: string) => {
+        const mine = new Set((rows || []).filter((l) => l?.partyProfileId === partyId).map((l) => String(l[subjectKey])));
+        for (const subjectId of mine) {
+          const others = (rows || [])
+            .filter((l) => String(l[subjectKey]) === subjectId && l.partyProfileId !== partyId && l.partyProfileId)
+            .map((l) => ({ partyProfileId: l.partyProfileId, ownershipPercentage: Number(l.ownershipPercentage ?? 0) }));
+          out.push({ kind, subjectId, others });
+        }
+      };
+      collect(assetLinks as any[], "asset", "assetProfileId");
+      collect(liabLinks as any[], "liability", "liabilityProfileId");
+    } catch { /* best effort — the delete itself is the priority */ }
+    return out;
+  }
+
+  /**
+   * A deleted co-owner's share goes back to the remaining owners pro rata
+   * (one remaining owner → 100%). The cascade only dropped the link row, so
+   * the car sat at "Self 50%" with the other half held by nobody and Self's
+   * net worth undercounted an asset that was now wholly theirs (D139).
+   * No remaining owner ⇒ no link rows ⇒ the asset is Self's by convention.
+   */
+  private async redistributePartyShares(shares: Array<{ kind: "asset" | "liability"; subjectId: string; others: Array<{ partyProfileId: string; ownershipPercentage: number }> }>): Promise<void> {
+    for (const sh of shares) {
+      try {
+        const live = sh.others.filter((o) => o.partyProfileId && o.ownershipPercentage > 0);
+        if (live.length === 0) continue;
+        const total = live.reduce((n, o) => n + o.ownershipPercentage, 0);
+        if (total <= 0 || total >= 99.995) continue;
+        const scaled = live.map((o) => ({ partyProfileId: o.partyProfileId, ownershipPercentage: Math.round((o.ownershipPercentage / total) * 10000) / 100 }));
+        const drift = Math.round((100 - scaled.reduce((n, o) => n + o.ownershipPercentage, 0)) * 100) / 100;
+        if (drift !== 0) {
+          const biggest = scaled.reduce((a, b) => (b.ownershipPercentage > a.ownershipPercentage ? b : a));
+          biggest.ownershipPercentage = Math.round((biggest.ownershipPercentage + drift) * 100) / 100;
+        }
+        if (sh.kind === "asset") await this.setAssetOwners(sh.subjectId, scaled);
+        else await this.setLiabilityOwners(sh.subjectId, scaled);
+      } catch (e: any) {
+        console.warn(`[deleteProfile] could not redistribute shares on ${sh.kind} ${sh.subjectId}: ${e?.message || e}`);
+      }
+    }
+  }
+
   async deleteProfile(id: string): Promise<boolean> {
     const profile = await this.getProfile(id);
     if (!profile) return false;
+    const heldShares = await this.capturePartyShares(id);
 
     // ── RECURSIVE: Delete all child profiles first (vehicles, assets, subscriptions, etc.) ──
     // Each child profile deletion triggers its own cascade, so their data goes away too.
@@ -1975,6 +2030,7 @@ export class SupabaseStorage implements IStorage {
     if (!rpcError) {
       console.log(`[deleteProfile] atomic cascade RPC path for ${id}: ${JSON.stringify(rpcCounts)}`);
       await this.pruneBudgetsForProfile(id);
+      await this.redistributePartyShares(heldShares);
       return true;
     }
     const fnMissing = rpcError.code === "42883" || rpcError.code === "PGRST202"
@@ -2173,8 +2229,9 @@ export class SupabaseStorage implements IStorage {
     if (error) {
       console.warn(`[deleteProfile] Failed to delete profile ${id}:`, error.message);
     }
-    // The profile row is gone: its per-person budgets go with it (D127).
-    if (!error) await this.pruneBudgetsForProfile(id);
+    // The profile row is gone: its per-person budgets go with it (D127) and
+    // its co-ownership shares return to the remaining owners (D139).
+    if (!error) { await this.pruneBudgetsForProfile(id); await this.redistributePartyShares(heldShares); }
     // Return false if EITHER the final profile-row delete failed OR any cascade
     // step failed. Previously we returned `!error` even when child cascade
     // operations failed, so the route reported success while orphan rows
