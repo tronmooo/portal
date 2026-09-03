@@ -329,6 +329,21 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Tracker totals across local midnight (probe s102) — verified working
+A water entry at 23:30 last night (America/Los_Angeles) stays on yesterday; today's total counts only the 00:30 entry, and the two entries sit on two local days.
+
+### Parallel identical link submissions (probe s101) — verified working
+Three identical link requests in flight together leave one link (unique pair index + the duplicate lookup), and the person's related list shows the task once.
+
+### Net-worth snapshot cron across two runs (probe s100) — verified working
+Two consecutive snapshot runs leave one row per profile (and one aggregate row) for the day: the writer resolves the day's row and updates it.
+
+### Autopay cron across two runs (probe s98) — verified working
+A bill due today with autopay on is paid once across two consecutive due-scan runs: one payment row, the due date advanced one cycle, one bill expense logged.
+
+### Search across users (probe s96) — verified working
+User B's search for A's unique task title (and for a shared word in it) returns nothing of A's.
+
 ### A legacy category spelling and its cap (probe s97) — verified after D187
 An expense row stored as "transportation" counts under the `transport` key the Transportation cap reads, alongside rows stored as "transport".
 
