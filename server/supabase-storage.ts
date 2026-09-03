@@ -4359,9 +4359,18 @@ export class SupabaseStorage implements IStorage {
     // liabilities should look similar; do it for all, not just subscriptions").
     // Non-recurring families derive a monthly payment series from their terms.
     {
+      // A liability's owner chain is its parent PLUS every party on it (a
+      // co-signer): the bill Linda co-signs is on Linda's calendar, as it is
+      // on her bills list. With the parent alone her scoped calendar dropped it.
+      const partiesByLiab = new Map<string, string[]>();
+      for (const l of (timelineLiabLinks || []) as any[]) {
+        if (!l?.liabilityProfileId || !l?.partyProfileId) continue;
+        partiesByLiab.set(l.liabilityProfileId, [...(partiesByLiab.get(l.liabilityProfileId) || []), l.partyProfileId]);
+      }
+      const liabOwners = (p: any): string[] => Array.from(new Set([...(p.parentProfileId ? [p.parentProfileId] : []), ...(partiesByLiab.get(p.id) || [])]));
       const liabProfiles = profiles.filter((p: any) =>
         (p.type === "liability" || p.type === "loan") &&
-        matchesProfile(p.parentProfileId ? [p.parentProfileId] : []));
+        matchesProfile(liabOwners(p)));
       // One query for all liability payments, grouped, so paid status is exact.
       const payByLiab = new Map<string, Array<{ paymentDate?: string; id?: string }>>();
       const liabIds = liabProfiles.map((p: any) => p.id);
@@ -4382,7 +4391,7 @@ export class SupabaseStorage implements IStorage {
         const typeKey = p.type_key ?? p.typeKey;
         const sf = deriveScheduleFields(p.fields || {}, typeKey, todayISO);
         const occ = generateSchedule({ id: p.id, fields: sf }, payByLiab.get(p.id) || [], { todayISO, windowStart: startDate, windowEnd: endDate });
-        const owner = p.parentProfileId ? [p.parentProfileId] : [];
+        const owner = liabOwners(p);
         const fam = liabilityFamily(typeKey);
         const freq = liabilityFrequency({ id: p.id, fields: sf });
         for (const o of occ) {
@@ -5367,7 +5376,7 @@ export class SupabaseStorage implements IStorage {
     return "bill";
   }
 
-  private liabilityToObligation(p: Profile, payments: ObligationPayment[] = []): Obligation {
+  private liabilityToObligation(p: Profile, payments: ObligationPayment[] = [], partyIds: string[] = []): Obligation {
     const f: any = p.fields || {};
     const baseAmount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? f.balance ?? 0) || 0;
     const frequency = String(f.frequency ?? f.billingFrequency ?? "monthly");
@@ -5419,7 +5428,11 @@ export class SupabaseStorage implements IStorage {
       leadTimeDays: 3,
       autoLogExpense: false,
       linkedLiabilityId: p.id,
-      linkedProfiles: parent ? [parent] : [],
+      // The bill's owner chain is its parent PLUS every party on it (a
+      // co-signer, a responsible party): a bill Linda co-signs is Linda's on
+      // her bills list, snapshot, timeline and bell, the way her co-owned
+      // car's is. With the parent alone, every scoped read dropped it.
+      linkedProfiles: Array.from(new Set([...(parent ? [parent] : []), ...partyIds.filter((id) => typeof id === "string" && id && id !== p.id)])),
       payments,
       notes: f.notes || undefined,
       createdAt: (p as any).createdAt,
@@ -5459,7 +5472,12 @@ export class SupabaseStorage implements IStorage {
         arr.push(this.paymentRowToObligationPayment(r));
         byLiab.set(r.liability_profile_id, arr);
       }
-      return bills.map(p => this.liabilityToObligation(p, byLiab.get(p.id) || []));
+      const partiesByLiab = new Map<string, string[]>();
+      for (const l of await this.getLiabilityProfileLinks().catch(() => [] as LiabilityProfileLink[])) {
+        if (!l?.liabilityProfileId || !l?.partyProfileId) continue;
+        partiesByLiab.set(l.liabilityProfileId, [...(partiesByLiab.get(l.liabilityProfileId) || []), l.partyProfileId]);
+      }
+      return bills.map(p => this.liabilityToObligation(p, byLiab.get(p.id) || [], partiesByLiab.get(p.id) || []));
     });
   }
 
@@ -5470,7 +5488,8 @@ export class SupabaseStorage implements IStorage {
       .from("liability_payments").select("*")
       .eq("user_id", this.userId).eq("liability_profile_id", id)
       .order("payment_date", { ascending: true });
-    return this.liabilityToObligation(p, (payRows || []).map(r => this.paymentRowToObligationPayment(r)));
+    const parties = (await this.getLiabilityProfileLinks(id).catch(() => [] as LiabilityProfileLink[])).map((l) => l.partyProfileId).filter(Boolean) as string[];
+    return this.liabilityToObligation(p, (payRows || []).map(r => this.paymentRowToObligationPayment(r)), parties);
   }
 
   /** Normalize a liability/bill name for identity: drop a trailing "payment"

@@ -1617,3 +1617,18 @@ describe("D206: the importer matches caps by the budget bucket, not the raw word
     expect(adds).toHaveLength(0);
   });
 });
+
+// ─── D207: a bill's owners include the parties on it ────────────────────────
+describe("D207: a co-signed bill lists its parties among its owners", () => {
+  it("getObligation adds the party ids to the parent", async () => {
+    const bill = { id: "bill-1", user_id: "u", type: "liability", type_key: "utility", name: "Internet", parent_profile_id: "self-1", fields: { monthlyAmount: 60, dueDate: "2026-09-05", nextDueDate: "2026-09-05", frequency: "monthly" }, linked_profiles: [], documents: [], tags: [] };
+    const { client } = chainClient((table) => {
+      if (table === "profiles") return { data: [bill], error: null };
+      if (table === "liability_profile_links") return { data: [{ id: "l-1", user_id: "u", liability_profile_id: "bill-1", party_profile_id: "linda-1", role: "co_signer", ownership_percentage: 50 }], error: null };
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client, getProfile: async () => ({ id: "bill-1", type: "liability", type_key: "utility", name: "Internet", parentProfileId: "self-1", fields: bill.fields, documents: [], tags: [] }) });
+    const ob = await s.getObligation("bill-1");
+    expect(ob?.linkedProfiles).toEqual(["self-1", "linda-1"]);
+  });
+});
