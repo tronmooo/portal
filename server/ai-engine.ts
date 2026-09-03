@@ -2820,7 +2820,7 @@ Return ONLY the JSON object, nothing else.`;
           : ["bank", "loan", "statement"].some(t => docType.includes(t)) ? "general"
           : "general");
         const desc = parsed.label || parsed.summary || fileName;
-        const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        const expenseDate = parsed.extractedData?.issueDate || parsed.extractedData?.dateIssued || parsed.extractedData?.serviceDate || parsed.extractedData?.statementDate || new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
         // OWNERSHIP MODEL (shared/cost-of-ownership.ts): the expense belongs
         // to the ASSET only — one row, one link. Owner-scoped views derive it
         // via ownedAssetIds, so it counts toward the owner exactly once.
@@ -2833,7 +2833,7 @@ Return ONLY the JSON object, nothing else.`;
           amount: numAmount,
           category,
           description: String(desc),
-          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          date: typeof expenseDate === 'string' && expenseDate.match(/^\d{4}-\d{2}-\d{2}/) ? expenseDate : new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() }),
           tags: ["from-document"],
           linkedProfiles: expenseLinks,
         }, "expense");
@@ -3296,7 +3296,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
           amount,
           category,
           vendor: vendor || undefined,
-          date: fieldLookup['transactiondate'] || fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+          date: fieldLookup['transactiondate'] || fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() }),
         };
       }
 
@@ -5515,7 +5515,7 @@ function resolveTzLabel(tz: string): string {
  * moved: the data now follows the instructions instead of interrupting them.
  */
 export function buildSystemPromptBlocks(context: string, selfProfileId?: string, userTz?: string): { stable: string; dynamic: string } {
-  const tz = userTz || (storage as any)._timezone || 'America/Los_Angeles';
+  const tz = userTz || aiUserTimezone();
   const tzLabel = resolveTzLabel(tz);
   const now = new Date();
   const dynamic = [
@@ -6659,7 +6659,7 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
       // the `x-timezone` request header upstream) instead of hard-coding
       // Pacific time — otherwise expenses created late at night get filed
       // under the wrong day for users on the East Coast / abroad.
-      const _userTz = (storage as any)._timezone || 'America/Los_Angeles';
+      const _userTz = aiUserTimezone();
       if (normalized.date && !/^\d{4}-\d{2}-\d{2}$/.test(normalized.date)) {
         warnings.push(`Date "${normalized.date}" is not YYYY-MM-DD format — using today`);
         normalized.date = new Date().toLocaleDateString('en-CA', { timeZone: _userTz });
@@ -9180,7 +9180,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     case "copy_budgets_previous_month": {
       const toMonth = /^\d{4}-\d{2}$/.test(String(input.month || ""))
         ? String(input.month)
-        : new Date().toLocaleDateString('en-CA', { timeZone: (storage as any)._timezone || 'America/Los_Angeles' }).slice(0, 7);
+        : new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() }).slice(0, 7);
       const [y, m] = toMonth.split("-").map(Number);
       const fromMonth = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
       const copied = await storage.copyBudgetsToMonth(fromMonth, toMonth);
@@ -9689,7 +9689,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
             const dueDay = Math.max(1, Math.min(31, Number(fields.dueDay)));
             const next = new Date(today.getFullYear(), today.getMonth(), dueDay);
             if (next.getTime() < today.getTime()) next.setTime(addMonthsClamped(next, 1, dueDay).getTime());
-            const nextDueDate = next.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+            const nextDueDate = next.toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
             const newOb = await storage.createObligation({
               name: obName,
               amount: Number(fields.monthlyPayment),
@@ -9739,7 +9739,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (input.refinance) {
         const newBal = ch.currentBalance != null ? Number(ch.currentBalance) : Number(newFields.currentBalance) || 0;
         newFields.originalBalance = newBal;
-        newFields.refinancedAt = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        newFields.refinancedAt = new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
       }
       // Apply all field changes
       for (const [k, v] of Object.entries(ch)) {
@@ -10333,7 +10333,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // `storage._timezone` from the `x-timezone` request header before
       // calling into the AI engine; falling back to LA preserves the old
       // behavior if for some reason the header was missing.
-      const userTz = (storage as any)._timezone || 'America/Los_Angeles';
+      const userTz = aiUserTimezone();
       const expenseDate = String(input.date || new Date().toLocaleDateString('en-CA', { timeZone: userTz })).slice(0, 10);
       // Dedup: the SAME expense created in the last 2 minutes — same amount,
       // similar description, same owner and same date. Owner and date used to
@@ -11575,7 +11575,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     // user has ever written onto their schedule.
     case "journal_entry":
     case "append_journal_entry": {
-      const journalTz = (storage as any)._timezone || "America/Los_Angeles";
+      const journalTz = aiUserTimezone();
       const todayDate = new Date().toLocaleDateString("en-CA", { timeZone: journalTz });
       const entryDate = /^\d{4}-\d{2}-\d{2}$/.test(String(input.entryDate || "").slice(0, 10))
         ? String(input.entryDate).slice(0, 10)
@@ -12578,7 +12578,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
     case "bulk_complete_tasks": {
       const tasks = await storage.getTasks();
-      const now = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const now = new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
       let toComplete: typeof tasks;
       if (input.filter === "all") {
         toComplete = tasks.filter(t => t.status !== "done");
@@ -12837,15 +12837,15 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           if (gcalMappings.has(gEventId)) continue;
 
           const startParsed = new Date(gcEvent.start);
-          const eventDate = startParsed.toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+          const eventDate = startParsed.toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
           const isDuplicate = existingEvents.some(
             (e: any) => e.title === gcEvent.title && e.date === eventDate
           );
           if (isDuplicate) continue;
 
-          const startTime = gcEvent.is_all_day ? undefined : startParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Los_Angeles" });
+          const startTime = gcEvent.is_all_day ? undefined : startParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: aiUserTimezone() });
           const endParsed = gcEvent.end ? new Date(gcEvent.end) : null;
-          const endTime = (gcEvent.is_all_day || !endParsed) ? undefined : endParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/Los_Angeles" });
+          const endTime = (gcEvent.is_all_day || !endParsed) ? undefined : endParsed.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: aiUserTimezone() });
 
           let category: "personal" | "work" | "health" | "social" | "travel" | "finance" | "family" | "education" | "other" = "personal";
           const combined = ((gcEvent.title || "") + " " + (gcEvent.description || "")).toLowerCase();
@@ -13113,7 +13113,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
     // --- Spending analytics ---
     case "spending_analytics": {
       const now = new Date();
-      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
       let periodStartDate: string;
       let periodEndDate: string = todayStr;
       let prevStartDate: string | undefined;
@@ -13126,11 +13126,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         year: 365 * 86400000,
       };
       const durationMs = periodMs[input.period as keyof typeof periodMs] || periodMs.month;
-      periodStartDate = new Date(now.getTime() - durationMs).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      periodStartDate = new Date(now.getTime() - durationMs).toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
 
       if (input.compareWith === "previous") {
-        prevEndDate = new Date(new Date(periodStartDate).getTime() - 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-        prevStartDate = new Date(new Date(periodStartDate).getTime() - durationMs).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+        prevEndDate = new Date(new Date(periodStartDate).getTime() - 86400000).toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
+        prevStartDate = new Date(new Date(periodStartDate).getTime() - durationMs).toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
       }
 
       const allExpenses = await storage.getExpenses();
@@ -13707,7 +13707,7 @@ const CHART_COLORS = ["hsl(188 55% 50%)","#6366f1","#f59e0b","#10b981","#ef4444"
 
 function dateRangeStart(dateRange?: string): Date {
   const now = new Date();
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
   switch (dateRange) {
     case "week": return new Date(now.getTime() - 7*86400000);
     case "month": return new Date(todayStr.slice(0,7) + '-01T12:00:00');

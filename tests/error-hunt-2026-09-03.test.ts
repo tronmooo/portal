@@ -1866,3 +1866,12 @@ describe("D217: financialSnapshot", () => {
     expect(s.thisMonthSpend).toBe(40);
   });
 });
+
+// ─── D218: the AI engine has no Los Angeles clock of its own ─────────────────
+describe("D218: no hard-coded Los Angeles clock in the AI engine", () => {
+  it("every 'today' and every imported event time reads the user's timezone", () => {
+    const src = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
+    const literal = src.split("\n").filter((l) => /timeZone:\s*['"]America\/Los_Angeles['"]|_timezone \|\| ['"]America\/Los_Angeles['"]/.test(l));
+    expect(literal).toEqual([]);
+  });
+});
