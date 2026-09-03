@@ -1069,3 +1069,7 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 ### Final replica sweep for the day — verified
 
 - crawl clean; flows15 7/7, flows21 4/4, flows24 5/5 on the last build. Integrity: no mirror entries without a habit, no paid stamps without a payment row, no `_docFields` naming a missing document, no tracker owner pointing at a missing profile. Nine probe leftover profiles (from runs that crashed on expired tokens or rate limits) removed through the cascade function.
+
+### Ended bill series — verified (s232)
+
+- Before: the bill listed `active | 2026-09-05` and the cron wrote a "Bill due" reminder (1/3). After: not listed as upcoming, no calendar occurrence, no bell notice, no reminder task (3/3). Neighbours unchanged: s217 2/2, s225 5/5, s231 2/2. Full suite 260 files / 4669 tests green.
