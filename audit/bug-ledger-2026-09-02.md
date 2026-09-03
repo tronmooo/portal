@@ -998,3 +998,4 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Cross-user attempts against today's routes — verified (s226)
 
 - User B against A's records: document edit/delete 404, owners write on A's asset 404, owners write naming A's person as a party 404, payment edit/delete 404, bill-payment expense edit 404, tracker entry edit (both routes) 404, profile detail 404, B's export carries none of A's rows; A's records unchanged. The graph route answered 200 with an empty graph (D245, fixed).
+- After D245: s226 2/2 (the graph now answers 404 to B), s211 15/15 unchanged.
