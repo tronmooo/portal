@@ -33,6 +33,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme, COLOR_PRESETS } from "@/components/theme-provider";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { localTodayISO } from "@/lib/dates";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 
@@ -339,7 +340,8 @@ export default function SettingsPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `portol-backup-${new Date().toISOString().split("T")[0]}.json`;
+      // The user's day, not UTC's: an evening backup was dated tomorrow.
+      a.download = `portol-backup-${localTodayISO()}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

@@ -335,3 +335,21 @@ describe("D132: ownership writes ripple the whole cache", () => {
     expect(everything.length).toBeGreaterThanOrEqual(linkKeyInvalidations.length);
   });
 });
+
+// D141 — the backup file name used the UTC day.
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+describe("D141: user-facing days never come from toISOString()", () => {
+  const walk = (dir: string, out: string[] = []): string[] => { for (const f of readdirSync(dir)) { const p = join(dir, f); if (statSync(p).isDirectory()) walk(p, out); else if (/\.(tsx?|ts)$/.test(f) && !/\.test\./.test(f)) out.push(p); } return out; };
+  it("no page or component builds a day string from toISOString()", () => {
+    const offenders: string[] = [];
+    for (const f of [...walk("client/src/pages"), ...walk("client/src/components")]) {
+      const src = read(f);
+      if (/toISOString\(\)\.(split\("T"\)\[0\]|slice\(0, ?10\)|substring\(0, ?10\))/.test(src)) offenders.push(f);
+    }
+    expect(offenders).toEqual([]);
+  });
+  it("the backup file is named after the user's day", () => {
+    expect(read("client/src/pages/settings.tsx")).toMatch(/portol-backup-\$\{localTodayISO\(\)\}\.json/);
+  });
+});
