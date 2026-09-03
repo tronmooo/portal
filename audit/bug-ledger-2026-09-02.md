@@ -355,6 +355,9 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
+### An insurance policy as the form creates it (probe s156) — verified working
+Created as an asset with a premium, frequency and renewal date: total asset value and net worth are unchanged (a policy is not worth its premium), the renewal date shows on the calendar, and the premium counts in no money surface (monthly obligations unchanged) — the product question stands under open items.
+
 ### Insurance policies and the bills surfaces (probe s155) — probe artifact, corrected
 The type registry carries insurance definitions (auto, home, health, …, category "insurance") and the create dialog stores a picked one as an ASSET (`mapTypeKeyToLegacyType`: assets and insurance → asset), never as a liability; no production account has one. The probe had created a liability-typed policy by hand, a shape the form cannot produce, so its finding (on the calendar, not in the bills list) does not apply to real data. Whether a policy's premium should feed cash flow is a product question, noted under open items.
 
