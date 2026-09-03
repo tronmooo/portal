@@ -12,6 +12,7 @@ import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
 import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords } from "@shared/date-rules";
+import { isActiveObligation } from "@shared/obligation-windows";
 
 export interface AppNotification {
   id: string;
@@ -215,6 +216,9 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   // --- Bills/Obligations ---
   for (const ob of obligations) {
     if (!ob.nextDueDate) continue;
+    // A paused or cancelled bill is not due (D222) — the bills list already
+    // hides it; the bell kept warning about it.
+    if (!isActiveObligation(ob as any)) continue;
     const due = parseDate(ob.nextDueDate);
     if (!due) continue;
     const diff = daysDiff(due, today);

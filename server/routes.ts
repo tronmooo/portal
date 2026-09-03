@@ -21,7 +21,7 @@ import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance }
 import { summarizeAccounts, isAccountProfile } from "@shared/finance-accounts";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill } from "@shared/liability-types";
-import { advanceLiabilityDueDate, readDueDate, isSettledOccurrence, effectiveDueDate } from "@shared/liability-recurrence";
+import { advanceLiabilityDueDate, readDueDate, isSettledOccurrence, effectiveDueDate, isPausedBillFields } from "@shared/liability-recurrence";
 import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
 import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
 import { selfIdsFrom } from "@shared/scope";
@@ -2343,7 +2343,9 @@ export async function registerRoutes(
                 const todayISO = getUserToday(userTz);
                 const windowEnd = toLocalDateStr(new Date(Date.now() + REMINDER_WINDOW_DAYS * 86400000), userTz);
                 const profiles = await scoped.getProfiles();
-                const bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey));
+                // Paused and cancelled bills are skipped entirely (D222): the
+                // scan kept reminding — and auto-paying — a paused bill.
+                const bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey) && !isPausedBillFields(p.fields));
                 const existingTasks = await scoped.getTasks().catch(() => [] as any[]);
                 for (const bill of bills) {
                   const f: any = bill.fields || {};

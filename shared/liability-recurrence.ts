@@ -185,3 +185,16 @@ export function isSettledOccurrence(fields: any, dateISO: string): boolean {
   const status = occ[String(dateISO || "").slice(0, 10)]?.status;
   return status === "paid" || status === "skipped";
 }
+
+/**
+ * A paused or cancelled bill has no occurrence to remind about, pay or warn
+ * for. The bills list already hid one (`isActiveObligation`), but the bell
+ * and the due-scan cron read the profile rows directly and kept warning,
+ * reminding — and, for an autopay bill, paying — while it was paused.
+ */
+export function isPausedBillFields(fields: any): boolean {
+  const f = fields || {};
+  if (f.paused === true) return true;
+  const status = String(f.status || "").toLowerCase();
+  return status === "paused" || status === "cancelled";
+}

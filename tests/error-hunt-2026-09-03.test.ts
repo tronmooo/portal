@@ -2004,3 +2004,29 @@ describe("D221: calendar timeline and a rescheduled occurrence", () => {
     expect(moved.map((i: any) => i.date)).toEqual(["2026-09-12"]);
   });
 });
+
+// ─── D222: a paused bill is not due anywhere ─────────────────────────────────
+import { isPausedBillFields } from "../shared/liability-recurrence";
+describe("D222: paused bill", () => {
+  it("isPausedBillFields reads the pause flag and the paused/cancelled status", () => {
+    expect(isPausedBillFields({ paused: true })).toBe(true);
+    expect(isPausedBillFields({ status: "paused" })).toBe(true);
+    expect(isPausedBillFields({ status: "cancelled" })).toBe(true);
+    expect(isPausedBillFields({ status: "upcoming", paused: false })).toBe(false);
+    expect(isPausedBillFields(undefined)).toBe(false);
+  });
+  it("the bell raises no notice for a paused or cancelled bill", async () => {
+    const today = getUserToday(TZ);
+    const list = await buildNotifications({
+      getDocuments: async () => [], getProfiles: async () => [], getTasks: async () => [], getHabits: async () => [],
+      getObligations: async () => [
+        { id: "ob-paused", name: "Gym", amount: 30, frequency: "monthly", status: "paused", nextDueDate: tzAddDays(today, 2) },
+        { id: "ob-cancelled", name: "Old cable", amount: 60, frequency: "monthly", status: "cancelled", nextDueDate: tzAddDays(today, -3) },
+        { id: "ob-live", name: "Water", amount: 40, frequency: "monthly", status: "active", nextDueDate: tzAddDays(today, 2) },
+      ],
+      listReminders: async () => [], listUserNotifications: async () => [], getPreference: async () => null,
+    } as any, TZ);
+    const bills = list.filter((n) => n.type === "bill_due").map((n) => n.entityId);
+    expect(bills).toEqual(["ob-live"]);
+  });
+});
