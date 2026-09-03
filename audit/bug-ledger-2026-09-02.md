@@ -286,6 +286,9 @@ The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 a
 ### Occurrence overrides and cross-user occurrence routes (probe s30) — verified working
 A per-period `actualAmount` override shows as the bill's current amount, in upcoming bills and in the monthly total (by the documented "amount is what the next period actually costs" rule); paying uses it and logs an expense for it; the next period reverts to the base amount; moving an occurrence into the past leaves a real next-due date; user B's skip/patch/pay/charge on A's occurrences are 404 and A's bill is untouched.
 
+### Real-user browser flows 8 (flows8.mjs, Journal and the bell) — verified working
+The guided journal form saves one entry on the user's day; writing again the same day keeps a single entry and never loses the first text; the page shows it at once. The bell shows the same count as the API; dismissing an item removes it from the panel, the dismissal survives a reload and the API no longer lists it.
+
 ### Real-user browser flows 7 (flows7.mjs, ⌘K search) — verified working
 Under the Everyone scope: "Linda" lists her profile and her expense, opening her lands on her Info page (D138); "Car insurance" lists the bill and opens its page; a no-match query shows the empty state; no page errors. Under the Self scope people were not findable at all (D140).
 
