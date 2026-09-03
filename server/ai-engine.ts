@@ -1,5 +1,6 @@
 import { logger } from "./logger";
 import { getAnthropicClient } from "./anthropic-client";
+import { fieldPatchBetween } from "../shared/field-patch";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { deleteDocumentEverywhere } from "./document-deletion";
@@ -7430,7 +7431,9 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
           logger.warn("ai", `create_profile dedup: refused to retype "${existingProfile.name}" from ${existingProfile.type} to ${input.type}`);
         }
         const mergedProfile = await storage.updateProfile(existingProfile.id, {
-          fields: mergedFields,
+          // Only what this call changes (the merged map was read before the
+          // model answered; a form edit meanwhile must not be put back).
+          fields: fieldPatchBetween(existingProfile.fields, mergedFields),
           notes: input.notes || existingProfile.notes,
           tags: input.tags?.length ? input.tags : existingProfile.tags,
           type: keepExistingType ? existingProfile.type : (input.type || existingProfile.type),
@@ -7686,7 +7689,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       // Merge, then sweep stale alias copies (a leftover "value" field that
       // loosely equals currentValue is redundant noise — drop it; differing
       // values are always kept).
-      if (updateFlatFields) changes.fields = sweepRedundantAliases({ ...profile.fields, ...updateFlatFields }).fields;
+      if (updateFlatFields) changes.fields = fieldPatchBetween(profile.fields, sweepRedundantAliases({ ...profile.fields, ...updateFlatFields }).fields);
       // Canonicalization renamed a value-ish alias into currentValue — keep the
       // prior value in previousValue (same behavior the mirror below had before
       // canonicalization made it a no-op for renamed keys).
@@ -9411,9 +9414,8 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 
       let liability: any;
       if (existing) {
-        const merged = { ...(existing.fields || {}), ...fields };
         liability = await storage.updateProfile(existing.id, {
-          fields: merged,
+          fields,
           notes: input.notes ?? existing.notes,
           type: "liability",
           type_key: input.subtype,
@@ -13014,7 +13016,6 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       const oldValue = profile.fields?.currentValue || profile.fields?.purchasePrice || 0;
       await storage.updateProfile(profile.id, {
         fields: {
-          ...profile.fields,
           currentValue: valuation.estimatedValue,
           valuationMethod: valuation.method,
           valuationConfidence: valuation.confidence,

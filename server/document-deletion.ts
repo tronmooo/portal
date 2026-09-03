@@ -29,6 +29,7 @@
 //     gone. The UI asks before either one, with real counts from
 //     computeDocumentDeletionImpact.
 import type { IStorage } from "./storage";
+import { fieldPatchBetween } from "../shared/field-patch";
 import {
   removeDocumentContributedFields,
   splitDocumentContributedFields,
@@ -301,7 +302,9 @@ export async function deleteDocumentEverywhere(
       // Top-level keys need an explicit null so the storage merge removes them;
       // nested groups are already rewritten without their entry.
       const removedTopLevel = cascade.removed.filter((path) => !path.includes("."));
-      const patch: Record<string, any> = { ...cascade.fields };
+      // Only the keys the cascade changed: the whole map it read, written
+      // back, reverted any edit that landed on this profile meanwhile.
+      const patch: Record<string, any> = fieldPatchBetween(p.fields as Record<string, any>, cascade.fields);
       for (const k of removedTopLevel) patch[k] = null;
       patch._docFields = Object.keys(nextSources).length > 0 ? nextSources : null;
 

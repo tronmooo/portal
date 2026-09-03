@@ -1185,3 +1185,27 @@ describe("D182: an account adjustment applies its delta to the balance the write
     expect(ups[1].payload.fields.balanceHistory[0]).toMatchObject({ previousBalance: 900, newBalance: 850, delta: -50 });
   });
 });
+
+// ─── D185: a snapshot write-back names only what it changed ─────────────────
+import { fieldPatchBetween } from "../shared/field-patch";
+import { cleanupStoredProfileFields } from "../shared/profile-field-identity";
+describe("D185: a read's alias cleanup (and every other snapshot write-back) writes only what changed", () => {
+  it("fieldPatchBetween: changed keys carry the new value, vanished keys null, untouched keys absent", () => {
+    const before = { address: "1 Old St", currentValue: 400000, value: 400000, personal: { phone: "1" }, tags: ["a"] };
+    const after = { address: "1 Old St", currentValue: 400000, personal: { phone: "2" }, tags: ["a"], note: "x" };
+    expect(fieldPatchBetween(before, after)).toEqual({ value: null, personal: { phone: "2" }, note: "x" });
+    expect(fieldPatchBetween(before, before)).toEqual({});
+    expect(fieldPatchBetween(undefined, { a: 1 })).toEqual({ a: 1 });
+  });
+  it("the detail read's cleanup patch drops the redundant alias and says nothing about the address", () => {
+    const stored = { currentValue: 400000, value: 400000, marketValue: 400000, address: "1 Old St" };
+    const cleanup = cleanupStoredProfileFields(stored);
+    expect(cleanup.changed).toBe(true);
+    const patch: Record<string, any> = fieldPatchBetween(stored, cleanup.fields);
+    for (const path of cleanup.removed) if (!path.includes(".")) patch[path] = null;
+    expect(patch).not.toHaveProperty("address");
+    expect(patch).not.toHaveProperty("currentValue");
+    expect(Object.values(patch).every((v) => v === null)).toBe(true);
+    expect(Object.keys(patch).length).toBeGreaterThan(0);
+  });
+});

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import express, { type Express, type Request } from "express";
+import { fieldPatchBetween } from "../shared/field-patch";
 import { shouldAppendClarifyingQuestion, appendClarifyingQuestion } from "@shared/chat-clarify";
 import { canonicalExpenseCategory, canonicalObligationCategory, EXPENSE_CATEGORIES } from "@shared/category-canon";
 import { createServer, type Server } from "http";
@@ -4594,13 +4595,17 @@ ${JSON.stringify(ctx, null, 2)}`;
     // write-back converges storage in the background (only fires when
     // something was actually redundant; differing values are never dropped).
     try {
-      const cleanup = cleanupStoredProfileFields((detail as any).fields);
+      const originalFields = (detail as any).fields;
+      const cleanup = cleanupStoredProfileFields(originalFields);
       if (cleanup.changed) {
         (detail as any).fields = cleanup.fields;
         log.info(`[profile-cleanup] ${req.params.id} collapsed ${cleanup.removed.length} redundant field(s): ${cleanup.removed.join(", ")}`);
         // Top-level removals need explicit null markers so the storage merge
         // layer deletes them; rewritten nested groups replace wholesale.
-        const patch: Record<string, any> = { ...cleanup.fields };
+        // Only what the cleanup changed. This write-back rides on a READ,
+        // beside whatever edit is in flight; handing back the whole map it
+        // read put that edit back the way it was.
+        const patch: Record<string, any> = fieldPatchBetween(originalFields, cleanup.fields);
         for (const path of cleanup.removed) {
           if (!path.includes(".") ) patch[path] = null;
         }
