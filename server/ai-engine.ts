@@ -9134,7 +9134,10 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const ctProfiles = await storage.getProfiles();
       let ctTargetId: string | undefined;
       if (input.forProfile) {
-        const match = ctProfiles.find(p => p.name.toLowerCase() === (input.forProfile || "").toLowerCase());
+        // Exact duplicates ("Max" the son, "Max" the dog) are a question (D251).
+        const ctPick = pickProfileByName(ctProfiles, safeLC(String(input.forProfile || "")).trim(), input.forProfile);
+        if ("error" in ctPick && /^Several profiles match/.test(ctPick.error)) return { error: ctPick.error };
+        const match = "profile" in ctPick ? ctPick.profile : undefined;
         if (match) ctTargetId = match.id;
       }
       if (!ctTargetId) {
