@@ -5,7 +5,7 @@ import type {
 } from "@shared/schema";
 import { MOOD_SCORES } from "@shared/schema";
 import { getUserToday, addDays as tzAddDays, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
-import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords } from "@shared/date-rules";
+import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords, bareDateOf } from "@shared/date-rules";
 import {
   currentMonthYM,
   previousMonthYM,
@@ -50,7 +50,7 @@ export function generateSmartInsights(data: InsightsInput, timezone: string = DE
   analyzeDocuments(data.documents, data.profiles, todayStr, insights);
 
   // --- Goal Progress ---
-  analyzeGoals(data.goals, now, insights);
+  analyzeGoals(data.goals, now, todayStr, insights);
 
   // --- Health Trends ---
   analyzeHealth(data.trackers, todayStr, now, insights);
@@ -289,7 +289,7 @@ function analyzeDocuments(documents: Document[], profiles: Profile[], todayStr: 
 
 // ─── Goals ───────────────────────────────────────────────────────────────────
 
-function analyzeGoals(goals: Goal[], now: Date, insights: Insight[]) {
+function analyzeGoals(goals: Goal[], now: Date, todayStr: string, insights: Insight[]) {
   for (const goal of goals) {
     if (goal.status !== "active") continue;
 
@@ -310,10 +310,12 @@ function analyzeGoals(goals: Goal[], now: Date, insights: Insight[]) {
       });
     }
 
-    // Deadline approaching with low progress
-    if (goal.deadline) {
-      const deadline = new Date(goal.deadline);
-      const daysLeft = daysDiff(deadline, now);
+    // Deadline approaching with low progress. Calendar days from the USER's
+    // today: counted from the server clock, a goal due today had already
+    // "passed" by 5 PM Pacific and the card never showed on its last day.
+    const deadlineDay = goal.deadline ? bareDateOf(goal.deadline) : null;
+    if (deadlineDay) {
+      const daysLeft = daysBetweenISO(todayStr, deadlineDay);
       if (daysLeft >= 0 && daysLeft <= 7 && progress < 50) {
         insights.push({
           id: randomUUID(),

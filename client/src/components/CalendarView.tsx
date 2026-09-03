@@ -1,3 +1,4 @@
+import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
@@ -206,7 +207,7 @@ function EventFormDialog({
   const isEdit = !!eventId;
   const todayStr = toLocalDateStr(new Date());
 
-  const [form, setForm] = useState<EventFormData>({
+  const seededForm: EventFormData = {
     title: initial?.title ?? "",
     date: initial?.date ?? defaultDate ?? todayStr,
     time: initial?.time ?? "",
@@ -218,7 +219,8 @@ function EventFormDialog({
     recurrence: initial?.recurrence ?? "none",
     recurrenceEnd: initial?.recurrenceEnd ?? "",
     linkedProfiles: initial?.linkedProfiles ?? [],
-  });
+  };
+  const [form, setForm] = useState<EventFormData>(seededForm);
 
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -226,25 +228,33 @@ function EventFormDialog({
 
   const mutation = useMutation<any, Error, void, { prevEvents: [readonly unknown[], unknown][]; prevTimeline: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async () => {
-      const payload: any = {
-        title: form.title,
-        date: form.date,
-        allDay: form.allDay,
-        category: form.category,
-        recurrence: form.recurrence,
-        // "Recurring events go forever" fix: an optional last date the series
-        // generates occurrences for. Cleared automatically for one-offs.
-        recurrenceEnd: form.recurrence !== "none" && form.recurrenceEnd ? form.recurrenceEnd : undefined,
-        linkedProfiles: form.linkedProfiles,
-        source: "manual",
+      const buildPayload = (f: EventFormData) => {
+        const p: any = {
+          title: f.title,
+          date: f.date,
+          allDay: f.allDay,
+          category: f.category,
+          recurrence: f.recurrence,
+          // "Recurring events go forever" fix: an optional last date the series
+          // generates occurrences for. Cleared automatically for one-offs.
+          recurrenceEnd: f.recurrence !== "none" && f.recurrenceEnd ? f.recurrenceEnd : undefined,
+          linkedProfiles: f.linkedProfiles,
+          source: "manual",
+        };
+        if (!f.allDay && f.time) p.time = f.time;
+        if (!f.allDay && f.endTime) p.endTime = f.endTime;
+        if (f.description) p.description = f.description;
+        if (f.location) p.location = f.location;
+        return p;
       };
-      if (!form.allDay && form.time) payload.time = form.time;
-      if (!form.allDay && form.endTime) payload.endTime = form.endTime;
-      if (form.description) payload.description = form.description;
-      if (form.location) payload.location = form.location;
+      const payload: any = buildPayload(form);
 
       if (isEdit) {
-        const res = await apiRequest("PATCH", `/api/events/${eventId}`, payload);
+        // Only what the user changed: the whole form used to go back, so the
+        // location another device set while this dialog sat open was
+        // reverted to the value the form was seeded with.
+        const patch = changedFieldsOnly(buildPayload(seededForm), payload);
+        const res = await apiRequest("PATCH", `/api/events/${eventId}`, patch);
         return res.json();
       } else {
         const res = await apiRequest("POST", "/api/events", payload);

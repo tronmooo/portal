@@ -1760,3 +1760,34 @@ describe("D211: fieldExpiryStatus", () => {
     expect(fieldExpiryStatus("expirationDate", "not a date", "2026-09-03")).toBeNull();
   });
 });
+
+// ─── D212: a goal's deadline card counts days in the user's zone ─────────────
+describe("D212: goal deadline card on its last day", () => {
+  it("at 7 PM Pacific on the deadline day the card still shows '0 days left'", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-04T02:00:00Z"));
+      const empty = { profiles: [], trackers: [], tasks: [], expenses: [], habits: [], obligations: [], journal: [], documents: [], goals: [], events: [] };
+      const insights = generateSmartInsights({ ...empty, goals: [
+        { id: "g-1", title: "Read 10 books", status: "active", target: 10, current: 1, unit: "books", deadline: "2026-09-03" },
+      ] } as any, TZ);
+      const card = insights.find((i) => i.relatedEntityId === "g-1" && /deadline approaching/i.test(i.title));
+      expect(card?.description).toMatch(/Only 0 days left/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ─── D213/D214: an edit dialog writes only what the user changed ─────────────
+import { changedFieldsOnly } from "../shared/field-patch";
+describe("D213: changedFieldsOnly", () => {
+  it("keeps only the keys whose value differs; a key missing from the form is not a deletion", () => {
+    const seeded = { title: "Renew passport", description: "old note", priority: "medium", dueDate: "2026-09-08", tags: ["admin"], time: "09:00" };
+    const next = { title: "Renew passport", description: "new note", priority: "medium", dueDate: "2026-09-08", tags: ["admin"] };
+    expect(changedFieldsOnly(seeded, next)).toEqual({ description: "new note" });
+    expect(changedFieldsOnly(seeded, { ...next, description: "", tags: ["admin", "travel"] })).toEqual({ description: "", tags: ["admin", "travel"] });
+    expect(changedFieldsOnly(seeded, { ...seeded })).toEqual({});
+    expect(changedFieldsOnly(undefined, { a: 1 })).toEqual({ a: 1 });
+  });
+});

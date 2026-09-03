@@ -1,3 +1,4 @@
+import { changedFieldsOnly } from "@shared/field-patch";
 import { localTodayISO, formatLocalDate } from "@/lib/dates";
 import { buildCashTrend } from "@/lib/cash-trend";
 import { formatApiError } from "@/lib/formatError";
@@ -1519,15 +1520,29 @@ export default function FinancePage() {
                 setEditingExpense(null);
                 setEditSaving(true);
                 try {
-                  await apiRequest("PATCH", `/api/expenses/${targetId}`, {
+                  // Only what changed: the form was seeded from the expense
+                  // and used to write every field back, reverting whatever
+                  // another device changed while this dialog sat open. A
+                  // cleared vendor goes as "" — as `undefined` the clear
+                  // fell out of the JSON and did nothing.
+                  const seeded = {
+                    description: editingExpense.description ?? "",
+                    amount: Number((editingExpense as any).amount ?? 0),
+                    category: (editingExpense as any).category ?? "",
+                    vendor: (editingExpense as any).vendor ?? "",
+                    date: (editingExpense as any).date?.slice(0, 10) ?? "",
+                    linkedProfiles: (editingExpense as any).linkedProfiles ?? [],
+                  };
+                  const patch = changedFieldsOnly(seeded, {
                     description: newDesc,
                     amount: newAmount,
                     category: newCategory,
-                    vendor: newVendor,
-                    date: newDate,
+                    vendor: editForm.vendor ?? "",
+                    ...(newDate ? { date: newDate } : {}),
                     // Round-6 fix (BUG-017): persist the chosen profile linkage.
                     ...(newProfiles ? { linkedProfiles: newProfiles } : {}),
                   });
+                  if (Object.keys(patch).length > 0) await apiRequest("PATCH", `/api/expenses/${targetId}`, patch);
                   invalidateDomain("expenses");
                 } catch (err: any) {
                   for (const [key, data] of prev) queryClient.setQueryData(key, data);

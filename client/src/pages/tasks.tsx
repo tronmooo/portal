@@ -58,6 +58,7 @@ import { ListTodo, Calendar, CalendarDays, AlertCircle, AlertTriangle, Flame, Pl
 import { Link } from "wouter";
 import type { Task, Profile } from "@shared/schema";
 import { useState, useEffect, useRef, useMemo } from "react";
+import { changedFieldsOnly } from "@shared/field-patch";
 import { useToast } from "@/hooks/use-toast";
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -118,7 +119,23 @@ function TaskDialog({
         ...(selectedProfileId && !isEdit ? { linkedProfiles: [selectedProfileId] } : {}),
       };
       if (isEdit) {
-        const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, body);
+        // Only what the user changed. The form was seeded from the task when
+        // it opened and used to hand the whole thing back, so the priority or
+        // due date the phone changed while this dialog sat open was written
+        // back to its stale value. A cleared description or due date goes as
+        // "" (the schema's clear) — as `undefined` it fell out of the JSON
+        // and the clear silently did nothing.
+        const seeded = {
+          title: task!.title,
+          description: task!.description ?? "",
+          priority: task!.priority ?? "medium",
+          dueDate: task!.dueDate?.slice(0, 10) ?? "",
+          tags: task!.tags ?? [],
+        };
+        const next = { ...body, description: description.trim(), dueDate: dueDate || "" };
+        const patch = changedFieldsOnly(seeded, next);
+        if (Object.keys(patch).length === 0) return task;
+        const res = await apiRequest("PATCH", `/api/tasks/${task!.id}`, patch);
         return res.json();
       }
       const res = await apiRequest("POST", "/api/tasks", body);

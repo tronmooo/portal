@@ -39,3 +39,25 @@ function sameValue(x: unknown, y: unknown): boolean {
   if (kx.length !== ky.length) return false;
   return kx.every((k) => k in (y as object) && sameValue((x as any)[k], (y as any)[k]));
 }
+
+/**
+ * The keys of `after` whose value differs from `before` — and nothing else.
+ *
+ * For an EDIT DIALOG: the form was seeded from the record when it opened and
+ * hands the whole form back on save, so every field it shows is written —
+ * including the priority the phone changed while the dialog sat open. Sending
+ * only what the user actually changed leaves every other field to whoever
+ * wrote it last. Unlike `fieldPatchBetween`, a key missing from `after` is
+ * NOT a deletion here: a form that stops sending `time` when the event turns
+ * all-day keeps exactly the meaning it had.
+ */
+export function changedFieldsOnly(
+  before: Record<string, any> | null | undefined,
+  after: Record<string, any> | null | undefined,
+): Record<string, any> {
+  const patch = fieldPatchBetween(before, after);
+  for (const k of Object.keys(patch)) {
+    if (!(k in ((after && typeof after === "object" ? after : {}) as object))) delete patch[k];
+  }
+  return patch;
+}
