@@ -967,3 +967,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Production re-verification on 55006e9 (deployed ~19:05 UTC) — verified live
 
 - p12 1/1: D236 (profile detail serves tracker entries oldest → newest). D235 was verified live in p11. The import fixes D237–D240 (and D241, not yet deployed) are verified on the replica (s218–s221) and by unit tests; production has no disposable second account to import into, so they are not exercised live.
+
+### Net worth under shared ownership — verified (s222)
+
+- A 100,000 house owned Self 60 / Linda 40: the unfiltered dashboard (household) counts the whole house by design; the Self-scoped dashboard (`?profileIds=self`) counts 60,000. Removing Linda's link hands the 40% back (D224) and the house counts in full again; deleting it returns net worth to the baseline. The `PUT /api/profiles/:id/owners` route replaced the owner set atomically (Self 60, Linda 40).
