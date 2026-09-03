@@ -11189,9 +11189,15 @@ No emojis. No prose outside the JSON.`,
     };
 
     await expand(id, 0);
-    // dedupe edges
+    // dedupe edges, and keep only the ones whose BOTH ends are nodes. A node
+    // at the hop limit still lists its links (so two hop-1 nodes linked to
+    // each other show that edge), but the far ends of those links are never
+    // expanded into nodes — every liability the owner holds used to ride
+    // along as an edge to nowhere on every asset's graph.
     const seen = new Set<string>();
+    const nodeIds = new Set(nodes.map(n => n.id));
     const uniqEdges = edges.filter(e => {
+      if (!nodeIds.has(e.from) || !nodeIds.has(e.to)) return false;
       const k = `${e.kind}:${e.linkId}`;
       if (seen.has(k)) return false;
       seen.add(k); return true;

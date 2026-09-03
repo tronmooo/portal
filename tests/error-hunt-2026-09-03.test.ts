@@ -2277,3 +2277,38 @@ describe("D230: editing a document's fields moves the copies it wrote onto profi
     expect(kim.fields._docFields["doc-1"].expirationDate).toBe("2026-09-11");
   });
 });
+
+// ─── D231: the relationships graph carried edges to nodes it never returned ─
+describe("D231: /api/relationships/graph returns only edges whose both ends are nodes", () => {
+  const links = {
+    assetParty: [{ id: "ap-1", assetProfileId: "car-1", partyProfileId: "self-1", role: "owner", ownershipPercentage: 100 }],
+    liabParty: [{ id: "lp-1", liabilityProfileId: "loan-1", partyProfileId: "self-1", role: "owner", ownershipPercentage: 100 }],
+  };
+  function wire(storage: any) {
+    storage.getLiabilityAssetLinks = async () => [];
+    storage.getLiabilityAssetLinksForAsset = async () => [];
+    storage.getAssetPartyLinks = async (pid: string) => links.assetParty.filter((l) => l.assetProfileId === pid);
+    storage.getAssetPartyLinksForParty = async (pid: string) => links.assetParty.filter((l) => l.partyProfileId === pid);
+    storage.getLiabilityProfileLinks = async (pid: string) => links.liabParty.filter((l) => l.liabilityProfileId === pid);
+    storage.getLiabilityProfileLinksForParty = async (pid: string) => links.liabParty.filter((l) => l.partyProfileId === pid);
+  }
+  const seed = { profiles: [
+    { id: "self-1", type: "self", name: "Me", fields: {} },
+    { id: "car-1", type: "asset", name: "Car", fields: {} },
+    { id: "loan-1", type: "liability", name: "Auto loan", fields: {} },
+  ] };
+  it("one hop from the car: the owner edge stays, the owner's loan is not an edge to nowhere", async () => {
+    h = await boot(seed, wire);
+    const g = (await h.api("GET", "/api/relationships/graph/car-1")).data;
+    const ids = new Set(g.nodes.map((n: any) => n.id));
+    expect([...ids].sort()).toEqual(["car-1", "self-1"]);
+    expect(g.edges.map((e: any) => e.linkId)).toEqual(["ap-1"]);
+    for (const e of g.edges) { expect(ids.has(e.from)).toBe(true); expect(ids.has(e.to)).toBe(true); }
+  });
+  it("two hops: the loan becomes a node and its edge is kept", async () => {
+    h = await boot(seed, wire);
+    const g = (await h.api("GET", "/api/relationships/graph/car-1?hops=2")).data;
+    expect(g.nodes.map((n: any) => n.id).sort()).toEqual(["car-1", "loan-1", "self-1"]);
+    expect(g.edges.map((e: any) => e.linkId).sort()).toEqual(["ap-1", "lp-1"]);
+  });
+});
