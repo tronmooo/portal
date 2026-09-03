@@ -289,6 +289,7 @@ export default defineConfig({
       'tests/cache-bus-single-refetch.test.ts',
       'tests/error-hunt-2026-09-02.test.ts',
       'tests/error-hunt-2026-09-02-storage.test.ts',
+      'tests/error-hunt-2026-09-02-merge.test.ts',
       'tests/error-hunt-2026-09-02-client.test.tsx',
       'tests/error-hunt-2026-09-02-client-logic.test.ts',
       'tests/error-hunt-2026-09-02-routes.test.ts',

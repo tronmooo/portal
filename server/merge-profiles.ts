@@ -88,12 +88,26 @@ export interface MovedShare {
   mergeIntoPct?: number;
 }
 
+/** A budget month touched by the merge: entries re-pointed to the target and
+ *  entries dropped because the target already budgets that category. */
+export interface MovedBudgets {
+  month: string;
+  movedIds: string[];
+  dropped: Array<{ id: string; category: string; amount: number; notes?: string; profileId?: string }>;
+}
+
 interface MergeSet {
   /** entityType → rows { id, links } whose linked_profiles include the source */
   affected: Record<string, Array<{ id: string; links: string[] }>>;
   childIds: string[];
   /** Co-ownership shares held by the source (see MovedShare). */
   shares: MovedShare[];
+  /** entity_links rows naming the source on one side (relationship graph). */
+  entityLinks: Array<{ id: string; side: "source" | "target" }>;
+  /** tracker_entries logged FOR the source (profile_id). */
+  trackerEntryIds: string[];
+  /** Per-person budgets of the source, by month. */
+  budgets: MovedBudgets[];
 }
 
 function hashMergeSet(set: MergeSet): string {
@@ -101,6 +115,9 @@ function hashMergeSet(set: MergeSet): string {
     ...Object.entries(set.affected).flatMap(([t, rows]) => rows.map((r) => `${t}:${r.id}`)),
     ...set.childIds.map((id) => `child:${id}`),
     ...(set.shares || []).map((sh) => `share:${sh.table}:${sh.id}:${sh.pct}:${sh.mergeIntoId || ""}:${sh.mergeIntoPct ?? ""}`),
+    ...(set.entityLinks || []).map((l) => `el:${l.id}:${l.side}`),
+    ...(set.trackerEntryIds || []).map((id) => `te:${id}`),
+    ...(set.budgets || []).flatMap((b) => [...b.movedIds.map((id) => `budget:${b.month}:${id}`), ...b.dropped.map((d) => `budget-drop:${b.month}:${d.id}`)]),
   ].sort().join("|");
   return createHash("sha256").update(flat).digest("hex").slice(0, 32);
 }
@@ -118,7 +135,52 @@ async function deriveMergeSet(storage: IStorage, sourceId: string, targetId?: st
   const profiles = await storage.getProfiles();
   const childIds = profiles.filter((p: any) => p.parentProfileId === sourceId).map((p: any) => p.id);
   const shares = await deriveShares(storage, sourceId, targetId);
-  return { affected, childIds, shares };
+  const { entityLinks, trackerEntryIds } = await deriveProfileRefs(storage, sourceId);
+  const budgets = await deriveBudgets(storage, sourceId, targetId);
+  return { affected, childIds, shares, entityLinks, trackerEntryIds, budgets };
+}
+
+const chunks = <T,>(arr: T[], n: number): T[][] => { const out: T[][] = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+
+/** Rows that name the source by id outside linked_profiles: the relationship
+ *  graph (entity_links) and entries logged FOR the person (tracker_entries). */
+async function deriveProfileRefs(storage: IStorage, sourceId: string): Promise<{ entityLinks: MergeSet["entityLinks"]; trackerEntryIds: string[] }> {
+  const sb = (storage as any).supabase;
+  const userId = (storage as any).userId as string;
+  const entityLinks: MergeSet["entityLinks"] = [];
+  let trackerEntryIds: string[] = [];
+  if (!sb || !userId) return { entityLinks, trackerEntryIds };
+  try {
+    const { data } = await sb.from("entity_links").select("id, source_type, source_id, target_type, target_id").eq("user_id", userId)
+      .or(`and(source_type.eq.profile,source_id.eq.${sourceId}),and(target_type.eq.profile,target_id.eq.${sourceId})`);
+    for (const r of (data || []) as any[]) {
+      if (r.source_type === "profile" && r.source_id === sourceId) entityLinks.push({ id: r.id, side: "source" });
+      else if (r.target_type === "profile" && r.target_id === sourceId) entityLinks.push({ id: r.id, side: "target" });
+    }
+  } catch { /* best effort — the merge still moves everything else */ }
+  try {
+    const { data } = await sb.from("tracker_entries").select("id").eq("user_id", userId).eq("profile_id", sourceId).limit(5000);
+    trackerEntryIds = ((data || []) as any[]).map((r) => r.id).filter((id) => typeof id === "string");
+  } catch { /* best effort */ }
+  return { entityLinks, trackerEntryIds };
+}
+
+/** The source's per-person budgets. A category the target already budgets
+ *  that month keeps the target's cap (like fields); the source's is dropped. */
+async function deriveBudgets(storage: IStorage, sourceId: string, targetId?: string): Promise<MovedBudgets[]> {
+  const out: MovedBudgets[] = [];
+  let all: Record<string, any[]> = {};
+  try { all = (await (storage as any).getAllBudgets?.()) || {}; } catch { return out; }
+  for (const [month, arr] of Object.entries(all)) {
+    if (!Array.isArray(arr)) continue;
+    const targetCats = new Set(arr.filter((b: any) => targetId && b?.profileId === targetId).map((b: any) => norm(b.category)));
+    const mine = arr.filter((b: any) => b?.profileId === sourceId && typeof b.id === "string");
+    if (mine.length === 0) continue;
+    const movedIds = mine.filter((b: any) => !targetCats.has(norm(b.category))).map((b: any) => b.id);
+    const dropped = mine.filter((b: any) => targetCats.has(norm(b.category)));
+    out.push({ month, movedIds, dropped });
+  }
+  return out;
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -155,6 +217,8 @@ function resolveProfile(profiles: any[], name: string): any | undefined {
     || profiles.find((p: any) => norm(p.name).includes(needle));
 }
 
+const refsCount = (set: MergeSet) => set.entityLinks.length + set.trackerEntryIds.length + set.budgets.reduce((n, b) => n + b.movedIds.length + b.dropped.length, 0);
+
 /** Phase 1: dry-run + persist the plan. NO writes to user data. */
 export async function planMergeProfiles(storage: IStorage, sourceName: string, targetName: string): Promise<any> {
   if (!sourceName || !targetName) return { error: "I need both profiles: merge WHICH profile INTO which?" };
@@ -179,6 +243,7 @@ export async function planMergeProfiles(storage: IStorage, sourceName: string, t
     counts, total,
     child_profiles_moved: set.childIds.length,
     shares_moved: set.shares.length,
+    references_moved: set.entityLinks.length + set.trackerEntryIds.length + set.budgets.reduce((n, b) => n + b.movedIds.length + b.dropped.length, 0),
     samples: Object.entries(set.affected).slice(0, 3).map(([t, rows]) => `${rows.length} ${t}${rows.length === 1 ? "" : "s"}`),
   };
   const row = await storage.createAiBulkPlan({
@@ -191,7 +256,7 @@ export async function planMergeProfiles(storage: IStorage, sourceName: string, t
   return {
     plan_id: row.id,
     preview,
-    message: `Merge preview: "${source.name}" → "${target.name}" will re-point ${total} record${total === 1 ? "" : "s"}${set.childIds.length ? ` and move ${set.childIds.length} child profile${set.childIds.length === 1 ? "" : "s"}` : ""}${set.shares.length ? ` and move ${set.shares.length} ownership share${set.shares.length === 1 ? "" : "s"} (co-owned assets/loans)` : ""}, then archive "${source.name}" (its empty fields fill from the target's are kept; conflicting fields keep the target's values). Nothing has been changed — confirm to proceed (15 min).`,
+    message: `Merge preview: "${source.name}" → "${target.name}" will re-point ${total} record${total === 1 ? "" : "s"}${set.childIds.length ? ` and move ${set.childIds.length} child profile${set.childIds.length === 1 ? "" : "s"}` : ""}${set.shares.length ? ` and move ${set.shares.length} ownership share${set.shares.length === 1 ? "" : "s"} (co-owned assets/loans)` : ""}${refsCount(set) ? ` and re-point ${refsCount(set)} linked record${refsCount(set) === 1 ? "" : "s"} (relationships, entries logged for them, budgets)` : ""}, then archive "${source.name}" (its empty fields fill from the target's are kept; conflicting fields keep the target's values). Nothing has been changed — confirm to proceed (15 min).`,
   };
 }
 
@@ -252,6 +317,32 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
     } catch { /* counted as not moved */ }
   }
 
+  // 2c. Re-point the rows that name the source by id outside linked_profiles.
+  let refsMoved = 0;
+  for (const l of set.entityLinks) {
+    try {
+      const col = l.side === "source" ? "source_id" : "target_id";
+      const { error } = await sb.from("entity_links").update({ [col]: target_id }).eq("id", l.id).eq("user_id", userId);
+      if (!error) refsMoved++;
+    } catch { /* counted as not moved */ }
+  }
+  for (const chunk of chunks(set.trackerEntryIds, 200)) {
+    try {
+      const { error } = await sb.from("tracker_entries").update({ profile_id: target_id }).in("id", chunk).eq("user_id", userId);
+      if (!error) refsMoved += chunk.length;
+    } catch { /* counted as not moved */ }
+  }
+  for (const b of set.budgets) {
+    try {
+      const arr: any[] = await (storage as any).getBudgets(b.month);
+      const moved = new Set(b.movedIds);
+      const dropped = new Set(b.dropped.map((d) => d.id));
+      const next = arr.filter((x) => !dropped.has(x.id)).map((x) => (moved.has(x.id) ? { ...x, profileId: target_id } : x));
+      await (storage as any).setBudgets(b.month, next);
+      refsMoved += b.movedIds.length + b.dropped.length;
+    } catch { /* counted as not moved */ }
+  }
+
   // 3. Fill-empty-only field merge (target keeps its own values on conflict).
   const source = profiles.find((p: any) => p.id === source_id);
   const target = profiles.find((p: any) => p.id === target_id);
@@ -277,7 +368,7 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
     .eq("id", source_id).eq("user_id", userId);
 
   await storage.setAiBulkPlanStatus(plan.id, "executed", {
-    affected: { relinked, childrenMoved, filledFields, sharesMoved },
+    affected: { relinked, childrenMoved, filledFields, sharesMoved, refsMoved },
     executedAt: new Date().toISOString(),
   });
 
@@ -292,11 +383,11 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
       entityId: target_id,
       entityName: `merge "${source_name}" → "${target_name}"`,
       input: plan.criteria as any,
-      before: { affected: set.affected, childIds: set.childIds, shares: set.shares } as any,
+      before: { affected: set.affected, childIds: set.childIds, shares: set.shares, entityLinks: set.entityLinks, trackerEntryIds: set.trackerEntryIds, budgets: set.budgets } as any,
       reversible: !big,
       reversePlan: big
         ? { op: "none", reason: `merge touched ${totalRelinked} records — undo is best-effort only, ask to re-merge manually` }
-        : { op: "unmerge", source_id, target_id, affected: set.affected, child_ids: set.childIds, shares: set.shares },
+        : { op: "unmerge", source_id, target_id, affected: set.affected, child_ids: set.childIds, shares: set.shares, entity_links: set.entityLinks, tracker_entry_ids: set.trackerEntryIds, budgets: set.budgets },
       source: "bulk",
     });
   } catch { /* ledger is best-effort */ }
@@ -306,15 +397,15 @@ export async function executeMergeProfiles(storage: IStorage, plan: { id: string
 
   return {
     executed: true,
-    merged: { relinked, children_moved: childrenMoved, fields_filled: filledFields, shares_moved: sharesMoved },
+    merged: { relinked, children_moved: childrenMoved, fields_filled: filledFields, shares_moved: sharesMoved, references_moved: refsMoved },
     ...(totalFailed > 0 ? { failed } : {}),
     source_archived: !delErr,
-    message: `Merged "${source_name}" into "${target_name}": ${totalRelinked} record${totalRelinked === 1 ? "" : "s"} re-pointed${childrenMoved ? `, ${childrenMoved} child profile${childrenMoved === 1 ? "" : "s"} moved` : ""}${sharesMoved ? `, ${sharesMoved} ownership share${sharesMoved === 1 ? "" : "s"} moved` : ""}${filledFields.length ? `, ${filledFields.length} empty field${filledFields.length === 1 ? "" : "s"} filled from "${source_name}"` : ""}. "${source_name}" was archived (soft-deleted)${big ? "" : " — this can be undone"}.${totalFailed ? ` ${totalFailed} record(s) failed to re-point.` : ""}`,
+    message: `Merged "${source_name}" into "${target_name}": ${totalRelinked} record${totalRelinked === 1 ? "" : "s"} re-pointed${childrenMoved ? `, ${childrenMoved} child profile${childrenMoved === 1 ? "" : "s"} moved` : ""}${sharesMoved ? `, ${sharesMoved} ownership share${sharesMoved === 1 ? "" : "s"} moved` : ""}${refsMoved ? `, ${refsMoved} linked record${refsMoved === 1 ? "" : "s"} re-pointed` : ""}${filledFields.length ? `, ${filledFields.length} empty field${filledFields.length === 1 ? "" : "s"} filled from "${source_name}"` : ""}. "${source_name}" was archived (soft-deleted)${big ? "" : " — this can be undone"}.${totalFailed ? ` ${totalFailed} record(s) failed to re-point.` : ""}`,
   };
 }
 
 /** Reverse a merge: restore the source profile, re-point links back, move children back. */
-export async function reverseMerge(storage: IStorage, reversePlan: { source_id: string; target_id: string; affected: MergeSet["affected"]; child_ids: string[]; shares?: MovedShare[] }): Promise<{ ok: boolean; description: string }> {
+export async function reverseMerge(storage: IStorage, reversePlan: { source_id: string; target_id: string; affected: MergeSet["affected"]; child_ids: string[]; shares?: MovedShare[]; entity_links?: MergeSet["entityLinks"]; tracker_entry_ids?: string[]; budgets?: MovedBudgets[] }): Promise<{ ok: boolean; description: string }> {
   const sb = (storage as any).supabase;
   const userId = (storage as any).userId as string;
   if (!sb || !userId) return { ok: false, description: "Unmerge isn't available in this deployment." };
@@ -362,10 +453,39 @@ export async function reverseMerge(storage: IStorage, reversePlan: { source_id: 
   }
 
   // Same fan-out as the merge itself: every owned table moved back.
+  // And the rows that named the target only because of the merge.
+  let refsRestored = 0;
+  for (const l of reversePlan.entity_links || []) {
+    try {
+      const col = l.side === "source" ? "source_id" : "target_id";
+      const { error } = await sb.from("entity_links").update({ [col]: reversePlan.source_id }).eq("id", l.id).eq("user_id", userId);
+      if (error) failed++; else refsRestored++;
+    } catch { failed++; }
+  }
+  for (const chunk of chunks(reversePlan.tracker_entry_ids || [], 200)) {
+    try {
+      const { error } = await sb.from("tracker_entries").update({ profile_id: reversePlan.source_id }).in("id", chunk).eq("user_id", userId);
+      if (error) failed++; else refsRestored += chunk.length;
+    } catch { failed++; }
+  }
+  for (const b of reversePlan.budgets || []) {
+    try {
+      const arr: any[] = await (storage as any).getBudgets(b.month);
+      const moved = new Set(b.movedIds);
+      const present = new Set(arr.map((x) => x.id));
+      const next = [
+        ...arr.map((x) => (moved.has(x.id) ? { ...x, profileId: reversePlan.source_id } : x)),
+        ...b.dropped.filter((d) => !present.has(d.id)).map((d) => ({ ...d, profileId: reversePlan.source_id })),
+      ];
+      await (storage as any).setBudgets(b.month, next);
+      refsRestored += b.movedIds.length + b.dropped.length;
+    } catch { failed++; }
+  }
+
   await reportMergeWrite(storage, "unmergeProfiles", [reversePlan.source_id, reversePlan.target_id], { id: reversePlan.source_id, relinked });
 
   return {
     ok: failed === 0,
-    description: `restored the source profile and re-pointed ${relinked} record(s) back${sharesRestored ? ` with ${sharesRestored} ownership share(s)` : ""}${failed ? ` (${failed} failed)` : ""}`,
+    description: `restored the source profile and re-pointed ${relinked} record(s) back${sharesRestored ? ` with ${sharesRestored} ownership share(s)` : ""}${refsRestored ? ` and ${refsRestored} linked record(s)` : ""}${failed ? ` (${failed} failed)` : ""}`,
   };
 }
