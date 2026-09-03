@@ -959,3 +959,11 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 
 - Before: the restored bill's stamp kept A's `paymentId`/`accountId` and deleting the restored payment left it paid; the expense's tags named A's ids (3/5). After: stamp names the restored payment and account, unpay clears it, the expense's `liability:`/`payment:` tags name the restored ids (5/5). A fourth replica account (`local-tester4`) was added to stay under the 3-imports-per-hour limit.
 - Full suite after D240 flagged `bill-entry-point-parity` (one raw ledger write allowed in routes.ts); both import blocks now share that single documented call. Suite: 260 files green after the change.
+
+### Document-derived events across a restore — verified (s221)
+
+- Before: the restored event had `linkedDocuments: []`, the calendar showed the permit's expiry twice, and deleting the restored document left the event (2/5). After: linked to the restored document, one calendar row, the delete takes the event (5/5). The import answered `success: false` on the second run only because the reused account already held the file's habits (duplicate names are skipped by design).
+
+### Production re-verification on 55006e9 (deployed ~19:05 UTC) — verified live
+
+- p12 1/1: D236 (profile detail serves tracker entries oldest → newest). D235 was verified live in p11. The import fixes D237–D240 (and D241, not yet deployed) are verified on the replica (s218–s221) and by unit tests; production has no disposable second account to import into, so they are not exercised live.
