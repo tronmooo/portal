@@ -837,3 +837,4 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s187: two taps of Pay in a row record one payment (the second answers deduped) and advance the due date once; an explicit additional 25 is a second payment row without advancing again; two expenses (100 and 25) are logged (3/3).
 - s188 after D223: paying a rent Linda co-signs at 50% logs one 1000 expense owned by Self and Linda; everyone's spend rises by 1000 and the expense now counts under Linda's scope (4/4). Neighbours s185–s187 unchanged.
 - s189: on a rent Linda co-signs, paying raises her scoped spend by 900 and deleting that payment removes the shared expense, restores her spend and puts the bill back on its original day under her scope (3/3).
+- s190 (co-owned asset): a 400,000 house owned 50/50 by Self and Linda raises everyone's assets by 400,000 and each scope by 200,000; editing its value to 500,000 moves every scope by its share (6/6).
