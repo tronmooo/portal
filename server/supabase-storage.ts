@@ -1924,6 +1924,25 @@ export class SupabaseStorage implements IStorage {
     return this.getProfile(id);
   }
 
+  /**
+   * Per-person budgets live as JSON under `budget:<month>` in preferences,
+   * which the SQL cascade never touches: a deleted person's caps stayed in
+   * every month and kept counting in the everyone-mode total (D127). Drop
+   * the person's entries from each month that has them. Best effort — the
+   * profile is already gone; a failed prune is logged, not surfaced.
+   */
+  private async pruneBudgetsForProfile(profileId: string): Promise<void> {
+    try {
+      const all = await this.getAllBudgets();
+      for (const [month, arr] of Object.entries(all)) {
+        if (!Array.isArray(arr) || !arr.some((b: any) => b?.profileId === profileId)) continue;
+        await this.setBudgets(month, arr.filter((b: any) => b?.profileId !== profileId));
+      }
+    } catch (e: any) {
+      console.warn(`[deleteProfile] budget prune for ${profileId} failed: ${e?.message || e}`);
+    }
+  }
+
   async deleteProfile(id: string): Promise<boolean> {
     const profile = await this.getProfile(id);
     if (!profile) return false;
@@ -1955,6 +1974,7 @@ export class SupabaseStorage implements IStorage {
     });
     if (!rpcError) {
       console.log(`[deleteProfile] atomic cascade RPC path for ${id}: ${JSON.stringify(rpcCounts)}`);
+      await this.pruneBudgetsForProfile(id);
       return true;
     }
     const fnMissing = rpcError.code === "42883" || rpcError.code === "PGRST202"
@@ -2153,6 +2173,8 @@ export class SupabaseStorage implements IStorage {
     if (error) {
       console.warn(`[deleteProfile] Failed to delete profile ${id}:`, error.message);
     }
+    // The profile row is gone: its per-person budgets go with it (D127).
+    if (!error) await this.pruneBudgetsForProfile(id);
     // Return false if EITHER the final profile-row delete failed OR any cascade
     // step failed. Previously we returned `!error` even when child cascade
     // operations failed, so the route reported success while orphan rows

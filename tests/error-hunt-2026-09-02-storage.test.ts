@@ -977,3 +977,30 @@ describe("D125: a merge-archived profile can be restored; a hard-deleted one sti
     expect(await s.restoreEntity("obligation", "x")).toBe(false);
   });
 });
+
+// D127 — deleting a person left their per-person budget entries in the
+// month (budgets live as JSON in preferences, which the SQL cascade never
+// touches), so the everyone-mode total kept counting a person who was gone.
+describe("D127: deleting a profile prunes its budget entries", () => {
+  it("drops only the deleted person's entries, in every month that has them", async () => {
+    const { client } = chainClient(() => ({ data: [], error: null }));
+    (client as any).rpc = async () => ({ data: { profiles_deleted: 1 }, error: null });
+    const months: Record<string, any[]> = {
+      "2026-09": [{ id: "b1", category: "food", amount: 77, profileId: "gone" }, { id: "b2", category: "food", amount: 200, profileId: "self" }, { id: "b3", category: "fuel", amount: 50 }],
+      "2026-10": [{ id: "b4", category: "food", amount: 10, profileId: "gone" }],
+      "2026-11": [{ id: "b5", category: "food", amount: 10, profileId: "self" }],
+    };
+    const writes: Array<[string, any[]]> = [];
+    const s = bareStorage({
+      supabase: client,
+      getProfile: async () => ({ id: "gone", type: "person", name: "X" }),
+      getProfilesLite: async () => [{ id: "self", type: "self", name: "Me" }],
+      getAllBudgets: async () => months,
+      setBudgets: async (month: string, arr: any[]) => { writes.push([month, arr]); },
+    });
+    expect(await s.deleteProfile("gone")).toBe(true);
+    expect(writes.map(([m]) => m).sort()).toEqual(["2026-09", "2026-10"]);
+    expect(writes.find(([m]) => m === "2026-09")![1].map((b: any) => b.id)).toEqual(["b2", "b3"]);
+    expect(writes.find(([m]) => m === "2026-10")![1]).toEqual([]);
+  });
+});

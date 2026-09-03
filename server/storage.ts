@@ -1017,6 +1017,10 @@ export class MemStorage implements IStorage {
   async deleteProfile(id: string): Promise<boolean> {
     const profile = this.profiles.get(id);
     if (!profile) return false;
+    // Parity with SupabaseStorage: a deleted person's per-person budgets go too.
+    for (const [month, arr] of this.budgetStore.entries()) {
+      if (arr.some((b) => b.profileId === id)) this.budgetStore.set(month, arr.filter((b) => b.profileId !== id));
+    }
 
     // Cascade delete: for each entity type, if sole owner → delete; if shared → remove profile ID from linkedProfiles
 
