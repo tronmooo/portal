@@ -355,6 +355,9 @@ A preference round-trips and overwrites cleanly, reserved keys and non-string va
 ### Scoped browser crawl under Linda's scope on the rebuilt client (10:58 UTC) — clean
 Dashboard, finance, tasks, habits and calendar under "Linda Carter": no page errors and no 4xx/5xx API responses.
 
+### A bill on a co-owned car under the co-owner's scope (probes s153, s154) — verified working, with two probe artifacts
+With Linda a 50% co-owner of a car, a recurring bill attached to the car shows under Linda's bills list, snapshot and timeline. Two earlier misreadings were the probes' own: the bulk party-link listing ignores an `?assetProfileId=` query and returns every link (the "duplicate owner link" was another car's), and a liability created with type_key "insurance" is not in the recurring family, so it never reaches the bills list at all (see the note on liability families under open items).
+
 ### Revoking a co-signer (probe s152) — verified after D207
 While co-signed, Linda's bills list, snapshot, timeline and bell all carry the overdue bill; once the party link is removed, none of them do.
 
