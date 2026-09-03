@@ -2021,7 +2021,7 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
 
   const calendarDates: ExtractionDateRow[] = extractionDateRows(
     input.extractedFields.map((f: any) => ({ key: f.key, label: f.label, value: f.value, selected: f.selected })),
-    { documentContext: `${input.documentType} ${input.label}`, today: getUserToday() },
+    { documentContext: `${input.documentType} ${input.label}`, today: getUserToday(aiUserTimezone()) },
   );
 
   // The index is storage reads and the reasoner is a model call — nothing
@@ -2113,7 +2113,7 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
     primaryProfileId: profile?.id,
     documentId: input.documentId,
     documentName: input.documentName,
-    today: getUserToday(),
+    today: getUserToday(aiUserTimezone()),
   });
 
   return {
@@ -12519,7 +12519,10 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
 
     case "delete_journal": {
       const entries = await storage.getJournalEntries();
-      const today = new Date().toLocaleDateString('en-CA');
+      // The user's today, not the host's: "delete today's entry" late in the
+      // user's evening used to look for the host's next day and fall back to
+      // the most recent entry — whichever day that was.
+      const today = getUserToday(aiUserTimezone());
       // Match by date (today/yesterday shorthand) or most recent if no date given
       let matchEntry = input.date ? entries.find(e => e.date === input.date) : null;
       if (!matchEntry) matchEntry = entries.find(e => e.date === today) ?? entries[entries.length - 1] ?? null;

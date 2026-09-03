@@ -17,7 +17,7 @@
  */
 
 import { storage } from "./storage";
-import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { getUserToday, getUserCurrentMonth, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { z } from "zod";
 import type Anthropic from "@anthropic-ai/sdk";
 import {
@@ -285,7 +285,7 @@ export async function executeFinanceTool(
         endDate: input.data.end_date,
         includeAccountIds: input.data.account_ids,
       };
-      const summary = await buildSummary(userId, scope);
+      const summary = await buildSummary(userId, scope, { month: getUserCurrentMonth((storage as any)._timezone || DEFAULT_TIMEZONE) });
 
       return {
         connected: true,

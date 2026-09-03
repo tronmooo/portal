@@ -8216,7 +8216,10 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // ⚠️  Same RLS-bypass concern — always filter by user_id.
   async getCashflow(month?: string): Promise<any[]> {
-    const m = month || new Date().toISOString().slice(0, 7);
+    // The user's month, not the host's UTC month (which is next month for an
+    // evening caller west of Greenwich on the last day). The route defaults
+    // the same way; the chat tool relies on this default.
+    const m = month || getUserCurrentMonth(this._timezone);
     const { data } = await this.supabase.from('cashflow_projections').select('*')
       .eq('month', m).eq('user_id', this.userId).order('week');
     const projections = (data as any[]) || [];

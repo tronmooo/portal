@@ -8777,6 +8777,7 @@ Rules:
     res.json(result);
   }));
 
+  const HEALTH_TRACKER_CATEGORIES = new Set(["health", "fitness", "nutrition", "sleep", "medication"]);
   app.post("/api/cleanup/tracker-entries", requireAdmin, asyncHandler(async (req, res) => {
     const cleanupTUid = (req as AuthenticatedRequest).userId || req.ip || 'anonymous';
     if (rateLimit(`cleanup-tracker:${cleanupTUid}`, 5, 3600000)) {
@@ -8792,8 +8793,11 @@ Rules:
         let isGarbage = false;
         const vals = entry.values;
 
-        // Negative values in health trackers
-        if (Object.values(vals).some((v: any) => typeof v === 'number' && v < 0)) {
+        // Negative values in health-type trackers only. A finance, lifestyle
+        // or custom tracker (net cash, temperature, weight change) records
+        // negatives on purpose; the rule used to delete those entries too.
+        const healthType = HEALTH_TRACKER_CATEGORIES.has(String(tracker.category || "").toLowerCase());
+        if (healthType && Object.values(vals).some((v: any) => typeof v === 'number' && v < 0)) {
           isGarbage = true;
         }
         // Weight over 1000 lbs or under 10 lbs (for humans)

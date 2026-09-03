@@ -40,6 +40,7 @@ import {
   type CalcScope, type ManualHolding,
 } from "@shared/finance-calc";
 import { majorToMinor } from "@shared/money";
+import { getUserCurrentMonth } from "@shared/timezone";
 import { financeErrorMessage, isDebtAccount } from "@shared/finance-connections";
 import {
   ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, isAssetProfile, isLiabilityProfile,
@@ -86,6 +87,12 @@ function wrap(fn: (req: Request, res: Response) => Promise<unknown>) {
 }
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD");
+
+/** The caller's current month (X-Timezone header), never the host's UTC month. */
+function currentMonthFor(req: Request): string {
+  const tz = req.headers["x-timezone"];
+  return getUserCurrentMonth(typeof tz === "string" && tz.trim() ? tz.trim() : undefined);
+}
 
 function scopeFromQuery(req: Request): CalcScope {
   const q = req.query as Record<string, string | undefined>;
@@ -619,7 +626,7 @@ export function registerFinanceRoutes(app: Express): void {
   app.get("/api/finance/summary", wrap(async (req, res) => {
     const userId = requireUser(req, res);
     if (!userId) return;
-    res.json(await buildSummary(userId, scopeFromQuery(req)));
+    res.json(await buildSummary(userId, scopeFromQuery(req), { month: currentMonthFor(req) }));
   }));
 
   app.get("/api/finance/cashflow", wrap(async (req, res) => {
@@ -650,7 +657,7 @@ export function registerFinanceRoutes(app: Express): void {
       getAccounts(userId), getConfirmedTransferIds(userId),
     ]);
     // A month comparison needs the previous month too, so widen the fetch.
-    const month = scope.startDate?.slice(0, 7) ?? new Date().toISOString().slice(0, 7);
+    const month = scope.startDate?.slice(0, 7) ?? currentMonthFor(req);
     const fetchStart = monthBounds(month).start;
     const wideStart = scope.startDate && scope.startDate < fetchStart ? scope.startDate : `${prevMonthOf(month)}-01`;
     const transactions = await getAllTransactionsInRange(userId, wideStart, scope.endDate, { accounts });
@@ -683,7 +690,7 @@ export function registerFinanceRoutes(app: Express): void {
     const [accounts, transferInfo] = await Promise.all([
       getAccounts(userId), getConfirmedTransferIds(userId),
     ]);
-    const month = scope.startDate?.slice(0, 7) ?? new Date().toISOString().slice(0, 7);
+    const month = scope.startDate?.slice(0, 7) ?? currentMonthFor(req);
     const transactions = await getAllTransactionsInRange(userId, `${prevMonthOf(month)}-01`, scope.endDate, { accounts });
 
     const income = calculateIncomeBySource(transactions, scope, transferInfo.ids);
@@ -749,14 +756,17 @@ function accountLabel(a: { accountDisplayName: string | null; institutionName: s
  * `get_financial_summary` tool so the number Claude quotes is the number the
  * screen shows.
  */
-export async function buildSummary(userId: string, scope: CalcScope) {
+export async function buildSummary(userId: string, scope: CalcScope, opts: { month?: string } = {}) {
   const [accounts, transferInfo, manual] = await Promise.all([
     getAccounts(userId),
     getConfirmedTransferIds(userId),
     loadManualHoldings().catch(() => [] as ManualHolding[]),
   ]);
 
-  const month = scope.startDate?.slice(0, 7) ?? new Date().toISOString().slice(0, 7);
+  // A scope without dates means the caller's current month — the user's
+  // month, which the route and the chat tool pass; the host's UTC month is
+  // only the last resort.
+  const month = scope.startDate?.slice(0, 7) ?? opts.month ?? new Date().toISOString().slice(0, 7);
   const bounds = monthBounds(month);
   const effective: CalcScope = {
     ...scope,

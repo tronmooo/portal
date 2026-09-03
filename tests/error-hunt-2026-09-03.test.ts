@@ -2973,3 +2973,43 @@ describe("D257 cron writes invalidate the user's caches", () => {
     expect((scan.match(/userWrote = true/g) || []).length).toBe(3);
   });
 });
+
+// ── D258: no user-facing default reads the host's clock — "today" and "this
+// month" come from the user's timezone in the AI engine, the cashflow default,
+// the connected-finance routes and the finance chat tool.
+describe("D258 host-clock defaults", () => {
+  const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
+  it("ai-engine: document extraction and delete_journal use the user's today", () => {
+    const src = read("../server/ai-engine.ts");
+    expect(src).not.toMatch(/today: getUserToday\(\)/);
+    expect(src).not.toMatch(/const today = new Date\(\)\.toLocaleDateString\('en-CA'\)/);
+    expect((src.match(/getUserToday\(aiUserTimezone\(\)\)/g) || []).length).toBeGreaterThanOrEqual(3);
+  });
+  it("storage: getCashflow defaults to the user's month", () => {
+    const src = read("../server/supabase-storage.ts");
+    const i = src.indexOf("async getCashflow(month?: string)");
+    expect(src.slice(i, i + 500)).toContain("month || getUserCurrentMonth(this._timezone)");
+  });
+  it("finance routes and the finance chat tool default the month from the user's zone", () => {
+    const fr = read("../server/finance-routes.ts");
+    // The host's month survives only as buildSummary's last resort behind the caller's month.
+    expect((fr.match(/new Date\(\)\.toISOString\(\)\.slice\(0, 7\)/g) || []).length).toBe(1);
+    expect(fr).toContain("scope.startDate?.slice(0, 7) ?? opts.month ?? new Date().toISOString().slice(0, 7)");
+    expect((fr.match(/currentMonthFor\(req\)/g) || []).length).toBe(3);
+    expect(fr).toContain('const tz = req.headers["x-timezone"]');
+    const tool = read("../server/finance-ai-tools.ts");
+    expect(tool).toContain("buildSummary(userId, scope, { month: getUserCurrentMonth(");
+  });
+});
+
+// ── D259: the admin tracker-entry cleanup only treats negatives as garbage in
+// health-type trackers; finance/custom trackers record them on purpose.
+describe("D259 tracker cleanup keeps legitimate negative entries", () => {
+  it("the negative-value rule is gated on a health category", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    const i = src.indexOf('app.post("/api/cleanup/tracker-entries"');
+    const block = src.slice(i, i + 4000);
+    expect(src.slice(i - 400, i)).toContain('HEALTH_TRACKER_CATEGORIES = new Set(["health", "fitness", "nutrition", "sleep", "medication"])');
+    expect(block).toContain("healthType && Object.values(vals).some((v: any) => typeof v === 'number' && v < 0)");
+  });
+});
