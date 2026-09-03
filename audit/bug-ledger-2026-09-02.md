@@ -1171,3 +1171,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - Production cross-user sweep (read-only, 23:55 UTC): no asset, liability, liability-asset or entity link and no task, expense or document links a profile of another user.
 - s256 (7/7): user B cannot undo A's finance import, move A's collateral link, rewrite A's owners, read A's ownership history or profile-bootstrap, or see A's caps; B's dismissals touch only B's list; A's data is unchanged afterwards.
 - Replica batch on the final build (cache on): s230–s235, s237–s239, s242–s244, s247, s248, s250, s251, s253, s254, s256 all green.
+- s257 (3/3, cache on): three simultaneous edits of different profile fields all land; an edit carrying a stale version is refused with 409 and the newer value stays; two simultaneous task edits of different fields both land.
