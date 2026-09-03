@@ -250,3 +250,34 @@ describe("buildChatMutation — the { result: row } tool family", () => {
     expect(buildChatMutation("create_task", { success: true, deduped: true }, { id: "t1" })).toBeNull();
   });
 });
+
+// D121 — the optimistic insert decided list membership with only
+// `{ selectedIds, allProfiles }`, so a task created for a co-owned car
+// never landed in the co-owner's filtered list until the next refetch.
+describe("D121: an optimistic insert honours co-ownership", () => {
+  const LINDA = "linda-1";
+  const CAR = "car-1";
+  const carTask = () => createTask({ row: { id: "task-new", title: "Oil change", linkedProfiles: [CAR] } });
+  beforeEach(() => {
+    queryClient.setQueryData(["/api/profiles"], [
+      ...PROFILES,
+      { id: LINDA, type: "person", name: "Linda" },
+      { id: CAR, type: "vehicle", name: "Honda", parentProfileId: SELF },
+    ]);
+    queryClient.setQueryData(["/api/tasks", "selected", LINDA], []);
+    queryClient.setQueryData(["/api/tasks", "selected", MIKE], []);
+    queryClient.setQueryData(["/api/tasks", "selected", SELF], []);
+  });
+  it("a car-linked task lands in the co-owner's list and the owner's, not in a stranger's", () => {
+    queryClient.setQueryData(["/api/asset-party-links"], [{ id: "apl", assetProfileId: CAR, partyProfileId: LINDA, ownershipPercentage: 50 }]);
+    applyRowPatches([carTask()]);
+    expect((queryClient.getQueryData(["/api/tasks", "selected", LINDA]) as any[]).map(t => t.title)).toEqual(["Oil change"]);
+    expect((queryClient.getQueryData(["/api/tasks", "selected", SELF]) as any[]).map(t => t.title)).toEqual(["Oil change"]);
+    expect(queryClient.getQueryData(["/api/tasks", "selected", MIKE])).toEqual([]);
+  });
+  it("without cached links the co-owner's list is left to the refetch", () => {
+    applyRowPatches([carTask()]);
+    expect(queryClient.getQueryData(["/api/tasks", "selected", LINDA])).toEqual([]);
+    expect((queryClient.getQueryData(["/api/tasks", "selected", SELF]) as any[]).map(t => t.title)).toEqual(["Oil change"]);
+  });
+});

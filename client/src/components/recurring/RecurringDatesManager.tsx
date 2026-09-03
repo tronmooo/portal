@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { useProfileFilterCtx } from "@/hooks/useProfileFilterCtx";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -699,6 +700,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
   });
   const { data: profilesRaw } = useQuery<any>({ queryKey: ["/api/profiles"] });
   const profiles: any[] = Array.isArray(profilesRaw) ? profilesRaw : (profilesRaw?.data ?? []);
+  const seriesScopeCtx = useProfileFilterCtx(filterIds, profiles);
 
   // ONE source for every date on this screen. The hook fetches each system's
   // records, runs them through the adapters and the occurrence engine, and
@@ -711,7 +713,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
   const series = useMemo(() => {
     let list = (Array.isArray(events) ? events : []).filter(e => e.recurrence && e.recurrence !== "none");
     if (filterMode === "selected" && filterIds.length > 0) {
-      list = list.filter(e => passesProfileFilter(e.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles }));
+      list = list.filter(e => passesProfileFilter(e.linkedProfiles, seriesScopeCtx));
     }
     return list
       .map(e => ({ ev: e, status: seriesStatus(e, today), next: nextOccurrence(e, today) }))

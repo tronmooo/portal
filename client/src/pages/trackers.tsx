@@ -21,7 +21,7 @@ import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { liabilityFamily } from "@shared/liability-types";
-import { passesProfileFilter } from "@shared/profile-filter";
+import { passesProfileFilter, pushdownSelection } from "@shared/profile-filter";
 import {
   ASSET_TAB_TYPES, assetTypeLabel, isAssetTabProfile, isLiabilityTabProfile,
   resolveAssetValue,
@@ -5895,7 +5895,7 @@ export default function TrackersPage() {
     if (filterMode === "selected" && filterIds.length > 0) {
       // Canonical rule (orphan docs with no linkedProfiles belong to self) —
       // the inline `.some(includes)` used to hide them when filtering to self.
-      return passesProfileFilter(d.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [] });
+      return passesProfileFilter(d.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [], assetPartyLinks });
     }
     return true;
   }), [allDocuments, filterMode, filterIds, profiles]);
@@ -5996,7 +5996,7 @@ export default function TrackersPage() {
   const filteredTrackers = useMemo(() => (trackers || []).filter(t => {
     if (filterMode === "selected" && filterIds.length > 0) {
       // Canonical rule so orphan trackers (no linkedProfiles) still show for self.
-      if (!passesProfileFilter(t.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [] })) return false;
+      if (!passesProfileFilter(t.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles || [], assetPartyLinks })) return false;
     }
     // The tracker-category chip filter only applies when the user is actually
     // on the Trackers tab. If they’re viewing "All" or some other section, a
@@ -6006,7 +6006,7 @@ export default function TrackersPage() {
     if (sectionFilter === "trackers" && trackerCatFilter !== "all" && normalizeFilter(getCanonicalGroup(t.category)) !== normalizeFilter(trackerCatFilter)) return false;
     return true;
   }).sort((a, b) => cleanTrackerName(a.name).toLowerCase().localeCompare(cleanTrackerName(b.name).toLowerCase())
-  ), [trackers, filterMode, filterIds, trackerCatFilter, sectionFilter, profiles]);
+  ), [trackers, filterMode, filterIds, trackerCatFilter, sectionFilter, profiles, assetPartyLinks]);
 
   // Group trackers by canonical group — memoized
   const { grouped, sortedCats } = useMemo(() => {
@@ -6568,7 +6568,7 @@ export default function TrackersPage() {
               // Canonical rule: orphan docs (no linked person) belong to self —
               // consistent with finalOwners above, which already attributes them
               // to self. The old `.some(includes)` hid them when filtering to self.
-              if (!passesProfileFilter(linked, { selectedIds: filterIds, allProfiles: profiles || [] })) return;
+              if (!passesProfileFilter(linked, { selectedIds: filterIds, allProfiles: profiles || [], assetPartyLinks })) return;
             }
             const sub = ((d as any).type || "Document").toString();
             const dt = d.createdAt ? new Date(d.createdAt).toLocaleDateString() : "";
@@ -7714,8 +7714,24 @@ export default function TrackersPage() {
           const personGroups: Record<string, { name: string; type: string; trackers: typeof allTrackersList }> = {};
           const selfProfile = (profiles || []).find(p => p.type === 'self');
           const selfId = selfProfile?.id || '';
-          // When a profile filter is active, only group under filtered profile IDs
+          // When a profile filter is active, only group under filtered profile IDs.
+          // A tracker reaches a selected person through the same rule the list
+          // was filtered with (owner chain + co-ownership): the car's mileage
+          // tracker files under "Me" (the car is mine) or under Linda (she
+          // co-owns it). Matching the raw id dropped it after the filter had
+          // already let it through, so it was fetched but never drawn.
           const activeFilterIds = (filterMode === "selected" && filterIds.length > 0) ? new Set(filterIds) : null;
+          const reachOf = new Map<string, Set<string>>();
+          if (activeFilterIds) {
+            for (const sid of filterIds) {
+              reachOf.set(sid, new Set(pushdownSelection({ selectedIds: [sid], allProfiles: (profiles || []) as any, assetPartyLinks })));
+            }
+          }
+          const groupsFor = (pid: string): string[] => {
+            if (!activeFilterIds) return [pid];
+            if (activeFilterIds.has(pid)) return [pid];
+            return filterIds.filter((sid) => reachOf.get(sid)?.has(pid));
+          };
           for (const t of allTrackersList) {
             const lp = t.linkedProfiles || [];
             if (lp.length === 0) {
@@ -7725,12 +7741,15 @@ export default function TrackersPage() {
                 personGroups[key].trackers.push(t);
               }
             } else {
+              const placed = new Set<string>();
               for (const pid of lp) {
-                // Skip person groups that don't match the active filter
-                if (activeFilterIds && !activeFilterIds.has(pid)) continue;
-                const prof = (profiles || []).find(p => p.id === pid);
-                if (!personGroups[pid]) personGroups[pid] = { name: prof?.name || 'Unknown', type: prof?.type || 'person', trackers: [] };
-                personGroups[pid].trackers.push(t);
+                for (const gid of groupsFor(pid)) {
+                  if (placed.has(gid)) continue;
+                  placed.add(gid);
+                  const prof = (profiles || []).find(p => p.id === gid);
+                  if (!personGroups[gid]) personGroups[gid] = { name: prof?.name || 'Unknown', type: prof?.type || 'person', trackers: [] };
+                  personGroups[gid].trackers.push(t);
+                }
               }
             }
           }

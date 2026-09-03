@@ -1307,10 +1307,28 @@ async function filterByProfileScope<T>(
   // (shared/profile-filter.effectiveSelection) — the bills route used to
   // hide the co-owned car's insurance while the expenses route showed its
   // fuel.
-  const assetPartyLinks = await (storage.getAssetPartyLinks?.() ?? Promise.resolve([])).catch(() => [] as any[]);
-  return items.filter((item: any) =>
-    passesProfileFilter(item?.linkedProfiles, { selectedIds: ids, allProfiles, assetPartyLinks })
-  );
+  const ctx = await profileFilterCtx(ids, allProfiles);
+  return items.filter((item: any) => passesProfileFilter(item?.linkedProfiles, ctx));
+}
+
+/**
+ * THE context for `passesProfileFilter` on the server: the selection, the
+ * profile tree and the co-ownership links. Every inline
+ * `{ selectedIds, allProfiles }` literal that used to be built at a call site
+ * silently dropped the co-ownership half of the rule (the bootstrap seeds,
+ * insights, wellness, cashflow, notifications, search, incomes), so a
+ * co-owner's dashboard disagreed with the lists it seeds. No selection ⇒ no
+ * link fetch.
+ */
+async function profileFilterCtx(
+  ids: string[],
+  allProfiles: Array<{ id: string; type?: string; parentProfileId?: string | null }>,
+  assetPartyLinks?: any[] | null,
+): Promise<{ selectedIds: string[]; allProfiles: any[]; assetPartyLinks: any[] }> {
+  const links = Array.isArray(assetPartyLinks)
+    ? assetPartyLinks
+    : (ids.length > 0 ? await (storage.getAssetPartyLinks?.() ?? Promise.resolve([])).catch(() => [] as any[]) : []);
+  return { selectedIds: ids, allProfiles, assetPartyLinks: links || [] };
 }
 
 export async function registerRoutes(
@@ -4205,11 +4223,10 @@ ${JSON.stringify(ctx, null, 2)}`;
       // BUG-20260528-profile-filter-leakage: previously inline orphan check
       // diverged from canonical passesProfileFilter. Replaced with shared
       // function so /api/dashboard-bootstrap matches /api/expenses exactly.
+      const bootCtx = await profileFilterCtx(filterIds || [], profiles, assetPartyLinks);
       const filteredExpenses = (!filterIds || filterIds.length === 0)
         ? expensesForBudget
-        : expensesForBudget.filter((e: any) =>
-            passesProfileFilter(e.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles })
-          );
+        : expensesForBudget.filter((e: any) => passesProfileFilter(e.linkedProfiles, bootCtx));
       const monthExpenses = filteredExpenses.filter((e: any) => (e.date || "").slice(0, 7) === month);
       const totalSpent = monthExpenses.reduce((s: number, e: any) => s + (e.amount || 0), 0);
       // BUG (user report 2026-06-27 "Craig has no budget but it shows $2,150"):
@@ -4232,9 +4249,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // BUG-20260528-profile-filter-leakage: same fix for incomes path.
       const filteredIncomes = (!filterIds || filterIds.length === 0)
         ? incomes
-        : incomes.filter((i: any) =>
-            passesProfileFilter(i.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles })
-          );
+        : incomes.filter((i: any) => passesProfileFilter(i.linkedProfiles, bootCtx));
 
       return {
         stats,
@@ -4252,9 +4267,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         budgets: scopedBudgets,
         obligations: ((!filterIds || filterIds.length === 0)
           ? obligationsAll
-          : obligationsAll.filter((o: any) =>
-              passesProfileFilter(o.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles })
-            )).slice(0, 100),
+          : obligationsAll.filter((o: any) => passesProfileFilter(o.linkedProfiles, bootCtx))).slice(0, 100),
         assetPartyLinks: assetPartyLinks || [],
         liabilityProfileLinks: liabilityProfileLinks || [],
         // [PERF 2026-07-16] Briefing/Upcoming seed datasets — each filtered with
@@ -4298,7 +4311,7 @@ ${JSON.stringify(ctx, null, 2)}`;
                 : [];
               const entity = collection.find((x: any) => x?.id === n.entityId);
               if (!entity) return true;
-              return passesProfileFilter(entity.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles });
+              return passesProfileFilter(entity.linkedProfiles, bootCtx);
             }),
         // Hero trend-line series (see nwProfileId above). Already scoped by the
         // storage call, so no extra filtering.
@@ -4309,9 +4322,7 @@ ${JSON.stringify(ctx, null, 2)}`;
 
       function scopeByLinkedProfiles<T extends { linkedProfiles?: string[] }>(rows: T[]): T[] {
         if (!filterIds || filterIds.length === 0) return rows || [];
-        return (rows || []).filter((x: any) =>
-          passesProfileFilter(x.linkedProfiles, { selectedIds: filterIds!, allProfiles: profiles })
-        );
+        return (rows || []).filter((x: any) => passesProfileFilter(x.linkedProfiles, bootCtx));
       }
     });
 
@@ -4369,7 +4380,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // delegates to the shared function.
       const filterActive = ids.length > 0;
       const fp = ids.length === 1 ? ids[0] : undefined; // back-compat for downstream code below
-      const filterCtx = { selectedIds: ids, allProfiles };
+      const filterCtx = await profileFilterCtx(ids, allProfiles);
       const mp = (linked: string[] | null | undefined) =>
         !filterActive || passesProfileFilter(linked, filterCtx);
       const profiles = allProfiles;
@@ -4406,7 +4417,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         storage.getTrackers(), storage.getHabits(), storage.getObligations(), storage.getProfiles(),
       ]);
       const filterActive = ids.length > 0;
-      const filterCtx = { selectedIds: ids, allProfiles: profiles };
+      const filterCtx = await profileFilterCtx(ids, profiles);
       const scoped = <T extends { linkedProfiles?: string[] }>(rows: T[]) =>
         !filterActive ? rows : rows.filter((r) => passesProfileFilter((r as any).linkedProfiles, filterCtx));
       const findings = computeKeyFindings({
@@ -6742,7 +6753,7 @@ Rules:
       // matches (legacy cashflow rows store the owner in profileId, not
       // linkedProfiles).
       const allProfiles = await storage.getProfiles();
-      const filterCtx = { selectedIds: ids, allProfiles };
+      const filterCtx = await profileFilterCtx(ids, allProfiles);
       items = items.filter((item: any) => {
         const linked = item.linkedProfiles || [];
         if (item.profileId && ids.includes(item.profileId)) return true;
@@ -8450,6 +8461,7 @@ Rules:
           storage.getDocuments(), storage.getTasks(), storage.getObligations(), storage.getHabits(),
           storage.getProfiles(),
         ]);
+        const notifCtx = await profileFilterCtx(ids, notifProfiles as any[]);
         const matchesProfile = (entityType: string | undefined, entityId: string | undefined): boolean => {
           if (!entityType || !entityId) return false;
           if (entityType === "profile") return ids.includes(entityId);
@@ -8462,7 +8474,7 @@ Rules:
           if (!ent) return false;
           // Canonical rule (shared/profile-filter.ts): an unlinked item is
           // Self's, so its alerts must not vanish under a Self filter.
-          return passesProfileFilter(ent.linkedProfiles, { selectedIds: ids, allProfiles: notifProfiles as any[] });
+          return passesProfileFilter(ent.linkedProfiles, notifCtx);
         };
         // Custom (user-created) notifications aren't entity-derived — they
         // survive every profile filter rather than silently vanishing.
@@ -8516,7 +8528,7 @@ Rules:
             if (isAssetOrLiability(r.type)) return itemVisibleForSelection(r.id, ids, ownerIndex, selfIds);
             return false;
           }
-          return passesProfileFilter(r.linkedProfiles, { selectedIds: ids, allProfiles: allProfiles as any[] });
+          return passesProfileFilter(r.linkedProfiles, { selectedIds: ids, allProfiles: allProfiles as any[], assetPartyLinks: assetLinks });
         });
       }
       res.json(results);
@@ -9773,7 +9785,7 @@ No emojis. No prose outside the JSON.`,
       // Use the unified passesProfileFilter rule so orphans only fall through
       // when a self profile is in the selection.
       const allProfiles = await storage.getProfiles();
-      const filterCtx = { selectedIds: filterProfileIds, allProfiles };
+      const filterCtx = await profileFilterCtx(filterProfileIds, allProfiles);
       incomes = incomes.filter((i: any) => passesProfileFilter(i.linkedProfiles || [], filterCtx));
     }
     res.json(incomes);

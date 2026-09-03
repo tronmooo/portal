@@ -15619,7 +15619,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   const selfProfileId = allProfiles.find((p: any) => p.type === "self")?.id || '';
   const profileFilterIds = (options?.profileFilterIds || []).filter((id: any) => typeof id === "string" && id.length > 0);
   if (profileFilterIds.length > 0) {
-    const filterCtx = { selectedIds: profileFilterIds, allProfiles };
+    // The link tables feed both the entity rule (co-ownership widens the
+    // selection — shared/profile-filter) and the profile rule below.
+    const [allAssetLinks, allLiabLinks] = await Promise.all([
+      storage.getAssetPartyLinks().catch(() => [] as any[]),
+      storage.getLiabilityProfileLinks().catch(() => [] as any[]),
+    ]);
+    const filterCtx = { selectedIds: profileFilterIds, allProfiles, assetPartyLinks: allAssetLinks };
     // Entities: same rule the UI and REST APIs use (shared/profile-filter.ts).
     // Orphans (no linkedProfiles) count as self's per the longstanding rule.
     const entityInScope = (e: any) => passesProfileFilter(e?.linkedProfiles, filterCtx);
@@ -15633,10 +15639,6 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     goals = goals.filter(entityInScope);
     // Profiles: keep the selected ids, their descendants (parentProfileId
     // chain), and co-owned asset/liability profiles (relational link tables).
-    const [allAssetLinks, allLiabLinks] = await Promise.all([
-      storage.getAssetPartyLinks().catch(() => [] as any[]),
-      storage.getLiabilityProfileLinks().catch(() => [] as any[]),
-    ]);
     const selectedSet = new Set(profileFilterIds);
     const selfIds = selfIdsFrom(allProfiles);
     const profileInScope = (p: any): boolean => {

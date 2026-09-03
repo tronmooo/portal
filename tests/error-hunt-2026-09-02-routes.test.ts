@@ -791,6 +791,28 @@ describe("D120: GET /api/documents?profileIds=<person> reaches documents through
   });
 });
 
+// D122 — routes that built the filter context inline (incomes, bootstrap
+// seeds, insights, notifications, search, cashflow) dropped co-ownership.
+describe("D122: inline server contexts carry co-ownership (incomes)", () => {
+  const LINDA = { id: "linda-1", type: "person", name: "Linda" };
+  const CAR = { id: "car-1", type: "vehicle", name: "Honda", parentProfileId: SELF.id };
+  const incomes = [
+    { id: "inc-car", source: "Car share payout", amount: 120, date: "2026-09-01", linkedProfiles: ["car-1"] },
+    { id: "inc-self", source: "Salary", amount: 5000, date: "2026-09-01", linkedProfiles: [SELF.id] },
+  ];
+  it("a co-owner's income list includes the car's income; without the link it does not", async () => {
+    h = await boot({ profiles: [SELF, LINDA, CAR], incomes }, (storage) => {
+      storage.getAssetPartyLinks = async () => [{ id: "apl-1", assetProfileId: "car-1", partyProfileId: "linda-1", ownershipPercentage: 50 }];
+    });
+    const r = await h.api("GET", `/api/incomes?profileIds=${LINDA.id}`);
+    expect(r.status).toBe(200);
+    expect(r.data.map((i: any) => i.source)).toEqual(["Car share payout"]);
+    h = await boot({ profiles: [SELF, LINDA, CAR], incomes });
+    const n = await h.api("GET", `/api/incomes?profileIds=${LINDA.id}`);
+    expect(n.data).toEqual([]);
+  });
+});
+
 // D97 — the bill-create dedupe was written only after the insert finished,
 // so two identical creates arriving together both inserted.
 describe("D97: two identical bill creates arriving together insert once", () => {

@@ -19,6 +19,7 @@ import { withFullLimit } from "@/lib/list-limit";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { formatStoredDate, farFutureWarning } from "@/lib/dates";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { useProfileFilterCtx } from "@/hooks/useProfileFilterCtx";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -608,7 +609,7 @@ export default function TasksPage() {
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
-  const { data: scopePartyLinks = [] } = useQuery<any[]>({ queryKey: ["/api/asset-party-links"], queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()), staleTime: 5 * 60_000 });
+  const scopeCtx = useProfileFilterCtx(filterIds, allProfiles);
 
   // Apply profile filter client-side (must be before early returns — Rules of Hooks).
   // P2.4 remediation: use the unified passesProfileFilter rule
@@ -617,13 +618,8 @@ export default function TasksPage() {
   // self profile — matching finance/journal/server semantics.
   const profileFilteredTasks = useMemo(() => {
     if (filterMode === "everyone" || filterIds.length === 0) return tasks || [];
-    const ctx = {
-      selectedIds: filterIds,
-      allProfiles: allProfiles.map(p => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
-      assetPartyLinks: scopePartyLinks,
-    };
-    return (tasks || []).filter(t => passesProfileFilter(t.linkedProfiles, ctx));
-  }, [tasks, filterMode, filterIds, allProfiles]);
+    return (tasks || []).filter(t => passesProfileFilter(t.linkedProfiles, scopeCtx));
+  }, [tasks, filterMode, filterIds, scopeCtx]);
   const activeTasks = useMemo(() => profileFilteredTasks.filter(t => t.status !== "done"), [profileFilteredTasks]);
   const completedTasks = useMemo(() => profileFilteredTasks.filter(t => t.status === "done"), [profileFilteredTasks]);
   // Render the lists in pages: every card is a swipeable tree with several

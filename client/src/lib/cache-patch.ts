@@ -87,7 +87,10 @@ function rowBelongsInScope(row: Record<string, any>, selectedIds: string[]): boo
   const linked = Array.isArray(row.linkedProfiles) ? row.linkedProfiles : undefined;
   // A profile row is in scope when it IS one of the selected profiles.
   if (!linked && typeof row.id === "string" && selectedIds.includes(row.id)) return true;
-  return passesProfileFilter(linked, { selectedIds, allProfiles });
+  // Co-ownership widens the selection (a co-owner's car): read the cached
+  // links so a new car task lands in Linda's list the same way a refetch would.
+  const cachedLinks = queryClient.getQueryData<any[]>(["/api/asset-party-links"]);
+  return passesProfileFilter(linked, { selectedIds, allProfiles, assetPartyLinks: Array.isArray(cachedLinks) ? cachedLinks : [] });
 }
 
 /** Apply one mutation to one cached list. Returns the new list, or the old one. */

@@ -8,6 +8,7 @@ import { invalidateDomain } from "@/lib/cache-bus";
 import { withFullLimit } from "@/lib/list-limit";
 import { getFilterLabel } from "@/lib/profileFilter";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { useProfileFilterCtx } from "@/hooks/useProfileFilterCtx";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -440,8 +441,9 @@ export default function HabitsPage() {
   // Client-side profile filter — the canonical rule (shared/profile-filter.ts):
   // an unlinked habit belongs to Self, so it shows under a Self selection and
   // not under every other person's view as the old inline check did.
+  const habitScopeCtx = useProfileFilterCtx(filterIds, profiles as any[]);
   const habits = filterMode === "selected" && filterIds.length > 0
-    ? allHabits.filter(h => passesProfileFilter(h.linkedProfiles, { selectedIds: filterIds, allProfiles: profiles as any[] }))
+    ? allHabits.filter(h => passesProfileFilter(h.linkedProfiles, habitScopeCtx))
     : allHabits;
 
   const handleCreate = (force?: boolean) => {

@@ -10,6 +10,7 @@ import { parseLocalDate } from "@/lib/format";
 import { getFilterLabel } from "@/lib/profileFilter";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { useProfileFilterCtx } from "@/hooks/useProfileFilterCtx";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -228,9 +229,6 @@ export default function JournalPage() {
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
 
-  // Co-ownership widens a person's scope to the assets they co-own (shared/profile-filter).
-
-  const { data: scopePartyLinks = [] } = useQuery<any[]>({ queryKey: ["/api/asset-party-links"], queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()), staleTime: 5 * 60_000 });
   // Default a new entry's profile to the ACTIVE scope (the profile the user is
   // working in), not unconditionally "me".
   const activeCreateProfileId = useActiveCreateProfileId(profiles);
@@ -241,6 +239,8 @@ export default function JournalPage() {
   // Reactive read of the active profile scope (single source of truth) so this
   // page re-renders the instant the selection changes anywhere in the app.
   const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
+  // Co-ownership widens a person's scope to the assets they co-own (shared/profile-filter).
+  const scopeCtx = useProfileFilterCtx(filterIds, profiles);
   const filterLabel = getFilterLabel();
   const profileParam = filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
 
@@ -255,11 +255,7 @@ export default function JournalPage() {
   // they leak into brand-new profiles (e.g. EMPTYPROBE_QA showed a phantom "1" badge).
   const entries = filterMode === "selected" && filterIds.length > 0
     ? allEntries.filter(e =>
-        passesProfileFilter((e as any).linkedProfiles, {
-          selectedIds: filterIds,
-          allProfiles: profiles.map(p => ({ id: p.id, type: p.type, parentProfileId: (p as any).parentProfileId ?? null })),
-          assetPartyLinks: scopePartyLinks,
-        })
+        passesProfileFilter((e as any).linkedProfiles, scopeCtx)
       )
     : allEntries;
 

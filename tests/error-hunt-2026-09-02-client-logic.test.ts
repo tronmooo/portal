@@ -307,7 +307,12 @@ describe("D117: every client scope filter keeps parentProfileId", () => {
     for (const f of files) {
       const src = read(f);
       expect(src, f).not.toMatch(/allProfiles:\s*[^\n]*\.map\([^)]*=>\s*\(\{\s*id:\s*p\.id,\s*type:\s*p\.type\s*\}\)\)/);
-      expect(src, f).toMatch(/parentProfileId/);
+      // Either the page keeps the parent itself or it delegates to the one
+      // shared hook (D121), which does.
+      expect(/parentProfileId/.test(src) || /useProfileFilterCtx\(/.test(src), f).toBe(true);
     }
+    const hook = read("client/src/hooks/useProfileFilterCtx.ts");
+    expect(hook).toMatch(/parentProfileId/);
+    expect(hook).toMatch(/assetPartyLinks/);
   });
 });
