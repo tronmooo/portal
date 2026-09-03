@@ -938,3 +938,35 @@ describe("D177: updateOccurrenceOverride is an optimistic-concurrency write", ()
     expect(updates[0].fields.occurrences["2026-09-10"].charges.map((c: any) => c.id)).toEqual(["c1", "c2"]);
   });
 });
+
+// ─── D178: edits write only the columns they name; profile fields are CAS-guarded ─
+describe("D178: partial edits do not overwrite each other", () => {
+  it("updateTask writes only the patched column, not the whole row it had read", async () => {
+    const updates: any[] = [];
+    const { client } = chainClient((table, op, payload) => {
+      if (table === "tasks" && op === "select") return { data: [{ id: "t-1", title: "Milk", status: "todo", priority: "medium", due_date: "2026-09-10", tags: [], linked_profiles: ["self-1"], updated_at: "u1" }], error: null };
+      if (table === "tasks" && op === "update") { updates.push(payload); return { data: [{ id: "t-1" }], error: null }; }
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client, assertNoWriteConflictFor: async () => undefined, guardedWrite: async (q: any) => q, getTask: async () => ({ id: "t-1", title: "Milk", status: "todo", priority: "medium", dueDate: "2026-09-10", tags: [], linkedProfiles: ["self-1"] }), applyOwnershipPatch: async () => undefined, clearRequestMemo: () => {} });
+    await s.updateTask("t-1", { priority: "high" });
+    expect(Object.keys(updates[0]).filter((k) => k !== "updated_at").sort()).toEqual(["priority"]);
+    expect(updates[0].priority).toBe("high");
+  });
+  it("updateProfile: a name edit leaves `fields` alone; a field edit that lost the race re-reads and re-merges", async () => {
+    const updates: any[] = []; let reads = 0;
+    const rowA = { id: "p-1", type: "person", name: "Mike", fields: { city: "Austin" }, tags: [], notes: "", documents: [], updated_at: "u1" };
+    const rowB = { ...rowA, fields: { city: "Austin", phone: "+1 512 555 0100" }, updated_at: "u2" };
+    const { client } = chainClient((table, op, payload) => {
+      if (table === "profiles" && op === "select") { reads++; return { data: [reads === 1 ? rowA : rowB], error: null }; }
+      if (table === "profiles" && op === "update") { updates.push(payload); return { data: updates.length === 1 ? [] : [{ id: "p-1" }], error: null }; }
+      return { data: [], error: null };
+    });
+    const profiles: any[] = [rowA, rowB];
+    const s = bareStorage({ supabase: client, getProfile: async () => { const r = profiles[Math.min(reads, 1)]; reads++; return { id: r.id, type: r.type, name: r.name, fields: r.fields, tags: r.tags, notes: r.notes, documents: r.documents, updatedAt: r.updated_at }; }, clearRequestMemo: () => {}, healOwnerPrefixedProfileNames: (x: any) => x, setOwners: async () => undefined, applyOwnershipPatch: async () => undefined, bumpDataVersion: async () => undefined });
+    await s.updateProfile("p-1", { fields: { email: "m@example.com" } });
+    expect(updates).toHaveLength(2);
+    expect(updates[1].fields).toEqual({ city: "Austin", phone: "+1 512 555 0100", email: "m@example.com" });
+    expect(Object.keys(updates[1]).sort()).toEqual(["fields", "updated_at"]);
+  });
+});
