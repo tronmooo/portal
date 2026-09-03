@@ -317,6 +317,9 @@ Budgets: create, no duplicate on re-post of the same category, PATCH validation 
 ### Data repair after D111 (replica only)
 The probe left the seed habit "Morning meditation" with `startDate` 2026-02-30 and Chase Checking with `balanceAsOf` 2026-13-45; both were repaired through the API after the rebuild. Production data with such values can only exist if a client sent one; a scan for impossible day strings in habit windows and `balanceAsOf` is the repair to run there.
 
+### Read-only relationship, date-rule and bootstrap routes as another user (probe s75) — verified working
+User B cannot read A's relationship graph (self or car), A's date rules, A's profile bootstrap or detail, nor the car's parties or liabilities; A reads their own graph and rules.
+
 ### Chat tools and impossible days — verified working
 Through the real `executeTool` over the in-memory harness, `create_expense` (date 2026-09-31), `create_task` (dueDate 2026-02-30) and `create_event` (date 2026-02-30) each answer "Use YYYY-MM-DD" and write nothing — the tool payload schemas already gate on a real calendar day.
 
