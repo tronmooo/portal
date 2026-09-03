@@ -353,6 +353,7 @@ An expense added in tab A appeared in tab B's Finance list without a reload (Bro
 `origin/main` had taken a 47-file performance branch (one refetch per write, scope-safe query URLs, full-by-default lists); merged cleanly, tsc clean, 4436 tests green, pushed to main. The probe battery re-run on the merged build (s8–s27) found no interaction: every remaining probe failure was a known by-design item, a probe expectation, or the stale car id in s9 (the seed's car was recreated after s15). The crawl of the merged build found the four "[object Object]" accounts (D116, sweep residue) and nothing else.
 
 ### Session environment note
+A third out-of-memory restart happened when a rebuild, a Playwright flow and the full vitest run were chained in one command; the interrupted build left no bundle and the app could not start until it was rebuilt. Each of those three now runs in its own turn. The uncommitted D140 edits survived the restart.
 The 16 GB sandbox restarted twice (OOM) when a production build, the full vitest run, a Playwright crawl and a probe sweep overlapped; the local stack (Postgres, PostgREST, gateway, app) came back from disk each time (`scratchpad/stack/start-stack.sh`) and every commit had already been pushed. Verification steps are now run one at a time.
 
 ### Replica caveat found this round
