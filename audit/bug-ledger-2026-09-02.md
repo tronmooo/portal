@@ -1045,3 +1045,4 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - Full suite after D251: 260 files / 4665 tests green.
 - Full suite after the ownership-tool guard: 260 files / 4666 tests green.
 - Replica after the final D251 build: s227 4/4, s229 4/4, s230 4/4, s225 5/5, s223 4/4; s228 4/6 (the two misses are the documented cascade design — sole-linked deed and expense go with the house).
+- Full suite after the legacy-matcher guard: 260 files / 4667 tests green.
