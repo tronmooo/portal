@@ -22,6 +22,8 @@
 // - The envelope must NEVER break a tool: any error here returns the raw
 //   result unchanged.
 import type { IStorage } from "./storage";
+import { fieldPatchBetween } from "@shared/field-patch";
+import { isAccountProfile } from "@shared/finance-accounts";
 import type { ChatMutation } from "@shared/schema";
 import { domainsForEntity, endpointForEntity, type Domain } from "@shared/entity-domains";
 import { deleteDocumentEverywhere } from "./document-deletion";
@@ -491,7 +493,42 @@ export async function executeReversePlan(
     case "reapply_before": {
       const fn = UPDATE_FN[type];
       if (!fn || !id || !plan.before) return { ok: false, description: `No before-state to re-apply for ${name}.` };
-      const snapshot = cleanSnapshot(plan.before);
+      let snapshot = cleanSnapshot(plan.before);
+      // With the post-write row in hand, undo touches ONLY what the tool
+      // changed: the keys that differ between after and before go back to
+      // before, keys the tool added go away, and everything else — a field
+      // edited from a form since, a balance a bill moved since — stands.
+      // Re-applying the whole before-state put all of it back.
+      const afterRow = (log as any).after ?? plan.after;
+      if (afterRow && typeof afterRow === "object" && afterRow.id === id) {
+        const after = cleanSnapshot(afterRow);
+        const changed = fieldPatchBetween(after, snapshot);
+        for (const k of Object.keys(changed)) if (changed[k] === null && k !== "fields") delete changed[k];
+        if (type === "profile") {
+          const beforeFields = (snapshot.fields && typeof snapshot.fields === "object") ? snapshot.fields as Record<string, any> : {};
+          const afterFields = (after.fields && typeof after.fields === "object") ? after.fields as Record<string, any> : {};
+          const fieldsPatch = fieldPatchBetween(afterFields, beforeFields);
+          // A balance the tool moved is undone as the opposite MOVE, not as
+          // the old figure: a bill paid from the account since then keeps
+          // its debit.
+          const balanceKeys = ["balance", "currentBalance", "currentValue"].filter((k) => k in fieldsPatch);
+          const canAdjust = balanceKeys.length > 0 && typeof (s as any).adjustAccountBalance === "function"
+            && isAccountProfile({ ...after, fields: afterFields });
+          if (canAdjust) {
+            const b = Number(beforeFields.balance ?? beforeFields.currentBalance ?? beforeFields.currentValue);
+            const a = Number(afterFields.balance ?? afterFields.currentBalance ?? afterFields.currentValue);
+            if (Number.isFinite(b) && Number.isFinite(a) && b !== a) {
+              await (s as any).adjustAccountBalance(id, { delta: b - a, reason: "Undo", source: "ai" });
+            }
+            for (const k of balanceKeys) delete fieldsPatch[k];
+            delete fieldsPatch.balanceHistory; delete fieldsPatch.balanceAsOf;
+          }
+          if (Object.keys(fieldsPatch).length > 0) changed.fields = fieldsPatch; else delete changed.fields;
+        }
+        if (Object.keys(changed).length === 0) return { ok: true, description: `${name} already shows its previous values.` };
+        await fn(s, id, changed);
+        return { ok: true, description: `Reverted ${name} to its previous values.` };
+      }
       if (type === "profile" && snapshot.fields && typeof snapshot.fields === "object") {
         // A profile write MERGES `fields`, so re-applying the before-state
         // alone left every field the undone edit had ADDED in place: "undo"

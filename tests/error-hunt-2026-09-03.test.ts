@@ -1325,3 +1325,31 @@ describe("D192: a reversal moves the balance even when the debt sits at 0", () =
     expect(profiles.get("card-1").fields.currentBalance).toBe(100);
   });
 });
+
+// ─── D193: chat undo touches only what the tool changed ─────────────────────
+describe("D193: 'undo' with the post-write row re-applies only the keys the tool changed", () => {
+  it("a field edited from a form after the chat edit survives the undo; the tool's field goes back", async () => {
+    const s = new MemStorage();
+    const p = await s.createProfile({ type: "person", name: "Mike", fields: { phone: "111", city: "Austin" } } as any);
+    const before = JSON.parse(JSON.stringify(await s.getProfile(p.id)));
+    const after = JSON.parse(JSON.stringify(await s.updateProfile(p.id, { fields: { city: "Dallas", email: "m@example.com" } } as any)));
+    await s.updateProfile(p.id, { fields: { phone: "222" } } as any); // the form, later
+    const out = await executeReversePlan(s, { entityType: "profile", entityId: p.id, entityName: "Mike", reversible: true, after, reversePlan: { op: "reapply_before", before } } as any);
+    expect(out.ok).toBe(true);
+    const f = (await s.getProfile(p.id))!.fields as Record<string, any>;
+    expect(f.city).toBe("Austin");
+    expect(f).not.toHaveProperty("email");
+    expect(f.phone).toBe("222");
+  });
+  it("a balance the chat moved is undone as the opposite move, keeping a debit that landed since", async () => {
+    const s = new MemStorage();
+    const acct = await s.createProfile({ type: "account", name: "Checking", fields: { balance: 1000, currentValue: 1000, accountKind: "checking" } } as any);
+    const before = JSON.parse(JSON.stringify(await s.getProfile(acct.id)));
+    const after = JSON.parse(JSON.stringify(await s.adjustAccountBalance(acct.id, { newBalance: 1200, source: "ai" })));
+    await s.adjustAccountBalance(acct.id, { delta: -50, reason: "bill", source: "payment" }); // a bill, later
+    const out = await executeReversePlan(s, { entityType: "profile", entityId: acct.id, entityName: "Checking", reversible: true, after, reversePlan: { op: "reapply_before", before } } as any);
+    expect(out.ok).toBe(true);
+    const f = (await s.getProfile(acct.id))!.fields as Record<string, any>;
+    expect(Number(f.balance ?? f.currentValue)).toBe(950);
+  });
+});
