@@ -56,6 +56,12 @@ export interface LiabilityPaymentResult {
   recurring: boolean;
 }
 
+/** A row's principal with its direction: a reversal put money back, everything else took it off. */
+export function signedPrincipal(row: { principalPortion?: number | null; paymentType?: string | null } | null | undefined): number {
+  const magnitude = Math.abs(Number(row?.principalPortion) || 0);
+  return row?.paymentType === "reversal" ? -magnitude : magnitude;
+}
+
 /**
  * Classify a payment when the caller didn't. Mirrors what the AI tool inferred,
  * kept so a chat-recorded payment still lands in the right bucket.
@@ -127,9 +133,13 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
     principal = 0;
     interest = 0;
   } else if (paymentType === "reversal") {
-    newBalance = balanceBefore + amount;
-    principal = -principal;
-    interest = -interest;
+    // A reversal puts the money back: all of it is principal (there is no
+    // period's interest to charge on money coming back), and the row's
+    // principal is exactly what the balance moves by, so an undo of the
+    // reversal takes the same figure off again.
+    principal = Math.max(0, cashTowardLoan);
+    interest = 0;
+    newBalance = balanceBefore + principal;
   } else if (paymentType === "payoff") {
     principal = balanceBefore;
     interest = Math.max(0, cashTowardLoan - balanceBefore);
@@ -239,8 +249,11 @@ export async function applyLiabilityPayment(
       liabilityProfileId: liability.id,
       paymentDate,
       amount,
-      principalPortion: principal,
-      interestPortion: interest,
+      // The ledger row stores MAGNITUDES (the table refuses a negative
+      // principal or interest); payment_type = 'reversal' carries the
+      // direction. Readers that sum principal apply the sign by type.
+      principalPortion: Math.abs(principal),
+      interestPortion: Math.abs(interest),
       fees: fees + escrow,
       remainingBalanceAfter: plan.moves ? newBalance : undefined,
       paymentType,
@@ -888,7 +901,9 @@ export async function unpayBillOccurrence(
     }
     // Debt: put the principal back, under every name readers use. A reversal-
     // type row carries negative principal, so plain addition also handles it.
-    const principal = Number(target.principalPortion) || 0;
+    // A reversal row stores its principal as a magnitude; undoing a reversal
+    // takes that money back OFF the balance.
+    const principal = signedPrincipal(target);
     const restores = !recurring && principal !== 0 && target.paymentType !== "skipped" && target.paymentType !== "deferred";
     // lastPaidDate: the latest remaining payment, or gone.
     const remaining = payments.filter((p: any) => p.id !== target.id).sort(byRecency);

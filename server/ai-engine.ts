@@ -122,7 +122,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
-import { payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
+import { signedPrincipal, payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries, stemKey } from "@shared/series-detect";
@@ -10165,7 +10165,7 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
         const annualRate = sharedAnnualRate(f);
         let payments: any[] = [];
         try { payments = await storage.getLiabilityPayments(lp.id); } catch { /* noop */ }
-        const totalPaidPrincipal = payments.reduce((s: number, p: any) => s + (Number(p.principalPortion) || 0), 0);
+        const totalPaidPrincipal = payments.reduce((s: number, p: any) => s + signedPrincipal(p), 0);
         const totalPaidInterest = payments.reduce((s: number, p: any) => s + (Number(p.interestPortion) || 0), 0);
         // Project payoff using current monthly payment
         let monthsLeft: number | null = null;

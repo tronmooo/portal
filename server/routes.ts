@@ -6841,7 +6841,9 @@ Rules:
     if (!month) return res.status(400).json({ error: "month must be YYYY-MM" });
     if (rawWeek === undefined || rawWeek === null) return res.status(400).json({ error: "week is required" });
     const week = typeof rawWeek === "number" ? rawWeek : Number(rawWeek);
-    if (!Number.isInteger(week) || week < 1 || week > 6) return res.status(400).json({ error: "week must be an integer from 1 to 6" });
+    // The table's CHECK allows weeks 1–5 (a month spans at most five
+    // Mon–Sun slices); 6 used to pass here and die on the constraint as a 500.
+    if (!Number.isInteger(week) || week < 1 || week > 5) return res.status(400).json({ error: "week must be an integer from 1 to 5" });
     // Bug fix: previously the four numeric fields were written through with no
     // validation. A bad payload could insert non-numeric values into the
     // cashflow_projections table and corrupt every downstream net-cashflow

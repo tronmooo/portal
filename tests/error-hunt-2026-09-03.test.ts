@@ -1320,7 +1320,9 @@ describe("D192: a reversal moves the balance even when the debt sits at 0", () =
     expect(profiles.get("card-1").fields.currentBalance).toBe(0);
     const rev = await payBillOccurrence(s, "card-1", { amount: 100, paymentDate: "2026-09-04", paymentType: "reversal", source: "route" }, "UTC");
     expect(rev.ok).toBe(true);
-    expect(rev.payment.principalPortion).toBe(-100);
+    // The row stores the magnitude (the table refuses a negative principal); the type carries the direction.
+    expect(rev.payment.principalPortion).toBe(100);
+    expect(rev.payment.paymentType).toBe("reversal");
     expect(rev.payment.remainingBalanceAfter).toBe(100);
     expect(profiles.get("card-1").fields.currentBalance).toBe(100);
   });
@@ -1426,5 +1428,25 @@ describe("D197: documents expose updatedAt like every other editable record", ()
     expect(d.updatedAt).toBe("2026-09-03T10:00:00Z");
     const d2 = s.rowToDocument({ id: "d-2", name: "Old", type: "other", linked_profiles: [], created_at: "2026-09-01T00:00:00Z" });
     expect(d2.updatedAt).toBe("2026-09-01T00:00:00Z");
+  });
+});
+
+// ─── D198: a reversal row never carries a negative principal; readers apply the sign ─
+import { signedPrincipal } from "../server/liability-payments";
+describe("D198: reversal rows store magnitudes and readers apply the direction by type", () => {
+  it("signedPrincipal: a reversal counts as money put back", () => {
+    expect(signedPrincipal({ principalPortion: 75, paymentType: "standard" })).toBe(75);
+    expect(signedPrincipal({ principalPortion: 50, paymentType: "reversal" })).toBe(-50);
+    expect(signedPrincipal({ principalPortion: -50, paymentType: "reversal" })).toBe(-50);
+  });
+  it("undoing a reversal takes the money back off the balance", async () => {
+    const { s, payments, profiles } = payStorage({ id: "card-2", name: "Card", type: "liability", type_key: "credit_card", fields: { currentBalance: 300, interestRate: 22, monthlyPayment: 25 } });
+    const rev = await payBillOccurrence(s, "card-2", { amount: 50, paymentDate: "2026-09-03", paymentType: "reversal", source: "route" }, "UTC");
+    expect(profiles.get("card-2").fields.currentBalance).toBe(350);
+    expect(rev.payment.principalPortion).toBe(50);
+    s.deleteLiabilityPayment = async (id: string) => { const i = payments.findIndex((p) => p.id === id); if (i < 0) return false; payments.splice(i, 1); return true; };
+    const undone = await unpayBillOccurrence(s, "card-2", { paymentId: rev.payment.id, source: "route" }, "UTC");
+    expect(undone.ok).toBe(true);
+    expect(profiles.get("card-2").fields.currentBalance).toBe(300);
   });
 });
