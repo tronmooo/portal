@@ -1311,3 +1311,17 @@ describe("D190: the ownership writer maps the guard's rejection to a 404", () =>
       .rejects.toMatchObject({ statusCode: 404, message: expect.stringContaining("11111111-2222-4333-8444-555555555555") });
   });
 });
+
+// ─── D192: a reversal after a payoff restores the balance ───────────────────
+describe("D192: a reversal moves the balance even when the debt sits at 0", () => {
+  it("payoff to 0, then a 100 reversal → balance 100, row carries remainingBalanceAfter", async () => {
+    const { s, profiles } = payStorage({ id: "card-1", name: "Card", type: "liability", type_key: "credit_card", fields: { currentBalance: 1200, interestRate: 22, monthlyPayment: 35 } });
+    await payBillOccurrence(s, "card-1", { amount: 1210, paymentDate: "2026-09-03", paymentType: "payoff", source: "route" }, "UTC");
+    expect(profiles.get("card-1").fields.currentBalance).toBe(0);
+    const rev = await payBillOccurrence(s, "card-1", { amount: 100, paymentDate: "2026-09-04", paymentType: "reversal", source: "route" }, "UTC");
+    expect(rev.ok).toBe(true);
+    expect(rev.payment.principalPortion).toBe(-100);
+    expect(rev.payment.remainingBalanceAfter).toBe(100);
+    expect(profiles.get("card-1").fields.currentBalance).toBe(100);
+  });
+});

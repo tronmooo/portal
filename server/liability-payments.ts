@@ -146,7 +146,9 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
 
   return {
     balanceBefore, principal, interest, fees, paymentType, newBalance,
-    moves: balanceBefore > 0 && paymentType !== "skipped" && paymentType !== "deferred",
+    // A reversal puts money back even on a paid-off debt (balance 0): the
+    // "balance above zero" gate is for payments that take money off.
+    moves: paymentType !== "skipped" && paymentType !== "deferred" && (balanceBefore > 0 || paymentType === "reversal"),
   };
 }
 
@@ -240,7 +242,7 @@ export async function applyLiabilityPayment(
       principalPortion: principal,
       interestPortion: interest,
       fees: fees + escrow,
-      remainingBalanceAfter: balanceBefore > 0 ? newBalance : undefined,
+      remainingBalanceAfter: plan.moves ? newBalance : undefined,
       paymentType,
       sourceAccount: input.sourceAccount || null,
       notes: input.notes || null,
