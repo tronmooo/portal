@@ -8626,7 +8626,7 @@ Rules:
       let [
         profiles, trackers, tasks, expenses, events, documents,
         habits, obligations, artifacts, journalEntries, memories, domains,
-        incomes, goals, paychecks, budgetsByMonth,
+        incomes, goals, paychecks, budgetsByMonth, assetPartyLinks, liabilityProfileLinks,
       ] = await Promise.all([
         storage.getProfiles(),
         storage.getTrackers(),
@@ -8647,6 +8647,10 @@ Rules:
         storage.getGoals(),
         storage.getPaychecks().catch(() => [] as any[]),
         storage.getAllBudgets().catch(() => ({} as Record<string, any[]>)),
+        // Co-ownership is reference data like profiles: without it a restore
+        // gave every asset and loan back to Self alone.
+        Promise.resolve(storage.getAssetPartyLinks?.()).then((r) => r || []).catch(() => [] as any[]),
+        Promise.resolve(storage.getLiabilityProfileLinks?.()).then((r) => r || []).catch(() => [] as any[]),
       ]);
       const liabilityIds = (profiles as any[]).filter((p) => p.type === "liability").map((p) => p.id);
       let liabilityPayments: any[] = [];
@@ -8688,6 +8692,7 @@ Rules:
         profiles, trackers, tasks, expenses, events, documents,
         habits, obligations, artifacts, journalEntries, memories, domains,
         incomes, goals, paychecks, budgets: budgetsByMonth, liabilityPayments,
+        assetPartyLinks, liabilityProfileLinks,
       };
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Content-Disposition', `attachment; filename="portol-backup-${getUserToday(getTimezone(req))}.json"`);
@@ -8762,6 +8767,30 @@ Rules:
         }
       }
       // Import trackers + entries
+      // Co-ownership shares, once every profile id is known. One atomic
+      // owner write per asset/loan (validated: shares ≤ 100%); a share whose
+      // asset or party did not make it into this account is skipped.
+      const importOwners = async (
+        section: "assetPartyLinks" | "liabilityProfileLinks",
+        subjectKey: "assetProfileId" | "liabilityProfileId",
+        write: (subjectId: string, owners: Array<{ partyProfileId: string; ownershipPercentage: number }>) => Promise<any>,
+      ) => {
+        const rows: any[] = Array.isArray(data[section]) ? data[section] : [];
+        const bySubject = new Map<string, any[]>();
+        for (const l of rows) {
+          const subject = l && l[subjectKey] ? idMap.get(String(l[subjectKey])) : undefined;
+          const party = l && l.partyProfileId ? idMap.get(String(l.partyProfileId)) : undefined;
+          if (!subject || !party) continue;
+          const arr = bySubject.get(subject) || [];
+          arr.push({ partyProfileId: party, ownershipPercentage: Number(l.ownershipPercentage ?? 100) });
+          bySubject.set(subject, arr);
+        }
+        for (const [subject, owners] of bySubject) {
+          await tryImport(section, subject, () => write(subject, owners));
+        }
+      };
+      await importOwners("assetPartyLinks", "assetProfileId", (id, owners) => storage.setAssetOwners(id, owners));
+      await importOwners("liabilityProfileLinks", "liabilityProfileId", (id, owners) => storage.setLiabilityOwners(id, owners));
       if (data.trackers && Array.isArray(data.trackers)) {
         for (const t of data.trackers) {
           await tryImport("trackers", t.name || "unnamed", async () => {
@@ -8808,7 +8837,10 @@ Rules:
         for (const [month, list] of Object.entries(data.budgets as Record<string, any[]>)) {
           if (!/^\d{4}-\d{2}$/.test(month) || !Array.isArray(list)) continue;
           for (const b of list) {
-            await tryImport("budgets", `${month} ${b.category || "unnamed"}`, () => storage.addBudget(month, String(b.category || ""), Number(b.amount), b.notes, undefined));
+            // A per-person budget keeps its person (remapped); an owner that did
+            // not make it into this account leaves the cap account-wide.
+            const budgetOwner = b?.profileId ? idMap.get(String(b.profileId)) : undefined;
+            await tryImport("budgets", `${month} ${b.category || "unnamed"}`, () => storage.addBudget(month, String(b.category || ""), Number(b.amount), b.notes, budgetOwner));
           }
         }
       }

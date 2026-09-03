@@ -940,6 +940,18 @@ describe("D104: export carries the whole money model and import restores it", ()
     expect(r.data.budgets).toEqual({ "2026-09": [{ id: "b-1", category: "food", amount: 300 }] });
     expect(r.data.liabilityPayments.map((p: any) => p.id)).toEqual(["pay-1"]);
   });
+  // D129 — co-ownership never left the account.
+  it("exports the asset and liability ownership links", async () => {
+    h = await boot({ profiles: [SELF] }, (storage, db) => {
+      moneyStorage(storage, db);
+      storage.getAssetPartyLinks = async () => [{ id: "apl-1", assetProfileId: "car-1", partyProfileId: "linda-1", ownershipPercentage: 50 }];
+      storage.getLiabilityProfileLinks = async () => [{ id: "lpl-1", liabilityProfileId: "loan-1", partyProfileId: "linda-1", ownershipPercentage: 50 }];
+    });
+    const r = await h.api("GET", "/api/export");
+    expect(r.status).toBe(200);
+    expect(r.data.assetPartyLinks.map((l: any) => l.id)).toEqual(["apl-1"]);
+    expect(r.data.liabilityProfileLinks.map((l: any) => l.id)).toEqual(["lpl-1"]);
+  });
   it("imports incomes, goals, paychecks and budgets from such a file", async () => {
     h = await boot({ profiles: [SELF] }, (storage, db) => moneyStorage(storage, db));
     const r = await h.api("POST", "/api/import", {
@@ -987,6 +999,42 @@ describe("D105: import remaps profiles, parents, Self and every link", () => {
     expect(t["Call Linda"]).toEqual([byName["Linda"].id]);            // unknown id dropped
     expect(t["Mine"]).toEqual([SELF.id]);
     expect(h.db.events[0].linkedProfiles).toEqual([SELF.id]);
+  });
+  // D129 — shares and per-person budgets follow the remapped ids.
+  it("restores co-ownership through the owner writers and keeps a budget's person", async () => {
+    const owners: any[] = []; const budgets: any[] = [];
+    h = await boot({ profiles: [SELF] }, (storage, db) => {
+      storage.getSelfProfile = async () => SELF;
+      let n = 0;
+      storage.createProfile = async (data: any) => { const row = { id: `new-${++n}`, ...data }; db.profiles.push(row); return row; };
+      storage.setAssetOwners = async (id: string, o: any[]) => { owners.push(["asset", id, o]); return o; };
+      storage.setLiabilityOwners = async (id: string, o: any[]) => { owners.push(["liability", id, o]); return o; };
+      storage.addBudget = async (month: string, category: string, amount: number, notes: any, profileId?: string) => { budgets.push({ month, category, amount, profileId }); return { id: "b", category, amount, profileId }; };
+    });
+    const r = await h.api("POST", "/api/import", {
+      version: 1,
+      profiles: [
+        { id: "old-self", type: "self", name: "Old Me" },
+        { id: "old-linda", type: "person", name: "Linda" },
+        { id: "old-car", type: "vehicle", name: "Civic", parentProfileId: "old-self" },
+        { id: "old-loan", type: "liability", name: "Car loan", parentProfileId: "old-self" },
+      ],
+      assetPartyLinks: [
+        { assetProfileId: "old-car", partyProfileId: "old-self", ownershipPercentage: 50 },
+        { assetProfileId: "old-car", partyProfileId: "old-linda", ownershipPercentage: 50 },
+        { assetProfileId: "ghost", partyProfileId: "old-linda", ownershipPercentage: 100 },
+      ],
+      liabilityProfileLinks: [{ liabilityProfileId: "old-loan", partyProfileId: "old-linda", ownershipPercentage: 40 }],
+      budgets: { "2026-09": [{ category: "food", amount: 200, profileId: "old-linda" }, { category: "fuel", amount: 80 }, { category: "vet", amount: 30, profileId: "ghost" }] },
+    });
+    expect(r.status, JSON.stringify(r.data)).toBe(200);
+    const byName = Object.fromEntries(h.db.profiles.map((p: any) => [p.name, p]));
+    expect(owners).toEqual([
+      ["asset", byName["Civic"].id, [{ partyProfileId: SELF.id, ownershipPercentage: 50 }, { partyProfileId: byName["Linda"].id, ownershipPercentage: 50 }]],
+      ["liability", byName["Car loan"].id, [{ partyProfileId: byName["Linda"].id, ownershipPercentage: 40 }]],
+    ]);
+    expect(r.data.imported).toMatchObject({ assetPartyLinks: 1, liabilityProfileLinks: 1, budgets: 3 });
+    expect(budgets.map((b) => [b.category, b.profileId])).toEqual([["food", byName["Linda"].id], ["fuel", undefined], ["vet", undefined]]);
   });
 });
 
