@@ -808,3 +808,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - scoped.mjs (Linda Carter's scope): net worth 0, cash flow −24, tasks due 0; the −24 is Linda's one linked expense ("Linda pharmacy" 23.50, probe residue), so the scoped strip is right. No failures, no leaks.
 - s169 (bill reminder lifecycle through the daily cron): three non-autopay bills due in 2 days each get one open "Bill due" task; a second run adds no duplicate; paying a bill marks its reminder done; moving a due date out closes the stale reminder and spawns none for the far date; deleting a bill leaves no open reminder and no bell row (7/7).
 - s170 (autopay through the daily cron): an autopay bill due in 2 days is paid once (one 75.00 payment row noted "Autopay"), its due date rolls to next month, a second run does not pay it again, the bills list and bell agree, and no "Bill due" task is spawned for it (7/7).
+
+### Integrity sweeps after today's probes — verified
+- Replica: no task, expense or event linked to a missing profile; no payment for a missing liability; no asset or liability link to a missing profile; no profile with a missing parent (all 0).
+- Production (read-only): the same sweep finds 0 everywhere except 3 live recurring events (source `ai`, May–July 2026, "Payment Due"/"Renewal", QA account `QAMULTI…`) linked to profiles that no longer exist — residue from before the current cascade. s172 confirms today's cascade removes an event the deleted profile alone owned and strips it from a shared one (5/5), so no code change; the 3 rows are left untouched (QA data) and noted here.
+- s172 also confirms the calendar timeline drops the deleted bill's recurring event.
