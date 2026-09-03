@@ -1519,3 +1519,26 @@ describe("D202: the Self is recreated whenever the profiles table was swept", ()
     } finally { await booted.close(); }
   });
 });
+
+// ─── D203: a backup carries captures, and an import brings them back ────────
+describe("D203: export and import cover captures", () => {
+  it("GET /api/export lists the account's captures; POST /api/import recreates them with the owner remapped", async () => {
+    const created: any[] = [];
+    const booted = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me", fields: {}, linked_profiles: [], documents: [] }] }, (storage) => {
+      storage.getCaptures = async () => [{ id: "c-1", type: "note", title: "Dentist", rawInput: "call the dentist", status: "pending", source: "manual", ownerProfileId: "self-1" }];
+      storage.createCapture = async (d: any) => { created.push(d); return { id: "c-new", ...d }; };
+    });
+    try {
+      const ex = await booted.api("GET", "/api/export");
+      expect(ex.status).toBe(200);
+      expect(ex.data.captures).toHaveLength(1);
+      expect(ex.data.captures[0].rawInput).toBe("call the dentist");
+      const im = await booted.api("POST", "/api/import", { version: 1, captures: [{ ...ex.data.captures[0], ownerProfileId: "someone-elses-self" }] });
+      expect(im.status).toBe(200);
+      expect(im.data?.success).toBe(true);
+      expect(created).toHaveLength(1);
+      expect(created[0].rawInput).toBe("call the dentist");
+      expect(created[0].source).toBe("manual");
+    } finally { await booted.close(); }
+  });
+});

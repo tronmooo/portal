@@ -8736,6 +8736,7 @@ Rules:
         profiles, trackers, tasks, expenses, events, documents,
         habits, obligations, artifacts, journalEntries, memories, domains,
         incomes, goals, paychecks, budgetsByMonth, assetPartyLinks, liabilityProfileLinks,
+        captures,
       ] = await Promise.all([
         storage.getProfiles(),
         storage.getTrackers(),
@@ -8760,6 +8761,9 @@ Rules:
         // gave every asset and loan back to Self alone.
         Promise.resolve(storage.getAssetPartyLinks?.()).then((r) => r || []).catch(() => [] as any[]),
         Promise.resolve(storage.getLiabilityProfileLinks?.()).then((r) => r || []).catch(() => [] as any[]),
+        // Captures (the universal capture layer) — reference data like
+        // memories, exported in full; a backup used to drop every one.
+        Promise.resolve(storage.getCaptures?.({ limit: 5000 })).then((r) => r || []).catch(() => [] as any[]),
       ]);
       const liabilityIds = (profiles as any[]).filter((p) => p.type === "liability").map((p) => p.id);
       let liabilityPayments: any[] = [];
@@ -8799,7 +8803,7 @@ Rules:
         scope: exportFilterIds.length > 0 ? "filtered" : "all",
         ...(exportFilterIds.length > 0 ? { filteredProfileIds: exportFilterIds } : {}),
         profiles, trackers, tasks, expenses, events, documents,
-        habits, obligations, artifacts, journalEntries, memories, domains,
+        habits, obligations, artifacts, journalEntries, memories, domains, captures,
         incomes, goals, paychecks, budgets: budgetsByMonth, liabilityPayments,
         assetPartyLinks, liabilityProfileLinks,
       };
@@ -9036,6 +9040,17 @@ Rules:
       if (data.memories && Array.isArray(data.memories)) {
         for (const m of data.memories) {
           await tryImport("memories", m.key || "unnamed", () => storage.saveMemory({ key: m.key, value: m.value, category: m.category }));
+        }
+      }
+      if (data.captures && Array.isArray(data.captures) && typeof (storage as any).createCapture === "function") {
+        for (const c of data.captures) {
+          if (!c || typeof c.rawInput !== "string" || !c.rawInput.trim()) continue;
+          await tryImport("captures", c.title || c.rawInput.slice(0, 40), () => (storage as any).createCapture({
+            type: c.type, title: c.title, rawInput: c.rawInput, structuredData: c.structuredData, metadata: c.metadata,
+            relationships: c.relationships, source: c.source || "import", confidence: c.confidence, status: c.status,
+            projections: c.projections, clarifyingQuestion: c.clarifyingQuestion,
+            ownerProfileId: remap(c.ownerProfileId ? [c.ownerProfileId] : [])[0] ?? null,
+          }));
         }
       }
 
