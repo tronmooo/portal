@@ -1962,3 +1962,40 @@ describe("D221: rescheduled occurrence", () => {
     expect(String(after.nextDueDate ?? after.dueDate).slice(0, 10)).toBe("2026-10-05");
   });
 });
+
+// ─── D221 (route): rescheduling closes the old day's reminder right away ─────
+describe("D221: POST /obligation-occurrences/:occ/reschedule closes the stale reminder", () => {
+  it("marks the 'Bill due' task for the old day done", async () => {
+    const updates: Array<[string, any]> = [];
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }, { id: "bill-1", type: "liability", type_key: "utility", name: "Gas", parentProfileId: "self-1", fields: { monthlyAmount: 50, dueDate: "2026-09-05", frequency: "monthly" } }] }, (storage) => {
+      storage.rescheduleOccurrence = async () => ({ occurrences: [] });
+      storage.getTasks = async () => [
+        { id: "t-old", title: "Bill due: Gas", status: "todo", dueDate: "2026-09-05", linkedProfiles: ["bill-1"] },
+        { id: "t-other", title: "Bill due: Gas", status: "todo", dueDate: "2026-10-05", linkedProfiles: ["bill-1"] },
+      ];
+      storage.updateTask = async (id: string, patch: any) => { updates.push([id, patch]); return { id, ...patch }; };
+    });
+    const r = await h.api("POST", "/api/obligation-occurrences/bill-1:2026-09-05/reschedule", { newDueAt: "2026-09-12" });
+    expect(r.status).toBe(200);
+    expect(updates.map(([id, p]) => `${id}:${p.status}`)).toEqual(["t-old:done"]);
+  });
+});
+
+// ─── D221 (timeline): a moved occurrence answers only for the day it falls on ─
+describe("D221: calendar timeline and a rescheduled occurrence", () => {
+  const fields = { monthlyAmount: 50, dueDate: "2026-09-05", nextDueDate: "2026-09-05", frequency: "monthly", occurrences: { "2026-09-05": { movedTo: "2026-09-12" } } };
+  const bill = { id: "bill-1", user_id: "u", type: "liability", type_key: "utility", name: "Gas", parent_profile_id: "self-1", fields, linked_profiles: [], documents: [], tags: [] };
+  const self = { id: "self-1", user_id: "u", type: "self", name: "Me", fields: {}, linked_profiles: [], documents: [], tags: [] };
+  const make = () => {
+    const { client } = chainClient((table) => (table === "profiles" ? { data: [self, bill], error: null } : { data: [], error: null }));
+    const toProfile = (r: any) => ({ id: r.id, type: r.type, type_key: r.type_key, name: r.name, parentProfileId: r.parent_profile_id, fields: r.fields, linkedProfiles: r.linked_profiles, documents: [], tags: [] });
+    return bareStorage({ supabase: client, _timezone: TZ, getProfiles: async () => [self, bill].map(toProfile), getProfile: async (id: string) => [self, bill].filter((x) => x.id === id).map(toProfile)[0] });
+  };
+  it("the old day has no bill item; the moved day has it", async () => {
+    const s = make();
+    const old = (await s.getCalendarTimeline("2026-09-05", "2026-09-05")).filter((i: any) => i.type === "obligation" && i.sourceId === "bill-1");
+    const moved = (await s.getCalendarTimeline("2026-09-12", "2026-09-12")).filter((i: any) => i.type === "obligation" && i.sourceId === "bill-1");
+    expect(old).toEqual([]);
+    expect(moved.map((i: any) => i.date)).toEqual(["2026-09-12"]);
+  });
+});

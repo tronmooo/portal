@@ -8014,6 +8014,10 @@ Rules:
     if (!parsed) return res.status(400).json({ error: "Unrecognized occurrence id" });
     const result = await storage.rescheduleOccurrence(parsed.liabilityId, parsed.date, newDueAt);
     if (!result) return res.status(404).json({ error: "Bill not found" });
+    // The "Bill due" reminder for the old day is stale the moment the
+    // occurrence moves — the pay path closes reminders the same way, and
+    // waiting for the nightly scan left it open on the dashboard all day.
+    await closeBillReminderTasksWhere(storage, parsed.liabilityId, (day) => !!day && day < String(newDueAt).slice(0, 10), log).catch(() => 0);
     bustBillCaches(uid);
     res.json(result);
   }));

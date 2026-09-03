@@ -4395,6 +4395,11 @@ export class SupabaseStorage implements IStorage {
         const fam = liabilityFamily(typeKey);
         const freq = liabilityFrequency({ id: p.id, fields: sf });
         for (const o of occ) {
+          // The generator admits an occurrence when EITHER its anchor day or
+          // its moved day is inside the window; the timeline answers for the
+          // day the occurrence actually falls on, so a bill moved from the
+          // 5th to the 12th must not come back for a 5th-only query.
+          if (o.effectiveDate < startDate || o.effectiveDate > endDate) continue;
           items.push({
             id: `bill-${p.id}-${o.date}`,
             type: "obligation",
