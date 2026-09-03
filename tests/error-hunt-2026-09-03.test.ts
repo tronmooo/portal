@@ -24,6 +24,7 @@ import {
 } from "../shared/budget-ledger";
 import { foldExpenseCategory } from "../shared/category-canon";
 import { getUserCurrentMonth } from "../shared/timezone";
+import { SupabaseStorage } from "../server/supabase-storage";
 
 let n = 0;
 const nextId = () => `id-${++n}`;
@@ -208,5 +209,97 @@ describe("D146: the AI budget tools do not hard-code a Los Angeles month", () =>
     const src = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
     expect(src).not.toMatch(/timeZone: 'America\/Los_Angeles' \}\)\.slice\(0, 7\)/);
     expect((src.match(/getUserCurrentMonth\(\(storage as any\)\._timezone/g) || []).length).toBeGreaterThanOrEqual(7);
+  });
+});
+
+// ─── D147: a goal keeps its progress when its source goes away ───────────────
+function bareStorage(over: Record<string, any> = {}): any {
+  const s: any = Object.create(SupabaseStorage.prototype);
+  s.userId = "22222222-2222-4222-8222-222222222222";
+  s._timezone = TZ;
+  s.memoEnabled = false;
+  s.memoCache = new Map();
+  s.logActivity = () => {};
+  Object.assign(s, over);
+  return s;
+}
+function chainClient(respond: (table: string, op: string, payload?: any) => any = () => ({ data: [], error: null })) {
+  const calls: Array<{ table: string; op: string; payload?: any; filters: Array<[string, any]> }> = [];
+  const from = (table: string) => {
+    const rec = { table, op: "select", payload: undefined as any, filters: [] as Array<[string, any]> };
+    calls.push(rec);
+    const chain: any = {};
+    for (const op of ["select", "update", "insert", "upsert", "delete"]) {
+      chain[op] = (payload?: any) => { if (op !== "select") { rec.op = op; rec.payload = payload; } return chain; };
+    }
+    for (const f of ["eq", "is", "gte", "lte", "in", "not", "order", "limit", "ilike", "contains", "or", "range"]) {
+      chain[f] = (...args: any[]) => { rec.filters.push([f, args]); return chain; };
+    }
+    const result = () => Promise.resolve(respond(table, rec.op, rec.payload));
+    chain.maybeSingle = () => result().then((r: any) => ({ ...r, data: Array.isArray(r.data) ? (r.data[0] ?? null) : r.data }));
+    chain.single = chain.maybeSingle;
+    chain.then = (res: any, rej?: any) => result().then(res, rej);
+    return chain;
+  };
+  return { client: { from }, calls };
+}
+const GOAL_ROW = { id: "goal-1", title: "100 pushups", type: "tracker_target", target: 100, current: 0, unit: "reps", tracker_id: "tr-1", status: "active", linked_profiles: ["self-1"], created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" };
+
+describe("D147: goal progress survives its source", () => {
+  it("deleteTracker writes the live figure into every active goal reading that tracker before the row goes", async () => {
+    const { client, calls } = chainClient((table, op) => table === "goals" && op === "select" ? { data: [GOAL_ROW], error: null } : { data: [], error: null });
+    const s = bareStorage({ supabase: client, computeGoalProgress: async () => 120, cleanupEntityLinks: async () => undefined });
+    expect(await s.deleteTracker("tr-1")).toBe(true);
+    const goalWrite = calls.find((c) => c.table === "goals" && c.op === "update");
+    expect(goalWrite?.payload).toEqual({ current: 120 });
+    expect(goalWrite?.filters).toEqual(expect.arrayContaining([["eq", ["id", "goal-1"]]]));
+    const trackerDelete = calls.findIndex((c) => c.table === "trackers" && c.op === "delete");
+    expect(calls.indexOf(goalWrite!)).toBeLessThan(trackerDelete);
+  });
+
+  it("deleteHabit freezes habit-streak goals (and goals on the mirror tracker) before hiding the habit", async () => {
+    const { client, calls } = chainClient((table, op) => {
+      if (table === "goals" && op === "select") return { data: [{ ...GOAL_ROW, id: "goal-2", type: "habit_streak", tracker_id: null, habit_id: "h-1" }], error: null };
+      if (table === "habits" && op === "select") return { data: [{ linked_tracker_id: null, name: "Read" }], error: null };
+      if (table === "habits" && op === "update") return { data: [{ id: "h-1" }], error: null };
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client, computeGoalProgress: async () => 14, cleanupEntityLinks: async () => undefined, habitMirrorTrackerId: async () => null });
+    expect(await s.deleteHabit("h-1")).toBe(true);
+    const goalWrite = calls.find((c) => c.table === "goals" && c.op === "update");
+    expect(goalWrite?.payload).toEqual({ current: 14 });
+  });
+
+  it("nothing is written when the figure is unchanged or the goal is not active", async () => {
+    const { client, calls } = chainClient((table, op) => table === "goals" && op === "select" ? { data: [{ ...GOAL_ROW, current: 40 }], error: null } : { data: [], error: null });
+    const s = bareStorage({ supabase: client, computeGoalProgress: async () => 40, cleanupEntityLinks: async () => undefined });
+    await s.deleteTracker("tr-1");
+    expect(calls.some((c) => c.table === "goals" && c.op === "update")).toBe(false);
+    // The select itself asks only for active, live goals of this user.
+    const sel = calls.find((c) => c.table === "goals" && c.op === "select")!;
+    expect(sel.filters).toEqual(expect.arrayContaining([["eq", ["status", "active"]], ["is", ["deleted_at", null]], ["eq", ["tracker_id", "tr-1"]]]));
+  });
+
+  it("updateGoal keeps the live figure when the goal leaves 'active' (target lowered under it, or paused)", async () => {
+    const writes: any[] = [];
+    const { client } = chainClient((table, op, payload) => { if (table === "goals" && op === "update") writes.push(payload); return { data: [], error: null }; });
+    const live = { id: "goal-1", title: "100 pushups", type: "tracker_target", target: 100, current: 120, unit: "reps", trackerId: "tr-1", status: "active", linkedProfiles: ["self-1"], updatedAt: "2026-09-01T00:00:00Z" };
+    let fetched = 0;
+    const s = bareStorage({ supabase: client, getGoal: async () => (fetched++ === 0 ? { ...live } : { ...live, status: "completed" }) });
+    await s.updateGoal("goal-1", { target: 50 });
+    expect(writes[0]).toMatchObject({ target: 50, status: "completed", current: 120 });
+    fetched = 0; writes.length = 0;
+    await s.updateGoal("goal-1", { status: "paused" });
+    expect(writes[0]).toMatchObject({ status: "paused", current: 120 });
+    // An explicit current from the caller wins, and staying active writes none.
+    fetched = 0; writes.length = 0;
+    await s.updateGoal("goal-1", { status: "completed", current: 99 });
+    expect(writes[0]).toMatchObject({ status: "completed", current: 99 });
+    // A goal still short of its target stays active and writes no figure.
+    const short = bareStorage({ supabase: client, getGoal: async () => ({ ...live, current: 40 }) });
+    writes.length = 0;
+    await short.updateGoal("goal-1", { title: "Push-ups" });
+    expect(writes[0]).not.toHaveProperty("current");
+    expect(writes[0]).not.toHaveProperty("status");
   });
 });

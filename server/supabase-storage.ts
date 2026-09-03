@@ -3356,7 +3356,29 @@ export class SupabaseStorage implements IStorage {
     return !error;
   }
 
+  /**
+   * A goal that reads its progress from a tracker or a habit keeps the last
+   * figure when that source goes away. Progress is computed on read and never
+   * stored, so deleting the tracker (a hard delete; the FK nulls the goal's
+   * tracker_id) or the habit used to drop the goal back to the 0 its row
+   * carried: "100 pushups — 0 / 100" the moment the tracker was gone.
+   */
+  private async freezeGoalProgress(column: "tracker_id" | "habit_id", sourceId: string): Promise<void> {
+    const { data, error } = await this.supabase.from("goals").select("*")
+      .eq("user_id", this.userId).eq(column, sourceId).eq("status", "active").is("deleted_at", null);
+    if (error || !data || data.length === 0) return;
+    for (const row of data) {
+      const goal = this.rowToGoal(row);
+      let current: number;
+      try { current = await this.computeGoalProgress(goal); } catch { continue; }
+      if (typeof current !== "number" || !Number.isFinite(current) || current === row.current) continue;
+      const { error: writeErr } = await this.supabase.from("goals").update({ current }).eq("id", goal.id).eq("user_id", this.userId);
+      if (writeErr) console.warn(`[freezeGoalProgress] could not keep goal ${goal.id} at ${current}: ${writeErr.message}`);
+    }
+  }
+
   async deleteTracker(id: string): Promise<boolean> {
+    await this.freezeGoalProgress("tracker_id", id);
     // Delete entries first, then the tracker
     await this.supabase.from("tracker_entries").delete().eq("tracker_id", id).eq("user_id", this.userId);
     /* D1: clean up entity_links rows that reference this tracker */
@@ -5103,6 +5125,10 @@ export class SupabaseStorage implements IStorage {
     const { data: habitRow } = await this.supabase.from("habits").select("linked_tracker_id, name")
       .eq("id", id).eq("user_id", this.userId).maybeSingle();
     const mirrorId = await this.habitMirrorTrackerId(id, habitRow?.name, habitRow?.linked_tracker_id);
+    // Goals reading this habit's streak (or the mirror tracker retired with
+    // it) keep their last figure.
+    await this.freezeGoalProgress("habit_id", id);
+    if (mirrorId) await this.freezeGoalProgress("tracker_id", mirrorId);
     // Soft delete the habit and KEEP its check-ins. The old hard-delete of
     // habit_checkins made "recoverable" a lie: restore returned an empty habit
     // with a phantom stored streak and no history. Check-in readers join
@@ -6360,6 +6386,13 @@ export class SupabaseStorage implements IStorage {
       effectiveCurrent >= effectiveTarget
     ) {
       updates.status = "completed";
+    }
+    // Leaving "active" freezes the figure: progress is computed live only for
+    // active goals, so a goal completed by lowering its target (or paused /
+    // abandoned) used to fall back to the 0 its row stored and show "0 / 50".
+    if (updates.status !== undefined && updates.status !== "active" && existing.status === "active"
+      && data.current === undefined && typeof effectiveCurrent === "number" && Number.isFinite(effectiveCurrent)) {
+      updates.current = effectiveCurrent;
     }
 
     const { error } = await this.supabase.from("goals").update(updates).eq("id", id).eq("user_id", this.userId);
