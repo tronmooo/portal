@@ -1015,3 +1015,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Liability dialogs under concurrent edits — verified (flows24)
 
 - Loan terms: with the editor open, a balance change lands (5000 → 4800); changing only the lender sends `{"fields":{"lender":…}}` and the balance stays 4800. Bill schedule: with the editor open, the due date is moved; changing only the reminder lead sends `{"fields":{"reminderLeadDays":5}}` and the moved due date stays. (Before the fix both dialogs sent every field; the server folds `currentBalance` into `balance` on write, which the flow accounts for.)
+
+### Vehicle Money tab and loan form — verified (flows25)
+
+- With D249 the vehicle's Money tab renders ("Loan Summary · Edit · Clear …"). With the loan editor open, the balance moves 5000 → 4800 elsewhere; changing only the lender sends `{"fields":{"lender":"New Credit Union"}}`, the balance stays 4800 and `originalAmount` stays 8000 (D248). Before D249 the flow could not reach the editor at all.
