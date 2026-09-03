@@ -1810,3 +1810,22 @@ describe("D215: sumMonthlyIncomeNow", () => {
     expect(sumMonthlyIncomeNow(incomes, TZ)).toBe(5000);
   });
 });
+
+// ─── D216: the AI's monthly income figure is the tile's figure ───────────────
+describe("D216: get_summary incomes.monthlyRecurring", () => {
+  it("counts every started or undated income and leaves out a job first dated next month", async () => {
+    const s = new MemStorage();
+    (s as any)._timezone = TZ;
+    const ym = curMonth(TZ);
+    const [y, m] = ym.split("-").map(Number);
+    const next = `${m === 12 ? y + 1 : y}-${String(m === 12 ? 1 : m + 1).padStart(2, "0")}-05`;
+    const prev = `${m === 1 ? y - 1 : y}-${String(m === 1 ? 12 : m - 1).padStart(2, "0")}-05`;
+    for (let i = 0; i < 16; i++) await s.createIncome({ description: `gig ${i}`, amount: 100, frequency: "monthly", category: "other", date: prev } as any);
+    await s.createIncome({ description: "stipend", amount: 1000, frequency: "monthly", category: "other" } as any);
+    await s.createIncome({ description: "new job", amount: 5000, frequency: "monthly", category: "salary", date: next } as any);
+    const run = <T,>(fn: () => Promise<T>) => new Promise<T>((resolve, reject) => requestStorageContext.run(s, () => fn().then(resolve, reject)));
+    const summary = await run(() => executeTool("get_summary", { entity_type: "incomes" }, "u-1"));
+    expect(summary.incomes.count).toBe(18);
+    expect(Math.round(summary.incomes.monthlyRecurring)).toBe(2600);
+  });
+});

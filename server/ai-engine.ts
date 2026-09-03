@@ -120,7 +120,7 @@ import {
 import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossessive, detectPossessiveOwner } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
-import { toMonthlyAmount } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
 import { signedPrincipal, payBillOccurrence, unpayBillOccurrence } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
@@ -7197,7 +7197,11 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
       if (entityType === "all" || entityType === "expenses" || entityType === "incomes" || entityType === "income" || entityType === "finances") {
         const allIncomes = await storage.getIncomes().catch(() => [] as any[]);
         const incomesForSummary = filterProfileId ? allIncomes.filter((i: any) => (i.linkedProfiles || []).includes(filterProfileId!)) : allIncomes;
-        const monthlyRecurring = incomesForSummary.reduce((s: number, i: any) => s + (i.frequency && i.frequency !== "once" && i.frequency !== "one_time" ? toMonthlyAmount(Number(i.amount || 0), i.frequency) : 0), 0);
+        // The same figure the Income tile shows: this month's recurring
+        // income in the user's zone, a job that starts next month left out.
+        // (An inline sum here counted every income regardless of its first
+        // pay day, so the AI and the tile disagreed.)
+        const monthlyRecurring = sumMonthlyIncomeNow(incomesForSummary, aiUserTimezone());
         summary.incomes = { count: incomesForSummary.length, monthlyRecurring, items: incomesForSummary.slice(-10).map((i: any) => ({ id: i.id, source: i.source || i.description, amount: i.amount, frequency: i.frequency || "once", date: i.date })) };
       }
       if (entityType === "all" || entityType === "expenses") {
@@ -15780,7 +15784,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     (() => {
       const rows = (incomes as any[]).slice(-15);
       if (rows.length === 0) return "Incomes: none recorded";
-      const monthly = rows.reduce((sum: number, i: any) => sum + (i.frequency && i.frequency !== "once" && i.frequency !== "one_time" ? toMonthlyAmount(Number(i.amount || 0), i.frequency) : 0), 0);
+      // Over EVERY income, not the 15 listed rows — with more than fifteen
+      // incomes the "≈ $X/month" figure was understated — and by the same
+      // per-month rule the Income tile uses (a job starting next month is
+      // not this month's income).
+      const monthly = sumMonthlyIncomeNow(incomes as any[], aiUserTimezone());
       const owner = (i: any) => (i.linkedProfiles || []).map((pid: string) => profiles.find((p: any) => p.id === pid)?.name).filter(Boolean).join(",");
       return `Incomes (${incomes.length}; recurring ≈ $${monthly.toFixed(2)}/month): ${rows.map((i: any) => `${i.source || i.description || "income"}: $${i.amount}${i.frequency && i.frequency !== "once" ? `/${i.frequency}` : " one-time"} (${String(i.date || "").slice(0, 10)}${owner(i) ? `, ${owner(i)}` : ""})`).join("; ")}`;
     })(),
