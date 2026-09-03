@@ -1135,3 +1135,5 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 
 - Budgets month row under concurrent writes (s242, 3/3): two adds of different categories both survive; two edits of different caps both land; a delete and an add at once both land.
 - Production (read-only, 22:45 UTC): no open reminder for a missing bill, no open task linking a missing profile, no budget month with a doubled (category, owner) bucket. The client surfaces the new 409 refusals (D261) through the shared request helper's error toast on both the backup restore and the ChatGPT import.
+- s243 (2/2): two simultaneous undos of one loan payment restore the balance once (900 → 1000, one 200 and one 404); two simultaneous account adjustments both apply (500 − 100 − 50 = 350).
+- flows27 (browser, 5/5): Settings → Import from ChatGPT → paste a budget for a hand-set category → the review calls it an update → commit overwrites the cap in place (500) → Undo in the history toasts "1 budget restored" and the cap is back at 300 with its note (D254 end to end).
