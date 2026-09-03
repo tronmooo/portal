@@ -1003,13 +1003,25 @@ export class MemStorage implements IStorage {
       }
       if (deletionIntents.length > 0) data = { ...data, fields: kept };
     }
-    const updated = { ...p, ...data, updatedAt: new Date().toISOString() };
+    // `fields` MERGES over the stored map, as SupabaseStorage's
+    // mergeFieldWrite does: a patch naming one field leaves the others in
+    // place. This storage used to replace the whole map, so the two storages
+    // disagreed about what a partial edit (and an undo of one) leaves behind.
+    const mergedFields = data.fields && typeof data.fields === "object"
+      ? { ...(p.fields || {}), ...(data.fields as Record<string, any>) }
+      : p.fields;
+    const updated = { ...p, ...data, fields: mergedFields, updatedAt: new Date().toISOString() };
     if (deletionIntents.length > 0) {
-      updated.fields = deleteProfileFields(updated.fields || {}, deletionIntents).fields;
+      // A null VALUE removes exactly that key — system keys such as
+      // `_docFields` included — the way SupabaseStorage's mergeAndApplyDeletes
+      // does; deleteProfileFields (the hint-array path) protects them.
+      const next = { ...(updated.fields || {}) } as Record<string, any>;
+      for (const k of deletionIntents) delete next[k];
+      updated.fields = next;
     }
     if ((fieldsToDelete?.length || 0) + (fieldPathsToDelete?.length || 0) > 0) {
       updated.fields = deleteProfileFields(
-        { ...(p.fields || {}), ...(data.fields || {}) },
+        updated.fields || {},
         fieldsToDelete,
         fieldPathsToDelete,
       ).fields;

@@ -604,3 +604,21 @@ describe("D158: /api/import restores status, times, ends, progress, schedule and
     expect((await s.updateIncome(i.id, { frequency: "Annually" } as any))?.frequency).toBe("yearly");
   });
 });
+
+// ─── D160: undoing a profile edit removes the fields that edit added ────────
+import { executeReversePlan } from "../server/ai-envelope";
+describe("D160: 'undo' of a profile edit re-applies the before-state including absent fields", () => {
+  it("a field the undone edit added is gone afterwards; the before values are back", async () => {
+    const s = new MemStorage();
+    const p = await s.createProfile({ type: "person", name: "Mike", fields: { phone: "111", city: "Austin" } } as any);
+    const before = JSON.parse(JSON.stringify(await s.getProfile(p.id)));
+    await s.updateProfile(p.id, { fields: { email: "mike@example.com", city: "Dallas" } } as any);
+    expect((await s.getProfile(p.id))!.fields).toMatchObject({ phone: "111", city: "Dallas", email: "mike@example.com" });
+    const out = await executeReversePlan(s, { entityType: "profile", entityId: p.id, entityName: "Mike", reversible: true, reversePlan: { op: "reapply_before", before } });
+    expect(out.ok).toBe(true);
+    const after = (await s.getProfile(p.id))!.fields as Record<string, any>;
+    expect(after.city).toBe("Austin");
+    expect(after.phone).toBe("111");
+    expect(after).not.toHaveProperty("email");
+  });
+});

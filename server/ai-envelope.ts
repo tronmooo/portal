@@ -491,7 +491,20 @@ export async function executeReversePlan(
     case "reapply_before": {
       const fn = UPDATE_FN[type];
       if (!fn || !id || !plan.before) return { ok: false, description: `No before-state to re-apply for ${name}.` };
-      await fn(s, id, cleanSnapshot(plan.before));
+      const snapshot = cleanSnapshot(plan.before);
+      if (type === "profile" && snapshot.fields && typeof snapshot.fields === "object") {
+        // A profile write MERGES `fields`, so re-applying the before-state
+        // alone left every field the undone edit had ADDED in place: "undo"
+        // after "add Mike's email" reported success and kept the email. Name
+        // the keys that exist now but did not before, so the writer removes
+        // them along with restoring the old values.
+        const current = await s.getProfile?.(id).catch(() => undefined);
+        const nowKeys = Object.keys((current?.fields && typeof current.fields === "object" ? current.fields : {}) as Record<string, any>);
+        const beforeKeys = new Set(Object.keys(snapshot.fields as Record<string, any>));
+        const added = nowKeys.filter((k) => !beforeKeys.has(k));
+        if (added.length > 0) snapshot.fieldsToDelete = [...new Set([...(snapshot.fieldsToDelete || []), ...added])];
+      }
+      await fn(s, id, snapshot);
       return { ok: true, description: `Reverted ${name} to its previous values.` };
     }
     case "recreate": {
