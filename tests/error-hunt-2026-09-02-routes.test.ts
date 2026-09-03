@@ -1194,3 +1194,45 @@ describe("D116: account text and money fields are validated", () => {
     expect(ok.status, JSON.stringify(ok.data)).toBeLessThan(300);
   });
 });
+
+// D135/D136 — the weekly review used the server's UTC day for its window and
+// title, and every run created another artifact for the same week.
+import { generateWeeklyReview } from "../server/weekly-review";
+describe("D135/D136: the weekly review is the user's week and one document per week", () => {
+  const LINDA = "linda-1";
+  function reviewStorage(existing: any[] = []) {
+    const created: any[] = []; const updated: any[] = [];
+    const empty = async () => [];
+    const storage: any = {
+      _timezone: "America/Los_Angeles",
+      getTasks: empty, getExpenses: empty, getTrackers: empty, getJournalEntries: empty, getHabits: empty, getBudgets: empty,
+      getArtifacts: async () => existing,
+      createArtifact: async (d: any) => { const row = { id: `art-${created.length + 1}`, ...d }; created.push(row); return row; },
+      updateArtifact: async (id: string, patch: any) => { updated.push([id, patch]); return { id, ...patch }; },
+    };
+    return { storage, created, updated };
+  }
+  afterEach(() => { vi.useRealTimers(); });
+  it("titles and windows the review by the user's day, and links a scoped review to its person", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-03T01:30:00Z")); // Sep 2, 18:30 in Los Angeles
+    const { storage, created } = reviewStorage();
+    const res = await generateWeeklyReview(storage, [LINDA]);
+    expect(res.title).toBe("Weekly Review · Aug 26 – Sep 2");
+    expect(created).toHaveLength(1);
+    expect(created[0].linkedProfiles).toEqual([LINDA]);
+    expect(created[0].tags).toContain("weekly-review");
+    expect(created[0].tags).toContain(`scope:${LINDA}`);
+  });
+  it("a second run for the same week and scope refreshes the existing document instead of adding one", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-03T01:30:00Z"));
+    const { storage, created, updated } = reviewStorage([{ id: "art-old", title: "Weekly Review · Aug 26 – Sep 2", tags: ["weekly-review", `scope:${LINDA}`], linkedProfiles: [LINDA] }]);
+    const res = await generateWeeklyReview(storage, [LINDA]);
+    expect(res.artifactId).toBe("art-old");
+    expect(updated.map(([id]) => id)).toEqual(["art-old"]);
+    expect(created).toHaveLength(0);
+    // A different scope (everyone) is a different document.
+    const all = await generateWeeklyReview(storage);
+    expect(all.artifactId).not.toBe("art-old");
+    expect(created).toHaveLength(1);
+  });
+});

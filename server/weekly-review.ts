@@ -9,6 +9,7 @@
 // automatically operate on the calling user's data.
 
 import Anthropic from "@anthropic-ai/sdk";
+import { DEFAULT_TIMEZONE, getUserToday, zonedTimeToUTC, addDays as tzAddDays } from "@shared/timezone";
 import { getAnthropicClient } from "./anthropic-client";
 import {
   computeBaseline,
@@ -35,6 +36,13 @@ function fmtDate(iso: string): string {
   try {
     return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
   } catch { return iso; }
+}
+
+/** "Sep 2" for a YYYY-MM-DD day — read at noon UTC so no zone shifts it. */
+function fmtDay(day: string): string {
+  try {
+    return new Date(`${day.slice(0, 10)}T12:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  } catch { return day; }
 }
 
 // ============================================================
@@ -191,11 +199,16 @@ export async function generateWeeklyReview(storage: any, profileIds?: string[]):
   highlights: number;
 }> {
   const fp = profileIds && profileIds.length > 0 ? profileIds : undefined;
+  // The week is the USER's last seven days, not the server's: at 01:00 UTC
+  // the review for a Los Angeles user was titled "Aug 27 – Sep 3" while her
+  // day was still Sep 2, and a Sep 3 expense logged elsewhere in the world
+  // would have counted as this week's.
+  const tz: string = (storage && storage._timezone) || DEFAULT_TIMEZONE;
+  const todayStr = getUserToday(tz);
+  const weekAgoStr = tzAddDays(todayStr, -7);
+  const monthAgoStr = tzAddDays(todayStr, -30);
   const now = new Date();
-  const weekAgo = new Date(now.getTime() - 7 * 86400000);
-  const monthAgo = new Date(now.getTime() - 30 * 86400000);
-  const weekAgoStr = weekAgo.toISOString().slice(0, 10);
-  const monthAgoStr = monthAgo.toISOString().slice(0, 10);
+  const weekAgo = zonedTimeToUTC(weekAgoStr, 0, 0, tz);
 
   // Pull data in parallel.
   const [tasks, expenses, trackers, journal, habits, anomalies] = await Promise.all([
@@ -264,7 +277,7 @@ export async function generateWeeklyReview(storage: any, profileIds?: string[]):
   }
 
   // ── Build HTML doc body ──
-  const dateRange = `${fmtDate(weekAgo.toISOString())} – ${fmtDate(now.toISOString())}`;
+  const dateRange = `${fmtDay(weekAgoStr)} – ${fmtDay(todayStr)}`;
   const parts: string[] = [];
   parts.push(`<h1>Weekly Review</h1>`);
   parts.push(`<p><em>${dateRange}</em></p>`);
@@ -338,14 +351,31 @@ export async function generateWeeklyReview(storage: any, profileIds?: string[]):
   const title = `Weekly Review · ${dateRange}`;
 
   // Create artifact via storage.
+  // One review per week and scope: a second run (a cron retry, the button
+  // pressed twice) refreshes the existing document instead of stacking a
+  // twin. The scoped review is linked to its person so it shows under them.
+  const scopeTag = `scope:${fp ? fp.slice().sort().join(",") : "all"}`;
+  let existing: any;
+  try {
+    const all: any[] = await storage.getArtifacts();
+    existing = (all || []).find((a) => a && a.title === title && (a.tags || []).includes("weekly-review") && (a.tags || []).includes(scopeTag));
+  } catch { existing = undefined; }
+  if (existing && typeof storage.updateArtifact === "function") {
+    const updated = await storage.updateArtifact(existing.id, { content: html });
+    if (updated) {
+      return { artifactId: existing.id, title, highlights: tasksDoneThisWeek.length + expWeek.length + journalThisWeek.length };
+    }
+  }
+
   const artifact = await storage.createArtifact({
     type: "doc",
     title,
     content: html,
     items: [],
-    tags: ["weekly-review", "auto-generated"],
+    tags: ["weekly-review", "auto-generated", scopeTag],
     pinned: false,
     source: "weekly-review-cron",
+    ...(fp ? { linkedProfiles: fp } : {}),
   });
 
   return {
