@@ -651,6 +651,14 @@ export function canonicalObligationStatus(raw: unknown): "active" | "paused" | "
   return "active";
 }
 
+/** entity_links endpoint type → table carrying its deleted_at flag. */
+const LINK_ENDPOINT_TABLES: Record<string, string> = {
+  task: "tasks", expense: "expenses", income: "incomes", event: "events", document: "documents",
+  goal: "goals", habit: "habits", journal: "journal_entries", tracker: "trackers",
+  profile: "profiles", obligation: "profiles", memory: "memories", artifact: "artifacts",
+};
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class SupabaseStorage implements IStorage {
   private supabase: SupabaseClient;
   private userId: string;
@@ -3640,8 +3648,9 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteTask(id: string): Promise<boolean> {
-    /* D1: clean up entity_links rows that reference this task */
-    await this.cleanupEntityLinks("task", id);
+    // A soft delete keeps this task's entity_links: restore brings the links
+    // back with the row, and link readers hide endpoints that sit in the trash
+    // (pruneLinksToTrashed). Only the hard deletes wipe them.
     // Soft delete KEEPS linked_profiles: every task reader filters deleted_at,
     // so ownership leaks nowhere — and it is what makes restore actually
     // restore. Clearing owners here (the old behavior) left 1,700+ restored
@@ -3755,8 +3764,9 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteExpense(id: string): Promise<boolean> {
-    /* D1: clean up entity_links rows that reference this expense */
-    await this.cleanupEntityLinks("expense", id);
+    // A soft delete keeps this expense's entity_links: restore brings the links
+    // back with the row, and link readers hide endpoints that sit in the trash
+    // (pruneLinksToTrashed). Only the hard deletes wipe them.
     // Keeps linked_profiles (readers filter deleted_at) so restore returns the
     // expense to its owner's scope; `.select` so 0 rows reports false.
     const { data, error } = await this.supabase.from("expenses")
@@ -3928,8 +3938,9 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteEvent(id: string): Promise<boolean> {
-    /* D1: clean up entity_links rows that reference this event */
-    await this.cleanupEntityLinks("event", id);
+    // A soft delete keeps this event's entity_links: restore brings the links
+    // back with the row, and link readers hide endpoints that sit in the trash
+    // (pruneLinksToTrashed). Only the hard deletes wipe them.
     // [P6.3] Soft delete — parity with every other entity (the live events
     // table has had a deleted_at column all along; the old "no such column"
     // comment was wrong). Profile-cascade deletion still hard-deletes.
@@ -4843,8 +4854,9 @@ export class SupabaseStorage implements IStorage {
 
   async deleteDocument(id: string): Promise<boolean> {
     if (!this.userId) throw new Error('Unauthorized: storage context missing userId');
-    /* D1: clean up entity_links rows that reference this document */
-    await this.cleanupEntityLinks("document", id);
+    // A soft delete keeps this document's entity_links: restore brings the links
+    // back with the row, and link readers hide endpoints that sit in the trash
+    // (pruneLinksToTrashed). Only the hard deletes wipe them.
     // A SOFT delete that is actually soft. The old version soft-deleted the
     // row while destroying the bytes (file_data cleared, Storage blob and
     // preview removed, owners wiped) — so "restore" produced a zombie: a row
@@ -5164,8 +5176,9 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteHabit(id: string): Promise<boolean> {
-    /* D1: clean up entity_links rows that reference this habit */
-    await this.cleanupEntityLinks("habit", id);
+    // A soft delete keeps this habit's entity_links: restore brings the links
+    // back with the row, and link readers hide endpoints that sit in the trash
+    // (pruneLinksToTrashed). Only the hard deletes wipe them.
     // Read the link before the row is hidden: the habit's mirror tracker (if
     // it is purely a mirror) is retired with it. Otherwise a deleted habit
     // kept showing up on the Trackers page under its own name, with its
@@ -6697,7 +6710,35 @@ export class SupabaseStorage implements IStorage {
       .or(`and(source_type.eq.${entityType},source_id.eq.${entityId}),and(target_type.eq.${entityType},target_id.eq.${entityId})`)
       .order("created_at", { ascending: false });
     if (error) throw error;
-    return (data || []).map(r => this.rowToEntityLink(r));
+    return this.pruneLinksToTrashed((data || []).map(r => this.rowToEntityLink(r)));
+  }
+
+  /**
+   * Hide links whose endpoint sits in the trash (or is gone). Soft deletes keep
+   * their entity_links so a restore brings the relationships back; until then
+   * the link must not surface on the other end, and a link to a hard-deleted
+   * row (an interrupted purge, an old cascade) heals itself on read. A lookup
+   * that fails keeps that type's links: a degraded list beats an empty one.
+   */
+  private async pruneLinksToTrashed(links: EntityLink[]): Promise<EntityLink[]> {
+    if (links.length === 0) return links;
+    const wanted = new Map<string, Set<string>>();
+    for (const l of links) {
+      for (const [t, id] of [[l.sourceType, l.sourceId], [l.targetType, l.targetId]] as const) {
+        if (!LINK_ENDPOINT_TABLES[t] || !UUID_RE.test(String(id))) continue;
+        if (!wanted.has(t)) wanted.set(t, new Set());
+        wanted.get(t)!.add(String(id));
+      }
+    }
+    const live = new Map<string, Set<string>>();
+    await Promise.all([...wanted].map(async ([t, ids]) => {
+      const { data, error } = await this.supabase.from(LINK_ENDPOINT_TABLES[t]).select("id")
+        .eq("user_id", this.userId).in("id", [...ids]).is("deleted_at", null);
+      if (error) { console.warn(`[entity-links] liveness lookup failed for ${t}: ${error.message}`); return; }
+      live.set(t, new Set((data || []).map((r: any) => String(r.id))));
+    }));
+    const alive = (t: string, id: string) => !live.has(t) || live.get(t)!.has(String(id));
+    return links.filter(l => alive(l.sourceType, l.sourceId) && alive(l.targetType, l.targetId));
   }
 
   async createEntityLink(data: InsertEntityLink): Promise<EntityLink> {

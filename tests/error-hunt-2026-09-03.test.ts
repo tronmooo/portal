@@ -1002,3 +1002,55 @@ describe("D179: an artifact rename does not rewrite items; a toggle is a compare
     expect(updates[1].items).toEqual([{ id: "i1", text: "milk", checked: true }, { id: "i2", text: "eggs", checked: true }]);
   });
 });
+
+// ─── D180: trashed records keep their links until purged ─────────────────────
+describe("D180: a restore brings a record's entity links back with it", () => {
+  const mk = () => chainClient((_t, op) => op === "update" || op === "delete" ? { data: [{ id: "x" }], error: null } : { data: [], error: null });
+  it("soft deletes never touch entity_links; the hard deletes still wipe them", async () => {
+    const soft: Array<[string, (s: any) => Promise<any>]> = [
+      ["task", (s) => s.deleteTask("t-1")], ["expense", (s) => s.deleteExpense("e-1")], ["event", (s) => s.deleteEvent("ev-1")],
+      ["habit", (s) => s.deleteHabit("h-1")], ["document", (s) => s.deleteDocument("d-1")],
+    ];
+    for (const [name, call] of soft) {
+      const { client, calls } = mk();
+      const s = bareStorage({ supabase: client, getEvent: async () => ({ id: "ev-1" }), habitMirrorTrackerId: async () => null, freezeGoalProgress: async () => undefined, getDocumentMeta: async () => null });
+      expect(await call(s), name).toBe(true);
+      expect(calls.some((c) => c.table === "entity_links"), name).toBe(false);
+    }
+    for (const [name, call] of [["purgeTask", (s: any) => s.purgeTask("t-1")], ["deleteTracker", (s: any) => s.deleteTracker("tr-1")]] as const) {
+      const { client, calls } = mk();
+      const s = bareStorage({ supabase: client, freezeGoalProgress: async () => undefined });
+      await call(s);
+      const wipe = calls.find((c) => c.table === "entity_links" && c.op === "delete");
+      expect(wipe, name).toBeTruthy();
+      expect(wipe!.filters, name).toEqual(expect.arrayContaining([["eq", ["user_id", s.userId]]]));
+    }
+  });
+  it("getEntityLinks hides a link whose other end sits in the trash and keeps the live ones", async () => {
+    const T = "11111111-1111-4111-8111-111111111111", P = "22222222-2222-4222-8222-222222222222", E = "33333333-3333-4333-8333-333333333333";
+    const row = (id: string, tt: string, tid: string) => ({ id, source_type: "task", source_id: T, target_type: tt, target_id: tid, relationship: "related_to", confidence: 1, created_at: "2026-09-03T00:00:00Z" });
+    const { client, calls } = chainClient((table) => {
+      if (table === "entity_links") return { data: [row("l1", "profile", P), row("l2", "expense", E)], error: null };
+      if (table === "tasks") return { data: [{ id: T }], error: null };
+      if (table === "profiles") return { data: [{ id: P }], error: null };
+      return { data: [], error: null };
+    });
+    const s = bareStorage({ supabase: client });
+    const links = await s.getEntityLinks("task", T);
+    expect(links.map((l: any) => l.id)).toEqual(["l1"]);
+    for (const tbl of ["tasks", "profiles", "expenses"]) {
+      const c = calls.find((c) => c.table === tbl)!;
+      expect(c, tbl).toBeTruthy();
+      expect(c.filters, tbl).toEqual(expect.arrayContaining([["is", ["deleted_at", null]], ["eq", ["user_id", s.userId]]]));
+    }
+  });
+  it("a trashed record itself lists no links", async () => {
+    const T = "11111111-1111-4111-8111-111111111111", P = "22222222-2222-4222-8222-222222222222";
+    const { client } = chainClient((table) => {
+      if (table === "entity_links") return { data: [{ id: "l1", source_type: "task", source_id: T, target_type: "profile", target_id: P, relationship: "related_to", confidence: 1, created_at: "x" }], error: null };
+      if (table === "profiles") return { data: [{ id: P }], error: null };
+      return { data: [], error: null };
+    });
+    expect(await bareStorage({ supabase: client }).getEntityLinks("profile", P)).toEqual([]);
+  });
+});
