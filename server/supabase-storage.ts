@@ -91,7 +91,7 @@ import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurre
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
-import { autoCheckinLinkedHabits } from "./habit-completion";
+import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency } from "../shared/obligation-windows";
@@ -5328,11 +5328,45 @@ export class SupabaseStorage implements IStorage {
       await this.supabase.from("trackers").update({ deleted_at: deletedAt }).eq("id", mirrorId).eq("user_id", this.userId);
       await this.supabase.from("tracker_entries").update({ deleted_at: deletedAt }).eq("tracker_id", mirrorId).eq("user_id", this.userId).is("deleted_at", null);
       bustInsightsCacheFor(this.userId);
+    } else if (ok && habitRow?.linked_tracker_id) {
+      // The habit was linked to the user's OWN tracker: it survives, but the
+      // habit's mirror entries on it ("Completed run", no measurement) used to
+      // stay behind as phantom rows pointing at a deleted habit (D228). They
+      // go to the trash with the habit (same stamp, so a restore brings them
+      // back); an entry another habit also owns is only unpaired.
+      await this.retireHabitMirrorEntries(id, String(habitRow.linked_tracker_id), deletedAt);
     }
     return ok;
   }
 
+  /** Trash this habit's own mirror entries on `trackerId` and unpair shared ones (D228). */
+  private async retireHabitMirrorEntries(habitId: string, trackerId: string, deletedAt: string): Promise<void> {
+    try {
+      const { data: rows } = await this.supabase.from("tracker_entries").select("id, entry_values")
+        .eq("tracker_id", trackerId).eq("user_id", this.userId).is("deleted_at", null);
+      for (const r of (rows || []) as any[]) {
+        const ids = mirrorHabitIds(r.entry_values);
+        if (!ids.includes(habitId)) continue;
+        const others = ids.filter((x) => x !== habitId);
+        if (others.length === 0) {
+          await this.supabase.from("tracker_entries").update({ deleted_at: deletedAt }).eq("id", r.id).eq("user_id", this.userId);
+        } else {
+          const values: Record<string, any> = { ...(r.entry_values || {}) };
+          delete values[HABIT_MIRROR_IDS_KEY];
+          values[HABIT_MIRROR_KEY] = others[0];
+          if (others.length > 1) values[HABIT_MIRROR_IDS_KEY] = others;
+          await this.supabase.from("tracker_entries").update({ entry_values: values }).eq("id", r.id).eq("user_id", this.userId);
+        }
+      }
+      bustInsightsCacheFor(this.userId);
+    } catch (e: any) {
+      console.warn(`[deleteHabit] could not retire mirror entries for ${habitId}: ${e?.message || e}`);
+    }
+  }
+
   async restoreHabit(id: string): Promise<boolean> {
+    const { data: before } = await this.supabase.from("habits").select("deleted_at, linked_tracker_id")
+      .eq("id", id).eq("user_id", this.userId).maybeSingle();
     const { data, error } = await this.supabase.from("habits").update({ deleted_at: null })
       .eq("id", id).eq("user_id", this.userId).select("id, linked_tracker_id, linked_profiles");
     const ok = !error && Array.isArray(data) && data.length > 0;
@@ -5344,6 +5378,11 @@ export class SupabaseStorage implements IStorage {
       if (tr?.deleted_at) {
         await this.supabase.from("trackers").update({ deleted_at: null }).eq("id", trackerId).eq("user_id", this.userId);
         await this.supabase.from("tracker_entries").update({ deleted_at: null }).eq("tracker_id", trackerId).eq("user_id", this.userId).eq("deleted_at", tr.deleted_at);
+        bustInsightsCacheFor(this.userId);
+      } else if (before?.deleted_at) {
+        // The tracker survived the habit's deletion (the user's own): bring
+        // back the mirror entries trashed with the habit — same stamp (D228).
+        await this.supabase.from("tracker_entries").update({ deleted_at: null }).eq("tracker_id", trackerId).eq("user_id", this.userId).eq("deleted_at", before.deleted_at);
         bustInsightsCacheFor(this.userId);
       }
     }

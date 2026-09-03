@@ -2139,3 +2139,24 @@ describe("D227: shared tracker, two habits", () => {
     expect(HABIT_MIRROR_IDS_KEY).toBe("_habitIds");
   });
 });
+
+// ─── D228: deleting a habit takes its mirror entries off the user's own tracker ─
+describe("D228: habit deletion and the user's own tracker", () => {
+  it("removes the habit's mirror entries, keeps the user's log, and unpairs a shared entry", async () => {
+    const s = new MemStorage();
+    (s as any)._timezone = TZ;
+    const tracker = await s.createTracker({ name: "Runs", category: "fitness", unit: "km", fields: [{ name: "km", type: "number" }] } as any);
+    const own = await s.logEntry({ trackerId: tracker.id, values: { km: 4 }, timestamp: new Date(Date.now() - 3 * 86400000).toISOString() } as any);
+    const a = await s.createHabit({ name: "Run", frequency: "daily", targetPerDay: 1, linkedTrackerId: tracker.id } as any);
+    const b = await s.createHabit({ name: "Move", frequency: "daily", targetPerDay: 1, linkedTrackerId: tracker.id } as any);
+    await completeHabitOccurrence(s, { habitId: a.id, source: "habit_ui", timezone: TZ } as any);          // A's own mirror
+    const shared = await s.logEntry({ trackerId: tracker.id, values: { km: 2 }, timestamp: new Date().toISOString() } as any); // paired with A and B
+    expect(await s.deleteHabit(a.id)).toBe(true);
+    const entries = ((await s.getTracker(tracker.id))?.entries || []) as any[];
+    expect(entries.some((e) => e.id === own!.id)).toBe(true);
+    expect(entries.some((e) => e.id === shared!.id)).toBe(true);
+    expect(entries.some((e) => mirrorHabitIds(e.values).includes(a.id))).toBe(false);
+    expect(mirrorHabitIds(entries.find((e) => e.id === shared!.id)?.values)).toEqual([b.id]);
+    expect(entries).toHaveLength(2);
+  });
+});

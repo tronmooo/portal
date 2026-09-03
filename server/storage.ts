@@ -2,7 +2,7 @@ import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { toMonthlyAmount, isUpcomingBill } from "@shared/obligation-windows";
-import { autoCheckinLinkedHabits } from "./habit-completion";
+import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
@@ -1863,7 +1863,28 @@ export class MemStorage implements IStorage {
     this.habits.set(id, updated);
     return updated;
   }
-  async deleteHabit(id: string) { return this.habits.delete(id); }
+  async deleteHabit(id: string) {
+    // Parity with SupabaseStorage (D228): the habit's own mirror entries on
+    // its linked tracker go with it; shared entries are unpaired.
+    const habit = this.habits.get(id);
+    const trackerId = (habit as any)?.linkedTrackerId as string | undefined;
+    const tracker = trackerId ? this.trackers.get(trackerId) : undefined;
+    if (tracker) {
+      const keep: any[] = [];
+      for (const e of (tracker.entries || []) as any[]) {
+        const ids = mirrorHabitIds(e.values);
+        if (!ids.includes(id)) { keep.push(e); continue; }
+        const others = ids.filter((x) => x !== id);
+        if (others.length === 0) continue;
+        const values: Record<string, any> = { ...(e.values || {}) };
+        delete values[HABIT_MIRROR_IDS_KEY]; values[HABIT_MIRROR_KEY] = others[0];
+        if (others.length > 1) values[HABIT_MIRROR_IDS_KEY] = others;
+        keep.push({ ...e, values });
+      }
+      (tracker as any).entries = keep;
+    }
+    return this.habits.delete(id);
+  }
 
   // ---- Obligations ----
   async getObligations() { return Array.from(this.obligations.values()); }
