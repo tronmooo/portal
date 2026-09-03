@@ -11,6 +11,7 @@ import { getUserToday, parseLocalDate } from "@shared/timezone";
 import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "@shared/recurring-dates";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
+import { rulesFromAll, daysBetweenISO, DOCUMENT_DUE_RULE_TYPES, type DateRuleType } from "@shared/date-rules";
 
 export interface AppNotification {
   id: string;
@@ -102,102 +103,78 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     storage.getHabits(),
   ]);
 
-  // --- Document Expirations ---
-  const expirationKeywords = ["expir", "exp date", "exp_date", "expdate", "valid until", "valid through", "valid_until", "valid_through", "expires", "expiration"];
-
-  for (const doc of documents) {
-    if (!doc.extractedData || typeof doc.extractedData !== "object") continue;
-    const fields = doc.extractedData as Record<string, any>;
-    for (const [key, value] of Object.entries(fields)) {
-      if (!value || typeof value !== "string") continue;
-      const keyLower = key.toLowerCase();
-      const isExpirationField = expirationKeywords.some(kw => keyLower.includes(kw));
-      if (!isExpirationField) continue;
-      const expDate = parseDate(value);
-      if (!expDate) continue;
-      const diff = daysDiff(expDate, today);
-      if (diff < 0) {
-        notifications.push({
-          id: `doc-exp-${doc.id}-${key}`,
-          type: "document_expiring",
-          severity: "critical",
-          title: `Expired: ${doc.name}`,
-          message: `${key} expired ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago (${value})`,
-          entityId: doc.id,
-          entityType: "document",
-          dueDate: value,
-        });
-      } else if (diff <= 7) {
-        notifications.push({
-          id: `doc-exp-${doc.id}-${key}`,
-          type: "document_expiring",
-          severity: "warning",
-          title: `Expiring soon: ${doc.name}`,
-          message: `${key} expires in ${diff} day${diff !== 1 ? "s" : ""} (${value})`,
-          entityId: doc.id,
-          entityType: "document",
-          dueDate: value,
-        });
-      } else if (diff <= 30) {
-        notifications.push({
-          id: `doc-exp-${doc.id}-${key}`,
-          type: "document_expiring",
-          severity: "info",
-          title: `Expiring: ${doc.name}`,
-          message: `${key} expires in ${diff} days (${value})`,
-          entityId: doc.id,
-          entityType: "document",
-          dueDate: value,
-        });
-      }
-    }
-  }
-
-  // --- Also scan profile fields for expiration dates ---
-  for (const profile of profiles) {
-    if (!profile.fields || typeof profile.fields !== "object") continue;
-    for (const [key, value] of Object.entries(profile.fields as Record<string, any>)) {
-      if (!value || typeof value !== "string") continue;
-      const keyLower = key.toLowerCase();
-      const isExpirationField = expirationKeywords.some(kw => keyLower.includes(kw));
-      if (!isExpirationField) continue;
-      const expDate = parseDate(value);
-      if (!expDate) continue;
-      const diff = daysDiff(expDate, today);
-      if (diff < 0) {
-        notifications.push({
-          id: `profile-exp-${profile.id}-${key}`,
-          type: "document_expiring",
-          severity: "critical",
-          title: `Expired: ${profile.name} - ${key}`,
-          message: `Expired ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago (${value})`,
-          entityId: profile.id,
-          entityType: "profile",
-          dueDate: value,
-        });
-      } else if (diff <= 7) {
-        notifications.push({
-          id: `profile-exp-${profile.id}-${key}`,
-          type: "document_expiring",
-          severity: "warning",
-          title: `Expiring soon: ${profile.name} - ${key}`,
-          message: `Expires in ${diff} day${diff !== 1 ? "s" : ""} (${value})`,
-          entityId: profile.id,
-          entityType: "profile",
-          dueDate: value,
-        });
-      } else if (diff <= 30) {
-        notifications.push({
-          id: `profile-exp-${profile.id}-${key}`,
-          type: "document_expiring",
-          severity: "info",
-          title: `Expiring: ${profile.name} - ${key}`,
-          message: `Expires in ${diff} days (${value})`,
-          entityId: profile.id,
-          entityType: "profile",
-          dueDate: value,
-        });
-      }
+  // --- Dates that run out: documents AND profiles, from the ONE Date Rule engine ---
+  //
+  // This block used to carry its own list of ten expiry key spellings and read
+  // documents' `extractedData` and profiles' `fields` against it. Every
+  // insurance definition in the app names its only date `renewal_date`, a
+  // membership its `contract_end_date`, a life policy its `term_end_date` —
+  // none contain "expir", so a policy renewing in two days, or lapsed three
+  // days ago, showed on the calendar and under Important Dates and never in
+  // the bell, while a passport document with `expirationDate` did. The rule
+  // engine classifies every spelling and every value format the calendar does,
+  // so the bell now sees exactly what the calendar sees for these types.
+  //
+  // What counts: something running out (expiration, end, cancellation), a
+  // renewal, a deadline — and, on a DOCUMENT, anything it says is due (a
+  // parking citation). Money dates on a PROFILE (`payment`, `due`) stay with
+  // the bills surface below, exactly as the Executive tab keeps them;
+  // maintenance and appointment dates on a profile are calendar entries, not
+  // bell alarms.
+  const BELL_RULE_TYPES = new Set<DateRuleType>(["expiration", "end", "cancellation", "renewal", "deadline"]);
+  // [past title, ≤7-day title, ≤30-day title, future verb, past verb]
+  const BELL_WORDS: Partial<Record<DateRuleType, [string, string, string, string, string]>> = {
+    expiration: ["Expired", "Expiring soon", "Expiring", "expires", "expired"],
+    end: ["Ended", "Ending soon", "Ending", "ends", "ended"],
+    cancellation: ["Cancelled", "Cancelling soon", "Cancelling", "cancels", "was cancelled"],
+    renewal: ["Renewal passed", "Renews soon", "Renewing", "renews", "was due to renew"],
+    deadline: ["Overdue", "Due soon", "Due", "is due", "was due"],
+    due: ["Overdue", "Due soon", "Due", "is due", "was due"],
+    payment: ["Overdue", "Due soon", "Due", "is due", "was due"],
+    maintenance: ["Overdue", "Due soon", "Due", "is due", "was due"],
+  };
+  for (const rule of rulesFromAll({ profiles, documents })) {
+    if (!rule.active) continue;
+    const isDoc = rule.sourceEntityType === "document";
+    if (!BELL_RULE_TYPES.has(rule.ruleType) && !(isDoc && DOCUMENT_DUE_RULE_TYPES.has(rule.ruleType))) continue;
+    const words = BELL_WORDS[rule.ruleType];
+    if (!words) continue;
+    const diff = daysBetweenISO(todayStr, rule.date);
+    if (diff > 30) continue;
+    // The PATH, so a nested date keeps a stable id; for a top-level field it is
+    // the key the old scan used, so existing dismissals still apply.
+    const key = rule.sourcePath || rule.sourceField;
+    const name = rule.subtitle || rule.label;
+    const [pastTitle, soonTitle, laterTitle, futureVerb, pastVerb] = words;
+    const base = {
+      id: `${isDoc ? "doc" : "profile"}-exp-${rule.sourceEntityId}-${key}`,
+      type: "document_expiring" as const,
+      entityId: rule.sourceEntityId,
+      entityType: isDoc ? "document" : "profile",
+      dueDate: rule.rawValue || rule.date,
+    };
+    const shown = rule.rawValue || rule.date;
+    if (diff < 0) {
+      notifications.push({
+        ...base,
+        severity: "critical",
+        title: isDoc ? `${pastTitle}: ${name}` : `${pastTitle}: ${name} - ${key}`,
+        message: `${key} ${pastVerb} ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago (${shown})`,
+      });
+    } else if (diff <= 7) {
+      notifications.push({
+        ...base,
+        severity: "warning",
+        title: isDoc ? `${soonTitle}: ${name}` : `${soonTitle}: ${name} - ${key}`,
+        message: `${key} ${futureVerb} ${diff === 0 ? "today" : `in ${diff} day${diff !== 1 ? "s" : ""}`} (${shown})`,
+      });
+    } else {
+      notifications.push({
+        ...base,
+        severity: "info",
+        title: isDoc ? `${laterTitle}: ${name}` : `${laterTitle}: ${name} - ${key}`,
+        message: `${key} ${futureVerb} in ${diff} days (${shown})`,
+      });
     }
   }
 

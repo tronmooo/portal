@@ -1632,3 +1632,62 @@ describe("D207: a co-signed bill lists its parties among its owners", () => {
     expect(ob?.linkedProfiles).toEqual(["self-1", "linda-1"]);
   });
 });
+
+// ─── D208: the bell reads the same date vocabulary as the calendar ──────────
+import { buildNotifications } from "../server/notification-service";
+import { addDays as tzAddDays2 } from "../shared/timezone";
+describe("D208: a policy's renewal_date reaches the bell like a document's expirationDate", () => {
+  const tz = "America/Los_Angeles";
+  const today = getUserToday(tz);
+  const bell = (overrides: Record<string, any>) => buildNotifications({
+    getDocuments: async () => [],
+    getProfiles: async () => [],
+    getTasks: async () => [],
+    getObligations: async () => [],
+    getHabits: async () => [],
+    listReminders: async () => [],
+    listUserNotifications: async () => [],
+    getPreference: async () => null,
+    ...overrides,
+  } as any, tz);
+  it("renewal in 2 days → warning; renewal 3 days past → critical; contract end in 20 days → info", async () => {
+    const list = await bell({
+      getProfiles: async () => [
+        { id: "p-auto", type: "asset", type_key: "auto_insurance", name: "Geico", fields: { renewal_date: tzAddDays2(today, 2) } },
+        { id: "p-home", type: "asset", type_key: "home_insurance", name: "Lemonade", fields: { renewal_date: tzAddDays2(today, -3) } },
+        { id: "p-gym", type: "asset", type_key: "gym_membership", name: "24 Hour", fields: { contract_end_date: tzAddDays2(today, 20) } },
+        { id: "p-far", type: "asset", type_key: "software", name: "Adobe", fields: { renewal_date: tzAddDays2(today, 200) } },
+        { id: "p-start", type: "asset", type_key: "utility", name: "Water", fields: { start_date: tzAddDays2(today, 1) } },
+      ],
+    });
+    const byId = Object.fromEntries(list.map((n) => [n.id, n]));
+    expect(byId["profile-exp-p-auto-renewal_date"]).toMatchObject({ severity: "warning", type: "document_expiring", entityType: "profile" });
+    expect(byId["profile-exp-p-auto-renewal_date"].message).toMatch(/renews in 2 days/);
+    expect(byId["profile-exp-p-home-renewal_date"]).toMatchObject({ severity: "critical" });
+    expect(byId["profile-exp-p-home-renewal_date"].message).toMatch(/3 days ago/);
+    expect(byId["profile-exp-p-gym-contract_end_date"]).toMatchObject({ severity: "info" });
+    expect(byId["profile-exp-p-far-renewal_date"]).toBeUndefined();
+    expect(list.some((n) => n.entityId === "p-start")).toBe(false);
+  });
+  it("documents keep their ids, and a due date on a citation now counts", async () => {
+    const list = await bell({
+      getDocuments: async () => [
+        { id: "d-pass", name: "Passport", type: "identity", extractedData: { expirationDate: tzAddDays2(today, 2) } },
+        { id: "d-cite", name: "Parking ticket", type: "other", extractedData: { dueDate: tzAddDays2(today, 5) } },
+        { id: "d-old", name: "Receipt", type: "other", extractedData: { purchaseDate: tzAddDays2(today, -2) } },
+      ],
+    });
+    const ids = list.map((n) => n.id);
+    expect(ids).toContain("doc-exp-d-pass-expirationDate");
+    expect(ids).toContain("doc-exp-d-cite-dueDate");
+    expect(ids.some((i) => i.includes("d-old"))).toBe(false);
+  });
+  it("a licence expiration copied from its document is one bell row, not two", async () => {
+    const exp = tzAddDays2(today, 4);
+    const list = await bell({
+      getDocuments: async () => [{ id: "d-lic", name: "Driver License", type: "drivers_license", linkedProfiles: ["p-me"], extractedData: { expirationDate: exp } }],
+      getProfiles: async () => [{ id: "p-me", type: "self", name: "Me", fields: { expirationDate: exp, _docFields: { "d-lic": { expirationDate: exp } } } }],
+    });
+    expect(list.filter((n) => n.type === "document_expiring")).toHaveLength(1);
+  });
+});
