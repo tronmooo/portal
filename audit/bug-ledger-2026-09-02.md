@@ -932,3 +932,4 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Production re-verification on f3b8c39 (deployed ~18:25 UTC) — verified live
 
 - p11 4/4: D233 (a mirror entry re-dated to yesterday moves the check-in), D234 (editing the logged expense's amount re-prices the payment row and stamp), D235 (editing the payment from the bill page keeps the user's recategorised, renamed expense at the new amount). D232 is client-only and was verified in the local browser flow (flows22); D236 (62c8301) awaits the next deploy.
+- Browser (flows23): Kim's Trackers tab reads "178 lbs … down 2 lbs over the past month" after the fix; the Info tab's compact Trackers card was not reachable in the flow (the Trackers tab is the surface users see first).
