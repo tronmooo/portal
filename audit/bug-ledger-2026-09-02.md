@@ -1101,3 +1101,7 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 
 - With the response cache enabled on the replica, s231 failed before the fix: the cron reported one reminder created, `GET /api/tasks` right after answered the cached pre-cron list (0/2). After the rebuild with `afterCronWrites`: the reminder is in the list and on the calendar (2/2).
 - Re-run with the cache on: s209 15/15, s213 3/3, s225 5/5, s226 2/2, s232 3/3, s233 3/3, s234 4/4.
+
+### Replica sweep with the response cache on — verified
+
+- s200–s229 re-run under the production cache configuration: all green except the two documented probe expectations (s212's paycheck check reads `/api/cashflow`, which is the weekly projection table; s228's sole-linked deed and expense go with the house by the cascade design). s230: 4 passed, 0 failed. s231 green after D257.
