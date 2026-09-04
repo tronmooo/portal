@@ -1142,6 +1142,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s337 remaining money doors: a sub-cent budget (create and edit), income edit, payment edit and obligation amount are refused; a profile balance of 555.555 stores 555.56; an account adjustment of −10.005 leaves whole cents.
 - s338 messages and noise: the sub-cent refusal says "whole cents (at most two decimals)" on create and edit; float noise from client arithmetic (0.1 + 0.2) is accepted and stored as 0.3.
 - Browser flows33 (finance page Add Expense): "12.345" is refused in place with the whole-cents message and nothing is saved; corrected to "12.34" it saves one expense.
+- The liability page's payment dialog closes only on success (its mutation's onSuccess), so a refused amount keeps that form open; D287 applies to the finance page's Add Expense form alone.
+- Full suite after D286/D287: 260 files / 4,746 tests green (vitest-full131).
 - s336 obligation edit validation: a numeric string amount is coerced to 45.5, a negative or non-numeric amount and an impossible due date are refused, an unknown frequency is refused or normalised.
 - Production (read-only): no expense, income or profile money field carries a sub-cent value (D286 has nothing to repair).
 - Full suite after D286: 260 files / 4,745 tests green (vitest-full129).
