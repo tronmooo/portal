@@ -11669,6 +11669,13 @@ No emojis. No prose outside the JSON.`,
     if (!parsed.success) return res.status(400).json({ error: "Invalid capture", details: parsed.error.flatten() });
     // Default ownerProfileId to self when missing/null.
     let ownerProfileId = parsed.data.ownerProfileId ?? null;
+    // The owner must be a profile this caller has. `getProfile` is user-scoped,
+    // so another account's id reads as missing — the same check the accounts
+    // route makes. Without it a capture could be filed under someone else's
+    // profile and kept (D292).
+    if (ownerProfileId && !(await storage.getProfile(ownerProfileId))) {
+      return res.status(404).json({ error: "Owner profile not found" });
+    }
     if (!ownerProfileId) {
       const self = await storage.getSelfProfile?.();
       if (self) ownerProfileId = self.id;
@@ -11694,6 +11701,10 @@ No emojis. No prose outside the JSON.`,
     if (!storage.updateCapture) return res.status(501).json({ error: "Captures not supported" });
     if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
       return res.status(400).json({ error: "Request body must be a JSON object" });
+    }
+    // Re-owning a capture is subject to the same rule as filing one (D292).
+    if (req.body.ownerProfileId != null && !(await storage.getProfile(String(req.body.ownerProfileId)))) {
+      return res.status(404).json({ error: "Owner profile not found" });
     }
     const updated = await storage.updateCapture(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });

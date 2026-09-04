@@ -3947,3 +3947,17 @@ describe("D291 the type-change guard knows the app's most common profile type", 
     }
   });
 });
+
+// ── D292: a capture cannot be filed under someone else's profile.
+describe("D292 the captures routes validate ownerProfileId against the caller's own profiles", () => {
+  it("create and update both check the owner with the user-scoped lookup", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    const i = src.indexOf('app.post("/api/captures"');
+    const post = src.slice(i, src.indexOf('app.get("/api/captures/:id"', i));
+    expect(post).toContain("if (ownerProfileId && !(await storage.getProfile(ownerProfileId))) {");
+    expect(post).toContain('return res.status(404).json({ error: "Owner profile not found" });');
+    const j = src.indexOf('app.patch("/api/captures/:id"');
+    const patch = src.slice(j, src.indexOf('app.delete("/api/captures/:id"', j));
+    expect(patch).toContain("if (req.body.ownerProfileId != null && !(await storage.getProfile(String(req.body.ownerProfileId)))) {");
+  });
+});
