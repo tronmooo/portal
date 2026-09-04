@@ -3682,3 +3682,15 @@ describe("D280 storage deletes report whether a row was affected", () => {
     expect(src).not.toMatch(/deleteIncome[\s\S]{0,400}return !error;/);
   });
 });
+
+// ── D281: a link to a foreign or missing profile is a 404, never a 500 or an orphan row.
+describe("D281 linking a row to a profile that is not yours answers 404", () => {
+  it("asyncHandler maps the ownership trigger's refusal, and the journal route checks before writing", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    expect(src).toContain('} else if (/linked_profiles on \\S+ references profile \\S+ which does not exist|cross-user profile association rejected|belongs to another user/i.test(msg)) {');
+    expect(src).toContain('res.status(404).json({ error: "Linked profile not found" });');
+    const j = src.indexOf('app.post("/api/journal"');
+    const block = src.slice(j, src.indexOf("upsertJournalEntry(storage, {", j));
+    expect(block).toContain('if (!pid || !(await storage.getProfile(String(pid)))) return res.status(404).json({ error: "Linked profile not found" });');
+  });
+});

@@ -1308,6 +1308,11 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
           // A value the column cannot hold (text where a number goes, an
           // object where text goes) is the caller's bad request.
           res.status(400).json({ error: "Invalid value for a field" });
+        } else if (/linked_profiles on \S+ references profile \S+ which does not exist|cross-user profile association rejected|belongs to another user/i.test(msg)) {
+          // The ownership trigger refused a link to a profile that is not
+          // this user's or does not exist: the caller named a profile it
+          // cannot use, which is a 404 like any other unknown id (D281).
+          res.status(404).json({ error: "Linked profile not found" });
         } else if (pgCode === "23505" || /duplicate key value violates unique constraint/i.test(msg)) {
           // A uniqueness rule (one journal entry per day, one Self, …) is the
           // caller's conflict, not a server fault.
@@ -8600,6 +8605,15 @@ Rules:
     // "add this to today's journal" should append anyway.
     const entryDate = String(req.body.entryDate || parsed.data.date || getUserToday(getTimezone(req))).slice(0, 10);
     applyActiveProfileScope(req, req.body);
+    // The linked profiles must be this user's and exist BEFORE the entry is
+    // written: the service inserts the row and then sets its owners, and the
+    // ownership trigger's refusal on that second write left an orphan entry
+    // behind a 500 (D281).
+    if (Array.isArray(req.body.linkedProfiles)) {
+      for (const pid of req.body.linkedProfiles) {
+        if (!pid || !(await storage.getProfile(String(pid)))) return res.status(404).json({ error: "Linked profile not found" });
+      }
+    }
     const linkedProfileId = Array.isArray(req.body.linkedProfiles) && req.body.linkedProfiles.length > 0
       ? String(req.body.linkedProfiles[0]) : null;
     let { entry: newEntry, appended } = await upsertJournalEntry(storage, {
