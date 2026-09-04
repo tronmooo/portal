@@ -1215,3 +1215,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - D269 second repair applied on production (`stale_identity_twins_2_d269`): no liability's balance spellings disagree any more (the July auto loan keeps 29,250 under `currentBalance`).
 - Full suite after D270: 260 files / 4714 tests green.
 - s269 (2/2): three same-amount expenses seconds apart on different dates all land, and three back-filled check-ins seconds apart all count (streak 3); a same-day same-amount expense repeat is a second row by design. The bills route's own 8-second dedupe key now carries the payment date too (D270).
+- Browser flows on the D270 build: flows15 7/7, flows21 4/4, flows24 5/5, flows27 5/5, flows28 3/3, flows29 4/4.
