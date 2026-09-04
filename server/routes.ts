@@ -5737,9 +5737,20 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         const restored = parseMoney((detail.fields as any).previousValue);
         try {
           await storage.updateProfile(id, {
-            fields: { ...(detail.fields || {}), currentValue: restored },
+            // Value only, plus dropping the failed-run markers so the valuation
+            // card stops describing the restored figure as "no data available".
+            fields: {
+              currentValue: restored,
+              valuationMethod: null,
+              valuationConfidence: null,
+              valuationRange: null,
+            },
           });
-          (detail as any).fields = { ...(detail.fields || {}), currentValue: restored };
+          // Mirror the repair onto the in-memory copy the rest of this handler
+          // reads, so `oldValue` below compares against the restored figure.
+          const healed = { ...(detail.fields || {}), currentValue: restored } as any;
+          delete healed.valuationMethod; delete healed.valuationConfidence; delete healed.valuationRange;
+          (detail as any).fields = healed;
           log.info(`[LookupValue] Restored ${id} from a zeroed failed lookup: $${restored}`);
         } catch { /* best-effort — the fresh lookup below may fix it anyway */ }
       }
@@ -5785,18 +5796,25 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       // NOTHING comes back as a `noData` placeholder whose estimatedValue is 0.
       // Persisting that 0 wiped the asset's stored value and dropped it out of
       // net worth. A failed lookup must leave the stored value exactly as it
-      // was — we record only the diagnostic metadata and tell the client so it
+      // was — nothing about the value is written, and the client is told so it
       // can show "couldn't find a value" instead of a fake $0 estimate.
+      //
+      // The write is deliberately MINIMAL — one timestamp, and no key that any
+      // UI reads as a valuation:
+      //  * `currentValue` is untouched. Writing it does more than set one key:
+      //    mergeFieldWrite collapses the whole `currentValue` identity group
+      //    (value / worth / marketValue / estimatedValue / currentWorth /
+      //    assetValue / presentValue) to null AND deletes nested twins like
+      //    `housing.currentValue`. That is why the original bug emptied the
+      //    `housing` and `other` groups too, leaving previousValue as the only
+      //    surviving copy of the number.
+      //  * `valuationMethod` is NOT written either. Stamping "No data
+      //    available" alongside a real stored value makes the valuation card
+      //    describe the user's own figure as an unsourced estimate.
       if (valuation.noData || !(Number(valuation.estimatedValue) > 0)) {
         try {
           await storage.updateProfile(id, {
-            fields: {
-              ...(detail.fields || {}),
-              valuationMethod: valuation.method,
-              valuationConfidence: valuation.confidence,
-              valuationMissingInfo: valuation.missingInfo,
-              valuationAttemptedAt: valuation.valuationDate,
-            },
+            fields: { valuationAttemptedAt: valuation.valuationDate },
           });
         } catch { /* the lookup outcome is reportable even if the note fails */ }
         return res.json({

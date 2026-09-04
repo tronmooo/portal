@@ -213,6 +213,16 @@ describe("POST /api/profiles/:id/lookup-value", () => {
       // ...and no previousValue was stamped from the failure, so a later
       // successful lookup still compares against the real prior figure.
       expect(saved.previousValue).toBeUndefined();
+
+      // The failure write is MINIMAL: one timestamp, and nothing that touches
+      // the value or that a valuation card would read as an estimate. Writing
+      // `currentValue` at all is what collapsed the whole identity group
+      // (marketValue / estimatedValue / housing.currentValue …) in the
+      // original bug, and a "No data available" method stamped next to a real
+      // value makes the card misdescribe the user's own figure.
+      expect(stubState.updates).toHaveLength(1);
+      expect(Object.keys(stubState.updates[0].patch.fields)).toEqual(["valuationAttemptedAt"]);
+      expect(saved.valuationMethod).toBeUndefined();
     });
 
     it("restores a value an earlier failed lookup already zeroed", async () => {
@@ -235,8 +245,12 @@ describe("POST /api/profiles/:id/lookup-value", () => {
       const data = await res.json();
 
       expect(data.noData).toBe(true);
-      expect(stubState.profiles.get("profile-zeroed").fields.currentValue).toBe(21400);
+      const healed = stubState.profiles.get("profile-zeroed").fields;
+      expect(healed.currentValue).toBe(21400);
       expect(data.currentValue).toBe(21400);
+      // The failed-run marker is dropped, so the valuation card stops
+      // describing the restored figure as "no data available".
+      expect(healed.valuationMethod).toBeFalsy();
     });
   });
 });
