@@ -14,7 +14,7 @@
 // shared with the Trackers tab.
 import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { useState, lazy, Suspense } from "react";
+import { useState, useMemo, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 // hashNavigate handles query-carrying targets ("/linked?tab=documents") correctly
 // under hash routing (see HubShell.tsx note).
@@ -23,6 +23,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useOverflowX } from "@/hooks/useOverflowX";
 import { computeHealthScore } from "@/lib/tracker-health";
+import { loadDocSnoozeMap } from "@/lib/docSnooze";
+import { groupDocumentDates } from "@shared/document-dates";
 import type { DashboardStats, Tracker } from "@shared/schema";
 import { MetricCard } from "@/components/ui/metric-card";
 import { formatMoneyRound } from "@/lib/format";
@@ -49,6 +51,12 @@ const NetWorthPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopu
 const CashFlowPopup = lazyPopup(() => import("@/components/finance/CashFlowView"), m => m.CashFlowView, "/dashboard/finance");
 const TasksPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.TasksPopup, "/dashboard/tasks");
 const HabitsPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.HabitsPopup, "/dashboard/habits");
+// DOCS EXP opened the Documents tab instead of a popup — the one number on the
+// strip you could not read (user report 2026-09-04: "there is no pop up here …
+// it just redirects me somewhere"). It now opens the SAME expirations popup the
+// Executive briefing's Documents card opens, with renew, dismiss and open-record
+// on every row.
+const DocsPopup = lazyPopup(() => import("@/components/dashboard/BriefingPopups"), m => m.DocsPopup, "/linked?tab=documents");
 
 // The strip shows whole dollars; the shared formatter does the grouping.
 const fmtMoney = (n: number) => formatMoneyRound(n).replace(/^-?\$/, "");
@@ -105,7 +113,7 @@ function StatChip({ label, value, icon, accent, tone, sub, subTone, onClick, tes
 
 export function HubKpiStrip() {
   const navigate = hashNavigate;
-  const [popup, setPopup] = useState<"networth" | "cashflow" | "tasks" | "habits" | null>(null);
+  const [popup, setPopup] = useState<"networth" | "cashflow" | "tasks" | "habits" | "docs" | null>(null);
   const scope = useProfileScope();
   const mode = scope.mode;
   const ids = scope.selectedIds;
@@ -167,7 +175,22 @@ export function HubKpiStrip() {
   const tasksDue = stats?.activeTasks;
   const tasksLate: number = (enhanced?.overdueTasks || []).length;
 
-  const expDocs: any[] = enhanced?.expiringDocuments || [];
+  // DOCS EXP — the rows the popup will list, counted the way it lists them.
+  //
+  // The raw feed is one row per dated FIELD, before dismissals: a policy that
+  // expires and takes its premium on the same day is two rows, and a row the
+  // user dismissed is still in it. Counting that fed the chip a number the
+  // popup then contradicted. Snooze-filter and group first (the same two
+  // helpers the popup and the Executive card use), so the tile promises
+  // exactly what opening it delivers.
+  const rawExpDocs: any[] = enhanced?.expiringDocuments || [];
+  const snoozedDocIds = useMemo(() => Object.keys(loadDocSnoozeMap()), [rawExpDocs.length]);
+  const expDocs = useMemo(
+    () => groupDocumentDates(
+      rawExpDocs.filter((d: any) => !snoozedDocIds.includes(d?.ruleId) && !snoozedDocIds.includes(d?.documentId)),
+    ),
+    [rawExpDocs, snoozedDocIds],
+  );
   const minDocDays = expDocs.length > 0
     ? Math.min(...expDocs.map((d: any) => (typeof d.daysUntil === "number" ? d.daysUntil : Infinity)))
     : null;
@@ -248,7 +271,7 @@ export function HubKpiStrip() {
         value={String(expDocs.length)}
         sub={minDocDays != null && isFinite(minDocDays) ? (minDocDays < 0 ? "overdue" : `≤${minDocDays}d`) : undefined}
         subTone={minDocDays != null && minDocDays < 0 ? "neg" : "warn"}
-        onClick={() => navigate("/linked?tab=documents")}
+        onClick={() => setPopup("docs")}
         testId="hub-kpi-docs"
       />
 
@@ -259,6 +282,10 @@ export function HubKpiStrip() {
         {popup === "cashflow" && <CashFlowPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
         {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
         {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
+        {/* Pass the RAW rows: the popup applies the same snooze filter and
+            grouping itself, and its dismiss action needs every rule id a card
+            stands for. The chip's count above is derived the same way. */}
+        {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={rawExpDocs} />}
       </Suspense>
     </div>
   );

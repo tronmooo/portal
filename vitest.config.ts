@@ -56,6 +56,7 @@ export default defineConfig({
       'tests/scope.test.ts',
       'tests/holding-visibility.test.ts',
       'tests/reserved-profile-fields.test.ts',
+      'tests/hub-kpi-docs-popup.dom.test.tsx',
       'tests/destination-picker-owner-scope.test.ts',
       'tests/reminder-scope.test.ts',
       'tests/calendar-virtual-event-scope.test.ts',
