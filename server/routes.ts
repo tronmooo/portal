@@ -32,7 +32,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
+import { withLedgerNote, ledgerNoteOf, payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -11091,6 +11091,9 @@ No emojis. No prose outside the JSON.`,
       return res.status(400).json({ error: `${refused.join(", ")} ${refused.length > 1 ? "are" : "is"} derived by the ledger and cannot be edited directly; change amount or paymentDate instead` });
     }
     const EDITABLE = ["amount", "paymentDate", "notes", "sourceAccount", "documentId"];
+    // A notes edit keeps the ledger's own segment (a settlement's written-off
+    // figure is what an undo restores from).
+    if (body.notes !== undefined) body.notes = withLedgerNote(body.notes == null ? null : String(body.notes), ledgerNoteOf(row.notes));
     const unknown = Object.keys(body).filter((k) => !EDITABLE.includes(k));
     if (unknown.length > 0) return res.status(400).json({ error: `Unknown field(s): ${unknown.join(", ")}` });
 

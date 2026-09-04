@@ -3487,3 +3487,28 @@ describe("D273 undoing a settlement payoff puts the whole balance back", async (
     expect(writtenOffOf({ paymentType: "payoff", notes: "final — Settled: $1,234.50 of the balance written off" })).toBe(1234.5);
   });
 });
+
+// ── D274: the ledger's note segment never stacks on a re-record or a notes edit.
+describe("D274 the ledger's own note segment is kept apart from the user's notes", async () => {
+  const { stripLedgerNotes, ledgerNoteOf, withLedgerNote, writtenOffOf, applyLiabilityPayment } = await import("../server/liability-payments");
+  it("strip / ledgerNoteOf / withLedgerNote", () => {
+    const stacked = "settled with Discover — Settled: $2900.00 of the balance written off — Settled: $2850.00 of the balance written off";
+    expect(stripLedgerNotes(stacked)).toBe("settled with Discover");
+    expect(ledgerNoteOf(stacked)).toBe("Settled: $2850.00 of the balance written off");
+    expect(stripLedgerNotes("Overpaid by $5980.00 (owed back by the lender)")).toBeNull();
+    expect(withLedgerNote("mine", null)).toBe("mine");
+    expect(withLedgerNote(null, "Settled: $1.00 of the balance written off")).toBe("Settled: $1.00 of the balance written off");
+    expect(withLedgerNote("a — Settled: $9.00 of the balance written off", "Settled: $2.00 of the balance written off")).toBe("a — Settled: $2.00 of the balance written off");
+  });
+  it("re-recording a settlement with the stored notes yields one settlement segment with the new figure", async () => {
+    const rows: any[] = []; let profile: any = { id: "card-3", type: "liability", type_key: "credit_card", name: "Card", fields: { currentBalance: 3100, interestRate: 24 }, tags: [], notes: "" };
+    const storage: any = { _timezone: "UTC", getProfile: async () => profile, updateProfile: async (_id: string, patch: any) => { profile = { ...profile, fields: { ...profile.fields, ...(patch?.fields || {}) } }; return profile; }, createLiabilityPayment: async (r: any) => { rows.push(r); return r; }, getLiabilityPayments: async () => rows };
+    const r: any = await applyLiabilityPayment(storage, profile, { amount: 250, paymentDate: "2026-09-04", paymentType: "payoff", notes: "settled with Discover — Settled: $2900.00 of the balance written off" } as any, "UTC");
+    expect(r.payment.notes).toBe("settled with Discover — Settled: $2850.00 of the balance written off");
+    expect(writtenOffOf(r.payment)).toBe(2850);
+  });
+  it("the notes edit route keeps the ledger segment", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    expect(src).toContain("if (body.notes !== undefined) body.notes = withLedgerNote(body.notes == null ? null : String(body.notes), ledgerNoteOf(row.notes));");
+  });
+});

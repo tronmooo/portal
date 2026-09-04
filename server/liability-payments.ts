@@ -70,6 +70,28 @@ export interface LiabilityPaymentResult {
 export function settlementNote(forgiven: number): string {
   return `Settled: $${forgiven.toFixed(2)} of the balance written off`;
 }
+/**
+ * The ledger appends its own segment to a row's notes (an overpayment, a
+ * settlement). Re-recording a payment (an amount edit) fed the stored notes
+ * back in, so the segment stacked up ("… — Settled: $2900 — Settled: $2850")
+ * and an undo read the stale first figure (D274). The user's text and the
+ * ledger's segment are kept apart here.
+ */
+const LEDGER_NOTE_RE = /(?:^|\s—\s)(?:Overpaid by \$[\d,]+(?:\.\d+)?\s\(owed back by the lender\)|Settled: \$[\d,]+(?:\.\d+)?\sof the balance written off)/g;
+export function stripLedgerNotes(notes: string | null | undefined): string | null {
+  const out = String(notes || "").replace(LEDGER_NOTE_RE, "").replace(/^\s*—\s*/, "").trim();
+  return out || null;
+}
+export function ledgerNoteOf(notes: string | null | undefined): string | null {
+  const m = String(notes || "").match(LEDGER_NOTE_RE);
+  return m ? m[m.length - 1].replace(/^\s—\s/, "") : null;
+}
+export function withLedgerNote(userNotes: string | null | undefined, ledger: string | null | undefined): string | null {
+  const user = stripLedgerNotes(userNotes);
+  if (!ledger) return user;
+  return user ? `${user} — ${ledger}` : ledger;
+}
+
 export function writtenOffOf(row: { notes?: string | null; paymentType?: string | null } | null | undefined): number {
   if (row?.paymentType !== "payoff") return 0;
   const m = /Settled: \$([\d,]+(?:\.\d+)?) of the balance written off/.exec(String(row?.notes || ""));
@@ -310,9 +332,10 @@ export async function applyLiabilityPayment(
       remainingBalanceAfter: plan.moves ? newBalance : undefined,
       paymentType,
       sourceAccount: input.sourceAccount || null,
-      notes: plan.overpayment > 0 ? `${input.notes ? input.notes + " — " : ""}Overpaid by $${plan.overpayment.toFixed(2)} (owed back by the lender)`
-        : plan.forgiven > 0 ? `${input.notes ? input.notes + " — " : ""}${settlementNote(plan.forgiven)}`
-        : (input.notes || null),
+      notes: withLedgerNote(input.notes,
+        plan.overpayment > 0 ? `Overpaid by $${plan.overpayment.toFixed(2)} (owed back by the lender)`
+        : plan.forgiven > 0 ? settlementNote(plan.forgiven)
+        : null),
     } as any);
   } catch (e) {
     // The balance moved for a row that never landed: put the money back
