@@ -6123,8 +6123,11 @@ export class SupabaseStorage implements IStorage {
       adjustment = out.adjustment;
       return { fields: out.fields } as any;
     });
-    if (!updated || !adjustment) return undefined;
-    const adj = adjustment as ReturnType<typeof applyBalanceAdjustment>["adjustment"];
+    if (!updated) return undefined;
+    // A move of nothing is a successful no-op: the account as it is, no
+    // history row, no activity line (D283).
+    if (!adjustment) return updated;
+    const adj = adjustment as NonNullable<ReturnType<typeof applyBalanceAdjustment>["adjustment"]>;
     this.logActivity(
       "profile",
       `${p.name} balance ${adj.delta >= 0 ? "+" : "-"}$${Math.abs(adj.delta)} → $${adj.newBalance}`,

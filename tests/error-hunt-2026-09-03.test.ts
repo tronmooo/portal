@@ -3715,3 +3715,22 @@ describe("D282 payment tags on an expense must name a live payment of this user"
     expect(src).toContain("if (Array.isArray(req.body.tags)) req.body.tags = await stripDanglingPaymentTags(storage, req.body.tags);");
   });
 });
+
+// ── D283: an adjustment that moves nothing writes no history entry.
+describe("D283 a zero balance move leaves no history entry", async () => {
+  const { applyBalanceAdjustment } = await import("../shared/finance-accounts");
+  it("delta 0 and 'set to the same balance' are no-ops; a real move still records", () => {
+    const acct = { id: "a1", type: "account", fields: { balance: 750, currentBalance: 750, balanceHistory: [{ id: "x", date: "2026-09-01", previousBalance: 1000, newBalance: 750, delta: -250 }] } };
+    expect(applyBalanceAdjustment(acct, { delta: 0, reason: "nothing" }, "2026-09-03")).toEqual({ fields: {}, adjustment: null });
+    expect(applyBalanceAdjustment(acct, { newBalance: 750 }, "2026-09-03")).toEqual({ fields: {}, adjustment: null });
+    const moved = applyBalanceAdjustment(acct, { delta: -0.004 }, "2026-09-03");
+    expect(moved.adjustment).toBeNull();
+    const real = applyBalanceAdjustment(acct, { delta: -10 }, "2026-09-03");
+    expect(real.adjustment?.delta).toBe(-10);
+    expect(real.fields.balanceHistory).toHaveLength(2);
+  });
+  it("the storage returns the account unchanged for a no-op instead of 404", () => {
+    const src = readFileSync(new URL("../server/supabase-storage.ts", import.meta.url), "utf8");
+    expect(src).toContain("if (!adjustment) return updated;");
+  });
+});

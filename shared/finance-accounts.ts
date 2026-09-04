@@ -235,7 +235,7 @@ export function applyBalanceAdjustment(
   profile: any,
   input: AdjustBalanceInput,
   todayISO: string,
-): { fields: Record<string, any>; adjustment: BalanceAdjustment } {
+): { fields: Record<string, any>; adjustment: BalanceAdjustment | null } {
   const previous = resolveAccountBalance(profile);
   const explicit = input.newBalance == null ? null : Number(input.newBalance);
   const delta = input.delta == null ? null : Number(input.delta);
@@ -243,6 +243,9 @@ export function applyBalanceAdjustment(
     ? round2(explicit)
     : round2(previous + (Number.isFinite(delta as number) ? (delta as number) : 0));
   const date = isCalendarDay(String(input.date ?? "").slice(0, 10)) ? String(input.date).slice(0, 10) : todayISO;
+  // Nothing moved (a delta of 0, "set to" the balance it already has): no
+  // history entry — every such call used to append a "$0" row (D283).
+  if (round2(next - previous) === 0) return { fields: {}, adjustment: null };
 
   const adjustment: BalanceAdjustment = {
     id: `adj_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
