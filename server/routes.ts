@@ -7926,6 +7926,12 @@ Rules:
       const result = await payBillOccurrence(storage, req.params.id, {
         amount: amount ?? null,
         paymentDate: date || null,
+        // The occurrence the caller named. The dedupe key above already told
+        // two explicit occurrences apart, but the pay operation never heard
+        // which one was meant: it paid the current occurrence and folded the
+        // second request (same money, seconds later) into the first, so
+        // catching up two months paid one (D276).
+        occurrenceDate: isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null,
         // Pay-from-account: the occurrence route honoured accountId, this one
         // silently dropped it, so the source account's balance never moved.
         accountId: accountId || null,

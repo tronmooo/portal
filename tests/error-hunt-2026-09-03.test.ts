@@ -3543,3 +3543,39 @@ describe("D275 the pay result carries overpayment and forgiven through to the AI
     expect(r.overpayment).toBe(0);
   });
 });
+
+// ── D276: the obligations pay route passes the named occurrence to the pay operation.
+describe("D276 POST /obligations/:id/pay honours an explicit occurrenceDate", async () => {
+  it("the route forwards a calendar-day occurrenceDate and drops anything else", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    const i = src.indexOf('app.post("/api/obligations/:id/pay"');
+    const block = src.slice(i, i + 6000);
+    expect(block).toContain('occurrenceDate: isCalendarDay(String(req.body?.occurrenceDate || "")) ? String(req.body.occurrenceDate) : null,');
+  });
+  it("two explicit occurrences paid seconds apart are two payments, not one folded into the other", async () => {
+    const { payBillOccurrence } = await import("../server/liability-payments");
+    let rows: any[] = [];
+    let profile: any = { id: "bill-1", type: "liability", type_key: "utility", name: "Water", fields: { monthlyAmount: 120, dueDate: "2026-09-04", nextDueDate: "2026-09-04", frequency: "monthly", count: 2, occurrences: {} }, tags: [], notes: "" };
+    const storage: any = {
+      _timezone: "UTC",
+      getProfile: async () => profile, getProfiles: async () => [profile],
+      updateProfile: async (_id: string, patch: any) => { profile = { ...profile, fields: { ...profile.fields, ...(patch?.fields || {}) } }; return profile; },
+      mutateProfileFields: async (_id: string, fn: any) => { const r = fn(profile); profile = { ...profile, fields: { ...profile.fields, ...(r?.fields || {}) } }; return profile; },
+      claimBillOccurrence: async (_id: string, date: string, stamp: any, extra: any) => {
+        const occ = { ...(profile.fields.occurrences || {}) };
+        if (occ[date]?.status === "paid") return { status: "already-paid", occurrences: occ };
+        occ[date] = stamp; profile = { ...profile, fields: { ...profile.fields, ...extra, occurrences: occ } };
+        return { status: "claimed", occurrences: occ };
+      },
+      createLiabilityPayment: async (r: any) => { const row = { id: r.id || `pay-${rows.length + 1}`, ...r }; rows.push(row); return row; },
+      getLiabilityPayments: async () => rows, getLiabilityPayment: async (id: string) => rows.find((r) => r.id === id) || null,
+      updateOccurrenceOverride: async () => {}, getTasks: async () => [], getExpenses: async () => [], createExpense: async (e: any) => e,
+    };
+    const first = await payBillOccurrence(storage, "bill-1", { amount: 120, paymentDate: "2026-09-03", occurrenceDate: "2026-09-04", source: "route" } as any, "UTC");
+    const second = await payBillOccurrence(storage, "bill-1", { amount: 120, paymentDate: "2026-09-03", occurrenceDate: "2026-10-04", source: "route" } as any, "UTC");
+    expect(first.ok && !first.deduped).toBe(true);
+    expect(second.ok && !second.deduped).toBe(true);
+    expect(rows.length).toBe(2);
+    expect(Object.keys(profile.fields.occurrences).sort()).toEqual(["2026-09-04", "2026-10-04"]);
+  });
+});
