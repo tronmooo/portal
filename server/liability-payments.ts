@@ -73,7 +73,11 @@ function inferPaymentType(
   monthlyPayment: number, explicitPrincipal: boolean,
 ): LiabilityPaymentType {
   if (explicitPrincipal && interest === 0 && principal > 0) return "extra_principal";
-  if (Math.max(0, balance - principal) === 0 && amount > 0) return "payoff";
+  // A loan with no tracked balance cannot be "paid off": nothing is known to
+  // clear, so the payment stays a standard one (whole amount principal). It
+  // used to infer payoff and book the entire payment as interest, then (with
+  // the D271 overpayment split) as nothing at all.
+  if (balance > 0 && Math.max(0, balance - principal) === 0 && amount > 0) return "payoff";
   if (monthlyPayment > 0 && Math.abs(amount - monthlyPayment) < 1) return "standard";
   if (monthlyPayment > 0 && amount < monthlyPayment && amount > 0) return "partial";
   if (monthlyPayment > 0 && amount > monthlyPayment) return "custom";
@@ -152,10 +156,17 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
     // it used to be booked as interest, so a $10,000 payment on a $4,000
     // loan recorded $6,000 of "interest" and the cost-of-borrowing figures
     // followed (D271).
-    const accrued = allocatePayment(cashTowardLoan, balanceBefore, annualRate, 0).interest;
-    principal = balanceBefore;
-    interest = Math.min(accrued, Math.max(0, cashTowardLoan - balanceBefore));
-    overpayment = Math.max(0, round2(cashTowardLoan - balanceBefore - interest));
+    if (balanceBefore > 0) {
+      const accrued = allocatePayment(cashTowardLoan, balanceBefore, annualRate, 0).interest;
+      principal = balanceBefore;
+      interest = Math.min(accrued, Math.max(0, cashTowardLoan - balanceBefore));
+      overpayment = Math.max(0, round2(cashTowardLoan - balanceBefore - interest));
+    } else {
+      // An explicit payoff on a loan whose balance was never tracked: the
+      // money paid is what was owed, all principal, nothing to owe back.
+      principal = Math.max(0, cashTowardLoan);
+      interest = 0;
+    }
     newBalance = 0;
   } else {
     newBalance = Math.max(0, balanceBefore - principal);

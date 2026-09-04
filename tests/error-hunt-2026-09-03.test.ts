@@ -3412,4 +3412,13 @@ describe("D271 a payoff books accrued interest only; the excess is an overpaymen
     const rc: any = await applyLiabilityPayment(c.storage, c.get(), { amount: 10000, paymentDate: "2026-09-04" } as any, "UTC");
     expect(c.rows[0].paymentType).toBe("payoff"); expect(c.rows[0].interestPortion).toBe(20); expect(rc.overpayment).toBe(5980);
   });
+  it("a loan with no tracked balance is never inferred as a payoff: the whole payment is principal, no interest, no overpayment", async () => {
+    const d = loanStub({ monthlyAmount: 100 });
+    const rd: any = await applyLiabilityPayment(d.storage, d.get(), { amount: 100, paymentDate: "2026-09-04" } as any, "UTC");
+    expect(d.rows[0].paymentType).not.toBe("payoff");
+    expect(d.rows[0].principalPortion).toBe(100); expect(d.rows[0].interestPortion).toBe(0); expect(rd.overpayment ?? 0).toBe(0);
+    const e = loanStub({ monthlyAmount: 100 });
+    const re: any = await applyLiabilityPayment(e.storage, e.get(), { amount: 250, paymentDate: "2026-09-04", paymentType: "payoff" } as any, "UTC");
+    expect(e.rows[0].principalPortion).toBe(250); expect(e.rows[0].interestPortion).toBe(0); expect(re.overpayment ?? 0).toBe(0); expect(e.rows[0].notes).toBeNull();
+  });
 });
