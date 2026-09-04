@@ -65,7 +65,9 @@ describe("'View all (N)' reveals the rows it promises", () => {
 
 // ── #4 — search results open the record, not the dashboard ───────────────────
 describe("global search results go somewhere", () => {
-  const src = read("client/src/components/CommandSearch.tsx");
+  // The palette body moved to CommandSearchDialog.tsx when the ⌘K chunk was made
+  // lazy (first-paint perf); the search groups this test reads live there now.
+  const src = read("client/src/components/CommandSearchDialog.tsx");
   // Each result group's onSelect sits directly above its data-testid.
   const targetFor = (kind: string): string => {
     const re = new RegExp(

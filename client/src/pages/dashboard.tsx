@@ -24,8 +24,6 @@ import {
   nextOccurrence as nextRecurOccurrence, seriesEnded, humanSummary, freqToUnit,
   type RecurrenceRule,
 } from "@shared/recurrence";
-import { DrillDownDialog } from "@/components/DrillDownDialog";
-import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { groupDocumentDates, ruleIdsOf } from "@shared/document-dates";
@@ -104,17 +102,25 @@ import { useShowTestData, toggleShowTestData } from "@/lib/showTestData";
 import { devToolsEnabled } from "@/lib/dev-affordances";
 import { isTestEntity } from "@shared/test-data";
 import { formatMoney, formatListDate } from "@/lib/format";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+import { LazySpendDonut } from "@/components/dashboard/LazySpendDonut";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { DEFAULT_SECTION_DEFS, LAYOUT_VERSION } from "@shared/dashboard-layout";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
-import { NetWorthPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
-// One data type = one UI: every cash-flow press opens the canonical waterfall.
-import { CashFlowView } from "@/components/finance/CashFlowView";
-import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
-import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
+// Overlays load on first open, not on first paint — see lazy-modals.tsx.
+// (One data type = one UI: every cash-flow press opens the canonical waterfall.)
+import {
+  NetWorthPopup,
+  BudgetPopup,
+  CashFlowView,
+  QuickAddDialog,
+  TasksPopup,
+  HabitsPopup,
+  DrillDownDialog,
+  ChatGPTImportDialog,
+  type QuickAddKind,
+} from "@/components/dashboard/lazy-modals";
 import { ExecutiveBriefing } from "@/components/dashboard/ExecutiveBriefing";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1239,29 +1245,16 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                 {/* Donut — spending by category */}
                 {categories.length > 0 && total > 0 && (
                   <div className="relative h-36">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={categories.map(([cat, amt]) => ({ name: cat, value: amt as number }))}
-                          dataKey="value"
-                          nameKey="name"
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={42}
-                          outerRadius={62}
-                          paddingAngle={2}
-                          stroke="none"
-                        >
-                          {categories.map(([cat], i) => (
-                            <Cell key={cat} fill={SPEND_COLORS[i % SPEND_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          formatter={(v: any, n: any) => [formatMoney(v as number), n]}
-                          contentStyle={{ fontSize: 11, borderRadius: 8, padding: "4px 8px" }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
+                    <LazySpendDonut
+                      data={categories.map(([cat, amt]) => ({ name: cat, value: amt as number }))}
+                      colors={SPEND_COLORS}
+                      height="100%"
+                      innerRadius={42}
+                      outerRadius={62}
+                      stroke="none"
+                      tooltipContentStyle={{ fontSize: 11, borderRadius: 8, padding: "4px 8px" }}
+                      formatTooltip={(v, n) => [formatMoney(v), n]}
+                    />
                     <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                       <p className="micro-label text-muted-foreground">Spent</p>
                       <p className="text-sm font-bold tabular-nums">{formatMoney(total)}</p>
@@ -3989,17 +3982,14 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
           const total = catData.reduce((s, c) => s + c.value, 0);
           return (
             <div className="mb-3">
-              <ResponsiveContainer width="100%" height={160}>
-                <PieChart>
-                  <Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={60} paddingAngle={2}>
-                    {catData.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{background:'hsl(var(--card))',border:'1px solid hsl(var(--border))',borderRadius:'8px',fontSize:'11px'}}
-                    formatter={(v:any, name:any) => [`$${Number(v).toFixed(2)}`, name]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              <LazySpendDonut
+                data={catData}
+                colors={COLORS}
+                height={160}
+                outerRadius={60}
+                tooltipContentStyle={{background:'hsl(var(--card))',border:'1px solid hsl(var(--border))',borderRadius:'8px',fontSize:'11px'}}
+                formatTooltip={(v, name) => [`$${v.toFixed(2)}`, name]}
+              />
               {/* Custom legend with color swatches + tabular numerals so amounts align */}
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-1 px-1">
                 {catData.map((c, i) => {

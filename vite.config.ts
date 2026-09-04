@@ -42,10 +42,43 @@ function stripEditorChunkPreloads(): Plugin {
   };
 }
 
+/**
+ * PERF (first paint) — preload the landing route's chunk.
+ *
+ * index.html ships a single <script type="module"> for the entry bundle and
+ * nothing else, so the dashboard chunk (the landing route: "/" redirects to
+ * "/dashboard") is not even discovered until the entry has downloaded, parsed,
+ * mounted React and resolved auth. That's a four-step serial waterfall before
+ * the first request for the code that actually paints the screen.
+ *
+ * Emitting <link rel="modulepreload"> for the dashboard chunk lets the browser
+ * fetch it alongside the entry bundle, so by the time AuthGate renders the
+ * route the module is already in the cache. Only the page chunk itself is
+ * preloaded — its lazy sub-chunks (popups, charts) stay on demand.
+ */
+function preloadLandingRoute(): Plugin {
+  return {
+    name: "preload-landing-route",
+    apply: "build",
+    enforce: "post",
+    transformIndexHtml(html: string, ctx) {
+      const bundle = ctx.bundle;
+      if (!bundle) return html;
+      const chunk = Object.keys(bundle).find((f) =>
+        /^assets\/dashboard-[A-Za-z0-9_-]+\.js$/.test(f),
+      );
+      if (!chunk) return html;
+      const tag = `    <link rel="modulepreload" crossorigin href="/${chunk}">\n`;
+      return html.replace("</head>", `${tag}  </head>`);
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
     stripEditorChunkPreloads(),
+    preloadLandingRoute(),
     // P1.2 (2026-06-10): real PWA service worker. Replaces the old inline
     // "unregister everything" script in index.html (which gave zero offline
     // support and zero asset caching).

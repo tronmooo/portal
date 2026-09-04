@@ -52,11 +52,23 @@ import { BubbleSkeleton } from "@/components/ui/skeleton";
 //     /dashboard/obligations page renders, the same Cash Flow waterfall the
 //     Finance tab opens. Nothing here is a second version of an existing
 //     screen, and a label never opens a different category's panel.
-import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
-import { BillsPopup, EventsPopup, DocsPopup, dedupeBills } from "@/components/dashboard/BriefingPopups";
-import { NetWorthPopup } from "@/components/dashboard/HeroKPIPopups";
-import { CashFlowView } from "@/components/finance/CashFlowView";
-import { WellnessPopup, type WellnessPopupKind, type WellnessPopupData } from "@/components/wellness/WellnessPopups";
+// Overlays load on first open, not on first paint. The briefing is the
+// dashboard's above-the-fold surface; statically importing its seven popups
+// pulled recharts, @shared/schema and the recurrence rules into the dashboard
+// chunk, so every cold open downloaded and parsed all of it before a single
+// number appeared. See components/dashboard/lazy-modals.tsx.
+import {
+  TasksPopup,
+  HabitsPopup,
+  BillsPopup,
+  EventsPopup,
+  DocsPopup,
+  NetWorthPopup,
+  CashFlowView,
+  WellnessPopup,
+} from "@/components/dashboard/lazy-modals";
+import { dedupeBills } from "@/lib/bill-dedupe";
+import type { WellnessPopupKind, WellnessPopupData } from "@/components/wellness/WellnessPopups";
 import { computeHealthScore } from "@/lib/tracker-health";
 // hashNavigate for query-carrying targets ("/trackers?open=x",
 // "/linked?tab=documents") — wouter's hash navigate hoists the query out of

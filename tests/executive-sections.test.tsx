@@ -47,11 +47,13 @@ describe("QuickActionsSection", () => {
     }
   });
 
-  it("opens the quick-add dialog when a button is clicked", () => {
+  // The dialog is code-split (first-paint perf: overlays load on first open),
+  // so it lands a microtask after the click rather than in the same commit.
+  it("opens the quick-add dialog when a button is clicked", async () => {
     wrap(<QuickActionsSection filterMode="everyone" filterIds={[]} />);
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     fireEvent.click(screen.getByTestId("quick-action-expense"));
-    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await waitFor(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
   });
 });
 
@@ -332,7 +334,7 @@ describe("ExecutiveBriefing", () => {
     it("Tasks — the KPI and the card header open the Tasks panel, not the Finance page", async () => {
       await mount(enhancedWith());
       fireEvent.click(screen.getByTestId("exec-kpi-tasks"));
-      expect(opened()).toContain("Task");
+      await waitFor(() => expect(opened()).toContain("Task"));
       // Still on Executive underneath — the tab was never navigated away.
       expect(screen.getByTestId("executive-briefing")).toBeTruthy();
       expect(screen.getByTestId("exec-card-tasks")).toBeTruthy();
@@ -386,7 +388,7 @@ describe("ExecutiveBriefing", () => {
     it("Documents — the card opens the Documents panel, not a document page", async () => {
       await mount(enhancedWith());
       fireEvent.click(screen.getByTestId("exec-view-documents"));
-      expect(opened()).toContain("Passport");
+      await waitFor(() => expect(opened()).toContain("Passport"));
       expect(screen.getByTestId("executive-briefing")).toBeTruthy();
     });
 
