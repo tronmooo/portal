@@ -9056,7 +9056,7 @@ Rules:
             // ids, so deleting or editing the restored document never found
             // the copies it had written.
             const { _docFields: docSources, ...fieldsWithoutProvenance } = (p.fields && typeof p.fields === "object" ? p.fields : {}) as Record<string, any>;
-            const created = await storage.createProfile({ type: p.type, name: p.name, fields: fieldsWithoutProvenance, tags: p.tags, notes: p.notes, ...(parentProfileId ? { parentProfileId } : {}) } as any);
+            const created = await storage.createProfile({ type: p.type, ...(p.type_key || p.typeKey ? { type_key: p.type_key || p.typeKey } : {}), name: p.name, fields: fieldsWithoutProvenance, tags: p.tags, notes: p.notes, ...(parentProfileId ? { parentProfileId } : {}) } as any);
             if (p.id && created?.id) idMap.set(String(p.id), created.id);
             if (created?.id && docSources && typeof docSources === "object" && Object.keys(docSources).length > 0) {
               heldProvenance.push({ profileId: created.id, sources: docSources as Record<string, any> });

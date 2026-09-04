@@ -3214,3 +3214,43 @@ describe("D266 registry bills anchor on their start date", async () => {
     expect(canonicalizeRegistryFields({ frequency: "monthly", start_date: "2026-07-01" }).dueDate).toBeUndefined();
   });
 });
+
+// ── D267: every door folds a profile's fields at the storage layer — a restored
+// old backup included.
+describe("D267 the storage layer folds registry fields for every door", async () => {
+  const { prepareProfileFields } = await import("../shared/registry-fields");
+  it("prepareProfileFields folds aliases, anchors a recurring bill and stores the model's numbers as numbers", () => {
+    expect(prepareProfileFields({ current_balance: "7000", monthly_payment: "310", interest_rate: 4.5, loan_term_months: "24", due_date_day: "20", lender: "CU" }, { typeKey: "auto_loan", todayISO: "2026-09-04" }))
+      .toEqual({ balance: 7000, monthlyAmount: 310, interestRate: 4.5, termMonths: 24, dueDay: 20, lender: "CU" });
+    const util = prepareProfileFields({ amount: "60", frequency: "monthly", start_date: "2026-05-26", provider: "City" }, { typeKey: "utility", todayISO: "2026-09-04" });
+    expect(util).toMatchObject({ amount: 60, firstPaymentDate: "2026-05-26", dueDate: "2026-09-26", nextDueDate: "2026-09-26" });
+    expect(prepareProfileFields({ value: "abc", notes: "x" })).toEqual({ value: "abc", notes: "x" });
+  });
+  it("MemStorage create and update fold an old-backup shape", async () => {
+    const s = new MemStorage();
+    const loan = await s.createProfile({ type: "liability", type_key: "auto_loan", name: "Old loan", fields: { current_balance: "7000", monthly_payment: "310", due_date_day: 20 }, tags: [], notes: "" } as any);
+    expect(loan.fields).toMatchObject({ balance: 7000, monthlyAmount: 310, dueDay: 20 });
+    expect((loan.fields as any).current_balance).toBeUndefined();
+    const upd = await s.updateProfile(loan.id, { fields: { monthly_payment: "325" } } as any);
+    expect((upd as any)?.fields?.monthlyAmount).toBe(325);
+    expect((upd as any)?.fields?.monthly_payment).toBeUndefined();
+  });
+  it("POST /api/import restores an old backup loan with its subtype and folded, numeric fields", async () => {
+    const created: any[] = [];
+    h = await boot({ profiles: [{ id: "self-1", type: "self", name: "Me" }] }, (storage) => {
+      storage.getProfiles = async () => [{ id: "self-1", type: "self", name: "Me", fields: {} }];
+      storage.getSelfProfile = async () => ({ id: "self-1", type: "self", name: "Me", fields: {} });
+      storage.createProfile = async (p: any) => { const row = { id: `p-${created.length + 1}`, ...p }; created.push(row); return row; };
+    });
+    const payload = { version: "2", profiles: [
+      { id: "old-self", type: "self", name: "Me", fields: {} },
+      { id: "old-loan", type: "liability", type_key: "auto_loan", name: "Old loan", parentProfileId: "old-self", fields: { current_balance: "7000", monthly_payment: "310", due_date_day: 20 }, tags: [], notes: "" },
+    ] };
+    const r = await h.api("POST", "/api/import", payload);
+    expect([200, 201]).toContain(r.status);
+    const loan = created.find((p) => p.name === "Old loan")!;
+    expect(loan.type_key).toBe("auto_loan");
+    // The fake storage stores what it is given; the fold lives in the real storages (covered above).
+    expect(loan.fields).toMatchObject({ current_balance: "7000" });
+  });
+});

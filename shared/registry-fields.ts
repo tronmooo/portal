@@ -101,3 +101,26 @@ export function canonicalizeRegistryFields<T extends Record<string, any>>(fields
   if (!isBlank(out.dueDate) && isBlank(out.nextDueDate) && "next_billing_date" in fields) out.nextDueDate = out.dueDate;
   return out as T;
 }
+
+const NUMERIC_MODEL_KEYS = new Set([
+  "value", "balance", "originalAmount", "monthlyAmount", "minimumPayment", "interestRate", "termMonths", "dueDay",
+  "creditLimit", "extraPayment", "purchasePrice", "amount", "monthlyPayment", "currentBalance", "originalBalance",
+]);
+
+/**
+ * Every door a profile comes through — the routes, a backup restore, the chat
+ * tools, a script — ends in the storage layer, so this is where a profile's
+ * fields take their one stored form: registry aliases folded into the model
+ * keys (D265), a recurring bill anchored on its start date (D266), and the
+ * model's numeric keys stored as numbers even when a form or an old backup
+ * sent numerals in strings (D264/D267). Unparseable text is left as typed
+ * for the validators to refuse.
+ */
+export function prepareProfileFields<T extends Record<string, any>>(fields: T, ctx?: { typeKey?: string | null; todayISO?: string }): T {
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) return fields;
+  const out: Record<string, any> = canonicalizeRegistryFields(fields, ctx);
+  for (const k of Object.keys(out)) {
+    if (NUMERIC_MODEL_KEYS.has(k)) out[k] = coerceRegistryFieldValue("number", out[k]);
+  }
+  return out as T;
+}

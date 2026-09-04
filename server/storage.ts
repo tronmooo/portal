@@ -13,6 +13,7 @@ import { canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/entity-naming";
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
+import { prepareProfileFields } from "../shared/registry-fields";
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
@@ -977,7 +978,7 @@ export class MemStorage implements IStorage {
     // Same guard as SupabaseStorage: a date reaches the row in one form
     // because the storage layer will not take another. See shared/date-rules.
     if (data.fields && typeof data.fields === "object") {
-      data = { ...data, fields: normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields };
+      data = { ...data, fields: prepareProfileFields(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (data as any).typeKey, todayISO: getUserToday((this as any)._timezone) }) };
     }
     const profile: Profile = { id: randomUUID(), ...data, fields: data.fields || {}, tags: data.tags || [], notes: data.notes || "", documents: [], linkedTrackers: [], linkedExpenses: [], linkedTasks: [], linkedEvents: [], createdAt: now, updatedAt: now };
     this.profiles.set(profile.id, profile);
@@ -991,7 +992,7 @@ export class MemStorage implements IStorage {
     // Same guard as SupabaseStorage: a date reaches the row in one form
     // because the storage layer will not take another. See shared/date-rules.
     if (data.fields && typeof data.fields === "object") {
-      data = { ...data, fields: normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? p.type ?? "") }).fields };
+      data = { ...data, fields: prepareProfileFields(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? p.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (p as any).type_key ?? (p as any).typeKey, todayISO: getUserToday((this as any)._timezone) }) };
     }
     // Honour the delete hints, as SupabaseStorage does. Without this the
     // calendar's "remove this date" was a no-op here AND the hint arrays were

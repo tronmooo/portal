@@ -51,6 +51,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
   return _sharedClient;
 }
 import { getUserToday, getUserCurrentMonth, parseLocalDate, toLocalDateStr, localDayOf, addDays as tzAddDays, DEFAULT_TIMEZONE } from "../shared/timezone";
+import { prepareProfileFields } from "../shared/registry-fields";
 import { nextRecurringTaskSpawn } from "../shared/recurrence";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
@@ -1705,7 +1706,7 @@ export class SupabaseStorage implements IStorage {
     // has a structural answer rather than an inventory of call sites.
     // See shared/date-rules.
     if (data.fields && typeof data.fields === "object") {
-      data = { ...data, fields: normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields };
+      data = { ...data, fields: prepareProfileFields(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (data as any).typeKey, todayISO: getUserToday(this._timezone) }) };
     }
     const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "liability", "investment", "property", "account", "insurance", "medical"]);
     if (data.type && !validProfileTypes.has(data.type)) data.type = "person";
@@ -1955,7 +1956,7 @@ export class SupabaseStorage implements IStorage {
     // Deletion intents (null / undefined values) are pulled out FIRST: those
     // keys are being removed, not written, and must not sweep their own twins.
     const normalizedIncoming = data.fields && typeof data.fields === "object"
-      ? normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? existing.type ?? "") }).fields
+      ? prepareProfileFields(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? existing.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (existing as any).type_key ?? (existing as any).typeKey, todayISO: getUserToday(this._timezone) })
       : data.fields;
     const incomingFields: Record<string, any> = {};
     const deletionIntents: string[] = [];
