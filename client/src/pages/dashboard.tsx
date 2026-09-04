@@ -5136,16 +5136,20 @@ function CustomizeDialog({
                   </button>
                   <button onClick={() => toggleVisibility(section.id)}
                     className="shrink-0 p-1 rounded hover:bg-muted"
+                    aria-label={`${section.visible ? "Hide" : "Show"} ${section.label}`}
+                    aria-pressed={section.visible}
                     data-testid={`btn-toggle-${section.id}`}>
                     {section.visible ? <Eye className="h-3.5 w-3.5 text-foreground/70" /> : <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />}
                   </button>
                   <button onClick={() => moveUp(section.id)}
                     className="shrink-0 p-1 rounded hover:bg-muted disabled:opacity-30" disabled={idx === 0}
+                    aria-label={`Move ${section.label} up`}
                     data-testid={`btn-moveup-${section.id}`}>
                     <ChevronUp className="h-3.5 w-3.5" />
                   </button>
                   <button onClick={() => moveDown(section.id)}
                     className="shrink-0 p-1 rounded hover:bg-muted disabled:opacity-30" disabled={idx === draft.length - 1}
+                    aria-label={`Move ${section.label} down`}
                     data-testid={`btn-movedown-${section.id}`}>
                     <ChevronDown className="h-3.5 w-3.5" />
                   </button>

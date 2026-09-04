@@ -303,12 +303,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Portol..." sit for seconds before anything happened. Cache the config
       // in localStorage: returning visits apply it synchronously and
       // revalidate in the background; only the first-ever visit waits.
+      //
+      // PERF (2026-09-04): the FIRST-ever visit still paid that cold start —
+      // measured at ~18s before a usable sign-in screen on a cold function.
+      // Nothing in this payload is actually unknown at build time: the Supabase
+      // URL and anon key are Vite-inlined build constants, and `authRequired`
+      // is true exactly when the deployment has Supabase configured. So when
+      // those constants are present we seed the config from them and revalidate
+      // in the background on the same path a cached config takes — the sign-in
+      // screen paints as soon as the bundle does. A build without them (local
+      // SQLite mode) still waits for the round trip, which is correct: there we
+      // genuinely cannot know whether auth is on.
       const AUTH_CONFIG_KEY = "portol_auth_config_v1";
       let data: any = null;
       try {
         const cached = localStorage.getItem(AUTH_CONFIG_KEY);
         if (cached) data = JSON.parse(cached);
       } catch { /* unavailable/corrupt — fetch below */ }
+
+      if (!data || typeof data.authRequired !== "boolean") {
+        const buildUrl = import.meta.env?.VITE_SUPABASE_URL;
+        const buildKey = import.meta.env?.VITE_SUPABASE_ANON_KEY;
+        if (buildUrl && buildKey) {
+          data = { authRequired: true, supabaseUrl: buildUrl, supabaseAnonKey: buildKey };
+        }
+      }
 
       const fetchFreshConfig = async (): Promise<any | null> => {
         const res = await fetch(`${API_BASE}/api/auth/config`);

@@ -239,6 +239,9 @@ export default defineConfig({
       // note (whose date the model invented) after a logged expense.
       'tests/bill-payments-tab.test.ts',
       'tests/artifacts-counts.dom.test.tsx',
+      // QA pass 2026-09-04: stale chunks, unclickable document links,
+      // "[object Object]" receipt items, and counts that meant three things.
+      'tests/qa-2026-09-04-findings.test.ts',
       // Chat must resolve what the dashboard shows (2026-08-17).
       'tests/entity-resolution.test.ts',
       'tests/ai-mark-done-routing.test.ts',

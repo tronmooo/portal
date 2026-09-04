@@ -84,8 +84,15 @@ export default defineConfig({
           {
             // The app shell (all SPA navigations). NetworkFirst: fresh
             // index.html whenever online — a new deploy reaches the client on
-            // the very next refresh. 3s timeout falls back to the cached
+            // the very next refresh. The timeout falls back to the cached
             // shell on dead/slow networks, preserving offline support.
+            //
+            // 3s was too eager (2026-09-04): a cold serverless start pushed the
+            // first navigation past it routinely, so an online user was handed
+            // the PREVIOUS deploy's index.html and every lazy chunk it named
+            // then 404'd ("Failed to fetch dynamically imported module"). 8s is
+            // still far below the point where a genuinely offline user notices,
+            // and it keeps online users on the current shell.
             urlPattern: ({ request, url, sameOrigin }) =>
               sameOrigin && request.mode === "navigate" &&
               !url.pathname.startsWith("/api/") &&
@@ -93,7 +100,7 @@ export default defineConfig({
             handler: "NetworkFirst",
             options: {
               cacheName: "portol-shell",
-              networkTimeoutSeconds: 3,
+              networkTimeoutSeconds: 8,
               expiration: { maxEntries: 30, maxAgeSeconds: 60 * 60 * 24 * 30 },
               cacheableResponse: { statuses: [0, 200] },
             },

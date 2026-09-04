@@ -759,7 +759,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     <div className={`w-4 h-4 rounded border flex items-center justify-center ${s.done ? 'bg-emerald-500 border-emerald-500' : 'border-muted-foreground/40'}`}>{s.done && <Check className="h-3 w-3 text-white" strokeWidth={3} />}</div>
                   </button>
                   <span className={`flex-1 text-xs ${s.done ? 'line-through text-muted-foreground' : ''}`}>{s.text}</span>
-                  <button onClick={() => removeSubtask(t, s.raw)} className="text-muted-foreground/40 hover:text-destructive"><X className="h-3 w-3" /></button>
+                  <button onClick={() => removeSubtask(t, s.raw)} className="text-muted-foreground/40 hover:text-destructive" aria-label={`Remove subtask ${s.text}`}><X className="h-3 w-3" /></button>
                 </div>
               ))}
             </div>
@@ -843,7 +843,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 <div className="flex flex-wrap gap-1.5 mb-1">
                   {freeTagsOf(t).map((tag: string) => (
                     <span key={tag} className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">#{tag}
-                      <button onClick={() => updateMutation.mutate({ id: t.id, patch: { tags: (t.tags || []).filter((x: string) => x !== tag) } })} className="hover:text-destructive"><X className="h-2.5 w-2.5" /></button>
+                      <button onClick={() => updateMutation.mutate({ id: t.id, patch: { tags: (t.tags || []).filter((x: string) => x !== tag) } })} className="hover:text-destructive" aria-label={`Remove tag ${tag}`}><X className="h-2.5 w-2.5" /></button>
                     </span>
                   ))}
                 </div>
@@ -946,7 +946,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 <span className="micro-label text-muted-foreground">
                   {tab === "today" ? "Today's priorities" : tab === "onetime" ? "One-time tasks" : tab === "recurring" ? "Recurring schedules" : "Upcoming"}
                 </span>
-                <button onClick={() => setComposer(c => ({ ...emptyComposer, open: !c.open, kind: tab === "recurring" ? "recurring" : "onetime", recurrence: tab === "recurring" ? "weekly" : "" }))} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors" data-testid="button-add-task"><Plus className="h-4 w-4 text-muted-foreground" /></button>
+                <button onClick={() => setComposer(c => ({ ...emptyComposer, open: !c.open, kind: tab === "recurring" ? "recurring" : "onetime", recurrence: tab === "recurring" ? "weekly" : "" }))} className="w-6 h-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors" aria-label="Add task" title="Add task" data-testid="button-add-task"><Plus className="h-4 w-4 text-muted-foreground" /></button>
               </div>
               {/* Only tasks on a real schedule belong on the Recurring tab — say
                   where the exit is for anything that landed here by mistake. */}

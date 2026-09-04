@@ -4,6 +4,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { formatListDate } from "@/lib/format";
 import { hashNavigate } from "@/lib/hashNavigate";
+import { formatFieldKey, stringifyField } from "@/lib/field-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -837,8 +838,16 @@ export default function ArtifactsPage() {
             ? "Scan"
             : (getDocGroup(d.type).label || "Document"),
           date: d.createdAt,
+          // stringifyField, not `${v}` — extracted values include objects and
+          // arrays (a receipt's line items), and template interpolation
+          // rendered those as "[object Object],[object Object]".
           preview: d.extractedData
-            ? Object.entries(d.extractedData).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join(" · ").slice(0, 100)
+            ? Object.entries(d.extractedData)
+                .slice(0, 3)
+                .map(([k, v]) => `${formatFieldKey(k)}: ${stringifyField(v)}`)
+                .filter(pair => !pair.endsWith(": "))
+                .join(" · ")
+                .slice(0, 100)
             : "",
           profileName: resolveProfile(d.linkedProfiles),
           source: d,
@@ -895,8 +904,15 @@ export default function ArtifactsPage() {
   //
   // The rule each chip follows: a chip's count excludes ONLY its own dimension,
   // so pressing it always yields exactly that many cards.
+  // A scan IS a document — it is a row in the documents table whose file
+  // happens to be an image. Excluding scans here meant a profile whose three
+  // documents were all photographed receipts read "3 items" beside
+  // "Documents 0" (user report 2026-09-04). Scans stay as their own narrower
+  // chip for anyone who wants only the photos; the chips therefore overlap
+  // rather than partition, which is fine — the invariant that matters is that
+  // each chip's count equals the cards pressing it yields, and that holds.
   const matchesType = (i: UnifiedArtifact, tab: FilterTab) =>
-    tab === "documents" ? i.type === "document"
+    tab === "documents" ? (i.type === "document" || i.type === "scan")
     : tab === "ai_reports" ? i.type === "ai_report"
     : tab === "scans" ? i.type === "scan"
     : true;  // "all"
@@ -926,7 +942,7 @@ export default function ArtifactsPage() {
     const base = profileFiltered.filter(i => matchesTag(i, activeTag) && matchesSearch(i, search));
     return {
       all: base.length,
-      documents: base.filter(i => i.type === "document").length,
+      documents: base.filter(i => i.type === "document" || i.type === "scan").length,
       ai_reports: base.filter(i => i.type === "ai_report").length,
       scans: base.filter(i => i.type === "scan").length,
     } as Record<FilterTab, number>;

@@ -21,6 +21,31 @@ export function isStaleChunkError(err: unknown): boolean {
 const RELOAD_FLAG = "portol:chunk-reload-ts";
 const RELOAD_COOLDOWN_MS = 30_000; // don't loop more than once per 30s
 
+/**
+ * Drop the cached app shell before reloading.
+ *
+ * The service worker serves navigations NetworkFirst with a 3s timeout
+ * (vite.config.ts). On a slow first load — the exact condition under which a
+ * deploy is most likely to have landed mid-session — that timeout fires and the
+ * browser gets the PREVIOUS index.html out of "portol-shell", whose chunk
+ * hashes no longer exist on the server. Reloading then re-serves the same stale
+ * shell from the same cache and the import fails again, which is why users saw
+ * repeated "reloaded but nothing changed" cycles rather than a single recovery.
+ *
+ * Deleting the shell cache (and the runtime asset cache, which may hold entries
+ * a stale shell asked for) forces the reload to go to the network for the
+ * document. /assets/* is content-hashed, so nothing of value is lost.
+ */
+async function purgeShellCaches(): Promise<void> {
+  if (typeof caches === "undefined") return;
+  const keys = await caches.keys();
+  await Promise.all(
+    keys
+      .filter((k) => k === "portol-shell" || k === "portol-assets" || k.startsWith("workbox-precache"))
+      .map((k) => caches.delete(k).catch(() => false)),
+  );
+}
+
 export function reloadForStaleChunk(reason: string) {
   try {
     const last = Number(sessionStorage.getItem(RELOAD_FLAG) || 0);
@@ -31,8 +56,13 @@ export function reloadForStaleChunk(reason: string) {
     }
     sessionStorage.setItem(RELOAD_FLAG, String(Date.now()));
     console.warn("[stale-chunk] reloading to pick up new bundle:", reason);
-    // Bypass HTTP cache so we definitely fetch the new index.html.
-    window.location.reload();
+    // Purge first so the reload cannot be answered from the stale shell, but
+    // never let a cache API failure (or a hang) strand the user on a dead page.
+    const reload = () => { try { window.location.reload(); } catch { /* ignore */ } };
+    void Promise.race([
+      purgeShellCaches(),
+      new Promise((resolve) => setTimeout(resolve, 1500)),
+    ]).catch(() => {}).then(reload);
     return true;
   } catch {
     try { window.location.reload(); } catch { /* ignore */ }

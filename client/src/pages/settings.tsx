@@ -80,7 +80,13 @@ function PWAInstallCard() {
   );
 }
 
-function StatCard({ icon: Icon, label, value, href, accent }: { icon: any; label: string; value: number | string; href: string; accent: string }) {
+// `hint` exists because these tiles count something WIDER than the screen they
+// link to: "Profiles" is every entity you track (people, pets, property,
+// accounts, liabilities) while /profiles/list groups them, and "Documents" is
+// every document on the account while a profile's tab shows only that profile's.
+// A tester read the two numbers as a contradiction (9 vs 3, 30 vs 1) rather than
+// as two different questions, so each tile now says which question it answers.
+function StatCard({ icon: Icon, label, hint, value, href, accent }: { icon: any; label: string; hint?: string; value: number | string; href: string; accent: string }) {
   const [, navigate] = useLocation();
   return (
     <button
@@ -91,9 +97,10 @@ function StatCard({ icon: Icon, label, value, href, accent }: { icon: any; label
       <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0" style={{ background: `hsl(${accent} / 0.15)` }}>
         <Icon className="h-4 w-4" style={{ color: `hsl(${accent})` }} />
       </div>
-      <div>
+      <div className="min-w-0">
         <p className="text-lg font-bold metric-value" style={{ color: `hsl(${accent})` }}>{value}</p>
         <p className="text-xs text-muted-foreground">{label}</p>
+        {hint && <p className="text-[11px] leading-tight text-muted-foreground/70">{hint}</p>}
       </div>
     </button>
   );
@@ -476,10 +483,10 @@ export default function SettingsPage() {
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-2">Your Data</p>
               <div className="grid grid-cols-2 gap-2">
-                <StatCard icon={Users} label="Profiles" value={profiles.length} href="/profiles" accent="188 55% 50%" />
+                <StatCard icon={Users} label="Profiles" hint="People, pets, property & accounts" value={profiles.length} href="/profiles/list" accent="188 55% 50%" />
                 <StatCard icon={ListTodo} label="Active Tasks" value={stats?.activeTasks || 0} href="/dashboard" accent="262 65% 62%" />
                 <StatCard icon={Activity} label="Trackers" value={stats?.totalTrackers || 0} href="/linked" accent="173 60% 44%" />
-                <StatCard icon={FileText} label="Documents" value={allDocs.length} href="/linked" accent="25 80% 54%" />
+                <StatCard icon={FileText} label="Documents" hint="Across all profiles" value={allDocs.length} href="/artifacts" accent="25 80% 54%" />
               </div>
             </div>
 

@@ -1,7 +1,7 @@
 import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
-import { formatFieldKey, stringifyField } from "@/lib/field-display";
+import { formatFieldKey, stringifyField, previewUnrenderable } from "@/lib/field-display";
 import { formatMoney, formatFullDate, parseLocalDate } from "@/lib/format";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
@@ -2420,12 +2420,14 @@ function InlineEditField({ profileId, fieldKey, fieldValue, allFields }: {
         <button
           className="min-w-[32px] min-h-[32px] flex items-center justify-center rounded-md opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted"
           onClick={() => setEditing(true)}
+          aria-label={`Edit ${formatKey(fieldKey)}`}
         >
           <Pencil className="h-3.5 w-3.5" />
         </button>
         <button
           className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-md opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity shrink-0 text-red-400 hover:text-red-600 hover:bg-red-500/10 active:bg-red-500/20"
           onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true); }}
+          aria-label={`Delete ${formatKey(fieldKey)}`}
           data-testid={`delete-field-${fieldKey}`}
         >
           <Trash2 className="h-3.5 w-3.5" />
@@ -4666,7 +4668,12 @@ function DocumentsTab({
                         setViewingDoc(doc);
                       }}
                     >
-                      <div className="text-sm font-medium text-primary" onClick={(e) => e.stopPropagation()}>
+                      {/* No stopPropagation here: EditableTitle already stops
+                          propagation on its own pencil/input/save controls, and
+                          a wrapper that stopped every click swallowed the one
+                          on the document NAME — the primary way to open the
+                          viewer from a profile (user report 2026-09-04). */}
+                      <div className="text-sm font-medium text-primary">
                         <EditableTitle
                           value={doc.name}
                           onSave={async (newName) => {
@@ -4735,12 +4742,18 @@ function DocumentsTab({
                   </div>
                   {expandedDocId === doc.id && doc.extractedData && Object.keys(doc.extractedData).length > 0 && (
                     <div className="border-t bg-muted/30 px-4 py-2.5 grid grid-cols-2 gap-x-4 gap-y-1.5">
-                      {Object.entries(doc.extractedData).map(([key, value]) => (
-                        <div key={key} className="min-w-0">
-                          <span className="text-xs text-muted-foreground capitalize">{key.replace(/([A-Z])/g, " $1").replace(/_/g, " ").trim()}</span>
-                          <p className="text-xs font-medium truncate">{String(value)}</p>
-                        </div>
-                      ))}
+                      {Object.entries(doc.extractedData).map(([key, value]) => {
+                        // stringifyField, not String(): extracted values are
+                        // often objects or arrays (a receipt's line items),
+                        // and String() renders those as "[object Object]".
+                        const display = stringifyField(value) || previewUnrenderable(value);
+                        return (
+                          <div key={key} className="min-w-0">
+                            <span className="text-xs text-muted-foreground capitalize">{formatKey(key)}</span>
+                            <p className="text-xs font-medium truncate" title={display}>{display}</p>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </CardContent>
@@ -6387,6 +6400,7 @@ function TrackerCard_Profile({
                       size="sm"
                       className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
                       onClick={() => setDeleteEntryId(entry.id)}
+                      aria-label="Delete entry"
                       data-testid={`button-delete-entry-${entry.id}`}
                     >
                       <Trash2 className="h-3 w-3" />
@@ -8111,7 +8125,7 @@ function TasksTab({
                       )}
                     </div>
                   </div>
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0 opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteTaskId(task.id)} data-testid={`button-delete-task-${task.id}`}>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0 shrink-0 opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-destructive" onClick={() => setDeleteTaskId(task.id)} aria-label={`Delete task ${task.title || ""}`.trim()} data-testid={`button-delete-task-${task.id}`}>
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </div>
@@ -9526,7 +9540,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
               <span className="text-xs">{c.description || "Claim"}</span>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium">{c.amount ? formatCurrency(Number(c.amount)) : "—"}</span>
-                <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteClaimMutation.mutate(c.id)} data-testid={`button-delete-claim-${c.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteClaimMutation.mutate(c.id)} aria-label={`Delete claim ${c.description || ""}`.trim()} data-testid={`button-delete-claim-${c.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
               </div>
             </div>
           )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No claims recorded</p>}
@@ -9612,7 +9626,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium tabular-nums">{r.amount ? formatCurrency(Number(r.amount)) : "—"}</span>
-                <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteRedemptionMutation.mutate(r.id)} data-testid={`button-delete-redemption-${r.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteRedemptionMutation.mutate(r.id)} aria-label={`Delete redemption ${r.description || ""}`.trim()} data-testid={`button-delete-redemption-${r.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
               </div>
             </div>
           )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No redemptions recorded</p>}
@@ -9654,7 +9668,7 @@ function AccessTab({ profile, profileId, onChanged }: { profile: any; profileId:
               <span className="text-xs text-muted-foreground">API Key</span>
               <div className="flex items-center gap-1">
                 <span className="text-xs font-mono">{showApiKey ? String(f.apiKey) : "••••••••••••"}</span>
-                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setShowApiKey(!showApiKey)} data-testid="button-toggle-apikey">
+                <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={() => setShowApiKey(!showApiKey)} aria-label={showApiKey ? "Hide API key" : "Show API key"} data-testid="button-toggle-apikey">
                   <Eye className="h-3 w-3" />
                 </Button>
               </div>
@@ -9709,7 +9723,7 @@ function CredentialsList({ profileId, fields, onChanged }: { profileId: string; 
             </div>
             <div className="flex items-center gap-2">
               {c.url && <a href={c.url.startsWith("http") ? c.url : `https://${c.url}`} target="_blank" rel="noopener noreferrer" className="text-xs text-primary hover:underline" data-testid={`link-cred-${i}`}><ExternalLink className="h-3 w-3" /></a>}
-              <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-cred-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+              <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} aria-label={`Delete credential ${c.label || ""}`.trim()} data-testid={`button-delete-cred-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
             </div>
           </div>
         )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No saved credentials</p>}
@@ -9912,7 +9926,7 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground tabular-nums">{formatLocalDate(a.date)}</span>
-              <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} data-testid={`button-delete-appraisal-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+              <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => handleDelete(i)} aria-label="Delete appraisal" data-testid={`button-delete-appraisal-${i}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
             </div>
           </div>
         )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No appraisals recorded</p>}
@@ -10680,7 +10694,7 @@ function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
                   data-testid={`input-coowner-pct-${l.id}`}
                 />
                 <span className="text-xs text-muted-foreground">%</span>
-                <button onClick={() => removeMutation.mutate(l.id)} className="text-muted-foreground hover:text-red-500" data-testid={`button-remove-coowner-${l.id}`}>
+                <button onClick={() => removeMutation.mutate(l.id)} className="text-muted-foreground hover:text-red-500" aria-label={`Remove co-owner ${person?.name || ""}`.trim()} data-testid={`button-remove-coowner-${l.id}`}>
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -10713,7 +10727,7 @@ function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
             <Button size="sm" className="h-7 px-2 text-xs" onClick={() => addMutation.mutate()} disabled={!pickPersonId || addMutation.isPending} data-testid="button-confirm-add-coowner">
               Add
             </Button>
-            <button onClick={() => { setAdding(false); setPickPersonId(""); }} className="text-muted-foreground hover:text-foreground" data-testid="button-cancel-add-coowner">
+            <button onClick={() => { setAdding(false); setPickPersonId(""); }} className="text-muted-foreground hover:text-foreground" aria-label="Cancel adding co-owner" data-testid="button-cancel-add-coowner">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -10775,7 +10789,7 @@ function CollateralEditor({ liabilityId, collateral, allProfiles, onChanged }: {
               <div key={l.id} className="flex items-center gap-2 py-1" data-testid={`collateral-${l.id}`}>
                 <span className="text-xs flex-1 truncate">{asset?.name || "Unknown asset"}</span>
                 <Badge variant="outline" className="text-[11px] h-5 px-1.5">{l.role || "collateral"}</Badge>
-                <button onClick={() => removeMutation.mutate(l.id)} className="text-muted-foreground hover:text-red-500" data-testid={`button-remove-collateral-${l.id}`}>
+                <button onClick={() => removeMutation.mutate(l.id)} className="text-muted-foreground hover:text-red-500" aria-label={`Remove collateral ${asset?.name || ""}`.trim()} data-testid={`button-remove-collateral-${l.id}`}>
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
@@ -10798,7 +10812,7 @@ function CollateralEditor({ liabilityId, collateral, allProfiles, onChanged }: {
             <Button size="sm" className="h-7 px-2 text-xs" onClick={() => addMutation.mutate()} disabled={!pickAssetId || addMutation.isPending} data-testid="button-confirm-add-collateral">
               Add
             </Button>
-            <button onClick={() => { setAdding(false); setPickAssetId(""); }} className="text-muted-foreground hover:text-foreground" data-testid="button-cancel-add-collateral">
+            <button onClick={() => { setAdding(false); setPickAssetId(""); }} className="text-muted-foreground hover:text-foreground" aria-label="Cancel adding collateral" data-testid="button-cancel-add-collateral">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -11044,7 +11058,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
                   <span className="text-xs text-muted-foreground">{formatFullDate(p.date)}</span>
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium tabular-nums">{p.amount ? formatCurrency(Number(p.amount)) : "—"}</span>
-                    <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deletePayMutation.mutate(p.id)} data-testid={`button-delete-payment-${p.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                    <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deletePayMutation.mutate(p.id)} aria-label="Delete payment" data-testid={`button-delete-payment-${p.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
                   </div>
                 </div>
               ))}
@@ -12565,7 +12579,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold tabular-nums">${(exp.amount || 0).toFixed(2)}</span>
-                    <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteSubPayMutation.mutate(exp.id)} data-testid={`button-delete-sub-payment-${exp.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                    <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteSubPayMutation.mutate(exp.id)} aria-label={`Delete payment ${exp.description || ""}`.trim()} data-testid={`button-delete-sub-payment-${exp.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
                   </div>
                 </div>
               ))}

@@ -2463,7 +2463,7 @@ function LinkedAssetsCard({ liabilityId }: { liabilityId: string }) {
               >
                 {createLink.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Link"}
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setPickerOpen(false)}>
+              <Button size="sm" variant="ghost" onClick={() => setPickerOpen(false)} aria-label="Cancel">
                 <X className="w-4 h-4" />
               </Button>
             </div>
@@ -2741,7 +2741,7 @@ function LinkedProfilesCard({ liabilityId }: { liabilityId: string }) {
               >
                 {createLink.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Add"}
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setPickerOpen(false)}>
+              <Button size="sm" variant="ghost" onClick={() => setPickerOpen(false)} aria-label="Cancel">
                 <X className="w-4 h-4" />
               </Button>
             </div>

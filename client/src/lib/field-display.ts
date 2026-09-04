@@ -1,3 +1,5 @@
+import { formatMoneyCents } from "@/lib/format";
+
 // ── Displaying a profile field ───────────────────────────────────────────────
 // A profile's `fields` is free-form JSONB. Values arrive as primitives, but
 // also as nested objects (an address written by document extraction, a legacy
@@ -41,9 +43,18 @@ export function stringifyField(value: any): string {
   if (typeof value === "string" || typeof value === "number") return String(value);
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (Array.isArray(value)) {
+    // Receipt/invoice rows keep their quantity and price; unwrapping them to
+    // just the name would silently drop the numbers the user came to read.
+    if (isLineItemArray(value)) return formatLineItems(value);
     return value.map((v) => stringifyField(v)).filter(Boolean).join(", ");
   }
   if (typeof value === "object") {
+    // A single line item ({ name, quantity, price }) reads better whole than
+    // unwrapped to its name — check before the wrapper unwrap below.
+    if (isLineItemArray([value])) {
+      const line = formatLineItem(value);
+      if (line) return line;
+    }
     // A wrapper like { value: "M" } or { name: "Progressive" } — unwrap it.
     for (const k of ["value", "name", "label", "display", "text", "title"]) {
       if (value[k] !== undefined && (typeof value[k] === "string" || typeof value[k] === "number")) {
@@ -68,4 +79,60 @@ export function stringifyField(value: any): string {
     return "";
   }
   try { return String(value); } catch { return ""; }
+}
+
+// ── Line items (receipts, invoices, orders) ──────────────────────────────────
+// Extraction writes a receipt's line items as an array of objects, e.g.
+//   items: [{ name: "Flat White", quantity: 2, price: 4.5 }, …]
+// Every renderer that reached for `String(value)` printed
+// "[object Object],[object Object]" for that (user report 2026-09-04). These
+// helpers give the array a readable form — and `isLineItemArray` lets a
+// renderer with room lay the items out one per row instead of on one line.
+
+const NAME_KEYS = ["name", "description", "item", "title", "label", "product"];
+const QTY_KEYS = ["quantity", "qty", "count", "units"];
+const PRICE_KEYS = ["price", "amount", "total", "cost", "subtotal", "unitPrice"];
+
+function pick(obj: Record<string, any>, keys: string[]): any {
+  for (const k of keys) {
+    if (obj[k] !== null && obj[k] !== undefined && obj[k] !== "") return obj[k];
+  }
+  return undefined;
+}
+
+function formatPrice(v: any): string {
+  // Keep an already-formatted string ("$4.50", "€3") as the author wrote it —
+  // re-parsing it would silently relabel another currency as dollars.
+  if (typeof v === "string" && /[^\d.,\s-]/.test(v)) return v.trim();
+  const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.-]/g, ""));
+  if (!Number.isFinite(n)) return String(v);
+  return formatMoneyCents(n);
+}
+
+/** True when `value` is an array whose entries look like receipt/invoice rows. */
+export function isLineItemArray(value: any): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (v) => v && typeof v === "object" && !Array.isArray(v) && pick(v, NAME_KEYS) !== undefined,
+    )
+  );
+}
+
+/** One line item as "2 × Flat White — $9.00". Never "[object Object]". */
+export function formatLineItem(item: any): string {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return stringifyField(item);
+  const name = pick(item, NAME_KEYS);
+  if (name === undefined) return stringifyField(item);
+  const qty = pick(item, QTY_KEYS);
+  const price = pick(item, PRICE_KEYS);
+  const qtyPart = qty !== undefined && Number(qty) !== 1 ? `${qty} × ` : "";
+  const pricePart = price !== undefined ? ` — ${formatPrice(price)}` : "";
+  return `${qtyPart}${String(name).trim()}${pricePart}`;
+}
+
+/** The whole array on one line, for previews and dense rows. */
+export function formatLineItems(value: any[]): string {
+  return value.map(formatLineItem).filter(Boolean).join(" · ");
 }

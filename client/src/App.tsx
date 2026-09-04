@@ -41,7 +41,8 @@ import { isHubRoute, isHubLocationForNav } from "@/components/hub/hub-routes";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
-import { lazy, Suspense, useEffect, useRef, useCallback, useState } from "react";
+import { Suspense, useEffect, useRef, useCallback, useState } from "react";
+import { lazyWithRetry } from "@/lib/lazy-retry";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
 // Keep lightweight pages as direct imports
@@ -78,31 +79,31 @@ const _editImport  = () => import("@/pages/editor");
 const _insightsImport = () => import("@/pages/insights");
 const _shareViewImport = () => import("@/pages/share-view");
 
-const ChatPage         = lazy(_chatImport);
-const DashboardPage    = lazy(_dashImport);
-const TrackersPage     = lazy(_trackImport);
-const ProfileRouteDispatch = lazy(_profDispatchImport);
-const ProfileInfoPage  = lazy(_profInfoImport);
-const ProfilesListPage = lazy(_profListImport);
-const DocumentDetailPage = lazy(_docDImport);
-const DocumentReviewPage = lazy(_docRImport);
-const AuthPage         = lazy(_authImport);
-const ResetPasswordPage = lazy(_resetImport);
-const SettingsPage     = lazy(_settImport);
-const CalendarPage     = lazy(_calImport);
-const ArtifactsPage    = lazy(_artImport);
-const FinancePage      = lazy(_finImport);
-const WellnessPage     = lazy(_wellImport);
-const HabitsPage       = lazy(_habImport);
-const JournalPage      = lazy(_jourImport);
-const ObligationsPage  = lazy(_oblImport);
-const TasksPage        = lazy(_taskImport);
-const GoalsPage        = lazy(_goalsImport);
-const PrivacyPage      = lazy(_privImport);
-const TermsPage        = lazy(_termsImport);
-const EditorPage       = lazy(_editImport);
-const InsightsPage     = lazy(_insightsImport);
-const ShareViewPage    = lazy(_shareViewImport);
+const ChatPage         = lazyWithRetry(_chatImport);
+const DashboardPage    = lazyWithRetry(_dashImport);
+const TrackersPage     = lazyWithRetry(_trackImport);
+const ProfileRouteDispatch = lazyWithRetry(_profDispatchImport);
+const ProfileInfoPage  = lazyWithRetry(_profInfoImport);
+const ProfilesListPage = lazyWithRetry(_profListImport);
+const DocumentDetailPage = lazyWithRetry(_docDImport);
+const DocumentReviewPage = lazyWithRetry(_docRImport);
+const AuthPage         = lazyWithRetry(_authImport);
+const ResetPasswordPage = lazyWithRetry(_resetImport);
+const SettingsPage     = lazyWithRetry(_settImport);
+const CalendarPage     = lazyWithRetry(_calImport);
+const ArtifactsPage    = lazyWithRetry(_artImport);
+const FinancePage      = lazyWithRetry(_finImport);
+const WellnessPage     = lazyWithRetry(_wellImport);
+const HabitsPage       = lazyWithRetry(_habImport);
+const JournalPage      = lazyWithRetry(_jourImport);
+const ObligationsPage  = lazyWithRetry(_oblImport);
+const TasksPage        = lazyWithRetry(_taskImport);
+const GoalsPage        = lazyWithRetry(_goalsImport);
+const PrivacyPage      = lazyWithRetry(_privImport);
+const TermsPage        = lazyWithRetry(_termsImport);
+const EditorPage       = lazyWithRetry(_editImport);
+const InsightsPage     = lazyWithRetry(_insightsImport);
+const ShareViewPage    = lazyWithRetry(_shareViewImport);
 
 // PERF-2 (2026-06-10): main-tab chunk preloads used to fire at module load,
 // before auth — logged-out users downloaded megabytes of route chunks they
@@ -168,7 +169,7 @@ function ProfileButton() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full p-0.5" title="Account" data-testid="button-profile-avatar" style={{ background: 'linear-gradient(135deg, hsl(188 55% 50%), hsl(262 65% 62%))' }}>
+        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full p-0.5" title="Account" aria-label="Account menu" data-testid="button-profile-avatar" style={{ background: 'linear-gradient(135deg, hsl(188 55% 50%), hsl(262 65% 62%))' }}>
           <div className="h-full w-full rounded-full bg-background flex items-center justify-center text-xs font-bold text-primary">
             {initial}
           </div>

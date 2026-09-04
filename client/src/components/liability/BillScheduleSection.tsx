@@ -321,11 +321,12 @@ function OccurrenceRow({
                 data-testid={`occ-pay-${occ.date}`}><CheckCircle2 className="w-3.5 h-3.5 mr-1" />Pay</Button>
               <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={busy}
                 onClick={() => onAct(() => apiRequest("POST", `${base}/skip`), "Skipped")}
+                aria-label="Skip this bill" title="Skip"
                 data-testid={`occ-skip-${occ.date}`}><SkipForward className="w-3.5 h-3.5" /></Button>
             </>
           )}
           <Popover>
-            <PopoverTrigger asChild><Button size="sm" variant="ghost" className="h-7 px-2 text-xs" data-testid={`occ-edit-${occ.date}`}><Pencil className="w-3.5 h-3.5" /></Button></PopoverTrigger>
+            <PopoverTrigger asChild><Button size="sm" variant="ghost" className="h-7 px-2 text-xs" aria-label="Edit this occurrence" title="Edit" data-testid={`occ-edit-${occ.date}`}><Pencil className="w-3.5 h-3.5" /></Button></PopoverTrigger>
             <PopoverContent className="w-72 space-y-3">
               <div className="space-y-1">
                 <Label className="text-xs">Reschedule this occurrence</Label>

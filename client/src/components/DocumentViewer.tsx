@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { stopProp } from "@/lib/event-utils";
+import { stringifyField, previewUnrenderable, isLineItemArray, formatLineItem } from "@/lib/field-display";
 import {
   FileText,
   ZoomIn,
@@ -436,6 +437,7 @@ export default function DocumentViewer({
         size="icon"
         className="h-7 w-7"
         onClick={() => setExpanded(!expanded)}
+        aria-label={expanded ? "Exit full screen" : "Expand to full screen"}
         data-testid={`btn-expand-${id}`}
       >
         {expanded ? (
@@ -898,8 +900,24 @@ export function DocumentViewerDialog({
                   {Object.entries(extractedData)
                     .filter(([_, v]) => v != null && v !== '')
                     .map(([key, rawVal]) => {
-                      const val = (rawVal && typeof rawVal === 'object' && 'value' in rawVal) ? rawVal.value : rawVal;
-                      const display = typeof val === 'object' ? JSON.stringify(val) : String(val);
+                      const val = (rawVal && typeof rawVal === 'object' && !Array.isArray(rawVal) && 'value' in rawVal) ? (rawVal as any).value : rawVal;
+                      // A receipt's line items get a row each — one long
+                      // "2 x A - $4 . 1 x B - $9" line is unreadable, and
+                      // JSON.stringify (what this used to do for any object)
+                      // is worse.
+                      if (isLineItemArray(val)) {
+                        return (
+                          <div key={key} className="flex flex-col gap-0.5">
+                            <span className="micro-label text-muted-foreground/80">{formatFieldKey(key)}</span>
+                            <ul className="space-y-0.5">
+                              {(val as any[]).map((item, i) => (
+                                <li key={i} className="text-sm font-medium text-foreground break-words">{formatLineItem(item)}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        );
+                      }
+                      const display = stringifyField(val) || previewUnrenderable(val);
                       if (!display || display === 'null' || display === 'undefined') return null;
                       return (
                         <div key={key} className="flex flex-col gap-0.5">
@@ -1124,13 +1142,30 @@ function ExtractedDataPanel({
                           autoFocus
                           data-testid={`input-field-${key}`}
                         />
+                      ) : val !== null && typeof val === "object" ? (
+                        // Structured values (a receipt's line items, an
+                        // extracted address) render as text, not through a
+                        // single-line input: `String(val)` printed
+                        // "[object Object]", and committing that string back
+                        // would overwrite the structure with it.
+                        <div className="text-xs text-foreground/80" data-testid={`value-field-${key}`}>
+                          {isLineItemArray(val) ? (
+                            <ul className="space-y-0.5">
+                              {(val as any[]).map((item, i) => (
+                                <li key={i} className="break-words">{formatLineItem(item)}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <span className="break-words">{stringifyField(val) || previewUnrenderable(val)}</span>
+                          )}
+                        </div>
                       ) : (
                         <button
                           onClick={() => startEdit(key, val)}
                           className="text-xs text-left w-full hover:text-foreground text-foreground/80 transition-colors"
                           data-testid={`value-field-${key}`}
                         >
-                          {String(val ?? "—")}
+                          {stringifyField(val) || "—"}
                         </button>
                       )}
                     </div>

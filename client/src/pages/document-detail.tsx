@@ -28,6 +28,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { stringifyField, previewUnrenderable, isLineItemArray, formatLineItem } from "@/lib/field-display";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { useDocumentBlobUrl, classifyDocument, prefetchDocumentBlob, wasFileDiscarded, DISCARDED_FILE_TAG } from "@/lib/document-preview";
 import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel } from "@shared/date-rules";
@@ -563,13 +564,30 @@ function DataPanel({
                           autoFocus
                           data-testid={`input-field-${key}`}
                         />
+                      ) : val !== null && typeof val === "object" ? (
+                        // Structured values (a receipt's line items, an
+                        // extracted address) render as text, not through a
+                        // single-line input: `String(val)` printed
+                        // "[object Object]", and committing that string back
+                        // would overwrite the structure with it.
+                        <div className="text-xs text-foreground/80" data-testid={`value-field-${key}`}>
+                          {isLineItemArray(val) ? (
+                            <ul className="space-y-0.5">
+                              {(val as any[]).map((item, i) => (
+                                <li key={i} className="break-words">{formatLineItem(item)}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <span className="break-words">{stringifyField(val) || previewUnrenderable(val)}</span>
+                          )}
+                        </div>
                       ) : (
                         <button
                           onClick={() => startEdit(key, val)}
                           className="text-xs text-left w-full hover:text-foreground text-foreground/80 transition-colors"
                           data-testid={`value-field-${key}`}
                         >
-                          {String(val ?? "—")}
+                          {stringifyField(val) || "—"}
                         </button>
                       )}
                     </div>

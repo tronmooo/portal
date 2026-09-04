@@ -105,13 +105,24 @@ async function ready() {
 }
 
 describe("Artifacts counts match the rendered data", () => {
-  it("counts nothing twice: All === Documents + AI Reports + Scans", async () => {
+  it("covers everything: All === Documents + AI Reports", async () => {
     mount();
     await ready();
-    // A documents-table row is EITHER a scan (image) or a document, never both;
-    // an artifact is either a doc/sheet (document) or an AI report.
-    expect(chipCount("documents") + chipCount("ai_reports") + chipCount("scans"))
+    // Every item is either a documents-table row or an in-app artifact, and
+    // the Documents chip covers all of the former plus doc/sheet artifacts —
+    // so these two chips partition All.
+    expect(chipCount("documents") + chipCount("ai_reports"))
       .toBe(chipCount("all"));
+  });
+
+  it("Scans are a subset of Documents, not a sibling of it", async () => {
+    mount();
+    await ready();
+    // A scan IS a document — a documents-table row whose file is an image.
+    // Excluding scans from the Documents chip made a profile whose documents
+    // were all photographed receipts read "3 items" beside "Documents 0".
+    expect(chipCount("scans")).toBeGreaterThan(0);
+    expect(chipCount("documents")).toBeGreaterThanOrEqual(chipCount("scans"));
   });
 
   it("Showing equals the rendered cards for every type filter", async () => {
