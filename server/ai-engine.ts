@@ -415,17 +415,21 @@ interface ReportMetric { label: string; value: string | number; change?: string;
 interface ReportSection { heading: string; content?: string; chart?: ChartSpec; table?: TableSpec; metrics?: ReportMetric[]; }
 interface ReportSpec { title: string; subtitle?: string; sections: ReportSection[]; generatedAt: string; }
 
-// Lazy-init: dotenv.config() runs after ESM imports resolve,
-// so we defer client creation until first use.
-let _client: Anthropic | null = null;
+// Lazy-init: dotenv.config() runs after ESM imports resolve, so we defer
+// client creation until first use.
+//
+// NOTE: no memo here. getAnthropicClient already caches per (budget, api key)
+// and exposes resetAnthropicClients() as the seam that drops those clients. A
+// second module-level `_client` cached the FIRST client forever and defeated
+// both — a rotated ANTHROPIC_API_KEY kept hitting the old credential, and an
+// unset key returned a live client instead of throwing.
 function getClient(): Anthropic {
   // Bounded client (see server/anthropic-client.ts). The chat tool-loop runs
   // on /api/ai (maxDuration 300) and makes several sequential model calls per
   // turn, so it gets the "extended" per-call budget — still bounded, unlike
   // the SDK's 10-minute default, which could park a single call for longer
   // than the entire function limit.
-  if (!_client) _client = getAnthropicClient("extended");
-  return _client;
+  return getAnthropicClient("extended");
 }
 
 // ============================================================
@@ -518,7 +522,12 @@ async function perplexityValuation(
         max_tokens: 900,
         temperature: 0.2,
       }),
-      signal: AbortSignal.timeout(25000),
+      // 25s allowed two attempts (sonar-pro, then the sonar retry on a model
+      // rejection) to spend 50s on their own — past the whole pipeline budget
+      // and past the platform limit, so the request was killed rather than
+      // falling back. 17s x 2 fits inside VALUATION_BUDGET_MS with room for the
+      // hedged Anthropic path to finish too.
+      signal: AbortSignal.timeout(17000),
     });
     let resp = await attempt(ppxModel);
     if (!resp.ok && ppxModel !== "sonar" && (resp.status === 400 || resp.status === 404)) {
@@ -586,26 +595,44 @@ export function isValuableType(t: string | undefined | null): boolean {
   return !!t && VALUABLE_TYPES.has(t);
 }
 
-export async function estimateAssetValue(
+// ── Valuation timing budget ──────────────────────────────────────────────────
+// The lookup route runs on api/index.js (vercel.json maxDuration 60s) and the
+// browser aborts at DEFAULT_TIMEOUT_MS (60s) too, so the two deadlines land on
+// the same instant: a pipeline that runs the full 60s produces a killed request
+// and a spinner that just stops, which is what "it took five minutes" felt like.
+// The whole model pipeline is therefore capped well under that, leaving room
+// for the profile read, the write and serialization.
+const VALUATION_BUDGET_MS = 38_000;
+// How long to give Perplexity alone before starting the Anthropic path
+// alongside it. Previously the two ran STRICTLY in sequence, so a slow-but-
+// doomed live search (25s) was pure dead time before the fallback even began,
+// and the pair together overran the function limit — that is how a lookup ended
+// in "No data available" after a very long wait. Hedging overlaps them: the
+// fallback is already in flight by the time the primary gives up.
+const VALUATION_HEDGE_AFTER_MS = 9_000;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * A deadline promise plus the handle to cancel it. The timer must be cleared on
+ * every exit path: a pending 38s timer keeps the serverless invocation from
+ * settling after the response has already been written.
+ */
+function deadlineAt(ms: number): { promise: Promise<"deadline">; cancel: () => void } {
+  let t: ReturnType<typeof setTimeout>;
+  const promise = new Promise<"deadline">((resolve) => { t = setTimeout(() => resolve("deadline"), Math.max(0, ms)); });
+  return { promise, cancel: () => clearTimeout(t) };
+}
+
+/**
+ * FALLBACK path: DDG/Brave web search + Anthropic. Extracted from
+ * estimateAssetValue so it can run CONCURRENTLY with the Perplexity path
+ * rather than only after it has failed.
+ */
+async function anthropicValuation(
   profile: { type: string; name: string; fields: Record<string, any> },
   context?: AssetValuationContext,
 ): Promise<AssetValuation | null> {
-  // HARD GUARD: refuse to value non-valuable profile types. Without this,
-  // perplexityValuation below blindly searches the web for a market price
-  // for any name (including people, pets, etc.) and confidently returns a
-  // ticker price. This is the root cause of the "Patrick = $90.21 PATK"
-  // bug and friends (Mike=$1, Lexi=$39.24, Jim=$0.0000025, Scrappy=$11k).
-  if (!isValuableType(profile.type)) return null;
-
-  // PRIMARY: Perplexity Sonar (live web search + LLM in one call). This is the
-  // same API the chat uses, so it works reliably from Vercel cloud IPs.
-  const ppx = await perplexityValuation(profile, context);
-  if (ppx && ppx.estimatedValue > 0) return ppx;
-
-  // FALLBACK: legacy Anthropic + DDG/Brave path (kept for resilience).
-  const valuableTypes = ["vehicle", "asset", "property", "investment"];
-  if (!valuableTypes.includes(profile.type)) return null;
-
   const dossier = buildValuationDossier(profile, context);
 
   if (!profile.name && !Object.keys(profile.fields || {}).length) return null;
@@ -665,9 +692,74 @@ export async function estimateAssetValue(
       defaultMethod: searchResults ? "web data" : "AI estimate",
     });
     if (parsed) return enforceRangeDiscipline(parsed);
-  } catch (e) {
-    console.error("[Valuation] Failed:", e);
+    console.warn(`[Valuation] Anthropic returned no parseable value for "${profile.name}"`);
+  } catch (e: any) {
+    console.error("[Valuation] Anthropic path failed:", e?.message || e);
   }
+  return null;
+}
+
+export async function estimateAssetValue(
+  profile: { type: string; name: string; fields: Record<string, any> },
+  context?: AssetValuationContext,
+): Promise<AssetValuation | null> {
+  // HARD GUARD: refuse to value non-valuable profile types. Without this,
+  // perplexityValuation below blindly searches the web for a market price
+  // for any name (including people, pets, etc.) and confidently returns a
+  // ticker price. This is the root cause of the "Patrick = $90.21 PATK"
+  // bug and friends (Mike=$1, Lexi=$39.24, Jim=$0.0000025, Scrappy=$11k).
+  if (!isValuableType(profile.type)) return null;
+
+  const startedAt = Date.now();
+  const elapsed = () => Date.now() - startedAt;
+  const isGood = (v: AssetValuation | null | undefined): v is AssetValuation =>
+    !!v && Number(v.estimatedValue) > 0;
+
+  // HEDGED EXECUTION. Perplexity (live web search + LLM in one call) stays the
+  // PREFERRED source — it cites real listing/AVM pages — but the Anthropic path
+  // starts alongside it after a short delay instead of waiting for it to fail.
+  // Whichever usable answer exists when Perplexity settles is the one we return,
+  // so a slow or failing live search costs seconds, not the whole budget.
+  let primaryUsable = false;
+  const primary = perplexityValuation(profile, context)
+    .catch((e: any) => { console.warn("[Valuation] Perplexity path threw:", e?.message || e); return null; })
+    .then((v) => { primaryUsable = isGood(v); return v; });
+
+  const hedge = (async (): Promise<AssetValuation | null> => {
+    // Start the second path at the head-start mark OR the instant Perplexity
+    // settles, whichever comes first. Waiting out a fixed delay after the
+    // primary has already failed is exactly the dead time this replaces.
+    await Promise.race([sleep(VALUATION_HEDGE_AFTER_MS), primary.then(() => {})]);
+    if (primaryUsable) return null; // primary won — don't spend the call
+    return anthropicValuation(profile, context).catch(() => null);
+  })();
+  // The hedge is consumed below; a no-op catch keeps a rejection from surfacing
+  // as an unhandled rejection if the budget expires first.
+  hedge.catch(() => {});
+
+  // Hard wall-clock stop. Whatever has landed by the deadline is what we use —
+  // an overrun means the platform kills the request and the user sees nothing.
+  const { promise: deadline, cancel: clearDeadline } = deadlineAt(VALUATION_BUDGET_MS - elapsed());
+  try {
+    const primaryResult = await Promise.race([primary, deadline]);
+    if (primaryResult !== "deadline" && isGood(primaryResult)) {
+      console.log(`[Valuation] Live search answered for "${profile.name}" in ${elapsed()}ms`);
+      return primaryResult;
+    }
+
+    const hedgeResult = await Promise.race([hedge, deadline]);
+    if (hedgeResult !== "deadline" && isGood(hedgeResult)) {
+      console.log(`[Valuation] Fallback answered for "${profile.name}" in ${elapsed()}ms`);
+      return hedgeResult;
+    }
+
+    if (hedgeResult === "deadline") {
+      console.warn(`[Valuation] Budget of ${VALUATION_BUDGET_MS}ms expired for "${profile.name}"`);
+    }
+  } finally {
+    clearDeadline();
+  }
+
   // Last-resort floor: never block the UI with a hard failure. Return a record
   // flagged `noData` so callers can tell "the pipeline found nothing" apart from
   // "this item is genuinely worth $0" and report it without touching stored data.
@@ -676,9 +768,9 @@ export async function estimateAssetValue(
   // value is data loss (the asset drops to $0 and out of net worth). Every
   // caller must check `noData` / `estimatedValue > 0` before writing.
   console.warn(
-    `[Valuation] No value found for ${profile.type} "${profile.name}" — every model path failed ` +
-    `(perplexity_key=${!!process.env.PERPLEXITY_API_KEY}, anthropic_key=${!!process.env.ANTHROPIC_API_KEY}, ` +
-    `search_chars=${searchResults.length}). Returning noData; the stored value must be left alone.`,
+    `[Valuation] No value found for ${profile.type} "${profile.name}" after ${elapsed()}ms — every model ` +
+    `path failed (perplexity_key=${!!process.env.PERPLEXITY_API_KEY}, ` +
+    `anthropic_key=${!!process.env.ANTHROPIC_API_KEY}). Returning noData; the stored value must be left alone.`,
   );
   return {
     estimatedValue: 0,

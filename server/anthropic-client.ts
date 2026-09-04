@@ -55,7 +55,11 @@ export function budgetFor(budget: CallBudget): { timeout: number; maxRetries: nu
   };
 }
 
-const clients = new Map<CallBudget, Anthropic>();
+// Keyed by budget AND api key. Keying on the budget alone meant the FIRST key
+// this process saw was served forever: a rotated or newly-injected
+// ANTHROPIC_API_KEY kept hitting the old credential, and an unset key returned
+// a live cached client instead of failing.
+const clients = new Map<string, Anthropic>();
 
 /**
  * A shared, bounded Anthropic client. Reused per budget so we are not building
@@ -64,19 +68,22 @@ const clients = new Map<CallBudget, Anthropic>();
  * latency to each call.
  *
  * Throws when ANTHROPIC_API_KEY is unset, matching the previous behaviour of
- * the individual call sites.
+ * the individual call sites. The key is checked BEFORE the cache: an unset key
+ * must throw even once a client has been built, or callers that depend on that
+ * failure silently keep talking to a stale credential.
  */
 export function getAnthropicClient(budget: CallBudget = "standard"): Anthropic {
-  const cached = clients.get(budget);
-  if (cached) return cached;
-
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error("ANTHROPIC_API_KEY environment variable is not set");
   }
+  const cacheKey = `${budget}:${apiKey}`;
+  const cached = clients.get(cacheKey);
+  if (cached) return cached;
+
   const { timeout, maxRetries } = budgetFor(budget);
   const client = new Anthropic({ apiKey, timeout, maxRetries });
-  clients.set(budget, client);
+  clients.set(cacheKey, client);
   return client;
 }
 

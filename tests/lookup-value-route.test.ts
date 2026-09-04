@@ -51,6 +51,7 @@ vi.mock("../server/storage", async (importOriginal) => {
 });
 
 import { registerRoutes } from "../server/routes";
+import { resetAnthropicClients } from "../server/anthropic-client";
 
 const crvDetail = () => ({
   id: "profile-crv",
@@ -90,6 +91,10 @@ describe("POST /api/profiles/:id/lookup-value", () => {
     stubState.profiles.set("profile-other", { ...crvDetail(), id: "profile-other", name: "Other Car" });
     stubState.preferences.set("profile_ai_profile-crv", JSON.stringify({ summary: "Old cached summary", generatedAt: new Date().toISOString() }));
 
+    // The Anthropic SDK captures `fetch` when the client is constructed, and
+    // clients are memoized for the process. Without this, a test that builds
+    // one keeps serving the PREVIOUS test's fetch mock to every later test.
+    resetAnthropicClients();
     vi.stubEnv("PERPLEXITY_API_KEY", "test-key");
     fetchMock = vi.fn(async (url: any, init?: any) => {
       if (String(url).includes("perplexity.ai")) {
@@ -175,6 +180,40 @@ describe("POST /api/profiles/:id/lookup-value", () => {
   it("404s for a missing profile", async () => {
     const res = await realFetch(`${base}/api/profiles/nope/lookup-value`, { method: "POST" });
     expect(res.status).toBe(404);
+  });
+
+  // ── The fallback path must actually rescue a failed live search ───────────
+  // The two model paths used to run strictly in sequence, so a slow-but-doomed
+  // Perplexity call burned the budget before the fallback began and the whole
+  // request was killed by the platform ("it took five minutes"). They are
+  // hedged now: when the live search fails, the Anthropic path's answer is the
+  // one that gets persisted — a real value, not a "no data" placeholder.
+  it("falls back to the Anthropic path when the live search fails", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-anthropic-key");
+    fetchMock.mockImplementation(async (url: any) => {
+      if (String(url).includes("perplexity.ai")) {
+        return { ok: false, status: 503, text: async () => "live search down" } as any;
+      }
+      if (String(url).includes("anthropic.com")) {
+        return new Response(JSON.stringify({
+          id: "msg_1", type: "message", role: "assistant", model: "claude-haiku-4-5",
+          content: [{ type: "text", text: JSON.stringify({
+            value: 20500, low: 19000, high: 22000, confidence: "medium",
+            method: "KBB + Edmunds comps", factors: ["80,000 miles"], missing: [],
+          }) }],
+          stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error("network unavailable in test");
+    });
+
+    const res = await realFetch(`${base}/api/profiles/profile-crv/lookup-value`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+
+    expect(data.noData).toBeUndefined();
+    expect(data.currentValue).toBe(20500);
+    expect(stubState.profiles.get("profile-crv").fields.currentValue).toBe(20500);
   });
 
   // ── Regression: a failed lookup must NEVER zero out the stored value ──────
