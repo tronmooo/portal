@@ -3304,3 +3304,24 @@ describe("D268 legacy cost strings with a cadence suffix", async () => {
     expect(liftLegacySubscriptionGroup({ subscriptions: { cost: "$99.99/mo" } }).amount).toBe(99.99);
   });
 });
+
+// ── D269: one spelling per fact — a write of the model key sweeps stale twins (storage path),
+// and the data repairs must do the same.
+describe("D269 stale identity twins", async () => {
+  const { mergeFieldWrite } = await import("../shared/profile-field-identity");
+  it("writing balance nulls a stale currentBalance/remainingBalance twin", () => {
+    const r = mergeFieldWrite({ balance: 6000, currentBalance: 0, remainingBalance: 0, lender: "CU" }, { balance: 25000 });
+    expect(r.fields.balance).toBe(25000);
+    expect(r.fields.currentBalance).toBeNull();
+    expect(r.fields.remainingBalance).toBeNull();
+    expect(r.fields.lender).toBe("CU");
+  });
+  it("the MemStorage patch stores one spelling", async () => {
+    const s = new MemStorage();
+    const p = await s.createProfile({ type: "liability", type_key: "auto_loan", name: "Loan", fields: { balance: 25000 }, tags: [], notes: "" } as any);
+    const u = await s.updateProfile(p.id, { fields: { currentBalance: 24500 } } as any);
+    const f = (u as any)?.fields || {};
+    expect(f.currentBalance).toBe(24500);
+    expect(f.balance == null).toBe(true);
+  });
+});
