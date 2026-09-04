@@ -48,6 +48,8 @@ export interface LiabilityPaymentInput {
 export interface LiabilityPaymentResult {
   /** Money paid beyond the balance and this period's interest on a payoff (D271). */
   overpayment?: number;
+  /** Balance written off on a payoff that paid less than was owed (a settlement). */
+  forgiven?: number;
   payment: any;
   /** The liability profile as it stands after the payment. */
   liability: any;
@@ -89,6 +91,8 @@ interface DebtPaymentPlan {
   balanceBefore: number; principal: number; interest: number; fees: number;
   /** Money paid beyond the balance and this period's interest on a payoff (owed back by the lender). */
   overpayment: number;
+  /** On a payoff for less than the balance, the part of the balance the lender let go. */
+  forgiven: number;
   paymentType: LiabilityPaymentType; newBalance: number;
   /** Whether this payment moves the tracked balance at all. */
   moves: boolean;
@@ -137,6 +141,7 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
 
   let newBalance: number;
   let overpayment = 0;
+  let forgiven = 0;
   const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
   if (paymentType === "skipped" || paymentType === "deferred") {
     newBalance = balanceBefore;
@@ -156,7 +161,15 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
     // it used to be booked as interest, so a $10,000 payment on a $4,000
     // loan recorded $6,000 of "interest" and the cost-of-borrowing figures
     // followed (D271).
-    if (balanceBefore > 0) {
+    if (balanceBefore > 0 && cashTowardLoan < balanceBefore) {
+      // A payoff for less than the balance is a settlement: the cash paid is
+      // principal and the rest of the balance is written off. The row used to
+      // book the whole balance as principal — a $200 "payoff" on a $3,100
+      // card recorded $3,100 of principal paid (D272).
+      principal = Math.max(0, cashTowardLoan);
+      interest = 0;
+      forgiven = round2(balanceBefore - principal);
+    } else if (balanceBefore > 0) {
       const accrued = allocatePayment(cashTowardLoan, balanceBefore, annualRate, 0).interest;
       principal = balanceBefore;
       interest = Math.min(accrued, Math.max(0, cashTowardLoan - balanceBefore));
@@ -179,7 +192,7 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
   }
 
   return {
-    balanceBefore, principal, interest, fees, paymentType, newBalance, overpayment,
+    balanceBefore, principal, interest, fees, paymentType, newBalance, overpayment, forgiven,
     // A reversal puts money back even on a paid-off debt (balance 0): the
     // "balance above zero" gate is for payments that take money off.
     moves: paymentType !== "skipped" && paymentType !== "deferred" && (balanceBefore > 0 || paymentType === "reversal"),
@@ -282,7 +295,9 @@ export async function applyLiabilityPayment(
       remainingBalanceAfter: plan.moves ? newBalance : undefined,
       paymentType,
       sourceAccount: input.sourceAccount || null,
-      notes: plan.overpayment > 0 ? `${input.notes ? input.notes + " — " : ""}Overpaid by $${plan.overpayment.toFixed(2)} (owed back by the lender)` : (input.notes || null),
+      notes: plan.overpayment > 0 ? `${input.notes ? input.notes + " — " : ""}Overpaid by $${plan.overpayment.toFixed(2)} (owed back by the lender)`
+        : plan.forgiven > 0 ? `${input.notes ? input.notes + " — " : ""}Settled: $${plan.forgiven.toFixed(2)} of the balance written off`
+        : (input.notes || null),
     } as any);
   } catch (e) {
     // The balance moved for a row that never landed: put the money back
@@ -303,7 +318,7 @@ export async function applyLiabilityPayment(
     throw e;
   }
 
-  return { payment, liability: updated, newBalance, principal, interest, recurring: false, overpayment: plan.overpayment };
+  return { payment, liability: updated, newBalance, principal, interest, recurring: false, overpayment: plan.overpayment, forgiven: plan.forgiven };
 }
 
 // ─── The one entry-point-facing pay operation ────────────────────────────────

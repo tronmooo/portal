@@ -3422,3 +3422,33 @@ describe("D271 a payoff books accrued interest only; the excess is an overpaymen
     expect(e.rows[0].principalPortion).toBe(250); expect(e.rows[0].interestPortion).toBe(0); expect(re.overpayment ?? 0).toBe(0); expect(e.rows[0].notes).toBeNull();
   });
 });
+
+// ── D272: a payoff for less than the balance is a settlement, not 3,100 of principal from a 200 payment.
+describe("D272 a payoff for less than the balance books the cash as principal and writes the rest off", async () => {
+  const { applyLiabilityPayment } = await import("../server/liability-payments");
+  function loanStub(fields: Record<string, any>) {
+    const rows: any[] = []; let profile: any = { id: "card-1", type: "liability", type_key: "credit_card", name: "Card", fields, tags: [], notes: "" };
+    const storage: any = {
+      _timezone: "UTC",
+      getProfile: async () => profile,
+      updateProfile: async (_id: string, patch: any) => { profile = { ...profile, ...patch, fields: { ...profile.fields, ...(patch?.fields || {}) } }; return profile; },
+      createLiabilityPayment: async (r: any) => { rows.push(r); return r; },
+      getLiabilityPayments: async () => rows,
+    };
+    return { storage, rows, get: () => profile };
+  }
+  it("200 payoff on a 3,100 card: principal 200, interest 0, 2,900 forgiven, balance 0", async () => {
+    const { storage, rows, get } = loanStub({ balance: 3100, interestRate: 24, minimumPayment: 90 });
+    const r: any = await applyLiabilityPayment(storage, get(), { amount: 200, paymentDate: "2026-09-04", paymentType: "payoff" } as any, "UTC");
+    expect(rows[0].principalPortion).toBe(200);
+    expect(rows[0].interestPortion).toBe(0);
+    expect(r.forgiven).toBe(2900);
+    expect(rows[0].notes).toContain("Settled: $2900.00");
+    expect(Number(get().fields.currentBalance)).toBe(0);
+  });
+  it("a full payoff has nothing forgiven and keeps the D271 split", async () => {
+    const { storage, rows, get } = loanStub({ balance: 3100, interestRate: 24, minimumPayment: 90 });
+    const r: any = await applyLiabilityPayment(storage, get(), { amount: 3162, paymentDate: "2026-09-04", paymentType: "payoff", notes: "final" } as any, "UTC");
+    expect(rows[0].principalPortion).toBe(3100); expect(rows[0].interestPortion).toBe(62); expect(r.forgiven ?? 0).toBe(0); expect(rows[0].notes).toBe("final");
+  });
+});
