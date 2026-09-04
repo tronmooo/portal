@@ -1,5 +1,6 @@
 import { changedFieldsOnly } from "@shared/field-patch";
 import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { cashOutOf } from "@shared/bill-payment-expense";
 import { localTodayISO } from "@/lib/dates";
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
@@ -774,10 +775,16 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
   // BUG (user report: tile "Out $0" while the Cash Flow popup said "Out $1,020"):
   // the tile only counted logged expenses; the popup counts recurring bills too.
-  // Use the SAME definition as the popup: Out = month expenses + monthlyized
-  // active obligations (financeSnapshot.monthlyObligationTotal).
+  // Use the SAME definition as the popup: Out = monthlyized active obligations
+  // (financeSnapshot.monthlyObligationTotal) + one-time spend…
   const monthlyRecurringOut = enhanced?.financeSnapshot?.monthlyObligationTotal ?? 0;
-  const monthlyOut = monthlySpend + monthlyRecurringOut;
+  // ...but only ONCE per bill: paying a recurring bill logs an expense, so
+  // `totalMonthlySpend` and `monthlyObligationTotal` overlap by exactly that
+  // amount. Out uses the one-time remainder (D-CASHFLOW-DOUBLE) — otherwise
+  // marking a $10 phone bill paid moved the month from -$10 to -$20.
+  const monthlyOut = enhanced?.financeSnapshot
+    ? cashOutOf(enhanced.financeSnapshot)
+    : monthlySpend + monthlyRecurringOut;
   const cashFlow = monthlyIncome - monthlyOut;
   // BUG (QA 2026-07-25): the tile flashed -$7,253 → +$28,247 → -$7,651 →
   // +$27,849 before settling. Cash flow is In minus Out, and its three inputs
@@ -3820,7 +3827,10 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
   const monthlyIncome = useMemo(() => sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE), [incomes]);
   // Same definition as the hero tile + Cash Flow popup: Out includes the
   // monthlyized recurring obligations, not just logged expenses.
-  const cashFlow = monthlyIncome - monthlySpend - (data?.monthlyObligationTotal ?? 0);
+
+  // One-time spend only on the spend side — bill payments are already in
+  // monthlyObligationTotal (D-CASHFLOW-DOUBLE).
+  const cashFlow = monthlyIncome - (data ? cashOutOf(data) : monthlySpend);
   // Hide synthetic test rows unless the dashboard toggle is on (point 11).
   const showTestData = useShowTestData();
   const hideTest = (e: any) => showTestData || !isTestEntity(e);

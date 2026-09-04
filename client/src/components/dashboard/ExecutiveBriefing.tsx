@@ -22,6 +22,7 @@
 // "Taken", managed recurring dates get "Done". Popups are the same components
 // the dashboard KPI tiles use.
 import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { cashOutOf } from "@shared/bill-payment-expense";
 import { localDayOf } from "@shared/timezone";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { useLocation } from "wouter";
@@ -704,11 +705,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   }, [nwHistory, netWorth]);
 
   // Cash flow — mirrors HubKpiStrip/HeroKPISection exactly: monthly income
-  // minus (month expenses + monthlyized active obligations).
+  // minus (monthlyized active obligations + one-time spend).
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
   const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
+  // Out = obligations + the spend that ISN'T a bill payment. Bill payments log
+  // an expense that monthlyObligationTotal already covers, so adding the whole
+  // month's spend charged each paid bill twice (D-CASHFLOW-DOUBLE).
   const monthlySpendBase = snap?.totalMonthlySpend ?? stats?.monthlySpend;
-  const monthlyExpenses = monthlySpendBase != null ? monthlySpendBase + (snap?.monthlyObligationTotal ?? 0) : null;
+  const monthlyExpenses = monthlySpendBase != null
+    ? (snap ? cashOutOf(snap) : monthlySpendBase)
+    : null;
   const cashFlow = monthlyExpenses != null ? monthlyIncome - monthlyExpenses : null;
 
   // Tasks

@@ -28,7 +28,7 @@ const noop = () => {};
 describe("MoneyPopups", () => {
   it("CashFlowWaterfallPopup renders the waterfall with in/recurring/one-time/net", () => {
     render(<CashFlowWaterfallPopup open onOpenChange={noop} monthLabel="JUL"
-      cashIn={35500} spendMtd={789} recurringOut={6822}
+      cashIn={35500} oneTimeOut={789} recurringOut={6822}
       incomes={[{ id: "i1", name: "Salary", amount: 30000, frequency: "monthly" }]}
       spendByCategory={{ food: 434 }} />);
     const el = screen.getByTestId("popup-cashflow-waterfall");

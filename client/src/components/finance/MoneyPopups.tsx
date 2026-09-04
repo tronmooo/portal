@@ -58,14 +58,20 @@ const ROSE = "350 80% 58%", VIOLET = "262 80% 66%", INDIGO = "234 85% 68%";
 // 1 · CASH FLOW — sky waterfall
 // ═════════════════════════════════════════════════════════════════════════════
 
+// `oneTimeOut` is deliberately NOT the month's total spend: a paid recurring
+// bill logs an expense, and that same money is already in `recurringOut`, so
+// adding the two counted it twice — creating a $10 phone bill read -$10, and
+// marking it paid read -$20 for the one bill (D-CASHFLOW-DOUBLE). Callers pass
+// the snapshot's one-time bucket (shared/bill-payment-expense: oneTimeSpendOf),
+// which is the month's spend minus what bill payments logged.
 export function CashFlowWaterfallPopup({
-  open, onOpenChange, monthLabel, cashIn, spendMtd, recurringOut, incomes, spendByCategory,
+  open, onOpenChange, monthLabel, cashIn, oneTimeOut, recurringOut, incomes, spendByCategory,
 }: {
   open: boolean; onOpenChange: (o: boolean) => void; monthLabel: string;
-  cashIn: number; spendMtd: number; recurringOut: number;
+  cashIn: number; oneTimeOut: number; recurringOut: number;
   incomes: any[]; spendByCategory: Record<string, number>;
 }) {
-  const cashOut = spendMtd + recurringOut;
+  const cashOut = oneTimeOut + recurringOut;
   const net = cashIn - cashOut;
   const sky = "hsl(203 92% 60%)";
 
@@ -77,7 +83,7 @@ export function CashFlowWaterfallPopup({
   const cols = [
     { label: "IN", from: 0, to: lvl1, color: "hsl(155 65% 45%)", value: cashIn, sign: "+" },
     { label: "RECURRING", from: lvl2, to: lvl1, color: "hsl(0 72% 58%)", value: recurringOut, sign: "−" },
-    { label: "ONE-TIME", from: lvl3, to: lvl2, color: "hsl(38 96% 54%)", value: spendMtd, sign: "−" },
+    { label: "ONE-TIME", from: lvl3, to: lvl2, color: "hsl(38 96% 54%)", value: oneTimeOut, sign: "−" },
     { label: "NET", from: 0, to: Math.max(0, lvl3), color: sky, value: net, sign: net >= 0 ? "+" : "−" },
   ];
   const X = (i: number) => 16 + i * 82;

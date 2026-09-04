@@ -13,6 +13,7 @@
 // lands, and its key/URL match the trackers page exactly so the cache is
 // shared with the Trackers tab.
 import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { cashOutOf } from "@shared/bill-payment-expense";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useState, useMemo, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -151,12 +152,15 @@ export function HubKpiStrip() {
   const netWorth = snap != null ? (snap.totalAssetValue ?? 0) - (snap.totalLiabilities ?? 0) : null;
 
   // CASH FLOW — mirrors HeroKPISection's definition exactly: monthly incomes
-  // minus (month expenses + monthlyized active obligations).
+  // minus (monthlyized active obligations + one-time spend).
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
   const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
+  // One-time spend, not the whole month's: expenses logged by paying a
+  // recurring bill are already inside monthlyObligationTotal, so summing both
+  // subtracted every paid bill twice (D-CASHFLOW-DOUBLE).
   const monthlySpend = snap?.totalMonthlySpend ?? stats?.monthlySpend;
   const cashFlow = monthlySpend != null
-    ? monthlyIncome - (monthlySpend + (snap?.monthlyObligationTotal ?? 0))
+    ? monthlyIncome - (snap ? cashOutOf(snap) : monthlySpend)
     : null;
 
   // computeHealthScore returns null for BOTH "still loading" and "this scope

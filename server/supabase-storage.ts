@@ -2,6 +2,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID, createHash } from "crypto";
 
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy, spendByCategory, spendByCategory as spendByCategoryOf, type BudgetEntry } from "@shared/budget-ledger";
+import { oneTimeExpenses, billPaymentTotal } from "@shared/bill-payment-expense";
 // One writer at a time per (user, month) within this process; see mutateBudgets.
 const budgetWriteLocks = new Map<string, Promise<void>>();
 import { assertEventSpan } from "@shared/event-span";
@@ -7653,6 +7654,18 @@ export class SupabaseStorage implements IStorage {
     // cap's spending straight out of this map by the cap's category.
     const spendByCategory = spendByCategoryOf(monthlyExpenses);
     const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
+    // D-CASHFLOW-DOUBLE: a paid recurring bill logs an expense AND still counts
+    // in monthlyObligationTotal, so anything that adds spend + obligations (the
+    // Cash Flow waterfall, the Out tile) counted that bill twice — marking the
+    // phone bill paid moved the month from -$10 to -$20. Split the same
+    // expenses once, here, so every surface reads the split off one snapshot:
+    // `totalMonthlySpend`/`spendByCategory` stay whole (budgets and the Spend
+    // card are about money actually spent), and the one-time figures below
+    // carry the non-bill remainder.
+    const nonBillExpenses = oneTimeExpenses(monthlyExpenses);
+    const billPaymentSpend = billPaymentTotal(monthlyExpenses);
+    const oneTimeSpend = nonBillExpenses.reduce((s, e) => s + e.amount, 0);
+    const oneTimeSpendByCategory = spendByCategoryOf(nonBillExpenses);
 
     // Previous month YYYY-MM, computed in the user's timezone
     const [yStr, mStr] = userYearMonth.split('-');
@@ -7751,6 +7764,9 @@ export class SupabaseStorage implements IStorage {
         spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : (totalMonthlySpend > 0 ? 100 : 0),
         spendByCategory, upcomingBills,
         monthlyObligationTotal,
+        // Cash flow reads these two, never totalMonthlySpend, so a bill is
+        // counted once (in monthlyObligationTotal) — see D-CASHFLOW-DOUBLE.
+        oneTimeSpend, oneTimeSpendByCategory, billPaymentSpend,
         totalAssetValue: (() => {
           // Asset profiles: vehicles, real estate, investments, accounts, generic assets, even loans
           // (a loan profile may carry the asset's market value separately from its remaining balance).

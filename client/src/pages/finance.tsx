@@ -16,6 +16,7 @@ import { formatMoney, formatListDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { oneTimeSpendOf, oneTimeSpendByCategoryOf, cashOutOf } from "@shared/bill-payment-expense";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -1135,7 +1136,10 @@ export default function FinancePage() {
         // Cash flow: monthly income vs (month spend + monthlyized bills).
         const monthlyIncome = sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
-        const cashOut = spendMtd + Number(snap.monthlyObligationTotal || 0);
+        // Cash out is recurring bills + one-time spend. `totalMonthlySpend`
+        // already contains the expenses that paying those bills logged, so
+        // adding it whole double-counted every paid bill (D-CASHFLOW-DOUBLE).
+        const cashOut = cashOutOf(snap);
         const savingsRate = monthlyIncome > 0 ? Math.round(((monthlyIncome - spendMtd) / monthlyIncome) * 100) : null;
 
         // Budgets: limit from /api/budgets, spent from snapshot.spendByCategory.
@@ -1223,7 +1227,10 @@ export default function FinancePage() {
         const monthlyIncome = sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const recurringOut = Number(snap.monthlyObligationTotal || 0);
+        // Cash flow splits spend in two; Spend/Budget keep the whole figure.
+        const oneTimeOut = oneTimeSpendOf(snap);
         const spendByCat: Record<string, number> = snap.spendByCategory || {};
+        const oneTimeByCat = oneTimeSpendByCategoryOf(snap);
         const upcomingBills = Array.isArray(snap.upcomingBills) ? snap.upcomingBills : [];
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
         const ymNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
@@ -1235,8 +1242,8 @@ export default function FinancePage() {
             <NetWorthPopup open={financePopup === "networth"} onOpenChange={closer} filterMode={fc} filterIds={filterIds} />
             <BudgetPopup open={financePopup === "budget"} onOpenChange={closer} filterMode={fc} filterIds={filterIds} monthlyIncome={monthlyIncome} />
             <CashFlowWaterfallPopup open={financePopup === "cashflow"} onOpenChange={closer}
-              monthLabel={monthLabel} cashIn={monthlyIncome} spendMtd={spendMtd} recurringOut={recurringOut}
-              incomes={incomes || []} spendByCategory={spendByCat} />
+              monthLabel={monthLabel} cashIn={monthlyIncome} oneTimeOut={oneTimeOut} recurringOut={recurringOut}
+              incomes={incomes || []} spendByCategory={oneTimeByCat} />
             <SpendPopup open={financePopup === "spend"} onOpenChange={closer}
               monthLabel={monthLabel} spendMtd={spendMtd}
               spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
@@ -1250,7 +1257,7 @@ export default function FinancePage() {
             <SavingsRatePopup open={financePopup === "savings"} onOpenChange={closer}
               incomeMtd={monthlyIncome} spendMtd={spendMtd} />
             <CashFlowOverviewPopup open={financePopup === "overview"} onOpenChange={closer}
-              cashIn={monthlyIncome} cashOut={spendMtd + recurringOut}
+              cashIn={monthlyIncome} cashOut={oneTimeOut + recurringOut}
               cashTrend={cashTrend} monthLabel={monthLabel} />
           </>
         );

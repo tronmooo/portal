@@ -20,6 +20,7 @@ import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-
 import { deriveScheduleFields, liabilityAmount } from "@shared/liability-schedule";
 import { isAccountProfile, isDebtAccount } from "@shared/finance-accounts";
 import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { BILL_PAYMENT_TAG, PAYMENT_TAG_PREFIX } from "@shared/bill-payment-expense";
 import type { IStorage } from "./storage";
 import { randomUUID } from "crypto";
 
@@ -894,7 +895,7 @@ export async function payBillOccurrence(
         linkedProfiles: owners,
         // The payment:<id> tag is the join key unpayBillOccurrence uses to
         // retract this exact expense. Not display metadata — an inverse's key.
-        tags: ["bill-payment", `liability:${liabilityId}`, `payment:${payment?.id}`],
+        tags: [BILL_PAYMENT_TAG, `liability:${liabilityId}`, `${PAYMENT_TAG_PREFIX}${payment?.id}`],
       } as any);
       expenseId = expense?.id ?? null;
       steps.push({ step: "expense", ok: true });
@@ -1198,7 +1199,9 @@ function curDueEqualsAdvanceFrom(fields: any, occDate: string): boolean {
 // which would delete the expense the user just edited and re-log a fresh one
 // without their other changes.
 
-export const PAYMENT_TAG_PREFIX = "payment:";
+// One home for the tag vocabulary: shared/bill-payment-expense.ts also reads
+// these to keep bill payments out of cash flow's one-time bucket.
+export { BILL_PAYMENT_TAG, PAYMENT_TAG_PREFIX };
 
 /** The payment id an expense carries when a bill payment logged it. */
 export function paymentIdOfExpense(expense: { tags?: unknown } | null | undefined): string | null {
@@ -1229,7 +1232,7 @@ export async function stripDanglingPaymentTags(storage: IStorage, tags: unknown)
     }
     kept.push(t);
   }
-  return hasPayment ? kept : kept.filter((t) => t !== "bill-payment");
+  return hasPayment ? kept : kept.filter((t) => t !== BILL_PAYMENT_TAG);
 }
 
 /**

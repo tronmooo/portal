@@ -2,6 +2,7 @@ import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { toMonthlyAmount, isUpcomingBill } from "@shared/obligation-windows";
+import { oneTimeExpenses, billPaymentTotal } from "@shared/bill-payment-expense";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
@@ -2447,6 +2448,16 @@ export class MemStorage implements IStorage {
       spendByCategory[e.category] = (spendByCategory[e.category] || 0) + e.amount;
     }
     const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
+    // D-CASHFLOW-DOUBLE: keep this snapshot's shape identical to the Supabase
+    // one — a paid recurring bill's expense must not also land in the
+    // cash-flow one-time bucket, where monthlyObligationTotal already has it.
+    const nonBillExpenses = oneTimeExpenses(monthlyExpenses);
+    const billPaymentSpend = billPaymentTotal(monthlyExpenses);
+    const oneTimeSpend = nonBillExpenses.reduce((s, e) => s + e.amount, 0);
+    const oneTimeSpendByCategory: Record<string, number> = {};
+    for (const e of nonBillExpenses) {
+      oneTimeSpendByCategory[e.category] = (oneTimeSpendByCategory[e.category] || 0) + e.amount;
+    }
 
     // Last month comparison
     const lastMonthDate = new Date(thisYear, thisMonth - 1, 1);
@@ -2506,6 +2517,7 @@ export class MemStorage implements IStorage {
         spendByCategory,
         upcomingBills,
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
+        oneTimeSpend, oneTimeSpendByCategory, billPaymentSpend,
       },
       overdueTasks,
       tasksDueToday,

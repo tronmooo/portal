@@ -310,6 +310,7 @@ export default defineConfig({
       'tests/public-auth-ui.dom.test.tsx',
       'tests/artifact-panel-failures.dom.test.tsx',
       'tests/editor-mobile-controls.test.ts',
+      'tests/cashflow-paid-bill-double-count.test.ts',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       'tests/test-suite-discovery.test.ts',

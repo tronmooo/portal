@@ -19,6 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { CashFlowWaterfallPopup } from "@/components/finance/MoneyPopups";
+import { oneTimeSpendOf, oneTimeSpendByCategoryOf } from "@shared/bill-payment-expense";
 
 export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
   open: boolean;
@@ -55,10 +56,13 @@ export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
       onOpenChange={onOpenChange}
       monthLabel={monthLabel}
       cashIn={monthlyIncome}
-      spendMtd={Number(snap.totalMonthlySpend || 0)}
+      // One-time = spend that isn't a bill payment. The bills themselves are
+      // recurringOut; totalMonthlySpend contains both, so using it here made a
+      // paid bill count twice (D-CASHFLOW-DOUBLE).
+      oneTimeOut={oneTimeSpendOf(snap)}
       recurringOut={Number(snap.monthlyObligationTotal || 0)}
       incomes={incomes}
-      spendByCategory={snap.spendByCategory || {}}
+      spendByCategory={oneTimeSpendByCategoryOf(snap)}
     />
   );
 }
