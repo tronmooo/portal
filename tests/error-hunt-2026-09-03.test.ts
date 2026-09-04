@@ -3812,3 +3812,24 @@ describe("D287 the add-expense form checks cents before the optimistic close", (
     expect(src.slice(i, j)).toContain("toast({ title: SUB_CENT_AMOUNT_MESSAGE, variant: \"destructive\" });");
   });
 });
+
+// ── D288: the same backup file is not restored twice.
+describe("D288 a backup restored before is refused the second time", async () => {
+  const { exportFingerprint, alreadyRestoredMessage } = await import("../shared/import-fingerprint");
+  it("the fingerprint is stable for one file and differs for another export", () => {
+    const a = { version: "3", exportedAt: "2026-09-03T10:00:00.000Z", profiles: [1, 2], tasks: [1], expenses: [] };
+    expect(exportFingerprint(a)).toBe(exportFingerprint({ ...a, tasks: [9] }));
+    expect(exportFingerprint(a)).not.toBe(exportFingerprint({ ...a, exportedAt: "2026-09-04T10:00:00.000Z" }));
+    expect(exportFingerprint(a)).not.toBe(exportFingerprint({ ...a, tasks: [1, 2] }));
+    expect(exportFingerprint({ version: "3" })).toBeNull();
+    expect(alreadyRestoredMessage("2026-09-04T03:00:00.000Z")).toContain("already restored on 2026-09-04");
+  });
+  it("the import route checks the fingerprint after the lock and remembers it after a restore that wrote anything", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    const i = src.indexOf('app.post("/api/import"');
+    const block = src.slice(i, i + 3000);
+    expect(block).toContain("const backupFingerprint = exportFingerprint(data);");
+    expect(block).toContain("return res.status(409).json({ error: alreadyRestoredMessage(String(restoredAt)), alreadyRestoredAt: restoredAt });");
+    expect(src).toContain("if (backupFingerprint && Object.values(imported).some((n) => n > 0)) {");
+  });
+});

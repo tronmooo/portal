@@ -32,6 +32,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
+import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
@@ -9034,6 +9035,16 @@ Rules:
       if (!(await storage.acquireUserLock("import", IMPORT_LOCK_TTL_MS))) {
         return res.status(409).json({ error: "A restore is already running for this account. Wait for it to finish, then check your data before restoring again." });
       }
+      // The same file restored again doubled every record that is not
+      // matched by name (D288): remember each restored file and refuse it.
+      const backupFingerprint = exportFingerprint(data);
+      if (backupFingerprint) {
+        const restoredAt = await storage.getPreference(`${IMPORTED_BACKUP_PREF_PREFIX}${backupFingerprint}`).catch(() => null);
+        if (restoredAt) {
+          await storage.releaseUserLock("import").catch(() => {});
+          return res.status(409).json({ error: alreadyRestoredMessage(String(restoredAt)), alreadyRestoredAt: restoredAt });
+        }
+      }
       try {
       const imported: Record<string, number> = {};
       const failed: Record<string, string[]> = {};
@@ -9434,6 +9445,9 @@ Rules:
       }
 
       const totalFailed = Object.values(failed).reduce((s, arr) => s + arr.length, 0);
+      if (backupFingerprint && Object.values(imported).some((n) => n > 0)) {
+        await storage.setPreference(`${IMPORTED_BACKUP_PREF_PREFIX}${backupFingerprint}`, new Date().toISOString()).catch(() => {});
+      }
       res.json({ success: totalFailed === 0, imported, failed: totalFailed > 0 ? failed : undefined, totalFailed });
       } finally {
         await storage.releaseUserLock("import").catch(() => {});
