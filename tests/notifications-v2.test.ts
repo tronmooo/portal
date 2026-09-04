@@ -120,10 +120,14 @@ describe("buildNotifications — a dismissal does not outlive the fact it was ab
     const storage = stubStorage({ getTasks: async () => [OVERDUE_TASK] });
     storage._prefs.set(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify([`task-overdue-t1-${OVERDUE_TASK.dueDate}`]));
     expect((await buildNotifications(storage, "America/New_York")).some((n) => n.type === "task_overdue")).toBe(false);
-    const moved = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const storage2 = stubStorage({ getTasks: async () => [{ ...OVERDUE_TASK, dueDate: moved }] });
+    // Yesterday in the builder's zone (a UTC "yesterday" is New York's today
+    // for the first hours after midnight UTC, which made the task due, not overdue).
+    const nyToday = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const moved = new Date(`${nyToday}T12:00:00Z`); moved.setUTCDate(moved.getUTCDate() - 1);
+    const movedISO = moved.toISOString().slice(0, 10);
+    const storage2 = stubStorage({ getTasks: async () => [{ ...OVERDUE_TASK, dueDate: movedISO }] });
     storage2._prefs.set(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify([`task-overdue-t1-${OVERDUE_TASK.dueDate}`]));
     const list = await buildNotifications(storage2, "America/New_York");
-    expect(list.map((n) => n.id)).toContain(`task-overdue-t1-${moved}`);
+    expect(list.map((n) => n.id)).toContain(`task-overdue-t1-${movedISO}`);
   });
 });
