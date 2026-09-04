@@ -46,6 +46,8 @@ export interface LiabilityPaymentInput {
 }
 
 export interface LiabilityPaymentResult {
+  /** Money paid beyond the balance and this period's interest on a payoff (D271). */
+  overpayment?: number;
   payment: any;
   /** The liability profile as it stands after the payment. */
   liability: any;
@@ -81,6 +83,8 @@ function inferPaymentType(
 /** Everything a debt payment derives from the liability's CURRENT balance. */
 interface DebtPaymentPlan {
   balanceBefore: number; principal: number; interest: number; fees: number;
+  /** Money paid beyond the balance and this period's interest on a payoff (owed back by the lender). */
+  overpayment: number;
   paymentType: LiabilityPaymentType; newBalance: number;
   /** Whether this payment moves the tracked balance at all. */
   moves: boolean;
@@ -128,6 +132,8 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
     input.paymentType || inferPaymentType(amount, balanceBefore, principal, interest, monthlyPayment, explicitPrincipal);
 
   let newBalance: number;
+  let overpayment = 0;
+  const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
   if (paymentType === "skipped" || paymentType === "deferred") {
     newBalance = balanceBefore;
     principal = 0;
@@ -141,8 +147,15 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
     interest = 0;
     newBalance = balanceBefore + principal;
   } else if (paymentType === "payoff") {
+    // A payoff clears the balance and this period's accrued interest — no
+    // more. Anything paid beyond that is an overpayment the lender owes back;
+    // it used to be booked as interest, so a $10,000 payment on a $4,000
+    // loan recorded $6,000 of "interest" and the cost-of-borrowing figures
+    // followed (D271).
+    const accrued = allocatePayment(cashTowardLoan, balanceBefore, annualRate, 0).interest;
     principal = balanceBefore;
-    interest = Math.max(0, cashTowardLoan - balanceBefore);
+    interest = Math.min(accrued, Math.max(0, cashTowardLoan - balanceBefore));
+    overpayment = Math.max(0, round2(cashTowardLoan - balanceBefore - interest));
     newBalance = 0;
   } else {
     newBalance = Math.max(0, balanceBefore - principal);
@@ -155,7 +168,7 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
   }
 
   return {
-    balanceBefore, principal, interest, fees, paymentType, newBalance,
+    balanceBefore, principal, interest, fees, paymentType, newBalance, overpayment,
     // A reversal puts money back even on a paid-off debt (balance 0): the
     // "balance above zero" gate is for payments that take money off.
     moves: paymentType !== "skipped" && paymentType !== "deferred" && (balanceBefore > 0 || paymentType === "reversal"),
@@ -258,7 +271,7 @@ export async function applyLiabilityPayment(
       remainingBalanceAfter: plan.moves ? newBalance : undefined,
       paymentType,
       sourceAccount: input.sourceAccount || null,
-      notes: input.notes || null,
+      notes: plan.overpayment > 0 ? `${input.notes ? input.notes + " — " : ""}Overpaid by $${plan.overpayment.toFixed(2)} (owed back by the lender)` : (input.notes || null),
     } as any);
   } catch (e) {
     // The balance moved for a row that never landed: put the money back
@@ -279,7 +292,7 @@ export async function applyLiabilityPayment(
     throw e;
   }
 
-  return { payment, liability: updated, newBalance, principal, interest, recurring: false };
+  return { payment, liability: updated, newBalance, principal, interest, recurring: false, overpayment: plan.overpayment };
 }
 
 // ─── The one entry-point-facing pay operation ────────────────────────────────

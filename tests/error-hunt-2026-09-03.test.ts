@@ -3377,3 +3377,39 @@ describe("D270 the bills pay route keys its dedupe on the payment date", () => {
     expect(src).toContain('const dedupeKey = `${uid_o3}:${req.params.id}:${amount ?? "due"}:${req.body?.occurrenceDate ?? ""}:${date ?? ""}`;');
   });
 });
+
+// ── D271: a payoff's excess is an overpayment, never interest.
+describe("D271 a payoff books accrued interest only; the excess is an overpayment", async () => {
+  const { applyLiabilityPayment } = await import("../server/liability-payments");
+  function loanStub(fields: Record<string, any>) {
+    const rows: any[] = []; let profile: any = { id: "loan-1", type: "liability", type_key: "personal_loan", name: "Loan", fields, tags: [], notes: "" };
+    const storage: any = {
+      _timezone: "UTC",
+      getProfile: async () => profile,
+      updateProfile: async (_id: string, patch: any) => { profile = { ...profile, ...patch, fields: { ...profile.fields, ...(patch?.fields || {}) } }; return profile; },
+      createLiabilityPayment: async (r: any) => { rows.push(r); return r; },
+      getLiabilityPayments: async () => rows,
+    };
+    return { storage, rows, get: () => profile };
+  }
+  it("10,000 on a 4,000 balance at 6%: principal 4,000, interest 20, overpayment 5,980, balance 0", async () => {
+    const { storage, rows, get } = loanStub({ balance: 4000, interestRate: 6, monthlyAmount: 300 });
+    const r: any = await applyLiabilityPayment(storage, get(), { amount: 10000, paymentDate: "2026-09-04", paymentType: "payoff" } as any, "UTC");
+    expect(rows[0].principalPortion).toBe(4000);
+    expect(rows[0].interestPortion).toBe(20);
+    expect(r.overpayment).toBe(5980);
+    expect(rows[0].notes).toContain("Overpaid by $5980.00");
+    expect(Number(get().fields.currentBalance)).toBe(0);
+  });
+  it("without a rate the interest is 0; an exact payoff has no overpayment; a plain overpayment infers payoff and splits the same way", async () => {
+    const a = loanStub({ balance: 370000, monthlyAmount: 2000 });
+    const ra: any = await applyLiabilityPayment(a.storage, a.get(), { amount: 1000000.99, paymentDate: "2026-09-04", paymentType: "payoff" } as any, "UTC");
+    expect(a.rows[0].interestPortion).toBe(0); expect(a.rows[0].principalPortion).toBe(370000); expect(ra.overpayment).toBe(630000.99);
+    const b = loanStub({ balance: 4000, interestRate: 6, monthlyAmount: 300 });
+    const rb: any = await applyLiabilityPayment(b.storage, b.get(), { amount: 4020, paymentDate: "2026-09-04", paymentType: "payoff" } as any, "UTC");
+    expect(b.rows[0].interestPortion).toBe(20); expect(rb.overpayment ?? 0).toBe(0); expect(b.rows[0].notes).toBeNull();
+    const c = loanStub({ balance: 4000, interestRate: 6, monthlyAmount: 300 });
+    const rc: any = await applyLiabilityPayment(c.storage, c.get(), { amount: 10000, paymentDate: "2026-09-04" } as any, "UTC");
+    expect(c.rows[0].paymentType).toBe("payoff"); expect(c.rows[0].interestPortion).toBe(20); expect(rc.overpayment).toBe(5980);
+  });
+});
