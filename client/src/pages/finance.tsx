@@ -16,20 +16,33 @@ import { formatMoney, formatListDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, lazy, Suspense } from "react";
+import { lazyPopup } from "@/lib/lazy-popup";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
-import { MoneyOverview } from "@/components/finance/MoneyOverview";
+const MoneyOverview = lazy(() =>
+  import("@/components/finance/MoneyOverview").then(m => ({ default: m.MoneyOverview })));
 import { ConnectedFinance } from "@/components/finance/ConnectedFinance";
 import { AccountsSection } from "@/components/finance/AccountsSection";
 import { accountViews } from "@shared/finance-accounts";
-import { NetWorthPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
-import {
-  CashFlowWaterfallPopup, SpendPopup, IncomePopup, BillsDuePopup,
-  SavingsRatePopup, CashFlowOverviewPopup,
-} from "@/components/finance/MoneyPopups";
+/* PERF (2026-09-04): the KPI drill-downs are lazy. Both popup modules import
+   recharts, and Rollup hoists a route chunk's transitive STATIC dependencies
+   into that chunk — so these two static imports alone kept ~416KB of chart code
+   loading eagerly with the Finance tab even after its own charts were split
+   out. Each popup is rendered only while open below, and their queries are
+   already gated on `open`, so the static import bought nothing but the
+   download. Warmed during idle time by prefetchFinanceCharts(). */
+const NetWorthPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.NetWorthPopup, "/dashboard/finance");
+const BudgetPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.BudgetPopup, "/dashboard/finance");
+const moneyPopups = () => import("@/components/finance/MoneyPopups");
+const CashFlowWaterfallPopup = lazyPopup(moneyPopups, m => m.CashFlowWaterfallPopup, "/dashboard/finance");
+const SpendPopup = lazyPopup(moneyPopups, m => m.SpendPopup, "/dashboard/finance");
+const IncomePopup = lazyPopup(moneyPopups, m => m.IncomePopup, "/dashboard/finance");
+const BillsDuePopup = lazyPopup(moneyPopups, m => m.BillsDuePopup, "/dashboard/obligations");
+const SavingsRatePopup = lazyPopup(moneyPopups, m => m.SavingsRatePopup, "/dashboard/finance");
+const CashFlowOverviewPopup = lazyPopup(moneyPopups, m => m.CashFlowOverviewPopup, "/dashboard/finance");
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,15 +63,27 @@ import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
 import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE } from "@shared/schema";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-} from "recharts";
+// PERF (2026-09-04): recharts is NOT imported here. The page's only chart is
+// the "Spending by Category" bars far below the fold, and MoneyOverview's own
+// sparklines — both now load in their own chunks rather than putting ~416KB of
+// chart code in front of the Finance tab's first paint. Both are warmed during
+// idle time (see prefetchFinanceCharts) so scrolling to them never waits.
+const CategorySpendBars = lazy(() => import("@/components/finance/CategorySpendBars"));
+
+/** Warm the chart chunks once the page has painted and the thread is idle. */
+function prefetchFinanceCharts(): void {
+  const run = () => {
+    void import("@/components/finance/CategorySpendBars").catch(() => {});
+    void import("@/components/finance/MoneyOverview").catch(() => {});
+    void import("@/components/finance/MoneyPopups").catch(() => {});
+    void import("@/components/dashboard/HeroKPIPopups").catch(() => {});
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(run, { timeout: 4000 });
+  } else {
+    setTimeout(run, 2000);
+  }
+}
 
 const categoryColors: Record<string, string> = {
   food: "hsl(var(--chart-1))",
@@ -118,6 +143,9 @@ function ExpandableRow({
 }
 
 export default function FinancePage() {
+  // PERF (2026-09-04): warm the lazy chart chunks once the page has painted
+  // and the main thread is idle — off first paint, ready before a scroll.
+  useEffect(() => { prefetchFinanceCharts(); }, []);
   useEffect(() => { document.title = "Finance — Portol"; }, []);
   const { toast } = useToast();
   // Hub consolidation (2026-07): shell owns back-nav + profile switcher.
@@ -1175,40 +1203,42 @@ export default function FinancePage() {
         const billsSeries = upcomingBillsList.map((b: any) => Number(b.amount) || 0);
 
         return (
-          <MoneyOverview
-            netWorth={netWorth}
-            assets={assetValue}
-            liabilities={liabilities}
-            momPct={momPct}
-            nwSeries={nwSeries}
-            cashIn={monthlyIncome}
-            cashOut={cashOut}
-            spendMtd={spendMtd}
-            spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
-            incomeMtd={monthlyIncome}
-            budgets={budgetRows}
-            bills={upcomingBillsList}
-            spendByCategory={spendByCat}
-            cashTrend={cashTrend}
-            spendSeries={spendSeries}
-            incomeSeries={incomeSeries}
-            billsSeries={billsSeries}
-            alerts={alerts}
-            assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
-            liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}
-            monthLabel={monthLabel}
-            onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
-            payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null}
-            onOpenNetWorth={() => setFinancePopup("networth")}
-            onOpenCashFlow={() => setFinancePopup("cashflow")}
-            onOpenBudget={() => setFinancePopup("budget")}
-            onOpenSpend={() => setFinancePopup("spend")}
-            onOpenIncome={() => setFinancePopup("income")}
-            onOpenBills={() => setFinancePopup("bills")}
-            onOpenSavings={() => setFinancePopup("savings")}
-            onOpenOverview={() => setFinancePopup("overview")}
-            onCategoryClick={(cat) => { setFilterCategory(cat); setSearchQuery(""); }}
-          />
+          <Suspense fallback={null}>
+            <MoneyOverview
+              netWorth={netWorth}
+              assets={assetValue}
+              liabilities={liabilities}
+              momPct={momPct}
+              nwSeries={nwSeries}
+              cashIn={monthlyIncome}
+              cashOut={cashOut}
+              spendMtd={spendMtd}
+              spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
+              incomeMtd={monthlyIncome}
+              budgets={budgetRows}
+              bills={upcomingBillsList}
+              spendByCategory={spendByCat}
+              cashTrend={cashTrend}
+              spendSeries={spendSeries}
+              incomeSeries={incomeSeries}
+              billsSeries={billsSeries}
+              alerts={alerts}
+              assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
+              liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}
+              monthLabel={monthLabel}
+              onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
+              payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null}
+              onOpenNetWorth={() => setFinancePopup("networth")}
+              onOpenCashFlow={() => setFinancePopup("cashflow")}
+              onOpenBudget={() => setFinancePopup("budget")}
+              onOpenSpend={() => setFinancePopup("spend")}
+              onOpenIncome={() => setFinancePopup("income")}
+              onOpenBills={() => setFinancePopup("bills")}
+              onOpenSavings={() => setFinancePopup("savings")}
+              onOpenOverview={() => setFinancePopup("overview")}
+              onCategoryClick={(cat) => { setFilterCategory(cat); setSearchQuery(""); }}
+            />
+          </Suspense>
         );
       })()}
 
@@ -1231,28 +1261,44 @@ export default function FinancePage() {
         const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE);
         const closer = (o: boolean) => !o && setFinancePopup(null);
         return (
-          <>
-            <NetWorthPopup open={financePopup === "networth"} onOpenChange={closer} filterMode={fc} filterIds={filterIds} />
-            <BudgetPopup open={financePopup === "budget"} onOpenChange={closer} filterMode={fc} filterIds={filterIds} monthlyIncome={monthlyIncome} />
-            <CashFlowWaterfallPopup open={financePopup === "cashflow"} onOpenChange={closer}
-              monthLabel={monthLabel} cashIn={monthlyIncome} spendMtd={spendMtd} recurringOut={recurringOut}
-              incomes={incomes || []} spendByCategory={spendByCat} />
-            <SpendPopup open={financePopup === "spend"} onOpenChange={closer}
-              monthLabel={monthLabel} spendMtd={spendMtd}
-              spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
-              spendByCategory={spendByCat} monthExpenses={monthExpenses} />
-            <IncomePopup open={financePopup === "income"} onOpenChange={closer}
-              incomes={incomes || []} monthlyIncome={monthlyIncome} />
-            <BillsDuePopup open={financePopup === "bills"} onOpenChange={closer}
-              bills={upcomingBills}
-              onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
-              payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null} />
-            <SavingsRatePopup open={financePopup === "savings"} onOpenChange={closer}
-              incomeMtd={monthlyIncome} spendMtd={spendMtd} />
-            <CashFlowOverviewPopup open={financePopup === "overview"} onOpenChange={closer}
-              cashIn={monthlyIncome} cashOut={spendMtd + recurringOut}
-              cashTrend={cashTrend} monthLabel={monthLabel} />
-          </>
+          <Suspense fallback={null}>
+            {financePopup === "networth" && (
+              <NetWorthPopup open onOpenChange={closer} filterMode={fc} filterIds={filterIds} />
+            )}
+            {financePopup === "budget" && (
+              <BudgetPopup open onOpenChange={closer} filterMode={fc} filterIds={filterIds} monthlyIncome={monthlyIncome} />
+            )}
+            {financePopup === "cashflow" && (
+              <CashFlowWaterfallPopup open onOpenChange={closer}
+                monthLabel={monthLabel} cashIn={monthlyIncome} spendMtd={spendMtd} recurringOut={recurringOut}
+                incomes={incomes || []} spendByCategory={spendByCat} />
+            )}
+            {financePopup === "spend" && (
+              <SpendPopup open onOpenChange={closer}
+                monthLabel={monthLabel} spendMtd={spendMtd}
+                spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
+                spendByCategory={spendByCat} monthExpenses={monthExpenses} />
+            )}
+            {financePopup === "income" && (
+              <IncomePopup open onOpenChange={closer}
+                incomes={incomes || []} monthlyIncome={monthlyIncome} />
+            )}
+            {financePopup === "bills" && (
+              <BillsDuePopup open onOpenChange={closer}
+                bills={upcomingBills}
+                onPayBill={(bill: any) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
+                payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null} />
+            )}
+            {financePopup === "savings" && (
+              <SavingsRatePopup open onOpenChange={closer}
+                incomeMtd={monthlyIncome} spendMtd={spendMtd} />
+            )}
+            {financePopup === "overview" && (
+              <CashFlowOverviewPopup open onOpenChange={closer}
+                cashIn={monthlyIncome} cashOut={spendMtd + recurringOut}
+                cashTrend={cashTrend} monthLabel={monthLabel} />
+            )}
+          </Suspense>
         );
       })()}
 
@@ -1263,26 +1309,9 @@ export default function FinancePage() {
           </CardHeader>
           <CardContent>
             <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData}>
-                  <XAxis dataKey="name" tick={{ fontSize: 12 }} className="capitalize" />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v}`} />
-                  <Tooltip
-                    formatter={(v: number) => [`$${v.toFixed(2)}`, "Amount"]}
-                    contentStyle={{
-                      background: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                      fontSize: "12px",
-                    }}
-                  />
-                  <Bar dataKey="amount" radius={[6, 6, 0, 0]}>
-                    {chartData.map((entry) => (
-                      <Cell key={entry.name} fill={categoryColors[entry.name] || categoryColors.general} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <Suspense fallback={null}>
+                <CategorySpendBars data={chartData} categoryColors={categoryColors} />
+              </Suspense>
             </div>
           </CardContent>
         </Card>
