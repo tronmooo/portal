@@ -61,6 +61,21 @@ export interface LiabilityPaymentResult {
 }
 
 /** A row's principal with its direction: a reversal put money back, everything else took it off. */
+/**
+ * A settlement payoff (paid less than the balance, D272) notes the part of
+ * the balance the lender let go. The row is the only record of that figure,
+ * so an undo reads it back here: putting only the cash paid back on the
+ * balance left a settled $3,100 card showing $200 owed (D273).
+ */
+export function settlementNote(forgiven: number): string {
+  return `Settled: $${forgiven.toFixed(2)} of the balance written off`;
+}
+export function writtenOffOf(row: { notes?: string | null; paymentType?: string | null } | null | undefined): number {
+  if (row?.paymentType !== "payoff") return 0;
+  const m = /Settled: \$([\d,]+(?:\.\d+)?) of the balance written off/.exec(String(row?.notes || ""));
+  return m ? Number(m[1].replace(/,/g, "")) || 0 : 0;
+}
+
 export function signedPrincipal(row: { principalPortion?: number | null; paymentType?: string | null } | null | undefined): number {
   const magnitude = Math.abs(Number(row?.principalPortion) || 0);
   return row?.paymentType === "reversal" ? -magnitude : magnitude;
@@ -296,7 +311,7 @@ export async function applyLiabilityPayment(
       paymentType,
       sourceAccount: input.sourceAccount || null,
       notes: plan.overpayment > 0 ? `${input.notes ? input.notes + " — " : ""}Overpaid by $${plan.overpayment.toFixed(2)} (owed back by the lender)`
-        : plan.forgiven > 0 ? `${input.notes ? input.notes + " — " : ""}Settled: $${plan.forgiven.toFixed(2)} of the balance written off`
+        : plan.forgiven > 0 ? `${input.notes ? input.notes + " — " : ""}${settlementNote(plan.forgiven)}`
         : (input.notes || null),
     } as any);
   } catch (e) {
@@ -1020,7 +1035,9 @@ export async function unpayBillOccurrence(
     // type row carries negative principal, so plain addition also handles it.
     // A reversal row stores its principal as a magnitude; undoing a reversal
     // takes that money back OFF the balance.
-    const principal = signedPrincipal(target);
+    // A settlement payoff's written-off balance comes back too: the debt was
+    // only closed because of that payment.
+    const principal = signedPrincipal(target) + writtenOffOf(target);
     const restores = !recurring && principal !== 0 && target.paymentType !== "skipped" && target.paymentType !== "deferred";
     // lastPaidDate: the latest remaining payment, or gone.
     const remaining = payments.filter((p: any) => p.id !== target.id).sort(byRecency);

@@ -3452,3 +3452,38 @@ describe("D272 a payoff for less than the balance books the cash as principal an
     expect(rows[0].principalPortion).toBe(3100); expect(rows[0].interestPortion).toBe(62); expect(r.forgiven ?? 0).toBe(0); expect(rows[0].notes).toBe("final");
   });
 });
+
+// ── D273: undoing a settlement payoff restores the written-off balance too.
+describe("D273 undoing a settlement payoff puts the whole balance back", async () => {
+  const { applyLiabilityPayment, unpayBillOccurrence, writtenOffOf } = await import("../server/liability-payments");
+  function cardStub(fields: Record<string, any>) {
+    let rows: any[] = []; let profile: any = { id: "card-2", type: "liability", type_key: "credit_card", name: "Card", fields, tags: [], notes: "" };
+    const storage: any = {
+      _timezone: "UTC",
+      getProfile: async () => profile,
+      getProfiles: async () => [profile],
+      updateProfile: async (_id: string, patch: any) => { profile = { ...profile, ...patch, fields: { ...profile.fields, ...(patch?.fields || {}) } }; return profile; },
+      createLiabilityPayment: async (r: any) => { const row = { id: `pay-${rows.length + 1}`, createdAt: new Date().toISOString(), ...r }; rows.push(row); return row; },
+      getLiabilityPayments: async () => [...rows].reverse(),
+      deleteLiabilityPayment: async (id: string) => { const n = rows.length; rows = rows.filter((r) => r.id !== id); return rows.length < n; },
+      unmarkLoanPayment: async () => 0,
+      updateOccurrenceOverride: async () => {},
+      getExpenses: async () => [],
+    };
+    return { storage, get: () => profile, rows: () => rows };
+  }
+  it("200 payoff on 3,100 then undo: balance 3,100 again", async () => {
+    const { storage, get } = cardStub({ currentBalance: 3100, interestRate: 24, minimumPayment: 90 });
+    const r: any = await applyLiabilityPayment(storage, get(), { amount: 200, paymentDate: "2026-09-04", paymentType: "payoff" } as any, "UTC");
+    expect(Number(get().fields.currentBalance)).toBe(0);
+    expect(writtenOffOf(r.payment)).toBe(2900);
+    const u = await unpayBillOccurrence(storage, "card-2", { paymentId: r.payment.id, source: "route" } as any, "UTC");
+    expect(u.balanceRestored).toBe(true);
+    expect(Number(get().fields.currentBalance)).toBe(3100);
+  });
+  it("an ordinary or overpaid payoff row has nothing written off; a note on another type is ignored", () => {
+    expect(writtenOffOf({ paymentType: "payoff", notes: "Lump sum — Overpaid by $5980.00 (owed back by the lender)" })).toBe(0);
+    expect(writtenOffOf({ paymentType: "standard", notes: "Settled: $10.00 of the balance written off" })).toBe(0);
+    expect(writtenOffOf({ paymentType: "payoff", notes: "final — Settled: $1,234.50 of the balance written off" })).toBe(1234.5);
+  });
+});
