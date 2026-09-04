@@ -173,6 +173,7 @@ export default defineConfig({
       'tests/upload-dedupe.test.ts',
       'tests/upload-discard-image.test.ts',
       'tests/upload-discard-image-route.test.ts',
+      'tests/upload-active-scope-route.test.ts',
       'tests/upload-discard-image.dom.test.tsx',
       'tests/upload-discard-image-nav.dom.test.tsx',
       'tests/cache-bust-predicate.test.ts',

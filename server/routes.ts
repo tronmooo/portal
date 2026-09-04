@@ -125,6 +125,22 @@ function applyActiveProfileScope(
 }
 
 /**
+ * The owner an upload should link to. `processFileUpload` takes a single
+ * comma-separated `profileId` string rather than a body with `linkedProfiles`,
+ * so the upload routes cannot go through applyActiveProfileScope — this applies
+ * the same rule (shared/active-scope.resolveCreateOwnerIds) to that shape.
+ * An explicit choice wins; "none"/empty falls back to the active scope, which
+ * only supplies an owner when exactly one profile is selected.
+ */
+function resolveUploadProfileId(req: Request, profileId: unknown): string | undefined {
+  const explicit = typeof profileId === "string"
+    ? profileId.split(",").map(s => s.trim()).filter(id => id && id !== "none")
+    : [];
+  const owners = resolveCreateOwnerIds(explicit, activeProfileIds(req));
+  return owners.length > 0 ? owners.join(",") : undefined;
+}
+
+/**
  * The guards a parent assignment must pass: the parent exists (404), the link
  * would not close a cycle (400), the chain stays at most 32 deep (400).
  *
@@ -2574,9 +2590,14 @@ export async function registerRoutes(
       if (clean.includes(",")) clean = clean.split(",").pop() || clean;
       clean = clean.replace(/\s/g, "");
 
-      const safeProfileIds: string[] = Array.isArray(profileIds)
+      const explicitProfileIds: string[] = Array.isArray(profileIds)
         ? profileIds.filter((p) => typeof p === "string" && p && p !== "none")
         : [];
+      // Profile isolation (PROP-005): a file saved while one profile is the
+      // active scope belongs to that profile. Without this, "Save file" in chat
+      // with Bob selected and no owner picked stored the document under the
+      // self profile, and Bob's Documents tab said "Nothing to list here yet".
+      const safeProfileIds = resolveCreateOwnerIds(explicitProfileIds, activeProfileIds(req));
 
       const baseName = String(fileName).replace(/\.[^.]+$/, "");
       const doc = await storage.createDocument({
@@ -2644,7 +2665,10 @@ export async function registerRoutes(
       if (!ALLOWED_MIMES.includes(mimeType)) {
         return res.status(415).json({ error: `Unsupported file type: ${mimeType}. Allowed: images, PDF, plain text, Word.` });
       }
-      const result = await processFileUpload(fileName, mimeType, fileData, message, profileId, { discardImage: discardUploadImage });
+      // Profile isolation (PROP-005): an upload with no chosen profile lands on
+      // the single profile in the caller's active scope, never silently on self.
+      const scopedProfileId = resolveUploadProfileId(req, profileId);
+      const result = await processFileUpload(fileName, mimeType, fileData, message, scopedProfileId, { discardImage: discardUploadImage });
       res.json(result);
     } catch (err: any) {
       log.error("[Upload]", err?.message || "unknown error");
@@ -2706,7 +2730,7 @@ export async function registerRoutes(
             mimeType || "image/jpeg",
             fileData,
             message,
-            profileId !== "none" ? profileId : undefined,
+            resolveUploadProfileId(req, profileId),
             { discardImage: discardBatchImages || file.discardImage === true }
           );
 
