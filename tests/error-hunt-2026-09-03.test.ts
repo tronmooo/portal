@@ -3920,3 +3920,30 @@ describe("D290 two writes for one day never lose the loser's text", async () => 
     expect(s.rows()).toHaveLength(1);
   });
 });
+
+// ── D291: "liability" is a profile type, and one list says so.
+describe("D291 the type-change guard knows the app's most common profile type", async () => {
+  const { checkProfileTypeChange, PROFILE_TYPES } = await import("../shared/profile-rename");
+  it("a profile can be changed to liability, and back out again", () => {
+    expect(PROFILE_TYPES).toContain("liability");
+    expect(checkProfileTypeChange("asset", "liability")).toEqual({ status: "ok", type: "liability" });
+    expect(checkProfileTypeChange("person", "liability")).toEqual({ status: "ok", type: "liability" });
+    expect(checkProfileTypeChange("liability", "person")).toEqual({ status: "ok", type: "person" });
+    expect(checkProfileTypeChange("liability", "liability")).toEqual({ status: "unchanged" });
+  });
+  it("the rules that matter are untouched: self is still fixed, and nonsense is still refused", () => {
+    expect(checkProfileTypeChange("self", "person").status).toBe("rejected");
+    expect(checkProfileTypeChange("person", "self").status).toBe("rejected");
+    expect(checkProfileTypeChange("person", "spaceship").status).toBe("rejected");
+    expect(checkProfileTypeChange("person", "").status).toBe("rejected");
+  });
+  it("the assistant reads the shared list instead of keeping its own copy", () => {
+    const ai = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
+    expect(ai).toContain('const ALLOWED_PROFILE_TYPES: string[] = [...PROFILE_TYPES, "self"];');
+    expect(ai).not.toMatch(/const PROFILE_TYPES = \["person", "pet", "vehicle", "account"/);
+    // every type the assistant used to accept is still accepted
+    for (const t of ["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset", "liability"]) {
+      expect([...PROFILE_TYPES, "self"]).toContain(t);
+    }
+  });
+});

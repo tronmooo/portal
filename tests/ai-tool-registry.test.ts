@@ -106,7 +106,9 @@ describe("AI tool registry", () => {
   // reaching the fallback means a malformed call, and of every wrong answer
   // "person" is the most damaging and the least recoverable.
   it("create_profile never falls back to type 'person'", () => {
-    const fallback = SRC.match(/const resolvedProfileType\s*=\s*PROFILE_TYPES\.includes\(input\.type\)\s*\?\s*input\.type\s*:\s*"(\w+)"/);
+    // The allow-list moved to the shared PROFILE_TYPES (D291); the rule this
+    // test guards — the fallback is "asset", never "person" — did not.
+    const fallback = SRC.match(/const resolvedProfileType\s*=\s*ALLOWED_PROFILE_TYPES\.includes\(input\.type\)\s*\?\s*input\.type\s*:\s*"(\w+)"/);
     expect(fallback, "create_profile type fallback line not found — did it move?").toBeTruthy();
     expect(fallback![1]).not.toBe("person");
     expect(fallback![1]).toBe("asset");

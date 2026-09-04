@@ -103,7 +103,7 @@ import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollo
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
-import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
+import { checkProfileRename, checkProfileTypeChange, PROFILE_TYPES } from "@shared/profile-rename";
 import { readProfileFieldValue } from "@shared/profile-field-identity";
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel, bareDateOf } from "@shared/date-rules";
@@ -7591,8 +7591,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // pollutes the people list, the owner badges, and ownership attribution.
       // "asset" is the generic bucket for a thing, and it is recoverable with
       // one update. A profile is only a person when the model SAYS person.
-      const PROFILE_TYPES = ["person", "pet", "vehicle", "account", "property", "subscription", "medical", "self", "loan", "investment", "asset", "liability"];
-      const resolvedProfileType = PROFILE_TYPES.includes(input.type) ? input.type : "asset";
+      // The one shared list, plus "self" (a kind that exists but is never
+      // created here). A second copy of this list is how the guard and the
+      // assistant came to disagree about whether "liability" is a type (D291).
+      const ALLOWED_PROFILE_TYPES: string[] = [...PROFILE_TYPES, "self"];
+      const resolvedProfileType = ALLOWED_PROFILE_TYPES.includes(input.type) ? input.type : "asset";
       if (resolvedProfileType !== input.type) {
         logger.warn("ai", `create_profile got type=${JSON.stringify(input.type)} for "${input.name}" — defaulting to "asset" (never "person")`);
       }

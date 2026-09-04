@@ -72,10 +72,19 @@ export function checkProfileRename(
 // (`update_profile changes:{type}`) from the day that tool existed; the UI
 // could not, so "my truck shows up as a person" had no manual fix at all.
 
-/** Every type a profile row can hold. Mirrors update_profile's enum. */
+/**
+ * Every type a profile row can hold. Mirrors update_profile's enum.
+ *
+ * "liability" belongs here even though the picker groups debts under their
+ * own tab: it is the type the bills and debt flows actually write, and the
+ * most common type in the data. Leaving it out made the change guard refuse
+ * it with `"liability" isn't a profile type` — so a debt could be turned
+ * into a person and never turned back, and the assistant (which kept its own
+ * list, including it) and this guard disagreed about what exists (D291).
+ */
 export const PROFILE_TYPES = [
   "person", "pet", "vehicle", "property", "asset", "investment",
-  "account", "loan", "subscription", "medical",
+  "account", "loan", "liability", "subscription", "medical",
 ] as const;
 
 export type ProfileType = typeof PROFILE_TYPES[number] | "self";
