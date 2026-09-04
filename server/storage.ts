@@ -14,6 +14,7 @@ import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/ent
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
 import { prepareProfileFields } from "../shared/registry-fields";
+import { mergeFieldWrite } from "../shared/profile-field-identity";
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
@@ -1019,9 +1020,15 @@ export class MemStorage implements IStorage {
     // mergeFieldWrite does: a patch naming one field leaves the others in
     // place. This storage used to replace the whole map, so the two storages
     // disagreed about what a partial edit (and an undo of one) leaves behind.
-    const mergedFields = data.fields && typeof data.fields === "object"
-      ? { ...(p.fields || {}), ...(data.fields as Record<string, any>) }
-      : p.fields;
+    // …and, like SupabaseStorage, a write of one spelling of a fact sweeps
+    // the row's stale twins (balance vs currentBalance…) so one spelling is
+    // stored (D269 parity: this storage kept both).
+    let mergedFields: Record<string, any> | undefined = p.fields;
+    if (data.fields && typeof data.fields === "object") {
+      const write = mergeFieldWrite(p.fields || {}, data.fields as Record<string, any>);
+      mergedFields = { ...write.fields };
+      for (const k of Object.keys(mergedFields)) if (mergedFields[k] === null) delete mergedFields[k];
+    }
     const updated = { ...p, ...data, fields: mergedFields, updatedAt: new Date().toISOString() };
     if (deletionIntents.length > 0) {
       // A null VALUE removes exactly that key — system keys such as
