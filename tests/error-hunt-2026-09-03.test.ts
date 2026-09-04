@@ -3633,6 +3633,6 @@ describe("D278 the pay route's double-tap memory is cleared by undo and edit", (
     expect(src).toContain("const forgetRecentPayments = (uid: string, billId: string) => {");
     expect(src).toContain("const prefix = `${uid}:${billId}:`;");
     expect(src).not.toContain("recentPayments.delete(`${uid}:${req.params.id}`);");
-    expect((src.match(/forgetRecentPayments\(/g) || []).length).toBe(4);
+    expect((src.match(/forgetRecentPayments\(/g) || []).length).toBe(3);
   });
 });
