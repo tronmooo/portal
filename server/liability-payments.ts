@@ -228,6 +228,13 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
     }
   }
 
+  // Cents in, cents out: a balance of 5314.889999999999 was stored and
+  // exported after an ordinary payment because the split was rounded and the
+  // subtraction was not (D284).
+  principal = round2(principal);
+  interest = round2(interest);
+  fees = round2(fees);
+  newBalance = round2(newBalance);
   return {
     balanceBefore, principal, interest, fees, paymentType, newBalance, overpayment, forgiven,
     // A reversal puts money back even on a paid-off debt (balance 0): the

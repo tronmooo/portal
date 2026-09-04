@@ -3734,3 +3734,26 @@ describe("D283 a zero balance move leaves no history entry", async () => {
     expect(src).toContain("if (!adjustment) return updated;");
   });
 });
+
+// ── D284: the ledger stores cents, never float noise.
+describe("D284 a payment's split and balance-after are rounded to cents", async () => {
+  const { applyLiabilityPayment } = await import("../server/liability-payments");
+  it("6,000 at 6% with 200 payments never stores 5314.889999999999", async () => {
+    const rows: any[] = []; let profile: any = { id: "loan-r", type: "liability", type_key: "personal_loan", name: "Loan", fields: { currentBalance: 5487.45, interestRate: 6, monthlyAmount: 200 }, tags: [], notes: "" };
+    const storage: any = { _timezone: "UTC", getProfile: async () => profile, updateProfile: async (_id: string, patch: any) => { profile = { ...profile, fields: { ...profile.fields, ...(patch?.fields || {}) } }; return profile; }, createLiabilityPayment: async (r: any) => { rows.push(r); return r; }, getLiabilityPayments: async () => rows };
+    await applyLiabilityPayment(storage, profile, { amount: 200, paymentDate: "2026-09-03" } as any, "UTC");
+    const cents = (n: any) => Math.abs(Number(n) * 100 - Math.round(Number(n) * 100)) < 1e-6;
+    expect(cents(rows[0].principalPortion) && cents(rows[0].interestPortion) && cents(rows[0].remainingBalanceAfter)).toBe(true);
+    expect(cents(profile.fields.currentBalance)).toBe(true);
+    expect(String(profile.fields.currentBalance)).not.toMatch(/\.\d{3,}/);
+  });
+});
+
+// ── D285: a bill's reminder task is not a second notification for the same bill.
+describe("D285 bill reminder tasks do not double the bill's notification", () => {
+  it("the task loop skips titles with the bill reminder prefix", () => {
+    const src = readFileSync(new URL("../server/notification-service.ts", import.meta.url), "utf8");
+    expect(src).toContain('if (typeof task.title === "string" && task.title.startsWith(BILL_REMINDER_TASK_PREFIX)) continue;');
+    expect(src).toContain('import { BILL_REMINDER_TASK_PREFIX } from "./liability-payments";');
+  });
+});

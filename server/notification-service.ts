@@ -13,6 +13,7 @@ import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
 import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords } from "@shared/date-rules";
 import { isActiveObligation } from "@shared/obligation-windows";
+import { BILL_REMINDER_TASK_PREFIX } from "./liability-payments";
 
 export interface AppNotification {
   id: string;
@@ -192,6 +193,10 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   };
   for (const task of tasks) {
     if (task.status === "done" || !task.dueDate) continue;
+    // A bill's reminder task is the bill's own alarm: the bill notification
+    // below already says the bill is due or overdue, so the task said the
+    // same thing a second time under another id (D285).
+    if (typeof task.title === "string" && task.title.startsWith(BILL_REMINDER_TASK_PREFIX)) continue;
     const due = parseDate(task.dueDate);
     if (!due) continue;
     const diff = daysDiff(due, today);
