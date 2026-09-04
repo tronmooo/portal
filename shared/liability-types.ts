@@ -65,3 +65,17 @@ export function isAmortizable(typeKey?: string | null): boolean {
 export function isRecurringBill(typeKey?: string | null): boolean {
   return liabilityFamily(typeKey) === "recurring";
 }
+
+/**
+ * The profile-level test every bills reader uses. A `subscription`-typed
+ * profile saved by an older door carries no subtype at all; classifying by
+ * the subtype alone left those rows off the bills list, the bell and the
+ * daily cron while the calendar (which reads the type) still showed them
+ * (D268). No subtype on a subscription means "a subscription".
+ */
+export function isRecurringBillProfile(p: { type?: string | null; type_key?: string | null; typeKey?: string | null } | null | undefined): boolean {
+  if (!p) return false;
+  const key = (p as any).type_key ?? (p as any).typeKey;
+  if (key) return isRecurringBill(key);
+  return String(p.type || "").toLowerCase() === "subscription";
+}

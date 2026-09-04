@@ -18,7 +18,7 @@
 // liability-types is pure + dependency-free (no import back into this module),
 // so there is no cycle. Used by isNetWorthLiabilityProfile below to exclude
 // recurring service bills from balance-sheet debt.
-import { isRecurringBill } from "./liability-types";
+import { isRecurringBill, isRecurringBillProfile } from "./liability-types";
 // account-kinds is pure + dependency-free (it imports nothing), so this is a
 // leaf edge, not a cycle. It answers ONE question here: is a `type: "account"`
 // profile's balance money held or money owed?
@@ -211,7 +211,7 @@ export function isLiabilityProfile(p: any): boolean {
  */
 export function isNetWorthLiabilityProfile(p: any): boolean {
   if (!isLiabilityProfile(p)) return false;
-  if (isRecurringBill(p?.type_key ?? p?.typeKey)) return false;
+  if (isRecurringBillProfile(p)) return false;
   return true;
 }
 

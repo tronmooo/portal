@@ -20,7 +20,7 @@ import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord, isOwner
 import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
 import { summarizeAccounts, isAccountProfile } from "@shared/finance-accounts";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
-import { isRecurringBill } from "@shared/liability-types";
+import { isRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
 import { advanceLiabilityDueDate, readDueDate, isSettledOccurrence, effectiveDueDate, isPausedBillFields, isEndedBillFields } from "@shared/liability-recurrence";
 import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
 import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
@@ -2381,7 +2381,7 @@ export async function registerRoutes(
                 const profiles = await scoped.getProfiles();
                 // Paused and cancelled bills are skipped entirely (D222): the
                 // scan kept reminding — and auto-paying — a paused bill.
-                const bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey) && !isPausedBillFields(p.fields) && !isEndedBillFields(p.fields));
+                const bills = profiles.filter((p: any) => isRecurringBillProfile(p) && !isPausedBillFields(p.fields) && !isEndedBillFields(p.fields));
                 const existingTasks = await scoped.getTasks().catch(() => [] as any[]);
                 let userWrote = false;
                 // Doubles left by earlier overlapping runs (D260) heal here,
@@ -8044,7 +8044,7 @@ Rules:
     const selfId = profiles.find(p => p.type === "self")?.id;
     const items: any[] = [];
     for (const p of profiles as any[]) {
-      if (!isRecurringBillType(p.type_key ?? p.typeKey)) continue;
+      if (!isRecurringBillProfile(p)) continue;
       if (allowedBillIds && !allowedBillIds.has(p.id)) continue;
       const owner = p.parentProfileId || selfId;
       const occ = generateSchedule({ id: p.id, fields: p.fields }, payByLiab.get(p.id) || [], { todayISO: today, windowStart: start, windowEnd: end });
@@ -11135,7 +11135,7 @@ No emojis. No prose outside the JSON.`,
     // pay, kept below for debts whose split and balance must be recomputed,
     // deleted the logged expense and re-logged a fresh one — the category and
     // description the user had given it were thrown away (D235).
-    if (isRecurringBill(liability.type_key ?? liability.typeKey)) {
+    if (isRecurringBillProfile(liability)) {
       const repriced = await repriceBillPayment(storage, row.id, { amount, paymentDate }, { expense: "sync" }, log);
       if (!repriced.ok) return res.status(404).json({ error: "Payment not found" });
       let payment = repriced.payment;

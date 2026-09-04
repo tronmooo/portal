@@ -3254,3 +3254,29 @@ describe("D267 the storage layer folds registry fields for every door", async ()
     expect(loan.fields).toMatchObject({ current_balance: "7000" });
   });
 });
+
+// ── D268: a subscription-typed profile with no subtype is a recurring bill everywhere.
+describe("D268 keyless subscriptions are bills", async () => {
+  const { isRecurringBillProfile } = await import("../shared/liability-types");
+  it("the profile-level predicate: subtype wins when present; a subscription with none is a bill; a keyless liability is not", () => {
+    expect(isRecurringBillProfile({ type: "subscription" })).toBe(true);
+    expect(isRecurringBillProfile({ type: "subscription", type_key: "" })).toBe(true);
+    expect(isRecurringBillProfile({ type: "subscription", type_key: "streaming" })).toBe(true);
+    expect(isRecurringBillProfile({ type: "liability", type_key: "utility" })).toBe(true);
+    expect(isRecurringBillProfile({ type: "liability" })).toBe(false);
+    expect(isRecurringBillProfile({ type: "liability", type_key: "auto_loan" })).toBe(false);
+    expect(isRecurringBillProfile({ type: "subscription", type_key: "credit_card" })).toBe(false);
+  });
+  it("every profile-level bills reader uses it (bills list, pay guards, cron scan, reminders, payment pipeline, net worth)", () => {
+    const store = readFileSync(new URL("../server/supabase-storage.ts", import.meta.url), "utf8");
+    expect(store).toContain("let bills = profiles.filter((p: any) => isRecurringBillProfile(p));");
+    expect(store).not.toMatch(/isRecurringBill\(\(p as any\)\.type_key \?\? \(p as any\)\.typeKey\)/);
+    const routes = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    expect(routes).toContain("isRecurringBillProfile(p) && !isPausedBillFields(p.fields)");
+    expect(routes).not.toContain("isRecurringBillType(p.type_key ?? p.typeKey)");
+    const pay = readFileSync(new URL("../server/liability-payments.ts", import.meta.url), "utf8");
+    expect(pay).not.toMatch(/isRecurringBill\(\(liability as any\)\.type_key/);
+    const fin = readFileSync(new URL("../client/src/components/finance/ConnectedFinance.tsx", import.meta.url), "utf8");
+    expect(fin).toContain('type_key: "subscription",');
+  });
+});

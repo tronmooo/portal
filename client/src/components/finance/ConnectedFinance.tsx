@@ -1053,6 +1053,7 @@ function RecurringList({ groups, testId }: { groups: RecurringGroup[]; testId?: 
       const res = await apiRequest("POST", "/api/profiles", {
         name: g.merchantName,
         type: "subscription",
+        type_key: "subscription",
         notes: `Detected from connected bank data — ${g.cadence} charge, ${g.occurrences} occurrences.`,
         fields: {
           finance: {

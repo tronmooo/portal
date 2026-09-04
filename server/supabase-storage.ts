@@ -74,7 +74,7 @@ import {
   isLiabilityProfile,
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
-import { isRecurringBill } from "../shared/liability-types";
+import { isRecurringBill, isRecurringBillProfile } from "../shared/liability-types";
 import {
   addCharge, removeCharge, setEstimate, setActual, normalizeBillingModel,
   resolveBillingModel, resolveOccurrenceAmount, billingModelMeta,
@@ -5524,7 +5524,7 @@ export class SupabaseStorage implements IStorage {
   async getObligations(profileIds?: string[]): Promise<Obligation[]> {
     return this.memo(`getObligations${this._fk(profileIds)}`, async () => {
       const profiles = await this.getProfiles();
-      let bills = profiles.filter((p: any) => isRecurringBill(p.type_key ?? p.typeKey));
+      let bills = profiles.filter((p: any) => isRecurringBillProfile(p));
       if (profileIds && profileIds.length > 0) {
         // The raw selection only matched a bill or its immediate parent, so a
         // co-owned car's insurance (D120) or a bill two levels down (bill →
@@ -5557,7 +5557,7 @@ export class SupabaseStorage implements IStorage {
 
   async getObligation(id: string): Promise<Obligation | undefined> {
     const p = await this.getProfile(id);
-    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return undefined;
+    if (!p || !isRecurringBillProfile(p)) return undefined;
     const { data: payRows } = await this.supabase
       .from("liability_payments").select("*")
       .eq("user_id", this.userId).eq("liability_profile_id", id)
@@ -5681,7 +5681,7 @@ export class SupabaseStorage implements IStorage {
 
   async updateObligation(id: string, data: Partial<Obligation>): Promise<Obligation | undefined> {
     const existing = await this.getProfile(id);
-    if (!existing || !isRecurringBill((existing as any).type_key ?? (existing as any).typeKey)) return undefined;
+    if (!existing || !isRecurringBillProfile(existing)) return undefined;
     // The version the caller read rides through to the profile write, which
     // is where the conflict check lives; it used to be dropped here, so a bill
     // edit from a stale tab never got its 409.
@@ -5753,7 +5753,7 @@ export class SupabaseStorage implements IStorage {
     const todayISO = getUserToday(this._timezone);
     // Normalize every family into schedule-ready fields (bills pass through).
     const f: any = deriveScheduleFields(p.fields || {}, typeKey, todayISO);
-    const isBill = isRecurringBill(typeKey);
+    const isBill = isRecurringBillProfile(p);
     const payments = await this._liabilityPayments(id);
     const fromISO = new Date(new Date(todayISO + "T00:00:00").setMonth(new Date(todayISO + "T00:00:00").getMonth() - 2)).toLocaleDateString("en-CA");
     const toISO = new Date(new Date(todayISO + "T00:00:00").setMonth(new Date(todayISO + "T00:00:00").getMonth() + months)).toLocaleDateString("en-CA");
@@ -5950,7 +5950,7 @@ export class SupabaseStorage implements IStorage {
 
   async pauseLiability(id: string, until?: string): Promise<any> {
     const p = await this.getProfile(id);
-    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
+    if (!p || !isRecurringBillProfile(p)) return null;
     await this.updateProfile(id, { fields: { paused: true, pausedUntil: until ? String(until).slice(0, 10) : null, status: "paused" } } as any);
     this.logActivity("obligation", `Paused ${p.name}${until ? ` until ${until}` : ""}`);
     return this.getLiabilitySchedule(id);
@@ -5958,7 +5958,7 @@ export class SupabaseStorage implements IStorage {
 
   async resumeLiability(id: string): Promise<any> {
     const p = await this.getProfile(id);
-    if (!p || !isRecurringBill((p as any).type_key ?? (p as any).typeKey)) return null;
+    if (!p || !isRecurringBillProfile(p)) return null;
     await this.updateProfile(id, { fields: { paused: false, pausedUntil: null, status: "upcoming" } } as any);
     this.logActivity("obligation", `Resumed ${p.name}`);
     return this.getLiabilitySchedule(id);

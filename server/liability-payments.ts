@@ -13,7 +13,7 @@
 // That is not a synchronization bug, but it is the same disease: two code paths
 // answering one question. Both callers now land here.
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
-import { isRecurringBill } from "@shared/liability-types";
+import { isRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
 import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
@@ -192,7 +192,7 @@ export async function applyLiabilityPayment(
   // family — shared/asset-value.ts decides what counts toward net worth the
   // same way. Reading `fields.subtype` here instead would let this function
   // call something a recurring bill while net worth still counted it as debt.
-  if (isRecurringBill((liability as any).type_key ?? (liability as any).typeKey)) {
+  if (isRecurringBillProfile(liability as any)) {
     const payment = await storage.createLiabilityPayment({
       ...(input.id ? { id: input.id } : {}),
       liabilityProfileId: liability.id,
@@ -881,7 +881,7 @@ export async function unpayBillOccurrence(
   const liability: any = await storage.getProfile(liabilityId);
   if (!liability || (liability.type !== "liability" && liability.type !== "loan")) return fail("not_found");
   const f: any = liability.fields || {};
-  const recurring = isRecurringBill((liability as any).type_key ?? (liability as any).typeKey);
+  const recurring = isRecurringBillProfile(liability as any);
 
   // Resolve the payment row to retract.
   const payments = await storage.getLiabilityPayments(liabilityId); // newest first
