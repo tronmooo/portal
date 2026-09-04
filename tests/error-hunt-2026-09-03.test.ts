@@ -3195,3 +3195,22 @@ describe("D265 registry-dialog profiles fold into the model's keys", async () =>
     expect(patched[0][1].fields.monthly_payment).toBeUndefined();
   });
 });
+
+// ── D266: a registry-dialog recurring bill with only a start date gets a due date.
+describe("D266 registry bills anchor on their start date", async () => {
+  const { canonicalizeRegistryFields } = await import("../shared/registry-fields");
+  it("a monthly utility started 40 days ago is next due one cycle on from the start, on or after today", () => {
+    const out = canonicalizeRegistryFields({ amount: 90, frequency: "monthly", start_date: "2026-07-25", provider: "Grid" }, { typeKey: "utility", todayISO: "2026-09-03" });
+    expect(out.firstPaymentDate).toBe("2026-07-25");
+    expect(out.dueDate).toBe("2026-09-25");
+    expect(out.nextDueDate).toBe("2026-09-25");
+    expect(out.amount).toBe(90);
+  });
+  it("a start date in the future is the first due date; an explicit due date or due day is left alone; loans are not touched", () => {
+    expect(canonicalizeRegistryFields({ frequency: "monthly", start_date: "2026-10-01" }, { typeKey: "gym_membership", todayISO: "2026-09-03" }).dueDate).toBe("2026-10-01");
+    expect(canonicalizeRegistryFields({ frequency: "monthly", start_date: "2026-07-01", dueDate: "2026-09-20" }, { typeKey: "utility", todayISO: "2026-09-03" }).dueDate).toBe("2026-09-20");
+    expect(canonicalizeRegistryFields({ frequency: "monthly", start_date: "2026-07-01", dueDay: 15 }, { typeKey: "utility", todayISO: "2026-09-03" }).dueDate).toBeUndefined();
+    expect(canonicalizeRegistryFields({ monthly_payment: 200, start_date: "2026-07-01" }, { typeKey: "personal_loan", todayISO: "2026-09-03" }).dueDate).toBeUndefined();
+    expect(canonicalizeRegistryFields({ frequency: "monthly", start_date: "2026-07-01" }).dueDate).toBeUndefined();
+  });
+});

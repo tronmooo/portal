@@ -4943,7 +4943,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     // (shared/date-rules) derives the same rule whichever door the date came
     // in by. No screen-specific shortcut.
     if (req.body.fields && typeof req.body.fields === "object") {
-      req.body.fields = canonicalizeRegistryFields(normalizeEntityDateFields(req.body.fields as Record<string, any>).fields);
+      req.body.fields = canonicalizeRegistryFields(normalizeEntityDateFields(req.body.fields as Record<string, any>).fields, { typeKey: req.body.type_key ?? req.body.typeKey, todayISO: getUserToday(getTimezone(req)) });
       {
         const impossible = impossibleCalendarDays(req.body.fields as Record<string, any>);
         if (impossible.length > 0) return res.status(400).json({ error: `${impossible.join(", ")} must be a real calendar day (YYYY-MM-DD)` });
@@ -5144,7 +5144,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     // (shared/date-rules) derives the same rule whichever door the date came
     // in by. No screen-specific shortcut.
     if (req.body.fields && typeof req.body.fields === "object") {
-      req.body.fields = canonicalizeRegistryFields(normalizeEntityDateFields(req.body.fields as Record<string, any>).fields);
+      req.body.fields = canonicalizeRegistryFields(normalizeEntityDateFields(req.body.fields as Record<string, any>).fields, { typeKey: req.body.type_key ?? req.body.typeKey ?? (await storage.getProfile(req.params.id).catch(() => undefined) as any)?.type_key, todayISO: getUserToday(getTimezone(req)) });
       {
         const impossible = impossibleCalendarDays(req.body.fields as Record<string, any>);
         if (impossible.length > 0) return res.status(400).json({ error: `${impossible.join(", ")} must be a real calendar day (YYYY-MM-DD)` });

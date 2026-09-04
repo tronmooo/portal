@@ -4,6 +4,9 @@
 // vehicle's year or mileage was stored as "12500" while the same field edited
 // elsewhere was stored as 12500 (D264). Coerce by the schema, at submit.
 
+import { isRecurringBill } from "./liability-types";
+import { advanceLiabilityDueDate } from "./liability-recurrence";
+
 export interface RegistryFieldDef { key: string; type?: string }
 
 const NUMERIC_TYPES = new Set(["number", "currency", "percentage"]);
@@ -61,10 +64,32 @@ export const REGISTRY_KEY_ALIASES: ReadonlyArray<readonly [string, string]> = [
 
 const isBlank = (v: unknown) => v === undefined || v === null || v === "";
 
-/** The field map with every registry alias folded into the model key (see REGISTRY_KEY_ALIASES). */
-export function canonicalizeRegistryFields<T extends Record<string, any>>(fields: T): T {
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const hasDueDate = (f: Record<string, any>) =>
+  [f.dueDate, f.nextDueDate, f.firstPaymentDate, f.renewalDate, f.due_date, f.next_due_date].some((v) => ISO_DAY.test(String(v || "").slice(0, 10)))
+  || Number.isFinite(parseInt(String(f.dueDay ?? ""), 10));
+
+/**
+ * The field map with every registry alias folded into the model key (see
+ * REGISTRY_KEY_ALIASES). With `ctx`, a recurring bill whose registry form gave
+ * a billing start date but no due date (the registry's utility, membership and
+ * subscription schemas have `start_date` and `frequency` only) is anchored on
+ * that start date and rolled to its first occurrence on or after today, so
+ * the schedule, the calendar and the bills list see the same date the classic
+ * form would have stored (D266).
+ */
+export function canonicalizeRegistryFields<T extends Record<string, any>>(fields: T, ctx?: { typeKey?: string | null; todayISO?: string }): T {
   if (!fields || typeof fields !== "object" || Array.isArray(fields)) return fields;
   const out: Record<string, any> = { ...fields };
+  const startDate = String(out.start_date ?? out.startDate ?? "").slice(0, 10);
+  if (ctx?.typeKey && ctx.todayISO && isRecurringBill(ctx.typeKey) && ISO_DAY.test(startDate) && !hasDueDate(out)) {
+    const anchored = { ...out, firstPaymentDate: startDate, dueDate: startDate };
+    const next = advanceLiabilityDueDate(anchored, ctx.todayISO);
+    const due = startDate >= ctx.todayISO ? startDate : next;
+    out.firstPaymentDate = startDate;
+    out.dueDate = due;
+    out.nextDueDate = due;
+  }
   for (const [alias, canonical] of REGISTRY_KEY_ALIASES) {
     if (!(alias in out)) continue;
     const v = out[alias];
