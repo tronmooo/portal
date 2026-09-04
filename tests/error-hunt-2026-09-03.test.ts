@@ -3698,3 +3698,20 @@ describe("D281 linking a row to a profile that is not yours answers 404", () => 
     expect(hb).not.toContain('res.status(500).json({ error: "Failed to update habit" })');
   });
 });
+
+// ── D282: a client cannot mark an expense as a bill payment that no longer exists.
+describe("D282 payment tags on an expense must name a live payment of this user", async () => {
+  const { stripDanglingPaymentTags } = await import("../server/liability-payments");
+  it("keeps a live payment's tags, drops a dangling one and its marker, leaves other tags alone", async () => {
+    const storage: any = { getLiabilityPayment: async (id: string) => (id === "live" ? { id: "live" } : null) };
+    expect(await stripDanglingPaymentTags(storage, ["bill-payment", "liability:L1", "payment:live"])).toEqual(["bill-payment", "liability:L1", "payment:live"]);
+    expect(await stripDanglingPaymentTags(storage, ["bill-payment", "liability:L1", "payment:gone"])).toEqual(["liability:L1"]);
+    expect(await stripDanglingPaymentTags(storage, ["food", 3, null])).toEqual(["food"]);
+    expect(await stripDanglingPaymentTags(storage, undefined)).toEqual([]);
+  });
+  it("the expense create and edit routes run the strip", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    expect(src).toContain("(parsed.data as any).tags = await stripDanglingPaymentTags(storage, (parsed.data as any).tags);");
+    expect(src).toContain("if (Array.isArray(req.body.tags)) req.body.tags = await stripDanglingPaymentTags(storage, req.body.tags);");
+  });
+});

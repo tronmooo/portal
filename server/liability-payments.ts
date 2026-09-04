@@ -1202,6 +1202,30 @@ export function paymentIdOfExpense(expense: { tags?: unknown } | null | undefine
 }
 
 /**
+ * Tags that claim an expense records a bill payment (`payment:<id>` and the
+ * `bill-payment` marker) are the pipeline's to write. A client re-creating
+ * a deleted expense (the Undo toast) sent them back after the payment had
+ * been reversed, so a plain expense claimed a payment that no longer existed
+ * and the edit path tried to reprice it (D282). Keep only the tags whose
+ * payment is this user's and still there.
+ */
+export async function stripDanglingPaymentTags(storage: IStorage, tags: unknown): Promise<string[]> {
+  const list = Array.isArray(tags) ? tags.filter((t): t is string => typeof t === "string") : [];
+  const kept: string[] = [];
+  let hasPayment = false;
+  for (const t of list) {
+    if (t.startsWith(PAYMENT_TAG_PREFIX)) {
+      const id = t.slice(PAYMENT_TAG_PREFIX.length).trim();
+      const row = id ? await storage.getLiabilityPayment(id).catch(() => null) : null;
+      if (!row) continue;
+      hasPayment = true;
+    }
+    kept.push(t);
+  }
+  return hasPayment ? kept : kept.filter((t) => t !== "bill-payment");
+}
+
+/**
  * Removing an expense a bill payment logged retracts that payment — the
  * expense is the payment's record of the money leaving, so deleting it alone
  * left the bill paid, the stamp set and the account debited (D279). One

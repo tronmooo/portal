@@ -32,7 +32,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
+import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -6729,6 +6729,8 @@ Rules:
 
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
+    // Only the payment pipeline may mark an expense as a bill payment (D282).
+    if (Array.isArray((parsed.data as any).tags)) (parsed.data as any).tags = await stripDanglingPaymentTags(storage, (parsed.data as any).tags);
     const newExpense = await storage.createExpense(parsed.data);
     const uid_e1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`);
@@ -6757,6 +6759,7 @@ Rules:
     }
     if (req.body.category !== undefined) req.body.category = canonicalExpenseCategory(req.body.category);
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
+    if (Array.isArray(req.body.tags)) req.body.tags = await stripDanglingPaymentTags(storage, req.body.tags);
     const updated = await storage.updateExpense(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_e2 = cacheUserKey(req as AuthenticatedRequest);
