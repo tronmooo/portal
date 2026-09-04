@@ -3,7 +3,10 @@
 //   • /profiles/:id/info  → one profile's Info (identity fields, notes, tags,
 //     documents, chat-saved facts, recent activity, latest journal).
 //   • /profiles           → "Everyone combined" — a per-person Info summary for
-//     all people plus the shared chat-saved facts.
+//     all people plus the shared chat-saved facts. When the profile scope is a
+//     SINGLE person, this location renders that person's Info instead (with an
+//     "All people" button back to the grid): a one-card list you must tap is a
+//     dead end when the switcher already says whose data the hub is showing.
 //
 // This is the canonical place where ALL data that doesn't fit a tracker shows
 // up: profile `fields` (edited here or written by chat's update_profile),
@@ -36,7 +39,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag, Trash2, Loader2 } from "lucide-react";
+import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag, Trash2, Loader2, Users } from "lucide-react";
 import { deleteProfileFields, fieldIdentity, isReservedFieldKey } from "@shared/profile-field-identity";
 import { checkProfileRename, MAX_PROFILE_NAME_LENGTH } from "@shared/profile-rename";
 import { checkProfileDelete, profileDeleteWarning } from "@shared/profile-delete";
@@ -106,7 +109,8 @@ const NESTED_GROUP_KEYS = new Set([
 ]);
 
 // ── Route dispatcher: one profile's Info, or the combined view ───────────────
-// /profiles/:id/info → that person. /profiles → everyone in the current scope.
+// /profiles/:id/info → that person. /profiles → everyone in the current scope,
+// or, when the scope is exactly one person, that person.
 //
 // NEITHER BRANCH MAY NAVIGATE. Which Info location matches the profile scope is
 // decided in exactly one place — reconcileInfoRoute (hub-routes.ts), applied by
@@ -120,16 +124,44 @@ const NESTED_GROUP_KEYS = new Set([
 // white-screen "Something went wrong". Reproduced 2/2 in the 2026-08-05 QA pass.
 export default function ProfileInfoPage() {
   const [singleMatch, singleParams] = useRoute("/profiles/:id/info");
-  const id = singleMatch ? ((singleParams as { id?: string } | null)?.id || "") : "";
-  if (id) return <SingleProfileInfo id={id} />;
-  return <EveryoneInfo />;
+  const scope = useProfileScope();
+  const routeId = singleMatch ? ((singleParams as { id?: string } | null)?.id || "") : "";
+
+  // `/profiles` under a ONE-PERSON scope IS that person's Info.
+  //
+  // The switcher says "Bob Robertson" and every other hub tab shows Bob's data,
+  // so the Info tab showing a list containing exactly one card — Bob — that you
+  // then have to tap is a dead end, not a summary. It happened whenever you
+  // reached `/profiles` by any route other than the Info chip (the People stat
+  // card, "Go to Profiles", a back link, the switcher's Everyone entry) and then
+  // narrowed the scope to one person: reconcileInfoRoute deliberately never
+  // redirects `/profiles` (that is the fixpoint which fixed the 2026-08-05
+  // white-screen loop), so the URL stayed on the combined view.
+  //
+  // Resolve it by RENDERING, never by navigating: the URL is left exactly where
+  // it is, so the reconciler stays the only thing that moves the user and the
+  // redirect loop cannot come back.
+  const scopedId = scope.mode === "selected" && scope.selectedIds.length === 1
+    ? scope.selectedIds[0]
+    : "";
+
+  // …with the people grid still one click away, so `/profiles` remains a way to
+  // browse everyone without having to widen the scope to Everyone first.
+  const [browseAll, setBrowseAll] = useState(false);
+  useEffect(() => { setBrowseAll(false); }, [scopedId]);
+
+  if (routeId) return <SingleProfileInfo id={routeId} />;
+  if (scopedId && !browseAll) {
+    return <SingleProfileInfo id={scopedId} onBrowseAll={() => setBrowseAll(true)} />;
+  }
+  return <EveryoneInfo showAll={browseAll} />;
 }
 
 // ── Everyone (or a multi-person selection) ───────────────────────────────────
 // The per-person summary the Info tab owes an aggregated scope: one card per
 // person in scope, each opening that person's full Info page, plus the shared
 // chat-saved facts (which are user-level, not per-profile).
-function EveryoneInfo() {
+function EveryoneInfo({ showAll = false }: { showAll?: boolean }) {
   const [, navigate] = useLocation();
   const scope = useProfileScope();
 
@@ -151,7 +183,10 @@ function EveryoneInfo() {
   const everyone = (profiles || []).filter((p: any) => PERSON_TYPES.has(p?.type));
   // A multi-person selection is still an aggregated scope — show exactly the
   // people the rest of the hub is aggregating, not all of them.
-  const people = scope.mode === "selected" && scope.selectedIds.length > 0
+  // `showAll` is the "All people" escape hatch from the single-person view:
+  // browse everybody without having to switch the scope to Everyone and back.
+  const scopedToSome = !showAll && scope.mode === "selected" && scope.selectedIds.length > 0;
+  const people = scopedToSome
     ? everyone.filter((p: any) => scope.selectedIds.includes(p.id))
     : everyone;
 
@@ -170,7 +205,7 @@ function EveryoneInfo() {
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <h1 className="text-lg font-bold tracking-tight leading-tight truncate" data-testid="info-name">
-            {scope.mode === "selected" && scope.selectedIds.length > 0 ? "Selected people" : "Everyone"}
+            {scopedToSome ? "Selected people" : "Everyone"}
           </h1>
           <p className="text-xs text-muted-foreground">
             {people.length} {people.length === 1 ? "person" : "people"} · tap anyone to open their info
@@ -249,7 +284,7 @@ function PersonSummaryCard({ profile, onOpen }: { profile: any; onOpen: () => vo
 }
 
 // ── One profile's Info ────────────────────────────────────────────────────────
-function SingleProfileInfo({ id }: { id: string }) {
+function SingleProfileInfo({ id, onBrowseAll }: { id: string; onBrowseAll?: () => void }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -446,7 +481,15 @@ function SingleProfileInfo({ id }: { id: string }) {
     return (
       <div className="p-6 text-center" data-testid="page-profile-info">
         <p className="text-sm text-destructive mb-2">Profile not found</p>
-        <Link href="/profiles" className="text-xs text-primary underline">Back to Info</Link>
+        {/* When we are already sitting on /profiles (scope-resolved view), a
+            link there reloads this same missing profile — show the grid. */}
+        {onBrowseAll ? (
+          <button type="button" onClick={onBrowseAll} className="text-xs text-primary underline" data-testid="info-browse-all">
+            Back to Info
+          </button>
+        ) : (
+          <Link href="/profiles" className="text-xs text-primary underline">Back to Info</Link>
+        )}
       </div>
     );
   }
@@ -580,6 +623,11 @@ function SingleProfileInfo({ id }: { id: string }) {
             </Select>
           )}
         </div>
+        {onBrowseAll && (
+          <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs" onClick={onBrowseAll} data-testid="info-browse-all">
+            <Users className="h-3.5 w-3.5" /> All people
+          </Button>
+        )}
         <Button variant="outline" size="sm" className="h-8 gap-1 text-xs" onClick={() => setAddingField(v => !v)} data-testid="info-add-field">
           <Plus className="h-3.5 w-3.5" /> Add field
         </Button>

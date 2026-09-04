@@ -278,6 +278,7 @@ export default defineConfig({
       'tests/profile-rename-routes.test.ts',
       'tests/profile-delete.test.ts',
       'tests/info-tab-delete.dom.test.tsx',
+      'tests/info-tab-single-scope.dom.test.tsx',
       // Chat quick-log lanes: owner-scoped tracker resolution + deterministic
       // recap (2026-09-01: "ran 2 miles" logged into another profile's tracker).
       'tests/quick-log.test.ts',
