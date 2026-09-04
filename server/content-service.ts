@@ -186,43 +186,64 @@ export async function upsertJournalEntry(
   const date = String(input.entryDate).slice(0, 10);
   const mood = MOODS.includes(String(input.mood)) ? String(input.mood) : "neutral";
 
-  const all = await storage.getJournalEntries();
-  const existing = (all || []).find((j: any) => String(j.date).slice(0, 10) === date) || null;
+  const readExisting = async () => {
+    const all = await storage.getJournalEntries();
+    return (all || []).find((j: any) => String(j.date).slice(0, 10) === date) || null;
+  };
+  const existing = await readExisting();
 
-  if (existing) {
+  const appendTo = async (row: any): Promise<{ entry: any; appended: boolean }> => {
     // IDEMPOTENCY: a retried turn must not append the same paragraph twice.
-    if (normalizeText(existing.content).includes(normalizeText(content)) && content) {
-      return { entry: existing, appended: false };
+    if (normalizeText(row.content).includes(normalizeText(content)) && content) {
+      return { entry: row, appended: false };
     }
     const label = input.profileLabel ? `[${input.profileLabel}] ` : "";
-    const merged = existing.content ? `${existing.content}\n\n${label}${content}` : `${label}${content}`;
+    const merged = row.content ? `${row.content}\n\n${label}${content}` : `${label}${content}`;
     const linked = Array.from(new Set([
-      ...(existing.linkedProfiles || []),
+      ...(row.linkedProfiles || []),
       ...(input.profileId ? [input.profileId] : []),
     ]));
-    const updated = await storage.updateJournalEntry(existing.id, {
+    const updated = await storage.updateJournalEntry(row.id, {
       content: merged,
-      mood: (input.mood && MOODS.includes(input.mood) ? input.mood : existing.mood) as any,
-      energy: input.energy ?? existing.energy,
-      gratitude: input.gratitude || existing.gratitude,
-      highlights: input.highlights || existing.highlights,
+      mood: (input.mood && MOODS.includes(input.mood) ? input.mood : row.mood) as any,
+      energy: input.energy ?? row.energy,
+      gratitude: input.gratitude || row.gratitude,
+      highlights: input.highlights || row.highlights,
       linkedProfiles: linked,
     } as any);
     if (input.profileId) {
-      await storage.linkProfileTo(input.profileId, "journal", existing.id).catch(() => { /* non-fatal */ });
+      await storage.linkProfileTo(input.profileId, "journal", row.id).catch(() => { /* non-fatal */ });
     }
-    return { entry: updated || existing, appended: true };
-  }
+    return { entry: updated || row, appended: true };
+  };
 
-  const created = await storage.createJournalEntry({
-    date,
-    mood: mood as any,
-    content,
-    tags: [],
-    energy: input.energy,
-    gratitude: input.gratitude,
-    highlights: input.highlights,
-  } as any);
+  if (existing) return appendTo(existing);
+
+  let created: any;
+  try {
+    created = await storage.createJournalEntry({
+      date,
+      mood: mood as any,
+      content,
+      tags: [],
+      energy: input.energy,
+      gratitude: input.gratitude,
+      highlights: input.highlights,
+    } as any);
+  } catch (e: any) {
+    // Two writes for one day raced: journal_entries is UNIQUE on
+    // (user_id, date), so the loser used to surface the constraint as a 409
+    // and the paragraph the user had typed was simply gone (D290). A day that
+    // already has an entry is an APPEND — that is this function's whole
+    // contract — so re-read the winner's row and append onto it.
+    const code = String(e?.code || e?.details?.code || "");
+    const msg = String(e?.message || "");
+    const isDuplicate = code === "23505" || /duplicate key value violates unique constraint/i.test(msg);
+    if (!isDuplicate) throw e;
+    const winner = await readExisting();
+    if (!winner) throw e;
+    return appendTo(winner);
+  }
   if (input.profileId) {
     // Return the row AS LINKED, not the pre-link row: the create answered
     // with Self as owner while the store held Linda, so the journal page's

@@ -3861,3 +3861,62 @@ describe("D288 a backup restored before is refused the second time", async () =>
     expect(src).toContain("if (backupFingerprint && Object.values(imported).some((n) => n > 0)) {");
   });
 });
+
+// ── D290: a raced journal write appends instead of losing the paragraph.
+describe("D290 two writes for one day never lose the loser's text", async () => {
+  const { upsertJournalEntry } = await import("../server/content-service");
+  function store(existingRows: any[] = []) {
+    let rows = [...existingRows];
+    let failNextCreateWith: any = null;
+    const storage: any = {
+      getJournalEntries: async () => rows.map((r) => ({ ...r })),
+      createJournalEntry: async (d: any) => {
+        if (failNextCreateWith) {
+          const e = failNextCreateWith; failNextCreateWith = null;
+          // the winner's row lands the moment our create is rejected
+          rows.push({ id: "winner", date: d.date, content: "first paragraph", mood: "good", linkedProfiles: [] });
+          throw e;
+        }
+        const row = { id: `j${rows.length + 1}`, ...d, linkedProfiles: [] };
+        rows.push(row); return row;
+      },
+      updateJournalEntry: async (id: string, patch: any) => {
+        const i = rows.findIndex((r) => r.id === id);
+        if (i < 0) return undefined;
+        rows[i] = { ...rows[i], ...patch }; return rows[i];
+      },
+      linkProfileTo: async () => {},
+    };
+    return { storage, rows: () => rows, failCreate: (e: any) => { failNextCreateWith = e; } };
+  }
+  it("a unique-violation on create is retried as an append, keeping both paragraphs", async () => {
+    const s = store();
+    s.failCreate(Object.assign(new Error('duplicate key value violates unique constraint "journal_entries_user_id_date_key"'), { code: "23505" }));
+    const r = await upsertJournalEntry(s.storage, { content: "second paragraph", entryDate: "2026-09-04", mood: "good" } as any);
+    expect(r.appended).toBe(true);
+    expect(r.entry.content).toContain("first paragraph");
+    expect(r.entry.content).toContain("second paragraph");
+    expect(s.rows()).toHaveLength(1);
+  });
+  it("the retry stays idempotent: the winner's own text is not appended to itself", async () => {
+    const s = store();
+    s.failCreate(Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" }));
+    const r = await upsertJournalEntry(s.storage, { content: "first paragraph", entryDate: "2026-09-04", mood: "good" } as any);
+    expect(r.entry.content).toBe("first paragraph");
+    expect((r.entry.content.match(/first paragraph/g) || []).length).toBe(1);
+  });
+  it("an error that is not a duplicate still propagates", async () => {
+    const s = store();
+    s.failCreate(Object.assign(new Error("database is on fire"), { code: "58030" }));
+    await expect(upsertJournalEntry(s.storage, { content: "x", entryDate: "2026-09-04", mood: "good" } as any)).rejects.toThrow(/on fire/);
+  });
+  it("the ordinary paths still work: a first write creates, a second appends", async () => {
+    const s = store();
+    const a = await upsertJournalEntry(s.storage, { content: "one", entryDate: "2026-09-04", mood: "good" } as any);
+    expect(a.appended).toBe(false);
+    const b = await upsertJournalEntry(s.storage, { content: "two", entryDate: "2026-09-04", mood: "great" } as any);
+    expect(b.appended).toBe(true);
+    expect(b.entry.content).toBe("one\n\ntwo");
+    expect(s.rows()).toHaveLength(1);
+  });
+});
