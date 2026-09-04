@@ -14,8 +14,10 @@
 // `getActiveTimezone()`, including the header every API request carries, so
 // both sides of the wire agree by construction.
 //
-// Deliberately dependency-free: queryClient imports it at module load, so it
-// must not import queryClient (or anything that does).
+// Deliberately dependency-light: queryClient imports it at module load, so it
+// must not import queryClient (or anything that does). shared/timezone.ts is
+// pure and safe.
+import { DEFAULT_TIMEZONE } from "@shared/timezone";
 
 /** What the device says. Re-resolved on demand — a laptop can change zones. */
 export function getDeviceTimezone(): string {
@@ -26,7 +28,9 @@ export function getDeviceTimezone(): string {
   }
 }
 
-const FALLBACK_TIMEZONE = "America/Los_Angeles";
+// The one fallback zone, shared with the server so both sides of the wire agree
+// about what "no zone at all" means (shared/timezone.ts).
+const FALLBACK_TIMEZONE = DEFAULT_TIMEZONE;
 const STORAGE_KEY = "portol_timezone";
 
 /** The user's stored preference, or null to follow the device. */

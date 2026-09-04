@@ -32,6 +32,7 @@ import {
   getActiveTimezone, setActiveTimezone, getDeviceTimezone, isFollowingDeviceTimezone,
 } from "@/lib/timezone";
 import { getActiveCurrency, setActiveCurrency, currencySymbol, COMMON_CURRENCIES } from "@/lib/currency";
+import { DEFAULT_TIMEZONE } from "@shared/timezone";
 
 /**
  * The zones offered in the picker. Deliberately a shortlist of the ones people
@@ -39,7 +40,7 @@ import { getActiveCurrency, setActiveCurrency, currencySymbol, COMMON_CURRENCIES
  * aliases), plus "Follow this device", which stays the default.
  */
 const TIMEZONE_CHOICES = [
-  "Pacific/Honolulu", "America/Anchorage", "America/Los_Angeles", "America/Denver",
+  "Pacific/Honolulu", "America/Anchorage", DEFAULT_TIMEZONE, "America/Denver",
   "America/Phoenix", "America/Chicago", "America/New_York", "America/Toronto",
   "America/Mexico_City", "America/Bogota", "America/Sao_Paulo", "America/Argentina/Buenos_Aires",
   "Atlantic/Reykjavik", "Europe/London", "Europe/Dublin", "Europe/Lisbon", "Europe/Madrid",
