@@ -31,7 +31,7 @@ import { buildImportPrompt, planImport, applyImport, undoImport } from "./financ
 import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
-import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
+import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD, dependenciesForPrefix } from "@shared/cache-domains";
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
@@ -827,8 +827,44 @@ const USER_CACHE_PREFIXES = [
 // everyone). Per-user only — all cached data is per-user, so there is nothing
 // shared to invalidate across users.
 const sharedCacheCleanupAt = new Map<string, number>();
-function bustUserCaches(uid: string): void {
-  for (const prefix of USER_CACHE_PREFIXES) bustCache(`${prefix}${uid}`);
+
+/**
+ * Which of the 25 prefixes a write to `domains` can actually have changed.
+ *
+ * WHY THIS EXISTS (2026-09 performance audit). `shared/cache-domains.ts` went
+ * to real trouble to declare, per prefix, exactly which domains its payload
+ * reads — and the version-stamp machinery honors that faithfully. But this
+ * function then wiped ALL 25 prefixes on every write regardless of domain, on
+ * the writing instance, which defeated the whole scheme in-process: logging a
+ * tracker entry threw away the warm document list, journal, artifacts,
+ * notifications and insights caches, so the next read of each recomputed from
+ * Postgres. That is the mechanism behind "one small change makes everything
+ * slow for a while".
+ *
+ * The fix is to reuse the dependency declarations that already exist rather
+ * than invent a second, parallel notion of what a write touches. Correctness
+ * is preserved by keeping the same failure direction the declarations use:
+ * `"all"` prefixes are always busted, an unknown prefix resolves to `"all"`,
+ * and an unclassifiable write (no domains, or `"everything"`) busts everything
+ * exactly as before. We only ever bust MORE than strictly necessary, never
+ * less — so this can make the app faster but cannot make it stale.
+ */
+function prefixesForDomains(domains: readonly string[] | undefined): readonly string[] {
+  if (!domains || domains.length === 0) return USER_CACHE_PREFIXES;
+  if (domains.includes("everything")) return USER_CACHE_PREFIXES;
+  const written = new Set(domains);
+  const out = USER_CACHE_PREFIXES.filter((prefix) => {
+    const deps = dependenciesForPrefix(prefix);
+    if (deps === "all") return true;
+    return deps.some((d) => written.has(d));
+  });
+  // A domain list that matched nothing is a domain we don't understand — a new
+  // noun, a typo, a stale deploy. Fail safe: bust everything.
+  return out.length > 0 ? out : USER_CACHE_PREFIXES;
+}
+
+function bustUserCaches(uid: string, domains?: readonly string[]): void {
+  for (const prefix of prefixesForDomains(domains)) bustCache(`${prefix}${uid}`);
   // Piggyback shared-cache hygiene on writes: version-stamped rows go stale by
   // key, so this only needs to DELETE EXPIRED rows, throttled to once/min per
   // user per instance. Fire-and-forget — a write must never wait on cleanup.
@@ -997,7 +1033,11 @@ function writeBarrierMiddleware(req: any, res: any, next: any) {
     if (barrierDone || res.statusCode >= 400) { send(); return; }
     barrierDone = true;
     attachWriteManifest(res, journal);
-    bustUserCaches(uid);
+    // Drain ONCE and reuse: the same domain list drives both the in-process
+    // cache bust and the version bump below, so the two can never disagree
+    // about what this request wrote.
+    const written = journal.drain().domains;
+    bustUserCaches(uid, written);
     // The barrier holds the response open until the version bump lands. That
     // ordering is the point — but it must never be able to hold it open
     // FOREVER. An upstream call with no timeout would otherwise turn a slow
@@ -1012,7 +1052,7 @@ function writeBarrierMiddleware(req: any, res: any, next: any) {
     // (or reported "everything") still moves the epoch, which every cache key
     // carries — so an unclassifiable write invalidates all of them, exactly as
     // every write used to.
-    Promise.resolve(bumpDataVersionNow(uid, journal.drain().domains))
+    Promise.resolve(bumpDataVersionNow(uid, written))
       .then((v) => {
         if (v === undefined) return;
         try { res.setHeader(DATA_VERSION_HEADER, encodeVersionMap(v)); } catch { /* headers already sent */ }
