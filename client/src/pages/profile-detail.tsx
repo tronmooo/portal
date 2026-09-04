@@ -282,6 +282,7 @@ import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomains, patchQueries, patchProfileDetailList, composeRestores } from "@/lib/cache-bus";
 import { useResyncedState } from "@/hooks/useResyncedState";
 import { checkProfileRename } from "@shared/profile-rename";
+import { isReservedFieldKey } from "@shared/profile-field-identity";
 import { allocatePayment } from "@shared/liability-calc";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
@@ -3344,7 +3345,7 @@ function StaticInfoTab({
     isAccountProfile(profile) && ACCOUNT_CARD_KEYS.has(k);
   const extraFields = Object.entries(profile.fields).filter(
     ([k, v]) => !groupedKeys.has(k) && !ALWAYS_HIDDEN_FROM_OTHER.has(k) && !hiddenByAccountCard(k)
-      && !k.startsWith("_") && v != null && v !== "" && typeof v !== "object"
+      && !isReservedFieldKey(k) && v != null && v !== "" && typeof v !== "object"
   );
 
   const handleSaved = () => {
@@ -3700,7 +3701,7 @@ function StaticInfoTab({
       ) : (
         // Fallback: flat list for unknown types
         Object.entries(profile.fields)
-          .filter(([k, v]) => !k.startsWith("_") && v != null && v !== "" && typeof v !== "object")
+          .filter(([k, v]) => !isReservedFieldKey(k) && v != null && v !== "" && typeof v !== "object")
           .length > 0 && (
           <Card>
             <CardHeader className="py-2.5 px-4">
@@ -3708,7 +3709,7 @@ function StaticInfoTab({
             </CardHeader>
             <CardContent className="px-4 pb-3 pt-0">
               {Object.entries(profile.fields)
-                .filter(([k, v]) => !k.startsWith("_") && v != null && v !== "" && typeof v !== "object")
+                .filter(([k, v]) => !isReservedFieldKey(k) && v != null && v !== "" && typeof v !== "object")
                 .sort(([a], [b]) => a.localeCompare(b))
                 .map(([key, val]) => (
                   <GroupedInlineField
@@ -8397,7 +8398,7 @@ function EditProfileDialog({
               data-testid="input-profile-name"
             />
           </div>
-          {allFieldKeys.filter(k => !k.startsWith("_")).map(key => {
+          {allFieldKeys.filter(k => !isReservedFieldKey(k)).map(key => {
             const sg = suggested.find(s => s.key === key);
             return (
               <div key={key}>

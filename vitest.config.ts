@@ -53,6 +53,7 @@ export default defineConfig({
       'tests/ownership-model.test.ts',
       'tests/scope.test.ts',
       'tests/holding-visibility.test.ts',
+      'tests/reserved-profile-fields.test.ts',
       'tests/destination-picker-owner-scope.test.ts',
       'tests/reminder-scope.test.ts',
       'tests/calendar-virtual-event-scope.test.ts',

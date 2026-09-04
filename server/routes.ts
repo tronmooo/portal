@@ -4714,6 +4714,25 @@ ${JSON.stringify(ctx, null, 2)}`;
    * `dateOfBirth` and as `identity.dateOfBirth` rendered twice, and storage
    * never converged because the healing route was rarely hit (D294).
    */
+  /**
+   * Profiles with a heal in flight (or healed in the last few seconds).
+   *
+   * This runs on EVERY read of a profile's fields, unawaited — and a screen
+   * does not read a profile once. The Info tab, the hub and a post-write
+   * refetch all land together, so one profile that needed healing started a
+   * write per reader, each racing the others' compare-and-swap AND whatever
+   * edit the user had in flight. That burst is what turned a field delete into
+   * "409: Profile edit kept colliding with another writer" (user report
+   * 2026-09-04): the heal writes ate the edit's retries.
+   *
+   * One heal per profile per cooldown window is all convergence needs — the
+   * next read after it heals whatever is left. Entries lapse by timestamp
+   * (and are pruned in bulk) rather than being cleared when the write lands,
+   * so a heal that somehow never converges cannot become a hot loop either.
+   */
+  const healingProfiles = new Map<string, number>();
+  const HEAL_COOLDOWN_MS = 5_000;
+
   function selfHealProfileFields(profileId: string, detail: any): void {
     try {
       const originalFields = (detail as any)?.fields;
@@ -4740,6 +4759,14 @@ ${JSON.stringify(ctx, null, 2)}`;
           patch[group] = (cleanedGroup && typeof cleanedGroup === "object" && Object.keys(cleanedGroup).length > 0)
             ? cleanedGroup
             : null;
+        }
+        // The response above already carries the cleaned shape, so skipping a
+        // duplicate write-back costs the caller nothing.
+        const now = Date.now();
+        if ((healingProfiles.get(profileId) ?? 0) > now) return;
+        healingProfiles.set(profileId, now + HEAL_COOLDOWN_MS);
+        if (healingProfiles.size > 256) {
+          for (const [pid, until] of healingProfiles) if (until <= now) healingProfiles.delete(pid);
         }
         storage.updateProfile(profileId, { fields: patch } as any).catch((e: any) =>
           console.error(`[profile-cleanup] write-back failed for ${profileId}: ${e?.message || e}`)
