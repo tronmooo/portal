@@ -1139,6 +1139,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s333 briefing-style bare pay (`{}`): dated today in the user's zone, settles the due amount; the dashboard's upcoming list and the bootstrap's obligations move the bill to next month at once.
 - s334 cron auth: the three cron routes answer 401 without the secret (no auth, a user token, a wrong secret) and run with it regardless of spoofed user headers; `/version` is public, `/health` requires auth.
 - s336 obligation edit validation: a numeric string amount is coerced to 45.5, a negative or non-numeric amount and an impossible due date are refused, an unknown frequency is refused or normalised.
+- Production (read-only): no expense, income or profile money field carries a sub-cent value (D286 has nothing to repair).
+- Full suite after D286: 260 files / 4,745 tests green (vitest-full129).
 - s291 cross-user status sweep (B against A's profile, tracker, habit, goal, task, event, journal entry, expense, income, document): GET, PATCH and DELETE all answer 404 and every row of A's is intact.
 - s289 expense ↔ bill payment: an amount edit on the logged expense reprices the payment row, the paid stamp and the account debit (85); after D279 the delete retracts the payment (0 rows, stamp cleared, account 1,000).
 - s290 incomes: create, edit and delete are visible in the list at once with the response cache on; B cannot see or edit A's income; the connected-finance summary carries no manual-income total (its `income` block is review counts), so no figure to compare there.
