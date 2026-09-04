@@ -419,6 +419,10 @@ export interface PayBillResult {
   newBalance?: number;
   principal?: number;
   interest?: number;
+  /** Money paid beyond a payoff's balance and accrued interest (owed back by the lender). */
+  overpayment?: number;
+  /** Balance written off by a settlement payoff. */
+  forgiven?: number;
   dueDateAdvanced: boolean;
   nextDueDate?: string | null;
   accountAdjusted: boolean;
@@ -898,6 +902,8 @@ export async function payBillOccurrence(
     amount,
     recurring,
     newBalance: ledger.newBalance,
+    overpayment: ledger.overpayment || 0,
+    forgiven: ledger.forgiven || 0,
     principal: ledger.principal,
     interest: ledger.interest,
     dueDateAdvanced,

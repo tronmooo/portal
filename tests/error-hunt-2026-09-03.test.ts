@@ -3512,3 +3512,34 @@ describe("D274 the ledger's own note segment is kept apart from the user's notes
     expect(src).toContain("if (body.notes !== undefined) body.notes = withLedgerNote(body.notes == null ? null : String(body.notes), ledgerNoteOf(row.notes));");
   });
 });
+
+// ── D275: the AI payment tool reports a payoff's overpayment or a settlement's write-off.
+describe("D275 the pay result carries overpayment and forgiven through to the AI tool", async () => {
+  it("payBillOccurrence result and the AI tool result name both figures", () => {
+    const lp = readFileSync(new URL("../server/liability-payments.ts", import.meta.url), "utf8");
+    expect(lp).toContain("overpayment: ledger.overpayment || 0,");
+    expect(lp).toContain("forgiven: ledger.forgiven || 0,");
+    const ai = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
+    expect(ai).toContain("...(paid.overpayment ? { overpayment: paid.overpayment, note:");
+    expect(ai).toContain("...(paid.forgiven ? { forgiven: paid.forgiven, note:");
+  });
+  it("a settlement through payBillOccurrence reports forgiven", async () => {
+    const { payBillOccurrence } = await import("../server/liability-payments");
+    let rows: any[] = []; let profile: any = { id: "card-4", type: "liability", type_key: "credit_card", name: "Card", fields: { currentBalance: 3100, interestRate: 24, dueDate: "2026-09-10" }, tags: [], notes: "" };
+    const storage: any = {
+      _timezone: "UTC",
+      getProfile: async () => profile, getProfiles: async () => [profile],
+      updateProfile: async (_id: string, patch: any) => { profile = { ...profile, fields: { ...profile.fields, ...(patch?.fields || {}) } }; return profile; },
+      mutateProfileFields: async (_id: string, fn: any) => { const r = fn(profile); profile = { ...profile, fields: { ...profile.fields, ...(r?.fields || {}) } }; return profile; },
+      createLiabilityPayment: async (r: any) => { const row = { id: `pay-${rows.length + 1}`, ...r }; rows.push(row); return row; },
+      getLiabilityPayments: async () => rows,
+      claimBillOccurrence: async () => ({ claimed: true }),
+      updateOccurrenceOverride: async () => {},
+      getTasks: async () => [], getExpenses: async () => [], createExpense: async (e: any) => e,
+    };
+    const r: any = await payBillOccurrence(storage, "card-4", { amount: 200, paymentDate: "2026-09-04", paymentType: "payoff", source: "ai" } as any, "UTC");
+    expect(r.ok).toBe(true);
+    expect(r.forgiven).toBe(2900);
+    expect(r.overpayment).toBe(0);
+  });
+});

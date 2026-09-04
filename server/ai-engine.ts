@@ -9886,7 +9886,14 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       );
       if (!paid.ok) return { error: `Couldn't record the payment on ${liability.name}` };
       return {
-        result: { payment: paid.payment, newBalance: paid.newBalance, principal: paid.principal, interest: paid.interest },
+        result: {
+          payment: paid.payment, newBalance: paid.newBalance, principal: paid.principal, interest: paid.interest,
+          // A payoff's excess or a settlement's write-off is the one thing the
+          // user must hear back; without it the reply said "paid" and nothing
+          // about the $5,980 the lender owes back or the $2,900 written off.
+          ...(paid.overpayment ? { overpayment: paid.overpayment, note: `Overpaid by $${paid.overpayment.toFixed(2)} — the lender owes this back. Tell the user.` } : {}),
+          ...(paid.forgiven ? { forgiven: paid.forgiven, note: `Settled: $${paid.forgiven.toFixed(2)} of the balance was written off (the payment was less than the balance). Tell the user.` } : {}),
+        },
         actions: [{ type: "create", category: "liability_payment", data: paid.payment }],
       };
     }
