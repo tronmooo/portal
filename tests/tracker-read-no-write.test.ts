@@ -26,7 +26,12 @@ type TrackerRow = {
 };
 
 function makeMockSupabase(trackerRows: TrackerRow[]) {
-  const captured = { trackerUpdates: 0, updatePayloads: [] as any[], tablesUpdated: [] as string[] };
+  const captured = {
+    trackerUpdates: 0,
+    updatePayloads: [] as any[],
+    tablesUpdated: [] as string[],
+    inFilters: [] as Array<{ table: string; column: string; values: string[] }>,
+  };
 
   const from = (table: string) => {
     const rows = table === "trackers" ? trackerRows : [];
@@ -44,6 +49,10 @@ function makeMockSupabase(trackerRows: TrackerRow[]) {
         return builder;
       },
       eq() { return builder; },
+      in(column: string, values: string[]) {
+        captured.inFilters.push({ table, column, values });
+        return builder;
+      },
       is() { return builder; },
       gte() { return builder; },
       order() { return builder; },
@@ -86,6 +95,11 @@ describe("SupabaseStorage.getTrackers — reads never mutate trackers", () => {
 
     expect(captured.trackerUpdates).toBe(0);
     expect(captured.tablesUpdated).not.toContain("trackers");
+    expect(captured.inFilters).toContainEqual({
+      table: "tracker_entries",
+      column: "tracker_id",
+      values: ["t1", "t2"],
+    });
     // Display name is still canonicalized in memory.
     expect(trackers.find((t: any) => t.id === "t1").name).toBe("Weight");
     expect(trackers.find((t: any) => t.id === "t2").name).toBe("Steps");

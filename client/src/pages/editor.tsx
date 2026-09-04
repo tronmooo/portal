@@ -36,7 +36,7 @@ import {
   Link2, User as UserIcon, Activity, FileText, ListChecks, CheckCircle2, BookOpen, Receipt, ExternalLink, PanelRightOpen, PanelRightClose,
   DollarSign, Percent, Hash, AlignLeft, AlignCenter, AlignRight,
   Calendar as CalendarIcon, Eraser, ChevronDown, Pencil as PencilIcon, MoreHorizontal,
-  Undo2, Redo2, UserPlus, MessageSquare, Menu as MenuIcon, AtSign, Strikethrough, Type, Highlighter, PaintBucket, LogOut,
+  Undo2, Redo2, UserPlus, AtSign, Strikethrough, Type, Highlighter, PaintBucket, LogOut,
 } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell,
@@ -50,6 +50,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import type { Artifact, SheetData, SheetCell, SheetCellFormat } from "@shared/schema";
+import { decodeSheetData, sheetCellDisplayValue } from "@shared/sheet-data";
 import { getTemplatesByType, type EditorTemplate } from "@/lib/editor-templates";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
@@ -92,15 +93,12 @@ function emptySheet(rows = DEFAULT_ROWS, cols = DEFAULT_COLS): SheetData {
 // Our SheetData persists the raw text (formula or literal) in `f` for formulas
 // and `v` for literals so reload round-trips perfectly.
 function sheetToMatrix(s: SheetData): { value: string }[][] {
+  const decoded = decodeSheetData(s);
   const m: { value: string }[][] = [];
-  for (let r = 0; r < s.rows; r++) {
+  for (let r = 0; r < decoded.rows; r++) {
     const row: { value: string }[] = [];
-    for (let c = 0; c < s.cols; c++) {
-      const cell = s.cells[`${r},${c}`];
-      let v = "";
-      if (cell?.f) v = cell.f;                                 // formula text wins
-      else if (cell?.v !== undefined && cell.v !== null) v = String(cell.v);
-      row.push({ value: v });
+    for (let c = 0; c < decoded.cols; c++) {
+      row.push({ value: sheetCellDisplayValue(decoded.cells[`${r},${c}`]) });
     }
     m.push(row);
   }
@@ -840,25 +838,27 @@ export default function EditorPage() {
   };
 
   // ── Insert chart from sheet range (Wave 6) ─────────────────────────────────
+  const decodedSheet = useMemo(() => decodeSheetData(sheet), [sheet]);
+
   // Parse a 1-based A1 range like "A1:C10" or "A:C" into [startRow, startCol, endRow, endCol] (0-based).
   // Returns null on bad input. Empty range or unbounded means full sheet bounds.
   const parseRange = useCallback((s: string): [number, number, number, number] | null => {
     const trimmed = (s || "").trim().toUpperCase().replace(/\s+/g, "");
-    if (!trimmed) return [0, 0, sheet.rows - 1, sheet.cols - 1];
+    if (!trimmed) return [0, 0, decodedSheet.rows - 1, decodedSheet.cols - 1];
     const m = trimmed.match(/^([A-Z]+)(\d*):([A-Z]+)(\d*)$/);
     if (!m) return null;
     const c1 = colLetterToIndex(m[1]);
     const c2 = colLetterToIndex(m[3]);
     const r1 = m[2] ? parseInt(m[2], 10) - 1 : 0;
-    const r2 = m[4] ? parseInt(m[4], 10) - 1 : sheet.rows - 1;
+    const r2 = m[4] ? parseInt(m[4], 10) - 1 : decodedSheet.rows - 1;
     if (c1 < 0 || c2 < 0 || r1 < 0 || r2 < 0) return null;
     return [Math.min(r1, r2), Math.min(c1, c2), Math.max(r1, r2), Math.max(c1, c2)];
-  }, [sheet.rows, sheet.cols]);
+  }, [decodedSheet.rows, decodedSheet.cols]);
 
   // Resolve a cell to its displayed value. Formulas: pull the parser-evaluated
   // result from the rendered <Spreadsheet> if available; otherwise fall back to raw.
   const resolveCellValue = useCallback((r: number, c: number): any => {
-    const cell = sheet.cells[`${r},${c}`];
+    const cell = decodedSheet.cells[`${r},${c}`];
     if (!cell) return "";
     if (cell.v !== undefined && cell.v !== null) return cell.v;
     if (cell.f) {
@@ -870,7 +870,7 @@ export default function EditorPage() {
       return isFinite(n) ? n : stripped;
     }
     return "";
-  }, [sheet.cells]);
+  }, [decodedSheet.cells]);
 
   // Build chart-friendly rows: { name, <series>: number, ... } from the selected range.
   const buildChartRows = useCallback((range: [number, number, number, number], hasHeader: boolean) => {
@@ -947,14 +947,12 @@ export default function EditorPage() {
     const ExcelJS = (await import("exceljs")).default;
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet(title || "Sheet1");
-    for (let r = 0; r < sheet.rows; r++) {
-      for (let c = 0; c < sheet.cols; c++) {
-        const cell = sheet.cells[`${r},${c}`];
-        if (!cell) continue;
-        const ref = ws.getCell(r + 1, c + 1);
-        if (cell.f) ref.value = { formula: cell.f.startsWith("=") ? cell.f.slice(1) : cell.f } as any;
-        else if (cell.v !== undefined && cell.v !== null) ref.value = cell.v as any;
-      }
+    for (const [key, cell] of Object.entries(decodedSheet.cells)) {
+      const match = /^(\d+),(\d+)$/.exec(key);
+      if (!match) continue;
+      const ref = ws.getCell(Number(match[1]) + 1, Number(match[2]) + 1);
+      if (cell.f) ref.value = { formula: cell.f.startsWith("=") ? cell.f.slice(1) : cell.f } as any;
+      else if (cell.v !== undefined && cell.v !== null) ref.value = cell.v as any;
     }
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
@@ -971,12 +969,8 @@ export default function EditorPage() {
   // Wave 16: detect a Univer-encoded payload inside SheetData.cells.
   // We stash the full workbook snapshot under cells.__univer__.v as a JSON string
   // so the existing artifact storage path keeps working without a schema change.
-  const univerPayload = (sheet.cells as any)?.__univer__?.v;
-  const isUniverSheet = type === "sheet" && typeof univerPayload === "string" && univerPayload.length > 0;
-  const initialUniverSnapshot = useMemo(() => {
-    if (!univerPayload || typeof univerPayload !== "string") return undefined;
-    try { return JSON.parse(univerPayload); } catch { return undefined; }
-  }, [univerPayload]);
+  const isUniverSheet = type === "sheet" && decodedSheet.format === "univer";
+  const initialUniverSnapshot = decodedSheet.univerSnapshot;
 
   // Live data snapshot — only fetched when in sheet mode. Powers =NETWORTH(),
   // =BUDGET("Groceries"), =TRACKER("Weight"), =DAYSUNTIL("2026-12-31"), etc.
@@ -1161,10 +1155,10 @@ export default function EditorPage() {
           className="h-9 w-9"
           onClick={() => {
             if (type === "doc") editor?.chain().focus().undo().run();
-            // Univer handles Cmd+Z natively on sheet; on mobile we surface a no-op
-            // because Univer's own undo lives in the canvas command stream.
           }}
-          aria-label="Undo"
+          disabled={type === "sheet"}
+          aria-label={type === "sheet" ? "Undo unavailable in mobile sheet view" : "Undo"}
+          title={type === "sheet" ? "Undo is available from the spreadsheet engine on desktop" : undefined}
           data-testid="button-mobile-undo"
         >
           <Undo2 className="h-5 w-5" />
@@ -1176,36 +1170,25 @@ export default function EditorPage() {
           onClick={() => {
             if (type === "doc") editor?.chain().focus().redo().run();
           }}
-          aria-label="Redo"
+          disabled={type === "sheet"}
+          aria-label={type === "sheet" ? "Redo unavailable in mobile sheet view" : "Redo"}
+          title={type === "sheet" ? "Redo is available from the spreadsheet engine on desktop" : undefined}
           data-testid="button-mobile-redo"
         >
           <Redo2 className="h-5 w-5" />
         </Button>
         {type === "sheet" || !docFocused ? (
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-9 w-9"
-              onClick={() => savedId ? setShareOpen(true) : saveMut.mutate()}
-              disabled={saveMut.isPending}
-              aria-label="Share"
-              data-testid="button-mobile-share"
-            >
-              <UserPlus className="h-5 w-5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-9 w-9"
-              onClick={() => { /* comment placeholder — surfaces share for now */ savedId ? setShareOpen(true) : saveMut.mutate(); }}
-              disabled={saveMut.isPending}
-              aria-label="Comments"
-              data-testid="button-mobile-comments"
-            >
-              <MessageSquare className="h-5 w-5" />
-            </Button>
-          </>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
+            onClick={() => savedId ? setShareOpen(true) : saveMut.mutate()}
+            disabled={saveMut.isPending}
+            aria-label="Share"
+            data-testid="button-mobile-share"
+          >
+            <UserPlus className="h-5 w-5" />
+          </Button>
         ) : (
           <Button
             variant="ghost"
@@ -1450,29 +1433,20 @@ export default function EditorPage() {
             </Suspense>
             </SectionErrorBoundary>
           </div>
-          {/* Mobile-only Google-Sheets-style bottom tab bar (IMG_0418).
-              ☰ menu  │  Sheet1 ▾ (active pill, green text)  │  + add sheet
-              Univer's own tab bar is hidden by .gsheet-mobile-skin CSS. */}
+          {/* Univer's multi-sheet controls are not wired through our snapshot
+              adapter on mobile. Show the current sheet as status, not as a
+              menu/add-sheet affordance that cannot do anything. */}
           <div
-            className="md:hidden bg-card border-t flex items-center shrink-0"
+            className="md:hidden bg-card border-t flex items-center shrink-0 px-3 gap-2"
             style={{ height: 48, paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
             data-testid="mobile-sheet-tab-bar"
+            role="status"
+            aria-label={`Current sheet: ${title?.trim() || "Sheet1"}. Additional sheet controls are available on desktop.`}
           >
-            <Button variant="ghost" size="icon" className="h-12 w-12 shrink-0 text-emerald-500" aria-label="Sheets menu" data-testid="button-sheet-menu">
-              <MenuIcon className="h-5 w-5" />
-            </Button>
-            <button
-              type="button"
-              className="h-9 px-3 rounded-md bg-muted/50 flex items-center gap-1 text-sm font-medium text-emerald-500 ml-1"
-              data-testid="button-sheet-tab-active"
-            >
-              <span>{title?.trim() || "Sheet1"}</span>
-              <ChevronDown className="h-4 w-4" />
-            </button>
-            <div className="flex-1" />
-            <Button variant="ghost" size="icon" className="h-12 w-12 shrink-0 text-emerald-500" aria-label="Add sheet" data-testid="button-sheet-add">
-              <Plus className="h-5 w-5" />
-            </Button>
+            <span className="h-8 px-3 rounded-md bg-muted/50 flex items-center text-sm font-medium text-emerald-500" data-testid="mobile-sheet-current">
+              {title?.trim() || "Sheet1"}
+            </span>
+            <span className="text-[11px] text-muted-foreground">Single-sheet mobile view</span>
           </div>
         </div>
       ) : type === "doc" ? (
@@ -2192,159 +2166,6 @@ export default function EditorPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Insert-Chart dialog (Wave 6) — sheet-only, builds a chart artifact from a range. */}
-      <Dialog open={chartOpen} onOpenChange={setChartOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Insert chart from range</DialogTitle>
-            <DialogDescription>
-              Pick a chart type and an A1 range. The chart is saved as a new artifact you can pin or share.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3">
-            {/* Chart type buttons */}
-            <div className="flex items-center gap-2">
-              {([
-                { v: "bar", label: "Bar", Icon: BarChart3 },
-                { v: "line", label: "Line", Icon: LineChartIcon },
-                { v: "area", label: "Area", Icon: AreaChartIcon },
-                { v: "pie", label: "Pie", Icon: PieChartIcon },
-              ] as const).map(({ v, label, Icon }) => (
-                <Button
-                  key={v}
-                  type="button"
-                  variant={chartType === v ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setChartType(v)}
-                  data-testid={`button-chart-type-${v}`}
-                >
-                  <Icon className="h-4 w-4 mr-1" /> {label}
-                </Button>
-              ))}
-            </div>
-            {/* Range + header toggle + title */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Range</label>
-                <Input
-                  value={chartRange}
-                  onChange={(e) => setChartRange(e.target.value)}
-                  placeholder="e.g. A1:C10"
-                  className="font-mono"
-                  data-testid="input-chart-range"
-                />
-                <button
-                  type="button"
-                  className="text-[11px] text-primary underline"
-                  onClick={() => setChartRange(`A1:${colIndexToLetter(Math.min(sheet.cols - 1, 4))}${Math.min(sheet.rows, 10)}`)}
-                >
-                  Use first {Math.min(10, sheet.rows)} rows
-                </button>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Chart title</label>
-                <Input
-                  value={chartTitle}
-                  onChange={(e) => setChartTitle(e.target.value)}
-                  placeholder={`${title || "Sheet"} chart`}
-                  data-testid="input-chart-title"
-                />
-              </div>
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={chartHasHeader}
-                onChange={(e) => setChartHasHeader(e.target.checked)}
-                className="rounded"
-                data-testid="checkbox-chart-header"
-              />
-              First row is the header (column names)
-            </label>
-            {/* Live preview */}
-            <div className="rounded border bg-muted/20 p-3">
-              <div className="text-xs font-medium text-muted-foreground mb-2">Preview</div>
-              {!chartPreview ? (
-                <div className="text-xs text-muted-foreground italic h-[180px] flex items-center justify-center">
-                  Enter a valid A1 range to preview.
-                </div>
-              ) : chartPreview.rows.length === 0 ? (
-                <div className="text-xs text-muted-foreground italic h-[180px] flex items-center justify-center">
-                  Range has no usable rows.
-                </div>
-              ) : (
-                <ResponsiveContainer width="100%" height={220}>
-                  {chartType === "line" ? (
-                    <LineChart data={chartPreview.rows}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <RTooltip />
-                      {chartPreview.seriesKeys.length > 1 && <Legend />}
-                      {chartPreview.seriesKeys.map((k, i) => (
-                        <Line key={k} type="monotone" dataKey={k} stroke={CHART_PALETTE[i % CHART_PALETTE.length]} strokeWidth={2} dot={{ r: 3 }} />
-                      ))}
-                    </LineChart>
-                  ) : chartType === "area" ? (
-                    <AreaChart data={chartPreview.rows}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <RTooltip />
-                      {chartPreview.seriesKeys.length > 1 && <Legend />}
-                      {chartPreview.seriesKeys.map((k, i) => (
-                        <Area key={k} type="monotone" dataKey={k} stroke={CHART_PALETTE[i % CHART_PALETTE.length]} fill={CHART_PALETTE[i % CHART_PALETTE.length]} fillOpacity={0.18} />
-                      ))}
-                    </AreaChart>
-                  ) : chartType === "pie" ? (
-                    <PieChart>
-                      <Pie
-                        data={chartPreview.rows}
-                        dataKey={chartPreview.seriesKeys[0] || "value"}
-                        nameKey="name"
-                        cx="50%" cy="50%" outerRadius={80}
-                        label
-                      >
-                        {chartPreview.rows.map((_, i) => (
-                          <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
-                        ))}
-                      </Pie>
-                      <RTooltip />
-                    </PieChart>
-                  ) : (
-                    <BarChart data={chartPreview.rows}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <RTooltip />
-                      {chartPreview.seriesKeys.length > 1 && <Legend />}
-                      {chartPreview.seriesKeys.map((k, i) => (
-                        <Bar key={k} dataKey={k} fill={CHART_PALETTE[i % CHART_PALETTE.length]} radius={[4, 4, 0, 0]} />
-                      ))}
-                    </BarChart>
-                  )}
-                </ResponsiveContainer>
-              )}
-              {chartPreview && chartPreview.total > chartPreview.rows.length && (
-                <div className="text-[11px] text-muted-foreground mt-1">
-                  Showing first {chartPreview.rows.length} of {chartPreview.total} rows in preview.
-                </div>
-              )}
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setChartOpen(false)}>Cancel</Button>
-            <Button
-              onClick={() => insertChartMut.mutate()}
-              disabled={insertChartMut.isPending || !chartPreview || chartPreview.rows.length === 0}
-              data-testid="button-chart-save"
-            >
-              {insertChartMut.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <BarChart3 className="h-4 w-4 mr-1" />}
-              Save chart
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

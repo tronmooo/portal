@@ -1322,3 +1322,111 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - Browser flows on the D270 build: flows15 7/7, flows21 4/4, flows24 5/5, flows27 5/5, flows28 3/3, flows29 4/4.
 - Final replica batch on the D270 build: s231 2/2, s232 3/3, s233 3/3, s234 4/4, s239 4/4, s243 2/2, s260 3/3, s264 2/2, s268 3/3, s270 2/2; s266 3 passed, 1 failed once its balance check reads the pipeline's spelling. s271 (undo of two dated same-amount payments): 3 passed, 0 failed.
 - s266 corrected (4 passed, 0 failed): the probe had expected the whole 320 to hit principal; the pipeline takes 35 of interest first (7% on 6,000), so 5,715 is right.
+
+### Application-wide interaction latency (BUG-20260903-scoped-history-fanout)
+
+- Before: every authenticated startup queued 12 route imports together and then fetched a second broad "Everyone" dashboard bootstrap after the active scope. Scoped tracker and habit reads also downloaded the user's complete entry/check-in history before discarding unrelated rows in application code.
+- After: route chunks preload one at a time during idle time and navigation intent preloads the exact destination; startup performs only the active bootstrap; tracker entries and habit check-ins are filtered by the fetched parent IDs in Postgres. Profile tree construction also uses a profile ID map instead of repeated linear scans.
+- Regression coverage: `tracker-read-no-write.test.ts` and `scoped-child-query.test.ts` require the child-history queries to carry their parent-ID filters while preserving read-path purity.
+
+### Obligation reassignment retained Self (BUG-20260903-obligation-owner-reassignment)
+
+- Before: `PATCH /api/obligations/:id` moved the liability profile's `parent_profile_id` to the requested person but left the auto-created Self owner row in `liability_profile_links`. The obligation read projection unions the parent and party rows, so the response and profile filters still treated Self as attached.
+- After: an explicit `linkedProfiles` patch synchronizes both representations by replacing the liability's owner-role set with the requested primary owner at 100%. Non-owner relationships such as co-signers and guarantors remain intact.
+- Regression coverage: `error-hunt-2026-09-03.test.ts` requires the parent update and owner-set replacement to occur before the updated obligation is returned; the live ownership-isolation contract verifies the old owner disappears and the new owner gains the row.
+
+### Modern spreadsheets exported and shared as blank (BUG-20260903-univer-sheet-consumers)
+
+- Before: new sheets persisted their data only in `cells.__univer__.v`, while Excel export and the public share viewer read only legacy `"row,column"` keys. A populated sheet therefore downloaded and shared as an empty grid.
+- After: `shared/sheet-data.ts` is the canonical decoder for both legacy coordinate maps and Univer snapshots. Editor export, public sharing, and the legacy matrix bridge all consume its normalized sparse cell map.
+- Regression coverage: `sheet-data.test.ts` covers both formats, formulas, sparse bounds, and malformed payloads; the production regression ledger requires both client consumers to call the decoder.
+
+### Range charts could not read new spreadsheets (BUG-20260903-univer-range-chart)
+
+- Before: range extraction read `sheet.cells["r,c"]` directly, so every new Univer-backed sheet produced zero usable chart rows.
+- After: range resolution reads canonical decoded cells and full-range parsing uses decoded used bounds.
+- Regression coverage: `sheet-data.test.ts` pins decoded values/formulas; the production regression ledger prevents range extraction from returning to the raw legacy map.
+
+### Failed Calendar Quick Add discarded the draft (BUG-20260903-calendar-quick-add-draft)
+
+- Before: click/Enter cleared text and preview and switched to Manage immediately after `mutate()`. A rejected POST arrived after the Create form had been hidden or unmounted, defeating its rollback.
+- After: submit only starts the mutation. Clear and `onCreated()` navigation run at the successful response commit point; failures retain the input and preview for retry.
+- Regression coverage: `calendar-client-failures.dom.test.tsx` holds a request pending, then verifies failure preserves the draft/no navigation and success clears/navigates.
+
+### Calendar outages appeared as successful empty data (BUG-20260903-calendar-source-errors)
+
+- Before: the shared occurrence hook caught each source request rejection and returned `[]`, preventing React Query error state/retry and making partial or total outages indistinguishable from an empty calendar.
+- After: source requests reject normally. The hook exposes `isDegraded` plus source-specific errors while retaining successful sources, and both recurring calendar surfaces display an incomplete-data warning.
+- Regression coverage: `calendar-client-failures.dom.test.tsx` verifies the failed query remains in error state with no cached empty data; the production regression ledger pins the degraded signal and warning.
+
+### D289 — Obligation edits accepted foreign destination profiles (BUG-20260904-obligation-linked-profile-scope)
+
+- Before: `PATCH /api/obligations/:id` parsed `linkedProfiles` and passed it directly to storage. A profile id owned by another user reached the write and depended on a database rejection, risking a 500 or a partial representation mismatch instead of the route's normal not-found boundary.
+- After: when `linkedProfiles` is present, the route resolves every id through user-scoped `storage.getProfile` before calling `updateObligation`; any missing/foreign destination returns 404 and performs no write.
+- Regression coverage: D289 sends one owned and one absent/foreign profile, asserts 404 and zero storage writes, then proves an all-owned list still updates.
+
+### D290 — Account creation accepted a foreign owner profile (BUG-20260904-account-owner-scope)
+
+- Before: `POST /api/accounts` forwarded `ownerProfileId` to `createAccount` without validating its type or ownership, unlike account PATCH.
+- After: a non-empty owner must be a string and resolve through user-scoped `storage.getProfile`; malformed ids return 400 and missing/foreign profiles return 404 before creation.
+- Regression coverage: D290 covers malformed, foreign, and owned owner ids and pins that rejected requests make no create call.
+
+### D291 — Liability-asset link edits accepted a foreign destination asset (BUG-20260904-liability-asset-destination-scope)
+
+- Before: `PATCH /api/liability-asset-links/:id` forwarded `assetProfileId` unchanged, while link creation validated both referenced profiles.
+- After: a supplied destination asset id must be a string and resolve through user-scoped `storage.getProfile`; malformed ids return 400 and missing/foreign profiles return 404 before the update.
+- Regression coverage: D291 covers malformed, foreign, and owned destination assets and pins zero writes on both refusals.
+
+### D292 — Profile-link refusals were acknowledged as successful writes (BUG-20260904-profile-link-typed-failure)
+
+- Before: the exclusive tracker/habit/goal/journal guard returned `void`, so `POST /api/profiles/:id/link` answered 200 `{ok:true}` after refusing the write. `setOwners` failures in link and unlink were logged and swallowed, producing the same false success.
+- After: storage throws `ProfileLinkFailure` with `PROFILE_EXCLUSIVE_CONFLICT`/409 or `OWNER_WRITE_FAILED`/500. Link and unlink routes map that typed failure to a non-200 response and stable code while preserving their existing generic error text for server failures.
+- Regression coverage: D292 exercises the real Supabase-storage exclusive branch, injected ownership-update failures in both directions, and the real Express routes' 409/500 response mapping.
+
+### Artifact actions looked functional but did nothing (BUG-20260904-artifact-preview-controls)
+
+- Before: checklist task conversion, structured-plan actions, calculator inputs/outputs, and quick-entry submission were rendered as working controls without any mutation callback or calculation implementation.
+- After: unsupported operations are explicitly labeled preview-only. Plan actions are non-interactive labels, calculator and form fields are disabled, and the false live-calculation/submission affordances are gone.
+- Regression coverage: `artifact-panel-failures.dom.test.tsx` requires the preview-only messages, disabled fields, and absence of action buttons.
+
+### Artifact chart references fetched the tracker list (BUG-20260904-artifact-chart-source-ref)
+
+- Before: a chart with `source.ref` used `["/api/trackers", ref]`; the shared query function reads only key slot zero, so every reference fetched the full tracker list. That response was not chart rows and could also displace valid inline data.
+- After: tracker references explicitly request `GET /api/trackers/:id`, unwrap and normalize the returned tracker entries, and fall back to inline rows for failed, malformed, or empty source data. Unknown source kinds stay inline-only.
+- Regression coverage: `artifact-panel-failures.dom.test.tsx` pins the encoded detail URL, tracker-entry normalization, unsupported-kind behavior, and inline fallback.
+
+### Failed saved-note mutations hid errors and discarded edit mode (BUG-20260904-saved-note-failure-state)
+
+- Before: saved-note Save exited edit mode immediately after `mutate()`, so a rejected PATCH hid the draft and gave no feedback. DELETE failures were likewise silent.
+- After: Save awaits `mutateAsync`, remains in edit mode with the draft intact on failure, and shows both inline and toast feedback. Delete failures show a destructive toast, and in-flight controls are disabled.
+- Regression coverage: `info-tab-editable.dom.test.tsx` rejects PATCH and DELETE requests and requires preserved edit state/draft plus visible failure signals.
+
+### Sheet editor mounted two insert-chart dialogs (BUG-20260904-duplicate-chart-dialog)
+
+- Before: two dialogs subscribed to the same `chartOpen` state and duplicated input/test IDs, so one Insert chart action mounted overlapping modal trees.
+- After: one canonical range-chart dialog remains.
+- Regression coverage: `editor-mobile-controls.test.ts` requires exactly one chart dialog and one copy of each chart input.
+
+### Mobile spreadsheet chrome advertised unsupported controls (BUG-20260904-mobile-sheet-fake-controls)
+
+- Before: Comments opened Share, sheet menu/tab/add controls had no handlers, and sheet Undo/Redo were enabled no-ops.
+- After: the fake comments and multi-sheet actions are absent, the footer is an accessible current-sheet/single-sheet status, and unsupported mobile sheet Undo/Redo are disabled with explicit labels.
+- Regression coverage: `editor-mobile-controls.test.ts` rejects the fake control IDs and pins the status and disabled accessibility labels.
+
+### Partial owner replacement survived a failed phase (BUG-20260904-owner-set-compensation / D293)
+
+- Before: asset and liability owner sets were replaced with sequential delete/update/create calls. A later write failure left earlier removals or percentage changes committed, and delete-time redistribution made later comparisons stale.
+- After: both replacements snapshot the complete previous owner set, reload after mutation phases, and reconcile back to the snapshot before surfacing any failure. Non-owner relationship rows remain untouched.
+- Regression coverage: `server-compensation-regressions.test.ts` injects delete-, update-, and create-phase failures for both asset and liability owners, then requires the original 50/50 set and non-owner row to remain.
+
+### Failed obligation owner sync left its parent moved (BUG-20260904-obligation-owner-compensation / D294)
+
+- Before: obligation reassignment wrote `parentProfileId` before replacing owner junction rows. A junction write failure returned an error with the parent already moved and ownership still old or partial.
+- After: reassignment snapshots the prior parent and owner set and restores both if owner synchronization fails; compensation failures are reported explicitly rather than hidden.
+- Regression coverage: `server-compensation-regressions.test.ts` injects the synchronization failure after the parent write and requires both parent and owner rows to return to Self.
+
+### Failed non-recurring payment edit deleted the original payment (BUG-20260904-payment-edit-compensation / D295)
+
+- Before: changing a loan/card payment amount or date first ran the full undo and then recorded a replacement. If replacement ledger insertion failed, the endpoint returned 500 after the original payment and its financial effects were gone.
+- After: the route captures the original occurrence/account and full ledger split before undo, refuses to proceed after an incomplete undo, and replays the original through the unified payment pipeline when replacement fails. Its document link is restored on the replayed row.
+- Regression coverage: `server-compensation-regressions.test.ts` injects replacement insertion failure and requires the original amount/split/document plus all debt-balance spellings to be restored.

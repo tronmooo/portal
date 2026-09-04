@@ -27,10 +27,11 @@ import { Router } from "wouter";
 
 type Call = { method: string; url: string; body: any };
 
-const { apiRequest, calls, scope } = vi.hoisted(() => ({
+const { apiRequest, calls, scope, toast } = vi.hoisted(() => ({
   apiRequest: vi.fn(),
   calls: [] as Array<{ method: string; url: string; body: any }>,
   scope: { mode: "single" as string, selectedIds: ["bob-1"], selectedNames: ["Bob QA"], isFiltered: true },
+  toast: vi.fn(),
 }));
 
 const PROFILE = {
@@ -54,6 +55,8 @@ const PROFILE = {
 };
 
 let selfMode = false;
+let notePatchFailure = false;
+let noteDeleteFailure = false;
 
 const JANE = { id: "jane-1", type: "person", name: "Jane Doe", fields: {}, tags: [] };
 
@@ -65,7 +68,7 @@ vi.mock("@/lib/queryClient", async () => {
   const { QueryClient } = await import("@tanstack/react-query");
   return { queryClient: new QueryClient(), apiRequest, BROWSER_TIMEZONE: "America/Los_Angeles" };
 });
-vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
+vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 vi.mock("@/hooks/useProfileScope", () => ({ useProfileScope: () => scope }));
 // The bus talks to a real queryClient elsewhere; the page's own invalidation is
 // not what this test is about.
@@ -107,6 +110,8 @@ beforeEach(() => {
   (Element.prototype as any).scrollIntoView ??= () => {};
   calls.length = 0;
   selfMode = false;
+  notePatchFailure = false;
+  noteDeleteFailure = false;
   apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
     calls.push({ method, url, body });
     if (method === "GET" && url.startsWith("/api/profile-bootstrap/")) {
@@ -123,6 +128,8 @@ beforeEach(() => {
     if (method === "GET" && url.startsWith("/api/notes")) return json(NOTES);
     if (method === "GET" && url.startsWith("/api/memories")) return json([]);
     if (method === "GET" && url.startsWith("/api/profiles/")) return json(PROFILE);
+    if (method === "PATCH" && url === "/api/notes/n1" && notePatchFailure) throw new Error("Network request failed");
+    if (method === "DELETE" && url === "/api/notes/n1" && noteDeleteFailure) throw new Error("Network request failed");
     return json({ ok: true });
   });
   (mockedQueryClient as QueryClient).setQueryData(["/api/profiles"], [PROFILE, JANE]);
@@ -304,12 +311,44 @@ describe("notes and tags", () => {
     expect(wrote("PATCH", "/api/notes/n1")).toBeUndefined();
   });
 
+  it("keeps a failed saved-note edit open with the draft and a visible error", async () => {
+    notePatchFailure = true;
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("saved-note-n1")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("saved-note-edit-n1"));
+    fireEvent.change(screen.getByTestId("saved-note-content-input-n1"), { target: { value: "Draft that must survive." } });
+    fireEvent.click(screen.getByTestId("saved-note-save-n1"));
+
+    await waitFor(() => expect(screen.getByTestId("saved-note-error-n1")).toBeTruthy());
+    expect((screen.getByTestId("saved-note-content-input-n1") as HTMLTextAreaElement).value).toBe("Draft that must survive.");
+    expect(screen.queryByTestId("saved-note-edit-n1")).toBeNull();
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Couldn't save note",
+      variant: "destructive",
+    }));
+  });
+
   it("deletes a saved note", async () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId("saved-note-n1")).toBeTruthy());
 
     fireEvent.click(screen.getByTestId("saved-note-delete-n1"));
     await waitFor(() => expect(wrote("DELETE", "/api/notes/n1")).toBeTruthy());
+  });
+
+  it("surfaces a saved-note delete failure", async () => {
+    noteDeleteFailure = true;
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId("saved-note-n1")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("saved-note-delete-n1"));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Couldn't delete note",
+      variant: "destructive",
+    })));
+    expect(screen.getByTestId("saved-note-n1")).toBeTruthy();
   });
 
   it("adds and removes a tag", async () => {

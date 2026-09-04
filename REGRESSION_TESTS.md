@@ -145,6 +145,8 @@ import from there. Adding to this set requires:
 | BUG-20260528-monthly-multipliers | /stats monthly totals vs /dashboard-enhanced | Server | `regressions.test.ts` |
 | BUG-20260528-obligation-patch-materialize | Calendar after obligation edit | Server | `regressions.test.ts` |
 | BUG-20260528-fabricated-sparkline | Net Worth tile sparkline | Client | `regressions.test.ts` |
+| BUG-20260903-forgot-password-history | Logged-out Forgot Password / browser Back | Client | `public-auth-ui.dom.test.tsx` |
+| BUG-20260903-public-feature-carousel | Logged-out What Portol Does carousel | Client | `public-auth-ui.dom.test.tsx` |
 
 Client-only fixes (mutation onMutate/rollback, useMemo wrappers, query key
 shape consolidation) are validated indirectly through the CRUD and CACHE

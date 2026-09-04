@@ -192,26 +192,48 @@ function ProfileButton() {
   );
 }
 
-// Preload all main tab pages so switching tabs is instant — no spinner on
-// first visit. Runs once per session, only after the user is authenticated
-// (logged-out users on AuthPage never pay for these chunks), and inside
-// requestIdleCallback so it never competes with first-paint work.
+// Progressively preload main pages after first paint. Importing every chunk in
+// one idle callback used to create a burst of downloads + parse work that could
+// make buttons and filters feel stuck on slower phones. One chunk is now loaded
+// per idle slice; persistent navigation also preloads the exact destination on
+// hover/focus/pointer-down (lib/navigation-prefetch.ts).
 function RoutePreloader() {
   const { user } = useAuth();
   const fired = useRef(false);
   useEffect(() => {
     if (!user || fired.current) return;
     fired.current = true;
-    const run = () => {
-      MAIN_TAB_IMPORTS.forEach((imp) => {
-        imp().catch(() => {/* best-effort prefetch; route lazy() retries on demand */});
-      });
+    let cancelled = false;
+    let index = 0;
+    let idleHandle: number | null = null;
+    let timerHandle: ReturnType<typeof setTimeout> | null = null;
+
+    const schedule = () => {
+      if (cancelled || index >= MAIN_TAB_IMPORTS.length) return;
+      if (typeof window.requestIdleCallback === "function") {
+        idleHandle = window.requestIdleCallback(runOne, { timeout: 5000 });
+      } else {
+        timerHandle = setTimeout(runOne, index === 0 ? 1500 : 250);
+      }
     };
-    if (typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(run, { timeout: 5000 });
-    } else {
-      setTimeout(run, 1500);
-    }
+    const runOne = () => {
+      if (cancelled || index >= MAIN_TAB_IMPORTS.length) return;
+      const load = MAIN_TAB_IMPORTS[index++];
+      // Wait for this chunk to finish before scheduling another idle slice.
+      // This bounds concurrent downloads and main-thread module evaluation.
+      void load()
+        .catch(() => {/* best-effort; route lazy() retries on demand */})
+        .finally(schedule);
+    };
+
+    schedule();
+    return () => {
+      cancelled = true;
+      if (idleHandle !== null && typeof window.cancelIdleCallback === "function") {
+        window.cancelIdleCallback(idleHandle);
+      }
+      if (timerHandle !== null) clearTimeout(timerHandle);
+    };
   }, [user]);
   return null;
 }
@@ -647,23 +669,10 @@ function DataPrefetch() {
       },
     }).catch(() => { /* best-effort */ });
 
-    // PERF (2026-07-17 live drive): switching to "Everyone" showed 7s of
-    // skeletons — it's the heaviest scope and the boot prefetch above only
-    // warms the SAVED scope (usually one person). Once the boot path is idle,
-    // warm the aggregate scope too, so the most common switch target renders
-    // from cache. One extra request per session, off the critical path.
-    if (mode !== 'everyone') {
-      const warmEveryone = () => {
-        import('@/lib/scope-prefetch')
-          .then((m) => m.prefetchScopeBootstrap('everyone', []))
-          .catch(() => { /* best-effort */ });
-      };
-      if (typeof window.requestIdleCallback === 'function') {
-        window.requestIdleCallback(warmEveryone, { timeout: 8000 });
-      } else {
-        setTimeout(warmEveryone, 3000);
-      }
-    }
+    // Do not automatically fetch the full "Everyone" scope when the user
+    // saved a narrower scope. That bootstrap is the broadest server fan-out
+    // and used to duplicate nearly all startup data during the first idle
+    // window. Scope-prefetch warms it on actual filter intent instead.
   }, [user]);
   return null;
 }

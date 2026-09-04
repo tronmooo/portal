@@ -37,7 +37,7 @@ import {
   CalendarHeart, Cake, Receipt, RefreshCw, Wrench, Stethoscope, CreditCard,
   Repeat, Plus, Check, ChevronDown, ChevronRight, MoreHorizontal, Pause, Play,
   Archive, ArchiveRestore, Pencil, CalendarClock, SkipForward, Trash2, Users, Bell,
-  Wallet, CheckSquare, FileText,
+  Wallet, CheckSquare, FileText, AlertTriangle,
 } from "lucide-react";
 import {
   RECURRING_KINDS, kindDef, parseRecurringMeta, metaToTags, markOccurrence,
@@ -760,6 +760,19 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
 
   return (
     <div className="space-y-2.5" data-testid="recurring-dates-manager">
+      {cal.isDegraded && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+          role="status"
+          data-testid="calendar-manager-data-warning"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Some calendar data couldn't load ({cal.sourceErrors.map((e) => e.source).join(", ")}).
+            Showing the items that are available.
+          </span>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2">
         <div className="flex gap-1 overflow-x-auto pb-0.5">
           {STATUS_ORDER.map(s => {

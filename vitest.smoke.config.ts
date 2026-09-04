@@ -25,7 +25,8 @@ export default defineConfig({
     // server's dedupe windows would make the fixture flaky.
     fileParallelism: false,
     pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    // Vitest 4 moved pool-specific options to the test config root.
+    singleFork: true,
   },
   resolve: {
     alias: {

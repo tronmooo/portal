@@ -23,7 +23,8 @@ export default defineConfig({
     hookTimeout: 120_000,
     fileParallelism: false,
     pool: "forks",
-    poolOptions: { forks: { singleFork: true } },
+    // Vitest 4 moved this option out of the removed poolOptions.forks object.
+    singleFork: true,
   },
   resolve: {
     alias: {

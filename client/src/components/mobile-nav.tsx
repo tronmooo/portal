@@ -1,10 +1,10 @@
 import { useLocation } from "wouter";
 import { MessageSquare, LayoutDashboard, Archive, Calendar } from "lucide-react";
 import { isHubLocationForNav } from "@/components/hub/hub-routes";
-import { queryClient, apiRequest } from "@/lib/queryClient";
-import { getProfileFilter } from "@/lib/profileFilter";
-import { prefetchScopeBootstrap } from "@/lib/scope-prefetch";
-import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
+import {
+  preloadNavigationChunk,
+  prefetchNavigationTarget,
+} from "@/lib/navigation-prefetch";
 
 // Hub consolidation (2026-07): Linked merged into the Dashboard hub (4 tabs).
 const TABS = [
@@ -13,50 +13,6 @@ const TABS = [
   { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
   { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
 ];
-
-// ── Tab-tap prefetch (P2 "Tab tap → destination painted") ───────────────────
-// Fired on pointerdown/touchstart — i.e. BEFORE the click commits and the
-// destination mounts its query waterfall. We warm only each destination's
-// PRIMARY key(s) so the first paint has data; everything else fills in on
-// mount as usual. prefetchQuery is staleTime-respecting, so a warm cache
-// (default staleTime 3 min) skips the network entirely — repeated tab taps
-// cost nothing.
-function prefetchTabData(href: string): void {
-  try {
-    const { mode, selectedIds } = getProfileFilter();
-    const ids = mode === "selected" ? (selectedIds || []).filter(Boolean) : [];
-    switch (href) {
-      case "/dashboard":
-        // Single aggregate round-trip; seeds stats/enhanced/profiles caches
-        // via seedDashboardCaches (has its own freshness/in-flight dedupe).
-        prefetchScopeBootstrap(ids.length > 0 ? "selected" : "everyone", ids);
-        break;
-      case "/calendar": {
-        // [PERF 2026-07-31] The calendar reads /api/calendar/timeline (the
-        // merged stream), NOT /api/events — the old prefetch warmed a key the
-        // page never touched. Use the canonical shared window so this hits the
-        // exact slot calendar-page.tsx + CalendarView read.
-        const win = canonicalTimelineWindow(new Date().toLocaleDateString("en-CA"));
-        const tlMode = ids.length > 0 ? "selected" : "everyone";
-        void queryClient.prefetchQuery({
-          queryKey: timelineQueryKey(win, tlMode, ids),
-          queryFn: () => apiRequest("GET", timelineUrl(win, tlMode, ids)).then((r) => r.json()),
-        });
-        break;
-      }
-      case "/artifacts":
-        // Default fetcher (queryKey[0] is the URL) — matches artifacts.tsx.
-        void queryClient.prefetchQuery({ queryKey: ["/api/artifacts"] });
-        break;
-      case "/chat":
-        // Chat's primary data dependency is the profiles list.
-        void queryClient.prefetchQuery({ queryKey: ["/api/profiles"] });
-        break;
-    }
-  } catch {
-    /* prefetch is best-effort — navigation must never be blocked by it */
-  }
-}
 
 export function MobileBottomNav() {
   const [location, navigate] = useLocation();
@@ -87,8 +43,9 @@ export function MobileBottomNav() {
               // (pointerdown covers mouse+touch on modern browsers; touchstart
               // is the fallback for older iOS. Duplicate calls are deduped by
               // react-query's in-flight tracking.)
-              onPointerDown={() => prefetchTabData(tab.href)}
-              onTouchStart={() => prefetchTabData(tab.href)}
+              onPointerDown={() => prefetchNavigationTarget(tab.href)}
+              onTouchStart={() => prefetchNavigationTarget(tab.href)}
+              onFocus={() => preloadNavigationChunk(tab.href)}
               className="relative flex flex-col items-center justify-center gap-0.5 min-h-[44px] min-w-[52px] px-2 py-1.5 rounded-xl select-none"
               style={{
                 WebkitTapHighlightColor: "transparent",

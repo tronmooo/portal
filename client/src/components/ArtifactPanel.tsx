@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -80,25 +80,71 @@ function ArtifactRenderer({ type, data }: { type: string; data: any }) {
 // ═══════════════════════════════════════════════
 // 1. CHART
 // ═══════════════════════════════════════════════
-function ChartArtifact({ data }: { data: any }) {
-  const { chartType = "bar", series = [], source, annotations = [], insight } = data;
-  
-  // Fetch data from source if available
-  const { data: chartData = [] } = useQuery({
-    queryKey: ["/api/trackers", source?.ref],
-    enabled: !!source?.ref,
+export function chartSourceRequestPath(source: any): string | null {
+  const kind = typeof source?.kind === "string" ? source.kind.trim().toLowerCase() : "";
+  const ref = typeof source?.ref === "string" ? source.ref.trim() : "";
+  if ((kind !== "tracker" && kind !== "trackers") || !ref) return null;
+  return `/api/trackers/${encodeURIComponent(ref)}`;
+}
+
+export function normalizeChartSourceRows(payload: any, series: any[] = []): any[] {
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.entries)
+      ? payload.entries
+      : [];
+  const seriesKeys = series
+    .map((item: any) => item?.key || item?.dataKey)
+    .filter((key: unknown): key is string => typeof key === "string" && key.length > 0);
+
+  return rows.flatMap((row: any, index: number) => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return [];
+    const values = row.values && typeof row.values === "object" && !Array.isArray(row.values)
+      ? row.values
+      : {};
+    const normalized = { ...row, ...values };
+    normalized.name = normalized.name
+      ?? normalized.label
+      ?? normalized.date
+      ?? normalized.timestamp
+      ?? String(index + 1);
+    const usableKeys = seriesKeys.length > 0
+      ? seriesKeys
+      : Object.keys(normalized).filter(key => key !== "name" && typeof normalized[key] === "number");
+    return usableKeys.some(key => normalized[key] !== undefined && normalized[key] !== null)
+      ? [normalized]
+      : [];
   });
-  
-  // Use inline data if source doesn't provide
+}
+
+export function selectChartDisplayData(sourcePayload: any, inlineData: any, series: any[] = []): any[] {
+  const sourceRows = normalizeChartSourceRows(sourcePayload, series);
+  if (sourceRows.length > 0) return sourceRows;
+  return Array.isArray(inlineData) ? inlineData : [];
+}
+
+function ChartArtifact({ data }: { data: any }) {
+  const { chartType = "bar", series = [], source, insight } = data;
+
+  const sourcePath = chartSourceRequestPath(source);
+  // A tracker reference identifies one tracker resource. The default query
+  // function intentionally uses only queryKey[0], so putting the ref in a
+  // second key slot used to fetch the whole tracker list instead.
+  const { data: sourcePayload } = useQuery({
+    queryKey: [sourcePath || "artifact-chart-inline"],
+    queryFn: async () => (await apiRequest("GET", sourcePath!)).json(),
+    enabled: !!sourcePath,
+  });
+
+  // Tracker detail responses wrap chartable rows in `.entries`. A failed,
+  // malformed, or empty source must never displace valid inline chart data.
   const displayData = useMemo(() => {
-    if (chartData && Array.isArray(chartData) && chartData.length > 0) return chartData;
-    if (data.data && Array.isArray(data.data)) return data.data;
-    return [];
-  }, [chartData, data.data]);
+    return selectChartDisplayData(sourcePayload, data.data, series);
+  }, [sourcePayload, data.data, series]);
   
   if (displayData.length === 0) return <div className="text-muted-foreground text-sm">No data available for chart</div>;
   
-  const primaryKey = series[0]?.key || "value";
+  const primaryKey = series[0]?.key || series[0]?.dataKey || "value";
   const primaryColor = COLORS[series[0]?.color as keyof typeof COLORS] || COLORS.primary;
   
   return (
@@ -111,7 +157,7 @@ function ChartArtifact({ data }: { data: any }) {
             <YAxis tick={{ fontSize: 11 }} />
             <Tooltip />
             {series.map((s: any, i: number) => (
-              <Line key={i} type="monotone" dataKey={s.key} stroke={COLORS[s.color as keyof typeof COLORS] || COLORS.primary} strokeWidth={2} dot={{ r: 3 }} />
+              <Line key={i} type="monotone" dataKey={s.key || s.dataKey} stroke={COLORS[s.color as keyof typeof COLORS] || COLORS.primary} strokeWidth={2} dot={{ r: 3 }} />
             ))}
           </LineChart>
         ) : chartType === "area" ? (
@@ -225,7 +271,11 @@ function ChecklistArtifact({ data }: { data: any }) {
           {item.priority && <Badge variant={item.priority === "high" ? "destructive" : "outline"} className="text-xs shrink-0">{item.priority}</Badge>}
         </label>
       ))}
-      {convert_to_tasks && <Button variant="outline" size="sm" className="mt-2">Create as Tasks</Button>}
+      {convert_to_tasks && (
+        <p className="text-xs text-muted-foreground rounded-md border border-dashed px-2.5 py-2 mt-2" role="note" data-testid="artifact-checklist-preview-only">
+          Task conversion is preview only. Create tasks from the Tasks page.
+        </p>
+      )}
     </div>
   );
 }
@@ -234,7 +284,7 @@ function ChecklistArtifact({ data }: { data: any }) {
 // 5. STRUCTURED PLAN
 // ═══════════════════════════════════════════════
 function StructuredPlanArtifact({ data }: { data: any }) {
-  const { planKind, duration, overview, sections = [], actions = [] } = data;
+  const { duration, overview, sections = [], actions = [] } = data;
   return (
     <div className="space-y-3">
       {overview && <p className="text-sm">{overview}</p>}
@@ -253,7 +303,16 @@ function StructuredPlanArtifact({ data }: { data: any }) {
         </div>
       ))}
       {actions.length > 0 && (
-        <div className="flex gap-2 mt-2">{actions.map((a: any, i: number) => <Button key={i} variant="outline" size="sm">{a.label}</Button>)}</div>
+        <div className="space-y-1.5 mt-2" role="note" data-testid="artifact-plan-preview-only">
+          <p className="text-xs text-muted-foreground">Suggested actions are preview only.</p>
+          <div className="flex flex-wrap gap-2">
+            {actions.map((a: any, i: number) => (
+              <span key={i} className="rounded-md border px-2.5 py-1 text-xs text-muted-foreground" aria-label={`${a.label} (preview only)`}>
+                {a.label}
+              </span>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -263,20 +322,25 @@ function StructuredPlanArtifact({ data }: { data: any }) {
 // 6. CALCULATOR
 // ═══════════════════════════════════════════════
 function CalculatorArtifact({ data }: { data: any }) {
-  const { calcKind, inputs = [], outputs_schema = [], narrative } = data;
-  const [values, setValues] = useState<Record<string, number>>(() => {
-    const init: Record<string, number> = {};
-    inputs.forEach((i: any) => { if (i.value != null) init[i.key] = i.value; });
-    return init;
-  });
+  const { inputs = [], outputs_schema = [], narrative } = data;
   return (
     <div className="space-y-3">
       {narrative && <p className="text-sm text-muted-foreground">{narrative}</p>}
+      <p className="text-xs text-muted-foreground rounded-md border border-dashed px-2.5 py-2" role="note" data-testid="artifact-calculator-preview-only">
+        Calculator preview only. Live calculations are not available here.
+      </p>
       <div className="space-y-2">
         {inputs.map((inp: any) => (
           <div key={inp.key}>
             <Label className="text-xs">{inp.label}</Label>
-            <Input type="number" value={values[inp.key] || ""} onChange={e => setValues({ ...values, [inp.key]: parseFloat(e.target.value) || 0 })} disabled={!inp.editable} className="h-8 text-sm" />
+            <Input
+              type="number"
+              value={inp.value ?? ""}
+              readOnly
+              disabled
+              aria-label={`${inp.label} (preview only)`}
+              className="h-8 text-sm"
+            />
           </div>
         ))}
       </div>
@@ -285,10 +349,9 @@ function CalculatorArtifact({ data }: { data: any }) {
           {outputs_schema.map((out: any) => (
             <div key={out.key} className="flex justify-between text-sm">
               <span className="text-muted-foreground">{out.label}</span>
-              <span className="font-semibold">—</span>
+              <span className="font-semibold text-muted-foreground">Not calculated</span>
             </div>
           ))}
-          <p className="text-xs text-muted-foreground italic">Calculation runs client-side when inputs change</p>
         </div>
       )}
     </div>
@@ -299,27 +362,24 @@ function CalculatorArtifact({ data }: { data: any }) {
 // 7. QUICK ENTRY FORM
 // ═══════════════════════════════════════════════
 function QuickEntryFormArtifact({ data }: { data: any }) {
-  const { target, fields = [], submit_label = "Submit" } = data;
-  const [values, setValues] = useState<Record<string, any>>(() => {
-    const init: Record<string, any> = {};
-    fields.forEach((f: any) => { if (f.default != null) init[f.key] = f.default; });
-    return init;
-  });
+  const { fields = [], submit_label = "Submit" } = data;
   return (
     <div className="space-y-3">
+      <p className="text-xs text-muted-foreground rounded-md border border-dashed px-2.5 py-2" role="note" data-testid="artifact-form-preview-only">
+        Form preview only. {submit_label} is not available here.
+      </p>
       {fields.map((f: any) => (
         <div key={f.key}>
           <Label className="text-xs">{f.label}{f.required && <span className="text-red-500 ml-0.5">*</span>}</Label>
           {f.type === "boolean" ? (
-            <Checkbox checked={!!values[f.key]} onCheckedChange={v => setValues({ ...values, [f.key]: v })} />
+            <Checkbox checked={!!f.default} disabled aria-label={`${f.label} (preview only)`} />
           ) : f.type === "textarea" ? (
-            <textarea value={values[f.key] || ""} onChange={e => setValues({ ...values, [f.key]: e.target.value })} className="w-full h-20 text-sm rounded-md border border-input bg-background px-3 py-2" />
+            <textarea defaultValue={f.default ?? ""} disabled aria-label={`${f.label} (preview only)`} className="w-full h-20 text-sm rounded-md border border-input bg-background px-3 py-2" />
           ) : (
-            <Input type={f.type === "number" || f.type === "currency" ? "number" : f.type === "date" || f.type === "datetime" ? "date" : "text"} value={values[f.key] || ""} onChange={e => setValues({ ...values, [f.key]: e.target.value })} className="h-8 text-sm" />
+            <Input type={f.type === "number" || f.type === "currency" ? "number" : f.type === "date" || f.type === "datetime" ? "date" : "text"} value={f.default ?? ""} readOnly disabled aria-label={`${f.label} (preview only)`} className="h-8 text-sm" />
           )}
         </div>
       ))}
-      <Button size="sm">{submit_label}</Button>
     </div>
   );
 }

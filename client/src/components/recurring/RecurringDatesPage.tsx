@@ -26,7 +26,7 @@
 
 import { useMemo, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Plus, Bell } from "lucide-react";
+import { Plus, Bell, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   CALENDAR_CATEGORIES, categoryChips, countRules, filterSeriesByCategory, seriesInCategory,
@@ -270,6 +270,19 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
 
   return (
     <div className="space-y-2.5" data-testid="recurring-dates-page">
+      {cal.isDegraded && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200"
+          role="status"
+          data-testid="calendar-data-warning"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            Some calendar data couldn't load ({cal.sourceErrors.map((e) => e.source).join(", ")}).
+            Showing the items that are available.
+          </span>
+        </div>
+      )}
       {/* ── Category chips: horizontally scrollable on mobile ─────────────── */}
       <div className="-mx-1 px-1 overflow-x-auto no-scrollbar" data-testid="category-chips">
         <div className="flex gap-1.5 w-max pb-0.5">
