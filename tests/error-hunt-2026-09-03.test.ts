@@ -3791,3 +3791,15 @@ describe("D286 sub-cent amounts are refused; money fields on a profile are store
     expect(out.termMonths).toBe(36);
   });
 });
+
+// ── D287: the expense form keeps a refused amount on screen instead of closing on it.
+describe("D287 the add-expense form checks cents before the optimistic close", () => {
+  it("the save handler refuses a third decimal with the shared message before mutate", () => {
+    const src = readFileSync(new URL("../client/src/pages/finance.tsx", import.meta.url), "utf8");
+    expect(src).toContain('import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE } from "@shared/schema";');
+    const i = src.indexOf("if (!isWholeCents(amt)) {");
+    const j = src.indexOf("addExpenseMutation.mutate({", i);
+    expect(i).toBeGreaterThan(0); expect(j).toBeGreaterThan(i);
+    expect(src.slice(i, j)).toContain("toast({ title: SUB_CENT_AMOUNT_MESSAGE, variant: \"destructive\" });");
+  });
+});

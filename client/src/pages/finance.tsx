@@ -49,6 +49,7 @@ import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
+import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE } from "@shared/schema";
 import {
   BarChart,
   Bar,
@@ -1071,6 +1072,13 @@ export default function FinancePage() {
                       const amt = parseFloat(newExpense.amount);
                       if (!newExpense.amount || isNaN(amt) || amt <= 0) {
                         toast({ title: "Amount must be greater than $0", variant: "destructive" });
+                        return;
+                      }
+                      // The server refuses a third decimal (D286); saying so here keeps
+                      // the form open with what was typed instead of closing it on
+                      // the optimistic path and losing the entry to a toast (D287).
+                      if (!isWholeCents(amt)) {
+                        toast({ title: SUB_CENT_AMOUNT_MESSAGE, variant: "destructive" });
                         return;
                       }
                       // Snapshot the payload BEFORE resetting the form (see the
