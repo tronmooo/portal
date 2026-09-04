@@ -258,6 +258,12 @@ export function isEndedBillFields(fields: any, nextDueISO?: string | null): bool
     }).length;
     if (settled >= count) return true;
   }
+  // The due-date advance never runs past a finite plan's last occurrence
+  // (D277), so "next" can sit ON that last occurrence: once it is settled
+  // there is nothing left to come due. Before this the bills list called an
+  // ended plan active with its paid last day as "next due".
+  const last = lastSeriesOccurrence(f);
+  if (last && next >= last && isSettledOccurrence(f, last)) return true;
   return false;
 }
 

@@ -3592,6 +3592,15 @@ describe("D277 a finite bill plan never runs past its last occurrence", async ()
     expect(lastSeriesOccurrence({ frequency: "once", dueDate: "2026-09-04", count: 3 })).toBe("2026-09-04");
     expect(lastSeriesOccurrence({ frequency: "weekly", firstPaymentDate: "2026-09-04", count: 3 })).toBe("2026-09-18");
   });
+  it("a plan whose last occurrence is settled is ended, even though the advance stays on it", async () => {
+    const { isEndedBillFields } = await import("../shared/liability-recurrence");
+    const f = { frequency: "monthly", firstPaymentDate: "2026-07-25", dueDate: "2026-07-25", nextDueDate: "2026-07-25", recurrenceEnd: "2026-08-24",
+      occurrences: { "2026-07-25": { status: "paid", paymentId: "p1" } } };
+    expect(isEndedBillFields(f)).toBe(true);
+    expect(isEndedBillFields(f, "2026-07-25")).toBe(true);
+    const open = { ...f, occurrences: {} };
+    expect(isEndedBillFields(open)).toBe(false);
+  });
   it("advancing past the last instalment stays on it", () => {
     const f = { frequency: "monthly", firstPaymentDate: "2026-09-04", dueDate: "2026-10-04", nextDueDate: "2026-10-04", count: 2,
       occurrences: { "2026-09-04": { status: "paid" }, "2026-10-04": { status: "paid" } } };
