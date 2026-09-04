@@ -20,6 +20,7 @@ import { useQuery } from "@tanstack/react-query";
 // under hash routing (see HubShell.tsx note).
 import { hashNavigate } from "@/lib/hashNavigate";
 import { apiRequest } from "@/lib/queryClient";
+import { seededQueryFn } from "@/lib/scope-prefetch";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useOverflowX } from "@/hooks/useOverflowX";
 import { computeHealthScore } from "@/lib/tracker-health";
@@ -119,27 +120,34 @@ export function HubKpiStrip() {
   const ids = scope.selectedIds;
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
 
+  // Cold (nothing cached for this scope), each of these joins the ONE scope
+  // bootstrap instead of firing its own request — see seededQueryFn. Warm,
+  // they are pure cache hits, as the strip's design requires.
   const { data: stats } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", mode, ...ids],
-    queryFn: () => apiRequest("GET", `/api/stats${param}`).then(r => r.json()),
+    queryFn: seededQueryFn(["/api/stats", mode, ...ids], mode, ids,
+      () => apiRequest("GET", `/api/stats${param}`).then(r => r.json())),
     staleTime: 30_000,
     placeholderData: undefined,
   });
   const { data: enhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", mode, ...ids],
-    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${param}`).then(r => r.json()),
+    queryFn: seededQueryFn(["/api/dashboard-enhanced", mode, ...ids], mode, ids,
+      () => apiRequest("GET", `/api/dashboard-enhanced${param}`).then(r => r.json())),
     staleTime: 30_000,
     placeholderData: undefined,
   });
   const { data: incomesRaw } = useQuery<any>({
     queryKey: ["/api/incomes", mode, ...ids, "hero"],
-    queryFn: () => apiRequest("GET", `/api/incomes${param}`).then(r => r.json()),
+    queryFn: seededQueryFn(["/api/incomes", mode, ...ids, "hero"], mode, ids,
+      () => apiRequest("GET", `/api/incomes${param}`).then(r => r.json())),
     staleTime: 60_000,
     placeholderData: undefined,
   });
   const { data: trackers, isPending: trackersPending } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", mode, ...ids],
-    queryFn: () => apiRequest("GET", `/api/trackers${param}`).then(r => r.json()),
+    queryFn: seededQueryFn(["/api/trackers", mode, ...ids], mode, ids,
+      () => apiRequest("GET", `/api/trackers${param}`).then(r => r.json())),
     staleTime: 30_000,
     placeholderData: undefined,
   });

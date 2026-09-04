@@ -35,37 +35,99 @@ export function warmProfileDetail(id: string): void {
   });
 }
 
-export function prefetchScopeBootstrap(
+/** The exact key dashboard.tsx's bootstrap useQuery reads, so a prefetch here
+ *  and the page's own hook collapse onto ONE request (React Query dedupes an
+ *  in-flight key) instead of two cold serverless invocations. */
+export function scopeBootstrapKey(mode: "everyone" | "selected", ids: string[]): unknown[] {
+  const month = getUserCurrentMonth(BROWSER_TIMEZONE); // browser-zone month, same key the dashboard reads
+  const cleanIds = mode === "selected" ? ids.filter(Boolean) : [];
+  return ["/api/dashboard-bootstrap", mode, ...cleanIds, month];
+}
+
+/**
+ * Make sure the scope's bootstrap is loaded (or loading) and return a promise
+ * for it. Unlike prefetchScopeBootstrap this REJECTS on failure and, when the
+ * bootstrap is already in flight, resolves with that same request — callers
+ * that want to piggyback on the one aggregate round-trip (seededQueryFn) need
+ * both.
+ */
+export function ensureScopeBootstrap(
   mode: "everyone" | "selected",
   ids: string[],
-): Promise<void> {
-  const month = getUserCurrentMonth(BROWSER_TIMEZONE); // browser-zone month, same key the dashboard reads
+): Promise<unknown> {
+  const month = getUserCurrentMonth(BROWSER_TIMEZONE);
   const cleanIds = mode === "selected" ? ids.filter(Boolean) : [];
   const qs = cleanIds.length > 0
     ? `?profileIds=${cleanIds.join(",")}&month=${month}`
     : `?month=${month}`;
-  const queryKey = ["/api/dashboard-bootstrap", mode, ...cleanIds, month];
+  const queryKey = scopeBootstrapKey(mode, cleanIds);
 
-  // Fresh-enough data already cached (or an identical prefetch in flight) —
-  // don't spend a serverless invocation re-warming it.
+  // Fresh-enough data already cached — don't spend a serverless invocation
+  // re-warming it. (An identical fetch in flight is joined by fetchQuery.)
   const state = queryClient.getQueryState(queryKey);
-  if (state && (state.fetchStatus === "fetching" ||
-      (state.data != null && Date.now() - state.dataUpdatedAt < 60_000))) {
-    return Promise.resolve();
+  if (state && state.fetchStatus !== "fetching" &&
+      state.data != null && Date.now() - state.dataUpdatedAt < 60_000) {
+    return Promise.resolve(state.data);
   }
 
-  perfMark(`scope-prefetch-start:${cleanIds.join(",") || "everyone"}`);
-  return queryClient.prefetchQuery({
+  const label = cleanIds.join(",") || "everyone";
+  if (!state || state.fetchStatus !== "fetching") perfMark(`scope-prefetch-start:${label}`);
+  return queryClient.fetchQuery({
     queryKey,
     queryFn: async () => {
       const r = await apiRequest("GET", `/api/dashboard-bootstrap${qs}`);
       const b = await r.json();
       seedDashboardCaches(b, mode, cleanIds, month);
-      perfMeasure("scope-prefetch-landed", `scope-prefetch-start:${cleanIds.join(",") || "everyone"}`);
+      perfMeasure("scope-prefetch-landed", `scope-prefetch-start:${label}`);
       return b ?? null;
     },
     staleTime: 60_000,
   });
+}
+
+export function prefetchScopeBootstrap(
+  mode: "everyone" | "selected",
+  ids: string[],
+): Promise<void> {
+  // Best-effort warmup: never rejects, never throws into a hover handler.
+  return ensureScopeBootstrap(mode, ids).then(() => undefined, () => undefined);
+}
+
+// ── Piggyback a cold tab query on the scope bootstrap ───────────────────────
+// Every hub tab is gated on one list (trackers, profiles, documents, expenses)
+// that /api/dashboard-bootstrap already returns and seeds under the tab's
+// exact query key. But a tab opened COLD (deep link, reload on a non-Executive
+// tab, first visit before the bootstrap lands) fired its own request for that
+// list in parallel with the bootstrap — two cold serverless invocations racing
+// for the same rows, and on a slow instance the tab's skeleton outlived the
+// 20s StuckLoadingGuard while the bootstrap that would have painted it was
+// still working (2026-09-04 "This is taking too long to load" on Assets).
+//
+// seededQueryFn turns that into ONE request: with nothing cached under the
+// key, await the scope bootstrap (starting it if nobody has) and read the
+// slot it seeds. Anything else — a refetch of data already on screen, a
+// bootstrap that failed or didn't carry the slot, a scope the bootstrap
+// doesn't cover — falls through to the tab's own direct fetch, exactly as
+// before. Errors from the bootstrap are swallowed here on purpose: the direct
+// fetch is the one whose failure the tab reports.
+export function seededQueryFn<T>(
+  queryKey: readonly unknown[],
+  mode: "everyone" | "selected",
+  ids: string[],
+  direct: () => Promise<T>,
+): () => Promise<T> {
+  return async () => {
+    // Data on screen already: this is a refetch (invalidation, Retry), and the
+    // caller wants THIS list refreshed, not the whole bootstrap re-run.
+    if (queryClient.getQueryData(queryKey) !== undefined) return direct();
+    try {
+      await ensureScopeBootstrap(mode, ids);
+    } catch {
+      return direct();
+    }
+    const seeded = queryClient.getQueryData<T>(queryKey);
+    return seeded !== undefined ? seeded : direct();
+  };
 }
 
 // ── Sibling-scope warmup ─────────────────────────────────────────────────────

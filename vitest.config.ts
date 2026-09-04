@@ -185,6 +185,8 @@ export default defineConfig({
       'tests/profile-edit-no-ai-regen.test.ts',
       'tests/bootstrap-seed-keys.test.ts',
       'tests/scope-prefetch-siblings.test.ts',
+      'tests/hub-one-request-per-scope.test.ts',
+      'tests/hub-shell-owns-bootstrap.dom.test.tsx',
       'tests/request-memo-reuse.test.ts',
       'tests/documents-page.test.ts',
       'tests/document-deletion-lifecycle.test.ts',

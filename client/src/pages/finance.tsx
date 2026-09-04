@@ -5,6 +5,7 @@ import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
+import { seededQueryFn } from "@/lib/scope-prefetch";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -149,7 +150,8 @@ export default function FinancePage() {
   // everyone's data even when a profile is selected.
   const { data: obligations } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json()),
+    queryFn: seededQueryFn(["/api/obligations", filterMode, ...filterIds], filterMode, filterIds,
+      () => apiRequest("GET", `/api/obligations${profileParam}`).then(r => r.json())),
   });
   // PERF (2026-08-17): refetchOnMount:"always" was dropped from both queries
   // below. It forced a network round-trip on EVERY Finance mount, gating the
@@ -157,11 +159,16 @@ export default function FinancePage() {
   // invalidation (every write invalidates these keys) already keep them fresh.
   const { data: enhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json()),
+    queryFn: seededQueryFn(["/api/dashboard-enhanced", filterMode, ...filterIds], filterMode, filterIds,
+      () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json())),
   });
+  // The page is gated on expenses. Opened cold it used to race its own
+  // /api/expenses against the scope bootstrap that seeds the very same key;
+  // seededQueryFn joins the bootstrap instead (one request, one cold start).
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
     queryKey: ["/api/expenses", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
+    queryFn: seededQueryFn(["/api/expenses", filterMode, ...filterIds], filterMode, filterIds,
+      () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json())),
   });
   // Expenses page controls — persisted in localStorage so the toolbar survives
   // reloads (search + category + sort + date range).

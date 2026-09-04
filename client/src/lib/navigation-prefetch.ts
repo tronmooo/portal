@@ -22,6 +22,32 @@ const NAVIGATION_CHUNKS: Record<string, () => Promise<unknown>> = {
   "/settings": () => import("@/pages/settings"),
 };
 
+/**
+ * Hub tab chunks (components/hub/hub-routes.ts). The hub shell can't import
+ * pages itself (bundle guard in tests/hub-routes.test.ts), so the chip row
+ * asks here on hover/touch/focus. Assets, Liabilities and Documents are all
+ * views of the trackers page; Info is the lightweight profile-info page.
+ */
+const HUB_TAB_CHUNKS: Record<string, () => Promise<unknown>> = {
+  executive: () => import("@/pages/dashboard"),
+  trackers: () => import("@/pages/trackers"),
+  finance: () => import("@/pages/finance"),
+  wellness: () => import("@/pages/wellness"),
+  assets: () => import("@/pages/trackers"),
+  liabilities: () => import("@/pages/trackers"),
+  documents: () => import("@/pages/trackers"),
+  info: () => import("@/pages/profile-info"),
+};
+
+/** Warm the JavaScript for a hub tab the pointer is resting on. Never throws. */
+export function preloadHubTabChunk(tabId: string): void {
+  const load = HUB_TAB_CHUNKS[tabId];
+  if (!load) return;
+  void load().catch(() => {
+    // Best effort. React.lazy retries through its own import on navigation.
+  });
+}
+
 function canonicalNavigationPath(href: string): string {
   const path = href.split("?")[0].replace(/\/$/, "") || "/";
   return path === "/" ? "/chat" : path;

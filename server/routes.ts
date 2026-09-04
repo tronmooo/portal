@@ -4489,7 +4489,14 @@ ${JSON.stringify(ctx, null, 2)}`;
     // serverless, so the TTL is the hard staleness ceiling. The QA spec
     // accepts 30s of bootstrap staleness; 60s exceeded that budget whenever
     // the busting paths didn't reach a warm instance.
-    setCache(cacheKey, data, 30 * 1000);
+    // (2026-09-04) When the key IS version-stamped ("@" — cacheUserKey resolved
+    // the user's data versions from the DB), any write on any instance makes
+    // this row unaddressable, so the TTL only bounds memory — the same reason
+    // the per-endpoint list caches below hold 5 min. At 30s, reopening the app
+    // a minute later paid the full ~18-query aggregation again (1.5-4.6s cold)
+    // for rows that had not changed. An un-stamped key (version resolve
+    // failed) keeps the 30s ceiling the QA spec budgets for.
+    setCache(cacheKey, data, cacheKey.includes("@") ? 5 * 60 * 1000 : 30 * 1000);
     // Publish this request's raw reads for the NEXT scope (see rawCacheKey
     // above). Only on a miss — refreshing the TTL on every hit would let one
     // long browsing session extend the snapshot indefinitely past the 30s

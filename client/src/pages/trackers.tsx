@@ -13,6 +13,7 @@ import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { warmProfileDetail } from "@/lib/scope-prefetch";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
+import { seededQueryFn } from "@/lib/scope-prefetch";
 import { stopProp, stopPropAndDefault } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -5599,26 +5600,27 @@ export default function TrackersPage() {
   // placeholderData:keepPreviousData on the global client, a filter switch
   // keeps prior data while refetching — isPending stays false, the skeleton
   // never flashes, and the page updates in place when the new response arrives.
+  // Opened cold, each of the three gating lists below joins the ONE scope
+  // bootstrap (which seeds these exact keys) instead of firing its own request
+  // in parallel with it — see seededQueryFn.
   const { data: trackers, isPending, refetch: refetchTrackers } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/trackers${trackerProfileParam}`).then(r => r.json()),
+    queryFn: seededQueryFn(["/api/trackers", filterMode, ...filterIds], filterMode, filterIds,
+      () => apiRequest("GET", `/api/trackers${trackerProfileParam}`).then(r => r.json())),
   });
-  const [showTrackerSkeleton, setShowTrackerSkeleton] = useState(false);
-  useEffect(() => {
-    if (!isPending || trackers) { setShowTrackerSkeleton(false); return; }
-    const tid = setTimeout(() => setShowTrackerSkeleton(true), 200);
-    return () => clearTimeout(tid);
-  }, [isPending, trackers]);
 
-  const { data: profiles } = useQuery<Profile[]>({
+  const { data: profiles, isPending: profilesPending, refetch: refetchProfiles } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
-    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+    queryFn: seededQueryFn(["/api/profiles"], filterMode, filterIds,
+      () => apiRequest("GET", "/api/profiles").then(r => r.json())),
   });
 
-  const { data: allDocuments = [] } = useQuery<Document[]>({
+  const { data: allDocumentsRaw, isPending: documentsPending, refetch: refetchDocuments } = useQuery<Document[]>({
     queryKey: ["/api/documents"],
-    queryFn: () => apiRequest("GET", "/api/documents").then(r => r.json()),
+    queryFn: seededQueryFn(["/api/documents"], filterMode, filterIds,
+      () => apiRequest("GET", "/api/documents").then(r => r.json())),
   });
+  const allDocuments = allDocumentsRaw ?? [];
 
   // Co-ownership link tables. The parent-profile rule alone misses assets/
   // liabilities where the active filter profile is a CO-OWNER via
@@ -6130,12 +6132,33 @@ export default function TrackersPage() {
   }, [profiles, filterMode, filterIds, sectionFilter, assetTypeFilter, assetNestingFilter, filteredTrackers, filteredDocuments,
       assetPartyLinks, liabilityProfileLinks, serverScopedAssetIds, serverScopedLiabilityIds]);
 
+  // Gate the skeleton on the list THIS section renders. The page used to wait
+  // on /api/trackers whatever the tab: Assets and Liabilities (which paint from
+  // profiles) and Documents sat behind a query they never read, so a slow
+  // trackers response put the "taking too long" card over a tab whose own
+  // data had long since arrived (2026-09-04 report).
+  const sectionPending =
+    sectionFilter === "profiles" || sectionFilter === "liabilities" ? (profilesPending && !profiles)
+    : sectionFilter === "documents" ? (documentsPending && !allDocumentsRaw)
+    : (isPending && !trackers);
+  const refetchSection = () => {
+    if (sectionFilter === "profiles" || sectionFilter === "liabilities") void refetchProfiles();
+    else if (sectionFilter === "documents") void refetchDocuments();
+    else void refetchTrackers();
+  };
+  const [showTrackerSkeleton, setShowTrackerSkeleton] = useState(false);
+  useEffect(() => {
+    if (!sectionPending) { setShowTrackerSkeleton(false); return; }
+    const tid = setTimeout(() => setShowTrackerSkeleton(true), 200);
+    return () => clearTimeout(tid);
+  }, [sectionPending]);
+
   // Skeleton loading state — MUST be after all hooks
-  if (showTrackerSkeleton && !trackers && isPending) {
+  if (showTrackerSkeleton && sectionPending) {
     return (
       // onRetry: without it the guard's Retry button never refetched THIS
-      // page's gating query — it only ran the generic cache recovery.
-      <StuckLoadingGuard active onRetry={() => { void refetchTrackers(); }}>
+      // section's gating query — it only ran the generic cache recovery.
+      <StuckLoadingGuard active onRetry={refetchSection}>
         <div className="p-3 md:p-5 space-y-3">
           <Skeleton className="h-7 w-32" />
           <div className="flex gap-2 overflow-x-hidden">

@@ -15,6 +15,8 @@ import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 // where trackers.tsx getQuerySection would never see it on subsequent in-hash navs.
 import { hashNavigate, hashReplace } from "@/lib/hashNavigate";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { prefetchScopeBootstrap } from "@/lib/scope-prefetch";
+import { preloadHubTabChunk } from "@/lib/navigation-prefetch";
 import { useResumeTick } from "@/hooks/useResumeTick";
 import { useOverflowX } from "@/hooks/useOverflowX";
 import { HUB_TABS, activeHubTab, hubTabAccent, infoTabRoute, reconcileInfoRoute } from "./hub-routes";
@@ -46,6 +48,21 @@ export function HubShell() {
     if (target) hashReplace(target);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location, selectedKey]);
+
+  // ONE REQUEST PER SCOPE (2026-09-04). Only the Executive tab fetched
+  // /api/dashboard-bootstrap; the KPI strip issues no requests by design and
+  // every other tab read the slots the bootstrap seeds. So a reload or deep
+  // link onto Assets / Finance / Wellness never fired the bootstrap at all:
+  // the strip sat on "…" and each tab paid its own cold serverless round-trip
+  // for lists the bootstrap already returns. The shell is the one component
+  // mounted for every hub route, so it owns that request now — on mount and
+  // on every scope change. Tabs then paint from the seeded cache (their own
+  // queries join this in-flight request, see seededQueryFn) and the Executive
+  // page's identical useQuery collapses onto it too.
+  useEffect(() => {
+    void prefetchScopeBootstrap(scope.mode, [...scope.selectedIds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey]);
 
   // STALE-CLOCK FIX (2026-07-21): re-render once per resume-after-long-absence
   // so the date line rolls over. Without this, a PWA frozen overnight kept
@@ -91,6 +108,13 @@ export function HubShell() {
               aria-selected={isActive}
               data-testid={`hub-tab-${tab.id}`}
               onClick={() => hashNavigate(tab.id === "info" ? infoTabRoute([...scope.selectedIds]) : tab.route)}
+              // Warm the destination's JavaScript while the pointer is still
+              // on its way: a first tab open no longer waits on a chunk
+              // download on top of its data. Best-effort, idempotent.
+              onPointerEnter={() => preloadHubTabChunk(tab.id)}
+              onPointerDown={() => preloadHubTabChunk(tab.id)}
+              onTouchStart={() => preloadHubTabChunk(tab.id)}
+              onFocus={() => preloadHubTabChunk(tab.id)}
               // The active chip wears the tab's own colour rather than one
               // app-wide primary, so the strip tells you where you are at a
               // glance and agrees with the page it opens.

@@ -117,6 +117,7 @@ const MAIN_TAB_IMPORTS = [
   _calImport,
   _artImport,
   _finImport,
+  _wellImport,
   _habImport,
   _jourImport,
   _oblImport,
