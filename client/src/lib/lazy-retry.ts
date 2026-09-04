@@ -2,6 +2,32 @@ import { lazy, type ComponentType } from "react";
 import { isStaleChunkError, reloadForStaleChunk } from "@/components/ErrorBoundary";
 
 /**
+ * The chunk URL out of a failed dynamic import.
+ *
+ * Browsers put it in the message: "Failed to fetch dynamically imported
+ * module: https://portol.me/assets/dashboard-B3kfn6HX.js". We need it because
+ * a module record that failed to load is cached by its specifier — calling the
+ * same `import("@/pages/dashboard")` again returns the same rejection without
+ * touching the network, so a retry is only real if it asks for a different URL.
+ *
+ * Same-origin `/assets/*.js` only: this string comes from an error message, and
+ * it is about to become a script the page executes.
+ */
+function chunkUrlFrom(err: unknown): string | null {
+  const msg = (err as any)?.message || "";
+  const found = String(msg).match(/https?:\/\/[^\s'")]+\.js/);
+  if (!found) return null;
+  try {
+    const url = new URL(found[0]);
+    if (url.origin !== window.location.origin) return null;
+    if (!url.pathname.startsWith("/assets/")) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * `React.lazy` that survives one failed chunk fetch.
  *
  * Two different things produce "Failed to fetch dynamically imported module":
@@ -26,7 +52,12 @@ export function lazyWithRetry<T extends ComponentType<any>>(
       if (!isStaleChunkError(err)) throw err;
       return new Promise<{ default: T }>((resolve, reject) => {
         setTimeout(() => {
-          factory().then(resolve).catch((err2) => {
+          const url = chunkUrlFrom(err);
+          const busted = url ? `${url}${url.includes("?") ? "&" : "?"}retry=${Date.now()}` : null;
+          const attempt = busted
+            ? (import(/* @vite-ignore */ busted) as Promise<{ default: T }>)
+            : factory();
+          attempt.then(resolve).catch((err2) => {
             // Second failure: treat it as a real stale deploy and reload onto
             // the current shell. reloadForStaleChunk rate-limits itself, so
             // this cannot become a reload loop.
