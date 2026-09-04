@@ -7961,6 +7961,7 @@ Rules:
     if (!payment) {
       // A ledger failure is a server error, not a missing bill.
       if (failReason === "payment_failed") return res.status(500).json({ error: "Payment failed" });
+      if (failReason === "ended") return res.status(409).json({ error: "This bill's payment plan has ended; there is no occurrence left to pay" });
       return res.status(404).json({ error: "Obligation not found" });
     }
     recentPayments.set(dedupeKey, { at: Date.now(), payment });
@@ -8129,6 +8130,7 @@ Rules:
       occurrenceDate: req.params.date, amount: amount ?? null,
       method, paymentDate, accountId, source: "occurrence_route",
     }, getTimezone(req));
+    if (!paid.ok && paid.reason === "ended") return res.status(409).json({ error: "This bill's payment plan has ended; there is no occurrence left to pay" });
     if (!paid.ok) return res.status(404).json({ error: "Recurring liability not found" });
     const result = await storage.getLiabilitySchedule(req.params.id);
     bustBillCaches(uid);

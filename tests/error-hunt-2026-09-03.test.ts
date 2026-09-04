@@ -3579,3 +3579,49 @@ describe("D276 POST /obligations/:id/pay honours an explicit occurrenceDate", as
     expect(Object.keys(profile.fields.occurrences).sort()).toEqual(["2026-09-04", "2026-10-04"]);
   });
 });
+
+// ── D277: a finite plan stops at its last instalment — no phantom occurrence, no due date past the end.
+describe("D277 a finite bill plan never runs past its last occurrence", async () => {
+  const { lastSeriesOccurrence, advanceLiabilityDueDate } = await import("../shared/liability-recurrence");
+  it("lastSeriesOccurrence: count, recurrenceEnd, open-ended, one-time", () => {
+    expect(lastSeriesOccurrence({ frequency: "monthly", firstPaymentDate: "2026-09-04", count: 2 })).toBe("2026-10-04");
+    expect(lastSeriesOccurrence({ frequency: "monthly", dueDate: "2026-09-04", recurrenceEnd: "2026-12-31" })).toBe("2026-12-04");
+    expect(lastSeriesOccurrence({ frequency: "monthly", dueDate: "2026-09-04" })).toBeNull();
+    expect(lastSeriesOccurrence({ frequency: "once", dueDate: "2026-09-04", count: 3 })).toBe("2026-09-04");
+    expect(lastSeriesOccurrence({ frequency: "weekly", firstPaymentDate: "2026-09-04", count: 3 })).toBe("2026-09-18");
+  });
+  it("advancing past the last instalment stays on it", () => {
+    const f = { frequency: "monthly", firstPaymentDate: "2026-09-04", dueDate: "2026-10-04", nextDueDate: "2026-10-04", count: 2,
+      occurrences: { "2026-09-04": { status: "paid" }, "2026-10-04": { status: "paid" } } };
+    expect(advanceLiabilityDueDate(f, "2026-10-04")).toBe("2026-10-04");
+    const open = { frequency: "monthly", firstPaymentDate: "2026-09-04", dueDate: "2026-10-04", nextDueDate: "2026-10-04", occurrences: { "2026-10-04": { status: "paid" } } };
+    expect(advanceLiabilityDueDate(open, "2026-10-04")).toBe("2026-11-04");
+  });
+  it("the pay operation refuses an occurrence past the plan's end and the routes answer 409", async () => {
+    const { payBillOccurrence } = await import("../server/liability-payments");
+    let rows: any[] = [];
+    let profile: any = { id: "bill-2", type: "liability", type_key: "utility", name: "Plan", fields: { monthlyAmount: 120, firstPaymentDate: "2026-09-04", dueDate: "2026-10-04", nextDueDate: "2026-10-04", frequency: "monthly", count: 2, occurrences: { "2026-09-04": { status: "paid", paymentId: "p0", amount: 120 } } }, tags: [], notes: "" };
+    const storage: any = {
+      _timezone: "UTC", getProfile: async () => profile, getProfiles: async () => [profile],
+      updateProfile: async (_id: string, patch: any) => { profile = { ...profile, fields: { ...profile.fields, ...(patch?.fields || {}) } }; return profile; },
+      mutateProfileFields: async (_id: string, fn: any) => { const r = fn(profile); profile = { ...profile, fields: { ...profile.fields, ...(r?.fields || {}) } }; return profile; },
+      claimBillOccurrence: async (_id: string, date: string, stamp: any, extra: any) => {
+        const occ = { ...(profile.fields.occurrences || {}) };
+        if (occ[date]?.status === "paid") return { status: "already-paid", occurrences: occ };
+        occ[date] = stamp; profile = { ...profile, fields: { ...profile.fields, ...extra, occurrences: occ } };
+        return { status: "claimed", occurrences: occ };
+      },
+      createLiabilityPayment: async (r: any) => { const row = { id: r.id || `pay-${rows.length + 1}`, ...r }; rows.push(row); return row; },
+      getLiabilityPayments: async () => rows, getLiabilityPayment: async (id: string) => rows.find((r) => r.id === id) || null,
+      updateOccurrenceOverride: async () => {}, getTasks: async () => [], getExpenses: async () => [], createExpense: async (e: any) => e,
+    };
+    const third = await payBillOccurrence(storage, "bill-2", { amount: 120, paymentDate: "2026-11-04", occurrenceDate: "2026-11-04", source: "route" } as any, "UTC");
+    expect(third.ok).toBe(false); expect(third.reason).toBe("ended"); expect(rows.length).toBe(0);
+    const second = await payBillOccurrence(storage, "bill-2", { amount: 120, paymentDate: "2026-10-04", occurrenceDate: "2026-10-04", source: "route" } as any, "UTC");
+    expect(second.ok).toBe(true); expect(rows.length).toBe(1);
+    expect(profile.fields.nextDueDate).toBe("2026-10-04");
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    expect((src.match(/if \(failReason === "ended"\) return res\.status\(409\)/g) || []).length).toBe(1);
+    expect((src.match(/paid\.reason === "ended"\) return res\.status\(409\)/g) || []).length).toBe(1);
+  });
+});

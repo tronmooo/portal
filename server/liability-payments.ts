@@ -14,7 +14,7 @@
 // answering one question. Both callers now land here.
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
-import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey } from "@shared/liability-recurrence";
+import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey, lastSeriesOccurrence } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
 import { deriveScheduleFields, liabilityAmount } from "@shared/liability-schedule";
@@ -410,7 +410,7 @@ export interface PayBillResult {
   deduped?: boolean;
   /** A second payment on an occurrence that was already settled: recorded, series state untouched. */
   additional?: boolean;
-  reason?: "not_found" | "not_liability" | "payment_failed";
+  reason?: "not_found" | "not_liability" | "payment_failed" | "ended";
   payment?: any;
   liability?: any;
   occurrenceDate: string;
@@ -663,6 +663,18 @@ export async function payBillOccurrence(
   const override = (f.occurrences && typeof f.occurrences === "object") ? f.occurrences[occurrenceDate] : null;
   const money = resolveOccurrenceAmount(definitionAmount, override, resolveBillingModel(liability));
   const amount = input.amount != null ? Number(input.amount) : money.current;
+
+  // A finite plan has no occurrence past its last instalment. Paying one
+  // stamped a phantom occurrence, wrote a ledger row and moved the due date
+  // further out (D277). Already-stamped days stay payable (a second payment
+  // on a settled occurrence is handled below).
+  if (recurring && !input.paymentType) {
+    const last = lastSeriesOccurrence(f);
+    const stamped = !!(f.occurrences && typeof f.occurrences === "object" && f.occurrences[occurrenceDate]);
+    if (last && occurrenceDate > last && !stamped) {
+      return { ok: false, reason: "ended", occurrenceDate, amount, recurring, dueDateAdvanced: false, accountAdjusted: false, expenseId: null, steps };
+    }
+  }
 
   const account: any = input.accountId ? await storage.getProfile(input.accountId) : null;
   // An extra-principal payment is not the scheduled one: it moves the balance

@@ -99,6 +99,45 @@ export function advanceLiabilityDueDatePatch(
   return patch;
 }
 
+/**
+ * The last occurrence of a finite series — the count-th one from the anchor,
+ * or the last on or before `recurrenceEnd` — and null for an open-ended bill.
+ * The same anchor and cadence the schedule generator walks, so the calendar,
+ * the due-date advance and the pay operation agree on where a plan stops.
+ * Without this the pay path advanced a two-instalment plan to a third and
+ * fourth due date and stamped occurrences past its end (D277).
+ */
+export function lastSeriesOccurrence(fields: any): string | null {
+  const f = fields || {};
+  const count = parseInt(String(f.count ?? f.totalTerm ?? ""), 10);
+  const end = typeof f.recurrenceEnd === "string" ? f.recurrenceEnd.slice(0, 10) : "";
+  const hasCount = Number.isFinite(count) && count > 0;
+  const hasEnd = /^\d{4}-\d{2}-\d{2}$/.test(end);
+  if (!hasCount && !hasEnd) return null;
+  let anchor = "";
+  for (const v of [f.firstPaymentDate, f.first_payment_date, f.dueDate, f.nextDueDate, f.due_date, f.next_due_date, f.renewalDate]) {
+    const a = String(v ?? "").slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(a)) { anchor = a; break; }
+  }
+  if (!anchor) return null;
+  if (hasEnd && anchor > end) return null;
+  const frequency = f.frequency ?? f.billingFrequency;
+  if (isOneTimeFrequency(frequency)) return anchor;
+  const rule = billRecurrenceRule(frequency);
+  rule.anchorDay = liabilityAnchorDay(f, anchor);
+  let cur = anchor;
+  let last = anchor;
+  for (let idx = 1; idx < 1200; idx++) {
+    if (hasEnd && cur > end) break;
+    if (hasCount && idx > count) break;
+    last = cur;
+    const next = advance(cur, rule);
+    if (next <= cur) break;
+    cur = next;
+  }
+  return last;
+}
+
 /** Read the current next-due date from a liability's fields (YYYY-MM-DD or ""). */
 export function readDueDate(fields: any): string {
   const f = fields || {};
@@ -175,6 +214,11 @@ export function advanceLiabilityDueDate(fields: any, todayISO: string): string {
     next = advance(next, rule);
     guard++;
   }
+  // A finite plan never advances past its last occurrence: the due date
+  // stays on the final instalment (settled, so the bills list reads the plan
+  // as ended) instead of drifting into instalments the plan does not have.
+  const last = lastSeriesOccurrence(fields);
+  if (last && next > last) return last;
   return next;
 }
 
