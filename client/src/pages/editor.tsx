@@ -8,6 +8,7 @@
 // Posts a chat preview card when launched from chat (via ?source=chat).
 
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, type CSSProperties } from "react";
+import { getActiveTimezone } from "@/lib/timezone";
 // Wave 16: Univer-powered Sheets-equivalent editor for newly-created sheets.
 // Lazy-loaded so doc-mode users don't pay the bundle cost.
 const UniverSheet = lazy(() => import("@/components/UniverSheet"));
@@ -608,15 +609,63 @@ export default function EditorPage() {
     },
   });
 
-  // Autosave debounce — only after the user has saved at least once OR is editing
-  // an existing artifact. Avoids creating empty drafts.
+  /* Is there anything here worth keeping? The point of the old `!savedId` bail
+     was to avoid littering the account with empty drafts — a good goal, but it
+     was implemented as "never autosave anything that has not been saved by
+     hand once", which meant a BRAND-NEW document was the one document autosave
+     never protected. Twenty minutes of typing, then a closed tab or an iOS
+     app-switcher eviction, and it was gone: beforeunload does not reliably fire
+     on mobile, and the two in-app "unsaved changes" prompts only cover the two
+     links that ask. Testing the CONTENT instead keeps the empty-draft guarantee
+     and protects the work. */
+  const hasSubstance = useMemo(() => {
+    if (title.trim().length > 0) return true;
+    return type === "doc"
+      ? htmlToPlainText(docHtml).trim().length > 0
+      : Object.keys(sheet.cells).length > 0;
+  }, [title, type, docHtml, sheet]);
+
+  // Autosave debounce. A document that has been saved once keeps autosaving
+  // whatever it becomes (including empty — that is a real edit); a new one
+  // starts autosaving as soon as it holds something.
   useEffect(() => {
     if (!dirty) return;
-    if (!savedId) return; // require explicit first save
+    if (!savedId && !hasSubstance) return; // nothing yet — don't create an empty draft
     const t = setTimeout(() => { saveMut.mutate(); }, 5000);
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dirty, docHtml, sheet, title, savedId]);
+  }, [dirty, docHtml, sheet, title, savedId, hasSubstance]);
+
+  /* …and one more save on the way out. The 5s debounce means the last few
+     seconds of typing are always unsaved, and `pagehide` is the one lifecycle
+     event iOS actually delivers before it freezes or discards a page. A
+     keepalive POST survives the page going away, which a normal fetch does
+     not. */
+  useEffect(() => {
+    const flush = () => {
+      if (!dirty) return;
+      if (!savedId && !hasSubstance) return;
+      try {
+        const body = JSON.stringify(buildPayload());
+        const url = savedId ? `/api/artifacts/${savedId}` : "/api/artifacts";
+        // sendBeacon can't do PATCH and can't carry auth headers, so use fetch
+        // with keepalive — the one form of request a page is allowed to leave
+        // behind. Best-effort by definition: nothing here can await a result.
+        void fetch(url, {
+          method: savedId ? "PATCH" : "POST",
+          keepalive: true,
+          // Authorization is attached by the global fetch interceptor
+          // (lib/auth.tsx) for every /api/ request, so this only has to carry
+          // what the server can't infer.
+          headers: { "Content-Type": "application/json", "X-Timezone": getActiveTimezone() },
+          body,
+        }).catch(() => { /* the draft still sits in the cache for next launch */ });
+      } catch { /* never throw from a lifecycle handler */ }
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirty, savedId, hasSubstance, docHtml, sheet, title, type]);
 
   // Warn on close if dirty.
   useEffect(() => {

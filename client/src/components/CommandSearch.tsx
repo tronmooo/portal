@@ -1,5 +1,7 @@
 import { parseLocalDate } from "@/lib/format";
 import { useState, useEffect, useCallback, useRef } from "react";
+import { subscribeDataChange } from "@/lib/cache-bus";
+import { isTombstoned } from "@/lib/write-sync";
 import { useLocation } from "wouter";
 import {
   Command,
@@ -146,9 +148,17 @@ type SearchCacheEntry = { raw: any[]; ts: number };
 type SearchCache = Map<string, Map<string, SearchCacheEntry>>;
 
 // Group the flat `_type`-tagged array the API returns into SearchResults.
+//
+// Tombstoned rows are dropped on the way through. A delete is not instant on
+// the server's read path — a response already in flight, or one served from a
+// cache an instance has not busted yet, can still list the row — and the
+// tombstone set (lib/write-sync.ts) is how every OTHER list in the app refuses
+// to show it. Search read the same stale rows and had no such filter, so the
+// thing you had just deleted stayed in the results and opened a dead page.
 function groupRaw(raw: any[]): SearchResults {
   const grouped: SearchResults = {};
   for (const item of raw) {
+    if (isTombstoned(item?.id)) continue;
     const t = item._type as string;
     if (t === "profile") (grouped.profiles ??= []).push(item);
     else if (t === "tracker") (grouped.trackers ??= []).push(item);
@@ -256,6 +266,17 @@ export function CommandSearch() {
   const requestIdRef = useRef(0);
   // Authoritative server results, cached per filter signature then query.
   const cacheRef = useRef<SearchCache>(new Map());
+
+  /* The cache above is keyed by term and filter and expires on a 60s clock —
+     and used to expire on NOTHING else. So for up to a minute after a write,
+     search answered from before it: a task you had just created was missing
+     from a term you had searched a moment earlier, and a record you had just
+     deleted was still listed, still clickable, and opened a page for something
+     that no longer existed. Every write now drops it (see cache-bus
+     subscribeDataChange), which is the same rule React Query has always had —
+     freshness in this app is invalidation-driven, and this cache was simply
+     not on the bus. */
+  useEffect(() => subscribeDataChange(() => { cacheRef.current.clear(); }), []);
 
   // Find the longest fresh cached query (within the CURRENT filter) that the
   // current, longer query extends, so we can narrow its result set locally

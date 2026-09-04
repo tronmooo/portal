@@ -422,6 +422,16 @@ export const queryClient = new QueryClient({
     },
     mutations: {
       retry: false,
+      /* Writes WAIT for the network instead of being thrown away by it.
+         Queries keep networkMode "always" (a read that fails offline should
+         fail fast and let cached data stand), but a write is the user's work:
+         with "always" a tap made in a lift or a tunnel hit fetch immediately,
+         failed, showed an error toast, and the expense/task/note was simply
+         gone — nothing retried it, and `refetchOnReconnect` was off so nothing
+         even noticed coming back. "online" pauses the mutation while the
+         browser reports no connection and runs it on reconnect, which is the
+         behavior the offline indicator has always implied. */
+      networkMode: "online",
       onSuccess: () => {
         // PERF (2026-05-24): the previous default invalidated EVERY `/api/*`
         // query after any mutation — a single expense write triggered

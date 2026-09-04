@@ -504,6 +504,9 @@ function invalidateDomainsInternal(domains: Domain[], remote: boolean): Promise<
     if (pred) predicates.push(pred);
   }
   if (prefixes.length === 0 && predicates.length === 0) return Promise.resolve();
+  // Tell the non-React-Query caches too (see bumpDataGeneration). Fires for a
+  // sibling tab's broadcast as well — its write is just as real as ours.
+  bumpDataGeneration();
 
   // React Query's own prefix rule for a non-exact queryKey filter: the query's
   // key starts with every segment of the filter key. All DOMAIN_KEYS entries
@@ -530,6 +533,36 @@ function invalidateDomainsInternal(domains: Domain[], remote: boolean): Promise<
 // Single-domain convenience
 export function invalidateDomain(domain: Domain): Promise<void> {
   return invalidateDomains(domain);
+}
+
+/* ─── "Something changed" ticker ───────────────────────────────────────────
+   React Query is not the only cache in the app. ⌘K search keeps its own
+   60-second result cache, and nothing ever busted it: create a task and search
+   a term you had searched a minute earlier and it was not there; delete
+   something and it was still listed, and opening it landed on a record that no
+   longer existed.
+
+   Any cache outside React Query can subscribe here and drop what it holds when
+   a write lands. Deliberately a counter rather than a domain list: a consumer
+   at this level doesn't model domains, it just needs to know its snapshot is
+   no longer current. */
+let dataGeneration = 0;
+const generationListeners = new Set<() => void>();
+
+export function getDataGeneration(): number {
+  return dataGeneration;
+}
+
+export function subscribeDataChange(fn: () => void): () => void {
+  generationListeners.add(fn);
+  return () => { generationListeners.delete(fn); };
+}
+
+function bumpDataGeneration(): void {
+  dataGeneration++;
+  for (const fn of generationListeners) {
+    try { fn(); } catch { /* one bad listener must not stop the rest */ }
+  }
 }
 
 // ─── Optimistic helpers ─────────────────────────────────────────────
