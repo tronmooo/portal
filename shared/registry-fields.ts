@@ -118,9 +118,29 @@ const NUMERIC_MODEL_KEYS = new Set([
  */
 export function prepareProfileFields<T extends Record<string, any>>(fields: T, ctx?: { typeKey?: string | null; todayISO?: string }): T {
   if (!fields || typeof fields !== "object" || Array.isArray(fields)) return fields;
-  const out: Record<string, any> = canonicalizeRegistryFields(fields, ctx);
+  const out: Record<string, any> = canonicalizeRegistryFields(liftLegacySubscriptionGroup(fields), ctx);
   for (const k of Object.keys(out)) {
     if (NUMERIC_MODEL_KEYS.has(k)) out[k] = coerceRegistryFieldValue("number", out[k]);
   }
+  return out as T;
+}
+
+
+/**
+ * An older subscription form stored its facts under a nested `subscriptions`
+ * group; the bills projection reads the top level. Lift the group's known
+ * keys to the model keys the top level lacks (the group itself is kept for
+ * the profile page's nested renderer). D268, legacy shape.
+ */
+export function liftLegacySubscriptionGroup<T extends Record<string, any>>(fields: T): T {
+  const g = (fields as any)?.subscriptions;
+  if (!g || typeof g !== "object" || Array.isArray(g)) return fields;
+  const out: Record<string, any> = { ...fields };
+  const blank = (v: unknown) => v === undefined || v === null || v === "";
+  if (blank(out.amount) && blank(out.monthlyAmount) && !blank(g.cost)) out.amount = coerceRegistryFieldValue("currency", g.cost);
+  if (blank(out.frequency) && !blank(g.frequency)) out.frequency = g.frequency;
+  if (blank(out.renewalDate) && blank(out.dueDate) && !blank(g.renewalDate)) out.renewalDate = g.renewalDate;
+  if (blank(out.dueDate) && blank(out.renewalDate) && !blank(g.nextBillingDate)) { out.dueDate = g.nextBillingDate; out.nextDueDate = g.nextBillingDate; }
+  for (const k of ["provider", "plan"]) if (blank(out[k]) && !blank(g[k])) out[k] = g[k];
   return out as T;
 }

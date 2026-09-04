@@ -3280,3 +3280,15 @@ describe("D268 keyless subscriptions are bills", async () => {
     expect(fin).toContain('type_key: "subscription",');
   });
 });
+
+// ── D268 (legacy shape): a nested `subscriptions` group is lifted to the model keys.
+describe("D268 legacy subscription bundles are lifted", async () => {
+  const { prepareProfileFields, liftLegacySubscriptionGroup } = await import("../shared/registry-fields");
+  it("cost, frequency, renewalDate, provider and plan move up; the top level wins when set", () => {
+    expect(liftLegacySubscriptionGroup({ subscriptions: { cost: "12.50", frequency: "monthly", renewalDate: "2026-09-07", provider: "Spotify", plan: "Duo" } }))
+      .toMatchObject({ amount: 12.5, frequency: "monthly", renewalDate: "2026-09-07", provider: "Spotify", plan: "Duo" });
+    expect(liftLegacySubscriptionGroup({ amount: 9, subscriptions: { cost: 12.5 } }).amount).toBe(9);
+    expect(prepareProfileFields({ subscriptions: { cost: 12.5, nextBillingDate: "2026-09-07" } }, { typeKey: "subscription", todayISO: "2026-09-04" })).toMatchObject({ amount: 12.5, dueDate: "2026-09-07", nextDueDate: "2026-09-07" });
+    expect(liftLegacySubscriptionGroup({ notes: "x" })).toEqual({ notes: "x" });
+  });
+});
