@@ -1109,6 +1109,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s309 count-bounded task (`recur:daily`, `rcount:3`): projects exactly 3 days; each completion advances one day with `rdone:` climbing, the third ends the series and the timeline projects nothing further.
 - s310 weekly event (`recurrence: "weekly"`): 5 occurrences in 29 days; moving the date re-anchors to 4 with no doubles and keeps the recurrence; deleting removes every projection.
 - s311 profile scoping: Pat's filter shows Pat's task and expense, Quinn's shows neither, Self's shows the unowned task and not Pat's; relinking the task swaps the filters at once and Quinn's detail lists it.
+- s312 timeline dedupe: a person's birthday appears once in the next 30 days and once next year, even beside a manual yearly birthday event for the same day; a weekly event with an end 15 days out projects 3 occurrences and none after.
+- s314 write budget: a burst of 75 task creates yields 201s and 429s only, every 201 one row and every 429 none.
 - s291 cross-user status sweep (B against A's profile, tracker, habit, goal, task, event, journal entry, expense, income, document): GET, PATCH and DELETE all answer 404 and every row of A's is intact.
 - s289 expense ↔ bill payment: an amount edit on the logged expense reprices the payment row, the paid stamp and the account debit (85); after D279 the delete retracts the payment (0 rows, stamp cleared, account 1,000).
 - s290 incomes: create, edit and delete are visible in the list at once with the response cache on; B cannot see or edit A's income; the connected-finance summary carries no manual-income total (its `income` block is review counts), so no figure to compare there.
