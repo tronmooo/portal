@@ -1081,6 +1081,9 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s279 freshness with the response cache on: the payments list, the profile balance and the obligations list are current right after record, amount edit and undo (next due advances, then rolls back).
 - s280 export/import: a settlement row travels with its ledger note and lands on the importer's copy of the card (balance 0); a payment row naming another user's liability id is skipped, and the other user's ledger and balance are untouched.
 - Full suite after D275: 260 files / 4,727 tests green (vitest-full120).
+- s281 schedule mark-paid after the balance fell below the row's principal (extra 3,900 on 4,000, then row 1 at 280/20): the ledger relabels it a payoff for the 100 owed (principal 100, accrued interest 0.50, "Overpaid by $199.50"), the balance clears, undo restores 100 and the schedule row reads unpaid again.
+- Production occurrence stamps (read-only): no paid stamp without a payment row, none pointing at another user's or another liability's payment, no negative current balance.
+- Browser flows27–29 (finance import undo, notification dismissal across tabs, create-profile type picker) green on the D275 build.
 
 ## Session summary — 2026-09-03 (this segment)
 
