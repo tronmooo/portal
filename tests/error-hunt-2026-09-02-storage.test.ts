@@ -1,6 +1,6 @@
 // Regression coverage for the 2026-09-02 error-hunting round — storage layer.
 // One describe per ledger item; each pins the lowest-level shared cause.
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import {
@@ -871,6 +871,10 @@ describe("D103: a settled one-time bill has no next due date; recurrenceEnd ride
 // D108 — un-completing a recurring task left the occurrence its completion
 // had spawned, so the series forked.
 describe("D108: un-completing a recurring task takes back the untouched spawn", () => {
+  // The spawn date is predicted from the user's today; pin the clock so the
+  // "next" occurrence of a task completed on the 2nd is always the 3rd.
+  beforeAll(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-09-03T12:00:00Z")); });
+  afterAll(() => { vi.useRealTimers(); });
   const prevTask = { id: "p1", title: "Water plants", status: "done", dueDate: "2026-09-02", tags: ["recur:daily"], linkedProfiles: [SELF] };
   function retractStorage(cloneRow: any | null) {
     const deleted: string[] = [];
