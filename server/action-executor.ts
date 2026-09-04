@@ -33,7 +33,7 @@ import { storage } from "./storage";
 import { logger } from "./logger";
 import type { ProposedAction } from "@shared/extraction-actions";
 import { canonicalizeProfileFields } from "@shared/profile-field-canon";
-import { mergeFieldWrite, fieldIdentity, fieldValuePersisted } from "@shared/profile-field-identity";
+import { mergeFieldWrite, fieldIdentity, fieldValuePersisted, cleanupStoredProfileFields } from "@shared/profile-field-identity";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { findCompatibleTracker } from "@shared/tracker-identity";
@@ -473,6 +473,19 @@ async function writeFieldsToProfile(action: ProposedAction, documentId: string):
   };
   merged[APPLIED_KEY] = { ...appliedMarks, [action.dedupeKey]: new Date().toISOString() };
 
+  // A grouped write skips the canonicalisation and identity merge the plain
+  // path runs, so one document proposing a fact twice — once against the
+  // record, once against an entity that lands in a namespace — stored it
+  // twice: `dateOfBirth` AND `identity.dateOfBirth`, the same birthday
+  // rendered as two fields (D294). The shared cleanup drops a nested copy only
+  // when a top-level field of the same identity already holds an equal value,
+  // so a genuinely different nested value is untouched.
+  const swept = cleanupStoredProfileFields(merged);
+  if (swept.changed) {
+    logger.info(CAT, `pruned ${swept.removed.length} redundant field(s) on ${profileId}: ${swept.removed.join(", ")}`);
+    merged = swept.fields;
+  }
+
   await storage.updateProfile(profileId, { fields: merged });
 
   // Verify. Claiming a save that did not land is worse than reporting a failure.
@@ -483,8 +496,11 @@ async function writeFieldsToProfile(action: ProposedAction, documentId: string):
   let wrote = 0;
   for (const [k, v] of Object.entries(written)) {
     if (k.startsWith("_")) continue;
+    // A grouped value the sweep above collapsed into an equal top-level field
+    // IS saved — just not under the group — so the top-level check is the
+    // fallback rather than a failure the user is told about.
     const landed = group
-      ? valueLanded((afterFields[group] || {}) as Record<string, any>, k, v)
+      ? (valueLanded((afterFields[group] || {}) as Record<string, any>, k, v) || fieldValuePersisted(afterFields, k, v))
       : fieldValuePersisted(afterFields, k, v);
     if (!landed) { unsaved.push(k); continue; }
     const identity = fieldIdentity(k);

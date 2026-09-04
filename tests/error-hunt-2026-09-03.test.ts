@@ -3961,3 +3961,49 @@ describe("D292 the captures routes validate ownerProfileId against the caller's 
     expect(patch).toContain("if (req.body.ownerProfileId != null && !(await storage.getProfile(String(req.body.ownerProfileId)))) {");
   });
 });
+
+// ── D294: one fact, one field — and internal bookkeeping stays internal.
+describe("D294 a document's grouped write does not duplicate a fact the profile already holds", async () => {
+  const { cleanupStoredProfileFields } = await import("../shared/profile-field-identity");
+  // The exact shape a medical document left on a real person profile.
+  const stored = {
+    identity: { dateOfBirth: "1975-04-12" },
+    allergies: "Fish",
+    _docFields: { doc1: { dateOfBirth: "1975-04-12", "identity.dateOfBirth": "1975-04-12" } },
+    dateOfBirth: "1975-04-12",
+    _extractionActions: { "1bisqtq": "2026-09-04T16:07:47.992Z" },
+  };
+  it("the sweep drops the nested copy and keeps the canonical field and the bookkeeping", () => {
+    const c = cleanupStoredProfileFields(stored as any);
+    expect(c.changed).toBe(true);
+    expect(c.removed).toContain("identity.dateOfBirth");
+    expect(c.fields.dateOfBirth).toBe("1975-04-12");
+    expect(c.fields._extractionActions).toEqual(stored._extractionActions);
+    expect(c.fields._docFields).toEqual(stored._docFields);
+  });
+  it("a nested value that genuinely differs is never dropped", () => {
+    const c = cleanupStoredProfileFields({
+      dateOfBirth: "1975-04-12",
+      identity: { dateOfBirth: "1980-01-01" },
+    } as any);
+    expect((c.fields.identity as any).dateOfBirth).toBe("1980-01-01");
+    expect(c.removed).not.toContain("identity.dateOfBirth");
+  });
+  it("the grouped write path runs the sweep, and its verification accepts a top-level landing", () => {
+    const src = readFileSync(new URL("../server/action-executor.ts", import.meta.url), "utf8");
+    expect(src).toContain("const swept = cleanupStoredProfileFields(merged);");
+    expect(src).toContain("? (valueLanded((afterFields[group] || {}) as Record<string, any>, k, v) || fieldValuePersisted(afterFields, k, v))");
+  });
+  it("every route that serves a profile's fields self-heals, not just the detail one", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    expect((src.match(/selfHealProfileFields\(/g) || []).length).toBeGreaterThanOrEqual(3);
+    const i = src.indexOf('app.get("/api/profile-bootstrap/:id"');
+    const boot = src.slice(i, i + 4000);
+    expect(boot).toContain("selfHealProfileFields(profileId, detail);");
+  });
+  it("the Info page hides internal keys and repeated group entries", () => {
+    const src = readFileSync(new URL("../client/src/pages/profile-info.tsx", import.meta.url), "utf8");
+    expect(src).toContain('if (k.startsWith("_")) continue;');
+    expect(src).toContain("const shownValue = shownByIdentity.get(fieldIdentity(kk));");
+  });
+});

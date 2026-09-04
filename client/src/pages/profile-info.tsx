@@ -37,7 +37,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag, Trash2, Loader2 } from "lucide-react";
-import { deleteProfileFields } from "@shared/profile-field-identity";
+import { deleteProfileFields, fieldIdentity } from "@shared/profile-field-identity";
 import { checkProfileRename, MAX_PROFILE_NAME_LENGTH } from "@shared/profile-rename";
 import { checkProfileDelete, profileDeleteWarning } from "@shared/profile-delete";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
@@ -474,8 +474,21 @@ function SingleProfileInfo({ id }: { id: string }) {
   // Custom scalar fields the user (or chat) added that aren't in the identity
   // whitelist and aren't nested storage groups — surfaced so "+ Add field" AND
   // anything saved from chat via update_profile shows up.
+  // What the cards above already show, keyed by canonical field identity, so a
+  // nested group can tell a repeat from a genuinely different value.
+  const shownByIdentity = new Map<string, string>();
+  for (const r of rows) {
+    if (r.key.startsWith("__")) continue;
+    shownByIdentity.set(fieldIdentity(r.key), r.value);
+  }
   const nestedGroups: Array<{ key: string; entries: Array<[string, any]> }> = [];
   for (const [k, v] of Object.entries(fields)) {
+    // Internal bookkeeping, never a field the user typed or wants to see:
+    // `_extractionActions` (the marker a document write leaves so a re-run
+    // recognises its own work) rendered as a section titled "_extraction
+    // Actions" holding a dedupe key and a timestamp; `_docFields` escaped only
+    // because its values happen to be objects (D294).
+    if (k.startsWith("_")) continue;
     if (shownKeys.has(k.toLowerCase())) continue;
     if (["dateofbirth", "dob"].includes(k.toLowerCase())) continue;
     if (v === undefined || v === null || v === "") continue;
@@ -483,7 +496,15 @@ function SingleProfileInfo({ id }: { id: string }) {
       // Render nested groups (and known group keys) as their own sub-section.
       const entries = Array.isArray(v)
         ? v.map((item, i) => [String(i + 1), typeof item === "object" ? JSON.stringify(item) : item] as [string, any])
-        : Object.entries(v).filter(([, vv]) => vv !== undefined && vv !== null && vv !== "" && typeof vv !== "object");
+        : Object.entries(v).filter(([kk, vv]) => {
+            if (vv === undefined || vv === null || vv === "" || typeof vv === "object") return false;
+            // A nested copy of a fact already on the card above is the same
+            // fact, not a second one: `identity.dateOfBirth` beside the
+            // BIRTHDAY chip read as two birthdays (D294). Values must agree —
+            // a genuinely different nested value still shows.
+            const shownValue = shownByIdentity.get(fieldIdentity(kk));
+            return !(shownValue !== undefined && String(shownValue).trim() === String(vv).trim());
+          });
       if (entries.length > 0) nestedGroups.push({ key: k, entries });
       continue;
     }

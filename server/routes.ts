@@ -4700,12 +4700,28 @@ ${JSON.stringify(ctx, null, 2)}`;
     // read — the response carries the cleaned shape immediately, and the
     // write-back converges storage in the background (only fires when
     // something was actually redundant; differing values are never dropped).
+    selfHealProfileFields(req.params.id, detail);
+    res.json(detail);
+  }));
+
+  /**
+   * SELF-HEALING FIELD CLEANUP, shared by every route that serves a profile's
+   * fields to a screen.
+   *
+   * It used to live only on GET /api/profiles/:id/detail — but the Info tab is
+   * served by /api/profile-bootstrap/:id, so the screen that shows fields was
+   * the one screen the cleanup never reached: a birthday stored both as
+   * `dateOfBirth` and as `identity.dateOfBirth` rendered twice, and storage
+   * never converged because the healing route was rarely hit (D294).
+   */
+  function selfHealProfileFields(profileId: string, detail: any): void {
     try {
-      const originalFields = (detail as any).fields;
+      const originalFields = (detail as any)?.fields;
+      if (!originalFields || typeof originalFields !== "object") return;
       const cleanup = cleanupStoredProfileFields(originalFields);
       if (cleanup.changed) {
         (detail as any).fields = cleanup.fields;
-        log.info(`[profile-cleanup] ${req.params.id} collapsed ${cleanup.removed.length} redundant field(s): ${cleanup.removed.join(", ")}`);
+        log.info(`[profile-cleanup] ${profileId} collapsed ${cleanup.removed.length} redundant field(s): ${cleanup.removed.join(", ")}`);
         // Top-level removals need explicit null markers so the storage merge
         // layer deletes them; rewritten nested groups replace wholesale.
         // Only what the cleanup changed. This write-back rides on a READ,
@@ -4713,17 +4729,26 @@ ${JSON.stringify(ctx, null, 2)}`;
         // read put that edit back the way it was.
         const patch: Record<string, any> = fieldPatchBetween(originalFields, cleanup.fields);
         for (const path of cleanup.removed) {
-          if (!path.includes(".") ) patch[path] = null;
+          if (!path.includes(".")) { patch[path] = null; continue; }
+          // A NESTED removal ("identity.dateOfBirth") was expressed neither way:
+          // the diff carries nothing for a key the cleaned map no longer has,
+          // and the null marker above was skipped for dotted paths — so the
+          // response was clean while storage kept the twin for ever (D294).
+          // Rewrite the group with what survived, or clear it when nothing did.
+          const group = path.slice(0, path.indexOf("."));
+          const cleanedGroup = (cleanup.fields as any)[group];
+          patch[group] = (cleanedGroup && typeof cleanedGroup === "object" && Object.keys(cleanedGroup).length > 0)
+            ? cleanedGroup
+            : null;
         }
-        storage.updateProfile(req.params.id, { fields: patch } as any).catch((e: any) =>
-          console.error(`[profile-cleanup] write-back failed for ${req.params.id}: ${e?.message || e}`)
+        storage.updateProfile(profileId, { fields: patch } as any).catch((e: any) =>
+          console.error(`[profile-cleanup] write-back failed for ${profileId}: ${e?.message || e}`)
         );
       }
     } catch (cleanErr: any) {
       console.error(`[profile-cleanup] skipped: ${cleanErr?.message || cleanErr}`);
     }
-    res.json(detail);
-  }));
+  }
 
   // ---- Profile Tree (depth-first, all descendants) ----
   app.get("/api/profiles/:id/tree", asyncHandler(async (req, res) => {
@@ -4840,6 +4865,11 @@ ${JSON.stringify(ctx, null, 2)}`;
         try { (storage as any).disableRequestMemo?.(); } catch {}
         return null;
       }
+
+      // The Info tab reads THIS route, so the cleanup has to run here too —
+      // before the payload is cached, or the duplicate is served for the life
+      // of the cache entry (D294).
+      selfHealProfileFields(profileId, detail);
 
       // PERF 2026-07-08: type-specific extras so the liability/asset profile
       // pages don't fire 4-5 follow-up serverless invocations after the
