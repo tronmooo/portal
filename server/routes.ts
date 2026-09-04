@@ -7899,7 +7899,9 @@ Rules:
     // tap with the same payload is the duplicate; a different amount (or a
     // named occurrence) seconds later is a second payment and must reach
     // the pay operation.
-    const dedupeKey = `${uid_o3}:${req.params.id}:${amount ?? "due"}:${req.body?.occurrenceDate ?? ""}`;
+    // …and on the payment date: a second request that names another date
+    // seconds later is a distinct payment, not a repeated tap (D270).
+    const dedupeKey = `${uid_o3}:${req.params.id}:${amount ?? "due"}:${req.body?.occurrenceDate ?? ""}:${date ?? ""}`;
     const last = recentPayments.get(dedupeKey);
     if (last && Date.now() - last.at < 8000) {
       const prior = last.payment ?? (last.inflight ? await last.inflight.catch(() => null) : null);

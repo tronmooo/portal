@@ -3369,3 +3369,11 @@ describe("D270 the same-tap fold requires the same payment date", async () => {
     expect(r.deduped).toBe(true);
   });
 });
+
+// ── D270 (route): the bills route's repeated-tap key includes the payment date.
+describe("D270 the bills pay route keys its dedupe on the payment date", () => {
+  it("the key carries user, bill, amount, occurrence and date", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    expect(src).toContain('const dedupeKey = `${uid_o3}:${req.params.id}:${amount ?? "due"}:${req.body?.occurrenceDate ?? ""}:${date ?? ""}`;');
+  });
+});
