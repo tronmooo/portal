@@ -3625,3 +3625,14 @@ describe("D277 a finite bill plan never runs past its last occurrence", async ()
     expect((src.match(/paid\.reason === "ended"\) return res\.status\(409\)/g) || []).length).toBe(1);
   });
 });
+
+// ── D278: an undo or edit forgets the route's remembered payment for that bill.
+describe("D278 the pay route's double-tap memory is cleared by undo and edit", () => {
+  it("every undo/edit route evicts by user+bill prefix; the stale single-key delete is gone", () => {
+    const src = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    expect(src).toContain("const forgetRecentPayments = (uid: string, billId: string) => {");
+    expect(src).toContain("const prefix = `${uid}:${billId}:`;");
+    expect(src).not.toContain("recentPayments.delete(`${uid}:${req.params.id}`);");
+    expect((src.match(/forgetRecentPayments\(/g) || []).length).toBe(4);
+  });
+});

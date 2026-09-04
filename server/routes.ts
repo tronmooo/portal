@@ -7873,6 +7873,14 @@ Rules:
   // Value is the payment the first request recorded, so a deduped retry can
   // answer with the real row instead of a bare acknowledgement.
   const recentPayments = new Map<string, { at: number; payment: any; inflight?: Promise<any> }>();
+  // An undo (or an edit, which re-records) makes the remembered payment
+  // stale: a "pay again" seconds later was answered with the deleted row and
+  // recorded nothing (D278). The unpay route used to evict a key shape the
+  // guard no longer writes, and the ledger routes never evicted at all.
+  const forgetRecentPayments = (uid: string, billId: string) => {
+    const prefix = `${uid}:${billId}:`;
+    for (const k of recentPayments.keys()) if (k.startsWith(prefix)) recentPayments.delete(k);
+  };
   app.post("/api/obligations/:id/pay", asyncHandler(async (req, res) => {
     let { amount, method, confirmationNumber, date, accountId } = req.body;
     if (accountId !== undefined && accountId !== null && typeof accountId !== "string") {
@@ -7986,7 +7994,7 @@ Rules:
       return res.status(404).json({ error: result.reason === "no_payment" ? "No payments to undo" : "Obligation not found" });
     }
     // Also clear the dedupe entry so the user can immediately re-pay.
-    recentPayments.delete(`${uid}:${req.params.id}`);
+    forgetRecentPayments(uid, req.params.id);
     bustCache(`obligations:${uid}`); bustCache(`stats:${uid}`); bustCache(`cashflow:${uid}`); bustCache(`expenses:${uid}`); bustCache(`calendar:${uid}`); bustCache(`notifications:${uid}`);
     res.json({ success: true, deletedPaymentId: result.deletedPaymentId });
   }));
@@ -11179,6 +11187,7 @@ No emojis. No prose outside the JSON.`,
       payment = (await storage.updateLiabilityPayment(payment.id, { documentId: cosmetic.documentId })) ?? payment;
     }
     bustBillCaches(uid);
+    forgetRecentPayments(cacheUserKey(req as AuthenticatedRequest), String(row.liabilityProfileId));
     // The edited payment is a NEW row; callers holding the old id get both.
     res.json({ ...payment, previousPaymentId: row.id });
   }));
@@ -11191,6 +11200,7 @@ No emojis. No prose outside the JSON.`,
       paymentId: req.params.id, source: "route",
     }, getTimezone(req));
     if (!result.ok) return res.status(404).json({ error: "Payment not found" });
+    forgetRecentPayments(cacheUserKey(req as AuthenticatedRequest), String((row as any).liabilityProfileId));
     res.json({ success: true, ...{ deletedPaymentId: result.deletedPaymentId } });
   }));
 
