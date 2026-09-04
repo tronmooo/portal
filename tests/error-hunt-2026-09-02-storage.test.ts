@@ -463,7 +463,8 @@ describe("#11 logEntry dedup", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe("#12 deleted trackers do not leave habits dangling", () => {
   it("SupabaseStorage.deleteTracker nulls habits.linked_tracker_id", async () => {
-    const { client, calls } = chainClient(() => ({ data: [], error: null }));
+    // The delete selects the affected id (D280): a row must come back for "true".
+    const { client, calls } = chainClient((table, op) => table === "trackers" && op === "delete" ? { data: [{ id: "t1" }], error: null } : { data: [], error: null });
     const s = bareStorage({ supabase: client, cleanupEntityLinks: async () => undefined });
     expect(await s.deleteTracker("t1")).toBe(true);
     const unlink = calls.find(c => c.table === "habits" && c.op === "update")!;
