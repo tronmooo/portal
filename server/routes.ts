@@ -462,7 +462,7 @@ import {
   isCalendarDay,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
-import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE, validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
+import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE, toCents, validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
 import { normalizeMonthKey, budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
 import { canonicalizeRegistryFields } from "@shared/registry-fields";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
@@ -6464,7 +6464,7 @@ Rules:
     }
     const m = budgetMonthParam(month, req);
     if (!m) return res.status(400).json({ error: "month must be YYYY-MM" });
-    const budget = await storage.addBudget(m, category.trim(), parsedAmount, notes, profileId || undefined);
+    const budget = await storage.addBudget(m, category.trim(), toCents(parsedAmount), notes, profileId || undefined);
     res.json(budget);
   }));
 
@@ -6480,7 +6480,7 @@ Rules:
           return res.status(400).json({ error: "amount must be a finite non-negative number" });
         }
         if (!isWholeCents(n)) return res.status(400).json({ error: SUB_CENT_AMOUNT_MESSAGE });
-        req.body.amount = n;
+        req.body.amount = toCents(n);
       }
       if (req.body.category !== undefined && (typeof req.body.category !== "string" || !req.body.category.trim())) {
         return res.status(400).json({ error: "category must be a non-empty string" });
@@ -6682,6 +6682,7 @@ Rules:
     {
       const amountError = validateTransactionAmount(req.body.amount);
       if (amountError) return res.status(400).json({ error: amountError });
+      req.body.amount = toCents(req.body.amount);
     }
     if (!req.body.description || typeof req.body.description !== "string" || !req.body.description.trim()) {
       return res.status(400).json({ error: "Description required" });
@@ -6751,6 +6752,7 @@ Rules:
       if (typeof req.body.amount !== "number") return res.status(400).json({ error: "Expense amount must be a positive number" });
       const amountError = validateTransactionAmount(req.body.amount);
       if (amountError) return res.status(400).json({ error: amountError });
+      req.body.amount = toCents(req.body.amount);
     }
     // The same gates the create route runs: an edit could blank the
     // description and store a raw category ("Utility Bill" next to
@@ -10396,7 +10398,7 @@ No emojis. No prose outside the JSON.`,
       const amountError = validateTransactionAmount(amt);
       if (amountError) return res.status(400).json({ error: amountError });
     }
-    req.body.amount = amt;
+    req.body.amount = toCents(amt);
     req.body.description = sanitize(req.body.description);
     if (req.body.frequency !== undefined) {
       const frequencyError = validateIncomeFrequency(req.body.frequency);
@@ -10422,7 +10424,7 @@ No emojis. No prose outside the JSON.`,
       const amt = typeof req.body.amount === "number" ? req.body.amount : Number(req.body.amount);
       const amountError = validateTransactionAmount(amt);
       if (amountError) return res.status(400).json({ error: amountError });
-      req.body.amount = amt;
+      req.body.amount = toCents(amt);
     }
     if (req.body.description !== undefined) {
       if (typeof req.body.description !== "string" || !req.body.description.trim()) {
@@ -11151,7 +11153,7 @@ No emojis. No prose outside the JSON.`,
       const parsedAmount = typeof body.amount === "number" ? body.amount : Number(body.amount);
       const amountError = validateTransactionAmount(parsedAmount);
       if (amountError) return res.status(400).json({ error: amountError });
-      amount = parsedAmount;
+      amount = toCents(parsedAmount);
     }
     const tz = getTimezone(req);
     let paymentDate: string | undefined;

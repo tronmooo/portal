@@ -1,3 +1,4 @@
+import { toCents as centsOf } from "./schema";
 // Registry-driven forms (profile_type_definitions.field_schema) render every
 // numeric field as an <input type="number"> whose change event carries a
 // STRING. The dialog used to save that string as the field value, so a
@@ -117,7 +118,7 @@ const MONEY_MODEL_KEYS = new Set([
 ]);
 // Round half up on the decimal digits the user typed: 555.555 → 555.56 (the
 // binary value sits just below .555, so a plain Math.round went down).
-const toCents = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? Number(`${Math.round(Number(`${n}e2`))}e-2`) : n);
+const toCents = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? centsOf(n) : n);
 
 /**
  * Every door a profile comes through — the routes, a backup restore, the chat

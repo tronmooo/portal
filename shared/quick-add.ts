@@ -59,7 +59,7 @@ export function validateTransactionAmount(
   return null;
 }
 
-export { isWholeCents, SUB_CENT_AMOUNT_MESSAGE } from "./schema";
+export { isWholeCents, SUB_CENT_AMOUNT_MESSAGE, toCents } from "./schema";
 
 function linkedProfiles(ownerProfileId?: string): Record<string, any> {
   return ownerProfileId ? { linkedProfiles: [ownerProfileId] } : {};

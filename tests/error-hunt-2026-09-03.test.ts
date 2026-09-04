@@ -3775,6 +3775,9 @@ describe("D286 sub-cent amounts are refused; money fields on a profile are store
     expect(insertLiabilityPaymentSchema.safeParse({ ...payOk, amount: 100.005 }).success).toBe(false);
     expect(insertLiabilityPaymentSchema.safeParse({ ...payOk, principalPortion: 50.005 }).success).toBe(false);
     expect(insertExpenseSchema.safeParse({ description: "x", amount: 12.34, category: "general", date: "2026-09-03" }).success).toBe(true);
+    // accepted float noise is stored as cents
+    const noisy: any = insertExpenseSchema.safeParse({ description: "x", amount: 0.1 + 0.2, category: "general", date: "2026-09-03" });
+    expect(noisy.success && noisy.data.amount).toBe(0.3);
   });
   it("prepareProfileFields rounds money keys to cents and leaves rates alone", () => {
     const out: any = prepareProfileFields({ balance: 1000.004, monthlyAmount: 33.335, interestRate: 6.125, termMonths: 36 }, { typeKey: "personal_loan", todayISO: "2026-09-03" });

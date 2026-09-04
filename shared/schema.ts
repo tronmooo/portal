@@ -703,6 +703,11 @@ export function isWholeCents(amount: number): boolean {
   if (!Number.isFinite(amount)) return false;
   return Math.abs(amount * 100 - Math.round(amount * 100)) < 1e-6;
 }
+/** The cents an accepted amount is stored as: 0.1 + 0.2 lands as 0.3, 555.555 (if ever let through) as 555.56. */
+export function toCents(amount: number): number {
+  if (!Number.isFinite(amount)) return amount;
+  return Number(`${Math.round(Number(`${amount}e2`))}e-2`);
+}
 
 /** Amount above which a UI should ask "did you really mean this?" before saving. */
 export const LARGE_TRANSACTION_AMOUNT = 1_000_000; // $1 million
@@ -748,7 +753,7 @@ const clockTimeOrEmpty = z.string().refine((v) => v === "" || CLOCK_TIME_RE.test
 
 export const insertObligationSchema = z.object({
   name: z.string().min(1),
-  amount: z.number().nonnegative("Amount must be 0 or positive").max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE).refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE),
+  amount: z.number().nonnegative("Amount must be 0 or positive").max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE).refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).transform(toCents),
   frequency: z.enum(["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"]).default("monthly"),
   category: z.string().default("general"),
   kind: z.enum(["bill","subscription","loan_payment","medication","maintenance","appointment","habit","doc_expiration","task"]).default("bill"),
@@ -1001,7 +1006,7 @@ export interface Expense {
 }
 
 export const insertExpenseSchema = z.object({
-  amount: z.number().positive("Amount must be a positive number").max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE).refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE),
+  amount: z.number().positive("Amount must be a positive number").max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE).refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).transform(toCents),
   category: z.string().default("general"),
   description: z.string().min(1, "Description must be non-empty"),
   vendor: z.string().optional(),
@@ -1073,7 +1078,7 @@ export interface Income {
 
 export const insertIncomeSchema = z.object({
   description: z.string().min(1),
-  amount: z.number().positive().max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE).refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE),
+  amount: z.number().positive().max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE).refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).transform(toCents),
   category: z.string().default("salary"),
   frequency: z.string().default("monthly"),
   // The first pay day (a real calendar day) or blank; free text used to be stored.
@@ -1506,10 +1511,10 @@ export interface OwnershipHistoryEntry {
 export const insertLiabilityPaymentSchema = z.object({
   liabilityProfileId: z.string().uuid(),
   paymentDate: calendarDay,
-  amount: z.number().nonnegative().max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE).refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE),
-  principalPortion: z.number().nonnegative().refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).default(0),
-  interestPortion: z.number().nonnegative().refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).default(0),
-  fees: z.number().nonnegative().refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).default(0),
+  amount: z.number().nonnegative().max(MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE).refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).transform(toCents),
+  principalPortion: z.number().nonnegative().refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).transform(toCents).default(0),
+  interestPortion: z.number().nonnegative().refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).transform(toCents).default(0),
+  fees: z.number().nonnegative().refine(isWholeCents, SUB_CENT_AMOUNT_MESSAGE).transform(toCents).default(0),
   remainingBalanceAfter: z.number().nullable().optional(),
   paymentType: z.enum([
     "standard", "minimum", "custom", "extra_principal",
