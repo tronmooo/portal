@@ -9827,16 +9827,35 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const nameLC = String(input.liabilityName || "").toLowerCase().trim();
       // Match strategy (most specific first): exact name, name-includes-query, query-includes-name (e.g. AI says "Affirm Peloton" but record is "Affirm Peloton Purchase"), lender match, token-overlap.
       const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
-      let liability = liabs.find((p: any) => p.name.toLowerCase() === nameLC)
-        || liabs.find((p: any) => nameLooselyMatches(p.name, nameLC))
-        || liabs.find((p: any) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()))
-        || liabs.find((p: any) => String((p.fields || {}).lender || "").toLowerCase() === nameLC)
-        || liabs.find((p: any) => {
+      // Tier by tier, most specific first. Each tier collects EVERY match, not
+      // the first: two debts sharing a word ("Chase Sapphire", "Chase Freedom")
+      // both match "Chase", and `.find` silently paid whichever sorted first —
+      // the wrong balance, in money, with no question asked (D293). A tier with
+      // one match wins; a tier with several is a question; an empty tier falls
+      // through to the next.
+      const tiers: Array<(p: any) => boolean> = [
+        (p) => p.name.toLowerCase() === nameLC,
+        (p) => nameLooselyMatches(p.name, nameLC),
+        (p) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()),
+        (p) => String((p.fields || {}).lender || "").toLowerCase() === nameLC,
+        (p) => {
           const tokens = nameLC.split(/\s+/).filter((t) => t.length >= 3);
           if (!tokens.length) return false;
           const hay = `${p.name} ${(p.fields || {}).lender || ""}`.toLowerCase();
           return tokens.every((t) => hay.includes(t));
-        });
+        },
+      ];
+      let liability: any = undefined;
+      for (const tier of tiers) {
+        const hits = liabs.filter(tier);
+        if (hits.length === 1) { liability = hits[0]; break; }
+        if (hits.length > 1) {
+          return {
+            error: `Multiple debts match "${input.liabilityName}". Which one? Paying the wrong balance is not something I can undo cleanly, so tell me which and I will record it.`,
+            candidates: hits.slice(0, 5).map((p: any) => ({ id: p.id, name: p.name })),
+          };
+        }
+      }
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
       // WRONG-LOAN GUARD (2026-07, user report): "car loan payment $125" was
       // applied to the mortgage because it was "the only loan", silently
