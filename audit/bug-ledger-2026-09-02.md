@@ -1135,6 +1135,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s332 charge across surfaces: a 12.25 charge on the occurrence makes the list 102.25 on base 90; editing the base to 95 keeps the charge (107.25) on the list, the calendar entry and the dashboard's upcoming bill.
 - Full suite after D284/D285: 260 files / 4,743 tests green (vitest-full128).
 - Browser flows32 (notification bell): an overdue bill appears exactly once in the bell after D285; dismissing it removes it at once and the dismissal survives a reload.
+- s333 briefing-style bare pay (`{}`): dated today in the user's zone, settles the due amount; the dashboard's upcoming list and the bootstrap's obligations move the bill to next month at once.
+- s334 cron auth: the three cron routes answer 401 without the secret (no auth, a user token, a wrong secret) and run with it regardless of spoofed user headers; `/version` is public, `/health` requires auth.
 - s291 cross-user status sweep (B against A's profile, tracker, habit, goal, task, event, journal entry, expense, income, document): GET, PATCH and DELETE all answer 404 and every row of A's is intact.
 - s289 expense ↔ bill payment: an amount edit on the logged expense reprices the payment row, the paid stamp and the account debit (85); after D279 the delete retracts the payment (0 rows, stamp cleared, account 1,000).
 - s290 incomes: create, edit and delete are visible in the list at once with the response cache on; B cannot see or edit A's income; the connected-finance summary carries no manual-income total (its `income` block is review counts), so no figure to compare there.
