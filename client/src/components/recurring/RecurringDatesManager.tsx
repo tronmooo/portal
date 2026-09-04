@@ -53,6 +53,7 @@ import {
 import { useCalendarOccurrences } from "@/hooks/useCalendarOccurrences";
 import { CalendarItemDetail } from "@/components/calendar/CalendarItemDetail";
 import { useLocation } from "wouter";
+import { currencySymbol } from "@/lib/currency";
 
 // Icon + accent per calendar kind. The detail panel uses the same mapping, so
 // a birthday looks identical wherever it appears.
@@ -668,7 +669,7 @@ function OccurrenceRow({ occ, todayISO, profileName, onOpen }: {
         <p className="text-[11px] text-muted-foreground truncate">
           {KIND_LABELS[occ.kind]}
           {owner ? ` · ${owner}` : ""}
-          {occ.amount != null ? ` · $${occ.amount.toFixed(2)}` : ""}
+          {occ.amount != null ? ` · ${currencySymbol()}${occ.amount.toFixed(2)}` : ""}
         </p>
       </div>
       <div className="text-right shrink-0">

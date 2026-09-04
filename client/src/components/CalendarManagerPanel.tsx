@@ -49,6 +49,7 @@ import {
 import { OBLIGATION_KIND_META, type ObligationKind } from "@shared/schema";
 import type { Obligation } from "@shared/schema";
 import { getActiveTimezone } from "@/lib/timezone";
+import { currencySymbol } from "@/lib/currency";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -270,7 +271,7 @@ export function QuickAddSection({ onCreated }: { onCreated: () => void }) {
               <p className="text-muted-foreground">
                 {OBLIGATION_KIND_META[(preview.payload.kind as ObligationKind)].label} ·
                 {" "}{preview.payload.frequency} · starts {preview.payload.nextDueDate}
-                {preview.payload.amount > 0 ? ` · $${preview.payload.amount}` : ""}
+                {preview.payload.amount > 0 ? ` · ${currencySymbol()}${preview.payload.amount}` : ""}
               </p>
             )}
             {preview.kind === "event" && (
@@ -920,7 +921,7 @@ function ManageList({ filter, onClose }: { filter: string; onClose: () => void }
         kind: "obligation",
         id: o.id,
         title: o.name,
-        subtitle: `${OBLIGATION_KIND_META[k].label} · ${o.frequency} · $${Number(o.amount).toFixed(2)}`,
+        subtitle: `${OBLIGATION_KIND_META[k].label} · ${o.frequency} · ${currencySymbol()}${Number(o.amount).toFixed(2)}`,
         due: (o.nextDueDate || "").slice(0, 10),
         tint: OBLIGATION_KIND_META[k].color,
         raw: o,

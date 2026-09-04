@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Sparkles } from "lucide-react";
 import { SmartFillDialog, type SmartFillSource } from "./SmartFillDialog";
 import { useToast } from "@/hooks/use-toast";
+import { MAX_DOCUMENT_BYTES, tooLargeMessage, uploadLimitHint } from "@shared/upload-limits";
 
 interface Props {
   preselectedSources?: SmartFillSource[];
@@ -51,9 +52,8 @@ export function SmartFillTrigger({
       toast({ title: "PDF only", description: "Smart Fill only works with PDF files.", variant: "destructive" });
       return;
     }
-    const MAX = 10 * 1024 * 1024;
-    if (f.size > MAX) {
-      toast({ title: "File too large", description: "Maximum 10 MB.", variant: "destructive" });
+    if (f.size > MAX_DOCUMENT_BYTES) {
+      toast({ title: "File too large", description: tooLargeMessage(f.size, MAX_DOCUMENT_BYTES), variant: "destructive" });
       return;
     }
     const base64 = await fileToBase64(f);
@@ -76,6 +76,9 @@ export function SmartFillTrigger({
         variant={variant}
         className={className}
         onClick={onPick}
+        // The limit, before the file is chosen rather than after it is
+        // rejected — see shared/upload-limits.ts.
+        title={`${label} · PDF, ${uploadLimitHint(MAX_DOCUMENT_BYTES).toLowerCase()}`}
         data-testid={testId}
       >
         <Sparkles className={iconOnly ? "h-4 w-4" : "h-4 w-4 mr-1.5"} />

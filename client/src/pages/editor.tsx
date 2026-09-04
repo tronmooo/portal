@@ -62,6 +62,7 @@ import {
   extractMentionTokens, htmlToPlainText, searchRowToEntity, rankAndDedupe,
   type MentionEntity,
 } from "@/lib/editor-mentions";
+import { getActiveCurrency } from "@/lib/currency";
 
 // ── Misc helpers ──
 
@@ -165,7 +166,7 @@ function formatCellDisplay(raw: unknown, fmt?: SheetCellFormat): string {
   const decimals = typeof fmt.decimals === "number" ? fmt.decimals : 2;
   switch (fmt.numberFormat) {
     case "currency":
-      return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+      return n.toLocaleString("en-US", { style: "currency", currency: getActiveCurrency(), minimumFractionDigits: decimals, maximumFractionDigits: decimals });
     case "percent":
       return (n * 100).toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) + "%";
     case "number":

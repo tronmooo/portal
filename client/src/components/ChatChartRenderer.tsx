@@ -10,6 +10,8 @@ import {
   RadarChart, Radar, PolarGrid, PolarAngleAxis,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Label, LabelList,
 } from "recharts";
+import { APP_LOCALE } from "@/lib/format";
+import { currencySymbol } from "@/lib/currency";
 
 // Chart types (inline — schema was reverted)
 export type ChartType2 = "line"|"bar"|"area"|"pie"|"scatter"|"composed"|"radar";
@@ -26,7 +28,7 @@ export default function ChatChartBody({ spec }: { spec: ChartSpec2 }) {
   const fmtVal = (v:any, name:any):[string,string] => {
     if (v == null) return ["—", name];
     const u = spec.unit;
-    if (u === "$") return [`$${Number(v).toLocaleString(undefined,{maximumFractionDigits:2})}`, name];
+    if (u === "$") return [`${currencySymbol()}${Number(v).toLocaleString(APP_LOCALE,{maximumFractionDigits:2})}`, name];
     return [u ? `${v} ${u}` : String(v), name];
   };
 
@@ -54,7 +56,7 @@ export default function ChatChartBody({ spec }: { spec: ChartSpec2 }) {
           >
             {spec.data.map((e,i)=><Cell key={i} fill={e.fill||CHART_PALETTE[i%CHART_PALETTE.length]}/>)}
           </Pie>
-          <Tooltip contentStyle={tts} formatter={(v:any)=>[typeof v==="number"?`$${Number(v).toFixed(2)}`:v,""]}/>
+          <Tooltip contentStyle={tts} formatter={(v:any)=>[typeof v==="number"?`${currencySymbol()}${Number(v).toFixed(2)}`:v,""]}/>
           {spec.showLegend!==false&&<Legend/>}
         </PieChart>
       );

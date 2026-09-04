@@ -12,7 +12,7 @@ import { withFullLimit } from "@/lib/list-limit";
 import { parseMoney } from "@/lib/utils";
 import { categoryTheme } from "@/lib/category-theme";
 import { MetricCard } from "@/components/ui/metric-card";
-import { formatMoneyRound } from "@/lib/format";
+import { formatMoneyRound, APP_LOCALE } from "@/lib/format";
 import { resolveAssetValue, resolveLiabilityBalance, isNetWorthLiabilityProfile } from "@shared/asset-value";
 import { parseISODate } from "@shared/date-math";
 import { daysUntilISO } from "@shared/date-rules";
@@ -117,6 +117,7 @@ import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { ExecutiveBriefing } from "@/components/dashboard/ExecutiveBriefing";
 import { getActiveTimezone } from "@/lib/timezone";
+import { currencySymbol } from "@/lib/currency";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -154,12 +155,12 @@ function timeAgo(ts: string): string {
 // 2026-08-04, and why the Tasks popup disagreed with the Calendar tab).
 function fmtDate(d: string): string {
   return (parseISODate(d) ?? new Date(d))
-    .toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    .toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" });
 }
 
 function fmtDateWithYear(d: string): string {
   return (parseISODate(d) ?? new Date(d))
-    .toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    .toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function journalStreakLabel(streak: number): string {
@@ -939,7 +940,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
 
         <div className="relative z-10 mt-2">
           <span className="text-4xl font-bold tracking-tight tabular-nums" style={{ color: netWorthNegative ? 'hsl(0 85% 68%)' : 'hsl(155 70% 55%)' }}>
-            {hideAmounts ? "••••••" : `${netWorthNegative ? "-" : ""}$${fmt(animatedNetWorth)}`}
+            {hideAmounts ? "••••••" : `${netWorthNegative ? "-" : ""}${currencySymbol()}${fmt(animatedNetWorth)}`}
           </span>
           {nwTrend && (
             <div className="mt-1 flex items-center gap-1 text-[12px] font-medium" style={{ color: nwTrend.up ? 'hsl(155 70% 55%)' : 'hsl(0 85% 68%)' }}>
@@ -992,7 +993,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
           ) : (
             <>
               <div className="mt-2 text-2xl font-bold tabular-nums" style={{ color: cashFlow >= 0 ? 'hsl(155 65% 50%)' : 'hsl(0 80% 62%)' }}>
-                {hideAmounts ? "••••" : `${cashFlow >= 0 ? '+' : '−'}$${fmt(animatedCashFlow)}`}
+                {hideAmounts ? "••••" : `${cashFlow >= 0 ? '+' : '−'}${currencySymbol()}${fmt(animatedCashFlow)}`}
               </div>
               <div className="mt-0.5 flex items-center gap-2.5 text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full" style={{ background: 'hsl(155 65% 50%)' }} />In {money(monthlyIncome)}</span>
@@ -2562,7 +2563,7 @@ function HealthSection({ data }: { data: any[] }) {
                     style={isNumeric ? { color: statusColor } : undefined}
                     title={!isNumeric ? String(displayVal) : undefined}
                   >
-                    {isNumeric ? Number(displayVal).toLocaleString(undefined, { maximumFractionDigits: 1 }) : displayVal}
+                    {isNumeric ? Number(displayVal).toLocaleString(APP_LOCALE, { maximumFractionDigits: 1 }) : displayVal}
                   </span>
                 }
                 unit={isNumeric && item.unit ? item.unit : undefined}
@@ -2744,7 +2745,7 @@ function ObligationsSection({ data }: { data: any[] }) {
       return { restore };
     },
     onSuccess: (_data, variables) => {
-      toast({ title: `"${variables.name || "Bill"}" marked paid`, description: variables.amount ? `$${variables.amount.toFixed(2)} payment recorded` : undefined });
+      toast({ title: `"${variables.name || "Bill"}" marked paid`, description: variables.amount ? `${currencySymbol()}${variables.amount.toFixed(2)} payment recorded` : undefined });
       setSelectedBill(null);
     },
     onError: (_err, variables, context: any) => {
@@ -3685,7 +3686,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
                 </div>
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>{Math.round(pct)}% used</span>
-                  <span className={over ? "text-red-400 font-medium" : ""}>{over ? `$${(actual - b.amount).toLocaleString()} over` : `$${(b.amount - actual).toLocaleString()} left`}</span>
+                  <span className={over ? "text-red-400 font-medium" : ""}>{over ? `${currencySymbol()}${(actual - b.amount).toLocaleString()} over` : `${currencySymbol()}${(b.amount - actual).toLocaleString()} left`}</span>
                 </div>
               </div>
             );
@@ -3966,11 +3967,11 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
               <p className="text-xs text-muted-foreground">Monthly Budget</p>
             </div>
             <p className={`text-sm font-bold tabular-nums ${budgetData && budgetData.remaining >= 0 ? "text-green-500" : budgetData ? "text-red-500" : ""}`}>
-              {budgetData && budgetData.totalBudget > 0 ? `$${budgetData.totalBudget.toLocaleString()} budgeted` : "Not set"}
+              {budgetData && budgetData.totalBudget > 0 ? `${currencySymbol()}${budgetData.totalBudget.toLocaleString()} budgeted` : "Not set"}
             </p>
             <p className="text-xs-tight text-muted-foreground">
               {budgetData && budgetData.totalBudget > 0
-                ? `$${budgetData.totalSpent.toLocaleString()} spent \u00B7 ${Math.round((budgetData.totalSpent / budgetData.totalBudget) * 100)}% used`
+                ? `${currencySymbol()}${budgetData.totalSpent.toLocaleString()} spent \u00B7 ${Math.round((budgetData.totalSpent / budgetData.totalBudget) * 100)}% used`
                 : "Tap to set up budget"}
             </p>
           </button>
@@ -3997,7 +3998,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
                   </Pie>
                   <Tooltip
                     contentStyle={{background:'hsl(var(--card))',border:'1px solid hsl(var(--border))',borderRadius:'8px',fontSize:'11px'}}
-                    formatter={(v:any, name:any) => [`$${Number(v).toFixed(2)}`, name]}
+                    formatter={(v:any, name:any) => [`${currencySymbol()}${Number(v).toFixed(2)}`, name]}
                   />
                 </PieChart>
               </ResponsiveContainer>
@@ -4043,11 +4044,11 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
         onClose={() => setDrill(null)}
         title="Monthly Spending"
         subtitle={`${now.toLocaleDateString("en-US", { month: "long", year: "numeric" })} • ${monthExpenses.length} expenses`}
-        total={`$${monthExpenses.reduce((s: number, e: any) => s + (e.amount || 0), 0).toLocaleString()}`}
+        total={`${currencySymbol()}${monthExpenses.reduce((s: number, e: any) => s + (e.amount || 0), 0).toLocaleString()}`}
         items={[
           ...Object.entries(byCategory).sort(([,a],[,b]) => b - a).map(([cat, amt]) => ({
             label: cat.charAt(0).toUpperCase() + cat.slice(1),
-            value: `$${amt.toLocaleString()}`,
+            value: `${currencySymbol()}${amt.toLocaleString()}`,
             sub: `${monthExpenses.filter(e => normalizeFilter(e.category || "general") === normalizeFilter(cat)).length} expenses`,
             category: cat,
           })),
@@ -4072,7 +4073,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
         total={`${formatMoneyRound(monthlyIncome)}/mo`}
         items={(incomes || []).slice().sort((a: any, b: any) => new Date(b.date || '').getTime() - new Date(a.date || '').getTime() || (b.description || '').localeCompare(a.description || '')).map((i: any) => ({
           label: i.description,
-          value: `$${i.amount.toLocaleString()}`,
+          value: `${currencySymbol()}${i.amount.toLocaleString()}`,
           sub: i.frequency,
           category: i.category,
         }))}
@@ -4092,10 +4093,10 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
         open={drill === "cashflow"}
         onClose={() => setDrill(null)}
         title="Cash Flow Breakdown"
-        total={`${filteredCashFlow >= 0 ? "+" : "-"}$${Math.abs(filteredCashFlow).toLocaleString()}`}
+        total={`${filteredCashFlow >= 0 ? "+" : "-"}${currencySymbol()}${Math.abs(filteredCashFlow).toLocaleString()}`}
         items={[
           { label: "Total Income", value: `+${formatMoneyRound(monthlyIncome)}`, sub: `${(incomes || []).length} sources`, category: "income" },
-          { label: "Total Spending", value: `-$${filteredSpend.toLocaleString()}`, sub: `${monthExpenses.length} expenses`, category: "expense" },
+          { label: "Total Spending", value: `-${currencySymbol()}${filteredSpend.toLocaleString()}`, sub: `${monthExpenses.length} expenses`, category: "expense" },
           // Round-6 fix (BUG-019): previously summed raw o.amount, but obligations have
           // varying frequencies (weekly, biweekly, quarterly, yearly). A weekly $50 obligation
           // is ~$216/mo, not $50. Summing raw amounts produced the $2,406 → $7,406 → $7,422
@@ -4103,7 +4104,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
           // removed materialized rows of the same recurring series. Match the same
           // frequency-conversion used by the Finance page (finance.tsx:637-647) so the two
           // surfaces agree.
-          { label: "Monthly Bills", value: `-$${Math.round((allObligations || []).reduce((s: number, o: any) => {
+          { label: "Monthly Bills", value: `-${currencySymbol()}${Math.round((allObligations || []).reduce((s: number, o: any) => {
             const amt = Number(o.amount) || 0;
             switch (o.frequency) {
               case "weekly": return s + (amt * 52) / 12;
@@ -4115,7 +4116,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
             }
           }, 0)).toLocaleString()}`, sub: `${(allObligations || []).length} obligations`, category: "obligation" },
           ...Object.entries(byCategory).sort(([,a],[,b]) => b - a).slice(0, 5).map(([cat, amt]) => ({
-            label: `Spending: ${cat}`, value: `-$${amt.toLocaleString()}`, category: cat,
+            label: `Spending: ${cat}`, value: `-${currencySymbol()}${amt.toLocaleString()}`, category: cat,
           })),
         ]}
         obligations={(allObligations || []).map((o: any) => ({
@@ -4167,15 +4168,15 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
             onClose={() => setDrill(null)}
             title="Net Worth Breakdown"
             subtitle="Assets minus liabilities"
-            total={`${filteredNetWorth < 0 ? "-" : ""}$${Math.abs(filteredNetWorth).toLocaleString()}`}
+            total={`${filteredNetWorth < 0 ? "-" : ""}${currencySymbol()}${Math.abs(filteredNetWorth).toLocaleString()}`}
             items={[
               ...assetProfiles.map((p: any) => {
                 const val = resolveAssetValue(p);
-                return { label: p.name, value: `$${val.toLocaleString()}`, sub: p.type, category: "asset" };
+                return { label: p.name, value: `${currencySymbol()}${val.toLocaleString()}`, sub: p.type, category: "asset" };
               }),
               ...liabilityProfiles.map((p: any) => {
                 const val = resolveLiabilityBalance(p);
-                return { label: p.name, value: `-$${val.toLocaleString()}`, sub: `${p.type} loan`, category: "liability" };
+                return { label: p.name, value: `-${currencySymbol()}${val.toLocaleString()}`, sub: `${p.type} loan`, category: "liability" };
               }),
             ]}
             emptyMessage="No assets or liabilities tracked yet. Add a value or loan balance to a profile to see it here."
@@ -5190,7 +5191,7 @@ function CustomizeDialog({
 // (the section grid), scoped to that selection. See the render branch in
 // DashboardPage.
 // ─────────────────────────────────────────────────────────────────────────────
-const fmtUSD0 = (n: number) => `${n < 0 ? "-" : ""}$${Math.round(Math.abs(n)).toLocaleString()}`;
+const fmtUSD0 = (n: number) => `${n < 0 ? "-" : ""}${currencySymbol()}${Math.round(Math.abs(n)).toLocaleString()}`;
 
 // Deterministic accent color per profile so a person reads with the same hue
 // wherever they appear (household cards, avatars). Small fixed HSL palette,

@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { X, BarChart3, FileText, CheckSquare, Calculator, LayoutGrid, ClipboardList, Zap, TrendingUp, TrendingDown, Minus, ChevronRight } from "lucide-react";
 import { BarChart, Bar, LineChart, Line, AreaChart, Area, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { apiRequest } from "@/lib/queryClient";
+import { currencySymbol } from "@/lib/currency";
 
 // Color tokens for charts
 const COLORS = {
@@ -233,7 +234,7 @@ function SummaryReportArtifact({ data }: { data: any }) {
               <div key={j} className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground">{stat.label}</span>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-sm font-semibold">{stat.unit === "currency" ? `$${stat.value.toLocaleString()}` : stat.value}{stat.unit === "percent" ? "%" : ""}</span>
+                  <span className="text-sm font-semibold">{stat.unit === "currency" ? `${currencySymbol()}${stat.value.toLocaleString()}` : stat.value}{stat.unit === "percent" ? "%" : ""}</span>
                   {stat.trend && trendIcon(stat.trend)}
                   {stat.delta_pct != null && <span className="text-xs text-muted-foreground">{stat.delta_pct > 0 ? "+" : ""}{stat.delta_pct}%</span>}
                 </div>

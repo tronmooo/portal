@@ -80,6 +80,8 @@ import { useShowTestData } from "@/lib/showTestData";
 import { extractVitals } from "@/lib/wellness-metrics";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 import { getActiveTimezone } from "@/lib/timezone";
+import { APP_LOCALE } from "@/lib/format";
+import { currencySymbol } from "@/lib/currency";
 
 /** Every drill-down this tab can open, each mapping to ONE canonical component.
  *  `wellness:<kind>` defers to the Wellness tab's own popup set. */
@@ -107,7 +109,7 @@ const CARD_ACCENTS = {
 
 // ── Small formatting helpers ─────────────────────────────────────────────────
 
-const fmtUSD = (n: number) => `$${Math.round(n).toLocaleString()}`;
+const fmtUSD = (n: number) => `${currencySymbol()}${Math.round(n).toLocaleString()}`;
 
 function dateFromDays(du: number): Date {
   const d = new Date();
@@ -1323,7 +1325,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                             <span className="block truncate">{b.name}</span>
                             <span className="block text-[11px] text-muted-foreground">{fmtShortDate(dateFromDays(b.daysUntil))}</span>
                           </span>
-                          <span className="shrink-0 font-bold tabular-nums">${Number(b.amount || 0).toLocaleString(undefined, { minimumFractionDigits: Number(b.amount) % 1 ? 2 : 0 })}</span>
+                          <span className="shrink-0 font-bold tabular-nums">${Number(b.amount || 0).toLocaleString(APP_LOCALE, { minimumFractionDigits: Number(b.amount) % 1 ? 2 : 0 })}</span>
                         </button>
                       ))}
                     </div>

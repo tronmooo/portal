@@ -37,9 +37,10 @@ import {
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { dayLabel } from "@shared/now-rank";
 import type { MoneyBill } from "@/components/finance/MoneyOverview";
+import { currencySymbol } from "@/lib/currency";
 
 const fmt = (n: number) => Math.round(Math.abs(n)).toLocaleString("en-US");
-const signed = (n: number) => `${n < 0 ? "-" : "+"}$${fmt(n)}`;
+const signed = (n: number) => `${n < 0 ? "-" : "+"}${currencySymbol()}${fmt(n)}`;
 
 // Category → icon (same vocabulary as the Budget Progress list).
 const CAT_ICON: Record<string, any> = {
@@ -221,14 +222,14 @@ export function SpendPopup({
   return (
     <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-spend"
       title={`Spend · ${monthLabel}`} icon={Flame} accent={AMBER}>
-      <PopupHero accent={AMBER} value={`$${fmt(spendMtd)}`}
+      <PopupHero accent={AMBER} value={`${currencySymbol()}${fmt(spendMtd)}`}
         caption={spendTrendPct != null ? (
           <span className="font-semibold" style={{ color: spendTrendPct > 0 ? "hsl(0 72% 58%)" : "hsl(155 65% 45%)" }}>
             {spendTrendPct > 0 ? "▲" : "▼"} {Math.abs(Math.round(spendTrendPct))}% vs last month
           </span>
         ) : "spent so far this month"}
         stats={[
-          { label: "Daily avg", value: `$${fmt(dailyAvg)}` },
+          { label: "Daily avg", value: `${currencySymbol()}${fmt(dailyAvg)}` },
           { label: "Purchases", value: String((monthExpenses || []).length) },
           { label: "Busiest day", value: busiest ? `${monthLabel} ${busiest[0]}` : "—" },
         ]} />
@@ -249,7 +250,7 @@ export function SpendPopup({
               const isToday = day === today;
               const future = day > today;
               return (
-                <div key={day} title={amt > 0 ? `$${fmt(amt)} on day ${day}` : `No spend on day ${day}`}
+                <div key={day} title={amt > 0 ? `${currencySymbol()}${fmt(amt)} on day ${day}` : `No spend on day ${day}`}
                   className={`aspect-square rounded-md flex items-center justify-center text-[11px] tabular-nums ${isToday ? "ring-2 ring-offset-1 ring-offset-background" : ""} ${future ? "opacity-35" : ""}`}
                   style={{
                     background: amt > 0 ? `hsl(38 96% 54% / ${0.15 + 0.75 * t})` : "hsl(var(--muted) / 0.5)",
@@ -368,14 +369,14 @@ export function IncomePopup({
   return (
     <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-income"
       title="Income · this month" icon={Sparkles} accent={EMERALD}>
-      <PopupHero accent={EMERALD} value={`$${fmt(monthlyIncome)}`}
+      <PopupHero accent={EMERALD} value={`${currencySymbol()}${fmt(monthlyIncome)}`}
         caption={<>≈ <span className="font-semibold text-foreground">${fmt(monthlyIncome * 12)}</span> / year</>} />
         {/* Stacked source ribbon */}
         {sources.length > 0 && (
           <div className="mt-3">
             <div className="flex h-3 w-full overflow-hidden rounded-full">
               {sources.map((s, i) => (
-                <div key={s.id} title={`${s.label} · $${fmt(s.monthly)}/mo`}
+                <div key={s.id} title={`${s.label} · ${currencySymbol()}${fmt(s.monthly)}/mo`}
                   style={{ width: `${(s.monthly / total) * 100}%`, background: `hsl(${STREAM_COLORS[i % STREAM_COLORS.length]})` }} />
               ))}
             </div>
@@ -395,7 +396,7 @@ export function IncomePopup({
           {[
             ["Sources", String(allRows.length)],
             ["Largest", top ? `${Math.round((top.monthly / total) * 100)}%` : "—"],
-            ["Avg / source", sources.length ? `$${fmt(sourcesTotal / sources.length)}` : "—"],
+            ["Avg / source", sources.length ? `${currencySymbol()}${fmt(sourcesTotal / sources.length)}` : "—"],
           ].map(([l, v]) => (
             <div key={l} className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-2 py-2 text-center">
               <p className="micro-label text-muted-foreground">{l}</p>
@@ -408,8 +409,8 @@ export function IncomePopup({
           <p className="text-[11px] text-muted-foreground px-1" data-testid="income-reconciliation-note">
             {unaccountedIsMaterial && (
               unaccounted > 0
-                ? `Listed sources account for $${fmt(sourcesTotal)} of the $${fmt(monthlyIncome)} above; $${fmt(unaccounted)} comes from income not itemised here.`
-                : `Listed sources add up to $${fmt(sourcesTotal)}, more than the $${fmt(monthlyIncome)} counted for this month.`
+                ? `Listed sources account for ${currencySymbol()}${fmt(sourcesTotal)} of the ${currencySymbol()}${fmt(monthlyIncome)} above; ${currencySymbol()}${fmt(unaccounted)} comes from income not itemised here.`
+                : `Listed sources add up to ${currencySymbol()}${fmt(sourcesTotal)}, more than the ${currencySymbol()}${fmt(monthlyIncome)} counted for this month.`
             )}
             {unaccountedIsMaterial && hiddenCount > 0 ? " " : ""}
             {hiddenCount > 0 && `${hiddenCount} source${hiddenCount === 1 ? "" : "s"} with no amount this month ${hiddenCount === 1 ? "is" : "are"} not charted.`}
@@ -430,7 +431,7 @@ export function IncomePopup({
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold truncate">{s.label}</p>
                       <p className="text-[11px] text-muted-foreground capitalize">
-                        {s.freq}{s.freq !== "monthly" ? ` · $${fmt(s.raw)} each` : ""}
+                        {s.freq}{s.freq !== "monthly" ? ` · ${currencySymbol()}${fmt(s.raw)} each` : ""}
                       </p>
                     </div>
                     <div className="text-right shrink-0">
@@ -754,7 +755,7 @@ export function CashFlowOverviewPopup({
                     tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v))} />
                   <RTooltip
                     contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 10, fontSize: 12 }}
-                    formatter={(v: number, n: string) => [`$${fmt(Number(v))}`, n]} />
+                    formatter={(v: number, n: string) => [`${currencySymbol()}${fmt(Number(v))}`, n]} />
                   <Bar dataKey="inflow" name="In" fill="hsl(155 65% 45% / 0.75)" radius={[3, 3, 0, 0]} maxBarSize={14} />
                   <Bar dataKey="outflow" name="Out" fill="hsl(0 72% 58% / 0.75)" radius={[3, 3, 0, 0]} maxBarSize={14} />
                   <Area dataKey="net" name="Net" type="monotone" stroke="hsl(234 85% 68%)" strokeWidth={2.5} fill="url(#cfov-net-fill)" dot={{ r: 2.5 }} />

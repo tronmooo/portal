@@ -2,7 +2,7 @@ import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField } from "@/lib/field-display";
-import { formatMoney, formatFullDate, parseLocalDate } from "@/lib/format";
+import { formatMoney, formatFullDate, parseLocalDate, APP_LOCALE } from "@/lib/format";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
 // ValueRollupCard / MaintenanceCard below still exist and are still used for
@@ -1407,7 +1407,12 @@ function MaintenanceCard({
   const { data: allEvents } = useQuery<any[]>({
     queryKey: ["/api/events", profile.id, "maint-scope", ...maintScopeIds],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/events?profileIds=${encodeURIComponent(maintScopeIds.join(","))}&limit=500`);
+      // No ?limit=. Both list routes are FULL by default and only page when a
+      // caller asks (paginateFull / the documents pager) — so passing
+      // limit=500 opted this query INTO a cap it did not want, and past 500
+      // rows the extras just stopped existing here with nothing on screen to
+      // say so. This tab computes over the whole set; it must have it.
+      const res = await apiRequest("GET", `/api/events?profileIds=${encodeURIComponent(maintScopeIds.join(","))}`);
       return res.json();
     },
     staleTime: 60000,
@@ -2284,7 +2289,7 @@ const TimelineItem = memo(function TimelineItem({ entry }: { entry: TimelineEntr
           </div>
         )}
         <p className="text-xs text-muted-foreground mt-1">
-          {new Date(entry.timestamp).toLocaleDateString(undefined, {
+          {new Date(entry.timestamp).toLocaleDateString(APP_LOCALE, {
             month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
           })}
         </p>
@@ -3132,7 +3137,7 @@ function formatFieldDisplayValue(fieldKey: string, raw: string): string {
   const isNum = raw.trim() !== "" && isFinite(num) && /\d/.test(raw) && /^[$\s]*-?[\d,]+(\.\d+)?\s*$/.test(raw.trim());
   if (/^(year|vehicleyear|modelyear|caryear|yearbuilt)$/.test(k)) return String(raw);
   if (isNum && /(price|value|premium|deductible|balance|amount|cost|payment|limit|debits|credits|worth|valuation)/.test(k)) {
-    return `$${num.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    return `${currencySymbol()}${num.toLocaleString(APP_LOCALE, { maximumFractionDigits: 2 })}`;
   }
   if (isNum && /(mileage|odometer)/.test(k)) {
     return `${num.toLocaleString()} mi`;
@@ -3544,7 +3549,7 @@ function StaticInfoTab({
           </Card>
           <Card className="p-2.5 text-center">
             <p className="text-base font-bold">
-              {expensesTotal > 0 ? `$${expensesTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "0"}
+              {expensesTotal > 0 ? `${currencySymbol()}${expensesTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "0"}
             </p>
             <p className="text-xs text-muted-foreground flex items-center justify-center gap-0.5">
               <DollarSign className="h-2.5 w-2.5" /> Spent
@@ -3813,7 +3818,7 @@ function StaticInfoTab({
           // Sum only THIS profile's share of each debt.
           return s + (Number.isFinite(v) ? v * liabPct(l) / 100 : 0);
         }, 0);
-        const fmt = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+        const fmt = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: getActiveCurrency(), maximumFractionDigits: 0 });
         return (
           <CollapsibleCardSection
             testId="profile-liabilities-section"
@@ -3884,7 +3889,7 @@ function StaticInfoTab({
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{child.name}</p>
                       <p className="text-xs text-muted-foreground capitalize">
-                        {child.type}{child.fields?.cost ? ` · $${child.fields.cost}` : child.fields?.currentValue ? ` · $${child.fields.currentValue}` : ""}
+                        {child.type}{child.fields?.cost ? ` · ${currencySymbol()}${child.fields.cost}` : child.fields?.currentValue ? ` · ${currencySymbol()}${child.fields.currentValue}` : ""}
                       </p>
                     </div>
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -4058,7 +4063,7 @@ function ProductivityHubTab({
     const t = e.startTime || e.start_time || e.start || e.date;
     if (!t) return "";
     const d = new Date(t);
-    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    return d.toLocaleString(APP_LOCALE, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   };
 
   return (
@@ -4071,7 +4076,7 @@ function ProductivityHubTab({
               <Calendar className={`h-3.5 w-3.5 ${C.today.text}`} />
             </span>
             <p className="micro-label text-muted-foreground">Today</p>
-            <span className="text-[11px] text-muted-foreground/70 ml-auto">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" })}</span>
+            <span className="text-[11px] text-muted-foreground/70 ml-auto">{new Date().toLocaleDateString(APP_LOCALE, { weekday: "long", month: "short", day: "numeric" })}</span>
           </div>
           <div className="grid grid-cols-4 gap-2">
             <div className="text-center py-2 rounded-lg bg-muted/40">
@@ -4379,7 +4384,9 @@ function DocumentsTab({
   // profile's docs. Prefix invalidations on ["/api/documents"] still match.
   const { data: allDocsRaw } = useQuery<any[]>({
     queryKey: ["/api/documents", profileId, "profile-scoped"],
-    queryFn: async () => (await apiRequest("GET", `/api/documents?profileId=${encodeURIComponent(profileId)}&limit=500`)).json(),
+    // No ?limit= — see the events query above: asking for one opts into a cap
+    // the route does not otherwise apply, and silently loses the overflow.
+    queryFn: async () => (await apiRequest("GET", `/api/documents?profileId=${encodeURIComponent(profileId)}`)).json(),
   });
   const documents = useMemo(() => {
     const byId = new Map<string, any>();
@@ -4685,16 +4692,16 @@ function DocumentsTab({
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         <Badge variant="secondary" className="text-xs capitalize">{doc.type}</Badge>
                         <span className="text-xs text-muted-foreground">
-                          {new Date(doc.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                          {new Date(doc.createdAt).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric", year: "numeric" })}
                         </span>
                         {expStatus === "expired" && expDate && (
                           <Badge variant="destructive" className="text-xs gap-0.5">
-                            <AlertCircle className="h-2.5 w-2.5" /> Expired {new Date(expDate as string).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                            <AlertCircle className="h-2.5 w-2.5" /> Expired {new Date(expDate as string).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric", year: "numeric" })}
                           </Badge>
                         )}
                         {expStatus === "soon" && expDate && (
                           <Badge className="text-xs gap-0.5 bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/30">
-                            <AlertCircle className="h-2.5 w-2.5" /> Expires {new Date(expDate as string).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                            <AlertCircle className="h-2.5 w-2.5" /> Expires {new Date(expDate as string).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric", year: "numeric" })}
                           </Badge>
                         )}
                         {doc.extractedData && Object.keys(doc.extractedData).length > 0 && (
@@ -5077,7 +5084,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const amortRows = isLoan ? calculateAmortization(loanPrincipal, loanRate, derivedTerm) : [];
   const totalInterest = amortRows.reduce((s, r) => s + r.interest, 0);
   const payoffDate = amortRows.length > 0
-    ? new Date(now.getFullYear(), now.getMonth() + amortRows.length, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" })
+    ? new Date(now.getFullYear(), now.getMonth() + amortRows.length, 1).toLocaleDateString(APP_LOCALE, { month: "short", year: "numeric" })
     : null;
 
   // Amortization chart — sample every N months so chart is not too dense
@@ -5116,7 +5123,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const monthsSaved = Math.max(0, baseSim.months - extraSim.months);
   const interestSaved = Math.max(0, baseSim.totalInterest - extraSim.totalInterest);
   const newPayoffDate = extraSim.months > 0
-    ? new Date(now.getFullYear(), now.getMonth() + extraSim.months, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" })
+    ? new Date(now.getFullYear(), now.getMonth() + extraSim.months, 1).toLocaleDateString(APP_LOCALE, { month: "short", year: "numeric" })
     : null;
 
   // ── spending by category ───────────────────────────────────────
@@ -5133,7 +5140,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const performanceHistory: any[] = Array.isArray(profile.fields.performanceHistory) ? profile.fields.performanceHistory : [];
   const perfChartData = performanceHistory
     .filter(p => p.date && p.value != null)
-    .map(p => ({ date: (parseLocalDate(p.date) ?? new Date(p.date)).toLocaleDateString(undefined, { month: "short", year: "2-digit" }), value: Number(p.value) }));
+    .map(p => ({ date: (parseLocalDate(p.date) ?? new Date(p.date)).toLocaleDateString(APP_LOCALE, { month: "short", year: "2-digit" }), value: Number(p.value) }));
 
   // ── mutations ──────────────────────────────────────────────────
   const createExpenseMutation = useMutation({
@@ -5148,7 +5155,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     },
     onSuccess: () => {
       const saved = expDesc;
-      toast({ title: `$${Number(expAmount).toFixed(2)} expense added`, description: saved });
+      toast({ title: `${currencySymbol()}${Number(expAmount).toFixed(2)} expense added`, description: saved });
       setShowAddExpense(false);
       setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor("");
       setExpDate(localTodayISO());
@@ -5167,7 +5174,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       });
     },
     onSuccess: () => {
-      toast({ title: `"${expDesc}" expense updated`, description: `$${Number(expAmount).toFixed(2)}` });
+      toast({ title: `"${expDesc}" expense updated`, description: `${currencySymbol()}${Number(expAmount).toFixed(2)}` });
       setEditingExpense(null);
       invalidateDomains("profiles", "expenses");
       onChanged();
@@ -5665,7 +5672,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                     <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} label={{ value: "Month", position: "insideBottom", offset: -2, fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+                    <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `${currencySymbol()}${(v / 1000).toFixed(0)}k`} />
                     <Tooltip
                       contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
                       formatter={(val: number, name: string) => [formatCurrency(val), name === "balance" ? "Remaining Balance" : name === "cumPrincipal" ? "Principal Paid" : "Interest Paid"]}
@@ -5845,7 +5852,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
               <BarChart data={monthlyBarData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                 <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval={monthlyBarData.length > 6 ? 1 : 0} />
-                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={38} tickFormatter={v => `$${v >= 1000 ? (v/1000).toFixed(0)+'k' : v}`} />
+                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={38} tickFormatter={v => `${currencySymbol()}${v >= 1000 ? (v/1000).toFixed(0)+'k' : v}`} />
                 <Tooltip
                   contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
                   formatter={(val: number) => [formatCurrency(val), "Spent"]}
@@ -5870,7 +5877,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
               <LineChart data={perfChartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `${currencySymbol()}${(v / 1000).toFixed(0)}k`} />
                 <Tooltip
                   contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
                   formatter={(val: number) => [formatCurrency(val), "Balance"]}
@@ -6132,7 +6139,7 @@ function TrackerCard_Profile({
     return {
       i,
       val: isNaN(num) ? 0 : num,
-      date: e?.timestamp ? new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "",
+      date: e?.timestamp ? new Date(e.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }) : "",
     };
   }).filter(d => d.val !== 0 || fieldName == null);
 
@@ -6283,7 +6290,7 @@ function TrackerCard_Profile({
                 contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 4 }}
                 labelFormatter={(_, payload) => payload?.[0]?.payload?.date || ""}
                 formatter={(val: number) => [
-                  `${val.toLocaleString(undefined, { maximumFractionDigits: 1 })}${tracker.unit ? " " + tracker.unit : ""}`,
+                  `${val.toLocaleString(APP_LOCALE, { maximumFractionDigits: 1 })}${tracker.unit ? " " + tracker.unit : ""}`,
                   tracker.name,
                 ]}
               />
@@ -6347,7 +6354,7 @@ function TrackerCard_Profile({
                           return <span className="text-muted-foreground italic text-xs">(no value)</span>;
                         }
                         if (isNumeric(primaryVal)) {
-                          const num = Number(primaryVal).toLocaleString(undefined, { maximumFractionDigits: 2 });
+                          const num = Number(primaryVal).toLocaleString(APP_LOCALE, { maximumFractionDigits: 2 });
                           return (
                             <>
                               <span className="font-mono font-semibold text-sm tabular-nums">{num}</span>
@@ -6364,7 +6371,7 @@ function TrackerCard_Profile({
                             {renderPrimary()}
                             {otherFields.map((f: any) => {
                               const v = vals[f.name];
-                              const num = isNumeric(v) ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(v);
+                              const num = isNumeric(v) ? Number(v).toLocaleString(APP_LOCALE, { maximumFractionDigits: 2 }) : String(v);
                               return (
                                 <span key={f.name} className="text-[11px] text-muted-foreground">
                                   <span className="text-muted-foreground/70">{f.name}:</span> {num}{f.unit ? ` ${f.unit}` : ""}
@@ -6386,7 +6393,7 @@ function TrackerCard_Profile({
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0 ml-2">
                     <span className="text-muted-foreground text-xs">
-                      {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      {new Date(entry.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" })}
                     </span>
                     <Button
                       variant="ghost"
@@ -7096,7 +7103,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
       // card / history / chart exactly (no per-page unit logic).
       const unit = resolveTrackerUnit(tracker as any, f.name);
       if (!isNaN(num) && typeof v !== "boolean") {
-        const formatted = num.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        const formatted = num.toLocaleString(APP_LOCALE, { maximumFractionDigits: 2 });
         return unit ? `${formatted} ${unit}` : formatted;
       }
       if (typeof v === "boolean") return v ? "yes" : "no";
@@ -7124,7 +7131,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
       for (const [k, v] of Object.entries(vals)) {
         if (k === "_notes" || v == null || v === "") continue;
         if (fields.some((f: any) => f.name === k)) continue;
-        const s = typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : String(v).trim();
+        const s = typeof v === "number" ? v.toLocaleString(APP_LOCALE, { maximumFractionDigits: 2 }) : String(v).trim();
         if (!s) continue;
         if (s.toLowerCase() === trackerNameLower) continue;
         parts.push(`${k}: ${s}`);
@@ -7366,7 +7373,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                   <div className="flex items-end justify-between">
                     <div className="flex items-baseline gap-1">
                       <span className="text-2xl font-bold tabular-nums leading-none" style={{ color: lineColor }}>
-                        {typeof latest === "number" ? Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 }) : latest}
+                        {typeof latest === "number" ? Number(latest).toLocaleString(APP_LOCALE, { maximumFractionDigits: 1 }) : latest}
                       </span>
                       {tracker.unit && <span className="text-[11px] text-muted-foreground font-medium">{tracker.unit}</span>}
                     </div>
@@ -7458,7 +7465,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                       </div>
                       {latest != null && !isNaN(latest) && (
                         <span className="text-sm font-bold tabular-nums" style={{ color: lineColor }}>
-                          {latest.toLocaleString(undefined, { maximumFractionDigits: 1 })}{t.unit ? <span className="text-[11px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span> : null}
+                          {latest.toLocaleString(APP_LOCALE, { maximumFractionDigits: 1 })}{t.unit ? <span className="text-[11px] text-muted-foreground ml-0.5 font-medium">{t.unit}</span> : null}
                         </span>
                       )}
                     </div>
@@ -7489,7 +7496,7 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
                         <Tooltip
                           contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: `1px solid hsl(${accent.hsl} / 0.4)`, borderRadius: 8, padding: "6px 10px" }}
                           labelStyle={{ color: "hsl(var(--muted-foreground))", fontSize: 10 }}
-                          formatter={(val: number) => [`${val.toLocaleString(undefined, { maximumFractionDigits: 1 })}${t.unit ? " " + t.unit : ""}`, t.name]}
+                          formatter={(val: number) => [`${val.toLocaleString(APP_LOCALE, { maximumFractionDigits: 1 })}${t.unit ? " " + t.unit : ""}`, t.name]}
                         />
                         <Area type="monotone" dataKey="value" stroke={lineColor} fill={`url(#${fillId})`} strokeWidth={2.25} isAnimationActive={false} dot={{ r: 2.5, fill: lineColor, strokeWidth: 0 }} activeDot={{ r: 4, fill: lineColor, stroke: "hsl(var(--card))", strokeWidth: 2 }} />
                       </AreaChart>
@@ -9260,10 +9267,10 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                  <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `${currencySymbol()}${(v/1000).toFixed(0)}k`} />
                   <Tooltip
                     contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }}
-                    formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Balance']}
+                    formatter={(v: any) => [`${currencySymbol()}${Number(v).toLocaleString()}`, 'Balance']}
                   />
                   <Area type="monotone" dataKey="balance" stroke="#3b82f6" fill="url(#lgBal)" strokeWidth={2} name="Balance" />
                 </AreaChart>
@@ -9278,10 +9285,10 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
                 <BarChart data={chartData} margin={{ top: 2, right: 4, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${v}`} />
+                  <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `${currencySymbol()}${v}`} />
                   <Tooltip
                     contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }}
-                    formatter={(v: any, n: string) => [`$${Number(v).toFixed(0)}`, n]}
+                    formatter={(v: any, n: string) => [`${currencySymbol()}${Number(v).toFixed(0)}`, n]}
                   />
                   <Legend wrapperStyle={{ fontSize: '11px' }} />
                   <Bar dataKey="principal" name="Principal" fill="#10b981" stackId="a" radius={[0,0,0,0]} />
@@ -9298,7 +9305,7 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
                     <Pie data={pieData2} cx="50%" cy="50%" innerRadius={30} outerRadius={50} paddingAngle={3} dataKey="value">
                       {pieData2.map((_, i) => <Cell key={i} fill={COLORS2[i % COLORS2.length]} />)}
                     </Pie>
-                    <Tooltip contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }} formatter={(v: any) => `$${Number(v).toLocaleString()}`} />
+                    <Tooltip contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }} formatter={(v: any) => `${currencySymbol()}${Number(v).toLocaleString()}`} />
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="space-y-2">
@@ -9792,7 +9799,7 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
       const res = await apiRequest("POST", `/api/profiles/${profileId}/lookup-value`);
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Lookup failed");
-      toast({ title: `Estimated at $${Number(data.currentValue).toLocaleString()}`, description: data.range ? `Range ${data.range}` : undefined });
+      toast({ title: `Estimated at ${currencySymbol()}${Number(data.currentValue).toLocaleString()}`, description: data.range ? `Range ${data.range}` : undefined });
       invalidateDomains("profiles");
       onChanged();
     } catch (e: any) {
@@ -9913,7 +9920,7 @@ function AppraisalsList({ profileId, fields, onChanged }: { profileId: string; f
         {appraisals.length > 0 ? appraisals.map((a, i) => (
           <div key={i} className="group flex justify-between items-center py-1.5 border-b border-border/30 last:border-0">
             <div className="min-w-0 flex-1">
-              <span className="text-xs font-medium">{a.value ? `$${a.value}` : "—"}</span>
+              <span className="text-xs font-medium">{a.value ? `${currencySymbol()}${a.value}` : "—"}</span>
               {a.source && <span className="text-xs text-muted-foreground ml-2">{a.source}</span>}
             </div>
             <div className="flex items-center gap-2">
@@ -11868,7 +11875,7 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
     return { assetCount: count, assetTotal: total };
   }, [assetRows]);
 
-  const fmt = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+  const fmt = (n: number) => n.toLocaleString("en-US", { style: "currency", currency: getActiveCurrency(), maximumFractionDigits: 0 });
 
   return (
     <>
@@ -12333,6 +12340,8 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
 export { ConnectionsTab, HistoryTab } from "@/components/ProfileSharedTabs";
 import { ConnectionsTab, HistoryTab } from "@/components/ProfileSharedTabs";
 import { getActiveTimezone } from "@/lib/timezone";
+import { currencySymbol, getActiveCurrency } from "@/lib/currency";
+import { MAX_IMAGE_BYTES, tooLargeMessage } from "@shared/upload-limits";
 
 function getTabsForType(type: string, profile?: any): TabDef[] {
   const assetSubtype = type === "asset" && profile?.fields?.assetSubtype ? String(profile.fields.assetSubtype) : null;
@@ -12455,7 +12464,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
       return expense;
     },
     onSuccess: () => {
-      toast({ title: `$${Number(payAmount).toFixed(2)} payment recorded` });
+      toast({ title: `${currencySymbol()}${Number(payAmount).toFixed(2)} payment recorded` });
       setShowAddPayment(false);
       setPayDesc(""); setPayAmount(""); setPayDate(localTodayISO());
       invalidateDomains("profiles", "expenses");
@@ -12693,15 +12702,15 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
         <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Spending Summary</p>
         <div className="grid grid-cols-3 gap-3 text-center">
           <div>
-            <p className="text-sm font-bold tabular-nums">{thisMonthTotal > 0 ? `$${thisMonthTotal.toFixed(2)}` : "—"}</p>
+            <p className="text-sm font-bold tabular-nums">{thisMonthTotal > 0 ? `${currencySymbol()}${thisMonthTotal.toFixed(2)}` : "—"}</p>
             <p className="text-xs text-muted-foreground">This Month</p>
           </div>
           <div>
-            <p className="text-sm font-bold tabular-nums">{thisYearTotal > 0 ? `$${thisYearTotal.toFixed(2)}` : "—"}</p>
+            <p className="text-sm font-bold tabular-nums">{thisYearTotal > 0 ? `${currencySymbol()}${thisYearTotal.toFixed(2)}` : "—"}</p>
             <p className="text-xs text-muted-foreground">This Year</p>
           </div>
           <div>
-            <p className="text-sm font-bold tabular-nums">{lifetimeEstimate > 0 ? `$${Math.round(lifetimeEstimate).toLocaleString()}` : "—"}</p>
+            <p className="text-sm font-bold tabular-nums">{lifetimeEstimate > 0 ? `${currencySymbol()}${Math.round(lifetimeEstimate).toLocaleString()}` : "—"}</p>
             <p className="text-xs text-muted-foreground">Lifetime</p>
           </div>
         </div>
@@ -12714,7 +12723,7 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
           <Target className="h-3.5 w-3.5 text-muted-foreground" />
         </div>
         <p className="text-lg font-bold tabular-nums mt-1" data-testid="text-12mo-projection">
-          {monthlyCost > 0 ? `$${Math.round(projection12).toLocaleString()}` : "—"}
+          {monthlyCost > 0 ? `${currencySymbol()}${Math.round(projection12).toLocaleString()}` : "—"}
         </p>
         {monthlyCost > 0 && (
           <p className="text-xs text-muted-foreground">${monthlyCost.toFixed(2)}/mo × 12 months</p>
@@ -12954,7 +12963,7 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
             <h3 className="text-sm font-semibold">Notes</h3>
             {updatedAt && (
               <span className="text-xs text-muted-foreground">
-                Last edited {new Date(updatedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                Last edited {new Date(updatedAt).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric", year: "numeric" })}
               </span>
             )}
           </div>
@@ -13043,8 +13052,8 @@ export default function ProfileDetailPage() {
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      toast({ title: "Image too large", description: "Please choose an image under 5MB", variant: "destructive" });
+    if (file.size > MAX_IMAGE_BYTES) {
+      toast({ title: "Image too large", description: tooLargeMessage(file.size, MAX_IMAGE_BYTES), variant: "destructive" });
       return;
     }
     const reader = new FileReader();
@@ -13578,7 +13587,7 @@ export default function ProfileDetailPage() {
                               {ownTrackers.map((t: any) => {
                                 const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
                                 const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
-                                const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
+                                const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(APP_LOCALE, { maximumFractionDigits: 1 })) : "—";
                                 return (
                                   <div key={t.id} className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 transition-colors">
                                     <div className="flex-1 min-w-0">
@@ -13608,7 +13617,7 @@ export default function ProfileDetailPage() {
                             {ownTrackers.map((t: any) => {
                               const pf = t.fields?.find((f: any) => f.isPrimary)?.name || t.fields?.[0]?.name || "value";
                               const latest = t.entries?.length > 0 ? t.entries[t.entries.length - 1]?.values?.[pf] : null;
-                              const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(undefined, { maximumFractionDigits: 1 })) : "—";
+                              const displayVal = latest != null ? (isNaN(Number(latest)) ? String(latest) : Number(latest).toLocaleString(APP_LOCALE, { maximumFractionDigits: 1 })) : "—";
                               return (
                                 <div key={t.id} className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/30 transition-colors">
                                   <div className="flex-1 min-w-0">
@@ -13783,7 +13792,7 @@ export default function ProfileDetailPage() {
                         feed.push({ date: (ev as any).date || '', type: 'event', title: (ev as any).title, subtitle: (ev as any).time, color: '#3b82f6' });
                       }
                       for (const e of (profile.relatedExpenses || [])) {
-                        feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `$${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
+                        feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `${currencySymbol()}${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
                       }
                       if (feed.length === 0) {
                         return (
@@ -14070,7 +14079,7 @@ export default function ProfileDetailPage() {
                     const feed: Array<{date: string; type: string; title: string; subtitle?: string; color: string}> = [];
                     
                     for (const e of (profile.relatedExpenses || [])) {
-                      feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `$${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
+                      feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `${currencySymbol()}${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
                     }
                     for (const t of (profile.relatedTasks || [])) {
                       feed.push({ date: (t as any).createdAt || t.dueDate || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });

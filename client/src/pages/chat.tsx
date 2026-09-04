@@ -152,7 +152,7 @@ interface ReportSpec2 { title:string; subtitle?:string; sections:ReportSection2[
 function fmtVal(v:any, fmt?:string): string {
   if (v===null||v===undefined||v==="") return "\u2014";
   switch(fmt) {
-    case "currency": return typeof v==="number"?`$${v.toFixed(2)}`:`$${v}`;
+    case "currency": return typeof v==="number"?`${currencySymbol()}${v.toFixed(2)}`:`${currencySymbol()}${v}`;
     case "percent": return `${v}%`;
     case "date": try { return new Date(v).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); } catch { return String(v); }
     case "number": return typeof v==="number"?v.toLocaleString():String(v);
@@ -1329,6 +1329,8 @@ import { ChatSuggestions, ChatFollowUps } from "@/components/chat/ChatSuggestion
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
 import { scopedKey } from "@shared/query-keys";
 import { getActiveTimezone } from "@/lib/timezone";
+import { currencySymbol } from "@/lib/currency";
+import { MAX_DOCUMENT_BYTES, tooLargeMessage } from "@shared/upload-limits";
 
 // ─────────────────────────────────────────────
 // Confirmation card with inline Edit + Undo
@@ -2086,7 +2088,7 @@ const MessageRow = memo(function MessageRow({
               const entityDetails = isTrackerEntry
                 ? entryValues
                 : action.data?.amount
-                  ? `$${Number(action.data.amount).toFixed(2)}`
+                  ? `${currencySymbol()}${Number(action.data.amount).toFixed(2)}`
                   : '';
               const isArtifact = action.type === 'create_artifact' && action.data && !isUndone;
               // Where tapping the card takes you (null = not linkable).
@@ -2386,7 +2388,7 @@ const MessageRow = memo(function MessageRow({
               if (!result || result.error) return null;
               const name = result.title || result.name || result.description || "";
               const type = result.type || result.category || "";
-              const amount = result.amount != null ? `$${Number(result.amount).toFixed(2)}` : null;
+              const amount = result.amount != null ? `${currencySymbol()}${Number(result.amount).toFixed(2)}` : null;
               // Prefer the server-resolved real owner name (nested-asset
               // aware) over raw ids/inputs for the "→ person" chip.
               const profile = result.owner || result.forProfile || result.linkedProfiles?.[0] || "";
@@ -3206,8 +3208,12 @@ export default function ChatPage() {
     }
 
     for (const file of files) {
-      if (file.size > 10 * 1024 * 1024) {
-        toast({ title: `File "${file.name}" is too large (max 10MB)`, variant: "destructive" });
+      if (file.size > MAX_DOCUMENT_BYTES) {
+        toast({
+          title: `"${file.name}" is too large`,
+          description: tooLargeMessage(file.size, MAX_DOCUMENT_BYTES),
+          variant: "destructive",
+        });
         continue;
       }
 

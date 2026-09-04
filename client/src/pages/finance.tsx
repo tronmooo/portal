@@ -12,7 +12,7 @@ import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { matchesExpenseSearch, sortExpenses, type ExpenseSort } from "@shared/expense-view";
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
-import { formatMoney, formatListDate } from "@/lib/format";
+import { formatMoney, formatListDate, APP_LOCALE } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
@@ -60,6 +60,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import { currencySymbol } from "@/lib/currency";
 
 const categoryColors: Record<string, string> = {
   food: "hsl(var(--chart-1))",
@@ -385,7 +386,7 @@ export default function FinancePage() {
       // and the server reported the expense row AND — when the spend came from
       // an account — the account balance it moved, along with every domain
       // those feed. See lib/write-sync.ts applyWriteManifest.
-      toast({ title: `$${result.amount.toFixed(2)} expense added`, description: result.description });
+      toast({ title: `${currencySymbol()}${result.amount.toFixed(2)} expense added`, description: result.description });
     },
     onError: (err: Error, _v, ctx) => {
       if (ctx?.prev) {
@@ -434,7 +435,7 @@ export default function FinancePage() {
     onSuccess: (_d, vars) => {
       // Cache bus: "incomes" covers paychecks + cashflow + dashboard + stats.
       invalidateDomain("incomes");
-      toast({ title: "Paycheck added", description: `${vars.source} — $${vars.amount.toFixed(2)}` });
+      toast({ title: "Paycheck added", description: `${vars.source} — ${currencySymbol()}${vars.amount.toFixed(2)}` });
     },
     onError: (err: Error, _v, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -482,7 +483,7 @@ export default function FinancePage() {
       invalidateDomain("incomes");
       showUndoToast({
         title: "Paycheck deleted",
-        description: `${pc.source} — $${Number(pc.actual_amount ?? pc.amount ?? 0).toFixed(2)}`,
+        description: `${pc.source} — ${currencySymbol()}${Number(pc.actual_amount ?? pc.amount ?? 0).toFixed(2)}`,
         onUndo: async () => {
           const created = await recreateDeleted<any>({
             url: "/api/paychecks",
@@ -613,7 +614,7 @@ export default function FinancePage() {
     },
     onSuccess: ({ description, amount }) => {
       invalidateDomain("incomes");
-      toast({ title: `Income added`, description: `${description} — $${amount.toFixed(2)}` });
+      toast({ title: `Income added`, description: `${description} — ${currencySymbol()}${amount.toFixed(2)}` });
     },
     onError: (err: Error, _v, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -703,7 +704,7 @@ export default function FinancePage() {
       invalidateDomain("incomes");
       showUndoToast({
         title: "Income deleted",
-        description: `${income.description} — $${Number(income.amount || 0).toFixed(2)}`,
+        description: `${income.description} — ${currencySymbol()}${Number(income.amount || 0).toFixed(2)}`,
         onUndo: () => recreateDeleted({
           url: "/api/incomes",
           body: {
@@ -1160,12 +1161,12 @@ export default function FinancePage() {
         // Financial alerts & insights — derived, honest, each deep-links.
         const alerts: Array<{ id: string; text: string; tone: "pos" | "neg" | "warn"; onClick?: () => void }> = [];
         const overdue = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : []).filter((b: any) => b.status === "overdue");
-        if (overdue.length > 0) alerts.push({ id: "overdue", tone: "neg", text: `You have ${overdue.length} overdue bill${overdue.length > 1 ? "s" : ""} totaling $${overdue.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
+        if (overdue.length > 0) alerts.push({ id: "overdue", tone: "neg", text: `You have ${overdue.length} overdue bill${overdue.length > 1 ? "s" : ""} totaling ${currencySymbol()}${overdue.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
         const breached = budgetRows.filter(b => b.spent > b.limit);
         for (const b of breached.slice(0, 2)) alerts.push({ id: `budget-${b.category}`, tone: "warn", text: `${b.category[0].toUpperCase()}${b.category.slice(1)} spending is over budget (${Math.round((b.spent / b.limit) * 100)}%).`, onClick: () => setFinancePopup("budget") });
         if (savingsRate != null && savingsRate >= 15) alerts.push({ id: "savings", tone: "pos", text: `Great job — you're saving ${savingsRate}% of income this month.` });
         const soonBill = upcomingBillsList.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
-        if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
+        if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling ${currencySymbol()}${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
 
         // Multi-month cash-flow trend (last 6 months) — shared helper so the
         // Cash Flow Overview popup plots the exact same series.
@@ -1267,9 +1268,9 @@ export default function FinancePage() {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
                   <XAxis dataKey="name" tick={{ fontSize: 12 }} className="capitalize" />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v}`} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${currencySymbol()}${v}`} />
                   <Tooltip
-                    formatter={(v: number) => [`$${v.toFixed(2)}`, "Amount"]}
+                    formatter={(v: number) => [`${currencySymbol()}${v.toFixed(2)}`, "Amount"]}
                     contentStyle={{
                       background: "hsl(var(--card))",
                       border: "1px solid hsl(var(--border))",
@@ -1450,7 +1451,7 @@ export default function FinancePage() {
                         <Badge variant="secondary" className="capitalize">{expense.category}</Badge>
                         {expense.vendor && <span className="text-muted-foreground">{expense.vendor}</span>}
                         <span className="text-muted-foreground">
-                          {new Date((expense.date?.slice(0, 10) || "") + "T00:00:00").toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric", year: "numeric" })}
+                          {new Date((expense.date?.slice(0, 10) || "") + "T00:00:00").toLocaleDateString(APP_LOCALE, { weekday: "short", month: "long", day: "numeric", year: "numeric" })}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
@@ -1946,7 +1947,7 @@ export default function FinancePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this income?</AlertDialogTitle>
             <AlertDialogDescription>
-              {incomeToDelete ? `"${incomeToDelete.description}" ($${Number(incomeToDelete.amount || 0).toLocaleString()}) will be permanently deleted.` : "This income will be permanently deleted."}
+              {incomeToDelete ? `"${incomeToDelete.description}" (${currencySymbol()}${Number(incomeToDelete.amount || 0).toLocaleString()}) will be permanently deleted.` : "This income will be permanently deleted."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2033,7 +2034,7 @@ export default function FinancePage() {
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="micro-label text-muted-foreground flex items-center gap-1.5">
-            <BarChart3 className="h-3.5 w-3.5" /> Cash Flow — {new Date(cfMonth + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+            <BarChart3 className="h-3.5 w-3.5" /> Cash Flow — {new Date(cfMonth + '-01').toLocaleDateString(APP_LOCALE, { month: 'long', year: 'numeric' })}
           </h2>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddCashflowOpen(true)} data-testid="button-add-cashflow">
             <Plus className="h-3 w-3 mr-1" /> Add Entry
@@ -2184,7 +2185,7 @@ export default function FinancePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this paycheck?</AlertDialogTitle>
             <AlertDialogDescription>
-              {paycheckToDelete ? `“${paycheckToDelete.source}” ($${Number(paycheckToDelete.actual_amount ?? paycheckToDelete.amount ?? 0).toLocaleString()}) will be permanently deleted.` : "This paycheck will be permanently deleted."}
+              {paycheckToDelete ? `“${paycheckToDelete.source}” (${currencySymbol()}${Number(paycheckToDelete.actual_amount ?? paycheckToDelete.amount ?? 0).toLocaleString()}) will be permanently deleted.` : "This paycheck will be permanently deleted."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2207,7 +2208,7 @@ export default function FinancePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Expense?</AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteConfirmId && (() => { const e = profileFiltered.find(x => x.id === deleteConfirmId); return e ? `"${e.description}" ($${e.amount.toFixed(2)}) will be permanently deleted.` : 'This expense will be permanently deleted.'; })()}
+              {deleteConfirmId && (() => { const e = profileFiltered.find(x => x.id === deleteConfirmId); return e ? `"${e.description}" (${currencySymbol()}${e.amount.toFixed(2)}) will be permanently deleted.` : 'This expense will be permanently deleted.'; })()}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

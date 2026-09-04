@@ -6,6 +6,8 @@ import { apiRequest } from "./queryClient";
 import { queryClient, clearAllClientCaches, resetQueryCacheForUserSwitch } from "./queryClient";
 import { clearChatCache } from "@/lib/chat-cache";
 import { setActiveUserForFilter, clearProfileFilterForUser } from "@/lib/profileFilter";
+import { clearStoredTimezone } from "@/lib/timezone";
+import { clearStoredCurrency } from "@/lib/currency";
 import { warmup } from "@/lib/warmup";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -245,6 +247,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setActiveUserForFilter(user.id);
     } else {
       clearProfileFilterForUser();
+      // Regional settings are the ACCOUNT's, not the machine's, so they must
+      // not survive a sign-out and greet the next person to use this browser
+      // with the previous account's zone and currency.
+      try { clearStoredTimezone(); } catch { /* ignore */ }
+      try { clearStoredCurrency(); } catch { /* ignore */ }
     }
   }, [user?.id]);
 

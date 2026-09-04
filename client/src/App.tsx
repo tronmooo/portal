@@ -40,6 +40,7 @@ import { isHubRoute, isHubLocationForNav } from "@/components/hub/hub-routes";
 
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { ProfileScopeHealer } from "@/components/ProfileScopeHealer";
+import { RegionalPreferences } from "@/components/RegionalPreferences";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { lazy, Suspense, useEffect, useRef, useCallback, useState } from "react";
@@ -938,6 +939,10 @@ function App() {
                   under their current names, on every route — not only the two
                   that happened to call reconcile. Renders nothing. */}
               <ProfileScopeHealer />
+              {/* Applies the account's stored timezone and currency to this
+                  device, so both follow the account rather than the browser.
+                  Renders nothing. */}
+              <RegionalPreferences />
             </CommandSearchProvider>
             </AuthGate>
           </Router>

@@ -39,6 +39,7 @@ import { netWorthView } from "@/lib/net-worth-view";
 import { EmptyState } from "@/components/ui/empty-state";
 import { BubbleModal } from "@/components/ui/bubble-modal";
 import { getActiveTimezone } from "@/lib/timezone";
+import { currencySymbol } from "@/lib/currency";
 
 // P1.2 remediation: the asset/liability value resolvers are imported from
 // @shared/asset-value (the single source of truth) instead of the hand-copied
@@ -334,7 +335,7 @@ export function NetWorthPopup({
       iconColor="hsl(155 60% 44%)"
       title="Net Worth"
       description={`${assets.length} asset${assets.length !== 1 ? "s" : ""} · ${liabilities.length} liabilit${liabilities.length !== 1 ? "ies" : "y"}`}
-      total={`$${fmt(netWorth)}`}
+      total={`${currencySymbol()}${fmt(netWorth)}`}
       testId="popup-net-worth"
     >
       {isLoading ? (
@@ -353,7 +354,7 @@ export function NetWorthPopup({
             {nwTrend && (
               <div className="text-right" title={`Change since the start of the selected period (${nwSeries.length} days of snapshots)`}>
                 <p className="text-[11px] font-semibold tabular-nums" style={{ color: nwTrend.up ? "hsl(155 60% 44%)" : "hsl(0 80% 60%)" }}>
-                  {nwTrend.up ? "▲" : "▼"} {nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : `$${fmt(Math.abs(nwTrend.delta))}`}
+                  {nwTrend.up ? "▲" : "▼"} {nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : `${currencySymbol()}${fmt(Math.abs(nwTrend.delta))}`}
                 </p>
                 <p className="text-[11px] text-muted-foreground">{nwTrend.delta >= 0 ? "+" : "−"}${fmt(Math.abs(nwTrend.delta))} this period</p>
               </div>
@@ -839,7 +840,7 @@ export function BudgetPopup({
       icon={PieChartIcon}
       iconColor={overallPct > 100 ? "hsl(0 72% 52%)" : "hsl(43 85% 52%)"}
       title="Monthly Budget"
-      description={hasBudget ? `$${fmt(totalSpent)} of $${fmt(totalBudget)} spent` : "No budget set for this scope"}
+      description={hasBudget ? `${currencySymbol()}${fmt(totalSpent)} of ${currencySymbol()}${fmt(totalBudget)} spent` : "No budget set for this scope"}
       total={hasBudget ? `${overallPct}%` : ""}
       testId="popup-budget"
     >

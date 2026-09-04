@@ -28,6 +28,29 @@ import {
   Users, Activity, ListTodo, FileText, Sparkles,
 } from "lucide-react";
 import { ChatGPTImportDialog, ChatGPTImportHistory } from "@/components/ChatGPTImportDialog";
+import {
+  getActiveTimezone, setActiveTimezone, getDeviceTimezone, isFollowingDeviceTimezone,
+} from "@/lib/timezone";
+import { getActiveCurrency, setActiveCurrency, currencySymbol, COMMON_CURRENCIES } from "@/lib/currency";
+
+/**
+ * The zones offered in the picker. Deliberately a shortlist of the ones people
+ * actually pick rather than the full IANA database (~600 entries, most of them
+ * aliases), plus "Follow this device", which stays the default.
+ */
+const TIMEZONE_CHOICES = [
+  "Pacific/Honolulu", "America/Anchorage", "America/Los_Angeles", "America/Denver",
+  "America/Phoenix", "America/Chicago", "America/New_York", "America/Toronto",
+  "America/Mexico_City", "America/Bogota", "America/Sao_Paulo", "America/Argentina/Buenos_Aires",
+  "Atlantic/Reykjavik", "Europe/London", "Europe/Dublin", "Europe/Lisbon", "Europe/Madrid",
+  "Europe/Paris", "Europe/Berlin", "Europe/Amsterdam", "Europe/Zurich", "Europe/Rome",
+  "Europe/Stockholm", "Europe/Warsaw", "Europe/Athens", "Europe/Istanbul", "Europe/Moscow",
+  "Africa/Lagos", "Africa/Cairo", "Africa/Nairobi", "Africa/Johannesburg",
+  "Asia/Jerusalem", "Asia/Dubai", "Asia/Karachi", "Asia/Kolkata", "Asia/Dhaka",
+  "Asia/Bangkok", "Asia/Jakarta", "Asia/Singapore", "Asia/Hong_Kong", "Asia/Shanghai",
+  "Asia/Seoul", "Asia/Tokyo", "Australia/Perth", "Australia/Adelaide", "Australia/Brisbane",
+  "Australia/Sydney", "Pacific/Auckland",
+];
 import { FinanceConnectionCard } from "@/components/finance/FinanceConnectionCard";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
@@ -696,6 +719,79 @@ export default function SettingsPage() {
                   Live preview — the whole app updates as you drag.
                 </span>
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ─── Regional ───
+            Two settings the app used to have no answer for. "Today" was
+            whatever the DEVICE said, while the server kept a per-user zone —
+            so travelling made the two disagree about what was due. And every
+            amount was printed with a literal "$", in the four canonical
+            formatters and in ~85 template strings besides, so an account kept
+            in pounds read as dollars with no way to say otherwise. */}
+        <Card data-testid="card-regional">
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <Globe className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-base">Regional</CardTitle>
+            </div>
+            <CardDescription>How dates and amounts are read and shown.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <Label className="text-sm font-medium">Time zone</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Decides what counts as today — for due dates, habits and the month an expense lands in.
+                  {isFollowingDeviceTimezone() && ` Following this device (${getDeviceTimezone()}).`}
+                </p>
+              </div>
+              <Select
+                value={isFollowingDeviceTimezone() ? "__device__" : getActiveTimezone()}
+                onValueChange={(value) => {
+                  const tz = value === "__device__" ? null : value;
+                  setActiveTimezone(tz);
+                  // Persist for the SERVER too: cron jobs have no request to
+                  // read the X-Timezone header from, so this preference is the
+                  // only way a reminder knows a Tokyo user's morning.
+                  void setAiPreference("timezone", tz || getDeviceTimezone());
+                }}
+              >
+                <SelectTrigger className="w-[220px] h-8 text-xs shrink-0" data-testid="select-timezone">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__device__">Follow this device</SelectItem>
+                  {TIMEZONE_CHOICES.map((tz) => (
+                    <SelectItem key={tz} value={tz}>{tz.replace(/_/g, " ")}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <Label className="text-sm font-medium">Currency</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Changes the symbol amounts are shown with. Nothing is converted — amounts stay exactly as you entered them.
+                </p>
+              </div>
+              <Select
+                value={getActiveCurrency()}
+                onValueChange={(value) => { setActiveCurrency(value); void setAiPreference("currency", value); }}
+              >
+                <SelectTrigger className="w-[220px] h-8 text-xs shrink-0" data-testid="select-currency">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {COMMON_CURRENCIES.map((c) => (
+                    <SelectItem key={c.code} value={c.code}>
+                      {currencySymbol(c.code)} · {c.label} ({c.code})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </CardContent>
         </Card>

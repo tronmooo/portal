@@ -42,6 +42,7 @@ import {
   Flame, ListChecks, ListTodo, Pause, Play, Plus, Repeat, SkipForward,
   Sparkles, Tag as TagIcon, Target, Timer, Trash2, X,
 } from "lucide-react";
+import { APP_LOCALE } from "@/lib/format";
 
 // Same short-date formatter the dashboard page uses (kept local — 2 lines).
 //
@@ -53,7 +54,7 @@ import {
 // is what a bare YYYY-MM-DD due date means.
 function fmtDate(d: string): string {
   return new Date(`${String(d ?? "").slice(0, 10)}T00:00:00`)
-    .toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    .toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" });
 }
 // ─── Tasks Popup ──────────────────────────────────────────────────────────────
 

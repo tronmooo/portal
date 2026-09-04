@@ -2,6 +2,24 @@
 // Before this, the dashboard showed "$18000.00", the finance page "$1,368", and
 // cards mixed "6/29/2026" / "Jun 24" / "May 21". One source of truth here.
 
+/**
+ * The locale every date and number in this app is rendered in.
+ *
+ * The helpers below have always pinned "en-US", but ~50 call sites elsewhere
+ * passed `undefined` — which means "whatever this browser is set to". So the
+ * same date read "9/4/2026" on one screen and "04/09/2026" on the next, in the
+ * same session, and a screenshot from one user could not be compared with a
+ * screenshot from another. Pinning is the honest choice while the copy, the
+ * currency and the date ORDER are all written for one locale; when the app
+ * genuinely localises, this constant is the one place that has to learn how.
+ */
+export const APP_LOCALE = "en-US";
+
+// The symbol these formatters put in front of an amount. It was the literal
+// "$" — see lib/currency.ts for why that was a bug and exactly how far this
+// setting goes (it changes the symbol, it does not convert anything).
+import { currencySymbol } from "./currency";
+
 // toLocaleString / toLocaleDateString build a fresh Intl formatter on every
 // call, and that construction — not the formatting — is what costs: a list of
 // 900 expense rows spent ~450ms per render inside these two helpers alone
@@ -38,7 +56,8 @@ export function formatMoney(n: number | null | undefined): string {
   const abs = Math.abs(v);
   const whole = abs % 1 === 0;
   const body = numberFormat(whole ? 0 : 2, 2).format(abs);
-  return `${v < 0 ? "-$" : "$"}${body}`;
+  const sym = currencySymbol();
+  return `${v < 0 ? `-${sym}` : sym}${body}`;
 }
 
 /**
@@ -59,7 +78,8 @@ export function formatMoneyRound(n: number | null | undefined): string {
 export function formatMoneyCents(n: number | null | undefined): string {
   const v = Number(n) || 0;
   const body = numberFormat(2, 2).format(Math.abs(v));
-  return `${v < 0 ? "-$" : "$"}${body}`;
+  const sym = currencySymbol();
+  return `${v < 0 ? `-${sym}` : sym}${body}`;
 }
 
 /**
@@ -73,12 +93,13 @@ export function formatMoneyCents(n: number | null | undefined): string {
  */
 export function formatMoneyCompact(n: number | null | undefined): string {
   const v = Number(n);
-  if (!Number.isFinite(v)) return "$0";
+  const sym = currencySymbol();
+  if (!Number.isFinite(v)) return `${sym}0`;
   const abs = Math.abs(v);
   const sign = v < 0 ? "-" : "";
-  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(2)}M`;
-  if (abs >= 10_000) return `${sign}$${numberFormat(0, 3).format(Math.round(abs))}`;
-  return `${sign}$${numberFormat(0, 2).format(abs)}`;
+  if (abs >= 1_000_000) return `${sign}${sym}${(abs / 1_000_000).toFixed(2)}M`;
+  if (abs >= 10_000) return `${sign}${sym}${numberFormat(0, 3).format(Math.round(abs))}`;
+  return `${sign}${sym}${numberFormat(0, 2).format(abs)}`;
 }
 
 /**

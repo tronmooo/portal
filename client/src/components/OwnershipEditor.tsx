@@ -28,6 +28,7 @@ import {
   roundPct,
   type OwnershipLink,
 } from "@shared/ownership-model";
+import { APP_LOCALE } from "@/lib/format";
 
 interface Row {
   partyProfileId: string;
@@ -320,10 +321,15 @@ export function OwnershipEditor({
   );
 }
 
+// An audit trail, deliberately capped — but a capped list that does not say so
+// reads as the whole history, and "there are only 25 changes on record" is a
+// different statement from "here are the last 25".
+const OWNERSHIP_HISTORY_LIMIT = 25;
+
 function OwnershipHistory({ subjectId, nameFor }: { subjectId: string; nameFor: (id: string) => string }) {
   const { data: history = [], isLoading } = useQuery<any[]>({
     queryKey: ["/api/ownership-history", subjectId],
-    queryFn: () => apiRequest("GET", `/api/ownership-history?subjectId=${subjectId}&limit=25`).then((r) => r.json()),
+    queryFn: () => apiRequest("GET", `/api/ownership-history?subjectId=${subjectId}&limit=${OWNERSHIP_HISTORY_LIMIT}`).then((r) => r.json()),
   });
   if (isLoading) return <p className="text-[11px] text-muted-foreground">Loading history…</p>;
   if (!history.length) return <p className="text-[11px] text-muted-foreground">No ownership changes recorded yet.</p>;
@@ -340,9 +346,14 @@ function OwnershipHistory({ subjectId, nameFor }: { subjectId: string; nameFor: 
       {history.map((h: any) => (
         <li key={h.id} className="text-[11px] text-muted-foreground flex items-baseline justify-between gap-2">
           <span className="text-foreground/80">{describe(h)}</span>
-          <span className="tabular-nums shrink-0">{h.changedAt ? new Date(h.changedAt).toLocaleDateString() : ""}</span>
+          <span className="tabular-nums shrink-0">{h.changedAt ? new Date(h.changedAt).toLocaleDateString(APP_LOCALE) : ""}</span>
         </li>
       ))}
+      {history.length >= OWNERSHIP_HISTORY_LIMIT && (
+        <li className="text-[11px] text-muted-foreground/70 italic pt-0.5" data-testid="ownership-history-truncated">
+          Showing the {OWNERSHIP_HISTORY_LIMIT} most recent changes.
+        </li>
+      )}
     </ul>
   );
 }

@@ -45,6 +45,7 @@ import EditableTitle from "@/components/EditableTitle";
 import { stringifyField, previewUnrenderable } from "@/lib/field-display";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
+import { MAX_IMAGE_BYTES, tooLargeMessage } from "@shared/upload-limits";
 
 // Where an activity row's record actually lives — the page that can edit it.
 // Unknown kinds return null and stay plain text rather than navigating
@@ -424,7 +425,7 @@ function SingleProfileInfo({ id }: { id: string }) {
   const onAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) { toast({ title: "Image too large", description: "Choose an image under 5MB", variant: "destructive" }); return; }
+    if (file.size > MAX_IMAGE_BYTES) { toast({ title: "Image too large", description: tooLargeMessage(file.size, MAX_IMAGE_BYTES), variant: "destructive" }); return; }
     const reader = new FileReader();
     reader.onloadend = () => {
       const result = reader.result as string;

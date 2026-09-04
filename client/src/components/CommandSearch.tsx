@@ -215,6 +215,7 @@ interface CommandSearchContextValue {
 }
 
 import { createContext, useContext } from "react";
+import { currencySymbol } from "@/lib/currency";
 
 export const CommandSearchContext = createContext<CommandSearchContextValue>({
   open: false,
@@ -418,7 +419,7 @@ export function CommandSearch() {
   const taskSubtitle = (t: Task) =>
     t.priority ? `Priority: ${t.priority}${t.completed ? " · Done" : ""}` : t.completed ? "Completed" : "Task";
   const expenseSubtitle = (e: Expense) =>
-    e.amount != null ? `$${e.amount}${e.category ? ` · ${e.category}` : ""}` : e.category ?? "Expense";
+    e.amount != null ? `${currencySymbol()}${e.amount}${e.category ? ` · ${e.category}` : ""}` : e.category ?? "Expense";
   const eventSubtitle = (e: CalendarEvent) => {
     const when = e.startDate || e.date;
     return when ? (parseLocalDate(when)?.toLocaleDateString() ?? when) : e.category ?? "Event";
@@ -430,7 +431,7 @@ export function CommandSearch() {
   const journalSubtitle = (j: JournalEntry) =>
     j.date ? (parseLocalDate(j.date)?.toLocaleDateString() ?? j.date) : j.mood ?? "Journal Entry";
   const obligationSubtitle = (o: Obligation) =>
-    o.amount != null ? `$${o.amount}${o.category ? ` · ${o.category}` : ""}` : o.category ?? "Obligation";
+    o.amount != null ? `${currencySymbol()}${o.amount}${o.category ? ` · ${o.category}` : ""}` : o.category ?? "Obligation";
   const artifactSubtitle = (a: Artifact) => a.type ?? "Artifact";
 
   // ── Determine if any results exist ────────────────────────────────────────

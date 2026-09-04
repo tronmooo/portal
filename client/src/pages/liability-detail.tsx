@@ -61,7 +61,7 @@ import { Pill } from "@/components/dashboard/visuals";
 import { MetricCard } from "@/components/ui/metric-card";
 import type { LucideIcon } from "lucide-react";
 import { profileVisual } from "@/lib/profile-visuals";
-import { formatFullDate, formatListDate, parseLocalDate } from "@/lib/format";
+import { formatFullDate, formatListDate, parseLocalDate, APP_LOCALE } from "@/lib/format";
 import { dayLabel } from "@shared/now-rank";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -116,6 +116,8 @@ import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liabili
 import { liabilityBillStatus, BILL_STATUS_META } from "@shared/liability-status";
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
 import { getActiveTimezone } from "@/lib/timezone";
+import { getActiveCurrency } from "@/lib/currency";
+import { MAX_IMAGE_BYTES, tooLargeMessage } from "@shared/upload-limits";
 
 interface LiabilityProfileLike {
   id: string;
@@ -160,7 +162,7 @@ const SUBTYPE_LABELS: Record<string, string> = {
 
 const fmtUSD = (n: number) =>
   Number.isFinite(n)
-    ? n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 })
+    ? n.toLocaleString("en-US", { style: "currency", currency: getActiveCurrency(), maximumFractionDigits: 2 })
     : "$0.00";
 
 // Smart formatter: shows decimals only when needed (e.g. $325,000.50 keeps cents, $325,000 stays clean).
@@ -169,7 +171,7 @@ const fmtUSDShort = (n: number) => {
   const hasCents = Math.round(n * 100) !== Math.round(n) * 100;
   return n.toLocaleString("en-US", {
     style: "currency",
-    currency: "USD",
+    currency: getActiveCurrency(),
     minimumFractionDigits: hasCents ? 2 : 0,
     maximumFractionDigits: hasCents ? 2 : 0,
   });
@@ -445,8 +447,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      toast({ title: "Image too large", description: "Please choose an image under 2MB", variant: "destructive" });
+    if (file.size > MAX_IMAGE_BYTES) {
+      toast({ title: "Image too large", description: tooLargeMessage(file.size, MAX_IMAGE_BYTES), variant: "destructive" });
       return;
     }
     const reader = new FileReader();
@@ -3528,7 +3530,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
           <p className="text-xs text-muted-foreground mt-0.5">{entry.description}</p>
         )}
         <p className="text-xs text-muted-foreground mt-1">
-          {new Date(entry.timestamp).toLocaleDateString(undefined, {
+          {new Date(entry.timestamp).toLocaleDateString(APP_LOCALE, {
             month: "short",
             day: "numeric",
             hour: "2-digit",

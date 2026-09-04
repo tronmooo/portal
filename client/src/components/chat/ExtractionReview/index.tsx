@@ -33,6 +33,7 @@ import { ProposedActions } from "./ProposedActions";
 import { ActionGroupSection } from "./ActionGroupSection";
 import { AddActionDialog } from "./AddActionDialog";
 import { getActiveTimezone } from "@/lib/timezone";
+import { currencySymbol } from "@/lib/currency";
 
 
 // ── Extraction Confirmation UI (two-phase extraction) ───────────────────────
@@ -896,7 +897,7 @@ export function ExtractionConfirmation({
               <label className="flex items-center gap-2 cursor-pointer">
                 <Checkbox checked={createExpense} onCheckedChange={() => setCreateExpense(!createExpense)} className="h-3.5 w-3.5" />
                 <span className={`text-xs ${createExpense ? 'text-foreground' : 'text-muted-foreground line-through'}`}>
-                  Create expense{!createExpense && expenseDraft ? `: $${expenseDraft.amount} — ${expenseDraft.description}` : ""}
+                  Create expense{!createExpense && expenseDraft ? `: ${currencySymbol()}${expenseDraft.amount} — ${expenseDraft.description}` : ""}
                 </span>
               </label>
               {/* Every part of the proposal is editable — amount, description,

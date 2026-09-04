@@ -14,7 +14,7 @@ import {
   billingModelMeta, CHARGE_KINDS,
   type BillingModel, type OccurrenceCharge,
 } from "@shared/liability-billing";
-import { formatFullDate, formatMoneyCents, parseLocalDate } from "@/lib/format";
+import { formatFullDate, formatMoneyCents, parseLocalDate, APP_LOCALE } from "@/lib/format";
 
 type OccStatus = BillStatus | "skipped";
 interface Occ {
@@ -480,7 +480,7 @@ function MiniMonthCalendar({
     const d = new Date(y, m - 1 + delta, 1);
     setYm(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   };
-  const monthLabel = new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const monthLabel = new Date(y, m - 1, 1).toLocaleDateString(APP_LOCALE, { month: "long", year: "numeric" });
 
   return (
     <div className="mt-3 rounded-lg border p-3" data-testid="bill-mini-calendar">

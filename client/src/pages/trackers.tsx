@@ -49,7 +49,7 @@ import { EntityCard } from "@/components/ui/entity-card";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { Medallion, Pill as StatusPill, toneForDays } from "@/components/dashboard/visuals";
 import { dayLabel } from "@shared/now-rank";
-import { formatMoneyCents } from "@/lib/format";
+import { formatMoneyCents, APP_LOCALE } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -266,6 +266,7 @@ export function getCategoryAccent(category: string): string {
 // strip can classify trackers without pulling this page chunk. Only the
 // icon/accent presentation metadata (CANONICAL_GROUPS below) stays here.
 import { getCanonicalGroup, computeHealthScore } from "@/lib/tracker-health";
+import { currencySymbol } from "@/lib/currency";
 
 // Canonical group definitions with icons and accents
 const CANONICAL_GROUPS: Record<string, {
@@ -606,7 +607,7 @@ function StandardDetailChart({
   goalValue?: number;
 }) {
   const chartData = entries.map((e) => ({
-    date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    date: new Date(e.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }),
     value: typeof e.values[primaryField] === "number" ? (e.values[primaryField] as number) : null,
   }));
 
@@ -637,7 +638,7 @@ function StandardDetailChart({
   // Without this the axis terminates at the last entry date and the user is
   // shown a stale-looking range (e.g. "Apr 29 → May 5" when today is May 20).
   (() => {
-    const todayLabel = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const todayLabel = new Date().toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" });
     if (chartData.length === 0 || chartData[chartData.length - 1].date !== todayLabel) {
       chartData.push({ date: todayLabel, value: null });
     }
@@ -707,7 +708,7 @@ function WeightDetailChart({
   unit?: string;
 }) {
   const chartData = entries.map((e) => ({
-    date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    date: new Date(e.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }),
     weight: typeof e.values[primaryField] === "number" ? (e.values[primaryField] as number) : null,
     bmi: e.computed?.bmi ?? null,
   }));
@@ -715,7 +716,7 @@ function WeightDetailChart({
   // even when the most recent entry is days/weeks old. Without this the axis
   // terminates at the last entry date and the trend looks stale.
   (() => {
-    const todayLabel = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const todayLabel = new Date().toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" });
     if (chartData.length === 0 || chartData[chartData.length - 1].date !== todayLabel) {
       chartData.push({ date: todayLabel, weight: null, bmi: null });
     }
@@ -775,7 +776,7 @@ function BloodPressureDetailChart({ entries }: { entries: TrackerEntry[] }) {
     // Try to find numeric fields automatically if named fields not found
     const numericVals = Object.values(e.values).filter((v) => typeof v === "number") as number[];
     return {
-      date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      date: new Date(e.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }),
       systolic: systolic !== null ? Number(systolic) : numericVals[0] ?? null,
       diastolic: diastolic !== null ? Number(diastolic) : numericVals[1] ?? null,
       category: e.computed?.bloodPressureCategory ?? null,
@@ -818,7 +819,7 @@ function SleepDetailChart({ entries, primaryField }: { entries: TrackerEntry[]; 
     const hours = typeof rawVal === "number" ? rawVal : null;
     const quality = e.computed?.sleepQuality ?? null;
     return {
-      date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      date: new Date(e.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }),
       hours,
       qualityScore: quality === "excellent" ? 4 : quality === "good" ? 3 : quality === "fair" ? 2 : quality === "poor" ? 1 : null,
       quality,
@@ -876,7 +877,7 @@ function RunningDetailChart({ entries, primaryField }: { entries: TrackerEntry[]
     const dist = e.computed?.distanceMiles ?? null;
     if (dist !== null) cumulativeDistance += dist;
     return {
-      date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      date: new Date(e.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }),
       pace: e.computed?.paceSeconds ?? null,
       distance: dist,
       cumulativeDistance: dist !== null ? parseFloat(cumulativeDistance.toFixed(2)) : null,
@@ -2016,7 +2017,7 @@ function pickStr(values: Record<string, any> | undefined, ...keys: string[]): st
 function fmtNum(n: number, max = 1): string {
   if (n >= 1000) return Math.round(n).toLocaleString();
   if (Math.abs(n - Math.round(n)) < 0.05) return Math.round(n).toLocaleString();
-  return n.toLocaleString(undefined, { maximumFractionDigits: max });
+  return n.toLocaleString(APP_LOCALE, { maximumFractionDigits: max });
 }
 
 function isSameDay(a: Date, b: Date) {
@@ -3386,7 +3387,7 @@ function EntryRow({
         )}
         <ComputedBadges computed={entry.computed} />
         <span className="text-muted-foreground text-xs">
-          {new Date(entry.timestamp).toLocaleDateString(undefined, {
+          {new Date(entry.timestamp).toLocaleDateString(APP_LOCALE, {
             month: "short",
             day: "numeric",
             hour: "2-digit",
@@ -4184,7 +4185,7 @@ function movingAverage(entries: TrackerEntry[], field: string, window = 7): { da
     const windowNums = windowEntries.map(e => typeof e.values[field] === "number" ? e.values[field] as number : NaN).filter(n => !isNaN(n));
     const ma = windowNums.length >= Math.min(3, window) ? windowNums.reduce((a, b) => a + b, 0) / windowNums.length : null;
     result.push({
-      date: new Date(sorted[i].timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      date: new Date(sorted[i].timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }),
       value: val,
       ma,
     });
@@ -4229,7 +4230,7 @@ function computeDynamicKpis(
   const unit = pres.unit || "";
   const fmt = (n: number) => {
     const r = Math.round(n * 100) / 100;
-    return unit === "$" ? `$${r.toLocaleString()}` : `${r.toLocaleString()}`;
+    return unit === "$" ? `${currencySymbol()}${r.toLocaleString()}` : `${r.toLocaleString()}`;
   };
   const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   const nums = sorted.map(e => Number(e.values?.[primaryField])).filter(v => !isNaN(v) && isFinite(v));
@@ -4306,7 +4307,7 @@ function AdditiveDailyBars({ entries, primaryField, unit, goalValue }: { entries
   }
   const data = [...byDay.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([k, v]) => ({ date: new Date(k + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }), value: Math.round(v * 100) / 100 }));
+    .map(([k, v]) => ({ date: new Date(k + "T12:00:00").toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }), value: Math.round(v * 100) / 100 }));
   if (data.length === 0) {
     return (
       <div className="h-[200px] flex flex-col items-center justify-center text-center rounded-lg border border-dashed border-border/60 bg-muted/20">
@@ -4576,7 +4577,7 @@ function BreakdownTabContent({ tracker }: { tracker: Tracker }) {
 
     // Daily calorie chart
     const dailyCals = entries.reduce((acc: Record<string, number>, e) => {
-      const d = new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      const d = new Date(e.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" });
       acc[d] = (acc[d] || 0) + (typeof e.values.calories === "number" ? e.values.calories : 0);
       return acc;
     }, {});
@@ -4665,7 +4666,7 @@ function BreakdownTabContent({ tracker }: { tracker: Tracker }) {
     // Sys vs Dia comparison
     const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     const bpLineData = sorted.slice(-20).map(e => ({
-      date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      date: new Date(e.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }),
       systolic: typeof e.values.systolic === "number" ? e.values.systolic : null,
       diastolic: typeof e.values.diastolic === "number" ? e.values.diastolic : null,
     }));
@@ -4743,7 +4744,7 @@ function BreakdownTabContent({ tracker }: { tracker: Tracker }) {
   if (spec === "running" || cat === "fitness") {
     const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     const runData = sorted.slice(-20).map(e => ({
-      date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      date: new Date(e.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" }),
       distance: typeof e.values.distance === "number" ? e.values.distance : null,
       caloriesBurned: typeof e.values.caloriesBurned === "number" ? e.values.caloriesBurned : (e.computed?.caloriesBurned || null),
     }));
@@ -4926,7 +4927,7 @@ function HistoryEntryRow({
       <div className="flex items-center gap-1.5 shrink-0">
         <div className="text-right">
           <span className="text-xs text-muted-foreground tabular-nums block">
-            {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+            {new Date(entry.timestamp).toLocaleDateString(APP_LOCALE, { month: "short", day: "numeric" })}
           </span>
           <span className="text-xs-tight text-muted-foreground/70 tabular-nums block">
             {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
@@ -6535,7 +6536,7 @@ export default function TrackersPage() {
               ? accountKindMeta(accountKindOf(p)).label
               : p.type.charAt(0).toUpperCase() + p.type.slice(1);
             const owner = resolveOwnerFromProfile(p);
-            rows.push({ id: p.id, kind: "asset", name: p.name, subtitle: sub, meta: cv != null ? `$${cv.toLocaleString()}` : "—", href: `/profiles/${p.id}`, ownerIds: owner ? [owner] : [] });
+            rows.push({ id: p.id, kind: "asset", name: p.name, subtitle: sub, meta: cv != null ? `${currencySymbol()}${cv.toLocaleString()}` : "—", href: `/profiles/${p.id}`, ownerIds: owner ? [owner] : [] });
           });
         }
         // Liabilities — includes loans/mortgages/credit cards AND subscriptions.
@@ -6556,8 +6557,8 @@ export default function TrackersPage() {
             const freq = (f.frequency || "monthly").toString();
             const sub = liabilitySubcategoryOf(p);
             const meta = bal != null && bal > 0
-              ? `$${Math.round(bal).toLocaleString()}`
-              : (cost != null && cost > 0 ? `$${Math.round(cost).toLocaleString()}/${freq.startsWith('y') ? 'yr' : freq.startsWith('w') ? 'wk' : 'mo'}` : "—");
+              ? `${currencySymbol()}${Math.round(bal).toLocaleString()}`
+              : (cost != null && cost > 0 ? `${currencySymbol()}${Math.round(cost).toLocaleString()}/${freq.startsWith('y') ? 'yr' : freq.startsWith('w') ? 'wk' : 'mo'}` : "—");
             const owner = resolveOwnerFromProfile(p);
             rows.push({ id: p.id, kind: "liability", name: p.name, subtitle: sub, meta, href: `/profiles/${p.id}`, ownerIds: owner ? [owner] : [] });
           });
@@ -7014,7 +7015,7 @@ export default function TrackersPage() {
                         accent={accentHsl}
                         icon={Icon}
                         title={child.name}
-                        value={displayValue != null ? `$${displayValue.toLocaleString()}` : undefined}
+                        value={displayValue != null ? `${currencySymbol()}${displayValue.toLocaleString()}` : undefined}
                         valueUnit={valueLabel ?? undefined}
                         emptyValue="Tap to add value"
                         meta={metaLines}
@@ -7407,7 +7408,7 @@ export default function TrackersPage() {
                         const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
                         const docMeta = [
                           { label: "Format", value: mimeShort },
-                          { label: "Added", value: createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) },
+                          { label: "Added", value: createdDate.toLocaleDateString(APP_LOCALE, { month: 'short', day: 'numeric', year: 'numeric' }) },
                           ...(linkedNames.length > 0 ? [{ label: "Owner", value: linkedNames.join(', ') }] : []),
                         ];
                         return (
