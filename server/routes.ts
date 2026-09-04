@@ -4740,6 +4740,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     // O(N²). For a corpus of 1000 profiles this drops the rollup-tree-fetch
     // from ~4M comparisons to ~1000.
     const childIndex = new Map<string, typeof allProfiles>();
+    const profileById = new Map(allProfiles.map((p) => [p.id, p]));
     for (const p of allProfiles) {
       if (p.deletedAt) continue;
       const k = p.parentProfileId || "__root__";
@@ -4766,7 +4767,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     const MAX_DEPTH = 50;
 
     function buildTree(profileId: string, visited: Set<string>, depth: number): TreeNode {
-      const p = allProfiles.find(x => x.id === profileId)!;
+      const p = profileById.get(profileId)!;
       const node: TreeNode = {
         id: p.id,
         name: p.name,
@@ -4844,8 +4845,9 @@ ${JSON.stringify(ctx, null, 2)}`;
       // bootstrap lands. Party enrichment reuses the already-fetched
       // allProfiles list — zero extra round-trips for it.
       const profileType = String((detail as any).type || "");
+      const profileById = new Map(allProfiles.map((p) => [p.id, p]));
       const enrichParties = (rows: any[]) => (rows || []).map((r: any) => {
-        const p = allProfiles.find(x => x.id === r.partyProfileId);
+        const p = profileById.get(r.partyProfileId);
         return { ...r, party: p ? { id: p.id, name: p.name, type: p.type } : null };
       });
 
@@ -4897,7 +4899,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
       const MAX_DEPTH = 50;
       function buildTree(pid: string, visited: Set<string>, depth: number): any {
-        const p = allProfiles.find(x => x.id === pid);
+        const p = profileById.get(pid);
         if (!p) return null;
         const node: any = {
           id: p.id, name: p.name, type: p.type, fields: p.fields,
@@ -11632,4 +11634,3 @@ No emojis. No prose outside the JSON.`,
 
   return httpServer;
 }
-

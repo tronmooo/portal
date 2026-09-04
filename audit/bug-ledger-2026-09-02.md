@@ -1318,3 +1318,9 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - Browser flows on the D270 build: flows15 7/7, flows21 4/4, flows24 5/5, flows27 5/5, flows28 3/3, flows29 4/4.
 - Final replica batch on the D270 build: s231 2/2, s232 3/3, s233 3/3, s234 4/4, s239 4/4, s243 2/2, s260 3/3, s264 2/2, s268 3/3, s270 2/2; s266 3 passed, 1 failed once its balance check reads the pipeline's spelling. s271 (undo of two dated same-amount payments): 3 passed, 0 failed.
 - s266 corrected (4 passed, 0 failed): the probe had expected the whole 320 to hit principal; the pipeline takes 35 of interest first (7% on 6,000), so 5,715 is right.
+
+### Application-wide interaction latency (BUG-20260903-scoped-history-fanout)
+
+- Before: every authenticated startup queued 12 route imports together and then fetched a second broad "Everyone" dashboard bootstrap after the active scope. Scoped tracker and habit reads also downloaded the user's complete entry/check-in history before discarding unrelated rows in application code.
+- After: route chunks preload one at a time during idle time and navigation intent preloads the exact destination; startup performs only the active bootstrap; tracker entries and habit check-ins are filtered by the fetched parent IDs in Postgres. Profile tree construction also uses a profile ID map instead of repeated linear scans.
+- Regression coverage: `tracker-read-no-write.test.ts` and `scoped-child-query.test.ts` require the child-history queries to carry their parent-ID filters while preserving read-path purity.

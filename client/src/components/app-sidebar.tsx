@@ -13,6 +13,10 @@ import {
 import { MessageSquare, LayoutDashboard, Archive, Settings, Calendar, Circle } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { isHubLocationForNav } from "@/components/hub/hub-routes";
+import {
+  preloadNavigationChunk,
+  prefetchNavigationData,
+} from "@/lib/navigation-prefetch";
 
 // Hub consolidation (2026-07): the Linked tab merged into the Dashboard hub —
 // its content lives on the hub's Trackers/Assets/Liabilities/Documents chips.
@@ -74,6 +78,9 @@ export function AppSidebar() {
                     <SidebarMenuButton
                       data-testid={`nav-${item.label.toLowerCase()}`}
                       onClick={() => { navigate(item.href); }}
+                      onPointerEnter={() => preloadNavigationChunk(item.href)}
+                      onFocus={() => preloadNavigationChunk(item.href)}
+                      onPointerDown={() => prefetchNavigationData(item.href)}
                       aria-current={isActive ? "page" : undefined}
                       style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
                       className="flex items-center gap-2.5 w-full px-2 py-2 rounded-lg relative cursor-pointer pressable"
@@ -109,6 +116,8 @@ export function AppSidebar() {
               <SidebarMenuItem>
                 <SidebarMenuButton asChild data-testid="nav-settings">
                   <button onClick={() => { navigate('/settings'); }}
+                    onPointerEnter={() => preloadNavigationChunk('/settings')}
+                    onFocus={() => preloadNavigationChunk('/settings')}
                     style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'manipulation' }}
                     className="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-muted/60 w-full text-left">
                     <div className="w-7 h-7 rounded-lg bg-muted/50 flex items-center justify-center">

@@ -2925,11 +2925,25 @@ export class SupabaseStorage implements IStorage {
       .is("deleted_at", null)
       .order("created_at", { ascending: false });
     trackersQuery = this._applyProfileFilter(trackersQuery, await this.pushdownIds(profileIds));
-    const [trackersResult, entriesResult] = await Promise.all([
-      trackersQuery,
-      this.supabase.from("tracker_entries").select("*").eq("user_id", this.userId).gte("timestamp", cutoff).is("deleted_at", null).order("timestamp", { ascending: true }),
-    ]);
+    const trackersResult = await trackersQuery;
     if (trackersResult.error) throw trackersResult.error;
+    const trackerRows = trackersResult.data || [];
+    if (trackerRows.length === 0) return [];
+
+    // Fetch child history only for the parents in this scope. The old parallel
+    // query loaded every tracker entry for the user and discarded unrelated
+    // rows in memory, making a one-profile filter almost as expensive as
+    // Everyone for accounts with long histories.
+    const trackerIds = trackerRows.map((row: any) => row.id);
+    const entriesResult = await this.supabase
+      .from("tracker_entries")
+      .select("*")
+      .eq("user_id", this.userId)
+      .in("tracker_id", trackerIds)
+      .gte("timestamp", cutoff)
+      .is("deleted_at", null)
+      .order("timestamp", { ascending: true });
+    if (entriesResult.error) throw entriesResult.error;
     // Group entries by tracker_id
     const entriesByTracker = new Map<string, any[]>();
     for (const e of entriesResult.data || []) {
@@ -2937,7 +2951,7 @@ export class SupabaseStorage implements IStorage {
       arr.push(e);
       entriesByTracker.set(e.tracker_id, arr);
     }
-    const trackers = (trackersResult.data || []).map(r =>
+    const trackers = trackerRows.map(r =>
       this.rowToTracker(r, (entriesByTracker.get(r.id) || []).map(e => this.rowToTrackerEntry(e))),
     );
     return this.healOwnerSuffixedTrackerNames(trackers);
@@ -5149,25 +5163,35 @@ export class SupabaseStorage implements IStorage {
       // PERF (durable-fix-phase1): DB pushdown via idx_habits_linked_profiles.
       let habitsQuery = this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null);
       habitsQuery = this._applyProfileFilter(habitsQuery, await this.pushdownIds(profileIds));
-      // Fetch habits and checkins in 2 parallel queries (not N+1).
+      // Fetch habits first, then constrain child rows to those parents. This
+      // remains two total queries (not N+1) while avoiding a transfer of every
+      // check-in owned by unrelated profiles.
       // [PERF 2026-07-31] Checkins are windowed to the last 400 days — the
       // table grows forever and was fetched IN FULL on every dashboard
       // bootstrap. 400 days comfortably covers every consumer: streak math
       // walks back ≤30 days (rowToHabit / getStats), completion rates use
       // today/this week, and the habit heatmaps show ≤ a year.
       const checkinCutoff = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
-      const [habitsResult, checkinsResult] = await Promise.all([
-        habitsQuery,
-        this.supabase.from("habit_checkins").select("*").eq("user_id", this.userId).gte("date", checkinCutoff).order("date", { ascending: true }),
-      ]);
+      const habitsResult = await habitsQuery;
       if (habitsResult.error) throw habitsResult.error;
+      const habitRows = habitsResult.data || [];
+      if (habitRows.length === 0) return [];
+      const habitIds = habitRows.map((row: any) => row.id);
+      const checkinsResult = await this.supabase
+        .from("habit_checkins")
+        .select("*")
+        .eq("user_id", this.userId)
+        .in("habit_id", habitIds)
+        .gte("date", checkinCutoff)
+        .order("date", { ascending: true });
+      if (checkinsResult.error) throw checkinsResult.error;
       const checkinsByHabit = new Map<string, any[]>();
       for (const c of checkinsResult.data || []) {
         const arr = checkinsByHabit.get(c.habit_id) || [];
         arr.push(c);
         checkinsByHabit.set(c.habit_id, arr);
       }
-      return (habitsResult.data || []).map(r =>
+      return habitRows.map(r =>
         this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map(c => this.rowToHabitCheckin(c)))
       );
     });
