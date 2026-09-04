@@ -1324,3 +1324,9 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - Before: every authenticated startup queued 12 route imports together and then fetched a second broad "Everyone" dashboard bootstrap after the active scope. Scoped tracker and habit reads also downloaded the user's complete entry/check-in history before discarding unrelated rows in application code.
 - After: route chunks preload one at a time during idle time and navigation intent preloads the exact destination; startup performs only the active bootstrap; tracker entries and habit check-ins are filtered by the fetched parent IDs in Postgres. Profile tree construction also uses a profile ID map instead of repeated linear scans.
 - Regression coverage: `tracker-read-no-write.test.ts` and `scoped-child-query.test.ts` require the child-history queries to carry their parent-ID filters while preserving read-path purity.
+
+### Obligation reassignment retained Self (BUG-20260903-obligation-owner-reassignment)
+
+- Before: `PATCH /api/obligations/:id` moved the liability profile's `parent_profile_id` to the requested person but left the auto-created Self owner row in `liability_profile_links`. The obligation read projection unions the parent and party rows, so the response and profile filters still treated Self as attached.
+- After: an explicit `linkedProfiles` patch synchronizes both representations by replacing the liability's owner-role set with the requested primary owner at 100%. Non-owner relationships such as co-signers and guarantors remain intact.
+- Regression coverage: `error-hunt-2026-09-03.test.ts` requires the parent update and owner-set replacement to occur before the updated obligation is returned; the live ownership-isolation contract verifies the old owner disappears and the new owner gains the row.

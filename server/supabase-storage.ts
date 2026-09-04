@@ -5730,18 +5730,33 @@ export class SupabaseStorage implements IStorage {
     if ((data as any).category !== undefined) fieldsPatch.category = canonicalObligationCategory((data as any).category);
     if (data.status !== undefined) fieldsPatch.status = data.status;
     if (data.notes !== undefined) fieldsPatch.notes = data.notes;
-    // Ownership reassignment: an obligation is a liability profile whose owner
-    // is its parentProfileId (liabilityToObligation maps linkedProfiles=[parent]).
-    // So PATCH { linkedProfiles: [newOwner] } must move parent_profile_id. Without
-    // this the recurring bill stays under the old owner's profile filter.
+    // Ownership reassignment: an obligation is a liability profile whose
+    // canonical owner is both its parentProfileId and its OWNER-role junction
+    // row. Keep those representations synchronized. Moving only the parent left
+    // the auto-created Self owner row in liability_profile_links, and
+    // liabilityToObligation unioned that stale row back into linkedProfiles.
+    // setLiabilityOwners deliberately preserves non-owner relationships such as
+    // co_signer and guarantor.
     const linked = (data as any).linkedProfiles;
     const hasLinked = Array.isArray(linked);
+    const ownerId = hasLinked && linked[0] ? String(linked[0]) : null;
     await this.updateProfile(id, {
       ...(data.name !== undefined ? { name: data.name } : {}),
       ...(Object.keys(fieldsPatch).length > 0 ? { fields: fieldsPatch } : {}),
-      ...(hasLinked ? { parentProfileId: linked[0] || null } : {}),
+      ...(hasLinked ? { parentProfileId: ownerId } : {}),
       ...(expectedUpdatedAt !== undefined ? { expectedUpdatedAt } : {}),
     } as any);
+    if (hasLinked) {
+      // updateProfile/getProfile and the ownership helpers can participate in a
+      // request memo during AI and bootstrap work. Never reconcile against, or
+      // return, the pre-write owner list.
+      this.clearRequestMemo();
+      await this.setLiabilityOwners(
+        id,
+        ownerId ? [{ partyProfileId: ownerId, ownershipPercentage: 100 }] : [],
+      );
+      this.clearRequestMemo();
+    }
     return this.getObligation(id);
   }
 

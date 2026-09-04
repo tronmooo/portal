@@ -1420,6 +1420,29 @@ describe("D196: updateArtifact and updateObligation refuse a stale expectedUpdat
     await s.updateObligation("b-1", { amount: 21, expectedUpdatedAt: "2026-09-03T09:59:00Z" } as any);
     expect(seen[0]).toMatchObject({ expectedUpdatedAt: "2026-09-03T09:59:00Z", fields: { monthlyAmount: 21 } });
   });
+
+  it("updateObligation replaces the stale Self owner when its linked profile changes", async () => {
+    const writes: string[] = [];
+    const s = bareStorage({
+      clearRequestMemo: () => writes.push("clear"),
+      getProfile: async () => ({
+        id: "b-1", type: "liability", type_key: "utility", name: "Water",
+        parentProfileId: "self-1", fields: { monthlyAmount: 20 },
+      }),
+      updateProfile: async (_id: string, patch: any) => {
+        writes.push(`parent:${patch.parentProfileId}`);
+        return {};
+      },
+      setLiabilityOwners: async (_id: string, owners: any[]) => {
+        writes.push(`owners:${owners.map((o) => `${o.partyProfileId}:${o.ownershipPercentage}`).join(",")}`);
+        return [];
+      },
+      getObligation: async () => ({ id: "b-1", linkedProfiles: ["linda-1"] }),
+    });
+    const updated = await s.updateObligation("b-1", { linkedProfiles: ["linda-1"] } as any);
+    expect(writes).toEqual(["parent:linda-1", "clear", "owners:linda-1:100", "clear"]);
+    expect(updated?.linkedProfiles).toEqual(["linda-1"]);
+  });
 });
 
 // ─── D197: a document read carries its version so a stale-tab edit can be refused ─
