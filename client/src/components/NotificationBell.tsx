@@ -30,6 +30,10 @@ interface Notification {
   entityId?: string;
   entityType?: string;
   dueDate?: string;
+  /** The DEADLINE this is about, shared by its "due soon" / "due today" /
+   *  "overdue" phrasings — see server/notification-service.ts. Dismissing one
+   *  has to silence all three, or the same deadline asks again tomorrow. */
+  dismissKey?: string;
   dismissed?: boolean;
 }
 
@@ -167,26 +171,35 @@ export function NotificationBell() {
     placeholderData: keepPreviousData,
   });
 
-  // Filter out dismissed notifications
-  const visibleNotifications = notifications.filter(n => !dismissedIds.has(n.id));
+  // Filter out dismissed notifications — by id, and by the deadline key that
+  // covers this notification's other phrasings.
+  const isDismissed = (n: Notification) =>
+    dismissedIds.has(n.id) || (!!n.dismissKey && dismissedIds.has(n.dismissKey));
+  const visibleNotifications = notifications.filter(n => !isDismissed(n));
   // ONE number for this surface. The badge used to count only critical +
   // warning while the panel header counted everything, so the bell and the list
   // it opens disagreed by design. The badge is "how many are waiting" — the
   // same thing the panel lists.
   const totalCount = visibleNotifications.length;
 
+  // Both keys go to the server: the id (so this exact row stays gone) and the
+  // deadline key (so its other phrasings never appear).
+  const keysFor = (n: Notification): string[] =>
+    n.dismissKey && n.dismissKey !== n.id ? [n.id, n.dismissKey] : [n.id];
+
   const handleDismissAll = useCallback(() => {
-    const allIds = notifications.map(n => n.id);
-    setDismissedIds(prev => new Set([...Array.from(prev), ...allIds]));
-    void dismissOnServer(allIds).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
+    const allKeys = notifications.flatMap(keysFor);
+    setDismissedIds(prev => new Set([...Array.from(prev), ...allKeys]));
+    void dismissOnServer(allKeys).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
   }, [notifications]);
 
-  const handleDismiss = useCallback((id: string, e: React.MouseEvent) => {
+  const handleDismiss = useCallback((n: Notification, e: React.MouseEvent) => {
     e.stopPropagation();
-    void dismissOnServer([id]).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
+    const keys = keysFor(n);
+    void dismissOnServer(keys).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
     setDismissedIds(prev => {
       const next = new Set(Array.from(prev));
-      next.add(id);
+      for (const k of keys) next.add(k);
       return next;
     });
   }, []);
@@ -364,7 +377,7 @@ function NotificationGroup({
 }: {
   label: string;
   notifications: Notification[];
-  onDismiss: (id: string, e: React.MouseEvent) => void;
+  onDismiss: (notification: Notification, e: React.MouseEvent) => void;
   onClick: (n: Notification) => void;
 }) {
   return (
@@ -392,7 +405,7 @@ function NotificationItem({
   onClick,
 }: {
   notification: Notification;
-  onDismiss: (id: string, e: React.MouseEvent) => void;
+  onDismiss: (notification: Notification, e: React.MouseEvent) => void;
   onClick: (n: Notification) => void;
 }) {
   const styles = getSeverityStyles(notification.severity);
@@ -429,7 +442,7 @@ function NotificationItem({
         variant="ghost"
         size="icon"
         className="h-6 w-6 shrink-0 mt-0.5 opacity-50 hover:opacity-100 focus:opacity-100"
-        onClick={(e) => onDismiss(notification.id, e)}
+        onClick={(e) => onDismiss(notification, e)}
         aria-label="Dismiss notification"
         data-testid={`button-dismiss-${notification.id}`}
       >

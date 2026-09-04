@@ -24,9 +24,43 @@ export interface AppNotification {
   entityId?: string;
   entityType?: string;
   dueDate?: string;
+  /**
+   * What dismissing this notification should silence.
+   *
+   * A task's deadline produces THREE notifications as it approaches — "due in
+   * 3 days", "is due today", "Overdue" — under three different ids, and a bill
+   * produces three of its own. Dismissing one silenced exactly that one, so
+   * the same deadline came back and asked again tomorrow, and again the day
+   * after: the user had said "I know" and the bell kept telling them.
+   *
+   * The key names the DEADLINE (entity + date), not the phrasing, so one
+   * dismissal covers every variant of it. A later deadline for the same entity
+   * has a different key and is a genuinely new thing to say. Absent for
+   * notifications with no natural grouping, where the id is the key.
+   */
+  dismissKey?: string;
   dismissed?: boolean;
   /** Custom rows only: whether mark_notifications_read has stamped it. */
   read?: boolean;
+}
+
+/** The deadline a notification is about: one key for all of its phrasings. */
+export function deadlineDismissKey(entityType: string, entityId: string, dueDate: string | undefined): string {
+  return `due:${entityType}:${entityId}:${String(dueDate || "").slice(0, 10)}`;
+}
+
+/** Every key that dismissing `n` should record — its own id AND its deadline. */
+export function dismissKeysFor(n: Pick<AppNotification, "id" | "dismissKey">): string[] {
+  return n.dismissKey && n.dismissKey !== n.id ? [n.id, n.dismissKey] : [n.id];
+}
+
+/** Is `n` silenced by anything the user has already dismissed? */
+export function isNotificationDismissed(
+  n: Pick<AppNotification, "id" | "dismissKey">,
+  dismissed: ReadonlySet<string> | Set<string>,
+): boolean {
+  if (dismissed.has(n.id)) return true;
+  return !!n.dismissKey && dismissed.has(n.dismissKey);
 }
 
 /** Preference key holding the dismissed-notification ids (JSON string array). */
@@ -42,9 +76,42 @@ export const DISMISSED_NOTIFICATIONS_PREF = "dismissed_notifications";
 export async function mergeDismissedNotifications(storage: IStorage, ids: string[]): Promise<string[]> {
   const add = (ids || []).filter((x) => typeof x === "string" && x.trim()).map((x) => x.trim());
   const current = Array.from(await readDismissedNotificationIds(storage));
-  const merged = Array.from(new Set([...current, ...add]));
-  if (merged.length !== current.length) await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(merged));
+  const merged = pruneDismissedNotifications(Array.from(new Set([...current, ...add])));
+  // Compare as sets: pruning can shrink the list even when nothing was added,
+  // and that shrink is worth persisting.
+  const changed = merged.length !== current.length || merged.some((x, i) => x !== current[i]);
+  if (changed) await storage.setPreference(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify(merged));
   return merged;
+}
+
+/**
+ * How long a dismissal is worth keeping, and how many to keep at most.
+ *
+ * Every id and dismiss key in this list ends in the date it is about. Once that
+ * date is well past, the notification it silenced can never be generated again
+ * — the entity has moved on to another due date, with another key — so the
+ * entry is dead weight. Nothing pruned it: the list grew by one entry for every
+ * notification the user had ever dismissed, was read and rewritten in full on
+ * every dismissal, and rode along in a preference row that only ever got
+ * bigger.
+ */
+const DISMISSED_RETENTION_DAYS = 180;
+const DISMISSED_MAX_ENTRIES = 2000;
+
+export function pruneDismissedNotifications(entries: string[], now: Date = new Date()): string[] {
+  const cutoff = new Date(now.getTime() - DISMISSED_RETENTION_DAYS * 86_400_000)
+    .toISOString().slice(0, 10);
+  const kept = entries.filter((entry) => {
+    // The LAST date in the string is the one the entry is about (an id can
+    // contain a uuid, never a date). No date at all → keep: it is a shape this
+    // pruner does not understand, and dropping it would un-dismiss something.
+    const dates = entry.match(/\d{4}-\d{2}-\d{2}/g);
+    if (!dates || dates.length === 0) return true;
+    return dates[dates.length - 1] >= cutoff;
+  });
+  // A backstop for entries with no date (custom notifications, future shapes):
+  // keep the most recent, which are the ones appended last.
+  return kept.length > DISMISSED_MAX_ENTRIES ? kept.slice(kept.length - DISMISSED_MAX_ENTRIES) : kept;
 }
 
 /** Preference key holding notification filters: {muted_severities?, muted_types?}. */
@@ -203,6 +270,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     if (diff < 0) {
       notifications.push({
         id: `task-overdue-${task.id}-${String(task.dueDate).slice(0, 10)}`,
+        dismissKey: deadlineDismissKey("task", task.id, task.dueDate),
         type: "task_overdue",
         severity: "critical",
         title: `Overdue: ${task.title}`,
@@ -214,6 +282,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     } else if (diff === 0) {
       notifications.push({
         id: `task-today-${task.id}-${String(task.dueDate).slice(0, 10)}`,
+        dismissKey: deadlineDismissKey("task", task.id, task.dueDate),
         type: "task_due_today",
         severity: "warning",
         title: `${task.title} is due today`,
@@ -225,6 +294,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     } else if (diff <= 3) {
       notifications.push({
         id: `task-soon-${task.id}-${String(task.dueDate).slice(0, 10)}`,
+        dismissKey: deadlineDismissKey("task", task.id, task.dueDate),
         type: "task_due_today",
         severity: "info",
         title: `${task.title} due in ${diff} day${diff !== 1 ? "s" : ""}`,
@@ -248,6 +318,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     if (diff < 0) {
       notifications.push({
         id: `bill-overdue-${ob.id}-${String(ob.nextDueDate).slice(0, 10)}`,
+        dismissKey: deadlineDismissKey("obligation", ob.id, ob.nextDueDate),
         type: "bill_due",
         severity: "critical",
         title: `Overdue bill: ${ob.name}`,
@@ -259,6 +330,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     } else if (diff <= 3) {
       notifications.push({
         id: `bill-soon-${ob.id}-${String(ob.nextDueDate).slice(0, 10)}`,
+        dismissKey: deadlineDismissKey("obligation", ob.id, ob.nextDueDate),
         type: "bill_due",
         severity: "warning",
         title: `Bill due soon: ${ob.name}`,
@@ -270,6 +342,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     } else if (diff <= 7 && !ob.autopay) {
       notifications.push({
         id: `bill-upcoming-${ob.id}-${String(ob.nextDueDate).slice(0, 10)}`,
+        dismissKey: deadlineDismissKey("obligation", ob.id, ob.nextDueDate),
         type: "bill_due",
         severity: "info",
         title: `Upcoming bill: ${ob.name}`,
@@ -431,7 +504,9 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   // the chat and the dismiss tool agree on what is showing. (Custom rows are
   // stamped dismissed_at in their own table and never enter the list.)
   const dismissed = await readDismissedNotificationIds(storage);
-  const visible = dismissed.size > 0 ? filtered.filter((n) => !dismissed.has(n.id)) : filtered;
+  // …by id OR by deadline key, so dismissing "due in 3 days" also silences
+  // "due today" and "Overdue" for the same deadline (see dismissKey above).
+  const visible = dismissed.size > 0 ? filtered.filter((n) => !isNotificationDismissed(n, dismissed)) : filtered;
 
   // Sort: critical first, then warning, then info
   visible.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);

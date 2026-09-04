@@ -36,7 +36,7 @@ import {
   insertMemorySchema,
 } from "@shared/schema";
 import { normalizeTrackerEntry } from "./tracker-normalize";
-import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF, mergeDismissedNotifications } from "./notification-service";
+import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF, mergeDismissedNotifications, dismissKeysFor } from "./notification-service";
 import { upcomingEventOccurrences } from "@shared/event-upcoming";
 import { rankByName } from "@shared/entity-resolution";
 import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags } from "@shared/recurring-dates";
@@ -7987,7 +7987,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (customIds.length > 0) {
         try { await storage.markUserNotifications("dismissed", customIds); } catch { /* best effort */ }
       }
-      const computedIds = targets.filter(n => !n.id.startsWith("custom:")).map(n => n.id);
+      // Both the id and the deadline key (dismissKeysFor), so "dismiss the
+      // rent reminder" silences the whole deadline rather than only the
+      // phrasing that happened to be showing when the user asked.
+      const computedIds = targets
+        .filter(n => !n.id.startsWith("custom:"))
+        .flatMap(n => dismissKeysFor(n));
       // Same merge as the bell and the briefing (D263): never write back a
       // list read earlier in the turn.
       if (computedIds.length > 0) await mergeDismissedNotifications(storage, computedIds);
