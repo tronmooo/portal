@@ -1111,6 +1111,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s311 profile scoping: Pat's filter shows Pat's task and expense, Quinn's shows neither, Self's shows the unowned task and not Pat's; relinking the task swaps the filters at once and Quinn's detail lists it.
 - s312 timeline dedupe: a person's birthday appears once in the next 30 days and once next year, even beside a manual yearly birthday event for the same day; a weekly event with an end 15 days out projects 3 occurrences and none after.
 - s314 write budget: a burst of 75 task creates yields 201s and 429s only, every 201 one row and every 429 none.
+- s313 pay → undo (`DELETE /obligations/:id/last-payment`) → pay within 8 s records a new payment (D278 through the obligations route); a repeated identical tap right after is still folded.
+- s316 obligation edits: amount lands on the profile's monthlyAmount; "paused" removes the bill from the calendar, the due scan's reminders and notifications; "active" brings it back with its due date.
 - s291 cross-user status sweep (B against A's profile, tracker, habit, goal, task, event, journal entry, expense, income, document): GET, PATCH and DELETE all answer 404 and every row of A's is intact.
 - s289 expense ↔ bill payment: an amount edit on the logged expense reprices the payment row, the paid stamp and the account debit (85); after D279 the delete retracts the payment (0 rows, stamp cleared, account 1,000).
 - s290 incomes: create, edit and delete are visible in the list at once with the response cache on; B cannot see or edit A's income; the connected-finance summary carries no manual-income total (its `income` block is review counts), so no figure to compare there.
