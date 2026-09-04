@@ -1084,6 +1084,7 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s281 schedule mark-paid after the balance fell below the row's principal (extra 3,900 on 4,000, then row 1 at 280/20): the ledger relabels it a payoff for the 100 owed (principal 100, accrued interest 0.50, "Overpaid by $199.50"), the balance clears, undo restores 100 and the schedule row reads unpaid again.
 - Production occurrence stamps (read-only): no paid stamp without a payment row, none pointing at another user's or another liability's payment, no negative current balance.
 - Browser flows27–29 (finance import undo, notification dismissal across tabs, create-profile type picker) green on the D275 build.
+- Browser flows30 (liability page, Payments tab): a settled card shows Balance $0 and the row's "Settled: $2,900.00 of the balance written off" note; Reverse removes the row and the Balance KPI reads $3,100 without a reload; the server balance agrees (D272/D273 through the UI).
 
 ## Session summary — 2026-09-03 (this segment)
 
