@@ -21,9 +21,13 @@ function stubStorage(overrides: Record<string, any> = {}): any {
   };
 }
 
+// Dates in the builder's zone (America/New_York), so "two days ago" and
+// "yesterday" stay distinct and both overdue whatever the UTC hour.
+const NY_TODAY = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+const nyDaysAgo = (n: number) => { const d = new Date(`${NY_TODAY}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10); };
 const OVERDUE_TASK = {
   id: "t1", title: "File taxes", status: "todo", priority: "high",
-  dueDate: new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10),
+  dueDate: nyDaysAgo(2),
 };
 
 describe("buildNotifications — custom rows", () => {
@@ -122,9 +126,7 @@ describe("buildNotifications — a dismissal does not outlive the fact it was ab
     expect((await buildNotifications(storage, "America/New_York")).some((n) => n.type === "task_overdue")).toBe(false);
     // Yesterday in the builder's zone (a UTC "yesterday" is New York's today
     // for the first hours after midnight UTC, which made the task due, not overdue).
-    const nyToday = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-    const moved = new Date(`${nyToday}T12:00:00Z`); moved.setUTCDate(moved.getUTCDate() - 1);
-    const movedISO = moved.toISOString().slice(0, 10);
+    const movedISO = nyDaysAgo(1);
     const storage2 = stubStorage({ getTasks: async () => [{ ...OVERDUE_TASK, dueDate: movedISO }] });
     storage2._prefs.set(DISMISSED_NOTIFICATIONS_PREF, JSON.stringify([`task-overdue-t1-${OVERDUE_TASK.dueDate}`]));
     const list = await buildNotifications(storage2, "America/New_York");
