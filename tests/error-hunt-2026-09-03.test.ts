@@ -3780,6 +3780,10 @@ describe("D286 sub-cent amounts are refused; money fields on a profile are store
     const out: any = prepareProfileFields({ balance: 1000.004, monthlyAmount: 33.335, interestRate: 6.125, termMonths: 36 }, { typeKey: "personal_loan", todayISO: "2026-09-03" });
     expect(out.balance).toBe(1000);
     expect(out.monthlyAmount).toBe(33.34);
+    expect((prepareProfileFields({ balance: 555.555 }, { typeKey: "personal_loan", todayISO: "2026-09-03" }) as any).balance).toBe(555.56);
+    const routes = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    // the budget routes parse their amount by hand: both refuse a third decimal
+    expect((routes.match(/isWholeCents\((parsedAmount|n)\)\) return res\.status\(400\)\.json\(\{ error: SUB_CENT_AMOUNT_MESSAGE \}\)/g) || []).length).toBe(2);
     expect(out.interestRate).toBe(6.125);
     expect(out.termMonths).toBe(36);
   });

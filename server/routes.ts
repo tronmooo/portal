@@ -462,7 +462,7 @@ import {
   isCalendarDay,
 } from "@shared/schema";
 import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
-import { validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
+import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE, validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
 import { normalizeMonthKey, budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
 import { canonicalizeRegistryFields } from "@shared/registry-fields";
 import { canonicalIncomeFrequency } from "@shared/obligation-windows";
@@ -6455,6 +6455,7 @@ Rules:
     if (!isFinite(parsedAmount) || parsedAmount < 0) {
       return res.status(400).json({ error: "amount must be a finite non-negative number" });
     }
+    if (!isWholeCents(parsedAmount)) return res.status(400).json({ error: SUB_CENT_AMOUNT_MESSAGE });
     if (notes !== undefined && typeof notes !== "string") {
       return res.status(400).json({ error: "notes must be a string" });
     }
@@ -6478,6 +6479,7 @@ Rules:
         if (!isFinite(n) || n < 0) {
           return res.status(400).json({ error: "amount must be a finite non-negative number" });
         }
+        if (!isWholeCents(n)) return res.status(400).json({ error: SUB_CENT_AMOUNT_MESSAGE });
         req.body.amount = n;
       }
       if (req.body.category !== undefined && (typeof req.body.category !== "string" || !req.body.category.trim())) {

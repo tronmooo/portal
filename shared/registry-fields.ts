@@ -115,7 +115,9 @@ const MONEY_MODEL_KEYS = new Set([
   "value", "balance", "originalAmount", "monthlyAmount", "minimumPayment", "creditLimit", "extraPayment",
   "purchasePrice", "amount", "monthlyPayment", "currentBalance", "originalBalance",
 ]);
-const toCents = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? Math.round((n + Number.EPSILON) * 100) / 100 : n);
+// Round half up on the decimal digits the user typed: 555.555 → 555.56 (the
+// binary value sits just below .555, so a plain Math.round went down).
+const toCents = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? Number(`${Math.round(Number(`${n}e2`))}e-2`) : n);
 
 /**
  * Every door a profile comes through — the routes, a backup restore, the chat
