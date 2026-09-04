@@ -1123,6 +1123,9 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s322 budgets copy: last month's two budgets copy into this month with their amounts; a second copy adds nothing; last month is untouched.
 - s324 paychecks: create (200), list at once; B cannot see, confirm or delete A's paycheck (404s); A's confirm records the actual amount at once; confirming an unknown id is a 404; delete removes it.
 - s325 accounts: a −250 adjustment lands with one history entry (read from the profile's `balanceHistory`), B cannot adjust A's account (404), a direct balance set is visible at once, delete removes it; the zero move is D283.
+- s326 accounts: a PATCH balance set records a history entry like an adjustment; a dated "set to" adjustment stamps balanceAsOf on that date with the reason and delta; the finance summary's manual assets carry the account.
+- s328 trackers: two entries logged at 03:40 UTC belong to the Los Angeles day; deleting one is visible at once and the list agrees on the count.
+- Full suite after D283: 260 files / 4,741 tests green (vitest-full127).
 - s291 cross-user status sweep (B against A's profile, tracker, habit, goal, task, event, journal entry, expense, income, document): GET, PATCH and DELETE all answer 404 and every row of A's is intact.
 - s289 expense ↔ bill payment: an amount edit on the logged expense reprices the payment row, the paid stamp and the account debit (85); after D279 the delete retracts the payment (0 rows, stamp cleared, account 1,000).
 - s290 incomes: create, edit and delete are visible in the list at once with the response cache on; B cannot see or edit A's income; the connected-finance summary carries no manual-income total (its `income` block is review counts), so no figure to compare there.
