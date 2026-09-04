@@ -1216,3 +1216,4 @@ By design, left as-is: profile delete cascade removes sole-linked expenses/docum
 - Full suite after D270: 260 files / 4714 tests green.
 - s269 (2/2): three same-amount expenses seconds apart on different dates all land, and three back-filled check-ins seconds apart all count (streak 3); a same-day same-amount expense repeat is a second row by design. The bills route's own 8-second dedupe key now carries the payment date too (D270).
 - Browser flows on the D270 build: flows15 7/7, flows21 4/4, flows24 5/5, flows27 5/5, flows28 3/3, flows29 4/4.
+- Final replica batch on the D270 build: s231 2/2, s232 3/3, s233 3/3, s234 4/4, s239 4/4, s243 2/2, s260 3/3, s264 2/2, s268 3/3, s270 2/2; s266 3 passed, 1 failed once its balance check reads the pipeline's spelling. s271 (undo of two dated same-amount payments): 3 passed, 0 failed.
