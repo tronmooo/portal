@@ -135,6 +135,8 @@ import {
 import { type IStorage, computeSecondaryData } from "./storage";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
+import { ProfileLinkFailure } from "./profile-link-failure";
+import { replaceOwnerSetWithRollback, type OwnerSetRecord } from "./owner-set-replacement";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
 import { shareForParty, shareForParties, validateOwnership, roundPct, type OwnershipLink, scaleSharesTo100 } from "../shared/ownership-model";
 
@@ -2670,7 +2672,11 @@ export class SupabaseStorage implements IStorage {
         if (current.length > 0 && !current.includes(profileId)) {
           // BLOCKED: entity already belongs to a different profile
           console.warn(`[ISOLATION] BLOCKED: ${entityType} ${entityId.slice(0,8)} already belongs to ${current[0].slice(0,8)}, rejecting link to ${profileId.slice(0,8)}`);
-          return; // Hard reject — do not write anything
+          throw new ProfileLinkFailure(
+            "PROFILE_EXCLUSIVE_CONFLICT",
+            `${entityType} already belongs to another profile`,
+            409,
+          );
         }
       }
     }
@@ -2703,6 +2709,11 @@ export class SupabaseStorage implements IStorage {
           );
         } catch (e: any) {
           console.error(`[linkProfileTo] setOwners failed for ${entityType}/${entityId.slice(0,8)}: ${e?.message || e}`);
+          throw new ProfileLinkFailure(
+            "OWNER_WRITE_FAILED",
+            `Failed to link ${entityType}`,
+            500,
+          );
         }
       }
     }
@@ -2748,6 +2759,11 @@ export class SupabaseStorage implements IStorage {
             );
           } catch (e: any) {
             console.error(`[unlinkProfileFrom] setOwners failed for ${entityType}/${entityId.slice(0,8)}: ${e?.message || e}`);
+            throw new ProfileLinkFailure(
+              "OWNER_WRITE_FAILED",
+              `Failed to unlink ${entityType}`,
+              500,
+            );
           }
         }
       }
@@ -5740,6 +5756,20 @@ export class SupabaseStorage implements IStorage {
     const linked = (data as any).linkedProfiles;
     const hasLinked = Array.isArray(linked);
     const ownerId = hasLinked && linked[0] ? String(linked[0]) : null;
+    const previousParentProfileId = (existing as any).parentProfileId ?? null;
+    let previousOwners: Array<{ partyProfileId: string; ownershipPercentage: number }> = [];
+    if (hasLinked) {
+      this.clearRequestMemo();
+      previousOwners = (await this.getLiabilityProfileLinks(id))
+        .filter((row) => {
+          const role = (row.role || "owner").toLowerCase();
+          return role === "owner" || role === "co_owner" || role === "co-owner";
+        })
+        .map((row) => ({
+          partyProfileId: row.partyProfileId,
+          ownershipPercentage: Number(row.ownershipPercentage),
+        }));
+    }
     await this.updateProfile(id, {
       ...(data.name !== undefined ? { name: data.name } : {}),
       ...(Object.keys(fieldsPatch).length > 0 ? { fields: fieldsPatch } : {}),
@@ -5751,10 +5781,41 @@ export class SupabaseStorage implements IStorage {
       // request memo during AI and bootstrap work. Never reconcile against, or
       // return, the pre-write owner list.
       this.clearRequestMemo();
-      await this.setLiabilityOwners(
-        id,
-        ownerId ? [{ partyProfileId: ownerId, ownershipPercentage: 100 }] : [],
-      );
+      try {
+        await this.setLiabilityOwners(
+          id,
+          ownerId ? [{ partyProfileId: ownerId, ownershipPercentage: 100 }] : [],
+        );
+      } catch (ownerWriteError) {
+        // The profile parent was already changed. Reconcile BOTH canonical
+        // representations back to their pre-request snapshots before exposing
+        // the owner-write failure to the route.
+        let ownerRollbackError: unknown;
+        let parentRollbackError: unknown;
+        try {
+          await this.setLiabilityOwners(id, previousOwners);
+        } catch (error) {
+          ownerRollbackError = error;
+        }
+        try {
+          await this.updateProfile(id, { parentProfileId: previousParentProfileId } as any);
+        } catch (error) {
+          parentRollbackError = error;
+        }
+        this.clearRequestMemo();
+        if (ownerRollbackError || parentRollbackError) {
+          const compensationError = new Error(
+            `Obligation owner update failed and compensation was incomplete` +
+            `${ownerRollbackError ? `; owner rollback: ${ownerRollbackError instanceof Error ? ownerRollbackError.message : String(ownerRollbackError)}` : ""}` +
+            `${parentRollbackError ? `; parent rollback: ${parentRollbackError instanceof Error ? parentRollbackError.message : String(parentRollbackError)}` : ""}`,
+          );
+          (compensationError as any).cause = ownerWriteError;
+          (compensationError as any).ownerRollbackError = ownerRollbackError;
+          (compensationError as any).parentRollbackError = parentRollbackError;
+          throw compensationError;
+        }
+        throw ownerWriteError;
+      }
       this.clearRequestMemo();
     }
     return this.getObligation(id);
@@ -9038,11 +9099,13 @@ export class SupabaseStorage implements IStorage {
   }
 
   /**
-   * Atomically replace the OWNER set of an asset — the single source-of-truth
+   * Replace the OWNER set of an asset — the single source-of-truth
    * write for ownership. Validates the full set (each 0–100, no dupes, totals
    * exactly 100% unless empty), then applies the minimal diff in a SAFE ORDER
    * so the per-asset sum never transiently exceeds 100 (which the DB guardrail
-   * rejects): removals + decreases first, then increases + additions.
+   * rejects): removals + decreases first, then increases + additions. Since
+   * these are multiple database writes, a failure triggers reconciliation back
+   * to a snapshot of the complete previous owner set.
    * Passing [] clears ownership → the asset reverts to the Self-100% default.
    */
   async setAssetOwners(
@@ -9058,45 +9121,35 @@ export class SupabaseStorage implements IStorage {
       throw new Error(v.errors[0] || "Invalid ownership configuration");
     }
 
-    // Current OWNER-role links for this asset (ignore co_signer/etc.).
-    const existingAll = await this.getAssetPartyLinks(assetProfileId);
-    const existing = existingAll.filter((l) => {
-      const r = (l.role || "owner").toLowerCase();
-      return r === "owner" || r === "co_owner" || r === "co-owner";
+    const targets: OwnerSetRecord[] = desired.map((owner) => ({
+      id: `desired:${owner.partyProfileId}`,
+      ...owner,
+    }));
+    await replaceOwnerSetWithRollback(targets, {
+      load: async () => {
+        this.clearRequestMemo();
+        return this.getAssetPartyLinks(assetProfileId);
+      },
+      remove: (row) => this.deleteAssetPartyLink(row.id),
+      updatePercentage: (row, ownershipPercentage) =>
+        this.updateAssetPartyLink(row.id, { ownershipPercentage }),
+      create: (target) => this.createAssetPartyLink({
+        assetProfileId,
+        partyProfileId: target.partyProfileId,
+        ownershipPercentage: target.ownershipPercentage,
+        role: (target.role || "owner") as any,
+        // A deleted snapshot row is recreated with all representable metadata.
+        effectiveFrom: (target as AssetPartyLink).effectiveFrom ?? null,
+        effectiveTo: (target as AssetPartyLink).effectiveTo ?? null,
+        notes: (target as AssetPartyLink).notes ?? null,
+      } as InsertAssetPartyLink),
     });
-    const existingByParty = new Map(existing.map((l) => [l.partyProfileId, l]));
-    const desiredByParty = new Map(desired.map((o) => [o.partyProfileId, o]));
-
-    // Phase A — lower the running sum first (safe under the >100 guardrail):
-    //   delete parties no longer present, and decrease shrinking ones.
-    for (const l of existing) {
-      if (!desiredByParty.has(l.partyProfileId)) {
-        await this.deleteAssetPartyLink(l.id);
-      }
-    }
-    for (const o of desired) {
-      const cur = existingByParty.get(o.partyProfileId);
-      if (cur && o.ownershipPercentage < Number(cur.ownershipPercentage)) {
-        await this.updateAssetPartyLink(cur.id, { ownershipPercentage: o.ownershipPercentage });
-      }
-    }
-    // Phase B — raise the running sum: increases then brand-new owners.
-    for (const o of desired) {
-      const cur = existingByParty.get(o.partyProfileId);
-      if (cur && o.ownershipPercentage > Number(cur.ownershipPercentage)) {
-        await this.updateAssetPartyLink(cur.id, { ownershipPercentage: o.ownershipPercentage });
-      }
-    }
-    for (const o of desired) {
-      if (!existingByParty.has(o.partyProfileId)) {
-        await this.createAssetPartyLink({ assetProfileId, partyProfileId: o.partyProfileId, ownershipPercentage: o.ownershipPercentage, role: "owner" } as InsertAssetPartyLink);
-      }
-    }
+    this.clearRequestMemo();
     return this.getAssetPartyLinks(assetProfileId);
   }
 
   /**
-   * Atomic, validated owner-set replacement for a LIABILITY — the liability
+   * Validated, compensating owner-set replacement for a LIABILITY — the liability
    * analogue of `setAssetOwners`. Same semantics: the application writes the
    * full desired owner set, this method validates the total via
    * `validateOwnership`, then reconciles existing OWNER-role links by deleting
@@ -9119,38 +9172,27 @@ export class SupabaseStorage implements IStorage {
       throw new Error(v.errors[0] || "Invalid ownership configuration");
     }
 
-    const existingAll = await this.getLiabilityProfileLinks(liabilityProfileId);
-    const existing = existingAll.filter((l) => {
-      const r = (l.role || "owner").toLowerCase();
-      return r === "owner" || r === "co_owner" || r === "co-owner";
+    const targets: OwnerSetRecord[] = desired.map((owner) => ({
+      id: `desired:${owner.partyProfileId}`,
+      ...owner,
+    }));
+    await replaceOwnerSetWithRollback(targets, {
+      load: async () => {
+        this.clearRequestMemo();
+        return this.getLiabilityProfileLinks(liabilityProfileId);
+      },
+      remove: (row) => this.deleteLiabilityProfileLink(row.id),
+      updatePercentage: (row, ownershipPercentage) =>
+        this.updateLiabilityProfileLink(row.id, { ownershipPercentage }),
+      create: (target) => this.createLiabilityProfileLink({
+        liabilityProfileId,
+        partyProfileId: target.partyProfileId,
+        ownershipPercentage: target.ownershipPercentage,
+        role: (target.role || "owner") as any,
+        notes: (target as LiabilityProfileLink).notes ?? null,
+      } as InsertLiabilityProfileLink),
     });
-    const existingByParty = new Map(existing.map((l) => [l.partyProfileId, l]));
-    const desiredByParty = new Map(desired.map((o) => [o.partyProfileId, o]));
-
-    // Phase A — lower the running sum first.
-    for (const l of existing) {
-      if (!desiredByParty.has(l.partyProfileId)) {
-        await this.deleteLiabilityProfileLink(l.id);
-      }
-    }
-    for (const o of desired) {
-      const cur = existingByParty.get(o.partyProfileId);
-      if (cur && o.ownershipPercentage < Number(cur.ownershipPercentage)) {
-        await this.updateLiabilityProfileLink(cur.id, { ownershipPercentage: o.ownershipPercentage });
-      }
-    }
-    // Phase B — raise the running sum.
-    for (const o of desired) {
-      const cur = existingByParty.get(o.partyProfileId);
-      if (cur && o.ownershipPercentage > Number(cur.ownershipPercentage)) {
-        await this.updateLiabilityProfileLink(cur.id, { ownershipPercentage: o.ownershipPercentage });
-      }
-    }
-    for (const o of desired) {
-      if (!existingByParty.has(o.partyProfileId)) {
-        await this.createLiabilityProfileLink({ liabilityProfileId, partyProfileId: o.partyProfileId, ownershipPercentage: o.ownershipPercentage, role: "owner" } as InsertLiabilityProfileLink);
-      }
-    }
+    this.clearRequestMemo();
     return this.getLiabilityProfileLinks(liabilityProfileId);
   }
 

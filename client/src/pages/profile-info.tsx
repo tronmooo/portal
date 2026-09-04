@@ -908,6 +908,7 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
   onSaveNotes: (v: string) => void;
   onSaveTags: (v: string[]) => void;
 }) {
+  const { toast } = useToast();
   const [editingNotes, setEditingNotes] = useState(false);
   const [draft, setDraft] = useState(notes);
   const [tagInput, setTagInput] = useState("");
@@ -927,6 +928,11 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
   const removeNote = useMutation({
     mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/notes/${id}`); },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/notes"] }),
+    onError: (err: Error) => toast({
+      title: "Couldn't delete note",
+      description: formatApiError(err),
+      variant: "destructive",
+    }),
   });
   // A saved note could be deleted here but never CORRECTED — the only way to
   // fix a typo was to delete it and dictate the whole thing again, or ask chat
@@ -940,6 +946,11 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
       queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
       queryClient.invalidateQueries({ queryKey: ["/api/artifacts"] });
     },
+    onError: (err: Error) => toast({
+      title: "Couldn't save note",
+      description: formatApiError(err),
+      variant: "destructive",
+    }),
   });
 
   const addTag = () => {
@@ -977,8 +988,9 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
               <SavedNote
                 key={n.id}
                 note={n}
-                onSave={(title, content) => editNote.mutate({ id: n.id, title, content })}
+                onSave={(title, content) => editNote.mutateAsync({ id: n.id, title, content })}
                 onRemove={() => removeNote.mutate(n.id)}
+                removing={removeNote.isPending && removeNote.variables === n.id}
               />
             ))}
           </div>
@@ -1012,34 +1024,49 @@ function NotesTags({ profileId, notes, tags, onSaveNotes, onSaveTags }: {
 // ── One saved note, editable in place ────────────────────────────────────────
 // Tap the note to edit its title and body; Cmd/Ctrl+Enter or Save commits,
 // Escape cancels. Same record `update_note` writes from chat.
-function SavedNote({ note, onSave, onRemove }: {
+function SavedNote({ note, onSave, onRemove, removing = false }: {
   note: any;
-  onSave: (title: string, content: string) => void;
+  onSave: (title: string, content: string) => Promise<void>;
   onRemove: () => void;
+  removing?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(String(note.title || ""));
   const [content, setContent] = useState(String(note.content || ""));
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   useEffect(() => {
     if (editing) return;
     setTitle(String(note.title || ""));
     setContent(String(note.content || ""));
   }, [note.title, note.content, editing]);
 
-  const commit = () => {
+  const commit = async () => {
+    if (saving) return;
     const t = title.trim();
     const c = content.trim();
     // An empty body would erase the note without saying so — treat it as a
     // cancel and leave the record alone. Deleting is the X, deliberately.
     if (!c) { setContent(String(note.content || "")); setEditing(false); return; }
     if (t !== String(note.title || "") || c !== String(note.content || "")) {
-      onSave(t || String(note.title || ""), c);
+      setSaving(true);
+      setSaveError(null);
+      try {
+        await onSave(t || String(note.title || ""), c);
+      } catch (err) {
+        setSaveError(formatApiError(err as Error));
+        return;
+      } finally {
+        setSaving(false);
+      }
     }
     setEditing(false);
   };
   const cancel = () => {
+    if (saving) return;
     setTitle(String(note.title || ""));
     setContent(String(note.content || ""));
+    setSaveError(null);
     setEditing(false);
   };
 
@@ -1052,6 +1079,7 @@ function SavedNote({ note, onSave, onRemove }: {
           placeholder="Title"
           className="h-7 text-xs font-medium"
           autoFocus
+          disabled={saving}
           onKeyDown={e => { if (e.key === "Escape") cancel(); }}
           data-testid={`saved-note-title-input-${note.id}`}
         />
@@ -1061,15 +1089,23 @@ function SavedNote({ note, onSave, onRemove }: {
           rows={3}
           className="text-xs"
           placeholder="Note"
+          disabled={saving}
           onKeyDown={e => {
             if (e.key === "Escape") cancel();
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
           }}
           data-testid={`saved-note-content-input-${note.id}`}
         />
+        {saveError && (
+          <p className="text-xs text-destructive" role="alert" data-testid={`saved-note-error-${note.id}`}>
+            {saveError}
+          </p>
+        )}
         <div className="flex gap-2">
-          <Button size="sm" className="h-7 text-xs" onClick={commit} data-testid={`saved-note-save-${note.id}`}>Save</Button>
-          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={cancel}>Cancel</Button>
+          <Button size="sm" className="h-7 text-xs" onClick={commit} disabled={saving} data-testid={`saved-note-save-${note.id}`}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={cancel} disabled={saving}>Cancel</Button>
         </div>
       </div>
     );
@@ -1091,12 +1127,13 @@ function SavedNote({ note, onSave, onRemove }: {
       </div>
       <button
         onClick={onRemove}
+        disabled={removing}
         // Always visible: Portol is used on a phone, where nothing hovers.
-        className="opacity-60 hover:opacity-100 text-muted-foreground hover:text-destructive shrink-0 p-0.5"
+        className="opacity-60 hover:opacity-100 disabled:opacity-30 text-muted-foreground hover:text-destructive shrink-0 p-0.5"
         aria-label={`Delete note ${note.title}`}
         data-testid={`saved-note-delete-${note.id}`}
       >
-        <X className="h-3.5 w-3.5" />
+        {removing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
       </button>
     </div>
   );

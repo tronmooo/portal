@@ -29,6 +29,11 @@ jobs:
 
       - name: TypeScript check
         run: npx tsc --noEmit
+
+      # Local-only unit/component/route-harness tests. Production-mutating
+      # contract and live suites have dedicated configs and are not run here.
+      - name: Unit and component tests
+        run: npm test
       
       - name: Build
         run: npx tsx script/build-vercel.ts

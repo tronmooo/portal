@@ -173,7 +173,7 @@ function parseQuickAdd(text: string): { kind: "obligation" | "event" | "task"; p
 
 // ─── Quick Add component ──────────────────────────────────────────────────
 
-function QuickAddSection({ onCreated }: { onCreated: () => void }) {
+export function QuickAddSection({ onCreated }: { onCreated: () => void }) {
   const { toast } = useToast();
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<ReturnType<typeof parseQuickAdd> | null>(null);
@@ -204,14 +204,20 @@ function QuickAddSection({ onCreated }: { onCreated: () => void }) {
       });
       return { prev, previewSnapshot, textSnapshot };
     },
-    onSuccess: async () => {
+    onSuccess: () => {
+      // A successful response is the commit point. Until now the click handler
+      // cleared and navigated immediately, so a rejected request unmounted this
+      // form before onError could restore its draft.
+      setText("");
+      setPreview(null);
       invalidateAll();
-      await Promise.all([
+      void Promise.all([
         queryClient.refetchQueries({ queryKey: ["/api/obligations"], type: "active" }),
         queryClient.refetchQueries({ queryKey: ["/api/obligation-occurrences"], type: "active" }),
         queryClient.refetchQueries({ queryKey: ["/api/calendar/timeline"], type: "active" }),
       ]).catch(() => {});
       toast({ title: "Added to calendar" });
+      onCreated();
     },
     onError: (err, _v, ctx) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
@@ -221,6 +227,11 @@ function QuickAddSection({ onCreated }: { onCreated: () => void }) {
       toast({ title: "Couldn't add", description: formatApiError(err), variant: "destructive" });
     },
   });
+
+  const submitQuickAdd = () => {
+    if (!preview || create.isPending) return;
+    create.mutate({ item: preview, textSnapshot: text });
+  };
 
   return (
     <Card>
@@ -240,9 +251,9 @@ function QuickAddSection({ onCreated }: { onCreated: () => void }) {
             onChange={(e) => { setText(e.target.value); setPreview(parseQuickAdd(e.target.value)); }}
             placeholder="Describe a one-time or recurring item…"
             data-testid="quick-add-input"
-            onKeyDown={(e) => { if (e.key === "Enter" && preview) { create.mutate({ item: preview, textSnapshot: text }); setText(""); setPreview(null); onCreated(); } }}
+            onKeyDown={(e) => { if (e.key === "Enter") submitQuickAdd(); }}
           />
-          <Button size="sm" disabled={!preview} onClick={() => { if (!preview) return; create.mutate({ item: preview, textSnapshot: text }); setText(""); setPreview(null); onCreated(); }} data-testid="quick-add-submit">
+          <Button size="sm" disabled={!preview || create.isPending} onClick={submitQuickAdd} data-testid="quick-add-submit">
             Add
           </Button>
         </div>

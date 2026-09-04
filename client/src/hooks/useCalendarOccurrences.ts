@@ -62,7 +62,19 @@ export interface CalendarOccurrencesResult {
   profileName: (profileId: string) => string | undefined;
   todayISO: string;
   isLoading: boolean;
+  /** True when one or more source queries failed and the stream is incomplete. */
+  isDegraded: boolean;
+  /** Source-specific failures; successful source data remains available. */
+  sourceErrors: Array<{ source: CalendarOccurrenceSource; error: unknown }>;
 }
+
+export type CalendarOccurrenceSource =
+  | "events"
+  | "profiles"
+  | "obligations"
+  | "tasks"
+  | "documents"
+  | "incomes";
 
 const EMPTY_LIST: any[] = [];
 
@@ -81,8 +93,10 @@ export function useCalendarOccurrences(
   const mode: "everyone" | "selected" = scoped ? "selected" : "everyone";
   const kIds = scoped ? filterIds : [];
 
-  const get = (url: string) =>
-    apiRequest("GET", url).then((r) => r.json()).catch(() => []);
+  // Let source failures reject. Resolving them as [] told React Query the
+  // request succeeded, disabled retries/error state, and made an outage look
+  // exactly like a legitimately empty calendar.
+  const get = (url: string) => apiRequest("GET", url).then((r) => r.json());
 
   // Events stay an UNSCOPED fetch: the series builder applies the client-side
   // soft-orphan scope rule itself (filterSeriesByProfiles below), which is not
@@ -250,6 +264,16 @@ export function useCalendarOccurrences(
     [profilesById],
   );
 
+  const sourceErrors: CalendarOccurrencesResult["sourceErrors"] = [
+    { source: "events" as const, isError: events.isError, error: events.error },
+    { source: "profiles" as const, isError: profiles.isError, error: profiles.error },
+    { source: "obligations" as const, isError: obligations.isError, error: obligations.error },
+    { source: "tasks" as const, isError: tasks.isError, error: tasks.error },
+    { source: "documents" as const, isError: documents.isError, error: documents.error },
+    { source: "incomes" as const, isError: incomes.isError, error: incomes.error },
+  ].filter(({ isError }) => isError)
+    .map(({ source, error }) => ({ source, error }));
+
   return {
     occurrences,
     series: ruleSeries,
@@ -262,6 +286,8 @@ export function useCalendarOccurrences(
     isLoading:
       events.isLoading || profiles.isLoading || obligations.isLoading ||
       tasks.isLoading || documents.isLoading || incomes.isLoading,
+    isDegraded: sourceErrors.length > 0,
+    sourceErrors,
   };
 }
 

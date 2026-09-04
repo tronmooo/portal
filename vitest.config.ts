@@ -297,6 +297,16 @@ export default defineConfig({
       'tests/error-hunt-2026-09-02-client-logic.test.ts',
       'tests/error-hunt-2026-09-02-routes.test.ts',
       'tests/error-hunt-2026-09-02-ai.test.ts',
+      'tests/server-audit-regressions.test.ts',
+      'tests/server-compensation-regressions.test.ts',
+      'tests/sheet-data.test.ts',
+      'tests/calendar-client-failures.dom.test.tsx',
+      'tests/public-auth-ui.dom.test.tsx',
+      'tests/artifact-panel-failures.dom.test.tsx',
+      'tests/editor-mobile-controls.test.ts',
+      // Meta-guard: every *.test.ts(x) must belong to this local suite, a
+      // named live/contract suite, or the explicit legacy manual-runner list.
+      'tests/test-suite-discovery.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

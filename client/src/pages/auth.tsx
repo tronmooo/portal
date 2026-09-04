@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import {
   AlertCircle, Loader2, Shield, CheckCircle2,
   MessageSquare, LayoutDashboard, Users, FileText,
   Activity, Calendar, ChevronRight, Sparkles,
-  DollarSign, Heart, Car, PawPrint, ChevronDown,
+  DollarSign, Heart, Car, PawPrint, ChevronDown, ChevronLeft,
 } from "lucide-react";
 
 // ── Feature data ────────────────────────────────────────────
@@ -77,7 +78,51 @@ const EXAMPLE_COMMANDS = [
 ];
 
 // ── Onboarding Section ──────────────────────────────────────
-function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void }) {
+export function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void }) {
+  const [activeFeature, setActiveFeature] = useState(0);
+  const featureTrackRef = useRef<HTMLDivElement>(null);
+
+  const selectFeature = useCallback((index: number) => {
+    const nextIndex = Math.max(0, Math.min(FEATURES.length - 1, index));
+    setActiveFeature(nextIndex);
+
+    const track = featureTrackRef.current;
+    const card = track?.children.item(nextIndex) as HTMLElement | null;
+    if (!track || !card) return;
+
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    track.scrollTo({
+      left: card.offsetLeft - track.offsetLeft,
+      behavior: reducedMotion ? "auto" : "smooth",
+    });
+  }, []);
+
+  const updateActiveFeature = useCallback(() => {
+    const track = featureTrackRef.current;
+    if (!track) return;
+
+    const cards = Array.from(track.children) as HTMLElement[];
+    const nearest = cards.reduce(
+      (best, card, index) => {
+        const distance = Math.abs(card.offsetLeft - track.offsetLeft - track.scrollLeft);
+        return distance < best.distance ? { index, distance } : best;
+      },
+      { index: 0, distance: Number.POSITIVE_INFINITY },
+    );
+    setActiveFeature(nearest.index);
+  }, []);
+
+  const handleFeatureKeys = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowLeft") nextIndex = activeFeature - 1;
+    if (event.key === "ArrowRight") nextIndex = activeFeature + 1;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = FEATURES.length - 1;
+    if (nextIndex == null) return;
+    event.preventDefault();
+    selectFeature(nextIndex);
+  };
+
   return (
     <div className="space-y-8">
       {/* Divider */}
@@ -88,17 +133,64 @@ function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void })
         </p>
       </div>
 
-      {/* Feature Cards — horizontal scroll */}
-      <div>
-        <div className="flex items-center gap-2 mb-3 px-1">
-          <Sparkles className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-semibold text-foreground">What Portol Does</h2>
+      {/* Feature Cards — controlled carousel with native touch scrolling */}
+      <section
+        className="min-w-0 max-w-full overflow-hidden"
+        aria-roledescription="carousel"
+        aria-label="What Portol Does"
+      >
+        <div className="flex items-center justify-between gap-3 mb-3 px-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+            <h2 className="text-sm font-semibold text-foreground">What Portol Does</h2>
+          </div>
+          <div className="flex shrink-0 items-center gap-1" aria-label="Carousel controls">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-11 w-11"
+              onClick={() => selectFeature(activeFeature - 1)}
+              disabled={activeFeature === 0}
+              aria-label="Previous feature"
+              data-testid="button-feature-previous"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-11 w-11"
+              onClick={() => selectFeature(activeFeature + 1)}
+              disabled={activeFeature === FEATURES.length - 1}
+              aria-label="Next feature"
+              data-testid="button-feature-next"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-2 -mx-1 px-1" style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}>
-          {FEATURES.map((f) => (
-            <div
+        <div
+          ref={featureTrackRef}
+          className="flex max-w-full gap-3 overflow-x-auto overscroll-x-contain snap-x snap-mandatory pb-2 px-1 touch-pan-x select-none [&::-webkit-scrollbar]:hidden"
+          style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
+          role="group"
+          tabIndex={0}
+          aria-label="Feature cards"
+          onKeyDown={handleFeatureKeys}
+          onScroll={updateActiveFeature}
+          data-testid="feature-carousel-track"
+        >
+          {FEATURES.map((f, index) => (
+            <article
               key={f.title}
               className="bubble snap-start shrink-0 w-[240px] p-4 space-y-2.5"
+              role="group"
+              aria-roledescription="slide"
+              aria-label={`${index + 1} of ${FEATURES.length}: ${f.title}`}
+              aria-current={index === activeFeature ? "true" : undefined}
+              data-testid={`feature-card-${index}`}
             >
               <div className={`inline-flex items-center justify-center w-9 h-9 rounded-lg ${f.bg}`}>
                 <f.icon className={`h-4.5 w-4.5 ${f.color}`} />
@@ -110,10 +202,33 @@ function OnboardingSection({ onScrollToLogin }: { onScrollToLogin: () => void })
                   <p key={i} className="text-xs-loose text-primary/80 font-mono">{ex}</p>
                 ))}
               </div>
-            </div>
+            </article>
           ))}
         </div>
-      </div>
+        <div className="mt-2 flex justify-center gap-1" aria-label="Choose a feature">
+          {FEATURES.map((feature, index) => (
+            <button
+              key={feature.title}
+              type="button"
+              className="flex h-11 w-11 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              onClick={() => selectFeature(index)}
+              aria-label={`Show ${feature.title}`}
+              aria-current={index === activeFeature ? "true" : undefined}
+              data-testid={`button-feature-select-${index}`}
+            >
+              <span
+                aria-hidden="true"
+                className={`block h-2 rounded-full transition-[width,background-color] duration-200 ${
+                  index === activeFeature ? "w-5 bg-primary" : "w-2 bg-muted-foreground/40"
+                }`}
+              />
+            </button>
+          ))}
+        </div>
+        <p className="sr-only" aria-live="polite">
+          Showing {FEATURES[activeFeature].title}, feature {activeFeature + 1} of {FEATURES.length}
+        </p>
+      </section>
 
       {/* Example Commands */}
       <div>
@@ -182,16 +297,39 @@ const RATE_LIMIT_COOLDOWN_S = 60;
 export default function AuthPage() {
   useEffect(() => { document.title = "Portol — AI Life Command Center"; }, []);
   const { signIn, signUp, signInWithGoogle } = useAuth();
+  const [location, navigate] = useLocation();
   const [tab, setTab] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [forgotMode, setForgotMode] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotSent, setForgotSent] = useState(false);
   const loginRef = useRef<HTMLDivElement>(null);
+  const forgotMode = location.replace(/\/$/, "") === "/auth/forgot-password";
+
+  const openForgotPassword = () => {
+    setError("");
+    setForgotEmail(email);
+    setForgotSent(false);
+    navigate("/auth/forgot-password", {
+      state: { ...window.history.state, portolAuthView: "forgot-password" },
+    });
+  };
+
+  const backToSignIn = () => {
+    setError("");
+    setForgotSent(false);
+    if (
+      forgotMode
+      && window.history.state?.portolAuthView === "forgot-password"
+    ) {
+      window.history.back();
+      return;
+    }
+    navigate("/auth", { replace: true });
+  };
 
   // A-5: 429 backoff. Seconds remaining in the cooldown; 0 = not rate-limited.
   // Single state + a single interval that ticks it down and self-cleans.
@@ -324,7 +462,7 @@ export default function AuthPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background overflow-y-auto" style={{ WebkitOverflowScrolling: "touch" }}>
+    <div className="min-h-screen bg-background overflow-x-hidden overflow-y-auto" style={{ WebkitOverflowScrolling: "touch" }}>
       <div className="w-full max-w-md mx-auto px-4 py-8 space-y-6">
 
         {/* Logo / Brand */}
@@ -356,8 +494,8 @@ export default function AuthPage() {
                 setConfirmPassword("");
                 setAttemptedSignIn(false);
                 setAttemptedSignUp(false);
-                setForgotMode(false);
                 setForgotSent(false);
+                if (forgotMode) navigate("/auth", { replace: true });
               }}>
                 <TabsList className="grid w-full grid-cols-2 bg-muted/60">
                   <TabsTrigger value="signin" data-testid="tab-signin" className="data-[state=active]:bg-background data-[state=active]:shadow-sm data-[state=active]:font-semibold">Sign In</TabsTrigger>
@@ -451,7 +589,7 @@ export default function AuthPage() {
                     {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                     Sign In
                   </Button>
-                  <button type="button" className="w-full text-xs text-muted-foreground/90 hover:text-primary transition-colors underline-offset-4 hover:underline" onClick={() => { setForgotMode(true); setError(""); setForgotEmail(email); setForgotSent(false); }} data-testid="link-forgot-password">
+                  <button type="button" className="w-full text-xs text-muted-foreground/90 hover:text-primary transition-colors underline-offset-4 hover:underline" onClick={openForgotPassword} data-testid="link-forgot-password">
                     Forgot password?
                   </button>
                 </form>
@@ -461,7 +599,7 @@ export default function AuthPage() {
                     <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto" />
                     <p className="text-sm font-medium">Check your email</p>
                     <p className="text-xs text-muted-foreground">We sent a password reset link to <span className="font-medium">{forgotEmail}</span></p>
-                    <button type="button" className="text-xs text-primary hover:underline" onClick={() => { setForgotMode(false); setForgotSent(false); }} data-testid="link-back-to-signin">Back to sign in</button>
+                    <button type="button" className="text-xs text-primary hover:underline" onClick={backToSignIn} data-testid="link-back-to-signin">Back to sign in</button>
                   </div>
                 ) : (
                   <form onSubmit={handleForgotPassword} className="space-y-4">
@@ -474,7 +612,7 @@ export default function AuthPage() {
                       {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
                       Send Reset Link
                     </Button>
-                    <button type="button" className="w-full text-xs text-muted-foreground hover:text-primary transition-colors" onClick={() => { setForgotMode(false); setError(""); }} data-testid="link-back-to-signin-2">Back to sign in</button>
+                    <button type="button" className="w-full text-xs text-muted-foreground hover:text-primary transition-colors" onClick={backToSignIn} data-testid="link-back-to-signin-2">Back to sign in</button>
                   </form>
                 )
               ) : (

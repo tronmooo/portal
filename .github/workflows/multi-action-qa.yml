@@ -5,22 +5,15 @@ name: Multi-action AI chat QA
 # against a real deployment. Runs from a GitHub runner because the authoring
 # environment's egress policy blocks *.vercel.app preview URLs.
 #
-# Push-trigger: scoped to the fix branch so pushing the suite both ships and
-# executes it (same pattern as live-e2e.yml — MCP can't dispatch workflows).
+# This suite mutates a dedicated live account, so it remains manual-only.
 on:
   workflow_dispatch:
     inputs:
       api_base:
-        description: "API base to test (default: branch preview deployment)"
+        description: "API base to test (default: https://portol.me/api)"
         required: false
-  push:
-    branches: ["claude/ai-chat-multi-action-fix-qzl64e"]
-    paths:
-      - "scripts/verify-multi-action.ts"
-      - ".github/workflows/multi-action-qa.yml"
-
 env:
-  PREVIEW_ORIGIN: https://portal-git-claude-ai-chat-multi-actio-0bd030-tronmooos-projects.vercel.app
+  TARGET_API_BASE: ${{ github.event.inputs.api_base || 'https://portol.me/api' }}
 
 jobs:
   multi-action-qa:
@@ -34,21 +27,23 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Wait for the preview deployment of this commit
+      - name: Wait for the target deployment of this commit
         run: |
-          echo "Waiting for $PREVIEW_ORIGIN to serve sha=$GITHUB_SHA"
+          target_origin="${TARGET_API_BASE%/api}"
+          echo "Waiting for $target_origin to serve sha=$GITHUB_SHA"
           for i in $(seq 1 40); do
-            body=$(curl -sS --max-time 20 "$PREVIEW_ORIGIN/api/version" || echo "")
+            body=$(curl -sS --max-time 20 "$target_origin/api/version" || echo "")
             echo "poll $i: $body"
             if echo "$body" | grep -q "$GITHUB_SHA"; then
-              echo "Preview is live on this commit."
+              echo "Target is live on this commit."
               exit 0
             fi
             sleep 15
           done
-          echo "Preview never reached this commit — testing whatever is deployed." >&2
+          echo "Target never reached this commit; refusing to test an unknown deployment." >&2
+          exit 1
 
       - name: Run 5/10/20-action verification suite
         env:
-          SMOKE_API_BASE: ${{ github.event.inputs.api_base || 'https://portal-git-claude-ai-chat-multi-actio-0bd030-tronmooos-projects.vercel.app/api' }}
+          SMOKE_API_BASE: ${{ env.TARGET_API_BASE }}
         run: npx tsx scripts/verify-multi-action.ts

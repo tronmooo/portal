@@ -1433,6 +1433,10 @@ describe("D196: updateArtifact and updateObligation refuse a stale expectedUpdat
         writes.push(`parent:${patch.parentProfileId}`);
         return {};
       },
+      getLiabilityProfileLinks: async () => [{
+        id: "owner-self", liabilityProfileId: "b-1", partyProfileId: "self-1",
+        ownershipPercentage: 100, role: "owner",
+      }],
       setLiabilityOwners: async (_id: string, owners: any[]) => {
         writes.push(`owners:${owners.map((o) => `${o.partyProfileId}:${o.ownershipPercentage}`).join(",")}`);
         return [];
@@ -1440,7 +1444,7 @@ describe("D196: updateArtifact and updateObligation refuse a stale expectedUpdat
       getObligation: async () => ({ id: "b-1", linkedProfiles: ["linda-1"] }),
     });
     const updated = await s.updateObligation("b-1", { linkedProfiles: ["linda-1"] } as any);
-    expect(writes).toEqual(["parent:linda-1", "clear", "owners:linda-1:100", "clear"]);
+    expect(writes).toEqual(["clear", "parent:linda-1", "clear", "owners:linda-1:100", "clear"]);
     expect(updated?.linkedProfiles).toEqual(["linda-1"]);
   });
 });
@@ -3667,8 +3671,9 @@ describe("D278 the pay route's double-tap memory is cleared by undo and edit", (
     expect(src).toContain("const forgetRecentPayments = (uid: string, billId: string) => {");
     expect(src).toContain("const prefix = `${uid}:${billId}:`;");
     expect(src).not.toContain("recentPayments.delete(`${uid}:${req.params.id}`);");
-    // undo route, ledger delete, ledger edit, and the bill-payment expense delete (D279)
-    expect((src.match(/forgetRecentPayments\(/g) || []).length).toBe(4);
+    // Undo route, ledger delete, successful ledger edit, failed edit after
+    // compensation (D295), and the bill-payment expense delete (D279).
+    expect((src.match(/forgetRecentPayments\(/g) || []).length).toBe(5);
   });
 });
 // ── D279: removing a bill-payment expense retracts the payment it records.

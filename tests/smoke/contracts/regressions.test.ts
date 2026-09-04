@@ -12,9 +12,12 @@
  * why the original assertion didn't catch it and strengthen it instead.
  */
 import { describe, it, expect, beforeAll } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { api, expectOk } from "../fixture/api";
 import { ensureSeeded } from "../fixture/setup";
 import type { SeedResult } from "../fixture/seed";
+import { decodeSheetData } from "@shared/sheet-data";
 
 let fixture: SeedResult;
 
@@ -450,6 +453,77 @@ describe("contract: regressions", () => {
       Array.isArray(filtered?.budgets) && filtered.budgets.length === 0,
       "budgets must be empty for a fresh non-self profile filter",
     ).toBe(true);
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // BUG-20260903-univer-sheet-consumers
+  //
+  // New sheets persisted a Univer snapshot while export and public sharing read
+  // only legacy "row,column" cells, producing blank output.
+  // ──────────────────────────────────────────────────────────────────────────
+  it("BUG-20260903-univer-sheet-consumers: export and share use the canonical decoder", () => {
+    const snapshot = {
+      sheetOrder: ["sheet-1"],
+      sheets: { "sheet-1": { cellData: { 0: { 0: { v: "Visible" } } } } },
+    };
+    expect(decodeSheetData({
+      rows: 2,
+      cols: 2,
+      cells: { __univer__: { v: JSON.stringify(snapshot) } },
+    }).cells["0,0"]?.v).toBe("Visible");
+
+    const editor = readFileSync(join(process.cwd(), "client/src/pages/editor.tsx"), "utf8");
+    const share = readFileSync(join(process.cwd(), "client/src/pages/share-view.tsx"), "utf8");
+    expect(editor).toContain("decodeSheetData(sheet)");
+    expect(share).toContain("decodeSheetData(sd)");
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // BUG-20260903-univer-range-chart
+  //
+  // Range-chart extraction read the legacy map directly and therefore saw no
+  // rows in every newly-created sheet.
+  // ──────────────────────────────────────────────────────────────────────────
+  it("BUG-20260903-univer-range-chart: range extraction reads decoded cells", () => {
+    const editor = readFileSync(join(process.cwd(), "client/src/pages/editor.tsx"), "utf8");
+    const rangeChartStart = editor.indexOf("// ── Insert chart from sheet range");
+    const rangeChartEnd = editor.indexOf("// ──", rangeChartStart + 10);
+    const rangeChartSource = editor.slice(rangeChartStart, rangeChartEnd);
+    expect(rangeChartStart).toBeGreaterThanOrEqual(0);
+    expect(editor).toContain('const cell = decodedSheet.cells[`${r},${c}`]');
+    expect(rangeChartSource).not.toContain('const cell = sheet.cells[`${r},${c}`]');
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // BUG-20260903-calendar-quick-add-draft
+  //
+  // Submit used to clear the draft and switch tabs before the POST settled, so
+  // a failure unmounted the form before rollback could restore it.
+  // ──────────────────────────────────────────────────────────────────────────
+  it("BUG-20260903-calendar-quick-add-draft: clearing and navigation happen on success", () => {
+    const src = readFileSync(join(process.cwd(), "client/src/components/CalendarManagerPanel.tsx"), "utf8");
+    const submit = src.slice(src.indexOf("const submitQuickAdd"), src.indexOf("return (", src.indexOf("const submitQuickAdd")));
+    expect(submit).toContain("create.mutate");
+    expect(submit).not.toContain("setText");
+    expect(submit).not.toContain("onCreated");
+    const success = src.slice(src.indexOf("onSuccess: () =>", src.indexOf("function QuickAddSection")), src.indexOf("onError:", src.indexOf("function QuickAddSection")));
+    expect(success).toContain('setText("")');
+    expect(success).toContain("onCreated()");
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // BUG-20260903-calendar-source-errors
+  //
+  // The shared calendar hook caught every source rejection as [], caching an
+  // outage as a successful empty calendar with no retry or warning.
+  // ──────────────────────────────────────────────────────────────────────────
+  it("BUG-20260903-calendar-source-errors: source failures reject and expose degraded state", () => {
+    const hook = readFileSync(join(process.cwd(), "client/src/hooks/useCalendarOccurrences.ts"), "utf8");
+    expect(hook).not.toMatch(/apiRequest\("GET", url\)[^;]*catch\(\(\) => \[\]\)/);
+    expect(hook).toContain("isDegraded: sourceErrors.length > 0");
+    expect(hook).toContain("sourceErrors,");
+    const page = readFileSync(join(process.cwd(), "client/src/components/recurring/RecurringDatesPage.tsx"), "utf8");
+    expect(page).toContain('data-testid="calendar-data-warning"');
   });
 
   // Add future regressions BELOW this line. Do not delete previous entries.

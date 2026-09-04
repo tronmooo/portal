@@ -33,7 +33,7 @@ import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
-import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
+import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -170,6 +170,7 @@ interface AuthenticatedRequest extends Request {
 import { computeDocumentDeletionImpact, deleteDocumentEverywhere, parseDeletionMode, repairOrphanedDocumentEvents } from "./document-deletion";
 import { propagateDocumentFieldChange } from "./document-provenance";
 import { storage, type IStorage } from "./storage";
+import { ProfileLinkFailure } from "./profile-link-failure";
 import { buildOverviewSpec, isOverviewEntity } from "./overview-engine";
 import { resolveAssetValue, resolveLiabilityValue, resolveMonthlyPayment, canonicalObligationStatus } from "./supabase-storage";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
@@ -5277,6 +5278,12 @@ ${JSON.stringify(ctx, null, 2)}`;
       res.json({ ok: true });
     } catch (err: any) {
       console.error("[profile-link]", err?.message || err);
+      if (err instanceof ProfileLinkFailure) {
+        return res.status(err.statusCode).json({
+          error: err.statusCode >= 500 ? "Link failed" : err.message,
+          code: err.code,
+        });
+      }
       res.status(500).json({ error: "Link failed" });
     }
   }));
@@ -5286,7 +5293,18 @@ ${JSON.stringify(ctx, null, 2)}`;
     // The unlink writes under this user's storage and never fails for a
     // profile that is not theirs; answer 404 unless the profile is the caller's.
     if (!(await storage.getProfile(req.params.id))) return res.status(404).json({ error: "Resource not found" });
-    await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
+    try {
+      await storage.unlinkProfileFrom(req.params.id, entityType, entityId);
+    } catch (err: any) {
+      console.error("[profile-unlink]", err?.message || err);
+      if (err instanceof ProfileLinkFailure) {
+        return res.status(err.statusCode).json({
+          error: err.statusCode >= 500 ? "Unlink failed" : err.message,
+          code: err.code,
+        });
+      }
+      throw err;
+    }
     const uid_pl2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`profiles:${uid_pl2}`); bustCache(`profile-detail:${uid_pl2}:`); bustCache(`stats:${uid_pl2}`); bustCache(`${entityType}s:${uid_pl2}`);
     res.json({ ok: true });
@@ -7863,6 +7881,13 @@ Rules:
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = withoutUndefined({ ...req.body, ...parsed.data });
     }
+    if (req.body.linkedProfiles !== undefined) {
+      const linkedProfiles = req.body.linkedProfiles as string[];
+      const profiles = await Promise.all(linkedProfiles.map((id) => storage.getProfile(id)));
+      if (profiles.some((profile) => !profile)) {
+        return res.status(404).json({ error: "Linked profile not found" });
+      }
+    }
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Obligation name must be a non-empty string" });
       req.body.name = sanitize(req.body.name);
@@ -8285,6 +8310,14 @@ Rules:
     if (!name || !String(name).trim()) return res.status(400).json({ error: "name is required" });
     if (balance !== undefined && balance !== null && !Number.isFinite(Number(balance))) {
       return res.status(400).json({ error: "balance must be a number" });
+    }
+    if (ownerProfileId !== undefined && ownerProfileId !== null && ownerProfileId !== "") {
+      if (typeof ownerProfileId !== "string") {
+        return res.status(400).json({ error: "ownerProfileId must be a profile id" });
+      }
+      if (!(await storage.getProfile(ownerProfileId))) {
+        return res.status(404).json({ error: "Owner profile not found" });
+      }
     }
     const created = await (storage as any).createAccount({
       name, accountKind, institution, balance, availableBalance, creditLimit,
@@ -10967,6 +11000,14 @@ No emojis. No prose outside the JSON.`,
     res.json(row);
   }));
   app.patch("/api/liability-asset-links/:id", asyncHandler(async (req, res) => {
+    if (req.body?.assetProfileId !== undefined) {
+      if (typeof req.body.assetProfileId !== "string") {
+        return res.status(400).json({ error: "assetProfileId must be a profile id" });
+      }
+      if (!(await storage.getProfile(req.body.assetProfileId))) {
+        return res.status(404).json({ error: "Resource not found" });
+      }
+    }
     const updated = await storage.updateLiabilityAssetLink(req.params.id, req.body || {});
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
@@ -11218,21 +11259,88 @@ No emojis. No prose outside the JSON.`,
     const occ = (liability.fields?.occurrences && typeof liability.fields.occurrences === "object") ? liability.fields.occurrences : {};
     const stamped = Object.entries(occ).find(([, ov]: [string, any]) => ov && ov.paymentId === row.id);
     const occurrenceDate = stamped?.[0] || String(row.paymentDate || "").slice(0, 10) || null;
-    const accountId = (stamped?.[1] as any)?.accountId || null;
+    // Loans and cards do not have occurrence stamps. Resolve their paying
+    // account from balance history BEFORE deleting the row that identifies it.
+    const accountId = (stamped?.[1] as any)?.accountId || await accountThatPaid(storage, row.id);
     const undone = await unpayBillOccurrence(storage, row.liabilityProfileId, { paymentId: row.id, source: "route" }, tz, log);
     if (!undone.ok) return res.status(404).json({ error: "Payment not found" });
-    const result = await payBillOccurrence(storage, row.liabilityProfileId, {
-      occurrenceDate,
-      amount: amount ?? Number(row.amount),
-      paymentDate: paymentDate ?? String(row.paymentDate || "").slice(0, 10),
-      accountId,
-      method: cosmetic.sourceAccount !== undefined ? cosmetic.sourceAccount : (row.sourceAccount ?? null),
-      notes: cosmetic.notes !== undefined ? cosmetic.notes : (row.notes ?? null),
-      fees: row.fees ?? null,
-      paymentType: row.paymentType && row.paymentType !== "standard" ? row.paymentType : null,
-      source: "route",
-    }, tz, log);
-    if (!result.ok) return res.status(500).json({ error: "Payment could not be re-recorded", reason: result.reason });
+
+    // If undo itself reported a failed side effect, replay could debit or reduce
+    // a balance twice. Stop before attempting the replacement; exact repair of
+    // an independently failed database side effect requires a transaction.
+    const undoSafe = undone.steps.every((step) => step.ok)
+      && (!stamped || undone.occurrenceCleared)
+      && (!accountId || undone.accountCredited);
+    if (!undoSafe) {
+      bustBillCaches(uid);
+      return res.status(500).json({
+        error: "Payment could not be safely re-recorded",
+        reason: "undo_incomplete",
+        restored: false,
+      });
+    }
+
+    const replayOriginal = async () => {
+      const replay = await payBillOccurrence(storage, row.liabilityProfileId, {
+        occurrenceDate,
+        amount: Number(row.amount),
+        paymentDate: String(row.paymentDate || "").slice(0, 10),
+        accountId,
+        method: row.sourceAccount ?? null,
+        notes: row.notes ?? null,
+        principal: row.principalPortion ?? null,
+        interest: row.interestPortion ?? null,
+        fees: row.fees ?? null,
+        paymentType: row.paymentType && row.paymentType !== "standard" ? row.paymentType : null,
+        source: "route",
+      }, tz, log);
+      if (replay.ok && replay.payment?.id && row.documentId) {
+        try {
+          await storage.updateLiabilityPayment(replay.payment.id, { documentId: row.documentId });
+        } catch (error) {
+          // The financial replay succeeded; a cosmetic document-link failure
+          // must not trigger another replay and duplicate the payment.
+          log.warn("[liability payment edit] restored payment document link failed", error);
+        }
+      }
+      return replay;
+    };
+
+    let result: Awaited<ReturnType<typeof payBillOccurrence>> | undefined;
+    let replacementError: unknown;
+    try {
+      result = await payBillOccurrence(storage, row.liabilityProfileId, {
+        occurrenceDate,
+        amount: amount ?? Number(row.amount),
+        paymentDate: paymentDate ?? String(row.paymentDate || "").slice(0, 10),
+        accountId,
+        method: cosmetic.sourceAccount !== undefined ? cosmetic.sourceAccount : (row.sourceAccount ?? null),
+        notes: cosmetic.notes !== undefined ? cosmetic.notes : (row.notes ?? null),
+        fees: row.fees ?? null,
+        paymentType: row.paymentType && row.paymentType !== "standard" ? row.paymentType : null,
+        source: "route",
+      }, tz, log);
+    } catch (error) {
+      replacementError = error;
+    }
+    if (!result?.ok) {
+      let restored = false;
+      try {
+        const replay = await replayOriginal();
+        // A stale occurrence claim can report a dedupe without yielding a row;
+        // that is not a successful restoration.
+        restored = replay.ok && !!replay.payment?.id;
+      } catch (error) {
+        log.error("[liability payment edit] original payment replay failed", error);
+      }
+      bustBillCaches(uid);
+      forgetRecentPayments(cacheUserKey(req as AuthenticatedRequest), String(row.liabilityProfileId));
+      return res.status(500).json({
+        error: "Payment could not be re-recorded",
+        reason: result?.reason || (replacementError ? "payment_failed" : undefined),
+        restored,
+      });
+    }
     let payment = result.payment;
     if (cosmetic.documentId !== undefined && payment?.id) {
       payment = (await storage.updateLiabilityPayment(payment.id, { documentId: cosmetic.documentId })) ?? payment;

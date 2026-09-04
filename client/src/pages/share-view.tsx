@@ -7,6 +7,7 @@ import { useRoute } from "wouter";
 import DOMPurify from "dompurify";
 import Spreadsheet from "react-spreadsheet";
 import { Loader2, Printer } from "lucide-react";
+import { decodeSheetData, sheetCellDisplayValue } from "@shared/sheet-data";
 
 interface PublicArtifact {
   id: string;
@@ -21,19 +22,14 @@ interface PublicArtifact {
   updatedAt: string;
 }
 
-// SheetData persists cell keys as `${row},${col}` (matches editor.tsx). Match that here
-// or the public share view will render an empty grid.
 function sheetToMatrix(sd: PublicArtifact["sheetData"]) {
   if (!sd) return [];
+  const decoded = decodeSheetData(sd);
   const rows: Array<Array<{ value: any }>> = [];
-  for (let r = 0; r < sd.rows; r++) {
+  for (let r = 0; r < decoded.rows; r++) {
     const row: Array<{ value: any }> = [];
-    for (let c = 0; c < sd.cols; c++) {
-      const cell = sd.cells[`${r},${c}`];
-      let val: any = "";
-      if (cell?.f) val = cell.f;                                      // formula text already begins with =
-      else if (cell?.v !== undefined && cell.v !== null) val = String(cell.v);
-      row.push({ value: val });
+    for (let c = 0; c < decoded.cols; c++) {
+      row.push({ value: sheetCellDisplayValue(decoded.cells[`${r},${c}`]) });
     }
     rows.push(row);
   }
