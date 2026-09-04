@@ -15,6 +15,11 @@ const db: { expenses: Expense[]; deleted: string[] } = { expenses: [], deleted: 
 // Two debts that share a word — the shape that made "pay my Chase card"
 // ambiguous. Kept beside the expense seed so both suites share one storage.
 type Liab = { id: string; name: string; type: string; type_key: string; fields: any; tags: string[]; notes: string };
+const domainDb = {
+  rows: [] as Array<{ id: string; name: string }>,
+  deleted: [] as string[],
+  reseed() { this.deleted = []; this.rows = [{ id: "d-home", name: "Home Insurance" }, { id: "d-auto", name: "Auto Insurance" }]; },
+};
 const liabDb = {
   rows: [] as Liab[],
   payments: [] as any[],
@@ -32,6 +37,7 @@ const today = () => new Date().toLocaleDateString("en-CA");
 
 function reseed() {
   liabDb.reseed();
+  domainDb.reseed();
   db.deleted = [];
   db.expenses = [
     { id: "e-coffee", description: "Coffee", amount: 4, category: "food", date: today(), linkedProfiles: [SELF.id] },
@@ -50,6 +56,9 @@ vi.mock("../server/storage", () => ({
     getDocuments: async () => [], getJournalEntries: async () => [], getIncomes: async () => [],
     getExpenses: async () => db.expenses,
     getLiabilityPayment: async () => null,
+    getDomains: async () => domainDb.rows,
+    updateDomain: async (id: string, patch: any) => { const d = domainDb.rows.find((x) => x.id === id); if (!d) return undefined; Object.assign(d, patch); return d; },
+    deleteDomain: async (id: string) => { domainDb.deleted.push(id); domainDb.rows = domainDb.rows.filter((x) => x.id !== id); return true; },
     getProfile: async (id: string) => liabDb.rows.find((r) => r.id === id),
     updateProfile: async (id: string, patch: any) => {
       const r = liabDb.rows.find((x) => x.id === id);
@@ -138,5 +147,63 @@ describe("the assistant never pays an ambiguous debt", () => {
     const res: any = await executeTool("add_liability_payment", { liabilityName: "Barclays", amount: 50 }, "u1");
     expect(res.error).toMatch(/not found/i);
     expect(liabDb.payments).toHaveLength(0);
+  });
+});
+
+// ── The same rule on every debt tool, not just the payment one (D295).
+describe("editing and deleting against an ambiguous debt name", () => {
+  it("update_liability asks instead of editing whichever sorted first", async () => {
+    const res: any = await executeTool("update_liability", { name: "Chase", changes: { currentBalance: 1 } }, "u1");
+    expect(res.error).toMatch(/which|multiple/i);
+    expect(liabDb.balances()).toEqual({ "l-sapphire": 1000, "l-freedom": 2000 });
+  });
+
+  it("update_liability still edits when the name picks one card", async () => {
+    const res: any = await executeTool("update_liability", { name: "Chase Sapphire", changes: { currentBalance: 900 } }, "u1");
+    expect(res.error).toBeUndefined();
+    expect(liabDb.balances()["l-sapphire"]).toBe(900);
+    expect(liabDb.balances()["l-freedom"]).toBe(2000);
+  });
+
+  it("delete_liability_payment asks rather than deleting a payment on the wrong card", async () => {
+    const res: any = await executeTool("delete_liability_payment", { liabilityName: "Chase" }, "u1");
+    expect(res.error).toMatch(/which|multiple/i);
+  });
+
+  it("the ambiguous answer always names the candidates", async () => {
+    for (const call of [
+      ["add_liability_payment", { liabilityName: "Chase", amount: 10 }],
+      ["update_liability", { name: "Chase", changes: { currentBalance: 1 } }],
+      ["delete_liability_payment", { liabilityName: "Chase" }],
+    ] as const) {
+      const res: any = await executeTool(call[0], call[1], "u1");
+      expect(res.candidates?.map((c: any) => c.name).sort()).toEqual(["Chase Freedom", "Chase Sapphire"]);
+    }
+  });
+});
+
+describe("domains are not deleted or edited on an ambiguous name", () => {
+  it('"insurance" matches both domains: it asks, and deletes nothing', async () => {
+    const res: any = await executeTool("delete_domain", { name: "Insurance" }, "u1");
+    expect(res.error).toMatch(/multiple matches/i);
+    expect(res.candidates?.map((c: any) => c.name).sort()).toEqual(["Auto Insurance", "Home Insurance"]);
+    expect(domainDb.deleted).toEqual([]);
+    expect(domainDb.rows).toHaveLength(2);
+  });
+  it("a name that picks one domain still deletes that one only", async () => {
+    const res: any = await executeTool("delete_domain", { name: "Home Insurance" }, "u1");
+    expect(res.deleted).toBe(true);
+    expect(domainDb.deleted).toEqual(["d-home"]);
+    expect(domainDb.rows.map((d) => d.id)).toEqual(["d-auto"]);
+  });
+  it("update_domain asks on the same ambiguity", async () => {
+    const res: any = await executeTool("update_domain", { name: "Insurance", changes: { name: "Cover" } }, "u1");
+    expect(res.error).toMatch(/multiple matches/i);
+    expect(domainDb.rows.map((d) => d.name).sort()).toEqual(["Auto Insurance", "Home Insurance"]);
+  });
+  it("a domain name that matches nothing is reported, not applied to the first", async () => {
+    const res: any = await executeTool("delete_domain", { name: "Boats" }, "u1");
+    expect(res.error).toBeTruthy();
+    expect(domainDb.deleted).toEqual([]);
   });
 });

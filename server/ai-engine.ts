@@ -1030,6 +1030,50 @@ function safeMatchEntity<T extends { id: string }>(
   return { match: best };
 }
 
+/**
+ * Resolve ONE debt from a name, tier by tier.
+ *
+ * The tiers are the ones every liability tool used to inline as a chain of
+ * `.find` calls — and `.find` takes the first hit, so two debts sharing a word
+ * ("Chase Sapphire", "Chase Freedom") both matched "Chase" and whichever
+ * sorted first was paid, edited or had a payment deleted (D293, D295). A tier
+ * with one hit wins; a tier with several is a question; an empty tier falls
+ * through to the next.
+ */
+export function resolveLiabilityByName<T extends { id: string; name: string; fields?: any }>(
+  liabs: T[],
+  rawName: unknown,
+): { match: T } | { ambiguous: T[] } | { none: true } {
+  const nameLC = String(rawName ?? "").toLowerCase().trim();
+  if (!nameLC) return { none: true };
+  const tiers: Array<(p: T) => boolean> = [
+    (p) => p.name.toLowerCase() === nameLC,
+    (p) => nameLooselyMatches(p.name, nameLC),
+    (p) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()),
+    (p) => String((p.fields || {}).lender || "").toLowerCase() === nameLC,
+    (p) => {
+      const tokens = nameLC.split(/\s+/).filter((t) => t.length >= 3);
+      if (!tokens.length) return false;
+      const hay = `${p.name} ${(p.fields || {}).lender || ""}`.toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    },
+  ];
+  for (const tier of tiers) {
+    const hits = liabs.filter(tier);
+    if (hits.length === 1) return { match: hits[0] };
+    if (hits.length > 1) return { ambiguous: hits };
+  }
+  return { none: true };
+}
+
+/** The answer a tool gives when a debt name matched several debts. */
+export function ambiguousDebtError(rawName: unknown, hits: Array<{ id: string; name: string }>, verb: string) {
+  return {
+    error: `Multiple debts match "${rawName}". Which one? ${verb} the wrong balance is not something I can undo cleanly, so tell me which and I will do it.`,
+    candidates: hits.slice(0, 5).map((p) => ({ id: p.id, name: p.name })),
+  };
+}
+
 // ============================================================
 // ACTION LOG — in-memory history of the last 20 CRUD operations
 // ============================================================
@@ -9780,16 +9824,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const profiles = await storage.getProfiles();
       const nameLC = String(input.name || "").toLowerCase().trim();
       const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
-      const target = liabs.find((p: any) => p.name.toLowerCase() === nameLC)
-        || liabs.find((p: any) => nameLooselyMatches(p.name, nameLC))
-        || liabs.find((p: any) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()))
-        || liabs.find((p: any) => String((p.fields || {}).lender || "").toLowerCase() === nameLC)
-        || liabs.find((p: any) => {
-          const tokens = nameLC.split(/\s+/).filter((t) => t.length >= 3);
-          if (!tokens.length) return false;
-          const hay = `${p.name} ${(p.fields || {}).lender || ""}`.toLowerCase();
-          return tokens.every((t) => hay.includes(t));
-        });
+      const pickedTarget = resolveLiabilityByName(liabs, input.name);
+      if ("ambiguous" in pickedTarget) return ambiguousDebtError(input.name, pickedTarget.ambiguous, "Editing");
+      const target: any = "match" in pickedTarget ? pickedTarget.match : undefined;
       if (!target) return { error: `Liability not found: ${input.name}` };
       const ch = input.changes || {};
       // Reject explicit negative balance — surface real intent (refund vs typo).
@@ -9827,35 +9864,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const nameLC = String(input.liabilityName || "").toLowerCase().trim();
       // Match strategy (most specific first): exact name, name-includes-query, query-includes-name (e.g. AI says "Affirm Peloton" but record is "Affirm Peloton Purchase"), lender match, token-overlap.
       const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
-      // Tier by tier, most specific first. Each tier collects EVERY match, not
-      // the first: two debts sharing a word ("Chase Sapphire", "Chase Freedom")
-      // both match "Chase", and `.find` silently paid whichever sorted first —
-      // the wrong balance, in money, with no question asked (D293). A tier with
-      // one match wins; a tier with several is a question; an empty tier falls
-      // through to the next.
-      const tiers: Array<(p: any) => boolean> = [
-        (p) => p.name.toLowerCase() === nameLC,
-        (p) => nameLooselyMatches(p.name, nameLC),
-        (p) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()),
-        (p) => String((p.fields || {}).lender || "").toLowerCase() === nameLC,
-        (p) => {
-          const tokens = nameLC.split(/\s+/).filter((t) => t.length >= 3);
-          if (!tokens.length) return false;
-          const hay = `${p.name} ${(p.fields || {}).lender || ""}`.toLowerCase();
-          return tokens.every((t) => hay.includes(t));
-        },
-      ];
-      let liability: any = undefined;
-      for (const tier of tiers) {
-        const hits = liabs.filter(tier);
-        if (hits.length === 1) { liability = hits[0]; break; }
-        if (hits.length > 1) {
-          return {
-            error: `Multiple debts match "${input.liabilityName}". Which one? Paying the wrong balance is not something I can undo cleanly, so tell me which and I will record it.`,
-            candidates: hits.slice(0, 5).map((p: any) => ({ id: p.id, name: p.name })),
-          };
-        }
-      }
+      const picked = resolveLiabilityByName(liabs, input.liabilityName);
+      if ("ambiguous" in picked) return ambiguousDebtError(input.liabilityName, picked.ambiguous, "Paying");
+      const liability: any = "match" in picked ? picked.match : undefined;
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
       // WRONG-LOAN GUARD (2026-07, user report): "car loan payment $125" was
       // applied to the mortgage because it was "the only loan", silently
@@ -9925,8 +9936,10 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const lNameLC = String(input.liabilityName || "").toLowerCase().trim();
       const aNameRaw = String(input.assetName || "").trim();
       const aNameLC = aNameRaw.toLowerCase();
-      const liability = profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && p.name.toLowerCase() === lNameLC)
-        || profiles.find((p: any) => (p.type === "liability" || p.type === "loan") && nameLooselyMatches(p.name, lNameLC));
+      const liabsForLink = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
+      const pickedLink = resolveLiabilityByName(liabsForLink as any[], input.liabilityName);
+      if ("ambiguous" in pickedLink) return ambiguousDebtError(input.liabilityName, pickedLink.ambiguous, "Linking against");
+      const liability: any = "match" in pickedLink ? pickedLink.match : undefined;
       if (!liability) return { error: `Liability not found: ${input.liabilityName}` };
       let asset = profiles.find((p: any) => p.name.toLowerCase() === aNameLC && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self")
         || profiles.find((p: any) => nameLooselyMatches(p.name, aNameLC) && p.type !== "liability" && p.type !== "loan" && p.type !== "person" && p.type !== "self");
@@ -12224,9 +12237,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const profiles = await storage.getProfiles();
       const nameLC = safeLC(input.liabilityName).trim();
       const liabs = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
-      const liability = liabs.find((p: any) => p.name.toLowerCase() === nameLC)
-        || liabs.find((p: any) => nameLooselyMatches(p.name, nameLC))
-        || liabs.find((p: any) => nameLC.length >= 3 && nameLC.includes(p.name.toLowerCase()));
+      const pickedDel = resolveLiabilityByName(liabs, input.liabilityName);
+      if ("ambiguous" in pickedDel) return ambiguousDebtError(input.liabilityName, pickedDel.ambiguous, "Deleting a payment against");
+      const liability: any = "match" in pickedDel ? pickedDel.match : undefined;
       if (!liability) return { error: `Liability not found: ${input.liabilityName}`, candidates: liabs.slice(0, 5).map((p: any) => p.name) };
       const payments = await storage.getLiabilityPayments(liability.id); // newest first
       if (payments.length === 0) return { error: `${liability.name} has no recorded payments` };
@@ -13024,16 +13037,22 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
 
     case "update_domain": {
       const domains = await storage.getDomains();
-      const domain = domains.find((d: any) => nameLooselyMatches(d.name, safeLC(input.name)));
-      if (!domain) return { error: `No domain found matching "${input.name}"` };
+      // `.find` took the first loose hit, so "Health" edited whichever of
+      // "Health" and "Health Insurance" sorted first (D295).
+      const dRes = safeMatchEntity(domains as any[], String(input.name || ""), (d: any) => d.name, { isDestructive: true });
+      if (!dRes.match) return { error: dRes.error || `No domain found matching "${input.name}"`, candidates: dRes.candidates };
+      const domain: any = dRes.match;
       const updated = await storage.updateDomain(domain.id, input.changes);
       return { updated: true, domain: updated };
     }
 
     case "delete_domain": {
       const domains = await storage.getDomains();
-      const domain = domains.find((d: any) => nameLooselyMatches(d.name, safeLC(input.name)));
-      if (!domain) return { error: `No domain found matching "${input.name}"` };
+      // Deleting a domain takes its entries with it, so an ambiguous name is a
+      // question, never the first loose hit (D295).
+      const dRes = safeMatchEntity(domains as any[], String(input.name || ""), (d: any) => d.name, { isDestructive: true });
+      if (!dRes.match) return { error: dRes.error || `No domain found matching "${input.name}"`, candidates: dRes.candidates };
+      const domain: any = dRes.match;
       await storage.deleteDomain(domain.id);
       return { deleted: true, name: domain.name, id: domain.id };
     }
