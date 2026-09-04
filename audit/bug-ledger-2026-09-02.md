@@ -1151,6 +1151,9 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 ### Tokyo probe re-run (s76 at 04:33 UTC, 4 Sep) — 6/6, but not the boundary case
 `PROBE_TZ=Asia/Tokyo npx tsx s76.ts` passes all six checks: a dateless check-in, journal entry and expense land on the Tokyo day, an entry stamped now reads back under it, the bell does not call a task due that day overdue, and the calendar shows both on the Tokyo day. At 04:33 UTC Tokyo and UTC share the date (the probe prints `differ: false`), so this run does not exercise the east-of-UTC boundary; the boundary run at 15:01 UTC (recorded above, dates genuinely differing) is the one that does.
 
+### D290 verified live (2026-09-04, 13:25 UTC, sha 24a82bd)
+Two concurrent `POST /journal` for one empty back-dated day on production: 201 and 200, one entry holding both paragraphs, cleaned up afterwards (the probe picks a day with no entry and deletes only an entry whose every line is its own, so real journal data is never touched). Production sweeps alongside it: 0 invalid `linked_profiles` elements, the guard on all 10 owned tables, 0 doubled open "Bill due" reminders, and 0 days carrying two journal rows. p14 6/6, p16 13/13 and p17 4/4 — p16's cleanup check now passes too, since the probe removes the expenses its bill payments log (those outlive their bill by design).
+
 ### Post-guard production re-check (2026-09-04, 11:45–12:00 UTC)
 One hour after the ownership guard went on, production is unchanged and healthy: 0 invalid `linked_profiles` elements, 0 links to a soft-deleted profile (so the guard's "must be active" rule has nothing legitimate to bite), the guard still on all ten owned tables, and 0 doubled open "Bill due" reminders. Probes p14 6/6, p17 4/4, and p16 now 12/12 on its behaviour checks — D281 passes live, which it did not before the guard. No write path has failed because of the trigger.
 
