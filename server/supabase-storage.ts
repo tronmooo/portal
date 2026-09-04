@@ -1881,6 +1881,14 @@ export class SupabaseStorage implements IStorage {
       const out = await this.writeProfilePatch(id, data, existing);
       if (out !== PROFILE_WRITE_COLLIDED) return out;
       if (attempt >= 6) throw Object.assign(new Error("Profile edit kept colliding with another writer; try again"), { statusCode: 409 });
+      // Back off before re-reading, exactly as mutateProfileFields does.
+      // Without it these seven attempts are a hot loop: they all land inside
+      // the same few milliseconds, so a short burst of contention — several
+      // page reads each firing the self-healing field write-back at once —
+      // consumed every retry and answered the user's field delete with
+      // "409: Profile edit kept colliding with another writer" for a write
+      // that would have gone through 50ms later (user report 2026-09-04).
+      await new Promise((r) => setTimeout(r, 10 + attempt * 20));
       this.clearRequestMemo();
       existing = await this.getProfile(id);
       if (!existing) return undefined;

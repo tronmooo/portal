@@ -21,7 +21,7 @@ import { invalidateDomain, invalidateDomains, patchQueries } from "@/lib/cache-b
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
-import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
+import { isHoldingVisible, isOwnershipKnown } from "@/lib/holding-visibility";
 import { liabilityFamily } from "@shared/liability-types";
 import { passesProfileFilter, pushdownSelection } from "@shared/profile-filter";
 import {
@@ -5625,40 +5625,72 @@ export default function TrackersPage() {
   // asset_party_links / liability_profile_links — e.g. Home is parented to
   // Test but Jane owns 50%, so a filter on Jane must still show Home.
   // These two endpoints are cheap user-scoped queries.
-  const { data: assetPartyLinks = [] } = useQuery<any[]>({
+  const { data: assetPartyLinks = [], isSuccess: assetLinksLoaded } = useQuery<any[]>({
     queryKey: ["/api/asset-party-links"],
     queryFn: () => apiRequest("GET", "/api/asset-party-links").then(r => r.json()),
   });
-  const { data: liabilityProfileLinks = [] } = useQuery<any[]>({
+  const { data: liabilityProfileLinks = [], isSuccess: liabilityLinksLoaded } = useQuery<any[]>({
     queryKey: ["/api/liability-profile-links"],
     queryFn: () => apiRequest("GET", "/api/liability-profile-links").then(r => r.json()),
   });
+
+  // The server's OWN answer to "which holdings belong to the people in scope".
+  //
+  // Reported 2026-09-04: with one person selected, the Net Worth popup listed
+  // "Radio · $75 · 50% owned" while this page's Assets tab said "No assets or
+  // vehicles yet". Radio is parented to another person and reaches the selected
+  // one ONLY through asset_party_links, so the tab's whole answer hung on that
+  // one extra request: while it is in flight (or if it fails) every co-owned
+  // holding silently vanishes and the tab renders a confident, wrong empty
+  // state — while the KPI strip, computed server-side from the same links,
+  // keeps counting it.
+  //
+  // /api/dashboard-enhanced already carries the share-aware breakdown for the
+  // active scope (see getDashboardEnhanced: assetBreakdown / liabilityBreakdown)
+  // and the hub bootstrap seeds this exact key, so reading it here is a cache
+  // hit, not a round trip. It is unioned into the visibility rule below — never
+  // subtracted from it — so the two surfaces can only agree more, never less.
+  const enhancedParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
+  const { data: enhancedForScope } = useQuery<any>({
+    queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
+    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${enhancedParam}`).then(r => r.json()),
+  });
+  const serverScopedAssetIds = useMemo(() => {
+    const rows = enhancedForScope?.financeSnapshot?.assetBreakdown;
+    return new Set<string>(Array.isArray(rows) ? rows.map((r: any) => String(r?.id || "")).filter(Boolean) : []);
+  }, [enhancedForScope]);
+  const serverScopedLiabilityIds = useMemo(() => {
+    const rows = enhancedForScope?.financeSnapshot?.liabilityBreakdown;
+    return new Set<string>(Array.isArray(rows) ? rows.map((r: any) => String(r?.id || "")).filter(Boolean) : []);
+  }, [enhancedForScope]);
+  // True once we can answer the ownership question at all. Until then an empty
+  // list means "not known yet", not "nothing here" — see the empty states below.
+  const ownershipKnown = isOwnershipKnown(assetLinksLoaded, serverScopedAssetIds);
+  const liabilityOwnershipKnown = isOwnershipKnown(liabilityLinksLoaded, serverScopedLiabilityIds);
 
   // Visibility helper: an asset is visible to the selected filter set if it's
   // (a) directly selected, (b) parented to a selected profile, or (c) the
   // selected profile appears as a co-owner via asset_party_links. Same logic
   // for liabilities. Returns true when filterMode is "everyone".
-  // P4.1 remediation: route through the canonical ownerCandidatesForProfile +
-  // isInScope primitives (shared/scope.ts) instead of a hand-rolled predicate
-  // so this page can never drift from the dashboard / net-worth scope rule.
-  const emptySelfIds = useMemo(() => new Set<string>(), []);
+  // P4.1 remediation: route through the canonical ownership primitives
+  // (client/src/lib/holding-visibility.ts over shared/scope.ts) instead of a
+  // hand-rolled predicate, so this page can never drift from the dashboard /
+  // net-worth scope rule — including the server's own breakdown for the scope.
   const isAssetVisible = (assetId: string, parentId: string | null | undefined): boolean => {
     if (filterMode === "everyone") return true;
-    if (filterIds.length === 0) return true;
-    return isInScope(
-      ownerCandidatesForProfile({ id: assetId, parentProfileId: parentId ?? null }, assetPartyLinks, null, profiles),
-      { selectedIds: filterIds, selfIds: emptySelfIds },
-      "out_of_scope",
-    );
+    return isHoldingVisible({
+      id: assetId, parentId, selectedIds: filterIds,
+      assetLinks: assetPartyLinks, allProfiles: profiles,
+      serverScopedIds: serverScopedAssetIds,
+    });
   };
   const isLiabilityVisible = (liabId: string, parentId: string | null | undefined): boolean => {
     if (filterMode === "everyone") return true;
-    if (filterIds.length === 0) return true;
-    return isInScope(
-      ownerCandidatesForProfile({ id: liabId, parentProfileId: parentId ?? null }, null, liabilityProfileLinks, profiles),
-      { selectedIds: filterIds, selfIds: emptySelfIds },
-      "out_of_scope",
-    );
+    return isHoldingVisible({
+      id: liabId, parentId, selectedIds: filterIds,
+      liabilityLinks: liabilityProfileLinks, allProfiles: profiles,
+      serverScopedIds: serverScopedLiabilityIds,
+    });
   };
 
   // `createOpen` is retained only so the CreateTrackerDialog component
@@ -5944,7 +5976,7 @@ export default function TrackersPage() {
       counts[lab] = (counts[lab] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filterMode, filterIds, assetPartyLinks]);
+  }, [profiles, filterMode, filterIds, assetPartyLinks, serverScopedAssetIds]);
 
   // Subscriptions/recurring bills are conceptually liabilities (things you owe
   // every month) so they live in the same Liabilities bucket alongside loans,
@@ -5986,7 +6018,7 @@ export default function TrackersPage() {
       counts[c] = (counts[c] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filterMode, filterIds, liabilityProfileLinks]);
+  }, [profiles, filterMode, filterIds, liabilityProfileLinks, serverScopedLiabilityIds]);
 
   // Build the list of profiles that have linked trackers OR are the "self" profile (always show "Me")
   const sortedFilterProfiles = useMemo(() => {
@@ -6095,7 +6127,8 @@ export default function TrackersPage() {
       filteredLiabilityCount: liabilities,
       allItemsCount: filteredTrackers.length + filteredDocuments.length + assets + liabilities,
     };
-  }, [profiles, filterMode, sectionFilter, assetTypeFilter, assetNestingFilter, filteredTrackers, filteredDocuments]);
+  }, [profiles, filterMode, filterIds, sectionFilter, assetTypeFilter, assetNestingFilter, filteredTrackers, filteredDocuments,
+      assetPartyLinks, liabilityProfileLinks, serverScopedAssetIds, serverScopedLiabilityIds]);
 
   // Skeleton loading state — MUST be after all hooks
   if (showTrackerSkeleton && !trackers && isPending) {
@@ -6872,6 +6905,17 @@ export default function TrackersPage() {
           }
           return true;
         });
+        // "Nothing here" vs "we don't know yet". With a person selected, an
+        // asset can reach them through asset_party_links alone, so until the
+        // ownership answer has landed an empty list means nothing at all —
+        // claiming "No assets or vehicles yet" there is how a co-owned asset
+        // came to be counted in Net Worth and absent from this tab at once.
+        if (childProfiles.length === 0 && !isShowAll && !ownershipKnown) return (
+          <div className="bubble p-6 space-y-2" data-testid="assets-ownership-loading">
+            <Skeleton className="h-4 w-40 mx-auto" />
+            <Skeleton className="h-4 w-24 mx-auto" />
+          </div>
+        );
         if (childProfiles.length === 0) return (
           <div className="bubble p-6 text-center">
             <Star className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
@@ -7073,6 +7117,15 @@ export default function TrackersPage() {
           }
           return true;
         });
+        // Same rule as the Assets section above: a co-owned liability reaches
+        // the selected person only through liability_profile_links, so don't
+        // claim "none" before that answer has landed.
+        if (liabs.length === 0 && !isShowAll && !liabilityOwnershipKnown) return (
+          <div className="bubble p-6 space-y-2" data-testid="liabilities-ownership-loading">
+            <Skeleton className="h-4 w-40 mx-auto" />
+            <Skeleton className="h-4 w-24 mx-auto" />
+          </div>
+        );
         if (liabs.length === 0) return (
           <div className="bubble p-6 text-center">
             <TrendingDown className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />

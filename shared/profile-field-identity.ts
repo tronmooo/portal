@@ -151,6 +151,29 @@ export function readProfileFieldValue(
 }
 
 /**
+ * Is this storage key internal bookkeeping rather than a fact the user typed?
+ *
+ * An underscore prefix marks the app's own record-keeping: `_docFields` (which
+ * document contributed which value), `_extractionActions` (the marker a
+ * document write leaves so a re-run recognises its own work),
+ * `_ownershipPercentage`, `_calendarOptOut`. Two rules follow from that, and
+ * they have to agree or the screen lies:
+ *
+ *   · a screen never lists these as fields, and
+ *   · `deleteProfileFields` never removes them.
+ *
+ * They did not agree. The Info tab rendered `_extractionActions` as a section
+ * titled "_extraction Actions" holding a dedupe key and a timestamp, with a
+ * delete X on it — and that X could not work, because the sweep below skips
+ * reserved keys by design. Pressing it removed nothing, and (when a burst of
+ * writes was in flight on that profile) failed outright with a 409. User
+ * report, 2026-09-04: "whenever I press the x button, nothing happens".
+ */
+export function isReservedFieldKey(key: unknown): boolean {
+  return typeof key === "string" && key.startsWith("_");
+}
+
+/**
  * Remove EVERY storage key matching the given UI keys — at the top level and
  * inside every nested group — comparing on identity rather than exact string.
  *
@@ -197,7 +220,7 @@ export function deleteProfileFields(
   const out: Record<string, any> = {};
   for (const [key, value] of Object.entries(fields)) {
     // Reserved metadata (_ownershipPercentage etc.) is never a user field.
-    if (key.startsWith("_")) { out[key] = value; continue; }
+    if (isReservedFieldKey(key)) { out[key] = value; continue; }
 
     const isGroup =
       (PROFILE_FIELD_GROUPS as readonly string[]).includes(key) &&

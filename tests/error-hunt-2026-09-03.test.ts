@@ -4003,7 +4003,10 @@ describe("D294 a document's grouped write does not duplicate a fact the profile 
   });
   it("the Info page hides internal keys and repeated group entries", () => {
     const src = readFileSync(new URL("../client/src/pages/profile-info.tsx", import.meta.url), "utf8");
-    expect(src).toContain('if (k.startsWith("_")) continue;');
+    // The rule moved behind the shared predicate the delete sweep uses, so the
+    // screen and the sweep agree on what is reserved (see
+    // tests/reserved-profile-fields.test.ts).
+    expect(src).toContain("if (isReservedFieldKey(k)) continue;");
     expect(src).toContain("const shownValue = shownByIdentity.get(fieldIdentity(kk));");
   });
 });

@@ -761,6 +761,24 @@ let hiddenAt = 0;
 // foreground. Collapse them so recovery runs at most once per real resume —
 // this is what makes return-to-app a SINGLE refresh path.
 const RESUME_DEDUP_MS = 3_000;
+
+/**
+ * The only keys a resume is allowed to refetch purely because they went stale.
+ *
+ * Kept deliberately tiny and hard-coded rather than derived, because the size
+ * of this set IS the safety property: five queries is a correction, twenty-five
+ * is the skeleton storm this file spent a release fixing. These are the
+ * account-wide aggregates — nothing can patch them in place, so a stale mark on
+ * one is invisible until something refetches it. Mirrors AGGREGATE_KEYS in
+ * client/src/lib/cache-bus.ts; if you add one there, add it here.
+ */
+const RESUME_REFETCH_KEYS = new Set([
+  "/api/stats",
+  "/api/dashboard-enhanced",
+  "/api/dashboard-bootstrap",
+  "/api/insights",
+  "/api/ai-digest",
+]);
 let lastRecoverAt = 0;
 
 /**
@@ -802,13 +820,38 @@ export async function recoverWedgedQueries(reason: "resume" | "deadline" = "resu
       (q.state.status === "error" ||
         (q.state.status === "pending" && q.state.data === undefined)),
     );
-    // Nothing is actually stuck — do NOT touch the cache. With focus/reconnect
-    // refetch disabled (see queries defaults above), a settled cache on resume
-    // means there is genuinely nothing to refresh: cached data stays rendered
-    // and freshness arrives via mutation-driven invalidation. A blanket
+    // STALE-AGGREGATE REFETCH (2026-09 performance audit).
+    //
+    // "Nothing is stuck" is not the same as "nothing is out of date", and the
+    // gap between those two was a real class of must-refresh bug. A cross-tab
+    // write, a cron job, a background finance sync or a co-owner's change
+    // MARKS the aggregate payloads stale (cache-bus AGGREGATE_KEYS use
+    // refetchType:"none" on remote replay, precisely so five open tabs don't
+    // all recompute the dashboard) — but with focus and reconnect refetch
+    // disabled, nothing ever came back for them. The dashboard kept rendering
+    // the pre-write numbers until the user navigated away and back, or hit
+    // refresh. That is the "I had to refresh" report.
+    //
+    // So: on a REAL resume, refetch the stale aggregates and nothing else.
+    // This deliberately does NOT re-enable blanket focus refetch — that is
+    // what caused the 2026-07 skeleton storm, because it re-ran all ~25 active
+    // dashboard queries at once on a cold serverless instance. This set is
+    // capped at the five aggregate keys, they are active-observer-only, and
+    // they already render cached data while refetching in the background, so
+    // the user sees numbers correct themselves rather than a skeleton.
+    const staleAggregates = all.filter((q) =>
+      isApiQuery(q) &&
+      q.isActive() &&
+      q.state.fetchStatus !== "fetching" &&
+      q.state.data !== undefined &&        // has something to render meanwhile
+      q.isStale() &&
+      RESUME_REFETCH_KEYS.has(String(q.queryKey?.[0] || "")),
+    );
+
+    // Nothing stuck and nothing stale — do NOT touch the cache. A blanket
     // invalidate here (the old behavior) fired a redundant refetch wave on
-    // every tab return — exactly the storm this fix removes.
-    if (wedged.length === 0 && failedWhileAway.length === 0) return;
+    // every tab return.
+    if (wedged.length === 0 && failedWhileAway.length === 0 && staleAggregates.length === 0) return;
 
     if (wedged.length > 0) {
       // Cancel ONLY the orphaned in-flight queries — cancel resolves their frozen
@@ -820,7 +863,7 @@ export async function recoverWedgedQueries(reason: "resume" | "deadline" = "resu
     // Refetch ONLY what we just unwedged or what failed while frozen (and only
     // if actively observed), so a stuck query recovers without triggering a
     // blanket /api sweep.
-    const recoverKeys = [...wedged, ...failedWhileAway].map((q) => q.queryKey);
+    const recoverKeys = [...wedged, ...failedWhileAway, ...staleAggregates].map((q) => q.queryKey);
     await queryClient.invalidateQueries({
       predicate: (q) => recoverKeys.some((k) => JSON.stringify(k) === JSON.stringify(q.queryKey)),
       refetchType: "active",

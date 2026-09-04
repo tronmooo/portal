@@ -100,6 +100,8 @@ import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/recurrence";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
+import { detectFactQuestion, lookupStoredFact, type FactSources } from "@shared/fact-lookup";
+import { startTrace } from "./latency";
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
@@ -15767,6 +15769,118 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       };
     }
   } catch { /* fall through to AI */ }
+
+  // ══ TIER 1 FAST-PATH: direct stored-fact lookup ═════════════════════════
+  //
+  // "What is my license plate number?" used to cost the full agentic path:
+  // 12 full-table reads, ~40 KB of assembled context, a ~250 KB prompt, and
+  // up to 15 sequential model round-trips — typically 20-120 seconds for a
+  // value that was a plain string in a document's extracted_data all along.
+  //
+  // shared/doc-field-lookup already resolved those questions deterministically,
+  // but only to build a PROMPT BLOCK, so the model still ran and the answer
+  // still paid the whole bill. shared/fact-lookup closes that loop: when the
+  // question is an unambiguous single-fact read AND exactly one stored value
+  // answers it, we answer from the database and never call the model.
+  //
+  // It reads three tables instead of twelve, and those reads land in the
+  // request memo enabled above — so a MISS costs nothing: the context snapshot
+  // below reuses them rather than re-reading.
+  //
+  // Every gate in shared/fact-lookup is biased toward escalating. Two people
+  // with the same field, a low-confidence extraction that OCR contradicts, any
+  // mutation or reasoning signal, a plural/aggregate ask — all fall through to
+  // the normal pipeline. Speed is never bought with accuracy here.
+  {
+    try {
+      // Cheap shape check first: pure string work, no I/O, so a message that is
+      // obviously not a single-fact read never touches the database and never
+      // opens a trace.
+      const factQuestion = detectFactQuestion(userMessage, conversationHistory);
+
+      if (factQuestion) {
+        const factTrace = startTrace("chat", { path: "tier1_fact", userId: userId?.slice(0, 8), kind: factQuestion.kind });
+        const [factProfiles, factDocuments, factTrackers] = await factTrace.measure("entity_resolution", () =>
+          Promise.all([
+            storage.getProfiles().catch(() => [] as any[]),
+            storage.getDocuments().catch(() => [] as any[]),
+            storage.getTrackers().catch(() => [] as any[]),
+          ]),
+        );
+
+        // Honor the UI profile filter, and apply the SAME redaction the model
+        // context applies — a fast answer must not surface a value the slow
+        // path would have masked, nor a row the slow path would have hidden.
+        //
+        // Scope goes through passesProfileFilter rather than a local
+        // `linkedProfiles.some(...)` check, because scope is not a set
+        // membership test: it walks the ancestor-owner chain and the
+        // co-ownership links, so the registration linked to the Honda is in
+        // scope for the Honda's owner. A hand-rolled check would have made the
+        // fast path answer "not found" for exactly the documents most likely to
+        // be asked about.
+        const scopeIds = (options?.profileFilterIds || []).filter((id: any) => typeof id === "string" && id.length > 0);
+        const factFilterCtx = { selectedIds: scopeIds, allProfiles: factProfiles as any };
+        const inScope = (row: any) => scopeIds.length === 0 || passesProfileFilter(row?.linkedProfiles, factFilterCtx);
+
+        const profileNameById = new Map(factProfiles.map((p: any) => [String(p.id), String(p.name || "")]));
+        const factSources: FactSources = {
+          profiles: (scopeIds.length === 0 ? factProfiles : factProfiles.filter((p: any) => scopeIds.includes(String(p.id)))) as any[],
+          documents: factDocuments.filter(inScope).map((d: any) => ({
+            id: d.id,
+            name: d.name,
+            type: d.type,
+            extractedData: stripSensitiveDocData(d.extractedData ?? d.extracted_data, d.linkedProfiles, factProfiles as any),
+            createdAt: d.createdAt || d.created_at,
+            ownerNames: (d.linkedProfiles || []).map((pid: string) => profileNameById.get(String(pid))).filter(Boolean),
+          })),
+          trackers: factTrackers.filter(inScope) as any[],
+        };
+
+        const lookupDone = factTrace.stage("structured_lookup");
+        const outcome = lookupStoredFact(userMessage, factSources, conversationHistory);
+        lookupDone();
+
+        factTrace.set("docs", factSources.documents.length);
+        factTrace.set("candidates", outcome.considered.length);
+
+        if (outcome.answer) {
+          factTrace.set("tier", 1);
+          factTrace.set("source", outcome.answer.candidate.source);
+          factTrace.set("hit", true);
+          const summary = factTrace.end();
+          logger.info("ai", `[turn ${turnId.slice(0, 8)}] TIER-1 fact hit in ${summary.totalMs}ms via ${outcome.answer.candidate.source} (${outcome.answer.candidate.fieldKey}) — model not called`);
+          return {
+            reply: outcome.answer.reply,
+            actions: [],
+            results: [],
+            turnId,
+            sourceMessageId,
+            // A read changes nothing, so there is deliberately no mutation
+            // manifest here — this must not bust a single cache key.
+            meta: {
+              route: "tier1_structured_lookup",
+              model: "none",
+              timings: { aiMs: summary.totalMs, tools: [] },
+            },
+          };
+        }
+
+        // Declined — record WHY, so a slow turn that could have been fast is
+        // visible in the logs instead of being rediscovered by hand.
+        factTrace.set("tier", 4);
+        factTrace.set("hit", false);
+        factTrace.set("miss", outcome.missReason);
+        factTrace.end();
+        logger.info("ai", `[turn ${turnId.slice(0, 8)}] tier-1 declined (${outcome.missReason}) — escalating to the agent`);
+      }
+    } catch (e: any) {
+      // The fast path is an optimization. Any failure falls through to the
+      // unchanged pipeline; it must never be able to break a chat turn.
+      logger.warn("ai", `tier-1 fact lookup failed (non-fatal): ${e?.message || e}`);
+    }
+  }
+  // ══ END TIER 1 FAST-PATH ════════════════════════════════════════════════
 
   // Context snapshot. The 5s per-user cache is honored here — invalidating it
   // unconditionally before this read (as this used to) meant the cache NEVER

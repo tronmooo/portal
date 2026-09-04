@@ -37,7 +37,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag, Trash2, Loader2 } from "lucide-react";
-import { deleteProfileFields, fieldIdentity } from "@shared/profile-field-identity";
+import { deleteProfileFields, fieldIdentity, isReservedFieldKey } from "@shared/profile-field-identity";
 import { checkProfileRename, MAX_PROFILE_NAME_LENGTH } from "@shared/profile-rename";
 import { checkProfileDelete, profileDeleteWarning } from "@shared/profile-delete";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
@@ -487,8 +487,10 @@ function SingleProfileInfo({ id }: { id: string }) {
     // `_extractionActions` (the marker a document write leaves so a re-run
     // recognises its own work) rendered as a section titled "_extraction
     // Actions" holding a dedupe key and a timestamp; `_docFields` escaped only
-    // because its values happen to be objects (D294).
-    if (k.startsWith("_")) continue;
+    // because its values happen to be objects (D294). The same predicate the
+    // delete sweep uses to refuse these keys decides they aren't shown, so the
+    // screen can never again offer an X that cannot remove anything.
+    if (isReservedFieldKey(k)) continue;
     if (shownKeys.has(k.toLowerCase())) continue;
     if (["dateofbirth", "dob"].includes(k.toLowerCase())) continue;
     if (v === undefined || v === null || v === "") continue;
