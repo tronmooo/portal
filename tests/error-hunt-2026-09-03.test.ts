@@ -247,7 +247,9 @@ const GOAL_ROW = { id: "goal-1", title: "100 pushups", type: "tracker_target", t
 
 describe("D147: goal progress survives its source", () => {
   it("deleteTracker writes the live figure into every active goal reading that tracker before the row goes", async () => {
-    const { client, calls } = chainClient((table, op) => table === "goals" && op === "select" ? { data: [GOAL_ROW], error: null } : { data: [], error: null });
+    const { client, calls } = chainClient((table, op) => table === "goals" && op === "select" ? { data: [GOAL_ROW], error: null }
+      : table === "trackers" && op === "delete" ? { data: [{ id: "tr-1" }], error: null } // the delete selects the affected id (D280)
+      : { data: [], error: null });
     const s = bareStorage({ supabase: client, computeGoalProgress: async () => 120, cleanupEntityLinks: async () => undefined });
     expect(await s.deleteTracker("tr-1")).toBe(true);
     const goalWrite = calls.find((c) => c.table === "goals" && c.op === "update");
@@ -3672,8 +3674,8 @@ describe("D279 removing a bill-payment expense reverses the payment", () => {
 describe("D280 storage deletes report whether a row was affected", () => {
   it("income, artifact and domain deletes select the affected id", () => {
     const src = readFileSync(new URL("../server/supabase-storage.ts", import.meta.url), "utf8");
-    for (const table of ["incomes", "artifacts", "domains"]) {
-      const i = src.indexOf(`from("${table}")`, src.indexOf(table === "incomes" ? "async deleteIncome(" : table === "artifacts" ? "async deleteArtifact(" : "async deleteDomain("));
+    for (const table of ["incomes", "artifacts", "domains", "trackers"]) {
+      const i = src.indexOf(`from("${table}")`, src.indexOf(table === "incomes" ? "async deleteIncome(" : table === "artifacts" ? "async deleteArtifact(" : table === "trackers" ? "async deleteTracker(" : "async deleteDomain("));
       const stmt = src.slice(i, src.indexOf(";", i));
       expect(stmt).toContain('.select("id")');
     }

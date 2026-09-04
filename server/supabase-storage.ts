@@ -3522,8 +3522,11 @@ export class SupabaseStorage implements IStorage {
     await this.supabase.from("tracker_entries").delete().eq("tracker_id", id).eq("user_id", this.userId);
     /* D1: clean up entity_links rows that reference this tracker */
     await this.cleanupEntityLinks("tracker", id);
-    const { error } = await this.supabase.from("trackers").delete().eq("id", id).eq("user_id", this.userId);
-    if (!error) {
+    // `.select` so a tracker that was not there (or not this user's) reports
+    // false instead of success (D280).
+    const { data, error } = await this.supabase.from("trackers").delete().eq("id", id).eq("user_id", this.userId).select("id");
+    const removed = !error && Array.isArray(data) && data.length > 0;
+    if (removed) {
       bustInsightsCacheFor(this.userId); // [P0] tracker removed → recompute insights
       // A habit that mirrored into this tracker must not keep pointing at it:
       // completeHabitOccurrence read the dangling id, found no tracker, wrote
@@ -3533,7 +3536,7 @@ export class SupabaseStorage implements IStorage {
         .eq("linked_tracker_id", id).eq("user_id", this.userId);
       if (unlinkErr) console.warn(`[deleteTracker] could not clear habits.linked_tracker_id for ${id}: ${unlinkErr.message}`);
     }
-    return !error;
+    return removed;
   }
 
   // ============================================================
