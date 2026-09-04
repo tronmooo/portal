@@ -14,12 +14,13 @@
 // shared with the Trackers tab.
 import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { useState, lazy, Suspense } from "react";
+import { useState, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 // hashNavigate handles query-carrying targets ("/linked?tab=documents") correctly
 // under hash routing (see HubShell.tsx note).
 import { hashNavigate } from "@/lib/hashNavigate";
 import { apiRequest } from "@/lib/queryClient";
+import { lazyPopup } from "@/lib/lazy-popup";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useOverflowX } from "@/hooks/useOverflowX";
 import { computeHealthScore } from "@/lib/tracker-health";
@@ -33,16 +34,8 @@ import { Wallet, ArrowLeftRight, HeartPulse, Flame, CheckCircle2, FileText } fro
 // every stat opens its existing popup; never duplicate one). Lazy-loaded:
 // the strip is in the eager bundle and HeroKPIPopups drags recharts along
 // (~500KB), so the chunks download on first chip click, not on app boot.
-// FAIL-SAFE: if the chunk fetch fails (typical cause: a stale cached
-// index.html referencing renamed chunk files right after a deploy), we
-// navigate to the module's page instead of silently doing nothing.
-function lazyPopup<T>(load: () => Promise<T>, pick: (m: T) => React.ComponentType<any>, fallbackRoute: string): React.ComponentType<any> {
-  return lazy(() =>
-    load().then(m => ({ default: pick(m) })).catch(() => ({
-      default: (() => { hashNavigate(fallbackRoute); return null; }) as React.ComponentType<any>,
-    })),
-  );
-}
+// lazyPopup (with its stale-chunk fail-safe) now lives in lib/lazy-popup so
+// ExecutiveBriefing and the dashboard page share the one implementation.
 const NetWorthPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.NetWorthPopup, "/dashboard/finance");
 // One data type = one UI (2026-08-13): cash flow opens the canonical waterfall
 // (finance/CashFlowView), the same interface Executive and Finance open.

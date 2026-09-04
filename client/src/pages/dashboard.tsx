@@ -1,7 +1,8 @@
 import { changedFieldsOnly } from "@shared/field-patch";
+import { lazyPopup } from "@/lib/lazy-popup";
 import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { localTodayISO } from "@/lib/dates";
-import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -25,7 +26,6 @@ import {
   type RecurrenceRule,
 } from "@shared/recurrence";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
-import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { groupDocumentDates, ruleIdsOf } from "@shared/document-dates";
@@ -104,18 +104,54 @@ import { useShowTestData, toggleShowTestData } from "@/lib/showTestData";
 import { devToolsEnabled } from "@/lib/dev-affordances";
 import { isTestEntity } from "@shared/test-data";
 import { formatMoney, formatListDate } from "@/lib/format";
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
+// PERF (2026-09-04): recharts is NOT imported here. A static import put ~430KB
+// of chart code on the /dashboard critical path for two small donuts; the chart
+// now lives in its own lazy chunk (see components/dashboard/SpendingDonut).
+const SpendingDonut = lazy(() => import("@/components/dashboard/SpendingDonut"));
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { DEFAULT_SECTION_DEFS, LAYOUT_VERSION } from "@shared/dashboard-layout";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
-import { NetWorthPopup, BudgetPopup } from "@/components/dashboard/HeroKPIPopups";
+import type { QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
+
+/* ── Lazy dialogs (PERF 2026-09-04) ──────────────────────────────────────────
+   Every dialog below used to be a static import, so its code rode in the
+   dashboard page chunk and was downloaded + parsed on every dashboard open —
+   ~150KB raw for UI nobody has opened yet (TaskHabitPopups 60KB, HeroKPIPopups
+   28KB, MoneyPopups 27KB via CashFlowView, ChatGPTImportDialog 11KB, plus the
+   quick-add form tree). Their data queries were already gated on `enabled: open`,
+   so mounting them closed bought nothing but that download.
+
+   They are now lazy AND only mounted while open, with the chunks warmed during
+   browser idle time by prefetchDialogChunks() below — so the first press still
+   opens instantly, it just no longer delays first paint. */
+const NetWorthPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.NetWorthPopup, "/dashboard/finance");
+const BudgetPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.BudgetPopup, "/dashboard/finance");
 // One data type = one UI: every cash-flow press opens the canonical waterfall.
-import { CashFlowView } from "@/components/finance/CashFlowView";
-import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
-import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
+const CashFlowView = lazyPopup(() => import("@/components/finance/CashFlowView"), m => m.CashFlowView, "/dashboard/finance");
+const QuickAddDialog = lazyPopup(() => import("@/components/dashboard/quick-add/QuickAddDialog"), m => m.QuickAddDialog, "/dashboard");
+const TasksPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.TasksPopup, "/dashboard/tasks");
+const HabitsPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.HabitsPopup, "/dashboard/habits");
+const ChatGPTImportDialog = lazyPopup(() => import("@/components/ChatGPTImportDialog"), m => m.ChatGPTImportDialog, "/dashboard");
 import { ExecutiveBriefing } from "@/components/dashboard/ExecutiveBriefing";
+
+/** Warm the lazy dialog chunks once the dashboard is painted and the main
+ *  thread is idle, so a press never waits on a network round trip. */
+function prefetchDialogChunks(): void {
+  const run = () => {
+    void import("@/components/dashboard/HeroKPIPopups").catch(() => {});
+    void import("@/components/dashboard/TaskHabitPopups").catch(() => {});
+    void import("@/components/finance/CashFlowView").catch(() => {});
+    void import("@/components/dashboard/quick-add/QuickAddDialog").catch(() => {});
+    void import("@/components/dashboard/SpendingDonut").catch(() => {});
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(run, { timeout: 4000 });
+  } else {
+    setTimeout(run, 2000);
+  }
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1069,26 +1105,36 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
       </div>
       </div>
 
-      {/* Hero KPI Popups */}
-      <NetWorthPopup
-        open={heroPopup === "networth"}
-        onOpenChange={(o) => setHeroPopup(o ? "networth" : null)}
-        filterMode={(filterMode as "all" | "selected" | "everyone")}
-        filterIds={filterIds}
-      />
-      <CashFlowView
-        open={heroPopup === "cashflow"}
-        onOpenChange={(o: boolean) => setHeroPopup(o ? "cashflow" : null)}
-        filterMode={filterMode}
-        filterIds={filterIds}
-      />
-      <BudgetPopup
-        open={heroPopup === "budget"}
-        onOpenChange={(o) => setHeroPopup(o ? "budget" : null)}
-        filterMode={(filterMode as "all" | "selected" | "everyone")}
-        filterIds={filterIds}
-        monthlyIncome={monthlyIncome}
-      />
+      {/* Hero KPI Popups — mounted only while open (see the lazy-dialog note at
+          the imports): their queries are already `enabled: open`, so mounting
+          them closed only ever cost the download and parse of their chunks. */}
+      <Suspense fallback={null}>
+        {heroPopup === "networth" && (
+          <NetWorthPopup
+            open
+            onOpenChange={(o: boolean) => setHeroPopup(o ? "networth" : null)}
+            filterMode={(filterMode as "all" | "selected" | "everyone")}
+            filterIds={filterIds}
+          />
+        )}
+        {heroPopup === "cashflow" && (
+          <CashFlowView
+            open
+            onOpenChange={(o: boolean) => setHeroPopup(o ? "cashflow" : null)}
+            filterMode={filterMode}
+            filterIds={filterIds}
+          />
+        )}
+        {heroPopup === "budget" && (
+          <BudgetPopup
+            open
+            onOpenChange={(o: boolean) => setHeroPopup(o ? "budget" : null)}
+            filterMode={(filterMode as "all" | "selected" | "everyone")}
+            filterIds={filterIds}
+            monthlyIncome={monthlyIncome}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }
@@ -1239,29 +1285,18 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                 {/* Donut — spending by category */}
                 {categories.length > 0 && total > 0 && (
                   <div className="relative h-36">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={categories.map(([cat, amt]) => ({ name: cat, value: amt as number }))}
-                          dataKey="value"
-                          nameKey="name"
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={42}
-                          outerRadius={62}
-                          paddingAngle={2}
-                          stroke="none"
-                        >
-                          {categories.map(([cat], i) => (
-                            <Cell key={cat} fill={SPEND_COLORS[i % SPEND_COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          formatter={(v: any, n: any) => [formatMoney(v as number), n]}
-                          contentStyle={{ fontSize: 11, borderRadius: 8, padding: "4px 8px" }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
+                    <Suspense fallback={null}>
+                      <SpendingDonut
+                        data={categories.map(([cat, amt]) => ({ name: cat, value: amt as number }))}
+                        colors={SPEND_COLORS}
+                        height="100%"
+                        innerRadius={42}
+                        outerRadius={62}
+                        stroke="none"
+                        tooltipStyle={{ fontSize: 11, borderRadius: 8, padding: "4px 8px" }}
+                        formatter={(v, n) => [formatMoney(v), n]}
+                      />
+                    </Suspense>
                     <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                       <p className="micro-label text-muted-foreground">Spent</p>
                       <p className="text-sm font-bold tabular-nums">{formatMoney(total)}</p>
@@ -1441,8 +1476,10 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
       </Dialog>
 
       {/* Tasks Popup */}
-      <TasksPopup open={popup === "tasks"} onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />
-      <HabitsPopup open={popup === "habits"} onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />
+      <Suspense fallback={null}>
+        {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />}
+        {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterIds={filterIds} filterMode={filterMode} />}
+      </Suspense>
 
       {/* Expiring Documents Popup */}
       <Dialog open={popup === "docs"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
@@ -1524,9 +1561,11 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
         </DialogContent>
       </Dialog>
 
-      {quickAdd && (
-        <QuickAddDialog open kind={quickAdd} ownerProfileId={kpiOwnerId} onClose={() => setQuickAdd(null)} />
-      )}
+      <Suspense fallback={null}>
+        {quickAdd && (
+          <QuickAddDialog open kind={quickAdd} ownerProfileId={kpiOwnerId} onClose={() => setQuickAdd(null)} />
+        )}
+      </Suspense>
     </>
   );
 }
@@ -3989,17 +4028,16 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
           const total = catData.reduce((s, c) => s + c.value, 0);
           return (
             <div className="mb-3">
-              <ResponsiveContainer width="100%" height={160}>
-                <PieChart>
-                  <Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={60} paddingAngle={2}>
-                    {catData.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{background:'hsl(var(--card))',border:'1px solid hsl(var(--border))',borderRadius:'8px',fontSize:'11px'}}
-                    formatter={(v:any, name:any) => [`$${Number(v).toFixed(2)}`, name]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              <Suspense fallback={<div style={{ height: 160 }} />}>
+                <SpendingDonut
+                  data={catData}
+                  colors={COLORS}
+                  height={160}
+                  outerRadius={60}
+                  tooltipStyle={{background:'hsl(var(--card))',border:'1px solid hsl(var(--border))',borderRadius:'8px',fontSize:'11px'}}
+                  formatter={(v, name) => [`$${v.toFixed(2)}`, name]}
+                />
+              </Suspense>
               {/* Custom legend with color swatches + tabular numerals so amounts align */}
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-1 px-1">
                 {catData.map((c, i) => {
@@ -4195,9 +4233,11 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
         </DialogContent>
       </Dialog>
 
-      {drillQuickAdd && (
-        <QuickAddDialog open kind={drillQuickAdd} ownerProfileId={fwOwnerId} onClose={() => setDrillQuickAdd(null)} />
-      )}
+      <Suspense fallback={null}>
+        {drillQuickAdd && (
+          <QuickAddDialog open kind={drillQuickAdd} ownerProfileId={fwOwnerId} onClose={() => setDrillQuickAdd(null)} />
+        )}
+      </Suspense>
     </CollapsibleSection>
   );
 }
@@ -4860,7 +4900,9 @@ export function QuickActionsSection({ filterMode, filterIds, allProfiles = [] }:
           <a.icon className="h-3.5 w-3.5" /> {a.label}
         </Button>
       ))}
-      {kind && <QuickAddDialog open kind={kind} ownerProfileId={ownerId} onClose={() => setKind(null)} />}
+      <Suspense fallback={null}>
+        {kind && <QuickAddDialog open kind={kind} ownerProfileId={ownerId} onClose={() => setKind(null)} />}
+      </Suspense>
     </div>
   );
 }
@@ -5401,6 +5443,10 @@ function HouseholdDashboard({ enhanced, stats, allProfiles, showSkeleton, ready 
 
 export default function DashboardPage() {
   useEffect(() => { document.title = "Dashboard — Portol"; }, []);
+  // PERF (2026-09-04): warm the lazy dialog + chart chunks once the page has
+  // painted and the main thread is idle, so they cost nothing on first paint
+  // but are already cached when the user presses a KPI tile.
+  useEffect(() => { prefetchDialogChunks(); }, []);
   const { toast } = useToast();
   // Hub consolidation (2026-07): under the hub shell the date + profile
   // filter are owned by the shell; this page keeps only its kebab menu.
@@ -5998,7 +6044,9 @@ export default function DashboardPage() {
       </Dialog>
 
       {/* Import from ChatGPT */}
-      <ChatGPTImportDialog open={chatgptImportOpen} onOpenChange={setChatgptImportOpen} />
+      <Suspense fallback={null}>
+        {chatgptImportOpen && <ChatGPTImportDialog open onOpenChange={setChatgptImportOpen} />}
+      </Suspense>
 
       {/* Customize Dialog */}
       <CustomizeDialog open={customizeOpen} onOpenChange={setCustomizeOpen}

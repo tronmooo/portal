@@ -23,7 +23,7 @@
 // the dashboard KPI tiles use.
 import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { localDayOf } from "@shared/timezone";
-import { useState, useEffect, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useMemo, Suspense, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
@@ -52,11 +52,44 @@ import { BubbleSkeleton } from "@/components/ui/skeleton";
 //     /dashboard/obligations page renders, the same Cash Flow waterfall the
 //     Finance tab opens. Nothing here is a second version of an existing
 //     screen, and a label never opens a different category's panel.
-import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
-import { BillsPopup, EventsPopup, DocsPopup, dedupeBills } from "@/components/dashboard/BriefingPopups";
-import { NetWorthPopup } from "@/components/dashboard/HeroKPIPopups";
-import { CashFlowView } from "@/components/finance/CashFlowView";
-import { WellnessPopup, type WellnessPopupKind, type WellnessPopupData } from "@/components/wellness/WellnessPopups";
+import { dedupeBills } from "@/components/dashboard/BriefingPopups";
+import type { WellnessPopupKind, WellnessPopupData } from "@/components/wellness/WellnessPopups";
+import { lazyPopup } from "@/lib/lazy-popup";
+
+/* PERF (2026-09-04) — the briefing's drill-downs are lazy.
+   ExecutiveBriefing is statically imported by the dashboard page, so every one
+   of these static popup imports was on the /dashboard critical path: the chain
+   ExecutiveBriefing -> HeroKPIPopups -> recharts alone put ~430KB of chart code
+   (generateCategoricalChart / YAxis / PieChart / ComposedChart) plus ~125KB of
+   popup code in front of first paint, for panels that only exist once a row is
+   pressed. Each is already rendered conditionally below, so making the import
+   lazy is the whole fix. HubKpiStrip opens the same popups the same way. */
+const TasksPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.TasksPopup, "/dashboard/tasks");
+const HabitsPopup = lazyPopup(() => import("@/components/dashboard/TaskHabitPopups"), m => m.HabitsPopup, "/dashboard/habits");
+const BillsPopup = lazyPopup(() => import("@/components/dashboard/BriefingPopups"), m => m.BillsPopup, "/dashboard/obligations");
+const EventsPopup = lazyPopup(() => import("@/components/dashboard/BriefingPopups"), m => m.EventsPopup, "/calendar");
+const DocsPopup = lazyPopup(() => import("@/components/dashboard/BriefingPopups"), m => m.DocsPopup, "/dashboard/documents");
+const NetWorthPopup = lazyPopup(() => import("@/components/dashboard/HeroKPIPopups"), m => m.NetWorthPopup, "/dashboard/finance");
+const CashFlowView = lazyPopup(() => import("@/components/finance/CashFlowView"), m => m.CashFlowView, "/dashboard/finance");
+const WellnessPopup = lazyPopup(() => import("@/components/wellness/WellnessPopups"), m => m.WellnessPopup, "/wellness");
+
+/** Warm the popup chunks above once the briefing has painted and the main
+ *  thread is idle, so a press never waits on a network round trip — the
+ *  chunks are simply no longer in front of first paint. */
+function prefetchBriefingPopups(): void {
+  const run = () => {
+    void import("@/components/dashboard/TaskHabitPopups").catch(() => {});
+    void import("@/components/dashboard/BriefingPopups").catch(() => {});
+    void import("@/components/dashboard/HeroKPIPopups").catch(() => {});
+    void import("@/components/finance/CashFlowView").catch(() => {});
+    void import("@/components/wellness/WellnessPopups").catch(() => {});
+  };
+  if (typeof window.requestIdleCallback === "function") {
+    window.requestIdleCallback(run, { timeout: 4000 });
+  } else {
+    setTimeout(run, 2000);
+  }
+}
 import { computeHealthScore } from "@/lib/tracker-health";
 // hashNavigate for query-carrying targets ("/trackers?open=x",
 // "/linked?tab=documents") — wouter's hash navigate hoists the query out of
@@ -475,6 +508,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   ready?: boolean;
 }) {
   const [, navigate] = useLocation();
+  useEffect(() => { prefetchBriefingPopups(); }, []);
   // Query-safe navigation: wouter's hash navigate loses "?tab=…"/"?open=…"
   // query strings, which is exactly "the link went to the wrong place".
   const go = (path: string) => { if (path.includes("?")) hashNavigate(path); else navigate(path); };
@@ -1505,6 +1539,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           CashFlowView is the Finance tab's waterfall, and the wellness popups
           are the Wellness tab's own. Nothing here is built twice, and closing
           any of them leaves the tab exactly where it was. */}
+      <Suspense fallback={null}>
       {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={allBills} />}
@@ -1512,6 +1547,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={visibleDocs} />}
       {popup === "networth" && <NetWorthPopup open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode as "all" | "selected" | "everyone"} filterIds={ids} />}
       {popup === "cashflow" && <CashFlowView open onOpenChange={(o: boolean) => !o && setPopup(null)} filterMode={mode} filterIds={ids} />}
+      </Suspense>
       {popup === "upcoming" && (
         <UpcomingPopup
           open onClose={() => setPopup(null)} items={upcomingItems}
@@ -1519,13 +1555,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
         />
       )}
-      {popup?.startsWith("wellness:") && (
-        <WellnessPopup
-          kind={popup.slice("wellness:".length) as WellnessPopupKind}
-          onClose={() => setPopup(null)}
-          d={wellnessData}
-        />
-      )}
+      <Suspense fallback={null}>
+        {popup?.startsWith("wellness:") && (
+          <WellnessPopup
+            kind={popup.slice("wellness:".length) as WellnessPopupKind}
+            onClose={() => setPopup(null)}
+            d={wellnessData}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }
