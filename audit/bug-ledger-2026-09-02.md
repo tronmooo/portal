@@ -1077,6 +1077,10 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s277 cache sweep: `/dashboard-enhanced`, `/dashboard-bootstrap` and `/finance/summary` all show the settled card's balance gone right after the payment (11,100 → 8,000; the finance summary reports minor units) and return to the earlier figures after the undo. `/stats` carries no debt figure.
 - Production integrity (read-only): no payment row with a split above its amount, no negative remaining balance, no payoff row with a balance left, no orphan or cross-user payment rows. Five rows have a split short of the amount: the repaired mortgage overpayment (by design now) and four legacy "standard" rows from May 21 / June 8 (before the shared payment pipeline existed on Aug 26) that carry a 0/0 split while the balance moved (Samsung 47; Ford 1,000; Jane Doe's mortgage 50,000 and 2,000). The old writer is gone and the true split is not recoverable from the rows, so they are left as they are and noted here rather than guessed at.
 - Full suite after D274: 260 files / 4,725 tests green (vitest-full119).
+- s278 timezone: at 02:00 UTC (Sep 4) a Los Angeles user's loan payment and bill payment land on Sep 3 — the payment row, `lastPaidDate`, the occurrence stamp and the logged expense all agree; the loan route requires `paymentDate` (400 without it), the bill route defaults through the request's timezone.
+- s279 freshness with the response cache on: the payments list, the profile balance and the obligations list are current right after record, amount edit and undo (next due advances, then rolls back).
+- s280 export/import: a settlement row travels with its ledger note and lands on the importer's copy of the card (balance 0); a payment row naming another user's liability id is skipped, and the other user's ledger and balance are untouched.
+- Full suite after D275: 260 files / 4,727 tests green (vitest-full120).
 
 ## Session summary — 2026-09-03 (this segment)
 
