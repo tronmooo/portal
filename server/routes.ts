@@ -7718,10 +7718,11 @@ Rules:
       bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`);
       res.json(result);
     } catch (e: any) {
-      // A typed refusal (a 409 version conflict, a 400 from the storage) is
-      // the answer, not a server fault: let the handler map it.
-      if (Number(e?.statusCode) >= 400 && Number(e?.statusCode) < 500) throw e;
-      console.error("[habits]", e?.message || e); res.status(500).json({ error: "Failed to update habit" });
+      // Every refusal is the handler's to map — a typed 409/400, and the
+      // database's own answers (an unknown id, a link to a profile that is
+      // not this user's, D281). Swallowing them here turned a refused link
+      // into "Failed to update habit" 500.
+      throw e;
     }
   }));
   app.delete("/api/habits/:id", asyncHandler(async (req, res) => {

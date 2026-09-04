@@ -3692,5 +3692,9 @@ describe("D281 linking a row to a profile that is not yours answers 404", () => 
     const j = src.indexOf('app.post("/api/journal"');
     const block = src.slice(j, src.indexOf("upsertJournalEntry(storage, {", j));
     expect(block).toContain('if (!pid || !(await storage.getProfile(String(pid)))) return res.status(404).json({ error: "Linked profile not found" });');
+    // The habit edit route no longer swallows storage refusals into a 500.
+    const h = src.indexOf('app.patch("/api/habits/:id"');
+    const hb = src.slice(h, src.indexOf('app.delete("/api/habits/:id"', h));
+    expect(hb).not.toContain('res.status(500).json({ error: "Failed to update habit" })');
   });
 });
