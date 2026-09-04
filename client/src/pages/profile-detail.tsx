@@ -1,6 +1,7 @@
 import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
+import { fetchProfileDetail, profileDetailKey, profileDetailPlaceholder } from "@/lib/profile-detail-query";
 import { formatFieldKey, stringifyField } from "@/lib/field-display";
 import { formatMoney, formatFullDate, parseLocalDate } from "@/lib/format";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
@@ -1980,6 +1981,11 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
       const data = await res.json();
       if (!res.ok) {
         setLookupError(data.error || "Lookup failed");
+      } else if (data.noData) {
+        // The lookup found nothing. The server deliberately left the stored
+        // value alone (writing its 0 used to zero the asset out of net worth),
+        // so show the failure as an error — never as a $0 "estimate".
+        setLookupError(data.error || "Couldn't find a current market value. Your saved value is unchanged.");
       } else {
         setLookupResult({
           value: data.currentValue,
@@ -9785,6 +9791,16 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
       const res = await apiRequest("POST", `/api/profiles/${profileId}/lookup-value`);
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Lookup failed");
+      // noData = the lookup found nothing and the server left the stored value
+      // untouched on purpose. Report it as a failure, not as a $0 estimate.
+      if (data?.noData) {
+        toast({
+          title: "Couldn't find a market value",
+          description: data.error || "Your saved value is unchanged. Add more details and try again.",
+          variant: "destructive",
+        });
+        return;
+      }
       toast({ title: `Estimated at $${Number(data.currentValue).toLocaleString()}`, description: data.range ? `Range ${data.range}` : undefined });
       invalidateDomains("profiles");
       onChanged();
@@ -13040,60 +13056,20 @@ export default function ProfileDetailPage() {
     reader.readAsDataURL(file);
   };
 
-  const { data: profile, isLoading, error } = useQuery<ProfileDetail>({
-    queryKey: ["/api/profiles", id, "detail"],
-    queryFn: async () => {
-      // PERF (2026-07-08): ONE round-trip. /api/profile-bootstrap/:id returns
-      // detail + tree + allProfiles + assetPartyLinks + liabilityProfileLinks
-      // in a single response. Previously the page fired the bootstrap (as a
-      // fire-and-forget effect) AND /detail AND /api/profiles AND /tree in
-      // parallel on every open — the heavy getProfileDetail aggregation ran
-      // TWICE server-side and the profiles table was scanned three more times.
-      // Seeding the sibling cache keys here lets the dependent queries below
-      // (and every child component that reads the same keys) resolve from
-      // cache without any extra network calls.
-      try {
-        const res = await apiRequest("GET", `/api/profile-bootstrap/${id}`);
-        const b = await res.json();
-        if (b && typeof b === "object" && b.detail) {
-          if (b.tree) queryClient.setQueryData(["/api/profiles", id, "tree"], b.tree);
-          if (b.profiles) queryClient.setQueryData(["/api/profiles"], b.profiles);
-          if (b.assetPartyLinks) queryClient.setQueryData(["/api/asset-party-links"], b.assetPartyLinks);
-          if (b.liabilityProfileLinks) queryClient.setQueryData(["/api/liability-profile-links"], b.liabilityProfileLinks);
-          // Type-specific extras (PERF 2026-07-08): pre-seed the queries the
-          // asset/liability pages fire right after the detail resolves, so
-          // opening those profiles costs ONE round-trip instead of 5-6. Key
-          // shapes must match the consumers exactly — liability-detail.tsx
-          // uses both the array form ["/api/liabilities", id, "parties"] and
-          // the template-string form [`/api/liabilities/${id}/parties`] for
-          // parties, so both slots are seeded.
-          if (b.assetParties) queryClient.setQueryData(["/api/assets", id, "parties"], b.assetParties);
-          if (b.liabilityExtras && typeof b.liabilityExtras === "object") {
-            const ex = b.liabilityExtras;
-            if (ex.payments) queryClient.setQueryData([`/api/liabilities/${id}/payments`], ex.payments);
-            if (ex.schedule) queryClient.setQueryData(["/api/liabilities", id, "schedule"], ex.schedule);
-            if (ex.parties) {
-              queryClient.setQueryData(["/api/liabilities", id, "parties"], ex.parties);
-              queryClient.setQueryData([`/api/liabilities/${id}/parties`], ex.parties);
-            }
-            if (ex.assets) queryClient.setQueryData([`/api/liabilities/${id}/assets`], ex.assets);
-          }
-          // Flatten nested storage paths (fields.vehicles.*, fields.insurance.*,
-          // fields.housing.*, fields.other.*, fields.finance.*) up to top level
-          // so every reader (`f.licensePlate`, `f.currentValue`, `f.year`, etc.)
-          // works regardless of how the value was originally written.
-          return flattenProfile(b.detail);
-        }
-      } catch (err: any) {
-        // 404 = the profile genuinely doesn't exist — surface the error state.
-        if (String(err?.message || "").startsWith("404")) throw err;
-        // Any other failure (transient network, older server build) falls
-        // through to the legacy per-endpoint fetch below.
-      }
-      const res = await apiRequest("GET", `/api/profiles/${id}/detail`);
-      return flattenProfile(await res.json());
-    },
+  const { data: profile, isLoading, error, isPlaceholderData } = useQuery<ProfileDetail>({
+    // The fetch + sibling-key seeding lives in lib/profile-detail-query so the
+    // hover/touch warmup (warmProfileDetail) can prefetch this EXACT query.
+    // Navigation then reads the warm cache — or attaches to the in-flight
+    // prefetch — instead of firing a second round-trip after the tap.
+    queryKey: profileDetailKey(id!),
+    queryFn: () => fetchProfileDetail(id!),
     enabled: !!id,
+    // PERF: paint the real page immediately from the profiles list already in
+    // cache (identity + fields — everything the hero and detail rows read)
+    // instead of holding a full-page skeleton for the whole round-trip. The
+    // linked-data tabs fill in when the bootstrap lands. Falls back to the
+    // skeleton on a cold deep-link, where the list isn't cached either.
+    placeholderData: () => profileDetailPlaceholder(id) as ProfileDetail | undefined,
     // PERF: keep the detail in cache so re-opening a profile renders the header
     // and body from cache instantly instead of showing the full-page skeleton on
     // every visit. Mutations here invalidate this key explicitly, so a short
@@ -13103,6 +13079,14 @@ export default function ProfileDetailPage() {
     gcTime: 10 * 60 * 1000,
     refetchOnMount: false,
   });
+
+  // TRUE only once the real bootstrap payload has landed. `profile` is
+  // populated a beat earlier by placeholderData (the cached profiles-list row)
+  // so the page can paint instantly; every dependent query below must still
+  // wait for the real payload, because the bootstrap SEEDS their cache keys.
+  // Firing them off the placeholder would race the bootstrap with the exact
+  // redundant /api/profiles + /tree + /parties fan-out it exists to replace.
+  const detailLoaded = !!profile && !isPlaceholderData;
 
   // Page-level all-profiles — powers the new breadcrumb + summary + tree.
   // Shared across all child queries via the same queryKey so React Query
@@ -13114,7 +13098,7 @@ export default function ProfileDetailPage() {
   const { data: allProfilesPage = [] } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
-    enabled: !!id && !!profile,
+    enabled: !!id && detailLoaded,
   });
 
   // Tree for the current profile — used by Overview rebuild + Financials tab.
@@ -13122,7 +13106,7 @@ export default function ProfileDetailPage() {
   const { data: pageTreeData } = useQuery<any>({
     queryKey: ["/api/profiles", id, "tree"],
     queryFn: () => apiRequest("GET", `/api/profiles/${id}/tree`).then(r => r.json()),
-    enabled: !!id && !!profile,
+    enabled: !!id && detailLoaded,
   });
 
   // Once the profile loads, refine the browser-tab title so it reflects the
@@ -13165,6 +13149,10 @@ export default function ProfileDetailPage() {
 
   const assetTypes = ["vehicle","asset","subscription","loan","investment","property","insurance","medical","account"];
   const isAssetProfile = !!profile && assetTypes.includes(profile.type);
+  // Query gate: the bootstrap seeds ["/api/assets", id, "parties"], so the
+  // parties fetch below must wait for the real payload rather than firing off
+  // the instant-paint placeholder and duplicating that request.
+  const isAssetProfileLoaded = isAssetProfile && detailLoaded;
 
   // PR S: derive "own" trackers — trackers whose true home is THIS profile,
   // not one of its child asset/liability profiles. The server links a tracker
@@ -13196,7 +13184,7 @@ export default function ProfileDetailPage() {
   const { data: ownerCandidates } = useQuery<any[]>({
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
-    enabled: isAssetProfile,
+    enabled: isAssetProfileLoaded,
   });
   const personOptions = (ownerCandidates || []).filter((p: any) =>
     ["self","person"].includes(p.type) && !p.parentProfileId
@@ -13206,7 +13194,7 @@ export default function ProfileDetailPage() {
   const { data: currentPartyLinks = [], refetch: refetchPartyLinks } = useQuery<any[]>({
     queryKey: ["/api/assets", id, "parties"],
     queryFn: () => apiRequest("GET", `/api/assets/${id}/parties`).then(r => r.json()),
-    enabled: isAssetProfile && !!id,
+    enabled: isAssetProfileLoaded && !!id,
   });
 
   // Build checked set from current links (partyProfileId set)

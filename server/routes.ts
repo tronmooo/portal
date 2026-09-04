@@ -17,7 +17,7 @@ import { detectMoodFromText } from "@shared/mood-detect";
 import { computeKeyFindings } from "@shared/tracker-insights";
 import { ownedAssetIds } from "@shared/cost-of-ownership";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord, isOwnerRole } from "@shared/ownership-model";
-import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
+import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance, parseMoney } from "@shared/asset-value";
 import { summarizeAccounts, isAccountProfile } from "@shared/finance-accounts";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
@@ -5687,6 +5687,21 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     }
   }));
 
+  // The marker a failed lookup used to leave behind: estimateAssetValue's
+  // "no data" placeholder stamps this exact method string, and the route (before
+  // the noData guard) wrote its 0 straight onto currentValue while stashing the
+  // real figure in previousValue. A row matching ALL of
+  //   currentValue is 0/absent  +  that method string  +  previousValue > 0
+  // is therefore a value this route destroyed, and previousValue is the number
+  // it destroyed — recoverable exactly. Anything else is left alone.
+  const FAILED_LOOKUP_METHOD = "No data available";
+  function isZeroedByFailedLookup(fields: any): boolean {
+    if (!fields || typeof fields !== "object") return false;
+    if (!String(fields.valuationMethod || "").startsWith(FAILED_LOOKUP_METHOD)) return false;
+    if (parseMoney(fields.currentValue) > 0) return false;
+    return parseMoney(fields.previousValue) > 0;
+  }
+
   // Wave 9: Look up current market value for an asset profile.
   // POST /api/profiles/:id/lookup-value
   // - Loads the COMPLETE asset record (fields + related expenses/documents/
@@ -5710,6 +5725,23 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const valuableTypes = ["vehicle", "asset", "property", "investment"];
       if (!valuableTypes.includes(detail.type)) {
         return res.status(400).json({ error: `Cannot estimate value for type '${detail.type}'` });
+      }
+
+      // SELF-HEAL for rows this route already damaged. Before the noData guard
+      // below existed, a failed lookup persisted currentValue: 0 over the real
+      // figure and stashed it in previousValue — the asset showed $0 and fell
+      // out of net worth. Restore it from previousValue on the next lookup so
+      // the user gets their number back without re-typing it, and so the
+      // "prior value" comparison below is against the real figure.
+      if (isZeroedByFailedLookup(detail.fields)) {
+        const restored = parseMoney((detail.fields as any).previousValue);
+        try {
+          await storage.updateProfile(id, {
+            fields: { ...(detail.fields || {}), currentValue: restored },
+          });
+          (detail as any).fields = { ...(detail.fields || {}), currentValue: restored };
+          log.info(`[LookupValue] Restored ${id} from a zeroed failed lookup: $${restored}`);
+        } catch { /* best-effort — the fresh lookup below may fix it anyway */ }
       }
 
       // Include the existing AI summary (if any) as context — it often
@@ -5743,13 +5775,49 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
           method: "no data",
         });
       }
-      // Phase 8: accept estimatedValue === 0 as a valid "no data" placeholder.
-      // We persist with low confidence so the user can edit manually instead of
-      // hitting a hard 422 error. The AI fallback path always returns a record.
 
-      const oldValue = (detail.fields as any)?.currentValue
-                    ?? (detail.fields as any)?.purchasePrice
-                    ?? 0;
+      // Canonical resolver — the inline `currentValue ?? purchasePrice` pair
+      // missed marketValue/estimatedValue and every nested/snake_case path, so
+      // a value stored there read as 0 and was reported as "no prior value".
+      const oldValue = resolveAssetValue(detail) || 0;
+
+      // DATA LOSS GUARD (user report 2026-09-04): a valuation that found
+      // NOTHING comes back as a `noData` placeholder whose estimatedValue is 0.
+      // Persisting that 0 wiped the asset's stored value and dropped it out of
+      // net worth. A failed lookup must leave the stored value exactly as it
+      // was — we record only the diagnostic metadata and tell the client so it
+      // can show "couldn't find a value" instead of a fake $0 estimate.
+      if (valuation.noData || !(Number(valuation.estimatedValue) > 0)) {
+        try {
+          await storage.updateProfile(id, {
+            fields: {
+              ...(detail.fields || {}),
+              valuationMethod: valuation.method,
+              valuationConfidence: valuation.confidence,
+              valuationMissingInfo: valuation.missingInfo,
+              valuationAttemptedAt: valuation.valuationDate,
+            },
+          });
+        } catch { /* the lookup outcome is reportable even if the note fails */ }
+        return res.json({
+          noData: true,
+          error: "Couldn't find a current market value for this item. Your saved value was left unchanged — add more details (address, make/model, year, condition) or enter a value manually, then try again.",
+          previousValue: oldValue,
+          // The stored value is unchanged: report it so the client never
+          // renders a $0 where the user's real figure still lives.
+          currentValue: oldValue,
+          low: null,
+          high: null,
+          confidence: valuation.confidence,
+          method: valuation.method,
+          range: "",
+          factorsConsidered: [],
+          missingInfo: valuation.missingInfo || [],
+          valuationDate: valuation.valuationDate,
+          filledSpecs: {},
+          sources: [],
+        });
+      }
 
       // Specs the live search found on the item's own listing/record pages
       // (sqft, bed/bath count, lot size, mileage…) auto-fill EMPTY profile

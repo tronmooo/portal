@@ -15,22 +15,32 @@ import { queryClient, apiRequest, BROWSER_TIMEZONE } from "./queryClient";
 import { getUserCurrentMonth } from "@shared/timezone";
 import { seedDashboardCaches } from "./bootstrap-seed";
 import { perfMark, perfMeasure } from "./perf-marks";
+import { fetchProfileDetail, profileDetailKey } from "./profile-detail-query";
 
 // ── Profile detail warmup ────────────────────────────────────────────────────
 // First open of an asset/liability detail measured ~8s in production
 // (2026-07-17 live drive): the /api/profile-bootstrap/:id aggregation runs
-// ~12 Supabase queries cold. Firing it on hover/touchstart of the row warms
-// the SERVER's 30s response cache, so the page's own fetch (which owns the
-// client cache shape — flattenProfile + sibling-key seeding lives in
-// profile-detail.tsx) becomes a near-instant cache hit. Deliberately
-// fire-and-forget with NO client cache writes: zero shape risk.
+// ~12 Supabase queries cold. Firing it on hover/touchstart of the row warms the
+// payload before the user has finished tapping.
+//
+// PERF (2026-09-04, "opening an asset takes long"): this used to be a bare
+// fire-and-forget fetch with NO client cache writes — it only heated the
+// SERVER's 30s response cache, so after navigation the page still paid a full
+// second round-trip. It now prefetches the page's OWN query (same key, same
+// queryFn — both live in lib/profile-detail-query, so there is one shape and
+// zero shape risk), which means the page either renders straight from cache or
+// attaches to this in-flight request instead of issuing another.
 const detailWarmed = new Map<string, number>();
 export function warmProfileDetail(id: string): void {
   if (!id) return;
   const last = detailWarmed.get(id) || 0;
   if (Date.now() - last < 25_000) return; // inside the server's 30s cache window
   detailWarmed.set(id, Date.now());
-  apiRequest("GET", `/api/profile-bootstrap/${id}`).catch(() => {
+  queryClient.prefetchQuery({
+    queryKey: profileDetailKey(id),
+    queryFn: () => fetchProfileDetail(id),
+    staleTime: 30_000, // matches the page's own staleTime
+  }).catch(() => {
     detailWarmed.delete(id); // let a later hover retry after a failure
   });
 }

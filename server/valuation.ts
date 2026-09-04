@@ -86,6 +86,17 @@ export interface AssetValuation {
   specs?: Record<string, string | number>;
   /** Source URLs the estimate was drawn from (persisted as valuationSources). */
   sources?: string[];
+  /**
+   * TRUE when this record is the resilient "we could not determine a value"
+   * placeholder rather than a real estimate (every model path failed or the
+   * time budget ran out). `estimatedValue` is 0 and carries NO information.
+   *
+   * Callers MUST NOT persist a noData record's value onto a profile: writing
+   * its 0 over a stored value is data loss — it wiped the asset's worth and
+   * dropped it out of net worth (user report 2026-09-04, "I pressed look up
+   * value and the asset went to zero").
+   */
+  noData?: boolean;
 }
 
 // Outputs of prior valuations. NEVER included in a new valuation prompt —

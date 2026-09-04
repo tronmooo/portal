@@ -176,4 +176,67 @@ describe("POST /api/profiles/:id/lookup-value", () => {
     const res = await realFetch(`${base}/api/profiles/nope/lookup-value`, { method: "POST" });
     expect(res.status).toBe(404);
   });
+
+  // ── Regression: a failed lookup must NEVER zero out the stored value ──────
+  // User report 2026-09-04: "I pressed look up value and the asset went to
+  // zero and now net worth says only 36,000". When every model path failed,
+  // estimateAssetValue returned a $0 "no data" placeholder and this route
+  // persisted that 0 straight over currentValue — the asset lost its worth and
+  // dropped out of net worth. A failed lookup must be reported, not written.
+  describe("when the valuation finds nothing", () => {
+    beforeEach(() => {
+      // Both model paths fail: Perplexity 500s, and with no Anthropic key the
+      // fallback throws — exactly the state that produced the $0 placeholder.
+      vi.stubEnv("ANTHROPIC_API_KEY", "");
+      fetchMock.mockImplementation(async (url: any) => {
+        if (String(url).includes("perplexity.ai")) {
+          return { ok: false, status: 500, text: async () => "upstream down" } as any;
+        }
+        throw new Error("network unavailable in test");
+      });
+    });
+
+    it("leaves the stored value untouched and reports noData", async () => {
+      const res = await realFetch(`${base}/api/profiles/profile-crv/lookup-value`, { method: "POST" });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+
+      expect(data.noData).toBe(true);
+      expect(typeof data.error).toBe("string");
+      // The response reports the value the profile STILL has — never a $0.
+      expect(data.currentValue).toBe(21400);
+      expect(data.previousValue).toBe(21400);
+
+      // The stored value is exactly what it was.
+      const saved = stubState.profiles.get("profile-crv").fields;
+      expect(saved.currentValue).toBe(21400);
+      // ...and no previousValue was stamped from the failure, so a later
+      // successful lookup still compares against the real prior figure.
+      expect(saved.previousValue).toBeUndefined();
+    });
+
+    it("restores a value an earlier failed lookup already zeroed", async () => {
+      // A row damaged before the guard existed: currentValue 0, the real
+      // figure stashed in previousValue, and the placeholder method string.
+      stubState.profiles.set("profile-zeroed", {
+        ...crvDetail(),
+        id: "profile-zeroed",
+        name: "Zeroed Car",
+        fields: {
+          year: 2021, make: "Honda", model: "CR-V",
+          currentValue: 0,
+          previousValue: 21400,
+          valuationMethod: "No data available — please enter manually",
+        },
+      });
+
+      const res = await realFetch(`${base}/api/profiles/profile-zeroed/lookup-value`, { method: "POST" });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+
+      expect(data.noData).toBe(true);
+      expect(stubState.profiles.get("profile-zeroed").fields.currentValue).toBe(21400);
+      expect(data.currentValue).toBe(21400);
+    });
+  });
 });

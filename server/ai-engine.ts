@@ -482,6 +482,13 @@ async function webSearch(query: string, numResults = 5): Promise<string> {
 // The prompt is the full asset dossier (all fields + related upgrades/repairs/
 // documents/notes/summary) with prior-valuation outputs stripped — see
 // server/valuation.ts for why both of those matter.
+//
+// PPX_RETRY_DEADLINE_MS: past this much elapsed time we stop paying for a
+// second Perplexity call to tighten a wide range and clamp it deterministically
+// instead. The lookup route runs on api/index.js (vercel.json maxDuration 60s)
+// and still has to leave room for the Anthropic fallback + the profile write.
+const PPX_RETRY_DEADLINE_MS = 20_000;
+
 async function perplexityValuation(
   profile: { type: string; name: string; fields: Record<string, any> },
   context?: AssetValuationContext,
@@ -527,6 +534,7 @@ async function perplexityValuation(
     return (json?.choices?.[0]?.message?.content || "") as string;
   };
   const system = { role: "system", content: "You are an expert asset appraiser. Always respond with a single JSON object and a positive numeric value. Recompute every estimate from the provided details — never repeat a prior estimate." };
+  const startedAt = Date.now();
   try {
     const text = await callPerplexity([system, { role: "user", content: userMsg }]);
     if (text === null) return null;
@@ -535,6 +543,20 @@ async function perplexityValuation(
     // source envelope, not an estimate. Give the model ONE chance to tighten
     // it properly (drop outliers, weight the specific comps); if it still
     // can't, clamp deterministically so the user never sees a useless range.
+    //
+    // TIME BUDGET (2026-09-04): that retry is a second full live search, and
+    // property lookups (where wide AVM envelopes are the norm, so the retry
+    // fires almost every time) pushed the request past the 60s function limit
+    // — the user got a killed request or an empty result after a very long
+    // wait. Past PPX_RETRY_DEADLINE_MS we skip the retry and clamp
+    // deterministically instead: same tight band, no extra round-trip.
+    const retryAffordable = Date.now() - startedAt < PPX_RETRY_DEADLINE_MS;
+    if (parsed && parsed.estimatedValue > 0 && parsed.lowValue > 0 && parsed.highValue > 0
+        && (parsed.highValue - parsed.lowValue) / parsed.estimatedValue > MAX_RANGE_SPREAD
+        && !retryAffordable) {
+      console.log(`[Valuation] Skipping range-retry (${Date.now() - startedAt}ms elapsed) — clamping deterministically`);
+      return enforceRangeDiscipline(parsed);
+    }
     if (parsed && parsed.estimatedValue > 0 && parsed.lowValue > 0 && parsed.highValue > 0
         && (parsed.highValue - parsed.lowValue) / parsed.estimatedValue > MAX_RANGE_SPREAD) {
       const retryText = await callPerplexity([
@@ -646,9 +668,18 @@ export async function estimateAssetValue(
   } catch (e) {
     console.error("[Valuation] Failed:", e);
   }
-  // Last-resort floor: never block the UI with a hard failure. Return a 0 with low
-  // confidence and a clear method label so the route can persist a placeholder and
-  // the user can manually edit it. The route layer also accepts 0 (Phase 8 fix).
+  // Last-resort floor: never block the UI with a hard failure. Return a record
+  // flagged `noData` so callers can tell "the pipeline found nothing" apart from
+  // "this item is genuinely worth $0" and report it without touching stored data.
+  //
+  // The 0 in `estimatedValue` is NOT an estimate — persisting it over a stored
+  // value is data loss (the asset drops to $0 and out of net worth). Every
+  // caller must check `noData` / `estimatedValue > 0` before writing.
+  console.warn(
+    `[Valuation] No value found for ${profile.type} "${profile.name}" — every model path failed ` +
+    `(perplexity_key=${!!process.env.PERPLEXITY_API_KEY}, anthropic_key=${!!process.env.ANTHROPIC_API_KEY}, ` +
+    `search_chars=${searchResults.length}). Returning noData; the stored value must be left alone.`,
+  );
   return {
     estimatedValue: 0,
     lowValue: 0,
@@ -659,6 +690,7 @@ export async function estimateAssetValue(
     factorsConsidered: [],
     missingInfo: [],
     valuationDate: new Date().toISOString(),
+    noData: true,
   };
 }
 
@@ -13112,11 +13144,16 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       } catch { /* fall back to fields-only valuation */ }
 
       const valuation = await estimateAssetValue({ type: profile.type, name: profile.name, fields: profile.fields }, revalueCtx);
-      if (!valuation || valuation.estimatedValue === 0) {
-        return { error: "Could not estimate value for " + profile.name };
+      // A failed lookup comes back as a `noData` placeholder with a 0 value.
+      // Writing that 0 would wipe the asset's stored worth (and its net-worth
+      // contribution), so a failure leaves the profile untouched.
+      if (!valuation || valuation.noData || !(Number(valuation.estimatedValue) > 0)) {
+        return { error: "Could not estimate a value for " + profile.name + " — its saved value is unchanged." };
       }
 
-      const oldValue = profile.fields?.currentValue || profile.fields?.purchasePrice || 0;
+      // Canonical resolver: the inline pair missed marketValue/estimatedValue
+      // and every nested/snake_case path, so a value stored there read as 0.
+      const oldValue = sharedAssetValue(profile) || 0;
       await storage.updateProfile(profile.id, {
         fields: {
           currentValue: valuation.estimatedValue,
