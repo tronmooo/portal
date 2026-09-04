@@ -3667,3 +3667,16 @@ describe("D279 removing a bill-payment expense reverses the payment", () => {
     expect(profile.fields.occurrences["2026-09-03"].status).toBeNull();
   });
 });
+
+// ── D280: a delete that removed nothing reports false, so the route's 404 holds.
+describe("D280 storage deletes report whether a row was affected", () => {
+  it("income, artifact and domain deletes select the affected id", () => {
+    const src = readFileSync(new URL("../server/supabase-storage.ts", import.meta.url), "utf8");
+    for (const table of ["incomes", "artifacts", "domains"]) {
+      const i = src.indexOf(`from("${table}")`, src.indexOf(table === "incomes" ? "async deleteIncome(" : table === "artifacts" ? "async deleteArtifact(" : "async deleteDomain("));
+      const stmt = src.slice(i, src.indexOf(";", i));
+      expect(stmt).toContain('.select("id")');
+    }
+    expect(src).not.toMatch(/deleteIncome[\s\S]{0,400}return !error;/);
+  });
+});

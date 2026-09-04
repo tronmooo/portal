@@ -3978,8 +3978,10 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteIncome(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("incomes").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId).is("deleted_at", null);
-    return !error;
+    // `.select` so a row that was not there (or not this user's) reports
+    // false: the route's 404 was defeated by a "success" for zero rows (D280).
+    const { data, error } = await this.supabase.from("incomes").update({ deleted_at: new Date().toISOString() }).eq("id", id).eq("user_id", this.userId).is("deleted_at", null).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================
@@ -6302,8 +6304,8 @@ export class SupabaseStorage implements IStorage {
   }
 
   async deleteArtifact(id: string): Promise<boolean> {
-    const { error } = await this.supabase.from("artifacts").delete().eq("id", id).eq("user_id", this.userId);
-    return !error;
+    const { data, error } = await this.supabase.from("artifacts").delete().eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   // ============================================================
@@ -6891,8 +6893,8 @@ export class SupabaseStorage implements IStorage {
 
   async deleteDomain(id: string): Promise<boolean> {
     await this.supabase.from("domain_entries").delete().eq("domain_id", id).eq("user_id", this.userId);
-    const { error } = await this.supabase.from("domains").delete().eq("id", id).eq("user_id", this.userId);
-    return !error;
+    const { data, error } = await this.supabase.from("domains").delete().eq("id", id).eq("user_id", this.userId).select("id");
+    return !error && Array.isArray(data) && data.length > 0;
   }
 
   async getDomainEntries(domainId: string): Promise<DomainEntry[]> {
