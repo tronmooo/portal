@@ -3325,3 +3325,47 @@ describe("D269 stale identity twins", async () => {
     expect(f.balance == null).toBe(true);
   });
 });
+
+// ── D270: a payment dated differently is not the same tap.
+describe("D270 the same-tap fold requires the same payment date", async () => {
+  const { payBillOccurrence } = await import("../server/liability-payments");
+  // A storage whose occurrence claim answers "already paid" with the winner's
+  // stamp (what a second request sees seconds after the first, on any instance).
+  function claimedStorage(priorStamp: Record<string, any>) {
+    const rows: any[] = [];
+    const loan = { id: "loan-1", type: "liability", type_key: "personal_loan", name: "Loan", fields: { balance: 12000, monthlyAmount: 300, interestRate: 0, termMonths: 40, dueDate: "2026-09-10", nextDueDate: "2026-09-10", occurrences: { "2026-09-10": priorStamp } }, tags: [], notes: "" };
+    const storage: any = {
+      _timezone: "UTC",
+      getProfile: async () => loan,
+      updateProfile: async (_id: string, patch: any) => ({ ...loan, ...patch, fields: { ...loan.fields, ...(patch?.fields || {}) } }),
+      claimBillOccurrence: async () => ({ status: "already-paid", occurrences: loan.fields.occurrences }),
+      getLiabilityPayment: async (id: string) => rows.find((r) => r.id === id) || (id === priorStamp.paymentId ? { id, amount: 300, paymentDate: priorStamp.paymentDate || "2026-09-04" } : undefined),
+      getLiabilityPayments: async () => rows,
+      createLiabilityPayment: async (r: any) => { rows.push(r); return r; },
+      createExpense: async (e: any) => ({ id: "e1", ...e }),
+      getExpenses: async () => [],
+      getTasks: async () => [],
+    };
+    return { storage, rows };
+  }
+  const freshStamp = (paymentDate?: string) => ({ status: "paid", paymentId: "pay-1", amount: 300, actualAmount: 300, paidAmount: 300, postedAt: new Date().toISOString(), ...(paymentDate ? { paymentDate } : {}) });
+  it("the same amount seconds later on another payment date is recorded, not folded", async () => {
+    const { storage, rows } = claimedStorage(freshStamp("2026-09-04"));
+    const r: any = await payBillOccurrence(storage, "loan-1", { amount: 300, paymentDate: "2026-07-06", source: "route" } as any);
+    expect(r.deduped).toBeFalsy();
+    expect(rows.length).toBe(1);
+    expect(rows[0].paymentDate).toBe("2026-07-06");
+  });
+  it("the same amount seconds later on the same day is the same tap", async () => {
+    const { storage, rows } = claimedStorage(freshStamp("2026-09-04"));
+    const r: any = await payBillOccurrence(storage, "loan-1", { amount: 300, paymentDate: "2026-09-04", source: "route" } as any);
+    expect(r.deduped).toBe(true);
+    expect(r.payment?.id).toBe("pay-1");
+    expect(rows.length).toBe(0);
+  });
+  it("a stamp from before the change (no date) still folds on money and time", async () => {
+    const { storage } = claimedStorage(freshStamp());
+    const r: any = await payBillOccurrence(storage, "loan-1", { amount: 300, paymentDate: "2026-07-06", source: "route" } as any);
+    expect(r.deduped).toBe(true);
+  });
+});

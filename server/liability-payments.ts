@@ -593,9 +593,17 @@ export async function payBillOccurrence(
   // is the same money seconds after the winner; otherwise a second payment
   // (the rest of a partial, an extra amount sent the same day) that is
   // recorded without touching the series state.
+  // A repeated tap repeats the same payment: the same money, seconds later,
+  // dated the same day. A request that names another payment date — a
+  // back-filled month, a script replaying history — is a different payment;
+  // folding those answered every one with the first row while the balance
+  // moved once (D270). Stamps written before this change carry no date and
+  // fold on money and time alone, as before.
   const sameTap = (stamp: any) => {
     const ageMs = stamp && typeof stamp.postedAt === "string" ? Date.now() - Date.parse(stamp.postedAt) : NaN;
-    return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 8000 && Math.abs(Number(stamp.amount) - amount) < 0.005;
+    const stampDate = stamp && typeof stamp.paymentDate === "string" ? stamp.paymentDate.slice(0, 10) : "";
+    const sameDay = !stampDate || stampDate === String(paymentDate || "").slice(0, 10);
+    return Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 8000 && Math.abs(Number(stamp.amount) - amount) < 0.005 && sameDay;
   };
   // Only an explicit form submission means "pay this again": automation
   // (autopay, a confirmed extraction, a chat tool the model may call twice)
@@ -648,7 +656,7 @@ export async function payBillOccurrence(
   if (typeof claimFn === "function" && !extraOnly) {
     const stamp = {
       status: "paid", paymentId, amount, actualAmount: amount, paidAmount: amount,
-      postedAt: new Date().toISOString(), ...(account ? { accountId: account.id } : {}),
+      postedAt: new Date().toISOString(), paymentDate, ...(account ? { accountId: account.id } : {}),
     };
     const extra: Record<string, any> = { lastPaidDate: paymentDate };
     let advanced: string | null = null;
