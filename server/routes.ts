@@ -32,7 +32,7 @@ import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD } from "@shared/cache-domains";
-import { withLedgerNote, ledgerNoteOf, payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
+import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, payBillOccurrence, unpayBillOccurrence, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
@@ -6765,8 +6765,21 @@ Rules:
     res.json(updated);
   }));
   app.delete("/api/expenses/:id", asyncHandler(async (req, res) => {
-    if (!(await storage.deleteExpense(req.params.id))) return res.status(404).json({ error: "Expense not found" });
     const uid_e3 = cacheUserKey(req as AuthenticatedRequest);
+    // An expense a bill payment logged is that payment's record of the money
+    // leaving: deleting it alone left the bill paid, the stamp set and the
+    // account debited with no spend to show for it (D279). Its edit already
+    // reprices the payment; its delete retracts the payment the same way
+    // Reverse does (the retraction deletes the expense itself).
+    const existing = await storage.getExpense(req.params.id);
+    const retracted = await retractPaymentOfExpense(storage, existing, getTimezone(req), log);
+    if (retracted?.ok) {
+      forgetRecentPayments(uid_e3, String(retracted.liabilityId));
+      bustBillCaches(uid_e3);
+      bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`);
+      return res.json({ success: true, reversedPaymentId: retracted.paymentId });
+    }
+    if (!(await storage.deleteExpense(req.params.id))) return res.status(404).json({ error: "Expense not found" });
     bustCache(`expenses:${uid_e3}`); bustCache(`stats:${uid_e3}`);
     res.json({ success: true });
   }));

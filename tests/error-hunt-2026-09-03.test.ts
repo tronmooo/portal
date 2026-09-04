@@ -3633,6 +3633,37 @@ describe("D278 the pay route's double-tap memory is cleared by undo and edit", (
     expect(src).toContain("const forgetRecentPayments = (uid: string, billId: string) => {");
     expect(src).toContain("const prefix = `${uid}:${billId}:`;");
     expect(src).not.toContain("recentPayments.delete(`${uid}:${req.params.id}`);");
-    expect((src.match(/forgetRecentPayments\(/g) || []).length).toBe(3);
+    // undo route, ledger delete, ledger edit, and the bill-payment expense delete (D279)
+    expect((src.match(/forgetRecentPayments\(/g) || []).length).toBe(4);
+  });
+});
+// ── D279: removing a bill-payment expense retracts the payment it records.
+describe("D279 removing a bill-payment expense reverses the payment", () => {
+  it("the expense delete route and the assistant's delete, full refund and convert tools share one retraction", () => {
+    const routes = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
+    const i = routes.indexOf('app.delete("/api/expenses/:id"');
+    const block = routes.slice(i, i + 1800);
+    expect(block).toContain("const retracted = await retractPaymentOfExpense(storage, existing, getTimezone(req), log);");
+    expect(block).toContain("return res.json({ success: true, reversedPaymentId: retracted.paymentId });");
+    const ai = readFileSync(new URL("../server/ai-engine.ts", import.meta.url), "utf8");
+    expect((ai.match(/await retractPaymentOfExpense\(storage, expense as any, aiUserTimezone\(\)\)/g) || []).length).toBe(3);
+  });
+  it("retractPaymentOfExpense: not a bill payment → null; a bill payment → the retraction runs and the expense goes", async () => {
+    const { retractPaymentOfExpense } = await import("../server/liability-payments");
+    expect(await retractPaymentOfExpense({} as any, { id: "e1", tags: ["food"] })).toBeNull();
+    let deleted: string[] = []; let rows: any[] = [{ id: "pay-9", liabilityProfileId: "bill-9", amount: 80, paymentDate: "2026-09-03", principalPortion: 80, interestPortion: 0, paymentType: "standard" }];
+    let profile: any = { id: "bill-9", type: "liability", type_key: "utility", name: "Power", fields: { monthlyAmount: 80, dueDate: "2026-10-03", nextDueDate: "2026-10-03", frequency: "monthly", occurrences: { "2026-09-03": { status: "paid", paymentId: "pay-9", amount: 80, postedAt: "2026-09-03T00:00:00Z", paymentDate: "2026-09-03" } } }, tags: [], notes: "" };
+    const storage: any = {
+      _timezone: "UTC", getProfile: async () => profile, getProfiles: async () => [profile],
+      updateProfile: async (_id: string, patch: any) => { profile = { ...profile, fields: { ...profile.fields, ...(patch?.fields || {}) } }; return profile; },
+      getLiabilityPayment: async (id: string) => rows.find((r) => r.id === id) || null,
+      getLiabilityPayments: async () => rows, deleteLiabilityPayment: async (id: string) => { const n = rows.length; rows = rows.filter((r) => r.id !== id); return rows.length < n; },
+      unmarkLoanPayment: async () => 0, updateOccurrenceOverride: async (_id: string, day: string, patch: any) => { profile.fields.occurrences[day] = { ...profile.fields.occurrences[day], ...patch }; },
+      getExpenses: async () => [{ id: "e9", tags: ["payment:pay-9"], amount: 80 }], deleteExpense: async (id: string) => { deleted.push(id); return true; },
+    };
+    const r = await retractPaymentOfExpense(storage, { id: "e9", tags: ["payment:pay-9"] } as any, "UTC");
+    expect(r?.ok).toBe(true); expect(r?.paymentId).toBe("pay-9"); expect(rows.length).toBe(0);
+    expect(deleted).toContain("e9");
+    expect(profile.fields.occurrences["2026-09-03"].status).toBeNull();
   });
 });

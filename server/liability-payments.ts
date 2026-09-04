@@ -1201,6 +1201,32 @@ export function paymentIdOfExpense(expense: { tags?: unknown } | null | undefine
   return id || null;
 }
 
+/**
+ * Removing an expense a bill payment logged retracts that payment — the
+ * expense is the payment's record of the money leaving, so deleting it alone
+ * left the bill paid, the stamp set and the account debited (D279). One
+ * implementation for the expense delete route and the assistant's delete,
+ * full-refund and convert-to-asset tools. Returns null when the expense is
+ * not a bill payment's (the caller deletes it as usual), otherwise the
+ * retraction's outcome — the retraction deletes the expense itself.
+ */
+export async function retractPaymentOfExpense(
+  storage: IStorage,
+  expense: { id: string; tags?: unknown } | null | undefined,
+  timezone: string = DEFAULT_TIMEZONE,
+  logger: PaymentLogger = noopLogger,
+): Promise<{ ok: boolean; paymentId: string; liabilityId: string | null; expenseDeleted: boolean } | null> {
+  const paymentId = paymentIdOfExpense(expense);
+  if (!expense || !paymentId) return null;
+  const row: any = await storage.getLiabilityPayment(paymentId).catch(() => null);
+  if (!row?.liabilityProfileId) return { ok: false, paymentId, liabilityId: null, expenseDeleted: false };
+  const undone = await unpayBillOccurrence(storage, String(row.liabilityProfileId), { paymentId, source: "route" }, timezone, logger);
+  if (undone.ok && !undone.expenseDeleted) {
+    try { await storage.deleteExpense(expense.id); } catch { /* the caller's own delete follows */ }
+  }
+  return { ok: undone.ok, paymentId, liabilityId: String(row.liabilityProfileId), expenseDeleted: undone.ok };
+}
+
 export interface RepriceBillPaymentResult {
   ok: boolean;
   reason?: "not_found" | "unchanged";

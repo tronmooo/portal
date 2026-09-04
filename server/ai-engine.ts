@@ -125,7 +125,7 @@ import { resolveTrackerUnit } from "@shared/tracker-units";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
-import { signedPrincipal, payBillOccurrence, unpayBillOccurrence, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense } from "./liability-payments";
+import { signedPrincipal, retractPaymentOfExpense, payBillOccurrence, unpayBillOccurrence, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries, stemKey } from "@shared/series-detect";
@@ -10466,6 +10466,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const dResult = safeMatchEntity(expenses, input.description || "", e => e.description, { isDestructive: true });
       if (!dResult.match) return { error: dResult.error || "Expense not found", candidates: dResult.candidates };
       const expense = dResult.match;
+      // A bill payment's expense: deleting it reverses the payment (D279).
+      const retracted = await retractPaymentOfExpense(storage, expense as any, aiUserTimezone());
+      if (retracted?.ok) return { deleted: true, description: expense.description, id: expense.id, reversedPaymentId: retracted.paymentId, note: "This expense recorded a bill payment; the payment was reversed too (the bill is unpaid again and the account credited)." };
       await storage.deleteExpense(expense.id);
       return { deleted: true, description: expense.description, id: expense.id };
     }
@@ -10497,7 +10500,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (!assetPayload.ok) return { error: assetPayload.error };
         asset = await storage.createProfile(assetPayload.data);
       } catch (e: any) { return { error: `Could not create asset profile: ${e?.message || "unknown"}` }; }
-      await storage.deleteExpense(expense.id);
+      const retractedConv = await retractPaymentOfExpense(storage, expense as any, aiUserTimezone());
+      if (!retractedConv?.ok) await storage.deleteExpense(expense.id);
       return {
         result: { assetId: asset.id, assetName: asset.name, assetType, purchasePrice: expense.amount, purchaseDate: expense.date, removedExpenseId: expense.id },
         actions: [{ type: "create", category: "profile", data: asset }],
@@ -10516,8 +10520,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const remaining = Math.round((expense.amount - refundAmount) * 100) / 100;
       const refundTag = `refundOf:${expense.id}:${refundAmount}`;
       if (remaining <= 0) {
-        await storage.deleteExpense(expense.id);
-        return { result: { refunded: refundAmount, fullRefund: true, expenseId: expense.id, description: expense.description } };
+        const retractedRefund = await retractPaymentOfExpense(storage, expense as any, aiUserTimezone());
+        if (!retractedRefund?.ok) await storage.deleteExpense(expense.id);
+        return { result: { refunded: refundAmount, fullRefund: true, expenseId: expense.id, description: expense.description, ...(retractedRefund?.ok ? { reversedPaymentId: retractedRefund.paymentId } : {}) } };
       }
       const updated = await storage.updateExpense(expense.id, {
         amount: remaining,
