@@ -1099,6 +1099,8 @@ The hand-built replica had no `updated_at` BEFORE UPDATE triggers (production ha
 - s298 unknown/malformed ids: GET, PATCH and DELETE with a ghost uuid and with "not-a-uuid" across 18 route families all answer 404, never 5xx.
 - s299 amortization (shared summary): 4,000 at 6% with 300/mo → 14 months and 150.02 interest, matching a straight simulation; principal sums to the balance, no negative row, the last payment is the remainder; 100 on 10,000 at 24% is flagged never-amortizing; a paid-off loan reads 100%/0 months/0 interest.
 - s300 net-worth snapshot cron: three runs in one day leave one row for today, updated with a value change; the dashboard's asset total reflects a PATCH at once.
+- s301/s303 budgets: a budget row carries no spend figure (the bootstrap's `budgetSummary` does); totalSpent moves with an expense create, edit and delete at once with the cache on, totalBudget with a budget add and delete; re-adding a category updates the one budget rather than creating a twin.
+- s302 recurring expense: three daily-cron runs add no duplicate occurrence.
 - s291 cross-user status sweep (B against A's profile, tracker, habit, goal, task, event, journal entry, expense, income, document): GET, PATCH and DELETE all answer 404 and every row of A's is intact.
 - s289 expense ↔ bill payment: an amount edit on the logged expense reprices the payment row, the paid stamp and the account debit (85); after D279 the delete retracts the payment (0 rows, stamp cleared, account 1,000).
 - s290 incomes: create, edit and delete are visible in the list at once with the response cache on; B cannot see or edit A's income; the connected-finance summary carries no manual-income total (its `income` block is review counts), so no figure to compare there.
