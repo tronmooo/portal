@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } fro
 import { formatApiError } from "@/lib/formatError";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { invalidateDomain, invalidateDomains, patchQueries, dropUpcomingBillFromDashboard } from "@/lib/cache-bus";
 import { withFullLimit } from "@/lib/list-limit";
@@ -116,6 +116,7 @@ import { CashFlowView } from "@/components/finance/CashFlowView";
 import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { ExecutiveBriefing } from "@/components/dashboard/ExecutiveBriefing";
+import { getActiveTimezone } from "@/lib/timezone";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -135,13 +136,13 @@ function timeAgo(ts: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   // Compare YYYY-MM-DD strings rendered in the user's local timezone so a
   // 25-hour-old event whose calendar date equals today still says "Today".
-  const entryDay = entry.toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
-  const todayDay = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+  const entryDay = entry.toLocaleDateString('en-CA', { timeZone: getActiveTimezone() });
+  const todayDay = new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() });
   if (entryDay === todayDay) return "Today";
   // Yesterday in the user's timezone: subtract one day from today's local date.
   const yest = new Date();
   yest.setDate(yest.getDate() - 1);
-  const yesterdayDay = yest.toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+  const yesterdayDay = yest.toLocaleDateString('en-CA', { timeZone: getActiveTimezone() });
   if (entryDay === yesterdayDay) return "Yesterday";
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
@@ -624,7 +625,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
     const t = setTimeout(() => setShowRefetch(false), 3500);
     return () => clearTimeout(t);
   }, [refetching]);
-  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() }).slice(0, 7);
   const trailing = filterMode === "selected" && filterIds.length > 0 ? `&profileIds=${filterIds.join(",")}` : "";
   const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   // Round-6 fix (BUG-003/004/015): Hero KPI tile previously used
@@ -771,7 +772,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // window (supabase-storage.ts getStats/getDashboardEnhanced), so the
   // value cannot flip as the two endpoints race.
   const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
-  const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
+  const monthlyIncome = sumMonthlyIncomeNow(incomes, getActiveTimezone());
   // BUG (user report: tile "Out $0" while the Cash Flow popup said "Out $1,020"):
   // the tile only counted logged expenses; the popup counts recurring bills too.
   // Use the SAME definition as the popup: Out = month expenses + monthlyized
@@ -1550,12 +1551,12 @@ function loadDismissed(): Set<string> {
     const raw = localStorage.getItem(DISMISSED_LS_KEY);
     if (!raw) return new Set();
     const parsed = JSON.parse(raw) as { tz?: string; date: string; ids: string[] };
-    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: getActiveTimezone() });
     // Bucket expires when EITHER the date OR the timezone changes. The tz
     // check catches travelers and DST hops mid-day; without it, a user who
     // dismissed something at 11pm before "spring forward" would still see it
     // hidden after the clock jump.
-    if (parsed.date !== todayStr || parsed.tz !== BROWSER_TIMEZONE) {
+    if (parsed.date !== todayStr || parsed.tz !== getActiveTimezone()) {
       localStorage.removeItem(DISMISSED_LS_KEY);
       return new Set();
     }
@@ -1564,9 +1565,9 @@ function loadDismissed(): Set<string> {
 }
 function saveDismissed(ids: Set<string>) {
   try {
-    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: getActiveTimezone() });
     localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify({
-      tz: BROWSER_TIMEZONE,
+      tz: getActiveTimezone(),
       date: todayStr,
       ids: Array.from(ids),
     }));
@@ -2948,7 +2949,7 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
   const hasValidTarget = goal.target > 0;
   const pct = hasValidTarget ? Math.min(100, Math.round((goal.current / goal.target) * 100)) : 0;
   const isComplete = normalizeFilter(goal.status) === normalizeFilter("completed") || pct >= 100;
-  const daysLeft = daysUntilISO(goal.deadline, tzUserToday(BROWSER_TIMEZONE));
+  const daysLeft = daysUntilISO(goal.deadline, tzUserToday(getActiveTimezone()));
 
   if (!hasValidTarget) {
     return (
@@ -3127,7 +3128,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
             const decorated = activeGoals.map(g => {
               const goalCurrent = g.current || g.startValue || 0;
               const pct = g.target > 0 ? Math.min(100, Math.round((goalCurrent / g.target) * 100)) : 0;
-              const daysLeft = daysUntilISO(g.deadline, tzUserToday(BROWSER_TIMEZONE));
+              const daysLeft = daysUntilISO(g.deadline, tzUserToday(getActiveTimezone()));
               const isOverdue = daysLeft !== null && daysLeft < 0;
               const isAtRisk = !isOverdue && daysLeft !== null && daysLeft <= 30 && pct < 50 && daysLeft > 0;
               const explicitlyCompleted = normalizeFilter(g.status) === normalizeFilter("completed");
@@ -3237,7 +3238,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
             const pct = actionGoal.target > 0 ? Math.min(100, Math.round((currentVal / actionGoal.target) * 100)) : 0;
             const remaining = Math.max(0, actionGoal.target - currentVal);
             // Pace analysis — only when both deadline and createdAt exist (no fabrication).
-            const daysLeft = daysUntilISO(actionGoal.deadline, tzUserToday(BROWSER_TIMEZONE));
+            const daysLeft = daysUntilISO(actionGoal.deadline, tzUserToday(getActiveTimezone()));
             let pace: { label: string; tone: 'good' | 'warn' | 'bad' | 'neutral'; detail: string } | null = null;
             if (actionGoal.deadline && actionGoal.createdAt && actionGoal.target > 0) {
               const startMs = new Date(actionGoal.createdAt).getTime();
@@ -3423,7 +3424,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                 )}
               </div>
               {formDeadline && formTarget && Number(formTarget) > 0 && (() => {
-                const daysToDeadline = daysUntilISO(formDeadline, tzUserToday(BROWSER_TIMEZONE));
+                const daysToDeadline = daysUntilISO(formDeadline, tzUserToday(getActiveTimezone()));
                 if (daysToDeadline === null || daysToDeadline <= 0) return null;
                 const perDay = Number(formTarget) / daysToDeadline;
                 return (
@@ -3504,7 +3505,7 @@ const BUDGET_CATEGORIES = [
 
 function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?: string[]; filterMode?: string }) {
   const { toast } = useToast();
-  const [month, setMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7));
+  const [month, setMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() }).slice(0, 7));
   const [addOpen, setAddOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [newCat, setNewCat] = useState("");
@@ -3769,7 +3770,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
     queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then(r => r.json()),
   });
 
-  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() }).slice(0, 7);
   // Bug fix: budget summary was previously fetched without profileIds, so the
   // "Monthly Budget" card showed all-profile spending no matter which profile
   // filter the user had active. Thread the filter into both /api/budgets and
@@ -3817,7 +3818,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
   // source the drilldown popup uses) so the card headline and the popup total always match.
   // Falls back to stats?.monthlySpend for the brief window before enhanced data arrives.
   const monthlySpend = data?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
-  const monthlyIncome = useMemo(() => sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE), [incomes]);
+  const monthlyIncome = useMemo(() => sumMonthlyIncomeNow(incomes || [], getActiveTimezone()), [incomes]);
   // Same definition as the hero tile + Cash Flow popup: Out includes the
   // monthlyized recurring obligations, not just logged expenses.
   const cashFlow = monthlyIncome - monthlySpend - (data?.monthlyObligationTotal ?? 0);
@@ -5520,7 +5521,7 @@ export default function DashboardPage() {
   // dependent hooks read from the pre-filled cache.
   // Browser-zone month — the same key the budget hooks read (see line ~620),
   // so the seed lands in the slot they consume.
-  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+  const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() }).slice(0, 7);
   const bootstrapQs = (filterMode === "selected" && filterIds.length > 0)
     ? `?profileIds=${filterIds.join(",")}&month=${currentMonth}`
     : `?month=${currentMonth}`;
@@ -5879,9 +5880,9 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2 flex-wrap">
             <p className="text-sm font-semibold text-foreground/90 tracking-tight">
               {/* Part D: render the header date in the user's timezone, not the
-                  JS engine's local zone. BROWSER_TIMEZONE falls back to
+                  JS engine's local zone. getActiveTimezone() falls back to
                   America/Los_Angeles, matching the server's _timezone default. */}
-              {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: BROWSER_TIMEZONE })}
+              {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: getActiveTimezone() })}
             </p>
             <span className="text-xs text-muted-foreground/60">·</span>
             <MultiProfileFilter

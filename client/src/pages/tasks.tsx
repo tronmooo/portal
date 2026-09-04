@@ -11,7 +11,7 @@ import { MetricCard } from "@/components/ui/metric-card";
 const TASKS_ACCENT = "262 70% 62%";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
 import { isRecurring, humanSummary, parseRecurrence, userTags } from "@shared/recurrence";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -60,6 +60,7 @@ import type { Task, Profile } from "@shared/schema";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { changedFieldsOnly } from "@shared/field-patch";
 import { useToast } from "@/hooks/use-toast";
+import { getActiveTimezone } from "@/lib/timezone";
 
 const PRIORITY_COLORS: Record<string, string> = {
   low: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
@@ -779,7 +780,7 @@ export default function TasksPage() {
                       // Tomorrow in the user's zone: the UTC slice was already a
                       // day ahead after ~5 PM Pacific, so "snooze to tomorrow"
                       // landed two days out.
-                      const dateStr = tzAddDays(getUserToday(BROWSER_TIMEZONE), 1);
+                      const dateStr = tzAddDays(getUserToday(getActiveTimezone()), 1);
                       // Optimistic update: set dueDate immediately
                       await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
                       const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });

@@ -26,7 +26,7 @@ import { localDayOf } from "@shared/timezone";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient, recoverWedgedQueries, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient, recoverWedgedQueries } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
@@ -79,6 +79,7 @@ import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { extractVitals } from "@/lib/wellness-metrics";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
+import { getActiveTimezone } from "@/lib/timezone";
 
 /** Every drill-down this tab can open, each mapping to ONE canonical component.
  *  `wellness:<kind>` defers to the Wellness tab's own popup set. */
@@ -490,7 +491,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const mode = filterMode;
   const ids = filterIds;
   const param = mode === "selected" && ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
-  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: getActiveTimezone() });
 
   // NOTE (BUG-20260715-everyone-zeros): none of these query functions may
   // swallow errors into a cached-as-success empty value (`.catch(() => [])`).
@@ -706,7 +707,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // Cash flow — mirrors HubKpiStrip/HeroKPISection exactly: monthly income
   // minus (month expenses + monthlyized active obligations).
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
-  const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
+  const monthlyIncome = sumMonthlyIncomeNow(incomes, getActiveTimezone());
   const monthlySpendBase = snap?.totalMonthlySpend ?? stats?.monthlySpend;
   const monthlyExpenses = monthlySpendBase != null ? monthlySpendBase + (snap?.monthlyObligationTotal ?? 0) : null;
   const cashFlow = monthlyExpenses != null ? monthlyIncome - monthlyExpenses : null;
@@ -723,7 +724,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // day. Slicing the instant compared UTC's date with the user's, so a chore
   // finished this morning east of Greenwich (or last night in the US) read
   // as "0 completed today".
-  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && localDayOf(t.completedAt || t.updatedAt || null, BROWSER_TIMEZONE) === todayStr).length;
+  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && localDayOf(t.completedAt || t.updatedAt || null, getActiveTimezone()) === todayStr).length;
   const sortedPending = pending.slice().sort((a: any, b: any) =>
     (daysFromToday(a.dueDate) ?? 9e9) - (daysFromToday(b.dueDate) ?? 9e9));
 

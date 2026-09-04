@@ -13,7 +13,7 @@
 // lands, and its key/URL match the trackers page exactly so the cache is
 // shared with the Trackers tab.
 import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
-import { BROWSER_TIMEZONE } from "@/lib/queryClient";
+
 import { useState, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 // hashNavigate handles query-carrying targets ("/linked?tab=documents") correctly
@@ -28,6 +28,7 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { formatMoneyRound } from "@/lib/format";
 import { HUB_TABS } from "./hub-routes";
 import { Wallet, ArrowLeftRight, HeartPulse, Flame, CheckCircle2, FileText } from "lucide-react";
+import { getActiveTimezone } from "@/lib/timezone";
 
 // Drill-down popups — the SAME components the dashboard uses (user rule:
 // every stat opens its existing popup; never duplicate one). Lazy-loaded:
@@ -145,7 +146,7 @@ export function HubKpiStrip() {
   // CASH FLOW — mirrors HeroKPISection's definition exactly: monthly incomes
   // minus (month expenses + monthlyized active obligations).
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
-  const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
+  const monthlyIncome = sumMonthlyIncomeNow(incomes, getActiveTimezone());
   const monthlySpend = snap?.totalMonthlySpend ?? stats?.monthlySpend;
   const cashFlow = monthlySpend != null
     ? monthlyIncome - (monthlySpend + (snap?.monthlyObligationTotal ?? 0))

@@ -10,7 +10,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { parseLocalDate } from "@/lib/format";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { withFullLimit } from "@/lib/list-limit";
@@ -34,6 +34,7 @@ import {
   type WellnessMed, type WellnessSupp, type WellnessAppt,
 } from "@/components/wellness/WellnessOverview";
 import { WellnessPopup, type WellnessPopupKind } from "@/components/wellness/WellnessPopups";
+import { getActiveTimezone } from "@/lib/timezone";
 
 const HYDRATION_GOAL = 100; // oz/day — matches the reference dial
 const CALORIE_GOAL = 2300;  // kcal/day
@@ -276,7 +277,7 @@ export default function WellnessPage() {
       id: o.id, name, dose: dose || (o.fields?.dose as string | undefined),
       // Only a value that carries a clock time has one to show; a date-only
       // nextDueDate used to render a fabricated "5:00 PM" (UTC midnight, local).
-      time: o.nextDueDate && /T\d|:/.test(String(o.nextDueDate)) ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BROWSER_TIMEZONE }) : undefined,
+      time: o.nextDueDate && /T\d|:/.test(String(o.nextDueDate)) ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: getActiveTimezone() }) : undefined,
       taken: takenToday(o),
     };
   });
@@ -295,7 +296,7 @@ export default function WellnessPage() {
       // parseLocalDate: a date-only value is local midnight, not UTC midnight
       // (which showed the previous day in the Americas).
       date: (parseLocalDate(o.nextDueDate) ?? new Date(o.nextDueDate)).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      time: /T\d|:/.test(o.nextDueDate) ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BROWSER_TIMEZONE }) : undefined,
+      time: /T\d|:/.test(o.nextDueDate) ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: getActiveTimezone() }) : undefined,
     }));
 
   // Health documents (medical / lab / insurance / prescription / vaccination).
@@ -332,7 +333,7 @@ export default function WellnessPage() {
       const m = readMetric([t], [/.*/]);
       return {
         id: t.id, name: t.name,
-        date: m.loggedAt ? new Date(m.loggedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: BROWSER_TIMEZONE }) : undefined,
+        date: m.loggedAt ? new Date(m.loggedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: getActiveTimezone() }) : undefined,
         status: m.value != null ? `${m.value}${m.unit ? " " + m.unit : ""}` : undefined,
       };
     });

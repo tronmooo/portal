@@ -278,7 +278,7 @@ import {
 } from "recharts";
 import { Slider } from "@/components/ui/slider";
 import type { ProfileDetail, Profile, Document, TimelineEntry, Tracker } from "@shared/schema";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomains, patchQueries, patchProfileDetailList, composeRestores } from "@/lib/cache-bus";
 import { useResyncedState } from "@/hooks/useResyncedState";
 import { checkProfileRename } from "@shared/profile-rename";
@@ -296,13 +296,13 @@ function monthKeyOf(date: unknown): string {
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 7);
   const d = new Date(s);
   if (Number.isNaN(d.getTime())) return "";
-  try { return toLocalDateStr(d, BROWSER_TIMEZONE).slice(0, 7); } catch { return ""; }
+  try { return toLocalDateStr(d, getActiveTimezone()).slice(0, 7); } catch { return ""; }
 }
 
 // Calendar day of a timestamp in the browser's zone, for Today/Yesterday
 // grouping. The UTC slice put an 8 PM entry under "Today" all the next morning.
 function localDayOfTimestamp(ts: string): string {
-  try { return toLocalDateStr(new Date(ts), BROWSER_TIMEZONE); } catch { return String(ts || "").slice(0, 10); }
+  try { return toLocalDateStr(new Date(ts), getActiveTimezone()); } catch { return String(ts || "").slice(0, 10); }
 }
 import { habitDayProgress } from "@shared/habit-progress";
 import { DocumentDeleteDialog } from "@/components/DocumentDeleteDialog";
@@ -3348,7 +3348,14 @@ function StaticInfoTab({
   );
 
   const handleSaved = () => {
-    invalidateDomains("profiles");
+    // Assets and liabilities are profile ROWS discriminated by `type`, so a
+    // save on this page is just as likely to have moved a value, a balance or
+    // an ownership share as a name. "profiles" alone reaches neither
+    // /api/net-worth/history nor /api/cashflow nor the persisted launch
+    // bootstrap, which is why editing a co-owner's percentage left the
+    // net-worth chart on the old split — and a reload brought the old split
+    // back, because the bootstrap seeded it.
+    invalidateDomains("profiles", "assets", "liabilities");
   };
 
   // ── Fetch all profiles for BelongsToEditor candidate list ──
@@ -3947,7 +3954,7 @@ function ProductivityHubTab({
   // The user's day, matching how check-ins are written (habits.tsx). The UTC
   // date is already tomorrow from ~5 PM Pacific, which showed a habit just
   // checked off as not done and shifted "due today" by a day.
-  const todayISO = getUserToday(BROWSER_TIMEZONE);
+  const todayISO = getUserToday(getActiveTimezone());
   const habits = (profile.relatedHabits || []) as any[];
   const tasks = (profile.relatedTasks || []) as any[];
   const events = (profile.relatedEvents || []) as any[];
@@ -4278,7 +4285,7 @@ function ProductivityHubTab({
 }
 
 const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }: { habits: any[]; profileName: string }) {
-  const today = getUserToday(BROWSER_TIMEZONE);
+  const today = getUserToday(getActiveTimezone());
   if (!habits || habits.length === 0) {
     return (
       <Card>
@@ -4974,7 +4981,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   }, [(profile as any).ownedAssetExpenses]);
 
   const now = new Date();
-  const currentMonthKey = getUserToday(BROWSER_TIMEZONE).slice(0, 7);
+  const currentMonthKey = getUserToday(getActiveTimezone()).slice(0, 7);
   const thisMonth = expenses
     .filter(e => monthKeyOf(e.date) === currentMonthKey)
     .reduce((sum, e) => sum + (e.amount || 0), 0);
@@ -7178,8 +7185,8 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
 
   function getStreak(tracker: any): number {
     if (!tracker.entries?.length) return 0;
-    const dates = tracker.entries.map((e: any) => toLocalDateStr(new Date(e.timestamp), BROWSER_TIMEZONE));
-    return calculateStreak(dates, { today: getUserToday(BROWSER_TIMEZONE) }).current;
+    const dates = tracker.entries.map((e: any) => toLocalDateStr(new Date(e.timestamp), getActiveTimezone()));
+    return calculateStreak(dates, { today: getUserToday(getActiveTimezone()) }).current;
   }
 
   // ── log entry mutation ────────────────────────────────────
@@ -7811,7 +7818,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
 
   // Group by relative date, in the browser's zone (see localDayOfTimestamp).
   const now = new Date();
-  const todayStr = getUserToday(BROWSER_TIMEZONE);
+  const todayStr = getUserToday(getActiveTimezone());
   const yesterday = tzAddDays(todayStr, -1);
   const weekAgo = new Date(now.getTime() - 7 * 86400000).getTime();
 
@@ -12315,6 +12322,7 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
 // (extracted to avoid circular imports with liability-detail.tsx)
 export { ConnectionsTab, HistoryTab } from "@/components/ProfileSharedTabs";
 import { ConnectionsTab, HistoryTab } from "@/components/ProfileSharedTabs";
+import { getActiveTimezone } from "@/lib/timezone";
 
 function getTabsForType(type: string, profile?: any): TabDef[] {
   const assetSubtype = type === "asset" && profile?.fields?.assetSubtype ? String(profile.fields.assetSubtype) : null;
@@ -12631,7 +12639,7 @@ function SubscriptionImpactTab({ profile, profileId }: { profile: ProfileDetail;
   const monthlyCost = toMonthlyAmount(cost, freq);
   const expenses = profile.relatedExpenses || [];
 
-  const currentMonthKey = getUserToday(BROWSER_TIMEZONE).slice(0, 7);
+  const currentMonthKey = getUserToday(getActiveTimezone()).slice(0, 7);
   const currentYear = currentMonthKey.slice(0, 4);
 
   const thisMonthTotal = expenses

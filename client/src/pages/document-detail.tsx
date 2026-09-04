@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo, lazy, Suspense } fro
 import { DocumentLinkPicker } from "@/components/DocumentLinkPicker";
 import { useRoute, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { getUserToday } from "@shared/timezone";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { useDocumentBlobUrl, classifyDocument, prefetchDocumentBlob, wasFileDiscarded, DISCARDED_FILE_TAG } from "@/lib/document-preview";
 import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel } from "@shared/date-rules";
 import { UPCOMING_WINDOW_DAYS } from "@shared/extraction-calendar";
+import { getActiveTimezone } from "@/lib/timezone";
 
 // PDF.js renderer is code-split — only loaded when a PDF is actually viewed.
 const PdfCanvas = lazy(() => import("@/components/PdfCanvas"));
@@ -85,7 +86,7 @@ function getDateFieldStatus(key: string, value: any, docContext?: string): {
   if (!iso) return null;
   const cls = classifyDateField(key, docContext);
   if (!cls.actionable) return null;
-  const today = getUserToday(BROWSER_TIMEZONE);
+  const today = getUserToday(getActiveTimezone());
   const days = daysBetweenISO(today, iso);
   return {
     tone: days < 0 ? "past" : days <= UPCOMING_WINDOW_DAYS ? "soon" : "ok",

@@ -44,12 +44,13 @@ import {
 import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat, ChevronDown, Search, ArrowUpDown, X, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Link } from "wouter";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { useToast } from "@/hooks/use-toast";
 import type { Expense } from "@shared/schema";
 import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE } from "@shared/schema";
+import { getActiveTimezone } from "@/lib/timezone";
 import {
   BarChart,
   Bar,
@@ -187,7 +188,7 @@ export default function FinancePage() {
   // always silently used today's date. Edit Expense had a Date field, so the two
   // were inconsistent. Initialise the form's date to today in the user's timezone
   // and let the user override it.
-  const todayLocalISO = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+  const todayLocalISO = new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() });
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
   // BUG-023: track whether the user has attempted to submit so we can show
   // red borders on empty required fields instead of just a quiet inline hint.
@@ -305,7 +306,7 @@ export default function FinancePage() {
       // Round-6 fix (BUG-016): honour the user-entered date. Falls back to today
       // in the user's timezone if for some reason the field is cleared.
       const expenseDate = (vars.date || "").trim()
-        || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+        || new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() });
       const res = await apiRequest("POST", "/api/expenses", {
         description: desc,
         amount: vars.amount,
@@ -524,7 +525,7 @@ export default function FinancePage() {
       const prev = queryClient.getQueriesData({ queryKey: ["/api/loans/schedule"] });
       queryClient.setQueriesData({ queryKey: ["/api/loans/schedule"] }, (old: any) => {
         if (!Array.isArray(old)) return old;
-        const today = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() });
         return old.map((schedule: any) => {
           if (!schedule || !Array.isArray(schedule.payments)) return schedule;
           return {
@@ -580,7 +581,7 @@ export default function FinancePage() {
         amount: amt,
         category: vars.category,
         frequency: vars.frequency,
-        date: vars.date || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
+        date: vars.date || new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() }),
         tags: [],
         ...(chosenProfileId ? { linkedProfiles: [chosenProfileId] } : {}),
       });
@@ -600,7 +601,7 @@ export default function FinancePage() {
         amount: amt,
         category: vars.category,
         frequency: vars.frequency,
-        date: vars.date || new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }),
+        date: vars.date || new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() }),
         tags: [],
         linkedProfiles: chosenProfileId ? [chosenProfileId] : [],
         _optimistic: true,
@@ -732,7 +733,7 @@ export default function FinancePage() {
   // BUG-021: must use user-local month — toISOString() returns UTC, which can
   // tip into next month for Pacific users in the evening (Dashboard shows May
   // while Finance showed April). Match dashboard's `currentMonth` derivation.
-  const cfMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+  const cfMonth = new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() }).slice(0, 7);
   const { data: cashflow = [] } = useQuery<any[]>({ queryKey: ["/api/cashflow", cfMonth] });
 
   // ── Money-overview data (2026-07 Finance redesign) ───────────────────────
@@ -1133,7 +1134,7 @@ export default function FinancePage() {
           : (typeof snap.spendTrend === "number" ? null : null);
 
         // Cash flow: monthly income vs (month spend + monthlyized bills).
-        const monthlyIncome = sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE);
+        const monthlyIncome = sumMonthlyIncomeNow(incomes || [], getActiveTimezone());
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const cashOut = spendMtd + Number(snap.monthlyObligationTotal || 0);
         const savingsRate = monthlyIncome > 0 ? Math.round(((monthlyIncome - spendMtd) / monthlyIncome) * 100) : null;
@@ -1154,7 +1155,7 @@ export default function FinancePage() {
         // so the tile said "3" and the popup showed 7 (ARCHITECTURE §10.1).
         const upcomingBillsList = (Array.isArray(snap.upcomingBills) ? snap.upcomingBills : []) as any[];
 
-        const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
+        const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: getActiveTimezone() }).toUpperCase();
 
         // Financial alerts & insights — derived, honest, each deep-links.
         const alerts: Array<{ id: string; text: string; tone: "pos" | "neg" | "warn"; onClick?: () => void }> = [];
@@ -1168,7 +1169,7 @@ export default function FinancePage() {
 
         // Multi-month cash-flow trend (last 6 months) — shared helper so the
         // Cash Flow Overview popup plots the exact same series.
-        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE);
+        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), getActiveTimezone());
         // Per-KPI mini-chart series.
         const spendSeries = cashTrend.map(c => c.outflow);
         const incomeSeries = cashTrend.map(c => c.inflow);
@@ -1220,15 +1221,15 @@ export default function FinancePage() {
       {(() => {
         const fc: "all" | "selected" | "everyone" = (filterMode === "selected" ? "selected" : "everyone");
         const snap = enhanced?.financeSnapshot || {};
-        const monthlyIncome = sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE);
+        const monthlyIncome = sumMonthlyIncomeNow(incomes || [], getActiveTimezone());
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const recurringOut = Number(snap.monthlyObligationTotal || 0);
         const spendByCat: Record<string, number> = snap.spendByCategory || {};
         const upcomingBills = Array.isArray(snap.upcomingBills) ? snap.upcomingBills : [];
-        const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
-        const ymNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+        const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: getActiveTimezone() }).toUpperCase();
+        const ymNow = new Date().toLocaleDateString("en-CA", { timeZone: getActiveTimezone() }).slice(0, 7);
         const monthExpenses = (Array.isArray(expenses) ? expenses : []).filter((e: any) => String(e.date || "").slice(0, 7) === ymNow);
-        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE);
+        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), getActiveTimezone());
         const closer = (o: boolean) => !o && setFinancePopup(null);
         return (
           <>
@@ -1612,7 +1613,7 @@ export default function FinancePage() {
               // paychecks before their expected date. The server allowed confirm at any
               // time. Gate the Received button at the UI layer so a paycheck can only be
               // marked received once expected_date has actually arrived (in the user's TZ).
-              const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
+              const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() });
               const expectedISO = (pc.expected_date || '').slice(0, 10);
               const isFuture = expectedISO && expectedISO > todayISO;
               return (

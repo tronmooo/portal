@@ -92,7 +92,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
 import { invalidateDomains } from "@/lib/cache-bus";
 import {
@@ -115,6 +115,7 @@ import {
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus, BILL_STATUS_META } from "@shared/liability-status";
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
+import { getActiveTimezone } from "@/lib/timezone";
 
 interface LiabilityProfileLike {
   id: string;
@@ -3449,7 +3450,7 @@ function ActivityTimelineCard({
   // Group by Today / Yesterday / This Week / Earlier, in the browser's zone —
   // the UTC slice put an 8 PM entry under "Today" all the next morning.
   const now = new Date();
-  const todayStr = getUserToday(BROWSER_TIMEZONE);
+  const todayStr = getUserToday(getActiveTimezone());
   const yesterday = tzAddDays(todayStr, -1);
   const weekAgo = new Date(now.getTime() - 7 * 86400000).getTime();
   const groups: { label: string; items: ActivityEntry[] }[] = [
@@ -3460,7 +3461,7 @@ function ActivityTimelineCard({
   ];
   for (const e of entries.slice(0, 100)) {
     let d: string;
-    try { d = toLocalDateStr(new Date(e.timestamp), BROWSER_TIMEZONE); } catch { d = String(e.timestamp || "").slice(0, 10); }
+    try { d = toLocalDateStr(new Date(e.timestamp), getActiveTimezone()); } catch { d = String(e.timestamp || "").slice(0, 10); }
     const t = new Date(e.timestamp).getTime();
     if (d === todayStr) groups[0].items.push(e);
     else if (d === yesterday) groups[1].items.push(e);

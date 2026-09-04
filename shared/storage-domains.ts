@@ -35,7 +35,11 @@ export interface StorageWriteTarget extends StorageTarget {
 /** Verbs that mean "this call wrote something", mapped to the patch op. */
 const VERB_OPS: Record<string, "create" | "update" | "delete"> = {
   create: "create", add: "create", log: "create", save: "create", record: "create", take: "create",
-  delete: "delete", unlink: "delete", remove: "delete",
+  // `purge` destroys a document's row AND its bytes (the only route that
+  // does). It was not in this list, so purgeDocument was not a write as far as
+  // the journal was concerned: the response carried no manifest and nothing
+  // downstream was told the document had gone.
+  delete: "delete", unlink: "delete", remove: "delete", purge: "delete",
   update: "update", set: "update", upsert: "update", mark: "update", toggle: "update",
   link: "update", checkin: "update", confirm: "update", pay: "update", restore: "update",
   ensure: "update", copy: "update", migrate: "update", propagate: "update", repair: "update",

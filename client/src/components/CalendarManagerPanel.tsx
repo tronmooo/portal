@@ -22,7 +22,7 @@
 import { useState, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { BROWSER_TIMEZONE, queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { useProfileScope, profileScopeParam } from "@/hooks/useProfileScope";
 import { scopedKey } from "@shared/query-keys";
@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import { OBLIGATION_KIND_META, type ObligationKind } from "@shared/schema";
 import type { Obligation } from "@shared/schema";
+import { getActiveTimezone } from "@/lib/timezone";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -111,7 +112,7 @@ function parseQuickAdd(text: string): { kind: "obligation" | "event" | "task"; p
   // Everyday words ("tomorrow at 3pm", "next friday", "in 3 days", "Sept 4
   // 10:30") → a day and a clock time in the user's zone, stripped from the
   // title. Explicit "YYYY-MM-DD" and "on the 15th" keep working below.
-  const when = parseQuickWhen(text, BROWSER_TIMEZONE);
+  const when = parseQuickWhen(text, getActiveTimezone());
   let dueDate: string | null = when.date || null;
   const dateMatch = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
   if (!dueDate && dateMatch) dueDate = dateMatch[1];

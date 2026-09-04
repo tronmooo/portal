@@ -4,7 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { invalidateDomain } from "@/lib/cache-bus";
-import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
 import { parseLocalDate } from "@/lib/format";
 import { getFilterLabel } from "@/lib/profileFilter";
@@ -32,6 +32,7 @@ import type { JournalEntry, MoodLevel, Profile } from "@shared/schema";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
+import { getActiveTimezone } from "@/lib/timezone";
 
 const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
   amazing:   { icon: Sparkles, label: "Amazing",   color: "#6DAA45", bg: "bg-green-500/10" },
@@ -452,7 +453,7 @@ export default function JournalPage() {
   const last7: { date: string; mood?: MoodLevel }[] = [];
   // Entry dates are written in the browser's zone (en-CA), so walk back from
   // the same "today" — the UTC slice left today's dot dark after ~5 PM Pacific.
-  const todayLocal = getUserToday(BROWSER_TIMEZONE);
+  const todayLocal = getUserToday(getActiveTimezone());
   for (let i = 6; i >= 0; i--) {
     const dateStr = tzAddDays(todayLocal, -i);
     const entry = entries.find(e => e.date === dateStr);

@@ -13,7 +13,7 @@ import { isInScope as scopeIsInScope, selfIdsFrom, withAncestorOwnerIds } from "
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { isRecurringBill } from "@shared/liability-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -38,6 +38,7 @@ import { useShowTestData } from "@/lib/showTestData";
 import { netWorthView } from "@/lib/net-worth-view";
 import { EmptyState } from "@/components/ui/empty-state";
 import { BubbleModal } from "@/components/ui/bubble-modal";
+import { getActiveTimezone } from "@/lib/timezone";
 
 // P1.2 remediation: the asset/liability value resolvers are imported from
 // @shared/asset-value (the single source of truth) instead of the hand-copied
@@ -501,7 +502,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
   const expenses: any[] = Array.isArray(expRaw) ? expRaw : (expRaw?.items || []);
 
   const now = new Date();
-  const ymNow = now.toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+  const ymNow = now.toLocaleDateString("en-CA", { timeZone: getActiveTimezone() }).slice(0, 7);
   const yearNow = ymNow.slice(0, 4);
   const lastDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const ymLast = `${lastDate.getFullYear()}-${String(lastDate.getMonth() + 1).padStart(2, "0")}`;
@@ -669,11 +670,11 @@ export function BudgetPopup({
   // the active profile filter, so switching profiles didn't update what the
   // popup showed. Thread filterMode/filterIds the same way the Hero card and
   // Finance section do.
-  // P1.1 remediation: use the browser timezone (same BROWSER_TIMEZONE every
+  // P1.1 remediation: use the browser timezone (same getActiveTimezone() every
   // request sends as the X-Timezone header), not a hardcoded zone. The server
   // computes month boundaries from that same header, so client and server
   // agree on what "this month" means for the user.
-  const currentMonthForPopup = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+  const currentMonthForPopup = new Date().toLocaleDateString('en-CA', { timeZone: getActiveTimezone() }).slice(0, 7);
   const budgetsParam = filterMode === "selected" && filterIds.length > 0
     ? `?month=${currentMonthForPopup}&profileIds=${filterIds.join(",")}`
     : `?month=${currentMonthForPopup}`;

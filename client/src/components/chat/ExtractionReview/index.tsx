@@ -12,7 +12,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Calendar, Check, Loader2 } from "lucide-react";
-import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
 import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ import { DocumentUnderstanding } from "./DocumentUnderstanding";
 import { ProposedActions } from "./ProposedActions";
 import { ActionGroupSection } from "./ActionGroupSection";
 import { AddActionDialog } from "./AddActionDialog";
+import { getActiveTimezone } from "@/lib/timezone";
 
 
 // ── Extraction Confirmation UI (two-phase extraction) ───────────────────────
@@ -309,7 +310,7 @@ export function ExtractionConfirmation({
   // be written. Before this, an actionable date was shown as an ordinary row
   // with no calendar affordance at all (user report 2026-08-25: a parking
   // citation's due date was extracted and then went nowhere visible).
-  const todayISO = useMemo(() => getUserToday(BROWSER_TIMEZONE), []);
+  const todayISO = useMemo(() => getUserToday(getActiveTimezone()), []);
   const dateRows: ExtractionDateRow[] = useMemo(
     () => extractionDateRows(fields, {
       documentContext: `${extraction.documentType ?? ""} ${extraction.label ?? ""}`,
@@ -414,7 +415,7 @@ export function ExtractionConfirmation({
         vendor: vendorField?.value ? String(vendorField.value) : undefined,
         date: dateField?.value
           ? String(dateField.value)
-          : getUserToday(BROWSER_TIMEZONE),
+          : getUserToday(getActiveTimezone()),
       };
     }
 

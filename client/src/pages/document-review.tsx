@@ -35,7 +35,7 @@ import {
   CreditCard, TrendingUp, Zap, Link2, Maximize2, Minus, Plus, RefreshCw,
   ShieldCheck, StickyNote,
 } from "lucide-react";
-import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -57,6 +57,7 @@ import { groupItemsIntoSections } from "@shared/extraction-sections";
 import { itemsClaimedByActions, OPERATION_LABEL, type ProposedAction } from "@shared/extraction-actions";
 import type { SemanticEntity } from "@shared/semantic-document";
 import { CONFIDENCE_HIGH, CONFIDENCE_MEDIUM } from "@shared/semantic-document";
+import { getActiveTimezone } from "@/lib/timezone";
 
 const PdfCanvas = lazy(() => import("@/components/PdfCanvas"));
 
@@ -500,7 +501,7 @@ export function DocumentReviewScreen({
   const entities = extraction.semantic?.entities ?? [];
 
   // ── Confirm ────────────────────────────────────────────────────────────────
-  const todayISO = useMemo(() => getUserToday(BROWSER_TIMEZONE), []);
+  const todayISO = useMemo(() => getUserToday(getActiveTimezone()), []);
   const docLabel = extraction.documentName || extraction.label || extraction.fileName;
 
   const handleConfirm = async () => {

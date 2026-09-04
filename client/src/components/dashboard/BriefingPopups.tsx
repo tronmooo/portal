@@ -178,9 +178,12 @@ function ExpandCard({ summary, urgentBorder, children, testId }: {
 }
 
 const invalidateFinance = () => {
-  // Cache bus: obligations domain covers /api/obligations + dashboard-enhanced
-  // + stats + cashflow + loans/schedule. Bootstrap + timeline have no matching
-  // domain entry, so they stay explicit.
+  // The obligations domain now covers everything a bill action touches:
+  // /api/obligations, the aggregates, cashflow, loans/schedule, the expense +
+  // budget + account + net-worth surfaces a payment moves, AND
+  // /api/obligation-occurrences — the per-due-date paid/skipped state this
+  // popup's Skip button writes to, which nothing here used to invalidate, so
+  // a skipped bill stayed "scheduled" on the calendar.
   invalidateDomain("obligations");
   queryClient.invalidateQueries({ queryKey: ["/api/dashboard-bootstrap"] });
   queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });

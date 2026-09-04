@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useDeferredValue, useMemo, lazy, memo, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
 import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -1328,6 +1328,7 @@ import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCach
 import { ChatSuggestions, ChatFollowUps } from "@/components/chat/ChatSuggestions";
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
 import { scopedKey } from "@shared/query-keys";
+import { getActiveTimezone } from "@/lib/timezone";
 
 // ─────────────────────────────────────────────
 // Confirmation card with inline Edit + Undo

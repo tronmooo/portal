@@ -14,7 +14,8 @@
 //     steady-state keep-alive pings are never suppressed.
 
 import { getProfileFilter } from "@/lib/profileFilter";
-import { BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getActiveTimezone } from "./timezone";
+
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -69,7 +70,7 @@ export function warmup(authHeader?: Record<string, string>): void {
       keepalive: true,
       // The warmed entries are read by this browser's real requests, which
       // carry its timezone — the warm-up must compute them in the same day.
-      headers: authed ? { ...authHeader, "X-Timezone": BROWSER_TIMEZONE } : undefined,
+      headers: authed ? { ...authHeader, "X-Timezone": getActiveTimezone() } : undefined,
     }).catch(() => {});
     // The AI lambda is a SEPARATE Vercel function (vercel.json routes
     // /api/chat/* to api/ai.js) that /api/warmup never touches — without this

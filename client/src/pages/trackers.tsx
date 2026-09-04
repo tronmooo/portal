@@ -1,5 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
-import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
+import { getActiveTimezone } from "@/lib/timezone";
 import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
 import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
 import { daysUntilISO } from "@shared/date-rules";
@@ -7,7 +7,7 @@ import { daysUntilISO } from "@shared/date-rules";
 // "Today" in the browser's zone. The UTC-date prefix test reset the Today
 // calories / hydration / dose tiles at 5-8 PM local for US users.
 function isTodayLocal(timestamp: string): boolean {
-  try { return tzLocalDateStr(new Date(timestamp), TRACKER_TZ) === tzUserToday(TRACKER_TZ); } catch { return false; }
+  try { return tzLocalDateStr(new Date(timestamp), getActiveTimezone()) === tzUserToday(getActiveTimezone()); } catch { return false; }
 }
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -5295,7 +5295,7 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
         <>
           {trackerGoals.map(g => {
             const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
-            const daysLeft = daysUntilISO(g.deadline, tzUserToday(TRACKER_TZ));
+            const daysLeft = daysUntilISO(g.deadline, tzUserToday(getActiveTimezone()));
             return (
               <div key={g.id} role="button" tabIndex={0} aria-label={`Edit goal: ${g.title}`} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors pressable" onClick={() => openEdit(g)} onKeyDown={onEnterOrSpace(() => openEdit(g))} data-testid={`tracker-goal-${g.id}`}>
                 <div className="flex items-center justify-between">
@@ -7182,7 +7182,7 @@ export default function TrackersPage() {
                 // the last payment. A loan with only "due on the 15th" read
                 // "No due date" here while the calendar put it on the 15th.
                 const rawDue = resolveLiabilityDueDate({ ...fin, ...fields })
-                  ?? deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(TRACKER_TZ)).nextDueDate
+                  ?? deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(getActiveTimezone())).nextDueDate
                   ?? fin.dueDate;
                 const due = fmtDue(rawDue);
                 const dueIn = daysUntilDue(rawDue);

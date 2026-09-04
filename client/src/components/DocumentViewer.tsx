@@ -39,10 +39,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { ExternalLink, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { fieldExpiryStatus } from "@shared/date-rules";
 import { getUserToday } from "@shared/timezone";
 import { cn } from "@/lib/utils";
+import { getActiveTimezone } from "@/lib/timezone";
 import {
   useDocumentBlobUrl,
   wasFileDiscarded,
@@ -96,7 +97,7 @@ function formatFieldLabel(key: string): string {
 }
 
 function getExpirationStatus(key: string, value: any): "expired" | "soon" | "valid" | null {
-  return fieldExpiryStatus(key, value, getUserToday(BROWSER_TIMEZONE));
+  return fieldExpiryStatus(key, value, getUserToday(getActiveTimezone()));
 }
 
 function ExpirationBadge({ status }: { status: "expired" | "soon" | "valid" }) {

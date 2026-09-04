@@ -9,7 +9,7 @@
 // no page state, and removing it reverts the app to the pre-hub behavior.
 import { useEffect, useRef } from "react";
 import { useLocation } from "wouter";
-import { BROWSER_TIMEZONE } from "@/lib/queryClient";
+
 // hashNavigate (NOT wouter navigate) — tab routes carry queries ("/linked?tab=assets")
 // and wouter's hash navigate hoists the query OUT of the hash ("?tab=assets#/linked"),
 // where trackers.tsx getQuerySection would never see it on subsequent in-hash navs.
@@ -20,6 +20,7 @@ import { useOverflowX } from "@/hooks/useOverflowX";
 import { HUB_TABS, activeHubTab, hubTabAccent, infoTabRoute, reconcileInfoRoute } from "./hub-routes";
 import { HubKpiStrip } from "./HubKpiStrip";
 import { HubProfileSwitcher } from "./HubProfileSwitcher";
+import { getActiveTimezone } from "@/lib/timezone";
 
 export function HubShell() {
   const [location] = useLocation();
@@ -53,7 +54,7 @@ export function HubShell() {
   // ever re-rendered this component after resume.
   useResumeTick();
   const dateLabel = new Date().toLocaleDateString("en-US", {
-    weekday: "long", month: "long", day: "numeric", timeZone: BROWSER_TIMEZONE,
+    weekday: "long", month: "long", day: "numeric", timeZone: getActiveTimezone(),
   });
 
   const [tabsRef, tabsClipped] = useOverflowX<HTMLDivElement>([]);

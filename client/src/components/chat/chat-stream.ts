@@ -1,3 +1,4 @@
+import { getActiveTimezone } from "@/lib/timezone";
 // ── Chat streaming transport (P0: chat had NO streaming) ─────────────────────
 // POSTs /api/chat with SSE opt-in (`?stream=1` + `Accept: text/event-stream`)
 // and incrementally surfaces the server's progress frames:
@@ -21,7 +22,7 @@
 //    JSON).
 //  - Broken stream mid-flight: the promise rejects with a "network"-shaped
 //    error message so the existing failed/retry affordance in chat.tsx fires.
-import { BROWSER_TIMEZONE } from "@/lib/queryClient";
+
 
 // Same build-time placeholder trick as lib/queryClient.ts — the iOS Capacitor
 // build rewrites the literal to the real API origin; web builds get "".
@@ -99,7 +100,7 @@ export async function streamChat(body: unknown, callbacks: ChatStreamCallbacks =
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
-        "X-Timezone": BROWSER_TIMEZONE,
+        "X-Timezone": getActiveTimezone(),
       },
       body: JSON.stringify(body),
       signal: controller.signal,

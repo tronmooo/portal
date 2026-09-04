@@ -2,7 +2,7 @@ import { Switch, Route, Router, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { parse as parseRoutePattern } from "regexparam";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
-import { queryClient, apiRequest, BROWSER_TIMEZONE } from "./lib/queryClient";
+import { queryClient, apiRequest } from "./lib/queryClient";
 import { getUserCurrentMonth } from "@shared/timezone";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { warmup } from "@/lib/warmup";
@@ -46,6 +46,7 @@ import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 
 // Keep lightweight pages as direct imports
 import NotFound from "@/pages/not-found";
+import { getActiveTimezone } from "@/lib/timezone";
 
 // Lazy load heavy pages
 // PERF Phase 1.5 (2026-07-16): ChatPage was a static import — 3.7k lines of
@@ -646,7 +647,7 @@ function DataPrefetch() {
     const { mode, selectedIds: ids } = getProfileFilter();
     // The user's month (not UTC's): the budget hooks key on the browser-zone
     // month, so a UTC key seeded the wrong slot on the last evening of a month.
-    const month = getUserCurrentMonth(BROWSER_TIMEZONE);
+    const month = getUserCurrentMonth(getActiveTimezone());
     const qs = (mode === 'selected' && ids.length > 0)
       ? `?profileIds=${ids.join(',')}&month=${month}`
       : `?month=${month}`;

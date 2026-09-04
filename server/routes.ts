@@ -7730,7 +7730,11 @@ Rules:
     }, log);
     if (!result.ok) return res.status(404).json({ error: result.reason === "not_found" ? "Habit not found" : "Checkin not found" });
     const uid_h2 = cacheUserKey(req as AuthenticatedRequest);
-    bustCache(`habits:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`notifications:${uid_h2}`);
+    // …including `trackers:`. Undoing a check-in removes the MIRRORED TRACKER
+    // ENTRY (see uncompleteHabitOccurrence above), exactly as checking in
+    // creates one — but only the check-in route busted the tracker cache, so
+    // on a warm instance the undone dose stayed on the tracker chart.
+    bustCache(`habits:${uid_h2}`); bustCache(`trackers:${uid_h2}`); bustCache(`stats:${uid_h2}`); bustCache(`notifications:${uid_h2}`);
     res.json({ success: true, removedCheckinId: result.removedCheckinId, removedTrackerEntryIds: result.removedTrackerEntryIds, progress: result.progress });
   }));
   app.patch("/api/habits/:id", asyncHandler(async (req, res) => {

@@ -3,7 +3,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { stopProp } from "@/lib/event-utils";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { withFullLimit } from "@/lib/list-limit";
 import { getFilterLabel } from "@/lib/profileFilter";
@@ -34,6 +34,7 @@ import { getUserToday, addDays, parseLocalDate } from "@shared/timezone";
 import { useState, useEffect } from "react";
 import { habitDayProgress } from "@shared/habit-progress";
 import { useToast } from "@/hooks/use-toast";
+import { getActiveTimezone } from "@/lib/timezone";
 
 const ICON_MAP: Record<string, any> = { Droplets, Brain, BookOpen, Smartphone, Zap, Flame };
 
@@ -41,10 +42,10 @@ function HabitCard({ habit }: { habit: Habit }) {
   const { toast } = useToast();
   // "Today" in the user's timezone. The server has no stored timezone
   // preference — it derives the user's tz from the X-Timezone header the
-  // client sends (BROWSER_TIMEZONE, see queryClient.ts). Using the same tz
+  // client sends (getActiveTimezone(), see lib/timezone.ts). Using the same tz
   // here keeps the client's "today" in lockstep with the server's
   // getUserToday(timezone) used by the canonical streak calculation.
-  const today = getUserToday(BROWSER_TIMEZONE);
+  const today = getUserToday(getActiveTimezone());
   // One shared answer for "how far through today is this habit?" — the same
   // module the popup, the briefing, the notifications and the server read, so
   // this page can no longer disagree with them (shared/habit-progress.ts).
@@ -478,7 +479,7 @@ export default function HabitsPage() {
   });
 
   // Summary stats — same user-timezone "today" as HabitCard / the server
-  const today = getUserToday(BROWSER_TIMEZONE);
+  const today = getUserToday(getActiveTimezone());
   const completedToday = habits.filter(h => {
     const tpd = (h as any).targetPerDay || 1;
     return h.checkins.filter(c => c.date === today).length >= tpd;

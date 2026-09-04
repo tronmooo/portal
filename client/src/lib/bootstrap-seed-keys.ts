@@ -9,6 +9,14 @@ import { scopedKey, type ProfileFilterMode } from "@shared/query-keys";
 export interface BootstrapSeedEntry {
   key: unknown[];
   data: unknown;
+  /**
+   * The bootstrap payload field this data came from, when it is one of the
+   * TRIMMABLE_LIST_FIELDS below. The hydrator needs it: a persisted SHELL has
+   * these lists sliced to SHELL_MAX_ROWS, and a slot seeded from a sliced list
+   * must be marked stale so it refetches on mount instead of showing the first
+   * 100 rows as if they were all of them (see `shellTrimmedFields`).
+   */
+  field?: TrimmableListField;
 }
 
 /**
@@ -26,36 +34,36 @@ export function bootstrapSeedEntries(
   const m: ProfileFilterMode = mode === "selected" ? "selected" : "everyone";
   const k = (endpoint: string, ...extra: unknown[]) => [...scopedKey(endpoint, m, ids, ...extra)];
   const out: BootstrapSeedEntry[] = [];
-  const add = (key: unknown[], data: unknown) => {
-    if (data !== undefined && data !== null) out.push({ key, data });
+  const add = (key: unknown[], data: unknown, field?: TrimmableListField) => {
+    if (data !== undefined && data !== null) out.push({ key, data, ...(field ? { field } : {}) });
   };
   add(k("/api/stats"), b.stats);
   add(k("/api/dashboard-enhanced"), b.enhanced);
   add(["/api/profiles"], b.profiles);
-  add(k("/api/incomes", "hero"), b.incomes);
-  add(k("/api/incomes"), b.incomes);
+  add(k("/api/incomes", "hero"), b.incomes, "incomes");
+  add(k("/api/incomes"), b.incomes, "incomes");
   add(k("/api/budgets/summary", month, "hero"), b.budgetSummary);
   add(k("/api/budgets/summary", month), b.budgetSummary);
-  add(k("/api/expenses"), b.expenses);
-  add(k("/api/budgets", month), b.budgets);
-  add(k("/api/obligations"), b.obligations);
+  add(k("/api/expenses"), b.expenses, "expenses");
+  add(k("/api/budgets", month), b.budgets, "budgets");
+  add(k("/api/obligations"), b.obligations, "obligations");
   add(["/api/asset-party-links"], b.assetPartyLinks);
   add(["/api/liability-profile-links"], b.liabilityProfileLinks);
-  add(k("/api/tasks"), b.tasks);
-  add(k("/api/habits"), b.habits);
+  add(k("/api/tasks"), b.tasks, "tasks");
+  add(k("/api/habits"), b.habits, "habits");
   // TrendsSection reads habits under a "trends" suffix off the SAME
   // `/api/habits?profileIds=…` response (dashboard.tsx TrendsSection), exactly
   // like the trackers pair below. Without this seed it was the one dashboard
   // query that still fired its own request on every scope switch.
-  add(k("/api/habits", "trends"), b.habits);
+  add(k("/api/habits", "trends"), b.habits, "habits");
   // goalsQueryKey(ids) collapses to this exact key (see @shared/query-keys), so
   // one entry covers the dashboard, goals and trackers pages — no double-seed.
-  add(k("/api/goals"), b.goals);
-  add(k("/api/journal"), b.journal);
-  add(k("/api/events"), b.events);
-  add(k("/api/documents"), b.documents);
-  add(k("/api/trackers"), b.trackers);
-  add(k("/api/trackers", "trends"), b.trackers);
+  add(k("/api/goals"), b.goals, "goals");
+  add(k("/api/journal"), b.journal, "journal");
+  add(k("/api/events"), b.events, "events");
+  add(k("/api/documents"), b.documents, "documents");
+  add(k("/api/trackers"), b.trackers, "trackers");
+  add(k("/api/trackers", "trends"), b.trackers, "trackers");
   // Hero trend line (dashboard.tsx). Ungated and keyed by scope, so before the
   // bootstrap carried it this was a second request racing every profile switch.
   add(k("/api/net-worth/history"), b.netWorthHistory);
@@ -83,7 +91,11 @@ export function bootstrapSeedEntries(
 // dataset size. Aggregate/summary fields (stats, enhanced, budgetSummary) and
 // the small link/profile arrays are deliberately NOT trimmed — they drive the
 // dashboard KPI numbers and must stay whole for the shell to be correct.
-const TRIMMABLE_LIST_FIELDS = [
+export type TrimmableListField =
+  | "expenses" | "incomes" | "budgets" | "obligations" | "tasks" | "habits"
+  | "goals" | "journal" | "events" | "documents" | "trackers";
+
+const TRIMMABLE_LIST_FIELDS: readonly TrimmableListField[] = [
   "expenses",
   "incomes",
   "budgets",
@@ -95,7 +107,7 @@ const TRIMMABLE_LIST_FIELDS = [
   "events",
   "documents",
   "trackers",
-] as const;
+];
 
 export interface BootstrapShellMeta {
   /** true when at least one list was truncated relative to the full payload. */
@@ -136,3 +148,28 @@ export function projectBootstrapShell(b: any, maxRows: number): any {
   return shell;
 }
 
+
+/**
+ * Which trimmable lists in a persisted payload are TRUNCATED — i.e. the shell
+ * holds fewer rows than the account really has.
+ *
+ * The hydrator seeds every restored slot as FRESH so that only the bootstrap
+ * query refetches on launch (one round trip, not twenty). That is right for a
+ * whole payload and wrong for a shell: a user with 300 tasks got 100 of them
+ * stamped fresh, so nothing refetched them for the full 3-minute staleTime and
+ * the missing 200 simply looked deleted. Slots named here are seeded stale
+ * instead, so they refresh on mount like any other stale query.
+ *
+ * Returns an empty set for a whole (untrimmed) payload.
+ */
+export function shellTrimmedFields(b: any): Set<TrimmableListField> {
+  const out = new Set<TrimmableListField>();
+  const meta = b && typeof b === "object" ? (b as any).__shell as BootstrapShellMeta | undefined : undefined;
+  if (!meta || !meta.trimmed) return out;
+  for (const field of TRIMMABLE_LIST_FIELDS) {
+    const full = Number(meta.counts?.[field]);
+    const held = Array.isArray((b as any)[field]) ? (b as any)[field].length : 0;
+    if (Number.isFinite(full) && full > held) out.add(field);
+  }
+  return out;
+}

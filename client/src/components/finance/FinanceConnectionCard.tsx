@@ -48,6 +48,15 @@ export function invalidateFinanceConnections(): void {
   queryClient.invalidateQueries({ queryKey: ["/api/finance/summary"] });
   queryClient.invalidateQueries({ queryKey: ["/api/finance/transactions"] });
   queryClient.invalidateQueries({ queryKey: ["/api/finance/sync-runs"] });
+  // The four panels this list used to forget. /api/finance/income and
+  // /api/finance/liabilities were invalidated by nothing anywhere in the app,
+  // and spending/cashflow only by the transaction-edit path — so after a sync
+  // or a disconnect those tabs kept rendering the previous connection's
+  // numbers (they all set refetchOnWindowFocus:false, so nothing else would).
+  queryClient.invalidateQueries({ queryKey: ["/api/finance/spending"] });
+  queryClient.invalidateQueries({ queryKey: ["/api/finance/cashflow"] });
+  queryClient.invalidateQueries({ queryKey: ["/api/finance/income"] });
+  queryClient.invalidateQueries({ queryKey: ["/api/finance/liabilities"] });
 }
 
 function relativeTime(iso: string | null | undefined): string {

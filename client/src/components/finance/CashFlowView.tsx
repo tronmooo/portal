@@ -16,9 +16,10 @@
 // "Cash Flow — this month" list view) is deleted; two UIs for one number is
 // how the app stops feeling like one product.
 import { useQuery } from "@tanstack/react-query";
-import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { CashFlowWaterfallPopup } from "@/components/finance/MoneyPopups";
+import { getActiveTimezone } from "@/lib/timezone";
 
 export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
   open: boolean;
@@ -45,9 +46,9 @@ export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
 
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
   // Mirrors finance.tsx: incomes normalised to monthly via their frequency.
-  const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
+  const monthlyIncome = sumMonthlyIncomeNow(incomes, getActiveTimezone());
   const snap = enhanced?.financeSnapshot || {};
-  const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
+  const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: getActiveTimezone() }).toUpperCase();
 
   return (
     <CashFlowWaterfallPopup

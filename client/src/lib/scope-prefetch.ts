@@ -11,10 +11,11 @@
 //    user commits the switch),
 //  - profileFilter's setters (warm the moment the switch happens, so even a
 //    cold switch fires one aggregate request instead of dozens).
-import { queryClient, apiRequest, BROWSER_TIMEZONE } from "./queryClient";
+import { queryClient, apiRequest } from "./queryClient";
 import { getUserCurrentMonth } from "@shared/timezone";
 import { seedDashboardCaches } from "./bootstrap-seed";
 import { perfMark, perfMeasure } from "./perf-marks";
+import { getActiveTimezone } from "./timezone";
 
 // ── Profile detail warmup ────────────────────────────────────────────────────
 // First open of an asset/liability detail measured ~8s in production
@@ -39,7 +40,7 @@ export function prefetchScopeBootstrap(
   mode: "everyone" | "selected",
   ids: string[],
 ): Promise<void> {
-  const month = getUserCurrentMonth(BROWSER_TIMEZONE); // browser-zone month, same key the dashboard reads
+  const month = getUserCurrentMonth(getActiveTimezone()); // browser-zone month, same key the dashboard reads
   const cleanIds = mode === "selected" ? ids.filter(Boolean) : [];
   const qs = cleanIds.length > 0
     ? `?profileIds=${cleanIds.join(",")}&month=${month}`

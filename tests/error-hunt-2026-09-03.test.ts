@@ -2978,7 +2978,7 @@ describe("D256 warm-up pins the user's timezone before warming stats", () => {
   });
   it("client: an authed warm-up sends the browser timezone", () => {
     const src = readFileSync(new URL("../client/src/lib/warmup.ts", import.meta.url), "utf8");
-    expect(src).toMatch(/"X-Timezone": BROWSER_TIMEZONE/);
+    expect(src).toMatch(/"X-Timezone": getActiveTimezone\(\)/);
   });
 });
 

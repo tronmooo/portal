@@ -1,14 +1,19 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { decodeSessionUserId, selectHydratableEntries } from "./cache-isolation";
-import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-keys";
+import { bootstrapSeedEntries, projectBootstrapShell, shellTrimmedFields } from "./bootstrap-seed-keys";
 import { getProfileFilterSnapshot } from "./profileFilter";
 import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
 import { decodeVersionMap, encodeVersionMap, EPOCH_KEY } from "@shared/cache-domains";
+import { getActiveTimezone, todayInActiveTimezone } from "./timezone";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
-/** Detect browser timezone once and reuse across all requests */
-export const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Los_Angeles';
+/* The zone every request is stamped with. Read through getActiveTimezone()
+   rather than a resolved-once module constant: a constant could not honour the
+   user's timezone preference, and could not notice a device that changed zones
+   mid-session (a laptop opened in another country, a phone crossing one).
+   See lib/timezone.ts — it is the single answer both sides of the wire use. */
+export { getActiveTimezone } from "./timezone";
 
 /**
  * The profile scope the user is looking at RIGHT NOW, sent on every request.
@@ -146,7 +151,7 @@ export async function apiRequest(
     const isDocFileFetch = /\/api\/documents\/[^/]+\/file/.test(url);
     const headers: Record<string, string> = isDocFileFetch
       ? {}
-      : { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader(), ...dataVersionHeader() };
+      : { "X-Timezone": getActiveTimezone(), ...activeProfileHeader(), ...dataVersionHeader() };
     if (data) headers["Content-Type"] = "application/json";
     const res = await fetch(`${API_BASE}${url}`, {
       method,
@@ -253,7 +258,7 @@ export const getQueryFn: <T>(options: {
     let res: Response;
     try {
       res = await window.fetch(`${API_BASE}${url}`, {
-        headers: { "X-Timezone": BROWSER_TIMEZONE, ...activeProfileHeader(), ...dataVersionHeader() },
+        headers: { "X-Timezone": getActiveTimezone(), ...activeProfileHeader(), ...dataVersionHeader() },
         signal: ctrl.signal,
       });
     } finally {
@@ -467,7 +472,13 @@ if (typeof window !== "undefined") {
    - Auth-sensitive keys are excluded so logout doesn't leak a stale session.
 --------------------------------------------------------------------------- */
 const STORAGE_KEY = "portol-query-cache-v1";
-const MAX_AGE_MS = 24 * 60 * 60_000; // 24h — anything older is re-fetched
+/* 8h, not 24h. The restore is deliberately optimistic — it paints yesterday's
+   numbers instantly and lets ONE bootstrap refetch correct them — but past a
+   working day that optimism stops being a head start and becomes a wrong
+   answer held on screen for a round trip. Eight hours keeps the case this
+   exists for (close the app in the evening, open it in the morning, see the
+   dashboard immediately) and drops the case where it misleads. */
+const MAX_AGE_MS = 8 * 60 * 60_000; // 8h — anything older is re-fetched cold
 
 /* SECURITY (cross-account leak fix): the persisted snapshot is stamped with the
    id of the user who created it, and is ONLY ever restored for that same user.
@@ -703,7 +714,18 @@ export function hydrateQueryCache(): void {
       const existing = queryClient.getQueryData(entry.k as any);
       if (existing !== undefined) continue;
       const isBootstrap = Array.isArray(entry.k) && entry.k[0] === "/api/dashboard-bootstrap";
-      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: isBootstrap ? entry.t : seededAt });
+      // The headline numbers refresh on their own account, not on the
+      // bootstrap's. Seeding /api/stats and /api/dashboard-enhanced fresh made
+      // net worth, the KPI tiles and the briefing wait a full bootstrap round
+      // trip before they could correct themselves — and show nothing at all to
+      // say they were mid-correction. They are two queries, not twenty, so
+      // stamping them with their real age costs one extra request each and
+      // buys a first paint that fixes itself immediately.
+      const head = Array.isArray(entry.k) ? String(entry.k[0]) : "";
+      const isHeadline = head === "/api/stats" || head === "/api/dashboard-enhanced";
+      queryClient.setQueryData(entry.k as any, entry.d, {
+        updatedAt: isBootstrap || isHeadline ? entry.t : seededAt,
+      });
       if (isBootstrap) {
         bootstrapEntry = entry as { k: any; d: any; t: number };
       }
@@ -727,9 +749,18 @@ export function hydrateQueryCache(): void {
       // keys via seedDashboardCaches. Seeding them stale here re-created the
       // ~20-request launch fan-out this pass exists to remove. Only fill empty
       // slots (never clobber a fresher restore).
-      for (const { key, data } of bootstrapSeedEntries(bootstrapEntry.d, mode, ids, month)) {
+      // …EXCEPT any list the shell projection truncated. Those slots hold the
+      // first SHELL_MAX_ROWS rows of a longer list; seeded fresh, they looked
+      // complete for the whole staleTime and the rest of the account's rows
+      // read as missing. Seeded with the snapshot's real age they are stale on
+      // arrival and refetch in full on mount.
+      const truncated = shellTrimmedFields(bootstrapEntry.d);
+      for (const { key, data, field } of bootstrapSeedEntries(bootstrapEntry.d, mode, ids, month)) {
         if (queryClient.getQueryData(key as any) !== undefined) continue;
-        queryClient.setQueryData(key as any, data, { updatedAt: seededAt });
+        const isTruncated = field !== undefined && truncated.has(field);
+        queryClient.setQueryData(key as any, data, {
+          updatedAt: isTruncated ? bootstrapEntry.t : seededAt,
+        });
       }
     }
   } catch {
@@ -828,13 +859,72 @@ export async function recoverWedgedQueries(reason: "resume" | "deadline" = "resu
   } catch { /* recovery is best-effort — never throw from a lifecycle handler */ }
 }
 
+/* ─── Freshness after a real absence, a reconnect, and at midnight ─────────
+   Focus and reconnect refetching are off (see the queries defaults above) and
+   for good reason: firing ~25 dashboard queries on every tab flip produced the
+   skeleton storm this app spent a release fixing. But "off" answered three
+   questions wrongly.
+
+     · Come back online and NOTHING re-asked. The offline pill vanished and the
+       numbers behind it stayed exactly as stale as they were.
+     · Do something on your phone, switch to the laptop tab, and it showed the
+       old data. Cross-tab writes propagate over the BroadcastChannel; another
+       DEVICE's writes had no path in at all.
+     · Leave the app open past midnight and "Today" was still yesterday —
+       nothing recomputes the day, and with a 3-minute staleTime and no focus
+       refetch nothing re-asks either.
+
+   The fix is not to re-enable blanket focus refetching. It is one refresh wave
+   — the same wave any single write already triggers — gated on an event that
+   actually implies staleness, throttled, and deliberately skipping queries
+   that are already in flight so it can never fight wedged-query recovery. A
+   quick tab flip still costs nothing. */
+const RESUME_REFRESH_AFTER_MS = 5 * 60_000;   // an absence long enough to matter
+const REFRESH_MIN_INTERVAL_MS = 60_000;       // …and at most once a minute
+let lastFullRefreshAt = 0;
+
+export function refreshActiveQueries(force = false): void {
+  const now = Date.now();
+  if (!force && now - lastFullRefreshAt < REFRESH_MIN_INTERVAL_MS) return;
+  lastFullRefreshAt = now;
+  try {
+    void queryClient.invalidateQueries({
+      predicate: (q) =>
+        String(q.queryKey?.[0] || "").startsWith("/api/") &&
+        q.isActive() &&
+        // Leave in-flight work alone: invalidating a fetching query cancels and
+        // restarts it, which on a cold backend is exactly the wasted round trip
+        // recoverWedgedQueries exists to avoid.
+        q.state.fetchStatus === "idle",
+      refetchType: "active",
+    });
+  } catch { /* best-effort — never throw from a lifecycle handler */ }
+}
+
+/* The calendar day the app last rendered. Everything date-derived — due today,
+   overdue, this month's spend, whether a habit still counts — is computed from
+   it, so when it changes the whole screen is wrong until something re-asks. */
+let lastSeenDay = todayInActiveTimezone();
+function checkDayRollover(): void {
+  const today = todayInActiveTimezone();
+  if (today === lastSeenDay) return;
+  lastSeenDay = today;
+  // A new day always refreshes, throttle or not: this is the one moment where
+  // every date-derived number on screen is known to be wrong.
+  refreshActiveQueries(true);
+}
+
 // Persistence is driven by IDLE + lifecycle events, NOT by every cache event.
 // A periodic idle tick captures fresh data mid-session; pagehide/visibility
 // hidden flush synchronously before the tab is frozen or closed.
 if (typeof window !== "undefined") {
   // Periodic idle snapshot — captures the latest curated data during a long
   // session without hooking the hot query-cache event stream.
-  setInterval(idleSnapshot, 30_000);
+  setInterval(() => { idleSnapshot(); checkDayRollover(); }, 30_000);
+  // Back online: the queries that failed or went stale while the radio was off
+  // get exactly one wave. `refetchOnReconnect` stays off — this is the same
+  // refresh, gated and throttled, instead of every query at once.
+  window.addEventListener("online", () => { refreshActiveQueries(true); });
   // Flush synchronously when the tab is being frozen/closed — these fire before
   // the browser can discard the page, so the snapshot must be synchronous.
   window.addEventListener("pagehide", () => { snapshotCache(); });
@@ -845,7 +935,14 @@ if (typeof window !== "undefined") {
     } else if (document.visibilityState === "visible") {
       // Only run recovery after a real absence (≥15s) — quick tab flips
       // shouldn't cancel healthy in-flight requests.
-      if (hiddenAt && Date.now() - hiddenAt >= 15_000) void recoverWedgedQueries();
+      const away = hiddenAt ? Date.now() - hiddenAt : 0;
+      if (away >= 15_000) void recoverWedgedQueries();
+      // A LONG absence is different from a stuck fetch: nothing is broken, the
+      // data is simply old, and it is the return itself that says so. This is
+      // the only path by which another device's writes — or a day that turned
+      // over while the app was backgrounded — reach the screen.
+      if (away >= RESUME_REFRESH_AFTER_MS) refreshActiveQueries();
+      checkDayRollover();
       hiddenAt = 0;
     }
   });

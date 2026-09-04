@@ -5,7 +5,7 @@
 // body through the pure builders in shared/quick-add.ts.
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { useToast } from "@/hooks/use-toast";
 import { BubbleModal } from "@/components/ui/bubble-modal";
@@ -25,6 +25,7 @@ import {
 } from "@shared/quick-add";
 import { LARGE_TRANSACTION_AMOUNT } from "@shared/schema";
 import { useActiveCreateProfileId } from "@/hooks/useProfileScope";
+import { getActiveTimezone } from "@/lib/timezone";
 
 export type QuickAddKind = "expense" | "income" | "bill" | "note" | "task";
 
@@ -63,7 +64,7 @@ export function QuickAddDialog({
 }) {
   const cfg = CONFIG[kind];
   const { toast } = useToast();
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: getActiveTimezone() });
 
   // PERF (QA scorecard): don't do non-critical work (profile list fetch /
   // option building) in the same frame that opens the dialog — it delayed the

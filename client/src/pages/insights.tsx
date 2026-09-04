@@ -4,7 +4,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { getUserToday } from "@shared/timezone";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
@@ -16,6 +16,7 @@ import {
   FileText, Camera, Sparkles, Loader2, RefreshCw, Wallet,
 } from "lucide-react";
 import { PageContainer, PageHeader } from "@/components/ui/page-shell";
+import { getActiveTimezone } from "@/lib/timezone";
 
 // AI-derived content is purple across the app (Executive insights, the wellness
 // AI card, the finance alerts panel).
@@ -113,7 +114,7 @@ export default function InsightsPage() {
         description: r.vendor,
         vendor: r.vendor,
         category: mappedCat,
-        date: r.date || getUserToday(BROWSER_TIMEZONE),
+        date: r.date || getUserToday(getActiveTimezone()),
       };
       const res = await apiRequest("POST", "/api/expenses", body);
       return res.json();

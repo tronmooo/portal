@@ -52,6 +52,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/calendar/timeline"],
     ["/api/date-rules"],  // a due date is a deadline rule
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
     // ...and the notification feed, which derives "due today" / "overdue"
     // straight from open tasks. Omitting it left a "X is due today" alert in
@@ -65,6 +66,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
     // Completing a habit writes its linked tracker's record too (one
     // completion, one pipeline — server/habit-completion.ts), so the Trackers
@@ -83,6 +85,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
     ["/api/goals"], // goals can auto-update from tracker entries
     // Habit ↔ tracker link (2026-08-20): logging an entry to a tracker
@@ -104,6 +107,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
     // A profile OWNS dates — a date of birth, an anniversary, a licence or
     // passport expiration. Changing July 10 to July 11 has to move the yearly
@@ -112,6 +116,10 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/calendar/timeline"],
     ["/api/date-rules"],
     ["/api/notifications"],
+    // A profile's notes live under their own endpoint, keyed by profile id.
+    // No domain listed them, so a note written anywhere but the notes panel
+    // itself (chat, a document extraction) never appeared on the profile.
+    ["/api/notes"],
     // nested keys handled via predicate below
   ],
   assets: [
@@ -128,6 +136,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     // came back at its old value after a reload.
     ["/api/dashboard-bootstrap"],
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
     ["/api/net-worth/history"],
   ],
@@ -154,8 +163,11 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/budgets"],
     ["/api/budgets/summary"],
     ["/api/net-worth/history"],
+    // Per-occurrence bill state — see the obligations domain.
+    ["/api/obligation-occurrences"],
     ["/api/dashboard-bootstrap"],
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
   ],
   people: [
@@ -192,6 +204,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/budgets/summary"],
     ["/api/cashflow"],
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
   ],
   incomes: [
@@ -205,6 +218,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/calendar/timeline"],
     ["/api/date-rules"],
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
   ],
   obligations: [
@@ -215,10 +229,27 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/loans/schedule"],
     ["/api/cashflow"],
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
     ["/api/calendar/timeline"], // bills and loan payments are calendar items
     ["/api/date-rules"],        // …and each one is a payment rule
     ["/api/notifications"],     // "bill due" alerts derive from obligations
+    // Paying a bill IS money leaving an account: the server records it in the
+    // expense ledger (routes.ts busts `expenses:` on /obligations/:id/pay) and
+    // moves the paying account's balance. None of that was listed here, so
+    // "Mark paid" left the month's spend total, the budget bars, the account
+    // balance and the net-worth trend showing the pre-payment picture until a
+    // reload. The liabilities domain already carried these; obligations, the
+    // domain every bill surface actually fires, did not.
+    ["/api/expenses"],
+    ["/api/budgets"],
+    ["/api/budgets/summary"],
+    ["/api/accounts"],
+    ["/api/net-worth/history"],
+    // Per-occurrence bill state (paid / skipped for one due date) lives under
+    // its own endpoint. Nothing listed it, so skipping an occurrence from a
+    // popup left the calendar showing it as still scheduled.
+    ["/api/obligation-occurrences"],
   ],
   budgets: [
     ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
@@ -264,6 +295,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/dashboard-enhanced"],
     ["/api/stats"],
     ["/api/insights"],
+    ["/api/anomalies"],
     ["/api/ai-digest"],
     // The bootstrap payload is the dashboard's first paint AND the seed for
     // ~24 dependent list caches (bootstrap-seed-keys.ts), and it is persisted
@@ -298,8 +330,17 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
         return (
           k0.startsWith("/api/profiles") ||
           k0.startsWith("/api/rel-") ||
-          k0.startsWith("/api/assets/") ||
-          k0.startsWith("/api/liabilities/") ||
+          // NO trailing slash. The keys these are meant to catch put the id in
+          // the SECOND segment — ["/api/assets", id, "parties"],
+          // ["/api/liabilities", id, "schedule"] — so their k0 is exactly
+          // "/api/assets" / "/api/liabilities". Matching "/api/assets/" caught
+          // none of them, and the ownership panels, the collateral list and a
+          // loan's payment schedule went stale after any change made anywhere
+          // else (chat, another tab, another page).
+          k0.startsWith("/api/assets") ||
+          k0.startsWith("/api/liabilities") ||
+          k0.startsWith("/api/liability-") ||
+          k0.startsWith("/api/asset-") ||
           k0.startsWith("/api/parties") ||
           k0.startsWith("/api/relationships/") ||
           k0.startsWith("/api/ownership-history")
@@ -320,6 +361,15 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
       };
     case "tasks":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/tasks");
+    // Connected-bank panels. Their keys — ["/api/finance/summary", from, to,
+    // accounts], ["/api/finance/spending", params] and six more — were in no
+    // domain at all, and every one of them sets refetchOnWindowFocus:false, so
+    // once painted they never refreshed. A bank sync journals as a
+    // FinanceImport write (expenses + incomes), which is what carries the
+    // ripple back to these panels.
+    case "expenses":
+    case "incomes":
+      return (q) => String(q.queryKey?.[0] || "").startsWith("/api/finance/");
     case "habits":
       // Nested keys too: a habit check-in mirrors into its linked tracker (the
       // Trackers page reads ["/api/trackers", id]) and shows up on the owner's

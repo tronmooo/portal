@@ -32,7 +32,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { getUserToday, getUserCurrentMonth, addDays as tzAddDays } from "@shared/timezone";
 import { formatMinor, minorToMajor } from "@shared/money";
 import {
@@ -42,6 +42,7 @@ import {
 import type { BreakdownRow, MoneyByCurrency, RecurringGroup } from "@shared/finance-calc";
 import { cn } from "@/lib/utils";
 import { invalidateFinanceConnections } from "./FinanceConnectionCard";
+import { getActiveTimezone } from "@/lib/timezone";
 
 const EXPENSE_CATEGORIES = [
   "food", "housing", "transport", "utilities", "health", "entertainment",
@@ -102,13 +103,13 @@ function accountLabel(a: FinancialAccountRecord): string {
 // The user's month/day, not UTC's: on the last evening of a month in the
 // Americas the UTC value already pointed "This month" at an empty next month.
 function currentMonth(): string {
-  return getUserCurrentMonth(BROWSER_TIMEZONE);
+  return getUserCurrentMonth(getActiveTimezone());
 }
 
 type RangeKey = "month" | "30d" | "90d" | "year";
 
 function rangeBounds(range: RangeKey): { startDate: string; endDate: string } {
-  const endDate = getUserToday(BROWSER_TIMEZONE);
+  const endDate = getUserToday(getActiveTimezone());
   if (range === "month") {
     return { startDate: `${currentMonth()}-01`, endDate };
   }
