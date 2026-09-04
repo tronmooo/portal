@@ -76,6 +76,16 @@ BEGIN
           AND t.table_name = c.table_name
           AND t.table_type = 'BASE TABLE'
       )
+      -- A table that carries linked_profiles but NO user_id is not an owned
+      -- entity: production grew `trackers_name_backup_20260824`, a snapshot
+      -- copy, after this migration was written, and every loop below reads
+      -- x.user_id, so discovery has to require that column (D289).
+      AND EXISTS (
+        SELECT 1 FROM information_schema.columns u
+        WHERE u.table_schema = 'public'
+          AND u.table_name = c.table_name
+          AND u.column_name = 'user_id'
+      )
     ORDER BY c.table_name
   LOOP
     IF r.data_type = 'jsonb' THEN
@@ -286,6 +296,16 @@ BEGIN
           AND t.table_name = c.table_name
           AND t.table_type = 'BASE TABLE'
       )
+      -- A table that carries linked_profiles but NO user_id is not an owned
+      -- entity: production grew `trackers_name_backup_20260824`, a snapshot
+      -- copy, after this migration was written, and every loop below reads
+      -- x.user_id, so discovery has to require that column (D289).
+      AND EXISTS (
+        SELECT 1 FROM information_schema.columns u
+        WHERE u.table_schema = 'public'
+          AND u.table_name = c.table_name
+          AND u.column_name = 'user_id'
+      )
     ORDER BY c.table_name
   LOOP
     EXECUTE format(
@@ -319,6 +339,16 @@ BEGIN
         WHERE t.table_schema = 'public'
           AND t.table_name = c.table_name
           AND t.table_type = 'BASE TABLE'
+      )
+      -- A table that carries linked_profiles but NO user_id is not an owned
+      -- entity: production grew `trackers_name_backup_20260824`, a snapshot
+      -- copy, after this migration was written, and every loop below reads
+      -- x.user_id, so discovery has to require that column (D289).
+      AND EXISTS (
+        SELECT 1 FROM information_schema.columns u
+        WHERE u.table_schema = 'public'
+          AND u.table_name = c.table_name
+          AND u.column_name = 'user_id'
       )
   LOOP
     IF r.data_type = 'jsonb' THEN
