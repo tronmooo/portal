@@ -3292,3 +3292,15 @@ describe("D268 legacy subscription bundles are lifted", async () => {
     expect(liftLegacySubscriptionGroup({ notes: "x" })).toEqual({ notes: "x" });
   });
 });
+
+// ── D268 (legacy costs): "$12.99/mo" parses as 12.99; the cadence lives in `frequency`.
+describe("D268 legacy cost strings with a cadence suffix", async () => {
+  const { coerceRegistryFieldValue, liftLegacySubscriptionGroup } = await import("../shared/registry-fields");
+  it("strips a cadence suffix before parsing and leaves prose alone", () => {
+    expect(coerceRegistryFieldValue("currency", "$12.99/mo")).toBe(12.99);
+    expect(coerceRegistryFieldValue("currency", "120 per year")).toBe(120);
+    expect(coerceRegistryFieldValue("currency", "9.99/month")).toBe(9.99);
+    expect(coerceRegistryFieldValue("currency", "about twelve")).toBe("about twelve");
+    expect(liftLegacySubscriptionGroup({ subscriptions: { cost: "$99.99/mo" } }).amount).toBe(99.99);
+  });
+});

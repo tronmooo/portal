@@ -18,7 +18,10 @@ export function coerceRegistryFieldValue(type: string | undefined, raw: unknown)
   if (typeof raw !== "string") return raw;
   const trimmed = raw.trim();
   if (trimmed === "") return raw;
-  const n = Number(trimmed.replace(/[$,%\s]/g, ""));
+  // "$12.99/mo", "12.99 per month", "120/yr": the cadence suffix is not part
+  // of the number (the field's own frequency carries the cadence).
+  const bare = trimmed.replace(/\s*(\/|per\s+)\s*(mo|month|monthly|yr|year|yearly|wk|week|weekly|day|daily)\.?$/i, "");
+  const n = Number(bare.replace(/[$,%\s]/g, ""));
   return Number.isFinite(n) ? n : raw;
 }
 
