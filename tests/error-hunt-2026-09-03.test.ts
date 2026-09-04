@@ -3757,3 +3757,30 @@ describe("D285 bill reminder tasks do not double the bill's notification", () =>
     expect(src).toContain('import { BILL_REMINDER_TASK_PREFIX } from "./liability-payments";');
   });
 });
+
+// ── D286: money is cents at every door.
+describe("D286 sub-cent amounts are refused; money fields on a profile are stored as cents", async () => {
+  const { validateTransactionAmount, isWholeCents } = await import("../shared/quick-add");
+  const { insertExpenseSchema, insertIncomeSchema, insertLiabilityPaymentSchema } = await import("../shared/schema");
+  const { prepareProfileFields } = await import("../shared/registry-fields");
+  it("the validator and the schemas refuse a third decimal but accept float noise", () => {
+    expect(validateTransactionAmount(12.345)).toMatch(/whole cents/);
+    expect(validateTransactionAmount(12.34)).toBeNull();
+    expect(validateTransactionAmount(0.1 + 0.2)).toBeNull();
+    expect(isWholeCents(100.005)).toBe(false);
+    expect(insertExpenseSchema.safeParse({ description: "x", amount: 12.345, category: "general", date: "2026-09-03" }).success).toBe(false);
+    expect(insertIncomeSchema.safeParse({ description: "x", amount: 100.005 }).success).toBe(false);
+    const payOk = { liabilityProfileId: "0f4a7d1e-6c2b-4e3a-9f1d-2b7c8e9a0b1c", amount: 100.01, paymentDate: "2026-09-03" };
+    expect(insertLiabilityPaymentSchema.safeParse(payOk).success).toBe(true);
+    expect(insertLiabilityPaymentSchema.safeParse({ ...payOk, amount: 100.005 }).success).toBe(false);
+    expect(insertLiabilityPaymentSchema.safeParse({ ...payOk, principalPortion: 50.005 }).success).toBe(false);
+    expect(insertExpenseSchema.safeParse({ description: "x", amount: 12.34, category: "general", date: "2026-09-03" }).success).toBe(true);
+  });
+  it("prepareProfileFields rounds money keys to cents and leaves rates alone", () => {
+    const out: any = prepareProfileFields({ balance: 1000.004, monthlyAmount: 33.335, interestRate: 6.125, termMonths: 36 }, { typeKey: "personal_loan", todayISO: "2026-09-03" });
+    expect(out.balance).toBe(1000);
+    expect(out.monthlyAmount).toBe(33.34);
+    expect(out.interestRate).toBe(6.125);
+    expect(out.termMonths).toBe(36);
+  });
+});

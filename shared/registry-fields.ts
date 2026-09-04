@@ -109,6 +109,13 @@ const NUMERIC_MODEL_KEYS = new Set([
   "value", "balance", "originalAmount", "monthlyAmount", "minimumPayment", "interestRate", "termMonths", "dueDay",
   "creditLimit", "extraPayment", "purchasePrice", "amount", "monthlyPayment", "currentBalance", "originalBalance",
 ]);
+// Money keys are cents: a balance typed as 1000.004 was stored as typed and
+// every reader carried the third decimal (D286). Rates and counts stay as is.
+const MONEY_MODEL_KEYS = new Set([
+  "value", "balance", "originalAmount", "monthlyAmount", "minimumPayment", "creditLimit", "extraPayment",
+  "purchasePrice", "amount", "monthlyPayment", "currentBalance", "originalBalance",
+]);
+const toCents = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? Math.round((n + Number.EPSILON) * 100) / 100 : n);
 
 /**
  * Every door a profile comes through — the routes, a backup restore, the chat
@@ -124,6 +131,7 @@ export function prepareProfileFields<T extends Record<string, any>>(fields: T, c
   const out: Record<string, any> = canonicalizeRegistryFields(liftLegacySubscriptionGroup(fields), ctx);
   for (const k of Object.keys(out)) {
     if (NUMERIC_MODEL_KEYS.has(k)) out[k] = coerceRegistryFieldValue("number", out[k]);
+    if (MONEY_MODEL_KEYS.has(k)) out[k] = toCents(out[k]);
   }
   return out as T;
 }

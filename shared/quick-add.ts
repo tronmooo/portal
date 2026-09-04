@@ -10,7 +10,7 @@
 // surface. Owner-profile defaulting (active filter → single selected profile,
 // else self) is handled by the caller passing `ownerProfileId`.
 
-import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE } from "./schema";
+import { MAX_TRANSACTION_AMOUNT, TRANSACTION_TOO_LARGE_MESSAGE, isWholeCents, SUB_CENT_AMOUNT_MESSAGE } from "./schema";
 import { normalizeClockTime } from "./timezone";
 
 export type BuildResult =
@@ -55,8 +55,11 @@ export function validateTransactionAmount(
     return allowZero ? "Amount must be 0 or a positive number" : "Amount must be a positive number";
   }
   if (amount > MAX_TRANSACTION_AMOUNT) return TRANSACTION_TOO_LARGE_MESSAGE;
+  if (!isWholeCents(amount)) return SUB_CENT_AMOUNT_MESSAGE;
   return null;
 }
+
+export { isWholeCents, SUB_CENT_AMOUNT_MESSAGE } from "./schema";
 
 function linkedProfiles(ownerProfileId?: string): Record<string, any> {
   return ownerProfileId ? { linkedProfiles: [ownerProfileId] } : {};
