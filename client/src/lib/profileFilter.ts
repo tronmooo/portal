@@ -245,7 +245,20 @@ export function reconcileProfileFilter(
   if (!profiles || profiles.length === 0) return;
   if (_state.mode !== "selected" || _state.selectedIds.length === 0) return;
   const live = (id: string) => profiles.some(p => p.id === id);
-  if (_state.selectedIds.every(live)) return;
+  if (_state.selectedIds.every(live)) {
+    /* Every id resolves, so nothing needs re-mapping — but the stored NAMES
+       can still be wrong. They are a snapshot taken when the scope was chosen
+       and kept in localStorage, and this early return used to hand it straight
+       back: rename someone and the scope label kept calling them by their old
+       name, across reloads, forever. Refresh the display names in place and
+       leave the selection alone. */
+    const refreshed = _state.selectedIds.map((id, i) =>
+      profiles.find(p => p.id === id)?.name || _state.selectedNames[i] || "");
+    if (refreshed.every((n, i) => n === _state.selectedNames[i])) return;
+    _state = { mode: "selected", selectedIds: [..._state.selectedIds], selectedNames: refreshed };
+    saveToStorage(); // rebuilds the snapshot and broadcasts on its own
+    return;
+  }
 
   const ids: string[] = [];
   const names: string[] = [];

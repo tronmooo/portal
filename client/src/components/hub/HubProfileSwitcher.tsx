@@ -48,15 +48,26 @@ export function HubProfileSwitcher() {
     if (profiles && profiles.length > 0) reconcileProfileFilter(profiles);
   }, [profiles]);
 
+  /* The LIVE name wins over the remembered one.
+     `selectedNames` is a snapshot taken when the scope was chosen and kept in
+     localStorage. reconcileProfileFilter refreshes it, but returns early the
+     moment every selected id still resolves — which is exactly the case after
+     a RENAME — so the stored name could sit here indefinitely, across reloads,
+     while the profile itself was called something else everywhere in the app.
+     Preferring `p?.name` makes the rename show up the moment the profile list
+     does; the stored name stays as the fallback for a list that hasn't loaded
+     (or a scope pointing at something not in `people`, e.g. an asset). */
+  const nameOf = (id: string, i: number) =>
+    (profiles || []).find(x => x.id === id)?.name || scope.selectedNames[i] || "";
   const label = (() => {
     if (scope.mode === "everyone") return "Everyone";
     if (scope.selectedIds.length === 1) {
       const p = people.find(x => x.id === scope.selectedIds[0]);
       if (p?.type === "self") return "My dashboard";
-      return scope.selectedNames[0] || p?.name || "My dashboard";
+      return nameOf(scope.selectedIds[0], 0) || "My dashboard";
     }
     if (scope.selectedIds.length > 1) {
-      return `${scope.selectedNames[0] || "Selected"} +${scope.selectedIds.length - 1}`;
+      return `${nameOf(scope.selectedIds[0], 0) || "Selected"} +${scope.selectedIds.length - 1}`;
     }
     return "My dashboard";
   })();

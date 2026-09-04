@@ -337,7 +337,7 @@ export function IncomePopup({
   incomes: any[]; monthlyIncome: number;
 }) {
   const emerald = "hsl(155 65% 45%)";
-  const sources = useMemo(() => (incomes || [])
+  const allRows = useMemo(() => (incomes || [])
     .map((i: any, idx: number) => ({
       id: i.id || String(idx),
       label: i.name || i.source || i.category || "Income",
@@ -345,9 +345,24 @@ export function IncomePopup({
       monthly: toMonthlyAmount(Number(i.amount) || 0, i.frequency),
       raw: Number(i.amount) || 0,
     }))
-    .filter((s) => s.monthly > 0)
     .sort((a, b) => b.monthly - a.monthly), [incomes]);
-  const total = sources.reduce((s, x) => s + x.monthly, 0) || monthlyIncome || 1;
+  // A row worth nothing this month can't be drawn as a ribbon segment, so it
+  // stays out of the chart — but it is still income the user entered, and
+  // dropping it silently is what made this popup impossible to reconcile with
+  // itself.
+  const sources = useMemo(() => allRows.filter((s) => s.monthly > 0), [allRows]);
+  const hiddenCount = allRows.length - sources.length;
+  const sourcesTotal = sources.reduce((s, x) => s + x.monthly, 0);
+  // Shares are of what is LISTED, so the segments always add to 100% of the
+  // list below them. `|| 1` only guards the divide.
+  const total = sourcesTotal || 1;
+  /* The headline is the server's monthly figure and the list is these rows;
+     they are computed from different places and need not agree (a one-off
+     payment, a row outside the current scope, a rounding difference). When
+     they don't, say so — a total the itemisation cannot reach is the single
+     most confusing thing a money screen can show. */
+  const unaccounted = monthlyIncome - sourcesTotal;
+  const unaccountedIsMaterial = Math.abs(unaccounted) >= 1 && monthlyIncome > 0;
   const top = sources[0];
 
   return (
@@ -378,9 +393,9 @@ export function IncomePopup({
       <div className="space-y-3">
         <div className="grid grid-cols-3 gap-2">
           {[
-            ["Sources", String(sources.length)],
+            ["Sources", String(allRows.length)],
             ["Largest", top ? `${Math.round((top.monthly / total) * 100)}%` : "—"],
-            ["Avg / source", sources.length ? `$${fmt(total / sources.length)}` : "—"],
+            ["Avg / source", sources.length ? `$${fmt(sourcesTotal / sources.length)}` : "—"],
           ].map(([l, v]) => (
             <div key={l} className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-2 py-2 text-center">
               <p className="micro-label text-muted-foreground">{l}</p>
@@ -388,6 +403,18 @@ export function IncomePopup({
             </div>
           ))}
         </div>
+
+        {(unaccountedIsMaterial || hiddenCount > 0) && (
+          <p className="text-[11px] text-muted-foreground px-1" data-testid="income-reconciliation-note">
+            {unaccountedIsMaterial && (
+              unaccounted > 0
+                ? `Listed sources account for $${fmt(sourcesTotal)} of the $${fmt(monthlyIncome)} above; $${fmt(unaccounted)} comes from income not itemised here.`
+                : `Listed sources add up to $${fmt(sourcesTotal)}, more than the $${fmt(monthlyIncome)} counted for this month.`
+            )}
+            {unaccountedIsMaterial && hiddenCount > 0 ? " " : ""}
+            {hiddenCount > 0 && `${hiddenCount} source${hiddenCount === 1 ? "" : "s"} with no amount this month ${hiddenCount === 1 ? "is" : "are"} not charted.`}
+          </p>
+        )}
 
         {sources.length === 0 ? (
           <p className="text-xs text-muted-foreground text-center py-6">No income sources yet — add income from the Finance tab.</p>

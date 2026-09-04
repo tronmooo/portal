@@ -645,7 +645,12 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       {expanded && !dimmed && (
         <div className="px-3 pb-3 pt-0 space-y-3 border-t border-border/30 mt-0" data-testid={`task-detail-${t.id}`}>
           {/* Title */}
-          <input defaultValue={t.title} placeholder="Task title"
+          {/* Keyed on the stored title — see the co-owner percentage field in
+              profile-detail for the same fix. An uncontrolled input holds its
+              value indefinitely, so a title changed from chat (or a rename this
+              panel tried and the server refused) left the box showing text that
+              was not the task's. */}
+          <input key={`title-${t.id}-${t.title}`} defaultValue={t.title} placeholder="Task title"
             onBlur={e => { const v = e.target.value.trim(); if (v && v !== t.title) updateMutation.mutate({ id: t.id, patch: { title: v } }); }}
             className="w-full text-sm font-semibold bg-transparent border-b border-border/40 pb-1.5 mt-1 focus:outline-none focus:border-primary" data-testid="task-title-edit" />
           {/* Priority — 4 levels incl. Critical */}
@@ -770,7 +775,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           {/* Notes */}
           <div>
             <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><FileText className="h-3 w-3" />Notes</label>
-            <textarea defaultValue={t.description || ""} rows={2} placeholder="Add notes…"
+            <textarea key={`notes-${t.id}-${t.description || ""}`} defaultValue={t.description || ""} rows={2} placeholder="Add notes…"
               onBlur={e => { if ((e.target.value || "") !== (t.description || "")) updateMutation.mutate({ id: t.id, patch: { description: e.target.value } }); }}
               className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-notes" />
           </div>

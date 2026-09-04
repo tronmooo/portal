@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,10 +41,33 @@ export function ArtifactPanel({ artifact, onClose }: { artifact: any; onClose: (
       
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
-        <ArtifactRenderer type={artifact.type} data={artifact.data} />
+        <ArtifactRenderer type={artifact.type} data={artifact.data} artifactKey={artifactStateKey(artifact)} />
       </div>
     </div>
   );
+}
+
+/**
+ * A stable per-artifact key for view state that belongs to the reader rather
+ * than to the record — which, for a chat checklist, is what a tick is.
+ *
+ * Derived from the content, not from an id: a chat artifact is rendered
+ * straight off the assistant's turn and may never have been persisted, so
+ * there is no id to key on. The same checklist reopened later hashes the same;
+ * two different checklists never collide.
+ */
+function artifactStateKey(artifact: any): string | undefined {
+  try {
+    const items = Array.isArray(artifact?.data?.items) ? artifact.data.items : null;
+    if (!items) return undefined;
+    const seed = [artifact?.type, artifact?.title, ...items.map((i: any) => String(i?.text ?? ""))].join("\u0001");
+    // djb2 — short, stable, and this only has to distinguish, not to secure.
+    let h = 5381;
+    for (let i = 0; i < seed.length; i++) h = ((h << 5) + h + seed.charCodeAt(i)) | 0;
+    return `portol_checklist_${(h >>> 0).toString(36)}`;
+  } catch {
+    return undefined;
+  }
 }
 
 function typeIcon(type: string) {
@@ -64,12 +87,12 @@ function typeIcon(type: string) {
 // ═══════════════════════════════════════════════
 // RENDERER — dispatches to type-specific component
 // ═══════════════════════════════════════════════
-function ArtifactRenderer({ type, data }: { type: string; data: any }) {
+function ArtifactRenderer({ type, data, artifactKey }: { type: string; data: any; artifactKey?: string }) {
   switch (type) {
     case "chart": return <ChartArtifact data={data} />;
     case "summary_report": return <SummaryReportArtifact data={data} />;
     case "kpi_cards": return <KpiCardsArtifact data={data} />;
-    case "checklist": return <ChecklistArtifact data={data} />;
+    case "checklist": return <ChecklistArtifact data={data} artifactKey={artifactKey} />;
     case "structured_plan": return <StructuredPlanArtifact data={data} />;
     case "calculator": return <CalculatorArtifact data={data} />;
     case "quick_entry_form": return <QuickEntryFormArtifact data={data} />;
@@ -255,15 +278,61 @@ function KpiCardsArtifact({ data }: { data: any }) {
 // ═══════════════════════════════════════════════
 // 4. CHECKLIST
 // ═══════════════════════════════════════════════
-function ChecklistArtifact({ data }: { data: any }) {
+
+/** Stored ticks for one checklist, sized to the list as it is NOW. */
+function readChecked(artifactKey: string | undefined, length: number): boolean[] {
+  const empty = new Array(length).fill(false);
+  if (!artifactKey) return empty;
+  try {
+    const raw = localStorage.getItem(artifactKey);
+    if (!raw) return empty;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return empty;
+    // A stored array from a shorter/longer version of the list is padded or
+    // truncated rather than trusted wholesale — never carried across lists.
+    return empty.map((_, i) => parsed[i] === true);
+  } catch {
+    return empty;
+  }
+}
+function ChecklistArtifact({ data, artifactKey }: { data: any; artifactKey?: string }) {
   const { intro, items = [], convert_to_tasks } = data;
-  const [checked, setChecked] = useState<boolean[]>(() => items.map(() => false));
+
+  /* Ticks used to be `useState(() => items.map(() => false))` and nothing else:
+     seeded ONCE from whatever items were present on first render, never
+     resynced, never stored. Two things followed. Close the panel and reopen it
+     and every tick was gone — the one piece of state on this screen the user
+     actually created. And because the array never resynced, a DIFFERENT
+     checklist rendered into the same panel inherited the previous one's ticks,
+     item for item, until its own length happened to differ.
+
+     Keyed by content (see artifactStateKey) and mirrored to localStorage: the
+     ticks survive close/reopen and reload, follow the checklist they belong
+     to, and stay where they belong — with this reader, on this device. They
+     are not a record; nothing else in the account reads them. */
+  const [checked, setChecked] = useState<boolean[]>(() => readChecked(artifactKey, items.length));
+  // Re-seed whenever the checklist itself changes identity or length.
+  useEffect(() => {
+    setChecked(readChecked(artifactKey, items.length));
+  }, [artifactKey, items.length]);
+
+  const setAt = (i: number) => {
+    setChecked((prev) => {
+      const next = prev.length === items.length ? [...prev] : new Array(items.length).fill(false);
+      next[i] = !next[i];
+      if (artifactKey) {
+        try { localStorage.setItem(artifactKey, JSON.stringify(next)); } catch { /* private browsing */ }
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="space-y-2">
       {intro && <p className="text-sm text-muted-foreground">{intro}</p>}
       {items.map((item: any, i: number) => (
         <label key={i} className="flex items-start gap-2 cursor-pointer py-0.5">
-          <Checkbox checked={checked[i]} onCheckedChange={() => { const next = [...checked]; next[i] = !next[i]; setChecked(next); }} className="mt-0.5" />
+          <Checkbox checked={!!checked[i]} onCheckedChange={() => setAt(i)} className="mt-0.5" />
           <div className="flex-1 min-w-0">
             <span className={`text-sm ${checked[i] ? "line-through text-muted-foreground" : ""}`}>{item.text}</span>
             {item.due && <span className="text-xs text-muted-foreground ml-2">Due: {item.due}</span>}

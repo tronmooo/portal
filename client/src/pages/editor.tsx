@@ -690,6 +690,17 @@ export default function EditorPage() {
   }, [dirty, savedId]);
 
   // ── Delete & duplicate ──────────────────────────────────────────────────────
+  // Sheet rename — a controlled dialog, not prompt(). See the tab bar below.
+  const [renameSheetOpen, setRenameSheetOpen] = useState(false);
+  const [renameSheetValue, setRenameSheetValue] = useState("");
+  const commitSheetRename = () => {
+    const next = renameSheetValue.trim();
+    setRenameSheetOpen(false);
+    if (!next || next === (sheet.sheetName || "Sheet1")) return;
+    setSheet(s => ({ ...s, sheetName: next }));
+    setDirty(true);
+  };
+
   // Controlled AlertDialog state replaces window.confirm() so two rapid clicks
   // of "Delete" cannot race past the modal and fire the mutation twice. The
   // dialog action button is disabled while the mutation is pending.
@@ -1957,39 +1968,56 @@ export default function EditorPage() {
               />
             </div>
           </div>
-          {/* Wave 14: Bottom sheet tab bar (Google-Sheets style) */}
+          {/* Bottom sheet tab bar.
+
+              There is ONE sheet. `sheetData` holds a single grid and a single
+              `sheetName` (shared/schema.ts), so a second tab is a schema
+              change, not a button. The "+" that used to sit here was labelled
+              "Add sheet" and RENAMED the sheet you were on — a destructive
+              answer to a request for a new one. It is gone until the model can
+              honour it; rename is now a labelled control instead of an
+              undiscoverable double-click, and it uses the app's own dialog
+              rather than `prompt()`, which the iOS shell renders badly and can
+              suppress outright. */}
           <div className="border-t bg-muted/30 px-2 py-1 flex items-center gap-1 shrink-0 text-xs">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 w-6 p-0"
-              onClick={() => {
-                const next = prompt("Add a new sheet tab — coming soon. For now, rename the current tab.", sheet.sheetName || "Sheet1");
-                if (next && next.trim()) {
-                  setSheet(s => ({ ...s, sheetName: next.trim() }));
-                  setDirty(true);
-                }
-              }}
-              title="Add sheet"
-              aria-label="Add sheet"
-              data-testid="sheet-tab-add"
-            ><Plus className="h-3.5 w-3.5" /></Button>
             <button
               type="button"
-              onDoubleClick={() => {
-                const next = prompt("Rename sheet", sheet.sheetName || "Sheet1");
-                if (next && next.trim()) {
-                  setSheet(s => ({ ...s, sheetName: next.trim() }));
-                  setDirty(true);
-                }
-              }}
-              className="px-3 py-1 rounded-t border-t border-l border-r border-border bg-background text-foreground font-medium text-xs hover:bg-muted/50"
+              onClick={() => { setRenameSheetValue(sheet.sheetName || "Sheet1"); setRenameSheetOpen(true); }}
+              className="group px-3 py-1 rounded-t border-t border-l border-r border-border bg-background text-foreground font-medium text-xs hover:bg-muted/50 flex items-center gap-1.5"
               data-testid="sheet-tab-active"
-              title="Double-click to rename"
-            >{sheet.sheetName || "Sheet1"}</button>
+              title="Rename sheet"
+              aria-label={`Rename sheet (currently ${sheet.sheetName || "Sheet1"})`}
+            >
+              {sheet.sheetName || "Sheet1"}
+              <PencilIcon className="h-3 w-3 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors" />
+            </button>
           </div>
         </div>
       )}
+
+      <AlertDialog open={renameSheetOpen} onOpenChange={setRenameSheetOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Rename sheet</AlertDialogTitle>
+            <AlertDialogDescription>
+              This workbook holds one sheet. The name shows on the tab below the grid.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Input
+            value={renameSheetValue}
+            onChange={(e) => setRenameSheetValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitSheetRename(); } }}
+            placeholder="Sheet1"
+            aria-label="Sheet name"
+            autoFocus
+            data-testid="input-sheet-name"
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-cancel-sheet-rename">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={commitSheetRename} data-testid="button-confirm-sheet-rename">Rename</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete confirmation — controlled dialog replaces window.confirm() so
           double-clicking Delete can’t race the modal and fire two deletes. */}

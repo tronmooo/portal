@@ -39,6 +39,7 @@ import { HubChromeContext } from "@/components/hub/hub-context";
 import { isHubRoute, isHubLocationForNav } from "@/components/hub/hub-routes";
 
 import { OfflineIndicator } from "@/components/OfflineIndicator";
+import { ProfileScopeHealer } from "@/components/ProfileScopeHealer";
 import { InstallPrompt } from "@/components/InstallPrompt";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { lazy, Suspense, useEffect, useRef, useCallback, useState } from "react";
@@ -933,6 +934,10 @@ function App() {
               </SidebarProvider>
               {/* Global command palette — renders its own Dialog portal */}
               <CommandSearch />
+              {/* Keeps the persisted profile scope pointing at live profiles,
+                  under their current names, on every route — not only the two
+                  that happened to call reconcile. Renders nothing. */}
+              <ProfileScopeHealer />
             </CommandSearchProvider>
             </AuthGate>
           </Router>

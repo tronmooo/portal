@@ -10673,7 +10673,17 @@ function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
             return (
               <div key={l.id} className="flex items-center gap-2 py-1" data-testid={`coowner-${l.id}`}>
                 <span className="text-xs flex-1 truncate">{person?.name || "Unknown"}</span>
+                {/* `key` on the server's value, not `defaultValue` alone.
+                    An uncontrolled input keeps whatever is in it forever: after
+                    a change made elsewhere (chat, another tab, another device)
+                    — or after this very save was REJECTED and rolled back — the
+                    box went on showing the old or refused number as though it
+                    had been accepted. Re-keying remounts the field whenever the
+                    stored share actually changes, so the box always agrees with
+                    the record, while still letting the user type freely in
+                    between. */}
                 <Input
+                  key={`pct-${l.id}-${Number(l.ownershipPercentage ?? 0)}`}
                   type="number"
                   defaultValue={Number(l.ownershipPercentage ?? 0)}
                   className="h-7 w-16 text-xs text-right"

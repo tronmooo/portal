@@ -3661,7 +3661,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
                   <div className="flex items-center gap-1">
                     {editId === b.id ? (
                       <form onSubmit={(e) => { e.preventDefault(); const val = parseFloat((e.target as any).amt.value); if (val > 0) updateMutation.mutate({ id: b.id, amount: val }); }} className="flex items-center gap-1">
-                        <Input name="amt" type="number" inputMode="decimal" defaultValue={b.amount} className="h-6 w-20 text-xs" step="0.01" autoFocus />
+                        <Input key={`amt-${b.id}-${b.amount}`} name="amt" type="number" inputMode="decimal" defaultValue={b.amount} className="h-6 w-20 text-xs" step="0.01" autoFocus />
                         <Button type="submit" variant="ghost" size="icon" className="h-8 w-8" aria-label="Save budget"><Check className="h-3 w-3" /></Button>
                       </form>
                     ) : (
