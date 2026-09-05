@@ -23,7 +23,9 @@ import {
 import { DetailHero, type HeroStat } from "@/components/profile/DetailHero";
 import { ProfileAlertsSection } from "@/components/ProfileAlertsSection";
 import { profileVisual } from "@/lib/profile-visuals";
-import { AccountOverview, accountHeroStats } from "@/components/finance/AccountOverview";
+import { accountHeroStats } from "@/components/finance/AccountOverview";
+import { FinancialAssetOverview, financialHeroStats } from "@/components/finance/FinancialAssetOverview";
+import { FINANCIAL_DATA_KEYS } from "@shared/financial-assets";
 import { isAccountProfile, accountKindMeta, accountKindOf } from "@shared/finance-accounts";
 import { Pill } from "@/components/dashboard/visuals";
 import { stopProp } from "@/lib/event-utils";
@@ -3344,7 +3346,7 @@ function StaticInfoTab({
     "currency", "includeInNetWorth",
   ]);
   const hiddenByAccountCard = (k: string) =>
-    isAccountProfile(profile) && ACCOUNT_CARD_KEYS.has(k);
+    isAccountProfile(profile) && (ACCOUNT_CARD_KEYS.has(k) || FINANCIAL_DATA_KEYS.has(k) || k === "possibleDuplicateOf");
   const extraFields = Object.entries(profile.fields).filter(
     ([k, v]) => !groupedKeys.has(k) && !ALWAYS_HIDDEN_FROM_OTHER.has(k) && !hiddenByAccountCard(k)
       && !isReservedFieldKey(k) && v != null && v !== "" && typeof v !== "object"
@@ -13384,7 +13386,10 @@ export default function ProfileDetailPage() {
   // (Liability/loan profiles returned above into LiabilityProfilePage, so the
   // only linked types reaching here are assets and the subscription/insurance
   // family.)
-  const listedUnderAssets = ["vehicle", "asset", "investment", "property"].includes(profile.type);
+  // A money-holding account lists under Assets; a debt-side account (credit
+  // card, loan account) does not, and goes back to Linked instead.
+  const listedUnderAssets = ["vehicle", "asset", "investment", "property"].includes(profile.type)
+    || (profile.type === "account" && isAssetTabProfile(profile as any));
   const backHref = listedUnderAssets ? "/linked?tab=assets" : isLinkedType ? "/linked" : "/profiles";
   const backLabel = listedUnderAssets ? "Back to Assets" : isLinkedType ? "Back to Linked" : "Back to Profiles";
 
@@ -13405,6 +13410,10 @@ export default function ProfileDetailPage() {
     if (isAccountProfile(profile)) {
       for (const st of accountHeroStats(profile)) {
         out.push({ label: st.label, value: st.value, icon: Wallet, testId: st.testId });
+      }
+      // How the balance moved this month, and how many positions it holds.
+      for (const st of financialHeroStats(profile, localTodayISO())) {
+        out.push({ label: st.label, value: st.value, icon: TrendingUp, testId: st.testId });
       }
     }
     const tabSet = new Set(getTabsForType(ptype, profile).map(t => t.value));
@@ -13564,8 +13573,11 @@ export default function ProfileDetailPage() {
                           say. Every number comes from the shared account
                           helpers, so this page and the Finance tab cannot
                           disagree. */}
+                      {/* Type-aware: a brokerage opens a portfolio dashboard, a
+                          checking account its balance and cash flow, a card its
+                          owed/limit view — decided by the account's kind. */}
                       {isAccountProfile(profile) && (
-                        <AccountOverview profile={profile} />
+                        <FinancialAssetOverview profile={profile} />
                       )}
                       {ownTrackers.length > 0 && (
                         <Card>

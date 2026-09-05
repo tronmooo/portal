@@ -84,6 +84,7 @@ export const TOOL_INTENT_ENTITY: Record<string, IntentEntity> = {
 
   // Financial accounts are `type: "account"` profiles.
   create_account: "profile", update_account_balance: "profile",
+  transfer_between_accounts: "profile", record_account_activity: "profile", set_holding: "profile",
 
   // Goals / notes / journal / memory / artifacts / documents
   create_goal: "goal", update_goal: "goal", delete_goal: "goal",

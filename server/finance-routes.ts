@@ -47,6 +47,9 @@ import {
   resolveAssetValue, resolveLiabilityBalance,
 } from "@shared/asset-value";
 import { storage } from "./storage";
+import { reconcileConnectedAccountProfiles } from "./financial-asset-sync";
+import { findAccountMatch, observationFromConnectedAccount } from "@shared/financial-reconcile";
+import { minorPerMajor } from "@shared/money";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -383,7 +386,10 @@ export function registerFinanceRoutes(app: Express): void {
     if (parsed.data.matchedProfileId !== undefined) {
       if (parsed.data.matchedProfileId === null) {
         patch.matched_profile_id = null;
+        // A deliberate unlink: the sync must not re-attach or recreate a profile.
+        patch.profile_unlinked_at = new Date().toISOString();
       } else {
+        patch.profile_unlinked_at = null;
         // The profile must belong to the caller. Without this check a user
         // could link their account to a stranger's profile id.
         const profile = await (storage as any).getProfile(parsed.data.matchedProfileId);
@@ -404,6 +410,11 @@ export function registerFinanceRoutes(app: Express): void {
       .maybeSingle();
     if (error) throw error;
     if (!data) return res.status(404).json({ code: "unknown", error: "Account not found." });
+    if (typeof parsed.data.matchedProfileId === "string") {
+      // The newly linked profile takes on the connection and this balance as
+      // an API observation right away, not on the next scheduled sync.
+      await reconcileConnectedAccountProfiles(userId, { db, accountIds: [String(req.params.id)] }).catch(() => null);
+    }
     res.json({ account: mapAccount(data) });
   }));
 
@@ -426,24 +437,16 @@ export function registerFinanceRoutes(app: Express): void {
     );
 
     const candidates = accounts.map((account) => {
-      const wantLiability = isDebtAccount(account.accountType);
-      const pool = (profiles ?? []).filter((p) =>
-        !alreadyMatched.has(p.id) &&
-        (wantLiability ? isLiabilityProfile(p) : isAssetProfile(p)));
-
-      const scored = pool.map((p) => {
-        const name = String(p.name ?? "").toLowerCase();
-        const fieldsText = JSON.stringify(p.fields ?? {}).toLowerCase();
-        let score = 0;
-        const institution = (account.institutionName ?? "").toLowerCase();
-        if (institution && (name.includes(institution) || fieldsText.includes(institution))) score += 0.5;
-        if (account.lastFour && (name.includes(account.lastFour) || fieldsText.includes(account.lastFour))) score += 0.4;
-        const sub = (account.accountSubcategory ?? "").replace("_", " ");
-        if (sub && name.includes(sub)) score += 0.2;
-        return { profileId: p.id, profileName: p.name, profileType: p.type, score: Number(Math.min(score, 1).toFixed(2)) };
-      }).filter((c) => c.score >= 0.4).sort((a, b) => b.score - a.score).slice(0, 3);
-
-      return { accountId: account.id, accountLabel: accountLabel(account), suggestions: scored };
+      // One matcher for every source (shared/financial-reconcile): the same
+      // institution / last-four / kind / owner / currency scoring the sync and
+      // the import use, so a suggestion here is the link the sync would make.
+      const obs = observationFromConnectedAccount(account, minorPerMajor(account.currency));
+      const match = findAccountMatch(obs, (profiles ?? []).filter((p) => !alreadyMatched.has(p.id)));
+      const suggestions = match.candidates
+        .filter((c) => c.confidence !== "none")
+        .slice(0, 3)
+        .map((c) => ({ profileId: c.profileId, profileName: c.profileName, score: c.score, confidence: c.confidence, reasons: c.reasons }));
+      return { accountId: account.id, accountLabel: accountLabel(account), decision: match.decision, suggestions };
     }).filter((c) => c.suggestions.length > 0);
 
     res.json({ candidates });

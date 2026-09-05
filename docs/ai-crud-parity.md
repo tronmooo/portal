@@ -4,7 +4,7 @@
 > Do not edit by hand. `tests/ai-button-parity.test.ts` enforces this matrix
 > against the live tool registry in CI.
 
-**134 operations** — ✅ 83 covered · 🆕 41 added · 🔜 0 planned · 🚫 10 excluded by design.
+**138 operations** — ✅ 83 covered · 🆕 45 added · 🔜 0 planned · 🚫 10 excluded by design.
 
 Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effort ·
 🔜 designed, landing in an upcoming batch · 🚫 deliberately not exposed to chat
@@ -134,6 +134,10 @@ Legend: ✅ the AI chat can do this today · 🆕 added by the CRUD-parity effor
 |---|---|---|---|---|
 | Create | Finance → Accounts → Add account | `create_account` | 🆕 added |  |
 | Adjust balance | Finance → Accounts → row → Add / Subtract | `update_account_balance` | 🆕 added |  |
+| Transfer between accounts | Asset profile → Transfer | `transfer_between_accounts` | 🆕 added |  |
+| Record activity (contribution / withdrawal / buy / sell / dividend) | Asset profile → Activity → Add | `record_account_activity` | 🆕 added |  |
+| Set / remove a holding | Asset profile → Holdings → Add position | `set_holding` | 🆕 added |  |
+| Balance history / change over period | Asset profile → history chart (1W…ALL) | `get_account_history` | 🆕 added |  |
 | Edit (name / type / institution / limit) | Finance → Accounts → row → Edit | `update_profile` | 🆕 added |  |
 | Delete | Finance → Accounts → row → Remove | `delete_profile` | 🆕 added |  |
 | Read balances / available credit | Finance → Accounts summary | `get_accounts` | 🆕 added |  |

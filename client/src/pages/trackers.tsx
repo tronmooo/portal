@@ -43,6 +43,10 @@ import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
 import { CreateProfileDialog } from "@/components/CreateProfileDialog";
 import { AddAccountDialog } from "@/components/finance/AccountsSection";
+import { financialCardSummary } from "@/components/finance/FinancialAssetCard";
+import { BalanceSparkline, ChangeChip } from "@/components/finance/BalanceHistoryChart";
+import { isAccountProfile } from "@shared/finance-accounts";
+import { profileVisual } from "@/lib/profile-visuals";
 // One card shape and one heading treatment for every hub tab — the Executive
 // tab's, so Assets / Liabilities / Documents stop reading as three products.
 import { EntityCard } from "@/components/ui/entity-card";
@@ -6860,6 +6864,8 @@ export default function TrackersPage() {
         const childTypeSet = ASSET_TAB_TYPES;
         const isShowAll = filterMode === "everyone";
         const labelForType = assetTypeLabel;
+        // Financial-account cards compute their one-month change against today.
+        const assetsTodayISO = new Date().toLocaleDateString("en-CA");
         // Walk full parent chain (up to 32 levels) so an asset nested at ANY
         // depth — Home → Furniture → Couch → Screws — is hidden from the
         // top-level Linked page. Previously only the direct parent was checked,
@@ -6963,7 +6969,7 @@ export default function TrackersPage() {
             {(!collapsedSections.has("profiles") || (hubEmbedded && sectionFilter !== "all")) && (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 202 }}>
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
-                  const Icon = typeIcons[child.type] || Star;
+                  const Icon = isAccountProfile(child) ? profileVisual(child).icon : (typeIcons[child.type] || Star);
                   const fields = child.fields || {};
                   // Robust value resolver — historical data is stored under several
                   // inconsistent paths (fields.currentValue, fields.housing.currentValue,
@@ -7016,7 +7022,8 @@ export default function TrackersPage() {
                   };
                   const insuranceFields = fields.insurance || {};
                   const insurance = safeStr(fields.insuranceProvider) || safeStr(fields.insurance) || safeStr(insuranceFields.insurance) || safeStr(insuranceFields.insurer) || safeStr(insuranceFields.provider) || '';
-                  const accentHsl = child.type === 'vehicle' ? '262 60% 62%' : child.type === 'investment' ? '142 60% 45%' : child.type === 'property' ? '220 60% 55%' : '262 60% 62%';
+                  const financialSummary = isAccountProfile(child) ? financialCardSummary(child, assetsTodayISO) : null;
+                  const accentHsl = child.type === 'vehicle' ? '262 60% 62%' : child.type === 'investment' ? '142 60% 45%' : child.type === 'property' ? '220 60% 55%' : financialSummary ? profileVisual(child).accent : '262 60% 62%';
                   const ac = `hsl(${accentHsl})`;
                   // ─── Build a UNIFIED 2-line meta strip so every card has identical height ───
                   // Pick the two most relevant KPIs for this card. If a slot is empty,
@@ -7036,17 +7043,20 @@ export default function TrackersPage() {
                     pushMeta('Address', safeStr(fields.address) || safeStr(housing.address));
                     pushMeta('Type', safeStr(fields.propertyType) || safeStr(housing.propertyType));
                     pushMeta('Year', year ? String(year) : undefined);
-                  } else if (child.type === 'investment') {
-                    pushMeta('Account', safeStr(fields.accountType) || safeStr(finance.accountType));
-                    pushMeta('Ticker', safeStr(fields.ticker) || safeStr(finance.ticker));
-                    pushMeta('Institution', safeStr(fields.institution) || safeStr(finance.institution));
+                  } else if (isAccountProfile(child)) {
+                    // A financial account: institution / kind, then what its
+                    // layout cares about (gain/loss for investments, 30-day
+                    // cash flow for a bank account). Same derivation as the
+                    // Finance rows and the profile page.
+                    for (const m of financialSummary!.meta) pushMeta(m.label, m.value);
                   } else {
                     // Generic fallback (electronics, other)
                     pushMeta('Make/Model', [make, model].filter(Boolean).join(' ') || undefined);
                     pushMeta('Year', year ? String(year) : undefined);
                   }
 
-                  const displayValue = (currentVal != null && currentVal > 0) ? currentVal
+                  const displayValue = financialSummary ? financialSummary.view.balance
+                                     : (currentVal != null && currentVal > 0) ? currentVal
                                      : (purchaseVal != null && purchaseVal > 0) ? purchaseVal
                                      : null;
                   const valueLabel = (currentVal == null || currentVal === 0) && purchaseVal != null && purchaseVal > 0 ? 'purchase' : null;
@@ -7067,12 +7077,24 @@ export default function TrackersPage() {
                         // pill treatment.
                         pills={
                           <>
-                            <StatusPill accent={accentHsl} className="capitalize">{child.type}</StatusPill>
-                            {year && <StatusPill tone="neutral">{year}</StatusPill>}
+                            <StatusPill accent={accentHsl} className="capitalize">
+                              {financialSummary ? financialSummary.view.kindLabel : child.type}
+                            </StatusPill>
+                            {!financialSummary && year && <StatusPill tone="neutral">{year}</StatusPill>}
+                            {financialSummary?.connected && <StatusPill tone="neutral">connected</StatusPill>}
                           </>
                         }
                         data-testid={`button-view-child-${child.id}`}
-                      />
+                      >
+                        {financialSummary && (
+                          <div className="flex items-center justify-between gap-2 pt-0.5">
+                            <ChangeChip change={financialSummary.change} changePct={financialSummary.changePct} className="text-[11px]" />
+                            {financialSummary.series.length >= 2 && (
+                              <BalanceSparkline points={financialSummary.series.slice(-30)} color={`hsl(${accentHsl})`} width={72} height={20} />
+                            )}
+                          </div>
+                        )}
+                      </EntityCard>
                     </Link>
                   );
                 })}

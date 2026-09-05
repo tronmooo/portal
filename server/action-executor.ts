@@ -29,6 +29,9 @@
 // makes this safe to retry.
 // =============================================================================
 
+import { isAccountProfile, balanceFieldsFor } from "@shared/finance-accounts";
+import { parseMoney } from "@shared/asset-value";
+import { appendBalanceSnapshot, recordFieldSources, sourceMayOverwrite } from "@shared/financial-assets";
 import { storage } from "./storage";
 import { logger } from "./logger";
 import type { ProposedAction } from "@shared/extraction-actions";
@@ -484,6 +487,39 @@ async function writeFieldsToProfile(action: ProposedAction, documentId: string):
   if (swept.changed) {
     logger.info(CAT, `pruned ${swept.removed.length} redundant field(s) on ${profileId}: ${swept.removed.join(", ")}`);
     merged = swept.fields;
+  }
+
+  // A BALANCE a statement carries is an OBSERVATION of a financial asset, not a
+  // field to overwrite: it lands in the account's balance history with the
+  // document as its source. The live balance follows it only when the
+  // document may own it — a live bank connection keeps the balance it syncs,
+  // and a statement from last quarter must not roll it back.
+  if (!group && isAccountProfile(profile)) {
+    const balanceKey = ["balance", "currentBalance", "currentValue", "accountBalance"].find((k) => k in written);
+    if (balanceKey) {
+      const observed = parseMoney(written[balanceKey]);
+      const statementDate = [written.balanceAsOf, written.statementDate, written.asOf, written.date]
+        .map((v) => String(v ?? "").slice(0, 10)).find((v) => /^\d{4}-\d{2}-\d{2}$/.test(v));
+      if (observed > 0) {
+        const mayOwn = sourceMayOverwrite(profile, "balance", "document");
+        merged.balanceSnapshots = appendBalanceSnapshot(existingFields, {
+          balance: observed, date: statementDate ?? null, source: "document", sourceRef: documentId,
+        });
+        if (mayOwn) {
+          Object.assign(merged, balanceFieldsFor(profile, observed));
+          if (statementDate) merged.balanceAsOf = statementDate;
+          merged.fieldSources = recordFieldSources(existingFields, ["balance", "currentBalance", "currentValue"], "document", new Date().toISOString(), documentId);
+        } else {
+          for (const k of ["balance", "currentBalance", "currentValue", "accountBalance"]) {
+            if (!(k in written)) continue;
+            merged[k] = existingFields[k];
+            // Not an unsaved field: the observation WAS recorded, in the history.
+            delete written[k];
+          }
+          logger.info(CAT, `kept the connected balance on ${profileId}; the statement's ${observed} was recorded as a document observation only`);
+        }
+      }
+    }
   }
 
   await storage.updateProfile(profileId, { fields: merged });

@@ -24,6 +24,10 @@ import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 import { generateSchedule } from "@shared/liability-schedule";
 import { addCharge, removeCharge } from "@shared/liability-billing";
 import { applyBalanceAdjustment, isAccountProfile } from "@shared/finance-accounts";
+import {
+  appendBalanceSnapshot, upsertHolding, removeHolding, appendActivity, activityBalanceEffect,
+  type FinanceDataSource, type AccountConnection,
+} from "@shared/financial-assets";
 
 // Per-request storage context — eliminates the global userId race condition (C-1)
 // Auth middleware runs storage within this context so all downstream code
@@ -195,6 +199,24 @@ export interface IStorage {
     newBalance?: number | null; delta?: number | null; date?: string | null;
     reason?: string | null; source?: any; linkedRecordId?: string | null;
   }): Promise<any | undefined>;
+  // Financial-asset data inside an account profile (shared/financial-assets.ts).
+  recordAccountSnapshot(id: string, input: {
+    balance: number; date?: string | null; at?: string | null; source: FinanceDataSource;
+    sourceRef?: string | null; note?: string | null; applyToBalance?: boolean;
+  }): Promise<any | undefined>;
+  setAccountHolding(id: string, input: {
+    symbol?: string | null; name?: string | null; quantity?: number | null; price?: number | null; value?: number | null;
+    costBasis?: number | null; assetClass?: string | null; asOf?: string | null; source?: FinanceDataSource;
+  }): Promise<any | undefined>;
+  removeAccountHolding(id: string, idOrSymbol: string): Promise<any | undefined>;
+  recordAccountActivity(id: string, input: {
+    kind: string; amount: number; date?: string | null; symbol?: string | null; quantity?: number | null;
+    note?: string | null; linkedProfileId?: string | null; source?: FinanceDataSource;
+  }): Promise<{ profile: any; entry: any } | undefined>;
+  recordAccountTransfer(input: {
+    fromId: string; toId: string; amount: number; date?: string | null; note?: string | null; source?: FinanceDataSource;
+  }): Promise<{ from: any; to: any; transferId: string } | undefined>;
+  linkAccountConnection(id: string, connection: AccountConnection | null): Promise<any | undefined>;
 
   // Artifacts
   getArtifacts(profileIds?: string[]): Promise<Artifact[]>;
@@ -2041,6 +2063,73 @@ export class MemStorage implements IStorage {
     const today = getUserToday(DEFAULT_TIMEZONE);
     const { fields } = applyBalanceAdjustment(p, input, today);
     p.fields = { ...(p.fields || {}), ...fields };
+    this.profiles.set(id, p);
+    return p;
+  }
+
+  async recordAccountSnapshot(id: string, input: {
+    balance: number; date?: string | null; at?: string | null; source: FinanceDataSource;
+    sourceRef?: string | null; note?: string | null; applyToBalance?: boolean;
+  }): Promise<any | undefined> {
+    const p: any = this.profiles.get(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(input.date ?? "")) ? String(input.date).slice(0, 10) : getUserToday(DEFAULT_TIMEZONE);
+    const fields: Record<string, any> = { balanceSnapshots: appendBalanceSnapshot(p, { ...input, date }, input.at ?? undefined) };
+    if (input.applyToBalance !== false) {
+      const v = Math.abs(Number(input.balance) || 0);
+      Object.assign(fields, { balance: v, currentBalance: v, currentValue: v, balanceAsOf: date });
+    }
+    p.fields = { ...(p.fields || {}), ...fields };
+    this.profiles.set(id, p);
+    return p;
+  }
+
+  async setAccountHolding(id: string, input: any): Promise<any | undefined> {
+    const p: any = this.profiles.get(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    p.fields = { ...(p.fields || {}), holdings: upsertHolding(p, input, getUserToday(DEFAULT_TIMEZONE)) };
+    this.profiles.set(id, p);
+    return p;
+  }
+
+  async removeAccountHolding(id: string, idOrSymbol: string): Promise<any | undefined> {
+    const p: any = this.profiles.get(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    p.fields = { ...(p.fields || {}), holdings: removeHolding(p, idOrSymbol) };
+    this.profiles.set(id, p);
+    return p;
+  }
+
+  async recordAccountActivity(id: string, input: any): Promise<{ profile: any; entry: any } | undefined> {
+    const p: any = this.profiles.get(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    const { list, entry } = appendActivity(p, input, getUserToday(DEFAULT_TIMEZONE));
+    if (!entry) return undefined;
+    p.fields = { ...(p.fields || {}), investmentActivity: list };
+    this.profiles.set(id, p);
+    const effect = activityBalanceEffect(entry.kind);
+    const profile = effect !== 0
+      ? await this.adjustAccountBalance(id, { delta: effect * entry.amount, date: entry.date, reason: input.note || entry.kind, source: input.source ?? "user", linkedRecordId: entry.id })
+      : p;
+    return { profile, entry };
+  }
+
+  async recordAccountTransfer(input: { fromId: string; toId: string; amount: number; date?: string | null; note?: string | null; source?: FinanceDataSource }): Promise<{ from: any; to: any; transferId: string } | undefined> {
+    const amount = Math.abs(Number(input.amount) || 0);
+    if (amount <= 0 || input.fromId === input.toId) return undefined;
+    const from: any = this.profiles.get(input.fromId);
+    const to: any = this.profiles.get(input.toId);
+    if (!from || !to || !isAccountProfile(from) || !isAccountProfile(to)) return undefined;
+    const transferId = `xfer_${randomUUID().slice(0, 8)}`;
+    const out = await this.recordAccountActivity(input.fromId, { kind: "transfer_out", amount, date: input.date, linkedProfileId: input.toId, note: input.note ?? `Transfer to ${to.name}`, source: input.source ?? "user" });
+    const inn = await this.recordAccountActivity(input.toId, { kind: "transfer_in", amount, date: input.date, linkedProfileId: input.fromId, note: input.note ?? `Transfer from ${from.name}`, source: input.source ?? "user" });
+    return { from: out?.profile ?? from, to: inn?.profile ?? to, transferId };
+  }
+
+  async linkAccountConnection(id: string, connection: AccountConnection | null): Promise<any | undefined> {
+    const p: any = this.profiles.get(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    p.fields = { ...(p.fields || {}), connection };
     this.profiles.set(id, p);
     return p;
   }

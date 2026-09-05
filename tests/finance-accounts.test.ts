@@ -46,7 +46,9 @@ describe("account classification", () => {
   it("maps the words people actually use onto kinds", () => {
     expect(normalizeAccountKind("chequing")).toBe("checking");
     expect(normalizeAccountKind("HYSA")).toBe("savings");
-    expect(normalizeAccountKind("brokerage")).toBe("investment");
+    expect(normalizeAccountKind("brokerage")).toBe("brokerage");
+    expect(normalizeAccountKind("roth_ira")).toBe("retirement");
+    expect(normalizeAccountKind("crypto")).toBe("crypto");
     expect(normalizeAccountKind("Visa")).toBe("credit_card");
     expect(normalizeAccountKind("HELOC")).toBe("line_of_credit");
     expect(normalizeAccountKind("mortgage")).toBe("loan");
@@ -332,9 +334,9 @@ describe("investment / brokerage profiles are accounts", () => {
   });
 
   it("resolves its kind from the profile TYPE when the fields don't say", () => {
-    // "Roth IRA" in accountType normalizes to "other" on its own; the type is
-    // the reliable signal.
-    expect(accountKindOf(rothIra)).toBe("investment");
+    // "Roth IRA" in accountType is a retirement account in its own right; a
+    // brokerage with nothing in its fields falls back to the profile TYPE.
+    expect(accountKindOf(rothIra)).toBe("retirement");
     expect(accountKindOf(brokerage)).toBe("investment");
   });
 

@@ -18,7 +18,14 @@ import { computeKeyFindings } from "@shared/tracker-insights";
 import { ownedAssetIds } from "@shared/cost-of-ownership";
 import { buildOwnerIndex, itemVisibleForSelection, type OwnershipRecord, isOwnerRole } from "@shared/ownership-model";
 import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance } from "@shared/asset-value";
-import { summarizeAccounts, isAccountProfile } from "@shared/finance-accounts";
+import { summarizeAccounts, isAccountProfile, accountKindMeta, accountKindOf } from "@shared/finance-accounts";
+import {
+  balanceSeries, seriesForPeriod, isHistoryPeriod, classifyAccountKind, cashFlowOf, summarizeActivity,
+  investmentActivity, holdings as accountHoldings, allocationOf, gainLossOf, biggestPositions, periodStart,
+  capabilitiesForKind, normalizeActivityKind, accountConnection, balanceSnapshots,
+} from "@shared/financial-assets";
+import { findAccountMatch, observationFromInput } from "@shared/financial-reconcile";
+import { markConnectedAccountProfileUnlinked } from "./financial-asset-sync";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
 import { advanceLiabilityDueDate, readDueDate, isSettledOccurrence, effectiveDueDate, isPausedBillFields, isEndedBillFields } from "@shared/liability-recurrence";
@@ -5338,6 +5345,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     if (deletable.status === "rejected") {
       return res.status(400).json({ error: deletable.error });
     }
+    if (isAccountProfile(existing)) await markConnectedAccountProfileUnlinked(existing).catch(() => null);
     const ok = await storage.deleteProfile(req.params.id);
     bustCache(`profiles:${uid_p3}`); bustCache(`stats:${uid_p3}`); bustCache(`profile-detail:${uid_p3}:`); bustCache(`cashflow:${uid_p3}`);
     if (!ok) {
@@ -8402,9 +8410,14 @@ Rules:
     if (textError) return res.status(400).json({ error: textError });
     const moneyError = validateProfileMoneyFields(req.body);
     if (moneyError) return res.status(400).json({ error: moneyError });
-    const { name, accountKind, institution, balance, availableBalance, creditLimit,
+    const { name, institution, balance, availableBalance, creditLimit,
       accountNumberLast4, balanceAsOf, currency, notes, ownerProfileId } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: "name is required" });
+    // The kind is classified from context when the caller did not (or could
+    // not) say: "Fidelity Brokerage" is a brokerage, "Coinbase" is crypto,
+    // "Roth IRA" is retirement — no hard-coded list the caller has to know.
+    const classified = classifyAccountKind({ hint: req.body?.accountKind, name, institution, description: notes });
+    const accountKind = classified.kind;
     if (balance !== undefined && balance !== null && !Number.isFinite(Number(balance))) {
       return res.status(400).json({ error: "balance must be a number" });
     }
@@ -8457,6 +8470,9 @@ Rules:
     // is an account too, and it appears in the Accounts list — so it has to be
     // deletable from there.
     if (!existing || !isAccountProfile(existing)) return res.status(404).json({ error: "Account not found" });
+    // A connected account whose profile is deleted must not come back on the
+    // next sync: remember the unlink on the connected row before the FK clears it.
+    await markConnectedAccountProfileUnlinked(existing).catch(() => null);
     const ok = await storage.deleteProfile(req.params.id);
     if (!ok) return res.status(404).json({ error: "Account not found" });
     bustBillCaches(uid);
@@ -8482,6 +8498,149 @@ Rules:
     if (!updated) return res.status(404).json({ error: "Account not found" });
     bustBillCaches(uid);
     res.json(updated);
+  }));
+
+  // ---- Financial-asset data: history, holdings, activity, transfers ----
+  //
+  // Everything an account's adaptive profile page reads that a plain profile
+  // row does not carry. All figures come from shared/financial-assets.ts, the
+  // same helpers the cards, the chat tools and the sync use.
+
+  /** Balance history for the chart + the change over a period. */
+  app.get("/api/accounts/:id/history", asyncHandler(async (req, res) => {
+    const profile = await storage.getProfile(req.params.id);
+    if (!profile || !isAccountProfile(profile)) return res.status(404).json({ error: "Account not found" });
+    const todayISO = getUserToday(getTimezone(req));
+    const period = isHistoryPeriod(req.query.period) ? req.query.period : "ALL";
+    const series = balanceSeries(profile, todayISO);
+    const windowed = seriesForPeriod(series, period, todayISO);
+    const start = periodStart(period, todayISO);
+    const activity = investmentActivity(profile);
+    res.json({
+      accountId: profile.id,
+      ...windowed,
+      allPoints: series.length,
+      observations: balanceSnapshots(profile).length,
+      activity: summarizeActivity(activity, start, todayISO),
+      cashFlow: cashFlowOf(profile, start, todayISO),
+      // Every period's change at once, so the selector can show deltas
+      // without a round trip per tab.
+      periods: Object.fromEntries((["1W", "1M", "3M", "YTD", "1Y", "ALL"] as const).map((p) => {
+        const w = seriesForPeriod(series, p, todayISO);
+        return [p, { change: w.change, changePct: w.changePct, from: w.from }];
+      })),
+    });
+  }));
+
+  /** The investment view: holdings, allocation, gain/loss, biggest positions. */
+  app.get("/api/accounts/:id/holdings", asyncHandler(async (req, res) => {
+    const profile = await storage.getProfile(req.params.id);
+    if (!profile || !isAccountProfile(profile)) return res.status(404).json({ error: "Account not found" });
+    const list = accountHoldings(profile);
+    res.json({
+      accountId: profile.id,
+      holdings: list,
+      allocation: allocationOf(list),
+      gainLoss: gainLossOf(list),
+      biggest: biggestPositions(list, 5),
+      capabilities: [...capabilitiesForKind(accountKindOf(profile))],
+    });
+  }));
+
+  app.post("/api/accounts/:id/holdings", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const b = (req.body && typeof req.body === "object" && !Array.isArray(req.body)) ? req.body : {};
+    if (!String(b.symbol ?? "").trim() && !String(b.name ?? "").trim()) {
+      return res.status(400).json({ error: "A holding needs a symbol or a name" });
+    }
+    for (const k of ["quantity", "price", "value", "costBasis"]) {
+      if (b[k] != null && b[k] !== "" && !Number.isFinite(Number(String(b[k]).replace(/[$,]/g, "")))) {
+        return res.status(400).json({ error: `${k} must be a number` });
+      }
+      if (b[k] != null && b[k] !== "") b[k] = Number(String(b[k]).replace(/[$,]/g, ""));
+    }
+    if (b.asOf != null && b.asOf !== "" && !isCalendarDay(String(b.asOf))) {
+      return res.status(400).json({ error: "asOf must be a real calendar day (YYYY-MM-DD)" });
+    }
+    const updated = await storage.setAccountHolding(req.params.id, {
+      symbol: b.symbol, name: b.name, quantity: b.quantity, price: b.price, value: b.value,
+      costBasis: b.costBasis, assetClass: b.assetClass, asOf: b.asOf || undefined, source: "user",
+    });
+    if (!updated) return res.status(404).json({ error: "Account not found" });
+    bustBillCaches(uid);
+    res.json({ profile: updated, holdings: accountHoldings(updated) });
+  }));
+
+  app.delete("/api/accounts/:id/holdings/:key", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const updated = await storage.removeAccountHolding(req.params.id, String(req.params.key));
+    if (!updated) return res.status(404).json({ error: "Account not found" });
+    bustBillCaches(uid);
+    res.json({ profile: updated, holdings: accountHoldings(updated) });
+  }));
+
+  /**
+   * Record activity INSIDE the account — a contribution, withdrawal, buy,
+   * sell, dividend, interest, fee. Never a new asset, never income or an
+   * expense: the money stays inside the user's own balance sheet.
+   */
+  app.post("/api/accounts/:id/activity", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const b = (req.body && typeof req.body === "object" && !Array.isArray(req.body)) ? req.body : {};
+    const kind = normalizeActivityKind(b.kind);
+    if (!kind) return res.status(400).json({ error: "kind must be one of contribution, withdrawal, buy, sell, dividend, interest, fee, transfer_in, transfer_out" });
+    const amount = Number(String(b.amount ?? "").replace(/[$,]/g, ""));
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "amount must be a positive number" });
+    if (b.date != null && b.date !== "" && !isCalendarDay(String(b.date))) {
+      return res.status(400).json({ error: "date must be a real calendar day (YYYY-MM-DD)" });
+    }
+    const out = await storage.recordAccountActivity(req.params.id, {
+      kind, amount, date: b.date || undefined, symbol: b.symbol, quantity: b.quantity == null || b.quantity === "" ? undefined : Number(b.quantity),
+      note: b.note, source: "user",
+    });
+    if (!out) return res.status(404).json({ error: "Account not found" });
+    bustBillCaches(uid);
+    res.status(201).json(out);
+  }));
+
+  /**
+   * Move money between two owned accounts. Both balances move, each side gets
+   * a transfer row, and net worth is unchanged by construction — nothing here
+   * is income or spending.
+   */
+  app.post("/api/accounts/transfer", asyncHandler(async (req, res) => {
+    const uid = cacheUserKey(req as AuthenticatedRequest);
+    const b = (req.body && typeof req.body === "object" && !Array.isArray(req.body)) ? req.body : {};
+    const amount = Number(String(b.amount ?? "").replace(/[$,]/g, ""));
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "amount must be a positive number" });
+    if (typeof b.fromAccountId !== "string" || typeof b.toAccountId !== "string") {
+      return res.status(400).json({ error: "fromAccountId and toAccountId are required" });
+    }
+    if (b.fromAccountId === b.toAccountId) return res.status(400).json({ error: "Pick two different accounts" });
+    if (b.date != null && b.date !== "" && !isCalendarDay(String(b.date))) {
+      return res.status(400).json({ error: "date must be a real calendar day (YYYY-MM-DD)" });
+    }
+    const out = await storage.recordAccountTransfer({
+      fromId: b.fromAccountId, toId: b.toAccountId, amount, date: b.date || undefined, note: b.note, source: "user",
+    });
+    if (!out) return res.status(404).json({ error: "One of the accounts was not found" });
+    bustBillCaches(uid);
+    res.status(201).json(out);
+  }));
+
+  /**
+   * "Is this the same account?" — the reconciliation the import, the sync and
+   * the chat use, exposed so the add-account form can warn before it creates
+   * "Fidelity Account 2".
+   */
+  app.get("/api/accounts/match", asyncHandler(async (req, res) => {
+    const q = req.query as Record<string, string | undefined>;
+    const profiles = await storage.getProfiles();
+    const obs = observationFromInput({
+      name: q.name, accountKind: q.accountKind, institution: q.institution,
+      accountNumberLast4: q.last4, balance: q.balance ? Number(q.balance) : null,
+    }, "user");
+    res.json(findAccountMatch(obs, profiles));
   }));
 
   // ---- Artifacts ----

@@ -57,6 +57,12 @@ import {
   accountViews, findAccount, isAccountProfile, normalizeAccountKind,
   summarizeAccounts, toAccountView,
 } from "@shared/finance-accounts";
+import {
+  classifyAccountKind, FINANCIAL_ONTOLOGY_GUIDANCE, FINANCIAL_ASSET_KINDS, balanceSeries, seriesForPeriod,
+  isHistoryPeriod, changeSince, holdings as accountHoldings, allocationOf, gainLossOf, investmentActivity,
+  summarizeActivity, normalizeActivityKind, activityIsIncome,
+} from "@shared/financial-assets";
+import { findAccountMatch, observationFromInput } from "@shared/financial-reconcile";
 import { createHash, randomUUID } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
 import { budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
@@ -4351,12 +4357,12 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   // ─── FINANCIAL ACCOUNTS ──────────────────────────────────────────────────
   {
     name: "create_account",
-    description: "Add a financial ACCOUNT the user holds — checking, savings, cash, credit card, investment/brokerage, loan account, or line of credit. Use for 'I have a checking account at Chase with $2,400', 'add my Amex with a $10,000 limit', 'my Fidelity brokerage has $45k', 'I keep about $300 in cash'.\n\nAn account is WHERE money sits. Do NOT use this for a debt with an amortization schedule the user wants to track payoff on (use create_liability) or for a recurring bill (use create_obligation). Balances entered here feed net worth, cash flow and the Accounts section directly.\n\nAlways pass the balance as a POSITIVE number, even for a credit card — the sign is applied from the account type.",
+    description: "Add a financial ACCOUNT the user holds — checking, savings, money market, CD, cash, brokerage, retirement (IRA/401k), crypto wallet, HSA, 529, credit card, loan account, or line of credit. Use for 'I have a checking account at Chase with $2,400', 'add my Amex with a $10,000 limit', 'my Fidelity brokerage has $45k', 'my Bitcoin wallet is worth $8,400', 'I keep about $300 in cash'.\n\nAn account is WHERE money sits — a money-holding account is an ASSET with its own profile; income (salary, a paycheck) is NOT an account. If an account at the same institution and of the same kind already exists, its balance is updated instead of a duplicate being created. Do NOT use this for a debt with an amortization schedule the user wants to track payoff on (use create_liability) or for a recurring bill (use create_obligation). Balances entered here feed net worth, cash flow and the Accounts section directly.\n\nAlways pass the balance as a POSITIVE number, even for a credit card — the sign is applied from the account type.",
     input_schema: {
       type: "object" as const,
       properties: {
         name: { type: "string", description: "Display name, e.g. 'Chase Checking', 'Amex Gold', 'Fidelity Brokerage'." },
-        accountKind: { type: "string", enum: ["checking", "savings", "cash", "credit_card", "investment", "loan", "line_of_credit", "other"], description: "Account type. REQUIRED — pick the closest match." },
+        accountKind: { type: "string", enum: ["checking", "savings", "money_market", "cd", "cash", "investment", "brokerage", "retirement", "crypto", "hsa", "education", "credit_card", "loan", "line_of_credit", "other"], description: "Account type. Pick the closest match; when the user does not say, infer it from context (Fidelity/Schwab/Vanguard/Robinhood → brokerage; Roth/IRA/401k → retirement; Coinbase/wallet/BTC → crypto; HSA → hsa; 529 → education; a plain bank → checking). Omit only when nothing in the message says — it is then classified from the name and institution." },
         institution: { type: "string", description: "Bank / brokerage / issuer name, e.g. 'Chase', 'Fidelity', 'American Express'." },
         balance: { type: "number", description: "Current balance as a POSITIVE number. For a credit card this is the amount OWED." },
         availableBalance: { type: "number", description: "Available balance — spendable cash for a checking account, remaining credit for a card. Omit if not stated (for cards it's derived from the limit)." },
@@ -4365,7 +4371,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         balanceAsOf: { type: "string", description: "YYYY-MM-DD the balance was accurate. Defaults to today." },
         forProfile: { type: "string", description: "Owner's profile name, when the account belongs to someone other than the user (e.g. 'Mom', 'Sarah')." },
       },
-      required: ["name", "accountKind"],
+      required: ["name"],
     },
   },
   {
@@ -4389,9 +4395,73 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     input_schema: {
       type: "object" as const,
       properties: {
-        kind: { type: "string", description: "Optional filter to one account type (checking, savings, cash, credit_card, investment, loan, line_of_credit)." },
+        kind: { type: "string", description: "Optional filter to one account type (checking, savings, money_market, cd, cash, investment, brokerage, retirement, crypto, hsa, education, credit_card, loan, line_of_credit)." },
       },
       required: [],
+    },
+  },
+  {
+    name: "transfer_between_accounts",
+    description: "Move money between two of the user's OWN accounts: 'put $500 into Schwab from checking', 'moved $1,000 from checking to savings', 'transferred $2k to my brokerage'. Both balances move by the amount, each side gets a transfer row, and NOTHING is logged as income or spending — a transfer changes the composition of net worth, never the total. Never use create_expense or log_income for a transfer. If only ONE side is named ('put $500 into Schwab') and the source is unknown, use record_account_activity(kind:'contribution') on the destination instead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        fromAccount: { type: "string", description: "Source account name (partial match), e.g. 'checking', 'Chase'." },
+        toAccount: { type: "string", description: "Destination account name (partial match), e.g. 'Schwab', 'savings'." },
+        amount: { type: "number", description: "Amount moved. Always positive." },
+        date: { type: "string", description: "YYYY-MM-DD. Defaults to today." },
+        note: { type: "string", description: "Optional note, e.g. 'monthly savings'." },
+      },
+      required: ["fromAccount", "toAccount", "amount"],
+    },
+  },
+  {
+    name: "record_account_activity",
+    description: "Record activity INSIDE an existing account — never a new asset. kinds: contribution (money put in: 'added $500 to my IRA'), withdrawal ('took $200 out of savings'), buy ('bought 10 shares of AAPL in Fidelity'), sell, dividend ('got a $120 dividend'), interest ('$14 interest posted'), fee, transfer_in, transfer_out. Contributions, dividends, interest and transfers-in RAISE the balance; withdrawals, fees and transfers-out LOWER it; a buy or sell changes what the account holds, not its total. A dividend is income tied to the asset — do not ALSO call log_income for it.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        account: { type: "string", description: "Account name (partial match), e.g. 'Fidelity', 'Roth IRA', 'Coinbase'." },
+        kind: { type: "string", enum: ["contribution", "withdrawal", "buy", "sell", "dividend", "interest", "fee", "transfer_in", "transfer_out"] },
+        amount: { type: "number", description: "Dollar amount of the activity. Always positive." },
+        symbol: { type: "string", description: "Ticker or token for a buy/sell/dividend, e.g. 'AAPL', 'BTC'." },
+        quantity: { type: "number", description: "Shares/units for a buy or sell." },
+        date: { type: "string", description: "YYYY-MM-DD. Defaults to today." },
+        note: { type: "string" },
+      },
+      required: ["account", "kind", "amount"],
+    },
+  },
+  {
+    name: "set_holding",
+    description: "Set or update ONE position inside an investment or crypto account: 'my Fidelity account holds 50 shares of VTI worth $12,000', 'I have 0.1 BTC in Coinbase', 'AAPL cost basis was $1,500'. Upserts by symbol — the same ticker is never listed twice. Holdings live INSIDE the account asset; they are never their own asset profile. Pass value, or quantity + price (value is computed).",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        account: { type: "string", description: "Account name (partial match)." },
+        symbol: { type: "string", description: "Ticker / token symbol, e.g. 'VTI', 'BTC'." },
+        name: { type: "string", description: "Position name when there is no symbol, e.g. 'Vanguard Total Market'." },
+        quantity: { type: "number" },
+        price: { type: "number", description: "Price per unit." },
+        value: { type: "number", description: "Current market value of the whole position." },
+        costBasis: { type: "number", description: "Total paid for the position." },
+        assetClass: { type: "string", description: "equity | etf | fund | bond | crypto | cash | real_estate | commodity | other" },
+        remove: { type: "boolean", description: "true to remove the position instead ('I sold all my AAPL')." },
+      },
+      required: ["account"],
+    },
+  },
+  {
+    name: "get_account_history",
+    description: "Balance history of ONE account and how it changed over a period: 'how much has my Fidelity account grown since January', 'what was my savings balance in March', 'how is my brokerage doing this year'. Returns the value series, the change over the period, and for investment accounts the holdings, allocation, gain/loss and activity summary.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        account: { type: "string", description: "Account name (partial match)." },
+        period: { type: "string", enum: ["1W", "1M", "3M", "YTD", "1Y", "ALL"], description: "Window. Defaults to ALL." },
+        since: { type: "string", description: "YYYY-MM-DD — change since this date instead of a period ('since January' → the first of that month)." },
+      },
+      required: ["account"],
     },
   },
   {
@@ -5644,13 +5714,14 @@ Once a variable/usage bill EXISTS, extra money spent on it is never a new bill a
 NEVER call create_obligation for a service the user already has — that produces two bills for one service, which is the single worst failure mode in this area. NEVER call update_obligation with changes.amount to record one month's actual: that rewrites EVERY month including history. One month's amount is always add_liability_charge or set_liability_amount.
 
 *** FINANCIAL ACCOUNTS ***
-An ACCOUNT is where money sits: checking, savings, cash, credit card, investment/brokerage, loan account, line of credit.
+An ACCOUNT is where money sits: checking, savings, money market, CD, cash, brokerage, retirement (IRA / 401k), crypto wallet, HSA, 529, credit card, loan account, line of credit.
 - "I have a checking account at Chase with $2,400" → create_account(name:"Chase Checking", accountKind:"checking", institution:"Chase", balance:2400)
 - "my checking is down to $1,850" → update_account_balance(name:"checking", newBalance:1850)
 - "I spent $40 out of cash" → update_account_balance(name:"cash", delta:-40)
 - "how much cash do I have?" / "what's my Amex balance?" → get_accounts
+- "how much has my Fidelity grown since January?" → get_account_history(account:"Fidelity", since:"<year>-01-01")
 Balances are ALWAYS positive numbers — a credit card balance is what is OWED, and the sign comes from the account type. Never create a second account for one the user already has; update its balance instead.
-
+${FINANCIAL_ONTOLOGY_GUIDANCE}
 ${FINANCE_TOOL_SYSTEM_GUIDANCE}
 
 DIAGNOSTICS & INSIGHTS MODE:
@@ -5996,9 +6067,12 @@ record already owns the information. Route it there — NEVER into a note:
   allergies / sizes / date of birth       -> update_profile (fields: {...})
   a document's expiration or renewal      -> the document record's field
   money spent                             -> create_expense
-  money earned / paycheck / salary        -> log_income
+  money earned / paycheck / salary        -> log_income (NEVER an account or asset)
   a recurring bill or subscription        -> create_obligation
   a debt, loan, or balance owed           -> create_liability
+  an account's balance / what it's worth  -> create_account / update_account_balance (appends history)
+  money moved between own accounts        -> transfer_between_accounts (never income, never spending)
+  a buy / sell / dividend inside account  -> record_account_activity / set_holding
   something owned, and its value          -> create_profile (asset) / revalue_asset
   a pet's breed, microchip, vet           -> update_profile on the pet
   a measured health value                 -> log_tracker_entry
@@ -11542,17 +11616,34 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const name = String(input.name || "").trim();
       if (!name) return { error: "An account needs a name." };
       const profiles = await storage.getProfiles();
-      // Never spawn a second "Chase Checking". If one already exists, move its
-      // balance instead — that is what the user meant.
-      const existing = findAccount(profiles, name);
-      if (existing && String(existing.name).toLowerCase() === name.toLowerCase()) {
+      // The kind comes from context when the model did not say: "Fidelity" is
+      // a brokerage, "Coinbase" is crypto, "Roth IRA" is retirement.
+      const classified = classifyAccountKind({ hint: input.accountKind, name, institution: input.institution });
+      // Never spawn a second "Chase Checking" — or a "Fidelity Account 2" for
+      // the Fidelity brokerage that already exists. The same reconciliation
+      // the statement import and the bank sync use decides whether this
+      // sentence describes an account the user already has; a confident match
+      // moves that account's balance (appending to its history) instead.
+      const exact = findAccount(profiles, name);
+      const match = findAccountMatch(observationFromInput({ ...input, name, accountKind: classified.kind }, "ai"), profiles);
+      const existing = (exact && String(exact.name).toLowerCase() === name.toLowerCase())
+        ? exact
+        : (match.decision === "link" && match.best ? profiles.find((p: any) => p.id === match.best!.profileId) : null);
+      if (existing) {
         if (input.balance != null) {
           const moved = await storage.adjustAccountBalance(existing.id, {
-            newBalance: Number(input.balance), source: "ai", reason: "Balance from chat",
+            newBalance: Number(input.balance), date: input.balanceAsOf, source: "ai", reason: "Balance from chat",
           });
-          return { updated: true, existing: true, account: moved, note: `${existing.name} already exists — updated its balance instead of creating a duplicate.` };
+          return { updated: true, existing: true, account: moved, view: toAccountView(moved), note: `${existing.name} already exists — recorded the new balance in its history instead of creating a duplicate.` };
         }
         return { existing: true, account: existing, note: `${existing.name} already exists.` };
+      }
+      if (match.decision === "confirm" && match.best) {
+        return {
+          needsConfirmation: true,
+          question: `Is "${name}" the same account as your existing "${match.best.profileName}" (${match.best.reasons.join(", ")})? Say yes to update it, or tell me it's a different account.`,
+          candidate: { id: match.best.profileId, name: match.best.profileName, score: match.best.score },
+        };
       }
       let ownerProfileId: string | undefined;
       if (input.forProfile) {
@@ -11564,7 +11655,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       }
       const created = await (storage as any).createAccount({
         name,
-        accountKind: input.accountKind,
+        accountKind: classified.kind,
         institution: input.institution,
         balance: input.balance,
         availableBalance: input.availableBalance,
@@ -11573,7 +11664,13 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         balanceAsOf: input.balanceAsOf,
         ownerProfileId,
       });
-      return { created: true, account: created, view: toAccountView(created) };
+      return {
+        created: true, account: created, view: toAccountView(created),
+        kind: classified.kind, kindConfidence: classified.confidence,
+        ...(classified.confidence === "low" || classified.confidence === "none"
+          ? { note: `Filed as ${toAccountView(created).kindLabel.toLowerCase()} (${classified.reason}). Tell me if it is a different kind of account.` }
+          : {}),
+      };
     }
 
     case "update_account_balance": {
@@ -11613,6 +11710,98 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           utilization: v.utilization, lastUpdated: v.balanceAsOf,
         })),
         summary: summarizeAccounts(profiles),
+      };
+    }
+
+    case "transfer_between_accounts": {
+      const profiles = await storage.getProfiles();
+      const from = findAccount(profiles, String(input.fromAccount || ""));
+      const to = findAccount(profiles, String(input.toAccount || ""));
+      const names = profiles.filter(isAccountProfile).map((a: any) => a.name);
+      if (!from) return { error: `I couldn't find an account matching "${input.fromAccount}".${names.length ? ` You have: ${names.join(", ")}.` : ""}` };
+      if (!to) return { error: `I couldn't find an account matching "${input.toAccount}".${names.length ? ` You have: ${names.join(", ")}.` : ""}` };
+      if (from.id === to.id) return { error: "Those are the same account — tell me where the money went." };
+      const amount = Number(input.amount);
+      if (!Number.isFinite(amount) || amount <= 0) return { error: "Tell me how much was moved." };
+      const out = await storage.recordAccountTransfer({
+        fromId: from.id, toId: to.id, amount, date: input.date, note: input.note, source: "ai",
+      });
+      if (!out) return { error: "The transfer could not be recorded." };
+      return {
+        transferred: true, amount, from: { id: from.id, name: from.name, balance: toAccountView(out.from).balance },
+        to: { id: to.id, name: to.name, balance: toAccountView(out.to).balance },
+        note: "Recorded as a transfer between your own accounts — not income, not spending; net worth is unchanged.",
+      };
+    }
+
+    case "record_account_activity": {
+      const profiles = await storage.getProfiles();
+      const account = findAccount(profiles, String(input.account || ""));
+      if (!account) {
+        const names = profiles.filter(isAccountProfile).map((a: any) => a.name);
+        return { error: `I couldn't find an account matching "${input.account}".${names.length ? ` You have: ${names.join(", ")}.` : ""}` };
+      }
+      const kind = normalizeActivityKind(input.kind);
+      if (!kind) return { error: `"${input.kind}" is not an activity I can record. Use contribution, withdrawal, buy, sell, dividend, interest, fee, transfer_in or transfer_out.` };
+      const amount = Number(input.amount);
+      if (!Number.isFinite(amount) || amount <= 0) return { error: "Tell me the amount." };
+      const out = await storage.recordAccountActivity(account.id, {
+        kind, amount, date: input.date, symbol: input.symbol, quantity: input.quantity, note: input.note, source: "ai",
+      });
+      if (!out) return { error: "The activity could not be recorded." };
+      const view = toAccountView(out.profile);
+      return {
+        recorded: true, account: account.name, accountId: account.id, activity: out.entry, balance: view.balance,
+        ...(activityIsIncome(kind) ? { note: "A dividend/interest is income tied to this asset; the account balance went up by it. Do not also log it as income." } : {}),
+        ...(kind === "buy" || kind === "sell" ? { note: "A buy/sell changes what the account holds, not its total value. Use set_holding to record the position." } : {}),
+      };
+    }
+
+    case "set_holding": {
+      const profiles = await storage.getProfiles();
+      const account = findAccount(profiles, String(input.account || ""));
+      if (!account) {
+        const names = profiles.filter(isAccountProfile).map((a: any) => a.name);
+        return { error: `I couldn't find an account matching "${input.account}".${names.length ? ` You have: ${names.join(", ")}.` : ""}` };
+      }
+      if (!String(input.symbol ?? "").trim() && !String(input.name ?? "").trim()) return { error: "Which position? Give me a ticker or a name." };
+      if (input.remove) {
+        const removed = await storage.removeAccountHolding(account.id, String(input.symbol || input.name));
+        return removed ? { removed: true, account: account.name, holdings: accountHoldings(removed) } : { error: "Could not update holdings." };
+      }
+      const updated = await storage.setAccountHolding(account.id, {
+        symbol: input.symbol, name: input.name, quantity: input.quantity, price: input.price, value: input.value,
+        costBasis: input.costBasis, assetClass: input.assetClass, source: "ai",
+      });
+      if (!updated) return { error: "Could not update holdings." };
+      const list = accountHoldings(updated);
+      return { updated: true, account: account.name, accountId: account.id, holdings: list, allocation: allocationOf(list), gainLoss: gainLossOf(list) };
+    }
+
+    case "get_account_history": {
+      const profiles = await storage.getProfiles();
+      const account = findAccount(profiles, String(input.account || ""));
+      if (!account) {
+        const names = profiles.filter(isAccountProfile).map((a: any) => a.name);
+        return { error: `I couldn't find an account matching "${input.account}".${names.length ? ` You have: ${names.join(", ")}.` : ""}` };
+      }
+      const todayISO = getUserToday(aiUserTimezone());
+      const series = balanceSeries(account, todayISO);
+      const period = isHistoryPeriod(input.period) ? input.period : "ALL";
+      const windowed = seriesForPeriod(series, period, todayISO);
+      const since = typeof input.since === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.since) ? changeSince(account, input.since, todayISO) : null;
+      const list = accountHoldings(account);
+      const activity = investmentActivity(account);
+      return {
+        account: account.name, accountId: account.id, kind: toAccountView(account).kindLabel,
+        current: toAccountView(account).balance, asOf: toAccountView(account).balanceAsOf,
+        period, from: windowed.from, to: windowed.to, change: windowed.change, changePct: windowed.changePct,
+        ...(since ? { since: input.since, changeSince: since } : {}),
+        points: windowed.points.slice(-60),
+        observations: series.length,
+        ...(list.length > 0 ? { holdings: list, allocation: allocationOf(list), gainLoss: gainLossOf(list) } : {}),
+        ...(activity.length > 0 ? { activity: summarizeActivity(activity, windowed.start, todayISO) } : {}),
+        disclosure: series.length < 2 ? "Only one balance observation exists, so there is no change to report yet." : undefined,
       };
     }
 
@@ -17633,7 +17822,7 @@ export const READ_ONLY_TOOLS = new Set<string>([
   "get_financial_summary", "search_financial_transactions",
   "get_spending_breakdown", "get_account_balances",
   // Manual accounts — a pure read over the user's own account profiles.
-  "get_accounts",
+  "get_accounts", "get_account_history",
 ]);
 
 // Write tools whose success needs no model follow-up: the outcome IS the
@@ -17764,9 +17953,13 @@ export const TOOL_ACTION_MAP: Record<string, ParsedAction["type"]> = {
   // obligation (one billing period of it), so they surface as bill updates.
   add_liability_charge: "update_entity",
   set_liability_amount: "update_entity",
-  // Financial accounts are profiles.
+  // Financial accounts are profiles. Transfers, activity and holdings write
+  // INSIDE an existing account profile, so they surface as profile updates.
   create_account: "create_profile",
   update_account_balance: "update_profile",
+  transfer_between_accounts: "update_profile",
+  record_account_activity: "update_profile",
+  set_holding: "update_profile",
   update_obligation: "update_entity",
   undo_last_payment: "delete_entity",
   update_liability_payment: "update_entity",

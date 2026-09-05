@@ -53,6 +53,11 @@ const ADMIN_EXACT = new Set([
   "valuation_method", "valuation_date", "valuation_confidence", "valuation_range",
   "previousValue", "previous_value", "includeInNetWorth", "countTowardOwner",
   "balanceHistory", "balance_history", "currency",
+  // Financial-asset DATA (shared/financial-assets.ts): observations, positions,
+  // activity, provenance and the source connection. The account's own overview
+  // renders them; as generic fields they would be arrays of objects.
+  "balanceSnapshots", "balance_snapshots", "holdings", "investmentActivity", "investment_activity",
+  "fieldSources", "field_sources", "connection", "possibleDuplicateOf", "performanceHistory", "performance_history",
 ]);
 
 // Role patterns. Order matters — first match wins, so the narrow patterns

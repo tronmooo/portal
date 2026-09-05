@@ -28,6 +28,9 @@ import {
   normalizeCategory,
 } from "@shared/finance-import-schema";
 import { detectImportSignals, type ImportSignal } from "@shared/finance-import-insights";
+import { balanceFieldsFor } from "@shared/finance-accounts";
+import { appendBalanceSnapshot, classifyAccountKind, recordFieldSources } from "@shared/financial-assets";
+import { findAccountMatch, observationFromImportAccount } from "@shared/financial-reconcile";
 import type { Expense, Obligation, Income, Profile } from "@shared/schema";
 
 // ── Minimal storage surface the engine needs (keeps planImport testable) ─────
@@ -215,6 +218,17 @@ export async function planImport(
       const s = sec(section);
       const key = `${profileType}|${normalizeMerchant(r.name)}`;
       const val = Number(r.value ?? r.balance ?? 0);
+      // An imported ACCOUNT that describes one the user already has (same
+      // institution, kind, number) updates that account's balance — appending
+      // to its history — instead of creating "Fidelity Account 2".
+      if (profileType === "account") {
+        const match = findAccountMatch(observationFromImportAccount(r as any), profiles);
+        if (match.decision === "link" && match.best) {
+          ops.push({ section, action: "update", uniqueId: r.unique_id, label: `${r.name} ${fmtMoney(val)}`, reason: `same account as "${match.best.profileName}" — its balance is updated, history kept` });
+          s.update++;
+          continue;
+        }
+      }
       if (existingProfileByKey.has(key)) {
         ops.push({ section, action: "duplicate", uniqueId: r.unique_id, label: `${r.name} ${fmtMoney(val)}`, reason: `a ${profileType} named "${r.name}" already exists` });
         s.duplicate++;
@@ -375,19 +389,46 @@ export async function applyImport(
   const holdingSections: Array<[string, Array<any>]> = [
     ["account", payload.accounts], ["asset", payload.assets], ["liability", payload.liabilities], ["investment", payload.investments],
   ];
+  const existingProfiles: any[] = await store.getProfiles();
   for (const [profileType, rows] of holdingSections) {
     for (const r of rows) {
-      if (actionByUid.get(r.unique_id) !== "create") continue;
+      const action = actionByUid.get(r.unique_id);
+      if (profileType === "account" && action === "update") {
+        // The plan matched this row to an account the user already has.
+        await attempt("accounts", r.unique_id, String(r.name), async () => {
+          const match = findAccountMatch(observationFromImportAccount(r as any), existingProfiles);
+          if (!match.best || match.decision !== "link") throw new Error("account match changed since the plan");
+          const adjust = (store as any).adjustAccountBalance;
+          if (typeof adjust !== "function") throw new Error("balance adjustments unavailable");
+          await adjust.call(store, match.best.profileId, {
+            newBalance: Number(r.balance ?? 0), reason: "Imported statement balance", source: "import",
+          });
+        });
+        continue;
+      }
+      if (action !== "create") continue;
       await attempt(`${profileType}s`, r.unique_id, String(r.name), async () => {
         const value = Number(r.value ?? r.balance ?? 0);
         const fields: Record<string, any> = { _import: importMeta(r.confidence) };
-        if (profileType === "liability") fields.balance = value; else fields.value = value;
+        if (profileType === "account") {
+          // A real account profile: kind classified from the row and its name,
+          // the balance under every key the resolvers read, and the imported
+          // figure as the first observation in its history.
+          const kind = classifyAccountKind({ hint: (r as any).type, name: r.name }).kind;
+          fields.accountKind = kind;
+          Object.assign(fields, balanceFieldsFor({ type: "account", fields: { accountKind: kind } }, value));
+          if (opts.today) fields.balanceAsOf = String(opts.today).slice(0, 10);
+          fields.balanceHistory = [];
+          fields.balanceSnapshots = appendBalanceSnapshot([], { balance: value, source: "import", sourceRef: batchId });
+          fields.fieldSources = recordFieldSources({}, ["balance", "currentBalance", "currentValue"], "import", new Date().toISOString(), batchId);
+        } else if (profileType === "liability") fields.balance = value; else fields.value = value;
         if (r.symbol) fields.symbol = r.symbol;
         if (r.currency) fields.currency = r.currency;
         const row = await store.createProfile({
           type: profileType, name: r.name, parentProfileId: profileId,
+          ...(profileType === "account" ? { type_key: fields.accountKind } : {}),
           fields, notes: r.notes || "", tags: [`source:${FINANCE_IMPORT_SOURCE}`, `import:${batchId}`],
-        });
+        } as any);
         created.profiles.push(row.id);
       });
     }

@@ -24,6 +24,7 @@
  */
 
 import type Stripe from "stripe";
+import { reconcileConnectedAccountProfiles, markConnectionProfilesDisconnected } from "./financial-asset-sync";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   getStripe, getFinanceDb, classifyStripeError, logFinanceError, FinanceConfigError,
@@ -826,6 +827,16 @@ export async function syncFinancialData(opts: SyncOptions): Promise<SyncResult> 
     logFinanceError("analyzeRecent", e, { userId: userId.slice(0, 8) });
   }
 
+  // Every connected account is an Asset Profile: match or create the profile
+  // and land this sync's balance as an observation in its history. Best-effort
+  // — a reconciliation failure must not turn a successful import into a
+  // failed run, so it is logged and the run still finishes.
+  try {
+    await reconcileConnectedAccountProfiles(userId, { db, runId });
+  } catch (e) {
+    logFinanceError("reconcileProfiles", e, { userId: userId.slice(0, 8) });
+  }
+
   result.status = result.errorCode ? "failed"
     : result.accountErrors.length > 0 ? "partial"
       : "success";
@@ -1016,6 +1027,16 @@ export async function disconnectConnection(
         logFinanceError("disconnectAccount", e, { stripeAccountId: a.stripe_financial_connections_account_id });
       }
     }
+  }
+
+  // The Asset Profiles these accounts fed STAY, with every balance observation
+  // they ever received; only their connection status flips. Disconnecting a
+  // feed is not deleting an asset. This runs before the deleteData branch
+  // because that branch removes the rows the account → profile lookup needs.
+  try {
+    await markConnectionProfilesDisconnected(userId, connectionId);
+  } catch (e) {
+    logFinanceError("markConnectionProfilesDisconnected", e, { userId: userId.slice(0, 8), connectionId });
   }
 
   let transactionsDeleted = 0;

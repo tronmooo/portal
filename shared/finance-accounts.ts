@@ -29,6 +29,7 @@ import { isCalendarDay } from "./schema";
 // the debt sign, so nothing downstream has to remember the rule.
 
 import { parseMoney } from "./asset-value";
+import { appendBalanceSnapshot } from "./balance-snapshots";
 import {
   ACCOUNT_KINDS, accountKindMeta, accountKindOf, isDebtAccount, isDebtAccountKind,
   normalizeAccountKind, type AccountKind, type AccountKindMeta,
@@ -187,7 +188,7 @@ export interface BalanceAdjustment {
   /** newBalance − previousBalance. Negative when the balance fell. */
   delta: number;
   reason?: string;
-  source?: "user" | "ai" | "payment" | "import" | "system";
+  source?: "user" | "ai" | "payment" | "import" | "system" | "api" | "document";
   /** Set when the adjustment came from a specific record (a liability payment). */
   linkedRecordId?: string;
   createdAt: string;
@@ -260,11 +261,20 @@ export function applyBalanceAdjustment(
   };
 
   const history = [...balanceHistory(profile), adjustment].slice(-200);
+  // The adjustment ledger says WHY the balance moved; the snapshot series says
+  // WHAT it was on each day, and is what the history chart and "how much has
+  // it grown since January" read. Both are written from the same event so they
+  // cannot disagree.
+  const snapshotSource = input.source ?? "user";
   return {
     fields: {
       ...balanceFieldsFor(profile, next),
       balanceAsOf: date,
       balanceHistory: history,
+      balanceSnapshots: appendBalanceSnapshot(profile, {
+        balance: next, date, source: snapshotSource, sourceRef: input.linkedRecordId ?? undefined,
+        note: input.reason ?? undefined,
+      }, adjustment.createdAt),
     },
     adjustment,
   };
@@ -447,10 +457,17 @@ export function findAccount(profiles: readonly any[], query: string | null | und
   const institution = accounts.filter((a) => (accountInstitution(a) ?? "").toLowerCase().includes(q));
   if (institution.length === 1) return institution[0];
   // "checking" / "savings" / "credit card" as a kind word, when unambiguous.
+  // A kind word also reaches its GROUP: "my brokerage" finds the one
+  // investment-group account even when it was filed as "investment".
   const kind = normalizeAccountKind(q);
   if (kind !== "other") {
     const byKind = accounts.filter((a) => accountKindOf(a) === kind);
     if (byKind.length === 1) return byKind[0];
+    if (byKind.length === 0) {
+      const group = accountKindMeta(kind).group;
+      const byGroup = accounts.filter((a) => accountKindMeta(accountKindOf(a)).group === group);
+      if (byGroup.length === 1) return byGroup[0];
+    }
   }
   return contains[0] ?? null;
 }

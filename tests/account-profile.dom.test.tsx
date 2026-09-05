@@ -57,15 +57,23 @@ const ACCOUNTS = {
   line_of_credit: makeAccount("line_of_credit", { balance: 15000, currentBalance: 15000, creditLimit: 50000, institution: "Wells Fargo" }),
   loan: makeAccount("loan", { balance: 18400, currentBalance: 18400, institution: "Toyota Financial" }),
   other: makeAccount("other", { balance: 750, currentBalance: 750 }),
+  // The finer money-holding subtypes (2026-09): each is its own asset kind.
+  money_market: makeAccount("money_market", { balance: 5200, currentBalance: 5200, institution: "Marcus" }),
+  cd: makeAccount("cd", { balance: 12000, currentBalance: 12000, institution: "Ally", maturityDate: "2027-08-11" }),
+  brokerage: makeAccount("brokerage", { balance: 24830, currentBalance: 24830, institution: "Fidelity", accountNumberLast4: "4821" }),
+  retirement: makeAccount("retirement", { balance: 88000, currentBalance: 88000, institution: "Vanguard" }),
+  crypto: makeAccount("crypto", { balance: 8400, currentBalance: 8400, institution: "Coinbase" }),
+  hsa: makeAccount("hsa", { balance: 3100, currentBalance: 3100, institution: "HealthEquity" }),
+  education: makeAccount("education", { balance: 15000, currentBalance: 15000, institution: "NY 529" }),
 } as const;
 
 const ALL = Object.values(ACCOUNTS);
 
 describe("every account kind exists and is distinguishable", () => {
-  it("covers all eight kinds the product promises", () => {
+  it("covers every kind the product promises", () => {
     expect(ACCOUNT_KINDS.map(k => k.key).sort()).toEqual([
-      "cash", "checking", "credit_card", "investment",
-      "line_of_credit", "loan", "other", "savings",
+      "brokerage", "cash", "cd", "checking", "credit_card", "crypto", "education", "hsa",
+      "investment", "line_of_credit", "loan", "money_market", "other", "retirement", "savings",
     ]);
     // Every kind has a fixture, so nothing below is untested by omission.
     expect(Object.keys(ACCOUNTS).sort()).toEqual(ACCOUNT_KINDS.map(k => k.key).sort());
@@ -76,7 +84,9 @@ describe("every account kind exists and is distinguishable", () => {
     expect(new Set(labels).size).toBe(labels.length);
     expect(labels).not.toContain("account");
     expect(toAccountView(ACCOUNTS.credit_card).kindLabel).toBe("Credit card");
-    expect(toAccountView(ACCOUNTS.investment).kindLabel).toBe("Investment / brokerage");
+    expect(toAccountView(ACCOUNTS.investment).kindLabel).toBe("Investment");
+    expect(toAccountView(ACCOUNTS.brokerage).kindLabel).toBe("Brokerage");
+    expect(toAccountView(ACCOUNTS.crypto).kindLabel).toBe("Crypto");
   });
 
   it("paints kinds with different icons, not one generic bank glyph", () => {
@@ -130,7 +140,7 @@ describe("the account profile page renders each kind's own details", () => {
   it("shows NO credit limit or utilization on kinds that have none", () => {
     // The point of the kind-aware layout: a checking account must not render
     // an empty "Credit limit —" row.
-    for (const kind of ["checking", "savings", "cash", "investment", "loan", "other"] as const) {
+    for (const kind of ["checking", "savings", "cash", "investment", "loan", "other", "brokerage", "retirement", "crypto", "hsa", "cd", "money_market", "education"] as const) {
       cleanup();
       render(<AccountOverview profile={ACCOUNTS[kind]} todayISO={TODAY} />);
       expect(screen.queryByTestId("account-credit-limit"), `${kind} showed a credit limit`).toBeNull();
@@ -169,7 +179,7 @@ describe("the account profile page renders each kind's own details", () => {
       }
       seen.set(kind, text);
     }
-    expect(seen.size).toBe(8);
+    expect(seen.size).toBe(ACCOUNT_KINDS.length);
   });
 });
 

@@ -40,6 +40,10 @@ export default defineConfig({
       'tests/liability-schedule.test.ts',
       'tests/liability-billing.test.ts',
       'tests/finance-accounts.test.ts',
+      // Universal financial-asset layer: subtypes, snapshots, holdings,
+      // activity, provenance, the asset/income/transfer ontology, reconciliation.
+      'tests/financial-assets.test.ts',
+      'tests/financial-asset-overview.dom.test.tsx',
       'tests/account-profile.dom.test.tsx',
       'tests/profile-detail-groups.test.ts',
       'tests/cost-of-ownership.test.ts',

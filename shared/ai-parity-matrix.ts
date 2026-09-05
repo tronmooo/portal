@@ -130,6 +130,10 @@ export const PARITY_MATRIX: ParityRow[] = [
   // ── Financial accounts ─────────────────────────────────────────────────────
   { entity: "Account", operation: "Create", ui: "Finance → Accounts → Add account", aiTools: ["create_account"], status: "added" },
   { entity: "Account", operation: "Adjust balance", ui: "Finance → Accounts → row → Add / Subtract", aiTools: ["update_account_balance"], status: "added" },
+  { entity: "Account", operation: "Transfer between accounts", ui: "Asset profile → Transfer", aiTools: ["transfer_between_accounts"], status: "added" },
+  { entity: "Account", operation: "Record activity (contribution / withdrawal / buy / sell / dividend)", ui: "Asset profile → Activity → Add", aiTools: ["record_account_activity"], status: "added" },
+  { entity: "Account", operation: "Set / remove a holding", ui: "Asset profile → Holdings → Add position", aiTools: ["set_holding"], status: "added" },
+  { entity: "Account", operation: "Balance history / change over period", ui: "Asset profile → history chart (1W…ALL)", aiTools: ["get_account_history"], status: "added" },
   { entity: "Account", operation: "Edit (name / type / institution / limit)", ui: "Finance → Accounts → row → Edit", aiTools: ["update_profile"], status: "added" },
   { entity: "Account", operation: "Delete", ui: "Finance → Accounts → row → Remove", aiTools: ["delete_profile"], status: "added" },
   { entity: "Account", operation: "Read balances / available credit", ui: "Finance → Accounts summary", aiTools: ["get_accounts"], status: "added" },

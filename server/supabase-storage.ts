@@ -84,6 +84,10 @@ import {
   isAccountProfile, isDebtAccount, normalizeAccountKind,
   reconcileAccountBalanceFields,
 } from "../shared/finance-accounts";
+import {
+  appendBalanceSnapshot, recordFieldSources, upsertHolding, removeHolding, appendActivity,
+  activityBalanceEffect, accountConnection, type FinanceDataSource, type AccountConnection,
+} from "../shared/financial-assets";
 import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-ownership";
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
@@ -6241,6 +6245,144 @@ export class SupabaseStorage implements IStorage {
       `${p.name} balance ${adj.delta >= 0 ? "+" : "-"}$${Math.abs(adj.delta)} → $${adj.newBalance}`,
     );
     return updated;
+  }
+
+  // ─── Financial-asset data: snapshots, holdings, activity, transfers ────────
+  //
+  // Everything below writes INSIDE the account profile row (shared/financial-
+  // assets.ts owns the shapes). Each goes through mutateProfileFields so two
+  // writers in flight compose instead of one overwriting the other's array.
+
+  /**
+   * Record an observation of the account's value from a source that is not
+   * a manual correction — a connected API, a statement, an import. The
+   * snapshot is appended and, when the source may own the balance, the live
+   * balance moves to it with provenance stamped. No adjustment-ledger row:
+   * the ledger explains deliberate moves, the series records observations.
+   */
+  async recordAccountSnapshot(id: string, input: {
+    balance: number; date?: string | null; at?: string | null; source: FinanceDataSource;
+    sourceRef?: string | null; note?: string | null;
+    /** false → append the observation only, leave the live balance alone. */
+    applyToBalance?: boolean;
+  }): Promise<any | undefined> {
+    const p = await this.getProfile(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    const today = getUserToday(this._timezone);
+    const nowISO = new Date().toISOString();
+    return this.mutateProfileFields(id, (fresh) => {
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(String(input.date ?? "")) ? String(input.date).slice(0, 10) : (input.at ? String(input.at).slice(0, 10) : today);
+      const fields: Record<string, any> = {
+        balanceSnapshots: appendBalanceSnapshot(fresh, { ...input, date }, input.at ?? nowISO),
+      };
+      if (input.applyToBalance !== false) {
+        Object.assign(fields, balanceFieldsFor(fresh, input.balance));
+        fields.balanceAsOf = date;
+        fields.fieldSources = recordFieldSources(fresh, ["balance", "currentBalance", "currentValue", "balanceAsOf"], input.source, nowISO, input.sourceRef);
+      }
+      return { fields } as any;
+    });
+  }
+
+  /** Upsert one holding (by symbol, else name) inside an investment/crypto account. */
+  async setAccountHolding(id: string, input: {
+    symbol?: string | null; name?: string | null; quantity?: number | null; price?: number | null; value?: number | null;
+    costBasis?: number | null; assetClass?: string | null; asOf?: string | null; source?: FinanceDataSource;
+  }): Promise<any | undefined> {
+    const p = await this.getProfile(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    const today = getUserToday(this._timezone);
+    const updated = await this.mutateProfileFields(id, (fresh) => ({
+      fields: {
+        holdings: upsertHolding(fresh, input, today),
+        fieldSources: recordFieldSources(fresh, ["holdings"], input.source ?? "user", new Date().toISOString()),
+      },
+    } as any));
+    if (updated) this.logActivity("profile", `${p.name}: holding ${String(input.symbol ?? input.name ?? "").toUpperCase()} updated`);
+    return updated;
+  }
+
+  async removeAccountHolding(id: string, idOrSymbol: string): Promise<any | undefined> {
+    const p = await this.getProfile(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    return this.mutateProfileFields(id, (fresh) => ({ fields: { holdings: removeHolding(fresh, idOrSymbol) } } as any));
+  }
+
+  /**
+   * Record activity INSIDE an account — a contribution, withdrawal, buy, sell,
+   * dividend, fee or transfer leg. The row is appended to the account's
+   * activity log; kinds that move the total (contribution, dividend,
+   * withdrawal…) also move the balance through the adjustment ledger, linked
+   * to the activity row. A buy or sell changes composition only.
+   */
+  async recordAccountActivity(id: string, input: {
+    kind: string; amount: number; date?: string | null; symbol?: string | null; quantity?: number | null;
+    note?: string | null; linkedProfileId?: string | null; source?: FinanceDataSource;
+  }): Promise<{ profile: any; entry: any } | undefined> {
+    const p = await this.getProfile(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    const today = getUserToday(this._timezone);
+    let entry: any = null;
+    const updated = await this.mutateProfileFields(id, (fresh) => {
+      const out = appendActivity(fresh, input, today);
+      entry = out.entry;
+      if (!out.entry) return null;
+      return { fields: { investmentActivity: out.list } } as any;
+    });
+    if (!updated || !entry) return undefined;
+    const effect = activityBalanceEffect(entry.kind);
+    let profile = updated;
+    if (effect !== 0) {
+      profile = (await this.adjustAccountBalance(id, {
+        delta: effect * entry.amount, date: entry.date,
+        reason: input.note || entry.kind.replace(/_/g, " "),
+        source: input.source ?? "user", linkedRecordId: entry.id,
+      })) ?? updated;
+    } else {
+      this.logActivity("profile", `${p.name}: ${entry.kind} ${entry.symbol ?? ""} $${entry.amount}`.trim());
+    }
+    return { profile, entry };
+  }
+
+  /**
+   * Move money between two owned accounts. Both balances move by the same
+   * amount, each side gets a transfer activity row pointing at the other, and
+   * NOTHING is logged as income or spending — a transfer changes the
+   * composition of net worth, never its total.
+   */
+  async recordAccountTransfer(input: {
+    fromId: string; toId: string; amount: number; date?: string | null; note?: string | null; source?: FinanceDataSource;
+  }): Promise<{ from: any; to: any; transferId: string } | undefined> {
+    const amount = Math.abs(Number(input.amount) || 0);
+    if (amount <= 0 || input.fromId === input.toId) return undefined;
+    const from = await this.getProfile(input.fromId);
+    const to = await this.getProfile(input.toId);
+    if (!from || !to || !isAccountProfile(from) || !isAccountProfile(to)) return undefined;
+    const transferId = `xfer_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const note = input.note || undefined;
+    const out = await this.recordAccountActivity(input.fromId, {
+      kind: "transfer_out", amount, date: input.date, linkedProfileId: input.toId,
+      note: note ?? `Transfer to ${to.name}`, source: input.source ?? "user",
+    });
+    const inn = await this.recordAccountActivity(input.toId, {
+      kind: "transfer_in", amount, date: input.date, linkedProfileId: input.fromId,
+      note: note ?? `Transfer from ${from.name}`, source: input.source ?? "user",
+    });
+    this.logActivity("profile", `Transferred $${amount} from ${from.name} to ${to.name}`);
+    return { from: out?.profile ?? from, to: inn?.profile ?? to, transferId };
+  }
+
+  /** Attach (or update) the account's source connection. Null clears it but keeps every observation. */
+  async linkAccountConnection(id: string, connection: AccountConnection | null): Promise<any | undefined> {
+    const p = await this.getProfile(id);
+    if (!p || !isAccountProfile(p)) return undefined;
+    return this.mutateProfileFields(id, (fresh) => {
+      const prev = accountConnection(fresh);
+      const next = connection
+        ? { ...(prev ?? {}), ...connection, linkedAt: connection.linkedAt ?? prev?.linkedAt ?? new Date().toISOString() }
+        : null;
+      return { fields: { connection: next } } as any;
+    });
   }
 
   // ============================================================

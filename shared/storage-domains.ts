@@ -184,6 +184,15 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
   // account clothing and ripple the same way.
   AccountBalance: { domains: [...PROFILE_DOMAINS, "expenses"], endpoint: null },
   Account: { domains: [...PROFILE_DOMAINS, "expenses"], endpoint: null },
+  // Financial-asset data inside an account profile (shared/financial-assets):
+  // a value observation, a holding, an activity row, a transfer between two
+  // accounts, the source connection. All are profile writes; a snapshot,
+  // an activity row and a transfer also move money the finance surfaces show.
+  AccountSnapshot: { domains: [...PROFILE_DOMAINS, "dashboard"], endpoint: null },
+  AccountHolding: { domains: PROFILE_DOMAINS, endpoint: null },
+  AccountActivity: { domains: [...PROFILE_DOMAINS, "expenses", "dashboard"], endpoint: null },
+  AccountTransfer: { domains: [...PROFILE_DOMAINS, "expenses", "dashboard"], endpoint: null },
+  AccountConnection: { domains: PROFILE_DOMAINS, endpoint: null },
   // ensureAutoOwnerLink — background ownership self-heal on profile writes.
   AutoOwnerLink: { domains: PROFILE_DOMAINS, endpoint: null },
   // logActivity — the activity feed the dashboard renders.

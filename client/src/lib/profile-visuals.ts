@@ -11,7 +11,7 @@
 import {
   User, Users, PawPrint, Car, Home, Package, TrendingUp, TrendingDown,
   Building2, CreditCard, Stethoscope, Wallet, Shield, Gem, PiggyBank,
-  Banknote, Landmark, type LucideIcon,
+  Banknote, Landmark, Bitcoin, HeartPulse, GraduationCap, LineChart, type LucideIcon,
 } from "lucide-react";
 import { accountKindOf, type AccountKind } from "@shared/account-kinds";
 
@@ -56,7 +56,14 @@ const ACCOUNT_VISUALS: Record<AccountKind, ProfileVisual> = {
   checking:       { icon: Wallet,     accent: "155 65% 45%" },
   savings:        { icon: PiggyBank,  accent: "168 60% 42%" },
   cash:           { icon: Banknote,   accent: "142 60% 45%" },
+  money_market:   { icon: PiggyBank,  accent: "175 55% 42%" },
+  cd:             { icon: Landmark,   accent: "160 50% 42%" },
   investment:     { icon: TrendingUp, accent: "142 60% 45%" },
+  brokerage:      { icon: TrendingUp, accent: "142 60% 45%" },
+  retirement:     { icon: LineChart,  accent: "262 60% 62%" },
+  crypto:         { icon: Bitcoin,    accent: "35 90% 55%"  },
+  hsa:            { icon: HeartPulse, accent: "350 65% 55%" },
+  education:      { icon: GraduationCap, accent: "220 60% 55%" },
   credit_card:    { icon: CreditCard, accent: "0 72% 55%"   },
   line_of_credit: { icon: CreditCard, accent: "12 75% 55%"  },
   loan:           { icon: Landmark,   accent: "0 72% 55%"   },

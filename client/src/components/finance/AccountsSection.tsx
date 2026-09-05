@@ -37,7 +37,12 @@ import { Link } from "wouter";
 import {
   Wallet, Plus, Pencil, Trash2, CreditCard, Landmark, PiggyBank, Banknote,
   TrendingUp, CircleDollarSign, History, ChevronDown, ChevronRight, ExternalLink,
+  Bitcoin, HeartPulse, GraduationCap,
 } from "lucide-react";
+import { localTodayISO } from "@/lib/dates";
+import { financialCardSummary } from "./FinancialAssetCard";
+import { BalanceSparkline, ChangeChip } from "./BalanceHistoryChart";
+import { holdings, investmentActivity, balanceSnapshots, accountConnection } from "@shared/financial-assets";
 import { formatMoney, formatListDate } from "@/lib/format";
 import {
   ACCOUNT_KINDS, accountViews, summarizeAccounts,
@@ -47,8 +52,15 @@ import {
 const KIND_ICONS: Record<string, any> = {
   checking: Wallet,
   savings: PiggyBank,
+  money_market: PiggyBank,
+  cd: Landmark,
   cash: Banknote,
   investment: TrendingUp,
+  brokerage: TrendingUp,
+  retirement: TrendingUp,
+  crypto: Bitcoin,
+  hsa: HeartPulse,
+  education: GraduationCap,
   credit_card: CreditCard,
   line_of_credit: CreditCard,
   loan: Landmark,
@@ -296,8 +308,14 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove "{deleting?.name}"?</AlertDialogTitle>
-            <AlertDialogDescription>
-              The account and its balance history are deleted. Expenses and bills linked to it are kept.
+            <AlertDialogDescription asChild>
+              <div className="space-y-1.5 text-sm text-muted-foreground" data-testid="account-delete-impact">
+                <p>Deleting this account also removes what lives inside it:</p>
+                <ul className="list-disc pl-5 space-y-0.5">
+                  {deleting && describeAccountDeletion(deleting.profile).map((line) => <li key={line}>{line}</li>)}
+                </ul>
+                <p>Expenses, bills and documents linked to it are kept and unlinked. Nothing else changes.</p>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -313,6 +331,28 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
       </AlertDialog>
     </Card>
   );
+}
+
+/**
+ * What deleting an account takes with it — the balance history, holdings and
+ * activity live INSIDE the profile row, and a connected feed is unlinked (the
+ * bank connection itself stays; the sync will not recreate the profile).
+ */
+export function describeAccountDeletion(profile: any): string[] {
+  const out: string[] = [];
+  const snaps = balanceSnapshots(profile).length;
+  const adjustments = Array.isArray(profile?.fields?.balanceHistory) ? profile.fields.balanceHistory.length : 0;
+  const history = Math.max(snaps, adjustments);
+  out.push(history > 0 ? `${history} balance ${history === 1 ? "observation" : "observations"} (its history chart)` : "its balance and history");
+  const h = holdings(profile).length;
+  if (h > 0) out.push(`${h} ${h === 1 ? "holding" : "holdings"}`);
+  const a = investmentActivity(profile).length;
+  if (a > 0) out.push(`${a} activity ${a === 1 ? "row" : "rows"} (contributions, buys, dividends…)`);
+  const conn = accountConnection(profile);
+  if (conn) out.push(conn.status === "active"
+    ? "its link to the connected bank account — the connection stays, and syncing will not recreate this profile"
+    : "its record of the past bank connection");
+  return out;
 }
 
 function Stat({ label, value, tone, testId }: {
@@ -338,6 +378,8 @@ function AccountRow({ account, expanded, onToggle, onEdit, onDelete, onAdjust }:
   const Icon = KIND_ICONS[account.kind] ?? CircleDollarSign;
   const [adjust, setAdjust] = useState("");
   const [busy, setBusy] = useState(false);
+  // The same one-month change and sparkline the Assets-tab card shows.
+  const summary = useMemo(() => financialCardSummary(account.profile, localTodayISO()), [account.profile]);
 
   const applyAdjust = async (sign: 1 | -1) => {
     const n = Number(adjust.replace(/[$,]/g, ""));
@@ -372,13 +414,19 @@ function AccountRow({ account, expanded, onToggle, onEdit, onDelete, onAdjust }:
             {account.lastFour ? ` · ••${account.lastFour}` : ""}
           </span>
         </div>
+        {summary.series.length >= 2 && (
+          <BalanceSparkline points={summary.series.slice(-30)} width={64} height={22}
+            className={`shrink-0 hidden sm:block ${account.isDebt ? "text-red-400" : "text-emerald-500"}`} />
+        )}
         <div className="text-right shrink-0">
           <p className={`text-[15px] font-bold tabular-nums ${account.isDebt ? "text-red-500" : ""}`}>
             {account.isDebt ? "−" : ""}{formatMoney(account.balance)}
           </p>
-          {account.balanceAsOf && (
+          {summary.change != null ? (
+            <ChangeChip change={account.isDebt ? -summary.change : summary.change} changePct={summary.changePct} className="text-[11px]" />
+          ) : account.balanceAsOf ? (
             <p className="text-[11px] text-muted-foreground">as of {formatListDate(account.balanceAsOf)}</p>
-          )}
+          ) : null}
         </div>
       </button>
 

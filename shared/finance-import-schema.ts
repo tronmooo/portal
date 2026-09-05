@@ -92,7 +92,14 @@ export const importAccountSchema = z
   .object({
     unique_id: z.string().min(1, "unique_id is required"),
     name: z.string().min(1, "account name is required"),
-    type: z.enum(["checking", "savings", "credit_card", "cash", "brokerage", "other"]).default("other"),
+    // Every money-holding and debt kind the account model knows
+    // (shared/account-kinds.ts); the importer classifies from the name when
+    // a row says "other".
+    type: z.enum([
+      "checking", "savings", "money_market", "cd", "cash",
+      "investment", "brokerage", "retirement", "crypto", "hsa", "education",
+      "credit_card", "line_of_credit", "loan", "other",
+    ]).default("other"),
     balance: money.default(0),
     currency: currency.default("USD"),
     confidence: confidence.optional().default(0.8),

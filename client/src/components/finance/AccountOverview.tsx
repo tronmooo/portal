@@ -53,10 +53,15 @@ function Fact({ label, value, tone, testId }: {
   );
 }
 
-export function AccountOverview({ profile, todayISO }: {
+export function AccountOverview({ profile, todayISO, hideHeadline = false }: {
   profile: any;
   /** Caller's tz-local today, for the staleness caption. */
   todayISO?: string;
+  /**
+   * The investment dashboard states the portfolio value itself, so it renders
+   * this card without the balance headline — one number, one place.
+   */
+  hideHeadline?: boolean;
 }) {
   const { toast } = useToast();
   const [adjust, setAdjust] = useState("");
@@ -91,6 +96,7 @@ export function AccountOverview({ profile, todayISO }: {
           {/* Headline. A debt account says what is OWED — the single most
               important word on the page for a credit card, and the one the
               generic asset layout had no way to say. */}
+          {!hideHeadline && (
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant="outline" className="text-[11px] h-5" data-testid="account-kind-badge">
@@ -116,6 +122,7 @@ export function AccountOverview({ profile, todayISO }: {
               {asOf.label}
             </p>
           </div>
+          )}
 
           {/* Only the facts this KIND actually has. */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
