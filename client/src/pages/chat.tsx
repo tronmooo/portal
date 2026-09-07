@@ -18,7 +18,6 @@ import { perfMark, perfMeasure, logServerTimings } from "@/lib/perf-marks";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { stashPendingReview } from "@/lib/pending-review";
 import { stopProp } from "@/lib/event-utils";
-import { isInternalDirective } from "@shared/ai-message-kinds";
 import { isInScope, ownerChainForProfile, selfIdsFrom } from "@shared/scope";
 
 // ── Lazy-loaded heavy components ─────────────────────────────────────────────
@@ -1805,21 +1804,6 @@ const MessageRow = memo(function MessageRow({
 }: MessageRowProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  // Failed/skipped operations this message may show. Three filters, in order:
-  //  1. successes already render as action cards above;
-  //  2. TURN SCOPING — an operation belongs to the turn that produced it, so
-  //     an older turn's failure never reappears under a newer answer
-  //     (operations from before turn ids existed carry none and still show);
-  //  3. INTERNAL TEXT — tool errors are written for the model ("do NOT create
-  //     one. Log the activity with log_tracker_entry(...)"). The server now
-  //     rewrites those into plain sentences; this is the client-side backstop
-  //     so an older server can't leak one into the conversation.
-  const visibleFailedOps: any[] = ((msg as any).operations || []).filter(
-    (op: any) =>
-      op?.status !== "ok" &&
-      (!(msg as any).turnId || !op?.turnId || op.turnId === (msg as any).turnId) &&
-      !isInternalDirective(op?.error),
-  );
   return (
     <div
       className={`message-in flex ${
@@ -2360,23 +2344,11 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
 
-        {/* Per-operation outcome checklist — only the ones that did
-            NOT succeed (successes already render as action cards).
-            Multi-action messages get honest per-item failure/skip
-            reporting instead of a vague "some failed". */}
-        {visibleFailedOps.length > 0 && (
-          <div className="mt-2 space-y-1 text-xs">
-            {visibleFailedOps.map((op: any, oi: number) => (
-              <div key={oi} className="flex items-start gap-1.5">
-                <span aria-hidden>{op.status === "deduped" ? "↩️" : op.status === "skipped" ? "⏸️" : "❌"}</span>
-                <span className="text-muted-foreground">
-                  <span className="font-medium">{op.trackerName || op.raw || op.tool}</span>
-                  {op.status === "deduped" ? " — already existed, so I updated it instead of adding a duplicate" : op.error ? ` — ${op.error}` : ""}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* The per-operation outcome checklist that used to render here was
+            removed: successes already show as action cards, and the
+            failure/dedupe lines repeated after every entry as noise the
+            assistant's own reply already covers. Operations still arrive on
+            the message and remain available for debugging. */}
 
         {/* Structured confirmation cards */}
         {msg.results && msg.results.length > 0 && (
