@@ -47,6 +47,8 @@ import {
   classifyFitnessActivity,
   caloriesForStoredEntry,
   formatCalories,
+  formatHeadline,
+  formatHeadlinePart,
   readFitnessFacts,
   type CalorieContext,
   type CalorieEstimate,
@@ -1974,6 +1976,10 @@ interface TrackerInsight {
    *  Null when this tracker is not an activity, or when there was not enough
    *  information to estimate responsibly. Never fabricated. */
   calories?: CalorieEstimate | null;
+  /** Headline parts AFTER bigPrimary/bigUnit, rendered as "× 10 reps × 3 sets".
+   *  A lift is a load, a rep count and a set count together — "50 lbs" alone
+   *  does not say how much work was done. Empty for single-number metrics. */
+  bigExtra?: Array<{ value: string; unit: string }>;
   iconKind: "bp" | "weight" | "sleep" | "run" | "walk" | "drop" | "flame"
           | "music" | "book" | "game" | "brain" | "dumbbell" | "activity"
           | "bike";
@@ -2628,8 +2634,17 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
       hasData: true, kind, importance, iconKind,
       bigPrimary: fmtNum(p.value, p.metric === "distance" ? 2 : 0),
       bigUnit: p.unit,
+      bigExtra: fitness.headline.slice(1).map((h) => {
+        const [value, ...rest] = formatHeadlinePart(h).split(" ");
+        return { value, unit: rest.join(" ") };
+      }),
       subline: fitness.detail.join(" · "),
-      insight: `${fitness.sentence} — logged ${when}.`,
+      // The headline is the big number right above this line, so the sentence
+      // carries only what it does NOT already say.
+      insight: (() => {
+        const rest = [...fitness.detail, formatCalories(fitness.calories)].filter(Boolean).join(" · ");
+        return rest ? `${rest} — logged ${when}.` : `Logged ${when}.`;
+      })(),
       progressPct: null, statusBadge: freshness,
       sparkValues: metricSeries.slice(0, 14).reverse(),
       trendPct: mTrendPct, trendDir: mTrendDir,
@@ -3008,6 +3023,15 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       {"\u{1F525}"} {insight.calories.estimated ? "~" : ""}{insight.calories.value.toLocaleString()} cal
     </span>
   ) : null;
+  // "× 10 reps × 3 sets" trailing the big number. The number keeps the accent
+  // and weight of the headline; its unit stays muted, exactly like bigUnit.
+  const bigExtraEls = (insight.bigExtra || []).map((x, i) => (
+    <span key={i} className="flex items-baseline gap-1">
+      <span className="text-[11px] font-medium text-muted-foreground">×</span>
+      <span className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[15px]" : "text-[19px]"}`} style={{ color: ac }}>{x.value}</span>
+      <span className="text-[11px] font-medium text-muted-foreground">{x.unit}</span>
+    </span>
+  ));
   const kindEmoji = KIND_EMOJI[insight.iconKind];
   // Sports / fitness trends get the layered "effort zone" area look.
   const useZoneArea = insight.kind === "running" || insight.kind === "walking" || tracker.category === "fitness";
@@ -3072,7 +3096,11 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       // driven by --accent-hsl. Setting background/border/shadow inline here is
       // what kept this card looking flat while the rest of the app moved.
       className="bubble bubble-interactive overflow-hidden cursor-pointer flex flex-col relative pressable"
-      style={{ ["--accent-hsl" as any]: catAccent, height: cardHeight }}
+      // minHeight, not height: a strength headline wraps to three lines on a
+      // narrow two-column grid, and a hard height cropped the weekday bars and
+      // ran the footer under them. The card keeps its floor so a row still
+      // reads as a ladder, and grows only when it has to.
+      style={{ ["--accent-hsl" as any]: catAccent, minHeight: cardHeight }}
       onClick={() => onOpenDetail?.(tracker.id)}
       role="button"
       tabIndex={0}
@@ -3160,12 +3188,13 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       ) : visual.type === "activity" && activityData ? (
         /* Activity/duration: latest value + weekly session bars + week stats. */
         <>
-          <div className="px-3 pt-1 flex items-baseline gap-1 shrink-0">
+          <div className="px-3 pt-1 flex items-baseline gap-x-1 gap-y-0.5 shrink-0 flex-wrap">
             <span className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`} style={{ color: ac }}>
               {insight.bigPrimary}
             </span>
             {insight.bigUnit && <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>}
-            {caloriePill && <span className="ml-auto">{caloriePill}</span>}
+            {bigExtraEls}
+            {caloriePill}
           </div>
           {/* overflow-hidden so a tight card clips here instead of bleeding the
               chips up over the value line; chips stay on ONE line (no wrap). */}
@@ -3191,7 +3220,11 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
         <>
           {/* Big metric (+ goal ring on the right for goal-based trackers) */}
           <div className="px-3 pt-1 pb-0 flex items-start justify-between gap-2">
-            <div className="flex items-baseline gap-1 min-w-0">
+            {/* flex-wrap: a strength headline is three numbers ("50 lbs × 10
+                reps × 3 sets") and at tablet width it used to run underneath
+                the calorie pill and off the card. Wrapping keeps every number
+                readable; the body below shrinks to absorb the extra line. */}
+            <div className="flex items-baseline gap-x-1 gap-y-0.5 min-w-0 flex-wrap">
               <span
                 className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`}
                 style={{ color: ac }}
@@ -3201,6 +3234,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
               {insight.bigUnit && (
                 <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>
               )}
+              {bigExtraEls}
               {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
                 <span
                   className="ml-1 text-[11px] font-semibold flex items-center gap-0.5"
@@ -3210,8 +3244,8 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
                   {Math.abs(Math.round(insight.trendPct))}%
                 </span>
               )}
+              {caloriePill}
             </div>
-            {caloriePill}
             {visual.type === "ring" && (
               <RingProgress pct={visual.pct} color={ac} size={importance === "compact" ? 46 : 54} centerLabel={`${Math.round(visual.pct)}%`} />
             )}
@@ -6809,8 +6843,7 @@ export default function TrackersPage() {
             const fitRow = (() => {
               const activity = classifyFitnessActivity(t.name, t.category);
               if (activity.kind === "non_fitness" || !last) return null;
-              const p = buildFitnessDisplay(activity, readFitnessFacts(vals, activity, t.fields as any), null).primary;
-              return p ? `${fmtNum(p.value, p.metric === "distance" ? 2 : 0)} ${p.unit}` : null;
+              return formatHeadline(buildFitnessDisplay(activity, readFitnessFacts(vals, activity, t.fields as any), null).headline);
             })();
             let primary: any = vals[pf];
             if (primary == null || (typeof primary === "string" && primary.trim().toLowerCase() === t.name.trim().toLowerCase())) {

@@ -17,6 +17,8 @@ import {
   classifyFitnessActivity,
   estimateCaloriesBurned,
   formatCalories,
+  formatHeadline,
+  formatHeadlinePart,
   formatRepScheme,
   metricKindForKey,
   minutesFromSetScheme,
@@ -36,7 +38,7 @@ const BOB = { name: "Bob", fields: { weight: 210 } };
 const NO_WEIGHT = { name: "Casey", fields: {} };
 
 const show = (d: ReturnType<typeof analyzeFitnessEntry>) =>
-  [d.primary ? `${d.primary.value} ${d.primary.unit}` : "", ...d.detail, formatCalories(d.calories) ?? ""].join(" | ");
+  [formatHeadline(d.headline) ?? "", ...d.detail, formatCalories(d.calories) ?? ""].join(" | ");
 
 // ───────────────────────────────────────────────────────────────────────────
 describe("1. Squats: 12 reps, 3 sets, no resistance", () => {
@@ -47,7 +49,9 @@ describe("1. Squats: 12 reps, 3 sets, no resistance", () => {
 
   it("shows the rep scheme, not a weight", () => {
     expect(d.primary).toEqual({ value: 12, unit: "reps", metric: "reps" });
-    expect(d.detail).toContain("12 reps × 3 sets");
+    // Reps AND sets lead together: "12 reps" alone does not say how many times.
+    expect(formatHeadline(d.headline)).toBe("12 reps × 3 sets");
+    expect(d.headline.map((h) => h.metric)).toEqual(["reps", "sets"]);
   });
 
   it("NEVER renders the set count as pounds — the reported defect", () => {
@@ -79,8 +83,14 @@ describe("2. Squats: 60 lbs, 10 reps, 3 sets", () => {
     expect(d.primary).toEqual({ value: 60, unit: "lbs", metric: "resistance" });
   });
 
-  it("keeps the rep scheme alongside it", () => {
-    expect(d.detail).toContain("10 reps × 3 sets");
+  it("states the load, the reps AND the sets as one headline", () => {
+    // "60 lbs" on its own describes no amount of work.
+    expect(formatHeadline(d.headline)).toBe("60 lbs × 10 reps × 3 sets");
+    expect(d.headline.map((h) => h.metric)).toEqual(["resistance", "reps", "sets"]);
+  });
+
+  it("does not repeat any headline metric in the supporting detail", () => {
+    expect(d.detail.join(" ")).not.toMatch(/reps|sets|lbs/);
   });
 
   it("burns more than the same scheme unloaded", () => {
@@ -101,7 +111,7 @@ describe("3. Push-ups: 25 reps, 1 set", () => {
 
   it("reads '25 reps × 1 set'", () => {
     expect(d.primary).toEqual({ value: 25, unit: "reps", metric: "reps" });
-    expect(d.detail).toContain("25 reps × 1 set");
+    expect(formatHeadline(d.headline)).toBe("25 reps × 1 set");
   });
 
   it("never shows the person's body weight as resistance lifted", () => {
@@ -123,7 +133,7 @@ describe("3. Push-ups: 25 reps, 1 set", () => {
       { trackerName: "Pull-ups", category: "fitness", values: { reps: 8, sets: 3, addedWeight: 25 } },
       calorieContextForOwner(BOB),
     );
-    expect(weighted.detail).toContain("25 lbs");
+    expect(show(weighted)).toContain("25 lbs");
   });
 });
 
@@ -469,12 +479,13 @@ describe("the reported Trackers dashboard, card by card", () => {
   // under the title.
   const OWNER = { name: "Poop", fields: { weight: "185 lb" } };
   const CARDS: Array<{ name: string; category: string; values: Record<string, any>; big: string | null; sub: string; cals: boolean }> = [
-    { name: "Incline Dumbbell Press", category: "fitness", values: { weight: 60, reps: 10, sets: 3 }, big: "60 lbs", sub: "10 reps × 3 sets", cals: true },
-    { name: "Shoulder Press", category: "fitness", values: { weight: 50, reps: 10, sets: 3 }, big: "50 lbs", sub: "10 reps × 3 sets", cals: true },
+    // The headline carries load × reps × sets: "60 lbs" alone states no work done.
+    { name: "Incline Dumbbell Press", category: "fitness", values: { weight: 60, reps: 10, sets: 3 }, big: "60 lbs × 10 reps × 3 sets", sub: "", cals: true },
+    { name: "Shoulder Press", category: "fitness", values: { weight: 50, reps: 10, sets: 3 }, big: "50 lbs × 10 reps × 3 sets", sub: "", cals: true },
     // The two that were wrong: the first numeric value was the SET COUNT.
-    { name: "Squats", category: "fitness", values: { sets: 3, reps: 12 }, big: "12 reps", sub: "12 reps × 3 sets", cals: true },
-    { name: "Pushups", category: "fitness", values: { sets: 1, reps: 25 }, big: "25 reps", sub: "25 reps × 1 set", cals: true },
-    { name: "Core Workout", category: "fitness", values: { sets: 3, reps: 20 }, big: "20 reps", sub: "20 reps × 3 sets", cals: true },
+    { name: "Squats", category: "fitness", values: { sets: 3, reps: 12 }, big: "12 reps × 3 sets", sub: "", cals: true },
+    { name: "Pushups", category: "fitness", values: { sets: 1, reps: 25 }, big: "25 reps × 1 set", sub: "", cals: true },
+    { name: "Core Workout", category: "fitness", values: { sets: 3, reps: 20 }, big: "20 reps × 3 sets", sub: "", cals: true },
     { name: "Basketball", category: "fitness", values: { duration: 30 }, big: "30 min", sub: "", cals: true },
     // Not activities — their cards are untouched and claim no burn.
     { name: "Hydration", category: "health", values: { ounces: 20 }, big: null, sub: "", cals: false },
@@ -492,7 +503,7 @@ describe("the reported Trackers dashboard, card by card", () => {
         expect(d.calories).toBeNull();
         return;
       }
-      expect(`${d.primary!.value} ${d.primary!.unit}`).toBe(c.big);
+      expect(formatHeadline(d.headline)).toBe(c.big);
       expect(d.detail.join(" · ")).toBe(c.sub);
       expect(d.calories != null).toBe(c.cals);
       // The whole defect in one line: no card may print pounds for a number
@@ -710,5 +721,63 @@ describe("Wellness cards label the fitness metric they show", () => {
     ] as any);
     expect(card.value).toBe(20);
     expect(card.unit).toBe("oz");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe("the headline states the whole set, not one number from it", () => {
+  // "50 lbs" alone says nothing about how much work was done, and neither does
+  // "12 reps". A lift is a load, a rep count and a set count together.
+  const CASES: Array<[string, Record<string, any>, string, string[]]> = [
+    ["Shoulder Press", { weightLbs: 50, reps: 10, sets: 3 }, "50 lbs × 10 reps × 3 sets", ["resistance", "reps", "sets"]],
+    ["Incline Dumbbell Press", { weightLbs: 60, reps: 10, sets: 3 }, "60 lbs × 10 reps × 3 sets", ["resistance", "reps", "sets"]],
+    ["Squats", { reps: 12, sets: 3 }, "12 reps × 3 sets", ["reps", "sets"]],
+    ["Pushups", { reps: 25, sets: 1 }, "25 reps × 1 set", ["reps", "sets"]],
+    ["Squats", { sets: 3 }, "3 sets", ["sets"]],
+    ["Bench Press", { weight: 225, reps: 5 }, "225 lbs × 5 reps", ["resistance", "reps"]],
+    // Duration- and distance-shaped activities stay a single number.
+    ["Basketball", { duration: 30 }, "30 min", ["duration"]],
+    ["Running", { distance: 2, duration: 20 }, "2 mi", ["distance"]],
+    ["Plank", { duration: 2, sets: 3 }, "2 min", ["duration"]],
+  ];
+
+  for (const [name, values, expected, metrics] of CASES) {
+    it(`${name} → "${expected}"`, () => {
+      const d = analyzeFitnessEntry({ trackerName: name, category: "fitness", values }, calorieContextForOwner(BOB));
+      expect(formatHeadline(d.headline)).toBe(expected);
+      expect(d.headline.map((h) => h.metric)).toEqual(metrics);
+      // `primary` stays the first part, for the series/trend consumers.
+      expect(d.primary).toEqual(d.headline[0]);
+    });
+  }
+
+  it("every headline part carries the unit of the metric it holds", () => {
+    const d = analyzeFitnessEntry(
+      { trackerName: "Shoulder Press", category: "fitness", values: { weightLbs: 50, reps: 10, sets: 3 } },
+      calorieContextForOwner(BOB),
+    );
+    expect(d.headline.map((h) => h.unit)).toEqual(["lbs", "reps", "sets"]);
+    // The pounds appear exactly once, on the load — never on a count.
+    expect(formatHeadline(d.headline)!.match(/lbs/g)).toHaveLength(1);
+    expect(formatHeadlinePart(d.headline[2])).toBe("3 sets");
+  });
+
+  it("a kg lift keeps kilograms in the headline", () => {
+    const d = analyzeFitnessEntry({
+      trackerName: "Squats", category: "fitness",
+      fields: [{ name: "weight", unit: "kg" }],
+      values: { weight: 60, reps: 5, sets: 5 },
+    }, calorieContextForOwner(BOB));
+    expect(formatHeadline(d.headline)).toBe("60 kg × 5 reps × 5 sets");
+  });
+
+  it("nothing the headline already says is repeated in the detail", () => {
+    for (const [name, values] of CASES) {
+      const d = analyzeFitnessEntry({ trackerName: name, category: "fitness", values }, calorieContextForOwner(BOB));
+      for (const part of d.headline) {
+        const token = formatHeadlinePart(part);
+        expect(d.detail, `${name} repeats "${token}"`).not.toContain(token);
+      }
+    }
   });
 });

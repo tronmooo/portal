@@ -913,7 +913,17 @@ export interface FitnessDisplay {
   activity: FitnessActivity;
   /** The headline measurement. Null when the entry holds no nameable metric. */
   primary: FitnessPrimary | null;
-  /** Supporting lines, already formatted ("12 reps × 3 sets", "9:40 /mi"). */
+  /**
+   * The WHOLE headline, in display order — `primary` is simply its first part.
+   *
+   * One number does not describe a set of strength work: "50 lbs" says nothing
+   * about how much of it was done, and "12 reps" nothing about how many times.
+   * A lift is a LOAD, a COUNT and a REPETITION of that count together, so the
+   * headline reads "50 lbs × 10 reps × 3 sets" and an unloaded movement reads
+   * "25 reps × 1 set". Duration- and distance-shaped activities stay single.
+   */
+  headline: FitnessPrimary[];
+  /** Supporting lines, already formatted ("3 sets", "9:40 /mi"). */
   detail: string[];
   /** Calories line, or null when we declined to estimate. */
   calories: CalorieEstimate | null;
@@ -962,44 +972,69 @@ export function buildFitnessDisplay(
   facts: FitnessFacts,
   calories: CalorieEstimate | null,
 ): FitnessDisplay {
-  const primary = pickPrimary(activity, facts);
+  const headline = pickHeadline(activity, facts);
+  const primary = headline[0] ?? null;
   const detail: string[] = [];
 
-  const scheme = formatRepScheme(facts);
-  const showScheme = scheme && primary?.metric !== "reps";
-  const schemeIsPrimaryLine = scheme && primary?.metric === "reps";
+  // Whatever the headline already says must not be repeated underneath it.
+  const inHeadline = new Set<FitnessMetricKind>(headline.map((h) => h.metric));
 
-  if (primary?.metric === "resistance") {
-    if (scheme) detail.push(scheme);
-    if (facts.duration != null) detail.push(`${fmt(facts.duration)} min`);
-  } else if (schemeIsPrimaryLine) {
-    if (scheme) detail.push(scheme);
-    if (facts.resistance) detail.push(`${fmt(facts.resistance.value)} ${facts.resistance.unit}`);
-    if (facts.duration != null) detail.push(`${fmt(facts.duration)} min`);
-  } else {
-    if (facts.resistance) detail.push(`${fmt(facts.resistance.value)} ${facts.resistance.unit}`);
-    if (showScheme && scheme) detail.push(scheme);
-    if (primary?.metric !== "duration" && facts.duration != null) detail.push(`${fmt(facts.duration)} min`);
-    if (primary?.metric !== "distance" && facts.distance) detail.push(`${fmt(facts.distance.value, 2)} ${facts.distance.unit}`);
+  if (!inHeadline.has("resistance") && facts.resistance) {
+    detail.push(`${fmt(facts.resistance.value)} ${facts.resistance.unit}`);
   }
-  if (facts.steps != null && primary?.metric !== "steps") detail.push(`${Math.round(facts.steps).toLocaleString()} steps`);
+  // The rep scheme, minus any half of it the headline already carries.
+  const repsLeft = !inHeadline.has("reps") && facts.reps != null;
+  const setsLeft = !inHeadline.has("sets") && facts.sets != null;
+  if (repsLeft || setsLeft) {
+    const parts: string[] = [];
+    if (repsLeft) parts.push(`${fmt(facts.reps!, 0)} ${plural(facts.reps!, "rep", "reps")}`);
+    if (setsLeft) parts.push(`${fmt(facts.sets!, 0)} ${plural(facts.sets!, "set", "sets")}`);
+    detail.push(parts.join(" × "));
+  }
+  if (!inHeadline.has("duration") && facts.duration != null) detail.push(`${fmt(facts.duration)} min`);
+  if (!inHeadline.has("distance") && facts.distance) detail.push(`${fmt(facts.distance.value, 2)} ${facts.distance.unit}`);
+  if (!inHeadline.has("steps") && facts.steps != null) detail.push(`${Math.round(facts.steps).toLocaleString()} steps`);
   if (facts.exerciseCount != null) detail.push(`${fmt(facts.exerciseCount, 0)} ${plural(facts.exerciseCount, "exercise", "exercises")}`);
   if (facts.laps != null) detail.push(`${fmt(facts.laps, 0)} ${plural(facts.laps, "lap", "laps")}`);
   if (facts.heartRate != null) detail.push(`${Math.round(facts.heartRate)} bpm`);
 
-  const calLine = formatCalories(calories);
-  // The headline is already on the card, so the sentence repeats it only when
-  // no detail line already carries it — otherwise a reps-led card reads
-  // "12 reps · 12 reps × 3 sets".
-  const primaryToken = primary ? `${fmt(primary.value)} ${primary.unit}` : null;
-  const primaryCovered = !!primaryToken && detail.some((d) => d === primaryToken || d.startsWith(`${primaryToken} ×`));
   const sentence = [
-    primaryCovered ? null : primaryToken,
+    formatHeadline(headline),
     ...detail,
-    calLine,
+    formatCalories(calories),
   ].filter(Boolean).join(" · ");
 
-  return { activity, primary, detail, calories, sentence };
+  return { activity, primary, headline, detail, calories, sentence };
+}
+
+/** One part of a headline: "50 lbs", "10 reps", "1 set", "2.15 mi". */
+export function formatHeadlinePart(p: FitnessPrimary): string {
+  const n = fmt(p.value, p.metric === "distance" ? 2 : 1);
+  if (p.metric === "reps") return `${n} ${plural(p.value, "rep", "reps")}`;
+  if (p.metric === "sets") return `${n} ${plural(p.value, "set", "sets")}`;
+  return `${n} ${p.unit}`;
+}
+
+/** "50 lbs × 10 reps × 3 sets", "25 reps × 1 set", "30 min". */
+export function formatHeadline(headline: FitnessPrimary[]): string | null {
+  if (!headline.length) return null;
+  return headline.map(formatHeadlinePart).join(" × ");
+}
+
+/**
+ * The headline pair for an entry: the metric that leads, and the one that
+ * gives it meaning. Resistance without reps, or reps without sets, is half a
+ * sentence.
+ */
+function pickHeadline(activity: FitnessActivity, f: FitnessFacts): FitnessPrimary[] {
+  const primary = pickPrimary(activity, f);
+  if (!primary) return [];
+  const reps = f.reps != null ? { value: f.reps, unit: FITNESS_METRIC_UNIT.reps, metric: "reps" as const } : null;
+  const sets = f.sets != null ? { value: f.sets, unit: FITNESS_METRIC_UNIT.sets, metric: "sets" as const } : null;
+  // A lift: load × reps × sets. An unloaded movement: reps × sets.
+  if (primary.metric === "resistance") return [primary, reps, sets].filter(Boolean) as FitnessPrimary[];
+  if (primary.metric === "reps") return [primary, sets].filter(Boolean) as FitnessPrimary[];
+  return [primary];
 }
 
 function pickPrimary(activity: FitnessActivity, f: FitnessFacts): FitnessPrimary | null {
