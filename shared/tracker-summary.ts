@@ -66,8 +66,31 @@ const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : ma
 
 // ── Occurrence trackers ──────────────────────────────────────────────────────
 
+/**
+ * A CONCENTRATION unit — an amount per unit volume ("ng/mL", "mg/dL",
+ * "nmol/L", "EU/dL"). This is what separates a lab RESULT from a DOSE: a dose
+ * is an amount ("500 mg", "2 tablets"), a blood level is an amount per volume.
+ *
+ * It matters because a "Vitamin D" tracker whose unit is ng/mL is a blood
+ * panel reading, and matching it on the word "vitamin" put a dose ledger —
+ * adherence, doses-taken tally, "log another dose" — over a lab value.
+ */
+export function isConcentrationUnit(unit: string | null | undefined): boolean {
+  const u = String(unit ?? "").toLowerCase().replace(/\s+/g, "");
+  if (!u.includes("/")) return false;
+  return /\/(l|dl|ml|cl|100ml|mm3|mcl|µl|ul|kg|g|mg)$/.test(u);
+}
+
+/** Does this tracker read a lab VALUE rather than record a dose? */
+export function isLabValueTracker(tracker: Tracker): boolean {
+  if (isConcentrationUnit(tracker.unit)) return true;
+  return (tracker.fields || []).some((f) => isConcentrationUnit(f.unit));
+}
+
 /** Is this a medication/supplement tracker (dose-shaped, many per day)? */
 export function isDoseTracker(tracker: Tracker): boolean {
+  // A blood level is never a dose, however the tracker is named.
+  if (isLabValueTracker(tracker)) return false;
   const cat = norm(tracker.category);
   if (cat === "medication" || cat === "prescription" || cat === "supplement") return true;
   const fieldNames = (tracker.fields || []).map((f) => norm(f.name));

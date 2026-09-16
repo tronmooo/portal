@@ -157,7 +157,9 @@ export default function WellnessPage() {
   // ── Quick-log tracker entry: shared tracker-entry mutation → propagates ──
   const quickLog = useMutation({
     mutationFn: async ({ trackerId, field, amount }: { trackerId: string; field: string; amount: number }) =>
-      apiRequest("POST", `/api/trackers/${trackerId}/entries`, { values: { [field]: amount } }),
+      // Each tap is its own occurrence — two identical quick-logs minutes
+      // apart are two events, so they must not collapse into one row.
+      apiRequest("POST", `/api/trackers/${trackerId}/entries`, { values: { [field]: amount }, allowDuplicate: true }),
     onSuccess: () => {
       invalidateDomain("trackers");
       toast({ title: "Logged" });

@@ -9,6 +9,8 @@ import {
   summarizeTrackerToday,
   isDoseTracker,
   isOccurrenceTracker,
+  isLabValueTracker,
+  isConcentrationUnit,
   occurrenceNoun,
   shortAgo,
 } from "@shared/tracker-summary";
@@ -208,6 +210,83 @@ describe("the other tracker shapes each get their own honest line", () => {
   });
 });
 
+describe("a lab VALUE is never a dose ledger", () => {
+  // Reported with a screenshot of "Vitamin D · 3 entries · ng/mL · health"
+  // wearing the medication UI: adherence, a dose tally, "log another dose".
+  it("tells a concentration unit from a dose unit", () => {
+    for (const u of ["ng/mL", "mg/dL", "nmol/L", "EU/dL", "µg/L", "mIU/L", "pg/mL", "g/dL"]) {
+      expect(isConcentrationUnit(u)).toBe(true);
+    }
+    for (const u of ["mg", "mcg", "IU", "g", "mL", "tablet", "capsule", "oz", "", null]) {
+      expect(isConcentrationUnit(u)).toBe(false);
+    }
+  });
+
+  it("does not treat a ng/mL Vitamin D panel as a medication", () => {
+    const lab = tracker({
+      name: "Vitamin D", category: "health", unit: "ng/mL",
+      fields: [{ name: "level", type: "number", unit: "ng/mL", isPrimary: true }],
+      entries: [entry(at(11, 11), { level: 42 })],
+    });
+    expect(isLabValueTracker(lab)).toBe(true);
+    expect(isDoseTracker(lab)).toBe(false);
+    const s = summarizeTrackerToday(lab, { now: NOW });
+    expect(s.line).toBe("42 ng/mL");
+    expect(s.shape).toBe("measurement");
+  });
+
+  it("still treats a Vitamin D SUPPLEMENT (dosed in IU) as a dose tracker", () => {
+    const supp = tracker({
+      name: "Vitamin D", category: "health", unit: "IU",
+      fields: [{ name: "dosage", type: "number", unit: "IU" }, { name: "adherence", type: "select" }],
+      entries: [entry(at(9, 0), { adherence: "taken" }), entry(at(21, 0, -1), { adherence: "taken" })],
+    });
+    expect(isLabValueTracker(supp)).toBe(false);
+    expect(isDoseTracker(supp)).toBe(true);
+    expect(summarizeTrackerToday(supp, { now: NOW }).line).toBe("1 dose today");
+  });
+});
+
+describe("EVERY explicit log action is an occurrence, not a re-send", () => {
+  // The reported bug was medication-shaped, but the cause is general: two
+  // identical logs minutes apart are two events on ANY tracker.
+  const CLIENT = [
+    "client/src/pages/trackers.tsx",
+    "client/src/pages/wellness.tsx",
+    "client/src/pages/profile-detail.tsx",
+  ];
+
+  it("no client POST to /entries omits allowDuplicate", () => {
+    const offenders: string[] = [];
+    for (const rel of CLIENT) {
+      const src = readFileSync(resolve(__dirname, "..", rel), "utf8");
+      // Each POST call site, sliced to the end of its argument object.
+      const re = /apiRequest\(\s*["']POST["'],\s*`\/api\/trackers\/\$\{[^`]*\}\/entries`/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(src))) {
+        const chunk = src.slice(m.index, m.index + 700);
+        const call = chunk.slice(0, chunk.indexOf("});") >= 0 ? chunk.indexOf("});") + 3 : 700);
+        if (!call.includes("allowDuplicate")) {
+          offenders.push(`${rel} @ ${src.slice(0, m.index).split("\n").length}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("covers every log surface, not just the medication button", () => {
+    const counts = CLIENT.map(rel => {
+      const src = readFileSync(resolve(__dirname, "..", rel), "utf8");
+      return (src.match(/allowDuplicate: true/g) || []).length;
+    });
+    // trackers page: med button + entry form + quick-log. wellness: quick-log.
+    // profile detail: log dialog + optimistic log.
+    expect(counts[0]).toBeGreaterThanOrEqual(3);
+    expect(counts[1]).toBeGreaterThanOrEqual(1);
+    expect(counts[2]).toBeGreaterThanOrEqual(2);
+  });
+});
+
 describe("formatting helpers", () => {
   it("shortAgo reads in the units a person would use", () => {
     expect(shortAgo(NOW - 30_000, NOW)).toBe("just now");
@@ -277,6 +356,17 @@ describe("the medication suite never gates logging on a taken-today flag", () =>
     expect(SRC).toContain("calorieContextForOwner(ownerProfile)");
     expect(SRC).not.toContain("useBodyWeightKg");
     expect(SRC).toContain("bodyWeightKg: fitnessCtx.bodyWeightKg");
+  });
+
+  it("headlines an occurrence tracker with TODAY'S COUNT, not the last row", () => {
+    // A Bathroom tracker storing `visits: 1` per log showed a big "1" over a
+    // subline that correctly read "3 visits today" — the same
+    // one-log-is-the-whole-day error as the badge, in the headline.
+    const i = SRC.indexOf("// An OCCURRENCE tracker's headline is TODAY'S COUNT");
+    expect(i).toBeGreaterThan(0);
+    const block = SRC.slice(i, i + 900);
+    expect(block).toContain('occ.shape === "occurrence" && occ.countToday > 0');
+    expect(block).toContain("bigPrimary: String(occ.countToday)");
   });
 
   it("keeps an occurrence tracker with entries out of the No Data pile", () => {

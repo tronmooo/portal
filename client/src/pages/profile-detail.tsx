@@ -6646,6 +6646,9 @@ function TrackersTab({
       }
       await apiRequest("POST", `/api/trackers/${trackerId}/entries`, {
         trackerId, values, notes: entryNotes || undefined,
+        // An explicit log is an occurrence, not a re-send: identical values
+        // logged twice minutes apart are two events.
+        allowDuplicate: true,
       });
     },
     onSuccess: (_data, trackerId) => {
@@ -7220,7 +7223,8 @@ function HealthTabView({ profile, onChanged, includeAll = false }: { profile: Pr
     { prevDetail: any; tempId: string }
   >({
     mutationFn: async ({ trackerId, values, notes }) => {
-      await apiRequest("POST", `/api/trackers/${trackerId}/entries`, { values, notes });
+      // An explicit log is an occurrence, not a re-send (see above).
+      await apiRequest("POST", `/api/trackers/${trackerId}/entries`, { values, notes, allowDuplicate: true });
     },
     onMutate: async ({ trackerId, values, notes }) => {
       const detailKey = ["/api/profiles", profileId, "detail"];

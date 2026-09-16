@@ -57,7 +57,7 @@ import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
-import { summarizeTrackerToday, occurrenceNoun, shortAgo } from "@shared/tracker-summary";
+import { summarizeTrackerToday, occurrenceNoun, shortAgo, isLabValueTracker } from "@shared/tracker-summary";
 import { computeMissedDoses } from "@shared/medication-doses";
 import { CreateProfileDialog } from "@/components/CreateProfileDialog";
 import { AddAccountDialog } from "@/components/finance/AccountsSection";
@@ -986,7 +986,11 @@ function detectSpecialization(tracker: Tracker): TrackerSpecialization {
     (fieldNames.includes("taken") || fieldNames.includes("adherence") ||
      fieldNames.includes("drug") || fieldNames.includes("drugname"));
   const SUPPLEMENT_RE = /\b(fish ?oil|omega|multivitamin|vitamin|creatine|magnesium|zinc|melatonin|probiotic|biotin|collagen|glucosamine|turmeric|ashwagandha|calcium|iron supplement|supplement|softgel|capsule|lozenge|gummy)\b/;
-  if (cat === "medication" || cat === "prescription" || cat === "supplement" || hasDoseFields || SUPPLEMENT_RE.test(name)) return "medication";
+  // A lab VALUE is never a dose ledger. "Vitamin D" measured in ng/mL is a
+  // blood level; matching it on the word "vitamin" put adherence, a dose
+  // tally and a "log another dose" button over a panel reading.
+  if (!isLabValueTracker(tracker) &&
+      (cat === "medication" || cat === "prescription" || cat === "supplement" || hasDoseFields || SUPPLEMENT_RE.test(name))) return "medication";
   if (cat === "health" && name.includes("weight")) return "weight";
   if (name.includes("blood") || name.includes("pressure")) return "bloodpressure";
   if (cat === "sleep") return "sleep";
@@ -1428,6 +1432,14 @@ function AddEntryDialog({
       const res = await apiRequest("POST", `/api/trackers/${tracker.id}/entries`, {
         values: coerced,
         notes: vars.notes,
+        // An explicit log action is an OCCURRENCE, not a re-send: two 8-oz
+        // glasses of water, two sets of 12 reps and two bathroom visits are
+        // each two events even when the values are identical and minutes
+        // apart. React Query never retries mutations (retry:false), so a
+        // second POST from this surface is always a second human intent —
+        // the server's identical-values dedup must not swallow it. The dedup
+        // still guards the machine-replayed paths (AI tool lanes, extraction).
+        allowDuplicate: true,
       });
       return res.json();
     },
@@ -1505,7 +1517,9 @@ function AddEntryDialog({
   })();
   const quickLog = useMutation<any, Error, number, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async (amount: number) => {
-      const res = await apiRequest("POST", `/api/trackers/${tracker.id}/entries`, { values: { [quickField as string]: amount } });
+      // Tapping "+8 oz" twice is two drinks — see the note on the entry form
+      // above; an explicit log is an occurrence, never a re-send.
+      const res = await apiRequest("POST", `/api/trackers/${tracker.id}/entries`, { values: { [quickField as string]: amount }, allowDuplicate: true });
       return res.json();
     },
     onMutate: async (amount) => {
@@ -2769,6 +2783,24 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
       progressPct: null, statusBadge: freshness, sparkValues: [], trendPct: null, trendDir: "flat",
     };
   }
+  // An OCCURRENCE tracker's headline is TODAY'S COUNT, not the last row's
+  // value. A Bathroom tracker storing `visits: 1` per log showed a big "1"
+  // over a subline that correctly read "3 visits today" — the same
+  // one-log-is-the-whole-day error as the medication badge, in the headline.
+  {
+    const occ = summarizeTrackerToday(tracker);
+    if (occ.shape === "occurrence" && occ.countToday > 0) {
+      const noun = occurrenceNoun(tracker);
+      return {
+        hasData: true, kind, importance, iconKind,
+        bigPrimary: String(occ.countToday),
+        bigUnit: occ.countToday === 1 ? noun : `${noun}s`,
+        subline: occ.line,
+        insight: `${occ.line}${occ.lastLine ? ` ${occ.lastLine}.` : ""}`,
+        progressPct: null, statusBadge: freshness, sparkValues, trendPct, trendDir,
+      };
+    }
+  }
   // Phase 2: spec-driven generic card. For an ADDITIVE metric (water, calories,
   // minutes, custom quantities), the headline should be TODAY's running total —
   // not the last single entry (the "0 oz / wrong number" dashboard bug).
@@ -2982,7 +3014,7 @@ function chooseCardVisual(
   // represent two components.
   if (insight.kind === "bloodpressure") return { type: "spark" };
   const name = tracker.name || "";
-  if (MED_RE.test(`${name} ${tracker.category || ""}`)) return { type: "checklist" };
+  if (!isLabValueTracker(tracker) && MED_RE.test(`${name} ${tracker.category || ""}`)) return { type: "checklist" };
   // Multi-metric lab panel: ≥2 reference-ranged numeric fields in the entry.
   const ranged = rangedMetricsFor(tracker, lastEntry);
   if (ranged.length >= 2) return { type: "panel", metrics: ranged };
