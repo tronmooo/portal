@@ -1,3 +1,7 @@
+import {
+  valuationKey, valuationHistoryKey, readValuationRecord, readValuationHistory,
+  appendValuationHistory, VALUATION_HISTORY_LIMIT, understandingKey, readUnderstanding,
+} from "./valuation/storage-codec";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID, createHash } from "crypto";
 
@@ -8132,6 +8136,32 @@ export class SupabaseStorage implements IStorage {
   }
   async releaseUserLock(name: string): Promise<void> {
     await this.supabase.from("preferences").delete().eq("user_id", this.userId).eq("key", `lock:${name}`);
+  }
+
+  // ---- Asset valuations (server/valuation) ----
+  // Rows in `preferences`, keyed per profile, scoped by this instance's
+  // user_id like every other preference read: `valuation:<profileId>` holds the
+  // latest record, `valuation-history:<profileId>` a bounded list of past
+  // estimates. No new table, no migration, and isolation for free.
+  async getAssetValuation(profileId: string) {
+    return readValuationRecord(await this.getPreference(valuationKey(profileId)));
+  }
+  async saveAssetValuation(profileId: string, record: import("@shared/valuation/types").ValuationRecord): Promise<void> {
+    await this.setPreference(valuationKey(profileId), JSON.stringify(record));
+    const history = appendValuationHistory(await this.getAssetValuationHistory(profileId), record);
+    await this.setPreference(valuationHistoryKey(profileId), JSON.stringify(history));
+  }
+  async touchAssetValuation(profileId: string, record: import("@shared/valuation/types").ValuationRecord): Promise<void> {
+    await this.setPreference(valuationKey(profileId), JSON.stringify(record));
+  }
+  async getAssetValuationHistory(profileId: string, limit = VALUATION_HISTORY_LIMIT) {
+    return readValuationHistory(await this.getPreference(valuationHistoryKey(profileId))).slice(-limit);
+  }
+  async getValuationUnderstanding(profileId: string) {
+    return readUnderstanding(await this.getPreference(understandingKey(profileId)));
+  }
+  async cacheValuationUnderstanding(profileId: string, understanding: import("@shared/valuation/types").AssetUnderstanding): Promise<void> {
+    await this.setPreference(understandingKey(profileId), JSON.stringify(understanding));
   }
 
   async setPreference(key: string, value: string): Promise<void> {

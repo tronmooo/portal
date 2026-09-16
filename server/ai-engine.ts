@@ -570,13 +570,24 @@ export function isValuableType(t: string | undefined | null): boolean {
 export async function estimateAssetValue(
   profile: { type: string; name: string; fields: Record<string, any> },
   context?: AssetValuationContext,
+  opts?: {
+    /**
+     * The caller has already established that this profile is an OWNED ASSET
+     * (server/valuation/service.ts goes through shared/asset-value's
+     * isAssetTabProfile before it gets here), so the coarse type gate below
+     * must not reject an asset whose `type` is one the gate never listed —
+     * an `account` holding a brokerage position, or a type that did not
+     * exist when the list was written. The gate stays for every other caller.
+     */
+    trustedAsset?: boolean;
+  },
 ): Promise<AssetValuation | null> {
   // HARD GUARD: refuse to value non-valuable profile types. Without this,
   // perplexityValuation below blindly searches the web for a market price
   // for any name (including people, pets, etc.) and confidently returns a
   // ticker price. This is the root cause of the "Patrick = $90.21 PATK"
   // bug and friends (Mike=$1, Lexi=$39.24, Jim=$0.0000025, Scrappy=$11k).
-  if (!isValuableType(profile.type)) return null;
+  if (!opts?.trustedAsset && !isValuableType(profile.type)) return null;
 
   // PRIMARY: Perplexity Sonar (live web search + LLM in one call). This is the
   // same API the chat uses, so it works reliably from Vercel cloud IPs.
@@ -585,7 +596,7 @@ export async function estimateAssetValue(
 
   // FALLBACK: legacy Anthropic + DDG/Brave path (kept for resilience).
   const valuableTypes = ["vehicle", "asset", "property", "investment"];
-  if (!valuableTypes.includes(profile.type)) return null;
+  if (!opts?.trustedAsset && !valuableTypes.includes(profile.type)) return null;
 
   const dossier = buildValuationDossier(profile, context);
 
