@@ -126,6 +126,29 @@ describe("no false precision, no invented numbers", () => {
   });
 });
 
+describe("no anchoring on prior valuations", () => {
+  const history = [
+    { valuedAt: "2026-01-01T00:00:00Z", status: "valued" as const, value: 30000, low: 27000, high: 33000, confidence: 0.7, methodology: [], inputFingerprint: "a", refreshReason: "scheduled" as const },
+    { valuedAt: "2026-06-01T00:00:00Z", status: "valued" as const, value: 30000, low: 27000, high: 33000, confidence: 0.7, methodology: [], inputFingerprint: "a", refreshReason: "scheduled" as const },
+  ];
+  it("prior valuations do not pull a fresh market estimate toward the old answer", () => {
+    const ctx = buildValuationContext({ profile: { id: "p", name: "Honda CR-V", type: "vehicle", fields: { year: 2021, make: "Honda", model: "CR-V" } }, history }, NOW);
+    const plan = planValuation(ctx, NOW);
+    expect(plan.methods.map(m => m.id)).toContain("historical_trend");
+    const withHistory = computeValuation(ctx, plan, [...deriveInternalEvidence(ctx, plan, NOW), live(20000)], opts);
+    const noHistory = computeValuation(ctx, plan, [live(20000)], opts);
+    expect(withHistory.value).toBe(noHistory.value);
+    expect(withHistory.methodology).not.toContain("historical_trend");
+  });
+  it("…but they still carry the estimate when no market evidence came back", () => {
+    const ctx = buildValuationContext({ profile: { id: "p", name: "Honda CR-V", type: "vehicle", fields: { year: 2021, make: "Honda", model: "CR-V" } }, history }, NOW);
+    const plan = planValuation(ctx, NOW);
+    const rec = computeValuation(ctx, plan, deriveInternalEvidence(ctx, plan, NOW), opts);
+    expect(rec.status).toBe("valued");
+    expect(rec.methodology).toContain("historical_trend");
+  });
+});
+
 describe("error records", () => {
   it("keep the previous estimate visible and count the failure", () => {
     const ctx = ctxFor({ year: 2021, make: "Honda", model: "CR-V" });

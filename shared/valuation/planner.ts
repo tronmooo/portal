@@ -18,6 +18,7 @@
 
 import { MS_PER_DAY } from "../obligation-windows";
 import type { MethodologyId, PlannedMethod, ValuationContext, ValuationPlan } from "./types";
+import { historyDrift } from "./internal-evidence";
 
 export const MS_PER_HOUR = 3_600_000;
 export const DEFAULT_MARKET_FRESHNESS_MS = 30 * MS_PER_DAY;
@@ -117,7 +118,7 @@ export function planValuation(ctx: ValuationContext, now: Date = new Date()): Va
         providers: [], evidenceKinds: ["transaction"],
       });
     } else {
-      const driftKnown = ctx.understanding?.expectedAnnualChangePct != null || ctx.history.filter(h => h.value).length >= 2;
+      const driftKnown = ctx.understanding?.expectedAnnualChangePct != null || historyDrift(ctx) != null;
       methods.push({
         id: "value_trajectory", weight: age == null ? 0.2 : driftKnown ? 0.5 : 0.35,
         rationale: age == null
@@ -132,7 +133,7 @@ export function planValuation(ctx: ValuationContext, now: Date = new Date()): Va
   // 5 — the asset's own valuation history.
   if (ctx.history.filter(h => h.status === "valued" && h.value).length >= 2) {
     methods.push({
-      id: "historical_trend", weight: 0.3,
+      id: "historical_trend", weight: 0.5,
       rationale: "Two or more prior valuations — trend extrapolation as a cross-check",
       providers: [], evidenceKinds: ["prior_valuation"],
     });

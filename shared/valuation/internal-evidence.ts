@@ -134,7 +134,7 @@ export function deriveInternalEvidence(ctx: ValuationContext, plan: ValuationPla
         id: "history-trend", kind: "prior_valuation", source: "Your valuation history",
         observedAt: last.valuedAt,
         value: projected, low: last.low ?? projected * 0.9, high: last.high ?? projected * 1.1,
-        reliability: 0.5, relevance: 0.8, halfLifeMs: 90 * MS_PER_DAY,
+        reliability: 0.5, relevance: 0.8, halfLifeMs: 180 * MS_PER_DAY,
         note: drift == null
           ? `Last valued at ${money(last.value!)}`
           : `Last valued at ${money(last.value!)}, trending ${(drift * 100).toFixed(0)}%/yr`,

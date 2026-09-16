@@ -135,6 +135,16 @@ export function computeValuation(
     usable.push({ e, w, decay, method: m.id, low, high });
   }
 
+  // NO ANCHORING: the asset's own prior valuations are a fallback signal,
+  // never a peer of fresh market evidence. When a current external
+  // observation is on the table, drop them — otherwise every run would pull
+  // toward the previous answer and the estimate would stop tracking the
+  // market (the "same number every time" failure the dossier builder also
+  // guards against).
+  if (usable.some(u => EXTERNAL_KINDS.has(u.e.kind))) {
+    for (let i = usable.length - 1; i >= 0; i--) if (usable[i].e.kind === "prior_valuation") usable.splice(i, 1);
+  }
+
   const totalW = usable.reduce((s, u) => s + u.w, 0);
   if (usable.length === 0 || totalW < MIN_TOTAL_WEIGHT) {
     rec.status = "insufficient_data";
@@ -150,8 +160,18 @@ export function computeValuation(
   }
 
   const value = usable.reduce((s, u) => s + u.w * u.e.value!, 0) / totalW;
-  const variance = usable.reduce((s, u) => s + u.w * Math.pow(u.e.value! - value, 2), 0) / totalW;
-  const cv = value > 0 ? Math.sqrt(variance) / value : 1;
+  // Agreement is judged among the DIRECT observations (market, user, appraisal,
+  // transaction). An indirect anchor — a purchase price projected with an
+  // unknown drift — still nudges the blend by its small weight, but it must
+  // not be able to declare a live comparable "in conflict" and drag the
+  // confidence down; it is the weak signal, not the market.
+  const strong = usable.filter(u => !WEAK_ALONE.has(u.e.kind));
+  const agreementSet = strong.length >= 1 ? strong : usable;
+  const agreementW = agreementSet.reduce((s, u) => s + u.w, 0);
+  const agreementMean = agreementSet.reduce((s, u) => s + u.w * u.e.value!, 0) / agreementW;
+  const variance = agreementSet.reduce((s, u) => s + u.w * Math.pow(u.e.value! - agreementMean, 2), 0) / agreementW;
+  const cv = agreementMean > 0 ? Math.sqrt(variance) / agreementMean : 1;
+  const agreementCount = agreementSet.length;
   const avgLow = usable.reduce((s, u) => s + u.w * u.low, 0) / totalW;
   const avgHigh = usable.reduce((s, u) => s + u.w * u.high, 0) / totalW;
   const freshness = usable.reduce((s, u) => s + u.w * u.decay, 0) / totalW;
@@ -160,13 +180,14 @@ export function computeValuation(
 
   // ── Confidence ──
   const weightScore = Math.min(1, totalW / 1.2);
-  const agreement = usable.length >= 2 ? Math.max(0, 1 - cv / CONFLICT_CV) : 0.7;
+  const agreement = agreementCount >= 2 ? Math.max(0, 1 - cv / CONFLICT_CV) : 0.7;
   const diversity = Math.min(1, kinds.size / 2);
   let confidence = weightScore * 0.45 + agreement * 0.3 + freshness * 0.15 + diversity * 0.1;
   const factors: string[] = [];
   const onlyWeak = usable.every(u => WEAK_ALONE.has(u.e.kind));
   if (onlyWeak) { confidence = Math.min(confidence, 0.4); factors.push("Only indirect evidence (no market observation or verified value)"); }
-  if (usable.length >= 2 && cv > CONFLICT_CV) { confidence = Math.min(confidence, 0.4); factors.push(`Sources disagree by ~${Math.round(cv * 100)}% — range widened`); }
+  const conflict = agreementCount >= 2 && cv > CONFLICT_CV;
+  if (conflict) { confidence = Math.min(confidence, 0.4); factors.push(`Sources disagree by ~${Math.round(cv * 100)}% — range widened`); }
   if (ctx.sparse) { confidence = Math.min(confidence, 0.5); factors.push("Sparse asset details limit precision"); }
   if (externalCount === 0 && plan.needsExternal) { confidence = Math.min(confidence, 0.55); factors.push("No current market evidence was available for this run"); }
   confidence = Math.max(0.05, Math.min(0.97, confidence));
@@ -177,7 +198,7 @@ export function computeValuation(
   const minHalf = (1 - confidence) * 0.4;      // 0.9 → ±4%, 0.4 → ±24%
   low = Math.min(low, value * (1 - minHalf));
   high = Math.max(high, value * (1 + minHalf));
-  const maxHalf = usable.length >= 2 && cv > CONFLICT_CV ? 0.6 : 0.45;
+  const maxHalf = conflict ? 0.6 : 0.45;
   low = Math.max(low, value * (1 - maxHalf));
   high = Math.min(high, value * (1 + maxHalf));
 
