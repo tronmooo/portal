@@ -326,4 +326,27 @@ describe("the medication suite never gates logging on a taken-today flag", () =>
   it("counts today's doses instead of testing for one", () => {
     expect(SRC).toMatch(/const dosesToday = todayEntries\.length/);
   });
+
+  it("derives adherence from the shared dose math, not a magic /7 divisor", () => {
+    // A med added today has no week to be adherent to; computeMissedDoses
+    // clamps the expectation to the tracker's own createdAt, which the old
+    // inline `Math.max(7, …)` divisor did not — it opened at 14%.
+    expect(SRC).toContain("computeMissedDoses(tracker, { days: 7 })");
+    expect(SRC).not.toMatch(/weekTaken \/ Math\.max\(7/);
+  });
+
+  it("does not read a bodyweight movement's rep count as a lifted weight", () => {
+    // "Lifted 12 reps × 12 × 3 sets" — primaryField on Squats IS "reps", and
+    // the bench branch used it as the load.
+    const i = SRC.indexOf('if (kind === "bench")');
+    expect(i).toBeGreaterThan(0);
+    const branch = SRC.slice(i, i + 700);
+    expect(branch).toContain('primaryField !== "reps" && primaryField !== "sets"');
+  });
+
+  it("keeps an occurrence tracker with entries out of the No Data pile", () => {
+    // A Bathroom tracker logs no number — the entries ARE the measurement —
+    // so the generic fallback used to report hasData:false and hide it.
+    expect(SRC).toContain('if (occ.shape === "occurrence" && occ.countToday > 0)');
+  });
 });

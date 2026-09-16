@@ -45,9 +45,10 @@ import {
   summarizeTrackerToday,
   resolveBodyWeightKg,
   isDoseTracker,
+  occurrenceNoun,
   shortAgo,
 } from "@shared/tracker-summary";
-import { parseFrequencyToDosesPerDay } from "@shared/medication-refills";
+import { computeMissedDoses } from "@shared/medication-doses";
 import { CreateProfileDialog } from "@/components/CreateProfileDialog";
 import { AddAccountDialog } from "@/components/finance/AccountsSection";
 // One card shape and one heading treatment for every hub tab — the Executive
@@ -1131,15 +1132,16 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
     },
   });
 
-  // Adherence this week = doses taken ÷ doses EXPECTED. Expected comes from the
-  // tracker's own frequency ("twice daily" → 14 in a week), so a med taken 3×
-  // a day no longer reads as 300%-worth of entries crammed into a /7 divisor.
-  const weekAgo = Date.now() - 7 * 86400000;
-  const weekEntries = tracker.entries.filter(e => new Date(e.timestamp).getTime() > weekAgo);
-  const weekTaken = weekEntries.filter(e => e.values?.adherence !== 'skipped' && e.values?.adherence !== 'missed').length;
-  const dosesPerDay = parseFrequencyToDosesPerDay([tracker.unit, tracker.name, frequency].filter(Boolean).join(' '));
-  const expectedWeek = Math.max(1, Math.round(dosesPerDay * 7));
-  const adherencePct = Math.min(100, Math.round((weekTaken / expectedWeek) * 100));
+  // Adherence this week = doses taken ÷ doses EXPECTED, from the ONE dose-math
+  // implementation (shared/medication-doses.ts). It derives the expectation
+  // from the tracker's own frequency ("twice daily" → 14 a week) and never
+  // expects doses from before the tracker existed — so a med added today
+  // doesn't open at 14%, and a med taken 3× a day isn't judged against a
+  // magic /7 divisor.
+  const doseMath = computeMissedDoses(tracker, { days: 7 });
+  const adherencePct = doseMath.expected > 0
+    ? Math.min(100, Math.round((doseMath.taken / doseMath.expected) * 100))
+    : null;
 
   return (
     <div className="space-y-4">
@@ -1192,8 +1194,17 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-muted/50 rounded-lg p-3 text-center">
           <p className="micro-label text-muted-foreground">Adherence</p>
-          <p className="text-2xl font-bold tabular-nums">{adherencePct}%</p>
-          <p className="text-xs text-muted-foreground">this week</p>
+          {/* No percentage until doses were actually expected — a tracker
+              added today has no week to be adherent to, and showing 14%
+              reads as a failure the user never had. */}
+          <p className="text-2xl font-bold tabular-nums" data-testid="med-adherence">
+            {adherencePct != null ? `${adherencePct}%` : '—'}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {adherencePct != null
+              ? `${doseMath.taken} of ${doseMath.expected} this week`
+              : 'not enough history'}
+          </p>
         </div>
         <div className="bg-muted/50 rounded-lg p-3 text-center">
           <p className="micro-label text-muted-foreground">Doses Logged</p>
@@ -2561,7 +2572,11 @@ function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsig
   }
 
   if (kind === "bench") {
-    const w = pickNum(last.values, "weight", "lbs", primaryField, "value") ?? (findAnyNumericValue(last.values)?.num ?? null);
+    // Only a real load counts as the weight. `primaryField` on a bodyweight
+    // movement IS "reps", so reading it as a weight produced the nonsense
+    // "Lifted 12 reps × 12 × 3 sets" for a 12-rep set of squats.
+    const w = pickNum(last.values, "weight", "lbs", "load")
+      ?? (primaryField !== "reps" && primaryField !== "sets" ? pickNum(last.values, primaryField, "value") : null);
     const reps = pickNum(last.values, "reps", "rep_count");
     const sets = pickNum(last.values, "sets", "set_count");
     if (w == null && reps == null && sets == null) {
@@ -2624,6 +2639,22 @@ function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsig
         subline: note ? note.slice(0, 60) : "",
         insight: `Logged on ${lastDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}.`,
         progressPct: null, statusBadge: freshness, sparkValues, trendPct, trendDir,
+      };
+    }
+    // An OCCURRENCE tracker (bathroom visits, cigarettes, cups of coffee) has
+    // no number to read because the entries ARE the measurement. Three visits
+    // today is real data, so count them instead of filing the tracker under
+    // "No Data" — which is where a Bathroom tracker used to disappear.
+    const occ = summarizeTrackerToday(tracker);
+    if (occ.shape === "occurrence" && occ.countToday > 0) {
+      const noun = occurrenceNoun(tracker);
+      return {
+        hasData: true, kind, importance, iconKind,
+        bigPrimary: String(occ.countToday),
+        bigUnit: occ.countToday === 1 ? noun : `${noun}s`,
+        subline: occ.line,
+        insight: `${occ.line}${occ.lastLine ? ` ${occ.lastLine}.` : ""}`,
+        progressPct: null, statusBadge: freshness, sparkValues: [], trendPct: null, trendDir: "flat",
       };
     }
     return {
@@ -2935,14 +2966,15 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   // could not change.
   const medChecklist = (() => {
     if (visual.type !== "checklist") return null;
+    // The TALLY lives in the subline ("2 doses today"), so this row carries
+    // what the tally can't: the dose strength or the prescribed schedule.
+    // Repeating the count here printed it twice on one small card.
     const doseField = tracker.fields?.find((f) => /dose|dosage|amount|qty|quantity|pill|tablet|capsule/i.test(f.name));
     const doseVal = doseField && lastEntry ? (lastEntry.values as any)[doseField.name] : undefined;
     const strength = doseVal != null ? `${doseVal}${doseField?.unit ? ` ${doseField.unit}` : ""}` : "";
-    const n = summary.countToday;
-    const label = n > 0
-      ? `${n} ${n === 1 ? "dose" : "doses"} today${strength ? ` · ${strength}` : ""}`
-      : (strength ? `${strength} — none today` : "No doses today");
-    return [{ label, done: n > 0 }];
+    const schedule = String((lastEntry?.values as any)?.frequency || tracker.unit || "").trim();
+    const label = strength || schedule || "Dose";
+    return [{ label, done: summary.countToday > 0 }];
   })();
   const kindEmoji = KIND_EMOJI[insight.iconKind];
   // Sports / fitness trends get the layered "effort zone" area look.
