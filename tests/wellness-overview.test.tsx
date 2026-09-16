@@ -47,6 +47,15 @@ const base: WellnessOverviewProps = {
   ],
   brief: ["Sleep is 36 min down vs. your average.", "You ran twice this week."],
   panels: [lipids],
+  body: [{
+    panel: "body", label: "Body", outOfRange: 0,
+    rows: [{ metricId: "weight", label: "Weight", value: 184.6, unit: "lbs", at: "2026-09-14T00:00:00Z",
+      flag: "unknown", reference: undefined, previous: 186.2, trackerId: "t-w", mergedFrom: 1 }],
+  }, {
+    panel: "vitals", label: "Vitals", outOfRange: 1,
+    rows: [{ metricId: "bp_systolic", label: "Systolic", value: 82, unit: "mmHg", at: "2026-09-15T00:00:00Z",
+      flag: "low", reference: "90–120 mmHg", previous: 118, trackerId: "t-bp", mergedFrom: 1 }],
+  }],
   medications: [{ id: "m1", name: "Lisinopril", dose: "10mg", refill: "Refills Oct 4" }],
   appointments: [{ id: "a1", title: "Dentist", date: "Oct 2", time: "9:00 AM" }],
   documents: [{ id: "d1", name: "Lab report — August", date: "Aug 1", type: "lab_result" }],
@@ -104,6 +113,23 @@ describe("Wellness overview — the readout", () => {
     expect(screen.getByTestId("wellness-lab-hdl").textContent).not.toMatch(/High|Low/);
   });
 
+  it("shows body and vitals, with their precision and their flags", () => {
+    render(<WellnessOverview {...base} />);
+    const body = screen.getByTestId("wellness-body");
+    expect(body.textContent).toMatch(/184\.6 lbs/);      // not "185"
+    expect(body.textContent).toMatch(/186\.2 → 184\.6/);
+    const sys = screen.getByTestId("wellness-lab-bp_systolic");
+    expect(sys.textContent).toMatch(/Low/);
+    expect(sys.textContent).toMatch(/Ref 90–120 mmHg/);
+  });
+
+  it("keeps a lab value's measured precision", () => {
+    render(<WellnessOverview {...base} panels={[{
+      ...lipids, rows: [{ ...lipids.rows[0], metricId: "hemoglobin", label: "Hemoglobin", value: 15.1, unit: "g/dL", flag: "normal", previous: null }],
+    }]} />);
+    expect(screen.getByTestId("wellness-lab-hemoglobin").textContent).toMatch(/15\.1 g\/dL/);
+  });
+
   it("shows medications as refill dates, not daily check-offs", () => {
     render(<WellnessOverview {...base} />);
     const med = screen.getByTestId("wellness-med-m1");
@@ -132,11 +158,12 @@ describe("Wellness overview — the readout", () => {
   it("says what is missing instead of rendering empty shells", () => {
     render(<WellnessOverview
       {...base}
-      brief={[]} panels={[]} workouts={[]} medications={[]} appointments={[]}
+      brief={[]} panels={[]} body={[]} workouts={[]} medications={[]} appointments={[]}
       documents={[]} allergies={[]} conditions={[]}
       score={{ value: null, components: base.score.components.map((c) => ({ ...c, score: null, weight: 0 })) }}
     />);
     expect(screen.getByTestId("wellness-labs").textContent).toMatch(/Photograph a lab report/);
+    expect(screen.getByTestId("wellness-body").textContent).toMatch(/No body measurements yet/);
     expect(screen.getByTestId("wellness-care").textContent).toMatch(/No medications, appointments or health documents/);
     expect(screen.getByTestId("wellness-activity").textContent).toMatch(/No workouts recorded/);
     expect(screen.getByTestId("wellness-score").textContent).toMatch(/nothing to score/);

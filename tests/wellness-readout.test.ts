@@ -13,7 +13,7 @@
 import { describe, it, expect } from "vitest";
 import {
   collectMetrics, todaySignals, labPanels, activityHistory, wellnessScore,
-  weeklyBrief, sourceState, mergedDuplicates, resolveWellnessSubject, belongsToSubject,
+  weeklyBrief, sourceState, mergedDuplicates, resolveWellnessSubject, belongsToSubject, bodyVitals,
 } from "../shared/wellness-readout";
 
 const NOW = new Date("2026-09-16T12:00:00Z");
@@ -264,5 +264,69 @@ describe("one subject — health data never blends", () => {
     const mine = trackers.filter((t) => belongsToSubject(t.linkedProfiles, me.subject, me.isSelf));
     const m = collectMetrics(mine as any, { now: NOW });
     expect(m.get("height")!.readings.map((r) => r.value)).toEqual([70]);
+  });
+});
+
+describe("activity history is workouts, not anything with a clock", () => {
+  const trackers = [
+    tracker({ name: "Guitar practice", category: "hobby", fields: [{ name: "minutes", type: "number" }], entries: [entry({ minutes: 45 }, daysAgo(1))] }),
+    tracker({ name: "Studying", category: "education", fields: [{ name: "minutes", type: "number" }], entries: [entry({ minutes: 90 }, daysAgo(2))] }),
+    tracker({ name: "Steps", category: "fitness", fields: [{ name: "steps", type: "number" }], entries: [entry({ steps: 9100 }, daysAgo(1))] }),
+    tracker({ name: "Running", category: "fitness", fields: [{ name: "distance", type: "number" }], entries: [entry({ distance: 4 }, daysAgo(2))] }),
+    tracker({ name: "Bench Press", category: "fitness", fields: [{ name: "weight", type: "number" }, { name: "reps", type: "number" }], entries: [entry({ weight: 185, reps: 5 }, daysAgo(4))] }),
+  ];
+
+  it("does not call a minutes field a workout", () => {
+    const types = activityHistory(trackers, { now: NOW }).map((g) => g.type);
+    expect(types).not.toContain("Guitar practice");
+    expect(types).not.toContain("Studying");
+  });
+
+  it("keeps a measured signal out of the workout list", () => {
+    // Steps is a Today signal; it is not a thing you trained at.
+    expect(activityHistory(trackers, { now: NOW }).map((g) => g.type)).not.toContain("Steps");
+  });
+
+  it("still keeps the real workouts", () => {
+    expect(activityHistory(trackers, { now: NOW }).map((g) => g.type).sort()).toEqual(["Bench Press", "Running"]);
+  });
+
+  it("keeps them out of the weekly brief too", () => {
+    const metrics = collectMetrics(trackers, { now: NOW });
+    const text = weeklyBrief({ metrics, workouts: activityHistory(trackers, { now: NOW }), labs: [], now: NOW }).join(" ");
+    expect(text).not.toMatch(/guitar|studying|steps/i);
+  });
+});
+
+describe("body & vitals are shown, not just collected", () => {
+  const trackers = [
+    tracker({ name: "Weight", unit: "lbs", entries: [entry({ value: 186.2 }, daysAgo(14)), entry({ value: 184.6 }, daysAgo(2))] }),
+    tracker({ name: "BMI", entries: [entry({ value: 26.4 }, daysAgo(5))] }),
+    tracker({ name: "Blood Pressure", category: "vitals",
+      fields: [{ name: "systolic", type: "number" }, { name: "diastolic", type: "number" }],
+      entries: [entry({ systolic: 118, diastolic: 76 }, daysAgo(30)), entry({ systolic: 82 }, daysAgo(1))] }),
+    tracker({ name: "HDL", entries: [entry({ value: 58 }, daysAgo(20))] }),
+  ];
+
+  it("surfaces weight, BMI and blood pressure", () => {
+    const rows = bodyVitals(collectMetrics(trackers, { now: NOW })).flatMap((p) => p.rows);
+    expect(rows.map((r) => r.metricId).sort()).toEqual(["bmi", "bp_diastolic", "bp_systolic", "weight"]);
+    expect(rows.find((r) => r.metricId === "weight")!.value).toBe(184.6);
+    expect(rows.find((r) => r.metricId === "weight")!.previous).toBe(186.2);
+  });
+
+  it("flags a systolic of 82 as low instead of printing '82/—'", () => {
+    const sys = bodyVitals(collectMetrics(trackers, { now: NOW })).flatMap((p) => p.rows).find((r) => r.metricId === "bp_systolic")!;
+    expect(sys.value).toBe(82);
+    expect(sys.flag).toBe("low");
+    // The diastolic keeps its OWN reading and date rather than being blanked.
+    const dia = bodyVitals(collectMetrics(trackers, { now: NOW })).flatMap((p) => p.rows).find((r) => r.metricId === "bp_diastolic")!;
+    expect(dia.value).toBe(76);
+  });
+
+  it("does not put a lab value in the body section, or vice versa", () => {
+    const m = collectMetrics(trackers, { now: NOW });
+    expect(bodyVitals(m).flatMap((p) => p.rows).some((r) => r.metricId === "hdl")).toBe(false);
+    expect(labPanels(m).flatMap((p) => p.rows).some((r) => r.metricId === "weight")).toBe(false);
   });
 });

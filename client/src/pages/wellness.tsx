@@ -36,7 +36,7 @@ import { isHealthDocument } from "@shared/health-documents";
 import { readField } from "@/lib/profile-fields";
 import {
   collectMetrics, todaySignals, labPanels, activityHistory, wellnessScore,
-  weeklyBrief, sourceState, mergedDuplicates, resolveWellnessSubject, belongsToSubject,
+  weeklyBrief, sourceState, mergedDuplicates, resolveWellnessSubject, belongsToSubject, bodyVitals,
 } from "@shared/wellness-readout";
 import {
   WellnessOverview,
@@ -98,6 +98,7 @@ export default function WellnessPage() {
   const metrics = collectMetrics(myTrackers);
   const signals = todaySignals(metrics);
   const panels = labPanels(metrics);
+  const body = bodyVitals(metrics);
   const workouts = activityHistory(myTrackers);
   const score = wellnessScore(metrics);
   const brief = weeklyBrief({ metrics, workouts, labs: panels });
@@ -205,6 +206,7 @@ export default function WellnessPage() {
         onAiBrief={() => aiBrief.mutate()}
         aiBriefLoading={aiBrief.isPending}
         panels={panels}
+        body={body}
         medications={medications}
         appointments={appointments}
         documents={healthDocs}

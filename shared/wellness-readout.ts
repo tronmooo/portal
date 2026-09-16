@@ -223,8 +223,25 @@ export interface LabPanel {
 }
 
 export function labPanels(metrics: Map<string, MetricSeries>): LabPanel[] {
+  return panelsFor(metrics, LAB_PANELS);
+}
+
+/**
+ * Body and vitals — weight, BMI, body fat, blood pressure, temperature, SpO2.
+ *
+ * Kept OUT of Labs (they are not lab work) but rendered in the same row shape,
+ * because they answer the same question: what is the number, is it in range,
+ * and which way is it moving. Browser-testing the rebuilt tab caught them
+ * missing from the page entirely — collected, scored against, and shown
+ * nowhere, which lost the old tab's Vitals card.
+ */
+export function bodyVitals(metrics: Map<string, MetricSeries>): LabPanel[] {
+  return panelsFor(metrics, ["vitals", "body"]);
+}
+
+function panelsFor(metrics: Map<string, MetricSeries>, wanted: MetricPanel[]): LabPanel[] {
   const panels: LabPanel[] = [];
-  for (const panel of LAB_PANELS) {
+  for (const panel of wanted) {
     const rows: LabRow[] = [];
     for (const s of metrics.values()) {
       if (s.metric.panel !== panel || !s.latest) continue;
@@ -288,8 +305,17 @@ export function activityHistory(
     if (!t) continue;
     const hay = `${t.name || ""} ${(t as any).category || ""}`;
     // A name that reads like a workout, or a tracker shaped like one.
-    const shaped = (t.fields || []).some((f: any) => DISTANCE_FIELD.test(f?.name || "") || DURATION_FIELD.test(f?.name || ""));
+    //
+    // A DURATION field deliberately does not qualify on its own: "Guitar
+    // practice" and "Studying" both record minutes, and browser-testing the
+    // rebuilt tab found them filed as workouts — with the weekly brief then
+    // reporting "you trained 9 times this week — mostly steps and guitar
+    // practice". A distance field is a real movement signal; minutes are not.
+    const shaped = (t.fields || []).some((f: any) => DISTANCE_FIELD.test(f?.name || ""));
     if (!ACTIVITY_NAME.test(hay) && !shaped) continue;
+    // A tracker that IS a canonical metric is a SIGNAL, not a workout type:
+    // "Steps" belongs in Today, not in the list of things you trained at.
+    if (resolveCanonicalMetric(t.name, (t as any).category)) continue;
     let sessions = 0, minutes = 0, distance = 0, reps = 0;
     let sawMin = false, sawDist = false, sawReps = false;
     let lastAt: string | null = null;

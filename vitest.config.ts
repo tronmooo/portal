@@ -132,6 +132,7 @@ export default defineConfig({
       'tests/wellness-overview.test.tsx',
       'tests/wellness-canon.test.ts',
       'tests/wellness-readout.test.ts',
+      'tests/wellness-routes.test.ts',
       'tests/query-key-hygiene.test.ts',
       'tests/ai-tool-registry.test.ts',
       'tests/ai-envelope.test.ts',

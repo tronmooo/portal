@@ -181,6 +181,16 @@ function FlagPill({ flag }: { flag: LabRow["flag"] }) {
   );
 }
 
+/** Lab and vitals values keep the precision they were measured with: a
+ *  hemoglobin of 15.1 must not render as "15". */
+const labValue = (n: number | null | undefined) =>
+  n == null || !Number.isFinite(n) ? "—" : Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
+
+const shortDay = (iso: string) => {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+};
+
 function LabRowView({ row }: { row: LabRow }) {
   const moved = row.previous != null && row.previous !== row.value;
   return (
@@ -194,15 +204,17 @@ function LabRowView({ row }: { row: LabRow }) {
           <span className="truncate">{row.label}</span>
           <FlagPill flag={row.flag} />
         </div>
-        {row.reference && <div className="text-[11px] text-muted-foreground">Ref {row.reference}</div>}
+        <div className="text-[11px] text-muted-foreground">
+          {row.reference ? `Ref ${row.reference}` : ""}{row.reference && row.at ? " · " : ""}{row.at ? shortDay(row.at) : ""}
+        </div>
       </div>
       <div className="text-right shrink-0">
         <div className="text-xs tabular-nums font-medium">
-          {auto(row.value)}{row.unit ? <span className="text-muted-foreground font-normal"> {row.unit}</span> : null}
+          {labValue(row.value)}{row.unit ? <span className="text-muted-foreground font-normal"> {row.unit}</span> : null}
         </div>
         {moved && (
           <div className="text-[11px] text-muted-foreground tabular-nums" data-testid={`wellness-lab-${row.metricId}-trend`}>
-            {auto(row.previous)} → {auto(row.value)}
+            {labValue(row.previous)} → {labValue(row.value)}
           </div>
         )}
       </div>
@@ -243,6 +255,8 @@ export interface WellnessOverviewProps {
   onAiBrief?: () => void;
   aiBriefLoading?: boolean;
   panels: LabPanel[];
+  /** Weight, BMI, body fat, blood pressure, temperature — same row shape. */
+  body: LabPanel[];
   medications: WellnessMed[];
   appointments: WellnessAppt[];
   documents: WellnessDoc[];
@@ -257,6 +271,7 @@ export interface WellnessOverviewProps {
 export function WellnessOverview(p: WellnessOverviewProps) {
   const labCount = p.panels.reduce((a, s) => a + s.rows.length, 0);
   const flagged = p.panels.reduce((a, s) => a + s.outOfRange, 0);
+  const bodyCount = p.body.reduce((a, s) => a + s.rows.length, 0);
   const care = p.medications.length + p.appointments.length + p.documents.length + p.allergies.length + p.conditions.length;
 
   return (
@@ -294,6 +309,25 @@ export function WellnessOverview(p: WellnessOverviewProps) {
             onClick={p.onAiBrief} disabled={p.aiBriefLoading} data-testid="wellness-ai-brief">
             {p.aiBriefLoading ? "Reading your data…" : "Ask AI to read this back"}
           </Button>
+        )}
+      </Section>
+
+      {/* ── Body & vitals ────────────────────────────────────────────────
+          Not labs, but the same question: what is it, is it in range, which
+          way is it moving. */}
+      <Section title="Body & vitals" icon={HeartPulse} tone={T.teal} testId="wellness-body"
+        meta={bodyCount > 0 ? `${bodyCount} measurement${bodyCount === 1 ? "" : "s"}` : undefined}>
+        {p.body.length === 0 ? (
+          <Empty text="No body measurements yet. A connected scale or health app fills these in." />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {p.body.map((panel) => (
+              <div key={panel.panel} data-testid={`wellness-body-${panel.panel}`}>
+                <h3 className="micro-label text-muted-foreground mb-1">{panel.label}</h3>
+                {panel.rows.map((r) => <LabRowView key={r.metricId} row={r} />)}
+              </div>
+            ))}
+          </div>
         )}
       </Section>
 
