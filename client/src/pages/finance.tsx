@@ -15,7 +15,7 @@ import { useShowTestData } from "@/lib/showTestData";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
-import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthIncomeNow } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -1132,10 +1132,19 @@ export default function FinancePage() {
           ? ((nwSeries[nwSeries.length - 1] - nwSeries[0]) / Math.abs(nwSeries[0])) * 100
           : (typeof snap.spendTrend === "number" ? null : null);
 
-        // Cash flow: monthly income vs (month spend + monthlyized bills).
-        const monthlyIncome = sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE);
+        // Cash flow, from the ONE definition the snapshot owns:
+        //   IN  = recurring income streams + paychecks actually received
+        //   OUT = this month's expenses + the bill money still owed this month
+        // OUT used to be `spend + the monthly-equivalent of every bill`, which
+        // counted a paid bill twice (paying one writes an expense) and pulled
+        // next month's bills into this month. The snapshot fields are the
+        // authority; the client fallbacks only cover an older cached payload.
+        const monthlyIncome = snap.monthlyIncome != null
+          ? Number(snap.monthlyIncome) || 0
+          : sumMonthIncomeNow(incomes || [], paychecks || [], BROWSER_TIMEZONE);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
-        const cashOut = spendMtd + Number(snap.monthlyObligationTotal || 0);
+        const billsStillOwed = Number(snap.unpaidBillsThisMonth ?? snap.monthlyObligationTotal ?? 0) || 0;
+        const cashOut = spendMtd + billsStillOwed;
         const savingsRate = monthlyIncome > 0 ? Math.round(((monthlyIncome - spendMtd) / monthlyIncome) * 100) : null;
 
         // Budgets: limit from /api/budgets, spent from snapshot.spendByCategory.
@@ -1168,7 +1177,8 @@ export default function FinancePage() {
 
         // Multi-month cash-flow trend (last 6 months) — shared helper so the
         // Cash Flow Overview popup plots the exact same series.
-        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE);
+        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE,
+          { paychecks: paychecks || [], pendingOutflowThisMonth: billsStillOwed });
         // Per-KPI mini-chart series.
         const spendSeries = cashTrend.map(c => c.outflow);
         const incomeSeries = cashTrend.map(c => c.inflow);
@@ -1220,15 +1230,20 @@ export default function FinancePage() {
       {(() => {
         const fc: "all" | "selected" | "everyone" = (filterMode === "selected" ? "selected" : "everyone");
         const snap = enhanced?.financeSnapshot || {};
-        const monthlyIncome = sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE);
+        const monthlyIncome = snap.monthlyIncome != null
+          ? Number(snap.monthlyIncome) || 0
+          : sumMonthIncomeNow(incomes || [], paychecks || [], BROWSER_TIMEZONE);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
-        const recurringOut = Number(snap.monthlyObligationTotal || 0);
+        // The popups plot the same OUT the cards do — bills still owed, not the
+        // monthly-equivalent of bills already paid (see the Money overview).
+        const recurringOut = Number(snap.unpaidBillsThisMonth ?? snap.monthlyObligationTotal ?? 0) || 0;
         const spendByCat: Record<string, number> = snap.spendByCategory || {};
         const upcomingBills = Array.isArray(snap.upcomingBills) ? snap.upcomingBills : [];
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
         const ymNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
         const monthExpenses = (Array.isArray(expenses) ? expenses : []).filter((e: any) => String(e.date || "").slice(0, 7) === ymNow);
-        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE);
+        const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE,
+          { paychecks: paychecks || [], pendingOutflowThisMonth: recurringOut });
         const closer = (o: boolean) => !o && setFinancePopup(null);
         return (
           <>

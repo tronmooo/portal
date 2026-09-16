@@ -26,6 +26,17 @@ const RECURRING = new Set([
   "utility", "phone_plan", "internet", "streaming", "software",
   "gym_membership", "parking", "storage_unit", "cloud_storage", "meal_kit",
   "box_subscription", "professional_membership", "bill", "subscription",
+  // Premiums, rent and dues are recurring service bills: a monthly amount and a
+  // due date, no balance to pay down. They used to fall through to "one_time",
+  // which meant paying one moved a fictional balance and — because only
+  // recurring bills log an expense (server/liability-payments.ts §4) — wrote no
+  // expense at all. That is why an Auto Insurance payment existed with no
+  // matching expense while a streaming payment had one, and monthly spend
+  // depended on which kind of bill you happened to pay.
+  "insurance", "insurance_premium", "auto_insurance", "car_insurance",
+  "home_insurance", "homeowners_insurance", "renters_insurance",
+  "health_insurance", "dental_insurance", "life_insurance", "pet_insurance",
+  "umbrella_insurance", "rent", "hoa", "hoa_dues", "childcare", "tuition_plan",
 ]);
 
 /**

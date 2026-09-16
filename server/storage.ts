@@ -1,7 +1,7 @@
 import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
-import { toMonthlyAmount, isUpcomingBill } from "@shared/obligation-windows";
+import { toMonthlyAmount, isUpcomingBill, sumBillsDueThroughMonth, sumMonthlyIncomeForMonth } from "@shared/obligation-windows";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
@@ -2470,6 +2470,11 @@ export class MemStorage implements IStorage {
         category: o.category,
       }));
 
+    const userYearMonth = `${thisYear}-${String(thisMonth + 1).padStart(2, '0')}`;
+    const incomesForMonth = Array.from(this.incomes.values()).filter(i => matchesFilter((i as any).linkedProfiles));
+    const recurringIncome = sumMonthlyIncomeForMonth(incomesForMonth as any[], userYearMonth);
+    const receivedPaycheckIncome = 0; // the in-memory storage keeps no paycheck table
+
     // Exact 52/12 and 26/12 multipliers (shared/obligation-windows.ts), the
     // same ones production uses — the truncated 4.33/2.17 drifted from it.
     const monthlyObligationTotal = obligations.reduce(
@@ -2506,6 +2511,13 @@ export class MemStorage implements IStorage {
         spendByCategory,
         upcomingBills,
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
+        // Mirrors SupabaseStorage: cash OUT is spend + the bill money still
+        // owed this month, never the monthly-equivalent of every bill (which
+        // double-counted every bill already paid and every expense it wrote).
+        unpaidBillsThisMonth: Math.round(sumBillsDueThroughMonth(obligations as any[], userYearMonth)),
+        monthlyIncome: Math.round(recurringIncome + receivedPaycheckIncome),
+        recurringIncome: Math.round(recurringIncome),
+        receivedPaycheckIncome: Math.round(receivedPaycheckIncome),
       },
       overdueTasks,
       tasksDueToday,

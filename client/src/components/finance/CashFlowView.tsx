@@ -17,7 +17,7 @@
 // how the app stops feeling like one product.
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthIncomeNow } from "@shared/obligation-windows";
 import { CashFlowWaterfallPopup } from "@/components/finance/MoneyPopups";
 
 export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
@@ -44,9 +44,12 @@ export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
   });
 
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
-  // Mirrors finance.tsx: incomes normalised to monthly via their frequency.
-  const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
   const snap = enhanced?.financeSnapshot || {};
+  // Mirrors finance.tsx: the snapshot's one income figure (streams + received
+  // paychecks), falling back to the streams alone on an older payload.
+  const monthlyIncome = snap.monthlyIncome != null
+    ? Number(snap.monthlyIncome) || 0
+    : sumMonthIncomeNow(incomes, null, BROWSER_TIMEZONE);
   const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
 
   return (
@@ -56,7 +59,7 @@ export function CashFlowView({ open, onOpenChange, filterMode, filterIds }: {
       monthLabel={monthLabel}
       cashIn={monthlyIncome}
       spendMtd={Number(snap.totalMonthlySpend || 0)}
-      recurringOut={Number(snap.monthlyObligationTotal || 0)}
+      recurringOut={Number(snap.unpaidBillsThisMonth ?? snap.monthlyObligationTotal ?? 0)}
       incomes={incomes}
       spendByCategory={snap.spendByCategory || {}}
     />
