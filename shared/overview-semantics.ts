@@ -52,7 +52,7 @@ const ADMIN_EXACT = new Set([
   "valuationMethod", "valuationDate", "valuationConfidence", "valuationRange",
   "valuation_method", "valuation_date", "valuation_confidence", "valuation_range",
   "valuationLow", "valuationHigh", "valuationFactors", "valuationMissingInfo", "valuationSources",
-  "currentValueSource", "current_value_source",
+  "currentValueSource", "current_value_source", "currentValueAsOf", "userEnteredValueAsOf",
   "previousValue", "previous_value", "includeInNetWorth", "countTowardOwner",
   "balanceHistory", "balance_history", "currency",
 ]);

@@ -17,7 +17,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { ValuationHistoryEntry, ValuationSnapshot } from "@shared/valuation/types";
+import type { ValuationHistoryEntry, ValuationSnapshot, ValuationStatusRow } from "@shared/valuation/types";
+import { perfMark, perfMeasure } from "@/lib/perf-marks";
 
 export function valuationQueryKey(profileId: string) {
   return ["/api/profiles", profileId, "valuation"] as const;
@@ -55,12 +56,18 @@ export function refreshAssetValuation(profileId: string, opts: { force?: boolean
   if (existing) return existing;
   const run = (async () => {
     lastAttemptAt.set(profileId, Date.now());
+    perfMark(`valuation:start:${profileId}`);
     let res: Response;
     try {
+      // apiRequest applies the write manifest before resolving: the mirrored
+      // profile row is already patched into every cached list (Assets cards,
+      // ownership rollups) and the asset-derived aggregates (net worth, KPI
+      // strip) are already refetching by the time we get here.
       res = await apiRequest("POST", `/api/profiles/${profileId}/valuation/refresh`, { force: !!opts.force });
     } catch {
       return null; // network failure — the stored estimate stays on screen
     }
+    perfMeasure(`valuation:complete:${profileId}`, `valuation:start:${profileId}`);
     let body: any = null;
     try { body = await res.json(); } catch { body = null; }
     let snapshot: ValuationSnapshot | null = body?.snapshot ?? null;
@@ -78,11 +85,90 @@ export function refreshAssetValuation(profileId: string, opts: { force?: boolean
     if (snapshot) {
       queryClient.setQueryData(valuationQueryKey(profileId), snapshot);
       queryClient.invalidateQueries({ queryKey: valuationHistoryQueryKey(profileId) });
+      perfMark(`valuation:cache-updated:${profileId}`);
     }
     return snapshot;
   })().finally(() => { inFlight.delete(profileId); });
   inFlight.set(profileId, run);
   return run;
+}
+
+// ─── The Assets-tab sweep ────────────────────────────────────────────────────
+// OPEN ASSETS → the list renders from stored values at once → one cheap
+// status call says which owned things need a re-valuation → those run
+// CONCURRENTLY (bounded) → each completion patches its own row and the
+// aggregates as it lands, never waiting for the rest.
+
+/** How many valuations run at once from one tab. */
+export const SWEEP_CONCURRENCY = 3;
+/** Don't re-sweep the same list more often than this from one tab. */
+const SWEEP_THROTTLE_MS = 60_000;
+let lastSweepAt = 0;
+let sweepInFlight: Promise<void> | null = null;
+
+export interface SweepProgress {
+  /** Stale assets found by the status call. */
+  total: number;
+  done: number;
+  running: boolean;
+  failed: number;
+}
+
+export function __resetSweepState(): void { lastSweepAt = 0; sweepInFlight = null; }
+
+async function runBounded<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      await fn(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
+/**
+ * Sweep every owned thing when the Assets tab is open: find the stale ones,
+ * refresh them with bounded concurrency, and report progress. One asset's
+ * failure or slowness never holds the others; a second mount while a sweep
+ * is running joins it instead of starting another.
+ */
+export function useAssetsValuationSweep(enabled: boolean): SweepProgress {
+  const [progress, setProgress] = useState<SweepProgress>({ total: 0, done: 0, running: false, failed: 0 });
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+
+  useEffect(() => {
+    if (!enabled) return;
+    if (sweepInFlight) { setProgress(p => ({ ...p, running: true })); sweepInFlight.finally(() => { if (mounted.current) setProgress(p => ({ ...p, running: false })); }); return; }
+    if (Date.now() - lastSweepAt < SWEEP_THROTTLE_MS) return;
+    lastSweepAt = Date.now();
+    const update = (patch: Partial<SweepProgress>) => { if (mounted.current) setProgress(p => ({ ...p, ...patch })); };
+    sweepInFlight = (async () => {
+      perfMark("assets:sweep:start");
+      let rows: ValuationStatusRow[] = [];
+      try {
+        const res = await apiRequest("GET", "/api/valuations/status");
+        rows = (await res.json())?.rows || [];
+      } catch {
+        return; // the list already shows stored values; nothing to sweep
+      }
+      const stale = rows.filter(r => !r.fresh).map(r => r.profileId)
+        .filter(id => !inFlight.has(id) && Date.now() - (lastAttemptAt.get(id) || 0) >= ATTEMPT_THROTTLE_MS);
+      update({ total: stale.length, done: 0, failed: 0, running: stale.length > 0 });
+      if (stale.length === 0) return;
+      let done = 0, failed = 0;
+      await runBounded(stale, SWEEP_CONCURRENCY, async (id) => {
+        const snap = await refreshAssetValuation(id);
+        done++;
+        if (!snap || snap.record?.status === "error") failed++;
+        update({ done, failed });
+      });
+      perfMeasure("assets:sweep:complete", "assets:sweep:start");
+    })().finally(() => { sweepInFlight = null; update({ running: false }); });
+  }, [enabled]);
+
+  return progress;
 }
 
 export interface UseAssetValuation {

@@ -21,6 +21,7 @@ import { isAssetTabProfile } from "@shared/asset-value";
 import { logger } from "../logger";
 import {
   assessFreshness,
+  assessListFreshness,
   buildValuationContext,
   computeValuation,
   deriveInternalEvidence,
@@ -31,8 +32,9 @@ import {
   VALUATION_MODEL_VERSION,
 } from "@shared/valuation";
 import type {
-  AssetUnderstanding, RefreshReason, ValuationContext, ValuationPlan, ValuationRecord, ValuationSnapshot,
+  AssetUnderstanding, RefreshReason, ValuationContext, ValuationPlan, ValuationRecord, ValuationSnapshot, ValuationStatusRow,
 } from "@shared/valuation/types";
+import { startTrace } from "../latency";
 import { bundleFromDetail, resolveAssetBundle } from "./resolver";
 import { runProviders } from "./providers/registry";
 import { loadCachedUnderstanding, resolveUnderstanding } from "./understanding";
@@ -121,9 +123,15 @@ function evidenceSources(record: ValuationRecord): string[] {
 }
 
 /**
- * The profile-field patch that mirrors a new estimate. Only touches
- * `currentValue` when nothing the user typed is there; always records which
- * side owns it so a later run can tell.
+ * The profile-field patch that mirrors a new estimate.
+ *
+ * `fields.currentValue` is the ONE canonical current value: the Assets list,
+ * the Overview headline, net worth, ownership shares and every rollup read
+ * it through resolveAssetValue. So a successful valuation always lands
+ * there, together with its as-of timestamp (one write, so the two can never
+ * be seen apart). A number the user typed is not lost: it moves to
+ * `userEnteredValue` (with the as-of date it had) and keeps counting as
+ * evidence in every later run.
  */
 export function mirrorPatchFor(
   fields: Record<string, any>,
@@ -138,15 +146,22 @@ export function mirrorPatchFor(
   if (record.status !== "valued" || record.value == null) {
     return { patch, previousValue, mirrored: false };
   }
-  if (hasExisting && !estimatorOwned) {
-    // The user's own number stays. Pin its provenance so a legacy marker can
-    // never reclassify it as ours.
+  // The estimate IS the user's own number (nothing else was known): mirroring
+  // it would only churn the row.
+  const onlyUserValue = record.methodology.length === 1 && record.methodology[0] === "user_verified_value";
+  if (onlyUserValue && hasExisting && !estimatorOwned) {
     if (fields.currentValueSource !== "user") patch.currentValueSource = "user";
     return { patch, previousValue, mirrored: false };
+  }
+  if (hasExisting && !estimatorOwned && fields.userEnteredValue == null) {
+    patch.userEnteredValue = Number(existing);
+    const asOf = fields.currentValueAsOf ?? fields.valueAsOf ?? null;
+    if (asOf) patch.userEnteredValueAsOf = asOf;
   }
   Object.assign(patch, {
     currentValue: record.value,
     currentValueSource: "estimate",
+    currentValueAsOf: record.valuedAt,
     previousValue: previousValue ?? 0,
     valuationMethod: record.methodSummary,
     valuationConfidence: record.confidenceLabel,
@@ -160,6 +175,45 @@ export function mirrorPatchFor(
   const sources = evidenceSources(record);
   if (sources.length) patch.valuationSources = sources.join(", ");
   return { patch, previousValue, mirrored: true };
+}
+
+/**
+ * The Assets-tab sweep: one profiles read + one valuation-store read, a
+ * profile-only fingerprint per owned thing, and a verdict each. No detail
+ * fanout, no provider, no model — the client then refreshes the stale ones
+ * concurrently through the per-asset route.
+ */
+export async function getValuationStatus(
+  storage: IStorage,
+  opts: { now?: Date; profileIds?: string[] } = {},
+): Promise<ValuationStatusRow[]> {
+  const now = opts.now ?? new Date();
+  const [profiles, records] = await Promise.all([
+    storage.getProfiles(),
+    storage.listAssetValuations().catch(() => ({} as Record<string, ValuationRecord>)),
+  ]);
+  const wanted = opts.profileIds ? new Set(opts.profileIds) : null;
+  const rows: ValuationStatusRow[] = [];
+  for (const p of profiles) {
+    if ((p as any).deletedAt) continue;
+    if (wanted && !wanted.has(p.id)) continue;
+    if (!isValuableProfile(p)) continue;
+    const record = records[p.id] ?? null;
+    const ctx = buildValuationContext({
+      profile: { id: p.id, name: p.name, type: p.type, type_key: (p as any).type_key ?? null, tags: p.tags, fields: p.fields || {}, notes: p.notes ?? null },
+    }, now);
+    const freshness = assessListFreshness(record, ctx.profileFingerprint, now, VALUATION_MODEL_VERSION);
+    rows.push({
+      profileId: p.id,
+      status: record?.status ?? "none",
+      value: record?.value ?? null,
+      valuedAt: record?.valuedAt ?? null,
+      confidenceLabel: record?.confidenceLabel ?? "none",
+      fresh: freshness.fresh,
+      reason: freshness.reason,
+    });
+  }
+  return rows;
 }
 
 function specFillsFrom(evidence: ValuationRecord["evidence"], fields: Record<string, any>): Record<string, unknown> {
@@ -219,21 +273,25 @@ export async function refreshValuation(
   const reason: RefreshReason = opts.force ? opts.reason : (freshness.reason ?? opts.reason);
   let ctx: ValuationContext = quickCtx;
   let plan: ValuationPlan = planValuation(ctx, now);
+  // Every stage of a refresh is timed and logged as one line, so "valuation
+  // is slow" names the stage (resolve / understand / providers / persist)
+  // instead of a guess.
+  const trace = startTrace("valuation", { profileId, reason });
   try {
     // Full bundle: history for trend evidence, the AI summary for the dossier,
     // and whatever understanding is already cached for this shape.
-    const cachedUnderstanding = await loadCachedUnderstanding(storage, profileId, quickCtx.signature, now);
-    const bundle = await resolveAssetBundle(storage, profileId, {
+    const cachedUnderstanding = await trace.measure("understanding.cache", () => loadCachedUnderstanding(storage, profileId, quickCtx.signature, now));
+    const bundle = await trace.measure("resolve", () => resolveAssetBundle(storage, profileId, {
       detail, includeHistory: true, includeSummary: true, understanding: cachedUnderstanding,
-    });
-    if (!bundle) return none;
+    }));
+    if (!bundle) { trace.end(); return none; }
     ctx = buildValuationContext(bundle, now);
     plan = planValuation(ctx, now);
 
     // The model is consulted only when deterministic planning came up short.
     if (plan.needsAi) {
       const allowModel = opts.allowModel ?? !!process.env.ANTHROPIC_API_KEY;
-      const understanding: AssetUnderstanding | null = await resolveUnderstanding(storage, ctx, { allowModel, now });
+      const understanding: AssetUnderstanding | null = await trace.measure("understanding.model", () => resolveUnderstanding(storage, ctx, { allowModel, now }));
       if (understanding) {
         ctx = buildValuationContext({ ...bundle, understanding }, now);
         plan = planValuation(ctx, now);
@@ -242,8 +300,9 @@ export async function refreshValuation(
 
     const internal = deriveInternalEvidence(ctx, plan, now);
     const external = plan.needsExternal
-      ? await runProviders(ctx, plan, now, { overallTimeoutMs: opts.providerBudgetMs ?? 40_000 })
+      ? await trace.measure("providers", () => runProviders(ctx, plan, now, { overallTimeoutMs: opts.providerBudgetMs ?? 40_000 }))
       : { evidence: [], failures: {}, succeeded: [], elapsedMs: 0 };
+    trace.set("providers", plan.providers.join(","));
     const evidence = [...internal, ...external.evidence];
     const failed = Object.entries(external.failures);
 
@@ -289,18 +348,20 @@ export async function refreshValuation(
     let wrote = false;
     let previousValue: number | null = null;
     if (changed) {
-      await storage.saveAssetValuation(profileId, record);
+      await trace.measure("persist.record", () => storage.saveAssetValuation(profileId, record));
       wrote = true;
       const mirror = mirrorPatchFor(detail.fields || {}, record, filledSpecs);
       previousValue = mirror.previousValue;
       if (Object.keys(mirror.patch).length > 0) {
-        await storage.updateProfile(profileId, { fields: mirror.patch } as any);
+        await trace.measure("persist.mirror", () => storage.updateProfile(profileId, { fields: mirror.patch } as any));
         // The narrative summary quotes the value; it must not keep quoting the old one.
         try { await storage.setPreference(`profile_ai_${profileId}`, ""); } catch { /* best-effort */ }
       }
     } else {
-      await storage.touchAssetValuation(profileId, record);
+      await trace.measure("persist.touch", () => storage.touchAssetValuation(profileId, record));
     }
+    trace.set("status", record.status); trace.set("changed", changed); trace.set("value", record.value);
+    trace.end();
 
     logger.info("valuation", `refreshed ${profileId}`, {
       status: record.status, value: record.value, confidence: record.confidence,
@@ -318,6 +379,7 @@ export async function refreshValuation(
     const record = errorRecord(ctx, plan, String(err?.message || err || "valuation failed"), previous, { now, refreshReason: reason, computeMs: Date.now() - started });
     record.nextRefreshAt = scheduleNextRefresh("error", plan, record.errorCount, now, false);
     try { await storage.touchAssetValuation(profileId, record); } catch { /* nothing else to do */ }
+    trace.set("error", record.error); trace.end();
     logger.warn("valuation", `refresh failed for ${profileId}: ${record.error}`);
     return {
       snapshot: { record, supported: true, inputFingerprint: ctx.inputFingerprint, freshness: assessFreshness(record, ctx.inputFingerprint, now, VALUATION_MODEL_VERSION) },

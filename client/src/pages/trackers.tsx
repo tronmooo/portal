@@ -16,6 +16,7 @@ import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp, stopPropAndDefault } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAssetsValuationSweep } from "@/hooks/useAssetValuation";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain, invalidateDomains, patchQueries } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
@@ -91,6 +92,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  RefreshCw,
   Activity,
   Plus,
   TrendingUp,
@@ -5834,6 +5836,10 @@ export default function TrackersPage() {
   const [sectionFilter, setSectionFilterRaw] = useState<"all" | "profiles" | "liabilities" | "documents" | "trackers">(() => {
     return getQuerySection() || getRouteDefaultSection(pageLoc || (typeof window !== "undefined" ? window.location.pathname : ""));
   });
+  // Assets tab sweep: the list renders from stored values immediately; the
+  // stale valuations are refreshed concurrently in the background and each
+  // one patches its own card + the net-worth aggregates as it lands.
+  const valuationSweep = useAssetsValuationSweep(sectionFilter === "profiles" && !!profiles);
   // BUG-LT01/LT02/LT03/LT04/UI02: reset section whenever the route changes
   // so /trackers, /dashboard/health, and /linked never reuse a stale tab.
   useEffect(() => {
@@ -6378,6 +6384,12 @@ export default function TrackersPage() {
 
       {sectionFilter === "profiles" && assetTypeOptions.length > 1 && (
         <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-assets">
+          {valuationSweep.running && (
+            <span className="text-[11px] text-muted-foreground flex items-center gap-1 mr-1" data-testid="assets-valuation-sweep">
+              <RefreshCw className="h-3 w-3 animate-spin" />
+              Updating values{valuationSweep.total > 0 ? ` · ${valuationSweep.done} of ${valuationSweep.total}` : "…"}
+            </span>
+          )}
           <button
             onClick={() => { setAssetTypeFilter("all"); setAssetNesting("all"); }}
             className={`px-2 py-0.5 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${assetTypeFilter === "all" && assetNestingFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted border border-border/50"}`}

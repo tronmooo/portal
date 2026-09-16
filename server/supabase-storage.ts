@@ -8119,6 +8119,18 @@ export class SupabaseStorage implements IStorage {
   async cacheValuationUnderstanding(profileId: string, understanding: import("@shared/valuation/types").AssetUnderstanding): Promise<void> {
     await this.setPreference(understandingKey(profileId), JSON.stringify(understanding));
   }
+  async listAssetValuations() {
+    const prefix = valuationKey("");
+    const { data, error } = await this.supabase.from("preferences").select("key,value")
+      .eq("user_id", this.userId).like("key", `${prefix}%`);
+    if (error) throw error;
+    const out: Record<string, import("@shared/valuation/types").ValuationRecord> = {};
+    for (const row of data || []) {
+      const rec = readValuationRecord(row.value);
+      if (rec) out[String(row.key).slice(prefix.length)] = rec;
+    }
+    return out;
+  }
 
   async setPreference(key: string, value: string): Promise<void> {
     // Upsert: try update, then insert. maybeSingle — a missing row is the

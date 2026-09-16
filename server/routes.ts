@@ -35,7 +35,7 @@ import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersi
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
-import { getValuationSnapshot, refreshValuation, isValuableProfile } from "./valuation/service";
+import { getValuationSnapshot, refreshValuation, isValuableProfile, getValuationStatus } from "./valuation/service";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
@@ -5360,6 +5360,11 @@ ${JSON.stringify(ctx, null, 2)}`;
       const typed = f.currentValue ?? f.current_value;
       if (typed !== undefined && typed !== null && String(typed).trim() !== "" && f.currentValueSource === undefined) {
         f.currentValueSource = "user";
+        // A typed value is as of today unless the form said otherwise, so the
+        // estimator can weigh it by age and the UI can show when it was set.
+        if (f.currentValueAsOf === undefined) f.currentValueAsOf = new Date().toISOString();
+        // A newer typed value supersedes the one kept from before.
+        if (f.userEnteredValue === undefined) { f.userEnteredValue = null; f.userEnteredValueAsOf = null; }
       }
     }
     const previousName: string | undefined = renamedFromName;
@@ -5950,6 +5955,15 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       ? await storage.getAssetValuationHistory(id).catch(() => [])
       : undefined;
     res.json(history ? { ...snapshot, history } : snapshot);
+  }));
+
+  // The Assets-tab sweep: one row per owned thing with its stored estimate and
+  // whether a background refresh is due. Two reads, no fanout, no providers.
+  app.get("/api/valuations/status", asyncHandler(async (req, res) => {
+    const idsParam = typeof req.query.ids === "string" ? req.query.ids : undefined;
+    const profileIds = idsParam ? idsParam.split(",").filter(Boolean) : undefined;
+    const rows = await getValuationStatus(storage, { profileIds });
+    res.json({ rows, checkedAt: new Date().toISOString() });
   }));
 
   app.post("/api/profiles/:id/valuation/refresh", asyncHandler(async (req, res) => {
