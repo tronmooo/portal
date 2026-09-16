@@ -28,7 +28,7 @@ import { isCalendarDay } from "./schema";
 // 410000, not -410000). `accountSignedBalance()` is the ONLY place that applies
 // the debt sign, so nothing downstream has to remember the rule.
 
-import { parseMoney } from "./asset-value";
+import { parseMoney, isNetWorthLiabilityProfile, resolveLiabilityBalance } from "./asset-value";
 import {
   ACCOUNT_KINDS, accountKindMeta, accountKindOf, isDebtAccount, isDebtAccountKind,
   normalizeAccountKind, type AccountKind, type AccountKindMeta,
@@ -484,4 +484,29 @@ export function reconcileAccountBalanceFields(profile: any): Record<string, any>
     return cur == null ? v != null : Math.abs(cur - Number(v)) > 0.005;
   });
   return drifted ? patch : null;
+}
+
+/**
+ * Loan and credit-card debt tracked as LIABILITY profiles rather than as
+ * accounts.
+ *
+ * `summarizeAccounts` only ever looked at account-type rows, so the Accounts
+ * rollup reported "Loan balances $0" while the Liabilities card right below it
+ * showed $50,797 for the same car loan — one screen, two answers to "do I owe
+ * anything". These figures are for those two tiles only: they deliberately do
+ * NOT enter `totalDebt` or `net`, which stay strictly about accounts.
+ */
+export function summarizeLiabilityDebt(profiles: readonly any[]): { loanDebt: number; creditDebt: number } {
+  let loanDebt = 0;
+  let creditDebt = 0;
+  for (const p of profiles || []) {
+    if (isAccountProfile(p)) continue;        // already in summarizeAccounts
+    if (!isNetWorthLiabilityProfile(p)) continue;
+    const bal = resolveLiabilityBalance(p?.fields ?? p);
+    if (!(bal > 0)) continue;
+    const key = String((p as any).type_key ?? (p as any).typeKey ?? "").toLowerCase();
+    if (key === "credit_card" || key === "line_of_credit" || key === "credit_line") creditDebt += bal;
+    else loanDebt += bal;
+  }
+  return { loanDebt: round2(loanDebt), creditDebt: round2(creditDebt) };
 }

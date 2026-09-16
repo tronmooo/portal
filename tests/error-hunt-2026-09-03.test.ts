@@ -3835,7 +3835,9 @@ describe("D287 the add-expense form checks cents before the optimistic close", (
     const src = readFileSync(new URL("../client/src/pages/finance.tsx", import.meta.url), "utf8");
     expect(src).toContain('import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE } from "@shared/schema";');
     const i = src.indexOf("if (!isWholeCents(amt)) {");
-    const j = src.indexOf("addExpenseMutation.mutate({", i);
+    // The payload is now built into a local first (the duplicate guard needs
+    // it), so match the mutate call rather than an inline object literal.
+    const j = src.indexOf("addExpenseMutation.mutate(payload)", i);
     expect(i).toBeGreaterThan(0); expect(j).toBeGreaterThan(i);
     expect(src.slice(i, j)).toContain("toast({ title: SUB_CENT_AMOUNT_MESSAGE, variant: \"destructive\" });");
   });

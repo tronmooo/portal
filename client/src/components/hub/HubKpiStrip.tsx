@@ -12,7 +12,7 @@
 // /api/trackers (not bootstrap-seeded): the HEALTH chip shows "—" until it
 // lands, and its key/URL match the trackers page exactly so the cache is
 // shared with the Trackers tab.
-import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { sumMonthIncomeNow } from "@shared/obligation-windows";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useState, useMemo, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -158,13 +158,18 @@ export function HubKpiStrip() {
   const snap = enhanced?.financeSnapshot;
   const netWorth = snap != null ? (snap.totalAssetValue ?? 0) - (snap.totalLiabilities ?? 0) : null;
 
-  // CASH FLOW — mirrors HeroKPISection's definition exactly: monthly incomes
-  // minus (month expenses + monthlyized active obligations).
+  // CASH FLOW — the ONE definition, straight off the snapshot:
+  //   IN  = recurring income + paychecks actually received
+  //   OUT = month expenses + bill money still owed this month
+  // OUT was `expenses + monthly-equivalent of every bill`, so every bill that
+  // had already been paid was counted twice (paying one writes an expense).
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
-  const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
+  const monthlyIncome = snap?.monthlyIncome != null
+    ? Number(snap.monthlyIncome) || 0
+    : sumMonthIncomeNow(incomes, null, BROWSER_TIMEZONE);
   const monthlySpend = snap?.totalMonthlySpend ?? stats?.monthlySpend;
   const cashFlow = monthlySpend != null
-    ? monthlyIncome - (monthlySpend + (snap?.monthlyObligationTotal ?? 0))
+    ? monthlyIncome - (monthlySpend + Number(snap?.unpaidBillsThisMonth ?? snap?.monthlyObligationTotal ?? 0))
     : null;
 
   // WELLNESS — the SAME score the Wellness tab shows, computed by the same

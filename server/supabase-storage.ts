@@ -78,7 +78,7 @@ import {
   isLiabilityProfile,
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
-import { isRecurringBill, isRecurringBillProfile } from "../shared/liability-types";
+import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName } from "../shared/liability-types";
 import {
   addCharge, removeCharge, setEstimate, setActual, normalizeBillingModel,
   resolveBillingModel, resolveOccurrenceAmount, billingModelMeta,
@@ -99,7 +99,7 @@ import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
-import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency } from "../shared/obligation-windows";
+import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth } from "../shared/obligation-windows";
 
 // PostgREST `.or()` filters are built by string concatenation, so a value
 // containing `,` `(` `)` or `.` breaks out of its operand and appends
@@ -5625,8 +5625,10 @@ export class SupabaseStorage implements IStorage {
 
   /** Normalize a liability/bill name for identity: drop a trailing "payment"
    *  suffix, collapse whitespace, lowercase. "Water Bill payment" ≡ "Water Bill". */
+  // ONE definition of the bill/loan pairing name rule, shared with the payment
+  // path (server/liability-payments.ts) so the two cannot drift.
   private normLiabilityName(n: string): string {
-    return String(n || "").toLowerCase().replace(/\s+(bill\s+)?payments?$/i, "").replace(/\s+/g, " ").trim();
+    return normalizeLiabilityName(n);
   }
 
   /** Find an existing liability profile that IS this one (same normalized name,
@@ -5708,8 +5710,16 @@ export class SupabaseStorage implements IStorage {
     // (fields.linkedLiabilityId), so the two stay related without merging.
     const profiles = await this.getProfiles();
     const existing = await this.resolveExistingLiability(rawName, parent, profiles, { billShellsOnly: true });
-    const paysFor = existing ? undefined : await this.resolveExistingLiability(rawName, parent, profiles);
-    if (paysFor) billFields.linkedLiabilityId = paysFor.id;
+    // Which debt this bill PAYS, recorded whether or not a bill shell of the
+    // same name already exists. It used to be resolved only on the
+    // never-seen-before branch, so a bill created twice (or created as a shell
+    // first, which is the common path) ended up with no link at all — every
+    // bill in the field carries a null linkedLiabilityId, which is why paying
+    // a car-loan bill never moved the car loan.
+    const paysFor = await this.resolveExistingLiability(rawName, parent, profiles);
+    if (paysFor && paysFor.id !== existing?.id && !isRecurringBillProfile(paysFor)) {
+      billFields.linkedLiabilityId = paysFor.id;
+    }
     if (existing) {
       await this.updateProfile(existing.id, {
         name: rawName,
@@ -7492,12 +7502,18 @@ export class SupabaseStorage implements IStorage {
     // the bootstrap's sibling unfiltered reads — see getStats for rationale.
     // The passesProfileFilter pass below stays the correctness authority.
     const _dbFilterIdsEnh = (fpIds && !_selfInFilterEnh && !opts?.sharedFetches) ? fpIds : undefined;
-    const [documents, rawTrackers, rawExpenses, rawObligations, rawTasks, rawEvents, allAssetLinks, allLiabLinks] = await Promise.all([
+    const [documents, rawTrackers, rawExpenses, rawObligations, rawTasks, rawEvents, allAssetLinks, allLiabLinks, rawIncomes, rawPaychecks] = await Promise.all([
       this.getDocuments(_dbFilterIdsEnh), this.getTrackers(undefined, _dbFilterIdsEnh),
       this.getExpenses(_dbFilterIdsEnh), this.getObligations(_dbFilterIdsEnh),
       this.getTasks(_dbFilterIdsEnh), this.getEvents(_dbFilterIdsEnh),
       assetLinksPromise,
       liabLinksPromise,
+      // Income lives in TWO tables and the snapshot read neither: the cash-flow
+      // IN leg was computed client-side from streams alone, so a received
+      // paycheck was invisible on every surface. The snapshot now owns the one
+      // income figure (financeSnapshot.monthlyIncome) and everybody reads it.
+      this.getIncomes(_dbFilterIdsEnh).catch(() => [] as any[]),
+      this.getPaychecks().catch(() => [] as any[]),
     ]);
     // Per-asset / per-liability explicit ownership links, in the shape the
     // shared ownership-model consumes. The model is the SINGLE SOURCE OF TRUTH:
@@ -7547,6 +7563,12 @@ export class SupabaseStorage implements IStorage {
       ? await this.getExpenses(expenseScopeIdsEnh) : rawExpenses;
     const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh));
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
+    // Same canonical scope rule the /api/incomes and /api/paychecks routes
+    // apply, so the snapshot's income total equals the lists the Finance tab
+    // renders. Paychecks carry no links today, so they read as orphans and
+    // fall to Self — exactly what /api/paychecks does.
+    const allIncomesEnh = (rawIncomes as any[]).filter(i => matchesProfileEnhanced((i as any).linkedProfiles));
+    const allPaychecksEnh = (rawPaychecks as any[]).filter(p => matchesProfileEnhanced((p as any).linkedProfiles));
     const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles));
     const allEvents = rawEvents.filter(e => matchesProfileEnhanced(e.linkedProfiles));
     // Filter documents by profile
@@ -7691,6 +7713,27 @@ export class SupabaseStorage implements IStorage {
       0,
     );
 
+    // ── The cash-flow terms, computed HERE so every surface shows one number ─
+    //
+    // Outflow was `totalMonthlySpend + monthlyObligationTotal` on the Finance
+    // tab, the hub strip, the executive card and the dashboard alike. Paying a
+    // bill writes an expense (server/liability-payments.ts §4), so a paid bill
+    // sat in both terms and paying it pushed OUTFLOW UP by its own amount.
+    // The monthly-equivalent term was also blind to due dates, so October's
+    // bills were September outflow.
+    //
+    // `unpaidBillsThisMonth` is the honest second term: the bill money still
+    // owed on or before month end. Paying an occurrence advances its due date
+    // out of the window, so the amount moves from this term into
+    // totalMonthlySpend and the sum of the two does not move.
+    const unpaidBillsThisMonth = sumBillsDueThroughMonth(allObligations as any[], userYearMonth);
+    // Income: recurring streams that had started by this month PLUS the
+    // paychecks that actually landed in it. Marking a paycheck received used
+    // to move nothing at all (INCOME · MTD stayed $0, savings rate stayed "—").
+    const receivedPaycheckIncome = sumReceivedPaychecksForMonth(allPaychecksEnh as any[], userYearMonth);
+    const recurringIncome = sumMonthlyIncomeForMonth(allIncomesEnh as any[], userYearMonth);
+    const monthlyIncome = recurringIncome + receivedPaycheckIncome;
+
     // Calendar days in the user's zone: `new Date("YYYY-MM-DD") < now` listed a
     // task due TODAY as overdue on the dashboard widget for the whole day.
     const overdueTasks = allTasks.filter(t => { if (t.status === 'done' || !t.dueDate) return false; const dueDay = localDayOf(t.dueDate, this._timezone); return !!dueDay && dueDay < today; }).map(t => ({ id: t.id, title: t.title, dueDate: t.dueDate!, priority: t.priority }));
@@ -7755,6 +7798,13 @@ export class SupabaseStorage implements IStorage {
         spendTrend: lastMonthTotal > 0 ? Math.round(((totalMonthlySpend - lastMonthTotal) / lastMonthTotal) * 100) : (totalMonthlySpend > 0 ? 100 : 0),
         spendByCategory, upcomingBills,
         monthlyObligationTotal,
+        // See the block where these are computed. Cash flow on EVERY surface is
+        //   IN  = monthlyIncome
+        //   OUT = totalMonthlySpend + unpaidBillsThisMonth
+        unpaidBillsThisMonth,
+        monthlyIncome,
+        recurringIncome,
+        receivedPaycheckIncome,
         totalAssetValue: (() => {
           // Asset profiles: vehicles, real estate, investments, accounts, generic assets, even loans
           // (a loan profile may carry the asset's market value separately from its remaining balance).
