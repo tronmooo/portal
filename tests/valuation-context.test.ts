@@ -125,6 +125,24 @@ describe("user value vs estimator value", () => {
     const ctx = buildValuationContext(bundle({ balance: 5200, balanceAsOf: "2026-09-01" }, {}, { type: "account", name: "Savings" }), NOW);
     expect(ctx.userValue).toEqual({ value: 5200, asOf: "2026-09-01", key: "balance" });
   });
+  it("a kept userEnteredValue is the user's evidence even after the estimate took over currentValue", () => {
+    const ctx = buildValuationContext(bundle({ make: "Honda", currentValue: 987, currentValueSource: "estimate", currentValueAsOf: "2026-09-16T00:00:00Z", userEnteredValue: 1200, userEnteredValueAsOf: "2026-08-01" }), NOW);
+    expect(ctx.userValue).toEqual({ value: 1200, asOf: "2026-08-01", key: "userEnteredValue" });
+    expect(ctx.estimatorValue).toBe(987);
+  });
+  it("the as-of date never falls back to the row's updatedAt (that would churn the fingerprint)", () => {
+    const a = buildValuationContext(bundle({ make: "Honda", currentValue: 20000 }, {}, { updatedAt: "2026-09-01T00:00:00Z" }), NOW);
+    const b = buildValuationContext(bundle({ make: "Honda", currentValue: 20000 }, {}, { updatedAt: "2026-09-16T00:00:00Z" }), NOW);
+    expect(a.userValue?.asOf).toBeNull();
+    expect(a.inputFingerprint).toBe(b.inputFingerprint);
+  });
+  it("profileFingerprint ignores linked-record facts, inputFingerprint does not", () => {
+    const base = buildValuationContext(bundle({ make: "Honda", model: "CR-V" }), NOW);
+    const withExpense = buildValuationContext(bundle({ make: "Honda", model: "CR-V" }, { expenses: [{ description: "New tires installed", amount: 800, date: "2026-03-01" }] }), NOW);
+    expect(withExpense.profileFingerprint).toBe(base.profileFingerprint);
+    expect(withExpense.inputFingerprint).not.toBe(base.inputFingerprint);
+    expect(buildValuationContext(bundle({ make: "Honda", model: "CR-V", mileage: 1 }), NOW).profileFingerprint).not.toBe(base.profileFingerprint);
+  });
 });
 
 describe("evidence pulled from related records", () => {

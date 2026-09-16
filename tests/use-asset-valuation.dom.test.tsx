@@ -20,7 +20,7 @@ const { apiRequest, calls, queryClient } = vi.hoisted(() => {
 vi.mock("@/lib/queryClient", () => ({ queryClient, apiRequest, BROWSER_TIMEZONE: "UTC" }));
 
 import { CurrentValueCard } from "@/components/asset/CurrentValueCard";
-import { __resetValuationRefreshState, valuationQueryKey } from "@/hooks/useAssetValuation";
+import { __resetValuationRefreshState, __resetSweepState, valuationQueryKey, useAssetsValuationSweep, SWEEP_CONCURRENCY } from "@/hooks/useAssetValuation";
 import type { ValuationRecord, ValuationSnapshot } from "@shared/valuation/types";
 
 function json(body: any, status = 200) {
@@ -48,6 +48,7 @@ beforeEach(() => {
   calls.length = 0;
   queryClient.clear();
   __resetValuationRefreshState();
+  __resetSweepState();
   apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
     calls.push({ method, url, body });
     const m = url.match(/\/api\/profiles\/([^/]+)\/valuation(\/refresh)?/);
@@ -170,5 +171,69 @@ describe("CurrentValueCard + useAssetValuation", () => {
     await waitFor(() => expect(screen.getByTestId("current-value-amount").textContent).toBe("$22,000"));
     expect(calls.filter(c => c.url.endsWith("/refresh"))).toHaveLength(1);
     vi.useRealTimers();
+  });
+});
+
+function SweepProbe({ enabled }: { enabled: boolean }) {
+  const p = useAssetsValuationSweep(enabled);
+  return <div data-testid="sweep">{p.running ? "running" : "idle"} {p.done}/{p.total} failed={p.failed}</div>;
+}
+
+describe("Assets-tab sweep (useAssetsValuationSweep)", () => {
+  it("refreshes only the stale assets, concurrently but bounded, and reports progress as each lands", async () => {
+    const releases: Record<string, (r: Response) => void> = {};
+    let maxInFlight = 0, inFlightNow = 0;
+    apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
+      calls.push({ method, url, body });
+      if (url === "/api/valuations/status") {
+        return json({ rows: [
+          { profileId: "a", fresh: false, reason: "first_valuation" }, { profileId: "b", fresh: false, reason: "scheduled" },
+          { profileId: "c", fresh: true, reason: null }, { profileId: "d", fresh: false, reason: "inputs_changed" },
+          { profileId: "e", fresh: false, reason: "scheduled" },
+        ] });
+      }
+      const m = url.match(/\/api\/profiles\/([^/]+)\/valuation\/refresh/);
+      if (m) {
+        inFlightNow++; maxInFlight = Math.max(maxInFlight, inFlightNow);
+        return new Promise<Response>(r => { releases[m[1]] = (res) => { inFlightNow--; r(res); }; });
+      }
+      return json({});
+    });
+    render(<QueryClientProvider client={queryClient}><SweepProbe enabled /></QueryClientProvider>);
+    await waitFor(() => expect(Object.keys(releases).length).toBe(SWEEP_CONCURRENCY));
+    expect(screen.getByTestId("sweep").textContent).toBe("running 0/4 failed=0");
+    expect(releases.c).toBeUndefined(); // fresh — never refreshed
+    releases.a(json({ snapshot: snapshot(record(10), true), ran: true, changed: true }));
+    await waitFor(() => expect(screen.getByTestId("sweep").textContent).toBe("running 1/4 failed=0"));
+    // The next one started as soon as a slot freed — without waiting for b or d.
+    await waitFor(() => expect(Object.keys(releases).length).toBe(4));
+    for (const id of ["b", "d", "e"]) releases[id]?.(json({ snapshot: snapshot(record(20), true), ran: true, changed: true }));
+    await waitFor(() => expect(screen.getByTestId("sweep").textContent).toBe("idle 4/4 failed=0"));
+    expect(maxInFlight).toBe(SWEEP_CONCURRENCY);
+    expect(calls.filter(c => c.url.includes("/refresh")).map(c => c.url).sort()).toEqual(["a", "b", "d", "e"].map(id => `/api/profiles/${id}/valuation/refresh`));
+    expect((queryClient.getQueryData(valuationQueryKey("a")) as ValuationSnapshot).record?.value).toBe(10);
+  });
+
+  it("a second Assets mount during a sweep joins it; one failure does not stop the rest", async () => {
+    apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
+      calls.push({ method, url, body });
+      if (url === "/api/valuations/status") return json({ rows: [{ profileId: "a", fresh: false }, { profileId: "b", fresh: false }] });
+      if (url.includes("/a/valuation/refresh")) throw new Error("network");
+      if (url.includes("/refresh")) return json({ snapshot: snapshot(record(5), true), ran: true, changed: true });
+      return json({});
+    });
+    const first = render(<QueryClientProvider client={queryClient}><SweepProbe enabled /></QueryClientProvider>);
+    render(<QueryClientProvider client={queryClient}><SweepProbe enabled /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getAllByTestId("sweep")[0].textContent).toBe("idle 2/2 failed=1"));
+    expect(calls.filter(c => c.url === "/api/valuations/status")).toHaveLength(1);
+    expect(calls.filter(c => c.url.includes("/refresh"))).toHaveLength(2);
+    expect((queryClient.getQueryData(valuationQueryKey("b")) as ValuationSnapshot).record?.value).toBe(5);
+    first.unmount();
+  });
+
+  it("does nothing while the Assets tab is not the active section", async () => {
+    render(<QueryClientProvider client={queryClient}><SweepProbe enabled={false} /></QueryClientProvider>);
+    await new Promise(r => setTimeout(r, 30));
+    expect(calls).toHaveLength(0);
   });
 });

@@ -250,9 +250,10 @@ describe("a lab VALUE is never a dose ledger", () => {
 describe("EVERY explicit log action is an occurrence, not a re-send", () => {
   // The reported bug was medication-shaped, but the cause is general: two
   // identical logs minutes apart are two events on ANY tracker.
+  // Every file that creates a tracker entry from a user action. Keep this in
+  // step with the sweep: `grep -rn '/entries`' client/src`.
   const CLIENT = [
     "client/src/pages/trackers.tsx",
-    "client/src/pages/wellness.tsx",
     "client/src/pages/profile-detail.tsx",
   ];
 
@@ -279,11 +280,10 @@ describe("EVERY explicit log action is an occurrence, not a re-send", () => {
       const src = readFileSync(resolve(__dirname, "..", rel), "utf8");
       return (src.match(/allowDuplicate: true/g) || []).length;
     });
-    // trackers page: med button + entry form + quick-log. wellness: quick-log.
+    // trackers page: med button + entry form + quick-log + undo-restore.
     // profile detail: log dialog + optimistic log.
-    expect(counts[0]).toBeGreaterThanOrEqual(3);
-    expect(counts[1]).toBeGreaterThanOrEqual(1);
-    expect(counts[2]).toBeGreaterThanOrEqual(2);
+    expect(counts[0]).toBeGreaterThanOrEqual(4);
+    expect(counts[1]).toBeGreaterThanOrEqual(2);
   });
 });
 

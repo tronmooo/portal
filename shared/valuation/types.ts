@@ -180,6 +180,8 @@ export interface ValuationContext {
   /** The facts the fingerprint is computed over — what the valuation depends on. */
   materialInputs: Record<string, unknown>;
   inputFingerprint: string;
+  /** Fingerprint over the profile-row facts only (no linked records) — computable from the profiles list. */
+  profileFingerprint: string;
   /** Structural signature (keys, not values) for caching the semantic understanding. */
   signature: string;
   /** 0..1 — how much usable information there is. */
@@ -228,6 +230,8 @@ export interface ValuationRecord {
   evidence: ValuationEvidence[];
   materialInputs: Record<string, unknown>;
   inputFingerprint: string;
+  /** See ValuationContext.profileFingerprint. Absent on records written before it existed. */
+  profileFingerprint?: string;
   /** Newest observation time among market evidence; null when none was used. */
   marketDataAsOf: string | null;
   /** How old market evidence may get before this record is stale. */
@@ -265,6 +269,17 @@ export interface FreshnessVerdict {
   reason: RefreshReason | null;
   /** A refresh already running elsewhere would make this moot. */
   detail: string;
+}
+
+/** One row of the Assets-tab sweep: what is stored and whether it needs a refresh. */
+export interface ValuationStatusRow {
+  profileId: string;
+  status: ValuationStatus | "none";
+  value: number | null;
+  valuedAt: string | null;
+  confidenceLabel: ValuationRecord["confidenceLabel"];
+  fresh: boolean;
+  reason: RefreshReason | null;
 }
 
 export interface ValuationSnapshot {

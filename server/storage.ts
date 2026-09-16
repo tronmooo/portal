@@ -280,6 +280,8 @@ export interface IStorage {
   /** Bookkeeping-only rewrite (checkedAt / retry backoff): not journaled, nothing to invalidate. */
   touchAssetValuation(profileId: string, record: import("@shared/valuation/types").ValuationRecord): Promise<void>;
   getAssetValuationHistory(profileId: string, limit?: number): Promise<import("@shared/valuation/types").ValuationHistoryEntry[]>;
+  /** Every stored latest record for this user, keyed by profile id (one read for the Assets-tab sweep). */
+  listAssetValuations(): Promise<Record<string, import("@shared/valuation/types").ValuationRecord>>;
   /** The cached semantic understanding of an asset's shape (server/valuation/understanding). Not journaled: it is a cache, not user data. */
   getValuationUnderstanding(profileId: string): Promise<import("@shared/valuation/types").AssetUnderstanding | null>;
   cacheValuationUnderstanding(profileId: string, understanding: import("@shared/valuation/types").AssetUnderstanding): Promise<void>;
@@ -1315,7 +1317,7 @@ export class MemStorage implements IStorage {
     const { _enrichment: enrichmentMeta, ...rawInput } = { ...data.values } as Record<string, any>;
     // Same unit + value gates as SupabaseStorage.logEntry — every write path, one rule.
     const rawValues = normalizeTrackerEntry(tracker as any, rawInput).values;
-    const guard = sanitizeTrackerEntryValues(tracker.fields, rawValues);
+    const guard = sanitizeTrackerEntryValues(tracker.fields, rawValues, { name: tracker.name, category: tracker.category, unit: (tracker as any).unit });
     if (guard.error) throw new Error(guard.error);
     const values = guard.values;
     // Owner context (body weight / age / sex) for the calorie estimate — the
@@ -2744,6 +2746,16 @@ export class MemStorage implements IStorage {
   }
   async cacheValuationUnderstanding(profileId: string, understanding: import("@shared/valuation/types").AssetUnderstanding): Promise<void> {
     await this.setPreference(understandingKey(profileId), JSON.stringify(understanding));
+  }
+  async listAssetValuations() {
+    const out: Record<string, import("@shared/valuation/types").ValuationRecord> = {};
+    const prefix = valuationKey("");
+    for (const [k, v] of this.preferences) {
+      if (!k.startsWith(prefix)) continue;
+      const rec = readValuationRecord(v);
+      if (rec) out[k.slice(prefix.length)] = rec;
+    }
+    return out;
   }
 
   // Income stubs (in-memory)

@@ -36,7 +36,7 @@ import { logger } from "./logger";
 
 /** Actions we trace. Keeping this a union means a typo can't create a
  *  silently separate metric stream. */
-export type TraceKind = "chat" | "mutation" | "document" | "upload" | "query";
+export type TraceKind = "chat" | "mutation" | "document" | "upload" | "query" | "valuation";
 
 /** Above this, a trace is a performance event and logs in full. */
 const SLOW_THRESHOLD_MS: Record<TraceKind, number> = {
@@ -45,6 +45,7 @@ const SLOW_THRESHOLD_MS: Record<TraceKind, number> = {
   document: 1_500,
   upload: 10_000,
   query: 500,
+  valuation: 3_000,
 };
 
 export interface StageRecord {

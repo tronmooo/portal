@@ -33,7 +33,7 @@ const PRIOR_VALUATION_KEYS = new Set([
   "currentvalue", "previousvalue", "estimatedvalue", "estimatedcurrentvalue",
   "valuationmethod", "valuationconfidence", "valuationrange", "valuationdate",
   "valuationlow", "valuationhigh", "valuationfactors", "valuationmissinginfo",
-  "valuationsources", "lastvaluedat", "currentvaluesource",
+  "valuationsources", "lastvaluedat", "currentvaluesource", "currentvalueasof",
 ]);
 export function isPriorValuationKey(key: string): boolean {
   return PRIOR_VALUATION_KEYS.has(String(key || "").toLowerCase());
@@ -171,6 +171,8 @@ export function buildValuationContext(bundle: AssetDataBundle, now: Date = new D
     if (key.startsWith("_")) continue;
     if (isPriorValuationKey(key) || isAdministrativeKey(key)) continue;
     if (SENSITIVE_KEY_RE.test(key)) continue;
+    // Captured as userValue below — not a characteristic of the thing.
+    if (/^user_?entered_?value/i.test(key)) continue;
     const scalar = normalizeScalar(value);
     if (scalar === null) continue;
     const sem = fieldSemantics(key, value);
@@ -226,18 +228,33 @@ export function buildValuationContext(bundle: AssetDataBundle, now: Date = new D
   const quantity = quantityKey ? num(fields[quantityKey]) : null;
 
   // ── What the user says it's worth vs what the estimator last wrote ──
+  // `fields.currentValue` is the CANONICAL current value every screen reads.
+  // Once the estimator has mirrored an estimate into it, the number the user
+  // typed before lives on in `userEnteredValue` (with its own as-of date) and
+  // keeps counting as evidence. The as-of date comes only from explicit
+  // fields — never from the row's updatedAt, which moves on every write and
+  // would make the fingerprint churn (the "re-check due right after an
+  // update" loop).
   const estimatorOwned = isEstimatorOwnedValue(fields);
   let userValue: ValuationContext["userValue"] = null;
   let estimatorValue: number | null = null;
+  const explicitAsOf = (...keys: string[]) => {
+    for (const k of keys) { const d = isoDate(fields[k]); if (d) return d; }
+    return null;
+  };
+  const kept = num(fields.userEnteredValue ?? fields.user_entered_value);
+  if (kept != null && kept > 0) {
+    userValue = { value: kept, asOf: explicitAsOf("userEnteredValueAsOf", "user_entered_value_as_of"), key: "userEnteredValue" };
+  }
   const valueKey = firstKey(fields, USER_VALUE_KEYS);
   if (valueKey) {
     const v = num(fields[valueKey]);
     if (v != null && v > 0) {
       const isMirrorKey = /^(currentValue|current_value)$/.test(valueKey);
       if (isMirrorKey && estimatorOwned) estimatorValue = v;
-      else userValue = {
+      else if (!userValue) userValue = {
         value: v,
-        asOf: isoDate(fields.currentValueAsOf ?? fields.valueAsOf ?? fields.balanceAsOf ?? fields.balance_as_of ?? fields.lastAppraisedDate ?? null) ?? isoDate(p.updatedAt) ?? null,
+        asOf: explicitAsOf("currentValueAsOf", "valueAsOf", "balanceAsOf", "balance_as_of", "lastAppraisedDate"),
         key: valueKey,
       };
     }
@@ -339,6 +356,15 @@ export function buildValuationContext(bundle: AssetDataBundle, now: Date = new D
     notesSignals,
   };
   const inputFingerprint = stableHash(stableStringify(materialInputs));
+  // The profile-only part: everything above that comes from the profile row
+  // itself (not from linked expenses / documents). The Assets-tab sweep can
+  // compute this from the plain profiles list, with no per-asset detail
+  // fanout, to decide which assets need a background re-valuation.
+  const { improvements: _imp, appraisals: _apr, ...profileOnly } = materialInputs;
+  const profileFingerprint = stableHash(stableStringify({
+    ...profileOnly,
+    fieldAppraisals: appraisals.filter(a => a.source.startsWith("field:")).map(a => ({ value: a.value, date: a.date, source: a.source })),
+  }));
   if (aiSymbol) identifiers.symbol = aiSymbol;
 
   const signature = stableHash(stableStringify({
@@ -391,6 +417,7 @@ export function buildValuationContext(bundle: AssetDataBundle, now: Date = new D
     understanding: bundle.understanding || null,
     materialInputs,
     inputFingerprint,
+    profileFingerprint,
     signature,
     dataQuality: quality,
     sparse: quality < 0.2,

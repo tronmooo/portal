@@ -57,6 +57,26 @@ export function marketEvidenceAge(record: ValuationRecord, now: Date): number | 
   return now.getTime() - Math.max(...times);
 }
 
+/**
+ * The Assets-tab sweep verdict: like assessFreshness, but the only fingerprint
+ * available is the profile-row one (no per-asset detail was loaded). A change
+ * in linked records is caught when the profile itself is opened.
+ */
+export function assessListFreshness(
+  record: ValuationRecord | null,
+  currentProfileFingerprint: string,
+  now: Date = new Date(),
+  modelVersion: string = VALUATION_MODEL_VERSION,
+): FreshnessVerdict {
+  if (!record) return { fresh: false, reason: "first_valuation", detail: "No valuation stored yet" };
+  if (record.profileFingerprint !== undefined && record.profileFingerprint !== currentProfileFingerprint) {
+    return { fresh: false, reason: "inputs_changed", detail: "Asset information changed since the last valuation" };
+  }
+  // Same profile facts → let the time-based rules decide, with the stored
+  // full fingerprint standing in for itself.
+  return assessFreshness(record, record.inputFingerprint, now, modelVersion);
+}
+
 export function assessFreshness(
   record: ValuationRecord | null,
   currentFingerprint: string,

@@ -69,7 +69,11 @@ export function CurrentValueCard({
   if (!snapshot || !snapshot.supported) return null;
   const record = snapshot.record;
 
-  const userOwned = fields && !isEstimatorOwnedValue(fields) ? parseMoney(fields.currentValue ?? fields.current_value) : 0;
+  // The number the user typed: kept in userEnteredValue once an estimate has
+  // become the canonical currentValue, or still in currentValue before then.
+  const userOwned = fields
+    ? (parseMoney(fields.userEnteredValue) || (!isEstimatorOwnedValue(fields) ? parseMoney(fields.currentValue ?? fields.current_value) : 0))
+    : 0;
   const stale = !snapshot.freshness.fresh;
 
   return (
@@ -115,7 +119,7 @@ export function CurrentValueCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground" data-testid="current-value-meta">
-          {record?.valuedAt && <span>Updated {relative(record.valuedAt)}</span>}
+          {record?.valuedAt && <span title={record.valuedAt}>Valued {relative(record.valuedAt)}</span>}
           {refreshing && <span className="text-primary" data-testid="current-value-refreshing">Refreshing in background…</span>}
           {!refreshing && stale && record && <span>Re-check due ({snapshot.freshness.reason?.replace(/_/g, " ")})</span>}
           {record?.methodSummary && <span className="truncate max-w-full">Method: {record.methodSummary}</span>}

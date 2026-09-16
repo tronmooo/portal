@@ -32,11 +32,12 @@ const REQUIRED: Record<string, string[]> = {
     "button-add-expense", "button-save-expense",
   ],
   "client/src/components/wellness/WellnessOverview.tsx": [
-    "wellness-kpi-score", "wellness-habit-", "wellness-med-toggle-",
-    // 2026-07-10 dynamic redesign: the five quick-log buttons render from one
-    // template literal (`wellness-quicklog-${kind}`), so the guard matches the
-    // shared prefix + the onQuickLog hook that drives all of them.
-    "wellness-quicklog-", "onQuickLog",
+    // 2026-09 readout rebuild: the quick-log row, the habit check-offs and the
+    // medication toggles are GONE on purpose — this tab reads data back and
+    // asks the user to log nothing. What has to stay reachable is the readout
+    // itself and the one action left on the page (the AI brief).
+    "wellness-signal-", "wellness-score-breakdown", "wellness-ai-brief",
+    "wellness-labs", "wellness-care", "wellness-activity",
   ],
   "client/src/components/dashboard/TaskHabitPopups.tsx": [
     "button-add-task", "btn-new-habit-add",

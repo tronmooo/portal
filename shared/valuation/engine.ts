@@ -85,6 +85,7 @@ function baseRecord(ctx: ValuationContext, plan: ValuationPlan, opts: ComputeOpt
     evidence: [],
     materialInputs: ctx.materialInputs,
     inputFingerprint: ctx.inputFingerprint,
+    profileFingerprint: ctx.profileFingerprint,
     marketDataAsOf: null,
     marketFreshnessMs: plan.marketFreshnessMs,
     valuedAt: nowIso,
@@ -275,6 +276,7 @@ export function errorRecord(
     rec.factors = previous.factors; rec.missingInfo = previous.missingInfo;
     rec.marketDataAsOf = previous.marketDataAsOf; rec.valuedAt = previous.valuedAt;
     rec.materialInputs = previous.materialInputs; rec.inputFingerprint = previous.inputFingerprint;
+    rec.profileFingerprint = previous.profileFingerprint;
   }
   return rec;
 }

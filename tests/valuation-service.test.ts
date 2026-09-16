@@ -129,27 +129,41 @@ describe("valuation service", () => {
     expect(await storage.getAssetValuationHistory(p.id)).toHaveLength(1);
   });
 
-  it("a user-entered value is never overwritten, and is weighed as evidence", async () => {
-    const p = await seedVehicle(storage, { currentValue: 23000, currentValueSource: "user" });
+  it("the estimate becomes the ONE canonical currentValue; the user's typed value is kept as userEnteredValue and still weighed", async () => {
+    const p = await seedVehicle(storage, { currentValue: 23000, currentValueSource: "user", currentValueAsOf: "2026-09-01" });
     setEvidenceProvidersForTest([fakeLiveSearch(async (run) => [liveEvidence(20000, run.now)])]);
     const out = await refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW });
     const rec = out.snapshot!.record!;
     expect(rec.methodology).toContain("user_verified_value");
     expect(rec.value).not.toBe(23000);
     const saved = (await storage.getProfile(p.id))!.fields;
-    expect(saved.currentValue).toBe(23000);
-    expect(saved.currentValueSource).toBe("user");
-    expect(saved.valuationMethod).toBeUndefined();
+    // Every reader of "current value" now resolves to the estimate…
+    expect(saved.currentValue).toBe(rec.value);
+    expect(saved.currentValueSource).toBe("estimate");
+    expect(saved.currentValueAsOf).toBe(rec.valuedAt);   // value + as-of written together
+    // …and the user's own number survives, with its date, as evidence.
+    expect(saved.userEnteredValue).toBe(23000);
+    expect(saved.userEnteredValueAsOf).toBe("2026-09-01");
+    expect(saved.purchasePrice).toBe(28000);
+    // The mirror itself must not look like a material change (no refresh loop).
+    expect((await getValuationSnapshot(storage, p.id, { now: NOW }))!.freshness.fresh).toBe(true);
+    // A later run still sees the user's value as evidence.
+    const again = await refreshValuation(storage, p.id, { reason: "user_requested", force: true, now: NOW });
+    expect(again.snapshot!.record!.methodology).toContain("user_verified_value");
   });
 
-  it("a legacy estimator-written currentValue may be replaced; a plain user value may not", () => {
-    const rec: any = { status: "valued", value: 500, low: 450, high: 550, confidenceLabel: "medium", methodSummary: "m", valuedAt: "t", factors: [], missingInfo: [], evidence: [] };
+  it("mirrorPatchFor: estimate always lands in currentValue (with as-of), except when the estimate IS the user's value", () => {
+    const rec: any = { status: "valued", value: 500, low: 450, high: 550, confidenceLabel: "medium", methodSummary: "m", valuedAt: "2026-09-16T12:00:00.000Z", factors: [], missingInfo: [], evidence: [], methodology: ["comparable_market_analysis"] };
     expect(mirrorPatchFor({ currentValue: 400, valuationMethod: "Live search" }, rec, {}).patch.currentValue).toBe(500);
-    const kept = mirrorPatchFor({ currentValue: 400 }, rec, {});
-    expect(kept.mirrored).toBe(false);
-    expect(kept.patch).toEqual({ currentValueSource: "user" });
+    const typed = mirrorPatchFor({ currentValue: 400, currentValueAsOf: "2026-08-01" }, rec, {});
+    expect(typed.mirrored).toBe(true);
+    expect(typed.patch).toMatchObject({ currentValue: 500, currentValueAsOf: rec.valuedAt, userEnteredValue: 400, userEnteredValueAsOf: "2026-08-01" });
+    // Already-kept user value is not overwritten by a later mirror.
+    expect(mirrorPatchFor({ currentValue: 500, currentValueSource: "estimate", userEnteredValue: 400 }, rec, {}).patch.userEnteredValue).toBeUndefined();
     expect(mirrorPatchFor({}, rec, {}).patch.currentValue).toBe(500);
     expect(mirrorPatchFor({}, { ...rec, status: "insufficient_data", value: null }, {}).mirrored).toBe(false);
+    const onlyUser = mirrorPatchFor({ balance: 500, currentValue: 500 }, { ...rec, methodology: ["user_verified_value"] }, {});
+    expect(onlyUser.mirrored).toBe(false);
   });
 
   it("an unavailable or slow source degrades gracefully: previous estimate kept, backoff scheduled, then recovers", async () => {

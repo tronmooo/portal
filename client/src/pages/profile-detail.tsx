@@ -3341,7 +3341,7 @@ function StaticInfoTab({
     "valuationConfidence", "valuationMethod", "valuationDate", "valuationRange",
     "valuation_confidence", "valuation_method", "valuation_date", "valuation_range",
     "valuationLow", "valuationHigh", "valuationFactors", "valuationMissingInfo", "valuationSources",
-    "currentValueSource", "current_value_source",
+    "currentValueSource", "current_value_source", "currentValueAsOf", "userEnteredValueAsOf",
     "assetSubtype", "asset_subtype",
   ]);
   // Keys the ACCOUNT card above already renders (balance, limit, available,

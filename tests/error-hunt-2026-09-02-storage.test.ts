@@ -443,6 +443,25 @@ describe("#11 logEntry dedup", () => {
     expect(new Set(inserts.map((i: any) => i.id)).size).toBe(3);
   });
 
+  it("undo-restore recreates THE row even when identical siblings surround it", async () => {
+    // Undo re-POSTs the deleted entry with its ORIGINAL timestamp. With three
+    // identical doses in the same five minutes, the dedup would match a
+    // sibling and hand back its id — the toast said "restored" while the row
+    // stayed deleted. allowDuplicate makes the restore land.
+    const ts = nowIso();
+    const dose = { drug: "Multivitamin", adherence: "taken" };
+    const { s, inserts } = logStorage([
+      { id: "sibling-a", entry_values: dose, timestamp: ts },
+      { id: "sibling-b", entry_values: dose, timestamp: ts },
+    ]);
+    const out = await s.logEntry({ trackerId: "t1", values: { ...dose }, timestamp: ts, allowDuplicate: true });
+    expect(inserts).toHaveLength(1);
+    expect(out.id).not.toBe("sibling-a");
+    expect(out.id).not.toBe("sibling-b");
+    // The restored row keeps the timestamp it was deleted with.
+    expect(inserts[0].timestamp).toBe(ts);
+  });
+
   it("a backdated identical entry ('also 180 for yesterday') is not dropped against today's row", async () => {
     const { s, inserts, calls } = logStorage([{ id: "today", entry_values: { ounces: 24 }, timestamp: nowIso() }]);
     const yesterdayNoon = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
