@@ -35,6 +35,17 @@ const { stubState, stubStorage } = vi.hoisted(() => {
     },
     async getPreference(key: string) { return state.preferences.get(key); },
     async setPreference(key: string, value: string) { state.preferences.set(key, value); },
+    // Valuation store (mirrors the preferences-backed codec both backends use).
+    async getAssetValuation(id: string) { const raw = state.preferences.get(`valuation:${id}`); return raw ? JSON.parse(raw) : null; },
+    async saveAssetValuation(id: string, record: any) {
+      state.preferences.set(`valuation:${id}`, JSON.stringify(record));
+      const prev = JSON.parse(state.preferences.get(`valuation-history:${id}`) || "[]");
+      state.preferences.set(`valuation-history:${id}`, JSON.stringify([...prev, { valuedAt: record.valuedAt, value: record.value }]));
+    },
+    async touchAssetValuation(id: string, record: any) { state.preferences.set(`valuation:${id}`, JSON.stringify(record)); },
+    async getAssetValuationHistory(id: string) { return JSON.parse(state.preferences.get(`valuation-history:${id}`) || "[]"); },
+    async getValuationUnderstanding() { return null; },
+    async cacheValuationUnderstanding() {},
   };
   const storage = new Proxy(impl, {
     get(target, prop) {
@@ -127,16 +138,23 @@ describe("POST /api/profiles/:id/lookup-value", () => {
     expect(res.status).toBe(200);
     const data = await res.json();
 
-    // Response: midpoint, range, confidence, factors, missing info, date.
-    expect(data.currentValue).toBe(20100);
-    expect(data.low).toBe(18500);
-    expect(data.high).toBe(22000);
-    expect(data.range).toBe("$18,500 - $22,000");
-    expect(data.confidence).toBe("medium");
-    expect(data.factorsConsidered).toEqual(["80,000 miles", "new tires"]);
-    expect(data.missingInfo).toEqual(["trim level", "service records"]);
+    // Response: the universal engine's blended estimate (the live-search
+    // figure carries ~90% of the weight; the dateless purchase price is a
+    // weak anchor), a range, confidence, factors, missing info, date.
+    expect(data.status).toBe("valued");
+    expect(data.currentValue).toBeGreaterThanOrEqual(18500);
+    expect(data.currentValue).toBeLessThanOrEqual(22000);
+    expect(data.low).toBeLessThan(data.currentValue);
+    expect(data.high).toBeGreaterThan(data.currentValue);
+    expect(data.range).toMatch(/^\$[\d,]+ - \$[\d,]+$/);
+    expect(["high", "medium", "low"]).toContain(data.confidence);
+    expect(data.methodology).toContain("comparable_market_analysis");
+    expect(data.factorsConsidered.join(" ")).toContain("80,000 miles");
+    expect(data.missingInfo).toEqual(expect.arrayContaining(["trim level", "service records"]));
     expect(data.previousValue).toBe(21400);
     expect(new Date(data.valuationDate).getTime()).toBeGreaterThan(0);
+    // The full normalized record rides along for the value card.
+    expect(data.valuation.record.evidence.some((e: any) => e.kind === "live_market_search")).toBe(true);
 
     // The model saw the complete record but never the prior estimate.
     const ppxCall = fetchMock.mock.calls.find(c => String(c[0]).includes("perplexity.ai"));
@@ -150,17 +168,26 @@ describe("POST /api/profiles/:id/lookup-value", () => {
     expect(prompt).not.toContain("21400");
     expect(prompt).not.toContain("$19,250");
 
-    // Persisted onto the CORRECT profile (survives refresh).
+    // Persisted onto the CORRECT profile (survives refresh). The prior
+    // currentValue was estimator-written (legacy valuationRange marker), so
+    // the mirror is allowed to replace it — a user-typed value would be kept.
     expect(stubState.updates).toHaveLength(1);
     expect(stubState.updates[0].id).toBe("profile-crv");
     const saved = stubState.profiles.get("profile-crv").fields;
-    expect(saved.currentValue).toBe(20100);
+    expect(saved.currentValue).toBe(data.currentValue);
+    expect(saved.currentValueSource).toBe("estimate");
     expect(saved.previousValue).toBe(21400);
-    expect(saved.valuationFactors).toEqual(["80,000 miles", "new tires"]);
-    expect(saved.valuationMissingInfo).toEqual(["trim level", "service records"]);
-    expect(saved.valuationRange).toBe("$18,500 - $22,000");
+    expect(saved.valuationFactors.join(" ")).toContain("80,000 miles");
+    expect(saved.valuationMissingInfo).toEqual(expect.arrayContaining(["trim level", "service records"]));
+    expect(saved.valuationRange).toBe(data.range);
     const other = stubState.profiles.get("profile-other").fields;
     expect(other.currentValue).toBe(21400); // untouched
+    // The normalized record + history live in the user-scoped valuation store.
+    const stored = JSON.parse(stubState.preferences.get("valuation:profile-crv")!);
+    expect(stored.status).toBe("valued");
+    expect(stored.value).toBe(data.currentValue);
+    expect(JSON.parse(stubState.preferences.get("valuation-history:profile-crv")!)).toHaveLength(1);
+    expect(stubState.preferences.get("valuation:profile-other")).toBeUndefined();
 
     // Summary cache busted so the stale summary can't be served again.
     expect(stubState.preferences.get("profile_ai_profile-crv")).toBe("");

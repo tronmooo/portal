@@ -31,6 +31,10 @@ import { applyBalanceAdjustment, isAccountProfile } from "@shared/finance-accoun
 export const requestStorageContext = new AsyncLocalStorage<IStorage>();
 import { journalStorageCall, isJournaledStorageMethod } from "./write-journal";
 import {
+  valuationKey, valuationHistoryKey, readValuationRecord, readValuationHistory,
+  appendValuationHistory, VALUATION_HISTORY_LIMIT, understandingKey, readUnderstanding,
+} from "./valuation/storage-codec";
+import {
   type Profile, type InsertProfile,
   type Tracker, type InsertTracker, type TrackerEntry, type InsertTrackerEntry,
   type Task, type InsertTask,
@@ -265,6 +269,19 @@ export interface IStorage {
   // Preferences
   getPreference(key: string): Promise<string | null>;
   setPreference(key: string, value: string): Promise<void>;
+
+  // Asset valuations (server/valuation): the latest estimate per profile and a
+  // bounded history. Stored per user, so one account's estimate can never be
+  // read through another's storage instance.
+  getAssetValuation(profileId: string): Promise<import("@shared/valuation/types").ValuationRecord | null>;
+  /** Persist a NEW estimate (journaled as an asset write) and append it to the history. */
+  saveAssetValuation(profileId: string, record: import("@shared/valuation/types").ValuationRecord): Promise<void>;
+  /** Bookkeeping-only rewrite (checkedAt / retry backoff): not journaled, nothing to invalidate. */
+  touchAssetValuation(profileId: string, record: import("@shared/valuation/types").ValuationRecord): Promise<void>;
+  getAssetValuationHistory(profileId: string, limit?: number): Promise<import("@shared/valuation/types").ValuationHistoryEntry[]>;
+  /** The cached semantic understanding of an asset's shape (server/valuation/understanding). Not journaled: it is a cache, not user data. */
+  getValuationUnderstanding(profileId: string): Promise<import("@shared/valuation/types").AssetUnderstanding | null>;
+  cacheValuationUnderstanding(profileId: string, understanding: import("@shared/valuation/types").AssetUnderstanding): Promise<void>;
   /**
    * Per-account mutual exclusion for long multi-row operations (a backup
    * restore). True when this call now holds the lock; false while another
@@ -2655,6 +2672,28 @@ export class MemStorage implements IStorage {
   async releaseUserLock(name: string): Promise<void> { this.userLocks.delete(name); }
   async setPreference(key: string, value: string): Promise<void> {
     this.preferences.set(key, value);
+  }
+
+  // ---- Asset valuations (preferences-backed, same keys as SupabaseStorage) ----
+  async getAssetValuation(profileId: string) {
+    return readValuationRecord(await this.getPreference(valuationKey(profileId)));
+  }
+  async saveAssetValuation(profileId: string, record: import("@shared/valuation/types").ValuationRecord): Promise<void> {
+    await this.setPreference(valuationKey(profileId), JSON.stringify(record));
+    const history = appendValuationHistory(await this.getAssetValuationHistory(profileId), record);
+    await this.setPreference(valuationHistoryKey(profileId), JSON.stringify(history));
+  }
+  async touchAssetValuation(profileId: string, record: import("@shared/valuation/types").ValuationRecord): Promise<void> {
+    await this.setPreference(valuationKey(profileId), JSON.stringify(record));
+  }
+  async getAssetValuationHistory(profileId: string, limit = VALUATION_HISTORY_LIMIT) {
+    return readValuationHistory(await this.getPreference(valuationHistoryKey(profileId))).slice(-limit);
+  }
+  async getValuationUnderstanding(profileId: string) {
+    return readUnderstanding(await this.getPreference(understandingKey(profileId)));
+  }
+  async cacheValuationUnderstanding(profileId: string, understanding: import("@shared/valuation/types").AssetUnderstanding): Promise<void> {
+    await this.setPreference(understandingKey(profileId), JSON.stringify(understanding));
   }
 
   // Income stubs (in-memory)
