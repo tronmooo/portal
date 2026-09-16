@@ -1,5 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
-import { localTodayISO, formatLocalDate } from "@/lib/dates";
+import { localTodayISO, formatLocalDate, monthKeyLabel } from "@/lib/dates";
 import { buildCashTrend } from "@/lib/cash-trend";
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -7,16 +7,17 @@ import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { EXPENSE_CATEGORIES, categoryLabel, canonicalExpenseCategory } from "@shared/category-canon";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
-import { matchesExpenseSearch, sortExpenses, type ExpenseSort } from "@shared/expense-view";
+import { matchesExpenseSearch, sortExpenses, findDuplicateExpense, type ExpenseSort } from "@shared/expense-view";
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount, sumMonthIncomeNow } from "@shared/obligation-windows";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -41,9 +42,12 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat, ChevronDown, Search, ArrowUpDown, X, CalendarDays } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, ArrowLeft, Plus, Filter, AlertCircle, Pencil, Trash2, Check, Wallet, Landmark, BarChart3, Loader2, Repeat, ChevronDown, ChevronRight, Search, ArrowUpDown, X, CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Link } from "wouter";
+import { isNetWorthLiabilityProfile, resolveLiabilityBalance } from "@shared/asset-value";
+import { isAmortizable } from "@shared/liability-types";
+import { resolveAnnualRate, computeAmortizedPayment } from "@shared/liability-calc";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
@@ -69,7 +73,15 @@ const categoryColors: Record<string, string> = {
   general: "hsl(var(--primary))",
 };
 
-const EXPENSE_CATEGORIES = ["entertainment", "food", "general", "health", "housing", "pet", "transport", "utilities", "vehicle"];
+// ONE expense vocabulary for this page: shared/category-canon's
+// EXPENSE_CATEGORIES, alphabetical by the label the user reads. There used to
+// be three lists — nine lowercase words in Add, fourteen capitalized ones in
+// Edit (with "Automotive" but no "Vehicle"), and a third built from whatever
+// was in the data, which offered "phone" and "personal" that neither form
+// could produce. Editing an older expense silently changed its category
+// because the value it was saved with wasn't in the form's list.
+const EXPENSE_CATEGORY_OPTIONS = [...EXPENSE_CATEGORIES]
+  .sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b)));
 
 /** Order profile-picker options: self ("Me") pinned first, everyone else A→Z. */
 function sortProfilesForSelect(a: { type?: string; name?: string }, b: { type?: string; name?: string }) {
@@ -141,6 +153,12 @@ export default function FinancePage() {
   // Accounts, for the "Paid from" picker. Derived from the profile list that is
   // already loaded — one fetch, one source of truth, no second account list.
   const accountOptions = useMemo(() => accountViews(profiles || []), [profiles]);
+  const accountIdSet = useMemo(() => new Set(accountOptions.map((a) => a.id)), [accountOptions]);
+  // "Dinner at Chili's" $100 was saved twice four minutes apart and nothing
+  // noticed. An expense with the same description, amount and date as one
+  // already logged is almost always a double submit, so ask before adding it.
+  // Held payload — set when a save is paused on the duplicate question.
+  const [duplicateExpense, setDuplicateExpense] = useState<{ payload: NewExpenseVars; existing: any } | null>(null);
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   // CRITICAL: each filtered query MUST set its own queryFn that appends
   // ?profileIds=... to the URL. Without an explicit queryFn the default fetcher
@@ -204,7 +222,7 @@ export default function FinancePage() {
   // Add Expense had one. Result: re-assigning an expense to a different family
   // member required deleting and recreating the row. Add profileId to the edit
   // form so the field is reachable everywhere it can be set.
-  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "" });
+  const [editForm, setEditForm] = useState({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "", accountId: "" });
   /* ST5: re-sync the form whenever the editing target changes. Previously
      the form was seeded inside the click handler, so if React re-used the
      dialog without remount the second open briefly showed the prior
@@ -218,15 +236,27 @@ export default function FinancePage() {
         category: (editingExpense as any).category ?? "",
         vendor: (editingExpense as any).vendor ?? "",
         date: (editingExpense as any).date?.slice(0, 10) ?? "",
-        // Pre-select the existing linked profile (first one), or empty string
-        // when the expense has no linked profile yet.
-        profileId: ((editingExpense as any).linkedProfiles?.[0]) ?? "",
+        // Pre-select the existing linked PERSON, and separately the account
+        // the expense was paid from. `linkedProfiles` mixes the two (Add writes
+        // [person, account]), and Edit used to write back [person] alone — so
+        // re-assigning an expense silently cut it loose from its account.
+        profileId: ((editingExpense as any).linkedProfiles || []).find((id: string) => !accountIdSet.has(id)) ?? "",
+        accountId: ((editingExpense as any).linkedProfiles || []).find((id: string) => accountIdSet.has(id)) ?? "",
       });
     } else {
-      setEditForm({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "" });
+      setEditForm({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "", accountId: "" });
     }
-  }, [editingExpense?.id]);
+  }, [editingExpense?.id, accountIdSet]);
   const [editSaving, setEditSaving] = useState(false);
+  // What the Edit dialog refuses to save, said out loud. A negative or empty
+  // amount used to grey the Save button out with no explanation at all.
+  const editAmountNum = parseFloat(editForm.amount);
+  const editError =
+    !editForm.description.trim() ? "Give the expense a description."
+    : !editForm.amount.trim() ? "Enter an amount."
+    : !Number.isFinite(editAmountNum) ? "That amount isn't a number."
+    : editAmountNum <= 0 ? "An expense amount has to be greater than zero."
+    : null;
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   // U2 fix: confirmation state for paycheck deletion. Holds the FULL paycheck
   // row pending confirmation (P2 undo needs every field for the re-create),
@@ -264,6 +294,7 @@ export default function FinancePage() {
   // schedules, cashflow grid) collapse below the Money overview so the tab
   // leads with the snapshot. Default collapsed.
   const [showMore, setShowMore] = useState(false);
+  const moreRef = useRef<HTMLButtonElement | null>(null);
   // Command-center drill-down popups (the SAME dashboard popups — reused).
   // Every Money KPI card now opens its OWN bespoke popup (2026-07 redesign) —
   // previously spend/income/bills/savings all funneled into "cashflow".
@@ -750,13 +781,35 @@ export default function FinancePage() {
 
   // Pay a bill straight from the Finance "Bills · next 14d" card — same
   // endpoint + optimistic pattern as ObligationsManager.payMut.
-  const payBillMut = useMutation<void, Error, { id: string; amount: number }>({
+  // "Pay" recorded money leaving in one tap, with nothing to confirm it and no
+  // way back: it writes a payment row, an expense, an account debit and moves
+  // the due date on. It now asks first, and the confirmation toast carries the
+  // same Undo the rest of the app uses (DELETE .../last-payment is the full
+  // inverse — see unpayBillOccurrence).
+  const [billToPay, setBillToPay] = useState<{ id: string; name: string; amount: number; dueDate?: string } | null>(null);
+  const payBillMut = useMutation<void, Error, { id: string; amount: number; name?: string }>({
     mutationFn: async ({ id }) => { await apiRequest("POST", `/api/obligations/${id}/pay`, {}); },
-    onSuccess: () => {
-      toast({ title: "Payment recorded" });
-      invalidateDomain("obligations");
-      // No bus domain maps the calendar timeline to obligations — keep explicit.
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+    onSuccess: (_data, vars) => {
+      const refresh = () => {
+        invalidateDomain("obligations");
+        invalidateDomains("expenses", "profiles");
+        // No bus domain maps the calendar timeline to obligations — keep explicit.
+        queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
+      };
+      refresh();
+      showUndoToast({
+        title: `${vars.name || "Bill"} paid — ${formatMoney(vars.amount)}`,
+        description: "Logged as an expense and taken off what's still due.",
+        onUndo: async () => {
+          try {
+            await apiRequest("DELETE", `/api/obligations/${vars.id}/last-payment`, {});
+            refresh();
+            toast({ title: "Payment undone" });
+          } catch (err: any) {
+            toast({ title: "Couldn't undo the payment", description: formatApiError(err), variant: "destructive" });
+          }
+        },
+      });
     },
     onError: (err) => toast({ title: "Failed to record payment", description: formatApiError(err), variant: "destructive" }),
   });
@@ -851,7 +904,9 @@ export default function FinancePage() {
     return new Date(now.getTime() - 30 * 86400000); // 30d
   }, [dateRange]);
   const filtered = useMemo(() => profileFiltered.filter(e => {
-    if (filterCategory !== "all" && normalizeFilter(e.category) !== normalizeFilter(filterCategory)) return false;
+    // Compare CANONICAL categories, so a row stored under an older spelling
+    // ("phone", "automotive") is found by the bucket the forms offer.
+    if (filterCategory !== "all" && canonicalExpenseCategory(e.category) !== canonicalExpenseCategory(filterCategory)) return false;
     if (rangeStart) {
       const d = new Date((e.date?.slice(0, 10) || "") + "T00:00:00");
       if (isNaN(d.getTime()) || d < rangeStart) return false;
@@ -874,12 +929,21 @@ export default function FinancePage() {
   const total = useMemo(() => filtered.reduce((s, e) => s + e.amount, 0), [filtered]);
 
   // Group by category
+  // Canonical keys, so a row saved as "automotive" and one saved as "vehicle"
+  // are one bar rather than two.
   const byCategory = useMemo(() => filtered.reduce((acc: Record<string, number>, e) => {
-    acc[e.category] = (acc[e.category] || 0) + e.amount;
+    const k = canonicalExpenseCategory(e.category);
+    acc[k] = (acc[k] || 0) + e.amount;
     return acc;
   }, {}), [filtered]);
-  const chartData = useMemo(() => Object.entries(byCategory).map(([name, amount]) => ({ name, amount: Number(amount.toFixed(2)) })).sort((a, b) => a.name.localeCompare(b.name)), [byCategory]);
-  const categories = useMemo(() => [...new Set(profileFiltered.map(e => e.category))].sort((a, b) => a.localeCompare(b)), [profileFiltered]);
+  const chartData = useMemo(() => Object.entries(byCategory).map(([name, amount]) => ({ name: categoryLabel(name), amount: Number(amount.toFixed(2)) })).sort((a, b) => a.name.localeCompare(b.name)), [byCategory]);
+  // The filter offers the canonical buckets actually present in the data — so
+  // every option it lists is one the Add and Edit forms can also produce.
+  const categories = useMemo(
+    () => [...new Set(profileFiltered.map(e => canonicalExpenseCategory(e.category)))]
+      .sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b))),
+    [profileFiltered],
+  );
 
   // BUG-G: Subscriptions section. Subscription profiles (type==="subscription")
   // are owned by a person via parentProfileId. Respect the active profile filter:
@@ -907,6 +971,35 @@ export default function FinancePage() {
     (acc[name] = acc[name] || []).push(entry);
     return acc;
   }, {}), [loanSchedules]);
+  // Loans that CAN be amortized but have no stored schedule row. This section
+  // counted only the `loan_amortization` table, which nothing populates on its
+  // own — so a car loan with a balance, a 6.49% rate and a monthly payment
+  // showed as "Loan Schedules (0) · No loan schedules found." Its projected
+  // schedule lives on the loan's own page, so list it and link there.
+  const loansWithoutSchedule = useMemo(() => {
+    const scheduled = new Set(loanSchedules.map((e: any) => String(e.loan_name || "").toLowerCase()));
+    const emptySelfIds = new Set<string>();
+    const inScope = (p: any) => filterMode === "everyone" || filterIds.length === 0 || isInScope(
+      ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks, profiles),
+      { selectedIds: filterIds, selfIds: emptySelfIds },
+      "out_of_scope",
+    );
+    return (profiles || [])
+      .filter((p: any) => !p.deletedAt && !p.deleted_at && inScope(p)
+        && isNetWorthLiabilityProfile(p)
+        && isAmortizable((p as any).type_key ?? (p as any).typeKey)
+        && !scheduled.has(String(p.name || "").toLowerCase()))
+      .map((p: any) => {
+        const f = p.fields || {};
+        const balance = resolveLiabilityBalance(f);
+        const rate = resolveAnnualRate(f);
+        const months = Math.max(0, Math.floor(Number(f.remainingTermMonths ?? f.termMonths ?? 0) || 0));
+        const payment = Number(f.monthlyPayment) || (balance > 0 && months > 0 ? computeAmortizedPayment(balance, rate, months) : 0);
+        return { id: p.id, name: p.name as string, balance, rate, months, payment };
+      })
+      .filter((l: { balance: number }) => l.balance > 0)
+      .sort((a: { balance: number }, b: { balance: number }) => b.balance - a.balance);
+  }, [profiles, loanSchedules, filterMode, filterIds, assetPartyLinks, liabilityProfileLinks]);
 
   // ── Early returns (after ALL hooks including useMemo) ──
   if (isLoading) {
@@ -1002,7 +1095,7 @@ export default function FinancePage() {
                       <Select value={newExpense.category} onValueChange={v => setNewExpense(p => ({ ...p, category: v }))}>
                         <SelectTrigger data-testid="select-expense-category"><SelectValue /></SelectTrigger>
                         <SelectContent>
-                          {EXPENSE_CATEGORIES.map(c => (<SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>))}
+                          {EXPENSE_CATEGORY_OPTIONS.map(c => (<SelectItem key={c} value={c}>{categoryLabel(c)}</SelectItem>))}
                         </SelectContent>
                       </Select></div>
                   </div>
@@ -1083,7 +1176,7 @@ export default function FinancePage() {
                       }
                       // Snapshot the payload BEFORE resetting the form (see the
                       // RACE FIX comment on addExpenseMutation).
-                      addExpenseMutation.mutate({
+                      const payload: NewExpenseVars = {
                         description: newExpense.description,
                         amount: amt,
                         category: newExpense.category,
@@ -1091,7 +1184,14 @@ export default function FinancePage() {
                         date: newExpense.date,
                         profileId: expenseProfileId || undefined,
                         accountId: expenseAccountId || undefined,
-                      });
+                      };
+                      const twin = findDuplicateExpense(expenses, payload);
+                      if (twin) {
+                        setDuplicateExpense({ payload, existing: twin });
+                        setAddAttempt(false);
+                        return;
+                      }
+                      addExpenseMutation.mutate(payload);
                       // Close immediately — optimistic insert already populated the list.
                       setAddOpen(false);
                       setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
@@ -1172,6 +1272,15 @@ export default function FinancePage() {
         const breached = budgetRows.filter(b => b.spent > b.limit);
         for (const b of breached.slice(0, 2)) alerts.push({ id: `budget-${b.category}`, tone: "warn", text: `${b.category[0].toUpperCase()}${b.category.slice(1)} spending is over budget (${Math.round((b.spent / b.limit) * 100)}%).`, onClick: () => setFinancePopup("budget") });
         if (savingsRate != null && savingsRate >= 15) alerts.push({ id: "savings", tone: "pos", text: `Great job — you're saving ${savingsRate}% of income this month.` });
+        // An expected paycheck whose date has passed and that was never marked
+        // received. Two of them sat overdue in the list while nothing above it
+        // said a word.
+        const latePaychecks = (paychecks || []).filter((pc: any) => !pc.confirmed && String(pc.expected_date || "").slice(0, 10) < todayLocalISO);
+        if (latePaychecks.length > 0) alerts.push({
+          id: "paychecks-late", tone: "warn",
+          text: `${latePaychecks.length} expected paycheck${latePaychecks.length > 1 ? "s are" : " is"} past its date and not marked received ($${latePaychecks.reduce((sum: number, pc: any) => sum + (Number(pc.actual_amount ?? pc.amount) || 0), 0).toLocaleString()}).`,
+          onClick: () => setShowMore(true),
+        });
         const soonBill = upcomingBillsList.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
         if (soonBill.length > 0) alerts.push({ id: "soon", tone: "warn", text: `${soonBill.length} bill${soonBill.length > 1 ? "s" : ""} due in the next 7 days totaling $${soonBill.reduce((s: number, b: any) => s + (Number(b.amount) || 0), 0).toLocaleString()}.`, onClick: () => setFinancePopup("cashflow") });
 
@@ -1207,7 +1316,7 @@ export default function FinancePage() {
             assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
             liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}
             monthLabel={monthLabel}
-            onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
+            onPayBill={(bill) => setBillToPay({ id: bill.id, name: bill.name, amount: bill.amount, dueDate: bill.dueDate })}
             payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null}
             onOpenNetWorth={() => setFinancePopup("networth")}
             onOpenCashFlow={() => setFinancePopup("cashflow")}
@@ -1217,7 +1326,7 @@ export default function FinancePage() {
             onOpenBills={() => setFinancePopup("bills")}
             onOpenSavings={() => setFinancePopup("savings")}
             onOpenOverview={() => setFinancePopup("overview")}
-            onCategoryClick={(cat) => { setFilterCategory(cat); setSearchQuery(""); }}
+            onCategoryClick={(cat) => { setFilterCategory(cat === "all" ? "all" : canonicalExpenseCategory(cat)); setSearchQuery(""); }}
           />
         );
       })()}
@@ -1260,7 +1369,7 @@ export default function FinancePage() {
               incomes={incomes || []} monthlyIncome={monthlyIncome} />
             <BillsDuePopup open={financePopup === "bills"} onOpenChange={closer}
               bills={upcomingBills}
-              onPayBill={(bill) => payBillMut.mutate({ id: bill.id, amount: bill.amount })}
+              onPayBill={(bill) => setBillToPay({ id: bill.id, name: bill.name, amount: bill.amount, dueDate: bill.dueDate })}
               payingId={payBillMut.isPending ? (payBillMut.variables as any)?.id : null} />
             <SavingsRatePopup open={financePopup === "savings"} onOpenChange={closer}
               incomeMtd={monthlyIncome} spendMtd={spendMtd} />
@@ -1364,7 +1473,7 @@ export default function FinancePage() {
                 {sortedExpenses.length === profileFiltered.length
                   ? `${profileFiltered.length} ${profileFiltered.length === 1 ? "expense" : "expenses"}`
                   : `${sortedExpenses.length} of ${profileFiltered.length} expenses`}
-                {filterCategory !== "all" && ` · ${filterCategory}`}
+                {filterCategory !== "all" && ` · ${categoryLabel(filterCategory)}`}
               </p>
             </div>
             {/* The one manual Add Expense affordance, next to the list it adds to. */}
@@ -1402,7 +1511,7 @@ export default function FinancePage() {
               <SelectContent>
                 <SelectItem value="all">All Categories</SelectItem>
                 {categories.map(c => (
-                  <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
+                  <SelectItem key={c} value={c}>{categoryLabel(c)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -1493,19 +1602,24 @@ export default function FinancePage() {
       </Card>
 
       {/* Edit Expense Dialog */}
-      <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setEditingExpense(null); setEditForm({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "" }); setEditSaving(false); } }}>
+      <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setEditingExpense(null); setEditForm({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "", accountId: "" }); setEditSaving(false); } }}>
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>Edit Expense</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Description</Label><Input value={editForm.description} onChange={e => setEditForm(f => ({...f, description: e.target.value}))} /></div>
             {/* U5: enforce non-negative amounts at the input level */}
-            <div><Label>Amount</Label><Input type="number" inputMode="decimal" step="0.01" min="0" max="999999999" value={editForm.amount} onChange={e => setEditForm(f => ({...f, amount: e.target.value}))} /></div>
+            <div><Label>Amount</Label>
+              <Input type="number" inputMode="decimal" step="0.01" min="0" max="999999999"
+                value={editForm.amount} onChange={e => setEditForm(f => ({...f, amount: e.target.value}))}
+                aria-invalid={editError && editForm.amount.trim() ? true : undefined}
+                className={editError && editForm.amount.trim() ? "border-destructive focus-visible:ring-destructive" : ""}
+                data-testid="input-edit-expense-amount" /></div>
             <div><Label>Category</Label>
               <Select value={editForm.category} onValueChange={v => setEditForm(f => ({...f, category: v}))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["automotive","education","entertainment","food","general","health","housing","insurance","pet","shopping","subscription","transport","travel","utilities"].map(c => (
-                    <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>
+                  {EXPENSE_CATEGORY_OPTIONS.map(c => (
+                    <SelectItem key={c} value={c}>{categoryLabel(c)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -1525,9 +1639,27 @@ export default function FinancePage() {
                 </SelectContent>
               </Select>
             </div>
+            {/* Paid from — the field Add Expense has always had. Without it here,
+                the account an expense was paid from was invisible on edit and
+                (because Edit rewrote linkedProfiles) quietly discarded. */}
+            {accountOptions.length > 0 && (
+              <div><Label>Paid from</Label>
+                <Select value={editForm.accountId || "__none"} onValueChange={v => setEditForm(f => ({ ...f, accountId: v === "__none" ? "" : v }))}>
+                  <SelectTrigger data-testid="select-edit-expense-account"><SelectValue placeholder="No account" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">Don't track an account</SelectItem>
+                    {accountOptions.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>{a.name} — {formatMoney(a.balance)}{a.isDebt ? " owed" : ""}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select></div>
+            )}
+            {editError && (
+              <p className="text-xs text-destructive" role="alert" data-testid="edit-expense-error">{editError}</p>
+            )}
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditingExpense(null)} disabled={editSaving}>Cancel</Button>
-              <Button className="flex-1" disabled={!editForm.description.trim() || !editForm.amount || parseFloat(editForm.amount) <= 0 || editSaving} onClick={async () => {
+              <Button className="flex-1" disabled={!!editError || editSaving} onClick={async () => {
                 if (!editingExpense) return;
                 const targetId = editingExpense.id;
                 const newDesc = editForm.description;
@@ -1535,7 +1667,12 @@ export default function FinancePage() {
                 const newCategory = editForm.category;
                 const newVendor = editForm.vendor || undefined;
                 const newDate = editForm.date || undefined;
-                const newProfiles = editForm.profileId ? [editForm.profileId] : undefined;
+                // Keep BOTH linkages: the person and the paying account.
+                const prevAccountId = ((editingExpense as any).linkedProfiles || []).find((id: string) => accountIdSet.has(id)) ?? "";
+                const prevAmount = Number((editingExpense as any).amount ?? 0);
+                const newAccountId = editForm.accountId;
+                const linkage = [editForm.profileId, newAccountId].filter(Boolean) as string[];
+                const newProfiles = linkage.length > 0 ? linkage : undefined;
                 // Optimistic in-place edit across every cached expense list
                 await queryClient.cancelQueries({ queryKey: ["/api/expenses"] });
                 const prev = queryClient.getQueriesData({ queryKey: ["/api/expenses"] });
@@ -1582,6 +1719,24 @@ export default function FinancePage() {
                     ...(newProfiles ? { linkedProfiles: newProfiles } : {}),
                   });
                   if (Object.keys(patch).length > 0) await apiRequest("PATCH", `/api/expenses/${targetId}`, patch);
+                  // Money that moved has to move back. Re-pointing an expense at
+                  // another account, or changing its amount, used to leave the
+                  // account balances exactly where the original save put them.
+                  // The expense itself is saved above and must not be rolled
+                  // back over a balance nudge (same rule as Add Expense) — but
+                  // a failed nudge is reported rather than swallowed.
+                  try {
+                    if (prevAccountId !== newAccountId) {
+                      if (prevAccountId) await apiRequest("POST", `/api/accounts/${prevAccountId}/adjust`, { delta: prevAmount, reason: `Expense moved off — ${newDesc}` });
+                      if (newAccountId) await apiRequest("POST", `/api/accounts/${newAccountId}/adjust`, { delta: -newAmount, reason: `Expense — ${newDesc}` });
+                      invalidateDomain("profiles");
+                    } else if (newAccountId && newAmount !== prevAmount) {
+                      await apiRequest("POST", `/api/accounts/${newAccountId}/adjust`, { delta: prevAmount - newAmount, reason: `Expense edited — ${newDesc}` });
+                      invalidateDomain("profiles");
+                    }
+                  } catch (balanceErr: any) {
+                    toast({ title: "Expense saved, but the account balance didn't move", description: formatApiError(balanceErr), variant: "destructive" });
+                  }
                   invalidateDomain("expenses");
                 } catch (err: any) {
                   for (const [key, data] of prev) queryClient.setQueryData(key, data);
@@ -1594,9 +1749,71 @@ export default function FinancePage() {
         </DialogContent>
       </Dialog>
 
+      {/* Duplicate-expense guard — see findDuplicateExpense. */}
+      <AlertDialog open={!!duplicateExpense} onOpenChange={(open) => { if (!open) setDuplicateExpense(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>You already logged this</AlertDialogTitle>
+            <AlertDialogDescription>
+              {duplicateExpense
+                ? `"${duplicateExpense.payload.description}" for ${formatMoney(duplicateExpense.payload.amount)} is already on ${formatLocalDate(duplicateExpense.existing?.date, { month: "long", day: "numeric" })}. Add it a second time?`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="btn-cancel-duplicate-expense">Don't add</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="btn-confirm-duplicate-expense"
+              onClick={() => {
+                if (duplicateExpense) {
+                  addExpenseMutation.mutate(duplicateExpense.payload);
+                  setAddOpen(false);
+                  setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+                  setExpenseAccountId("");
+                }
+                setDuplicateExpense(null);
+              }}
+            >Add anyway</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Pay confirmation — "Pay" moves real money and writes four records. */}
+      <AlertDialog open={!!billToPay} onOpenChange={(open) => { if (!open) setBillToPay(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Pay {billToPay?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {billToPay ? `${formatMoney(billToPay.amount)}` : ""}
+              {billToPay?.dueDate ? ` due ${formatLocalDate(billToPay.dueDate, { month: "long", day: "numeric" })}` : ""}.
+              {" "}This records the payment, logs it as an expense dated today and moves the
+              bill on to its next cycle. You can undo it right after.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="btn-cancel-pay-bill">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="btn-confirm-pay-bill"
+              onClick={() => {
+                if (billToPay) payBillMut.mutate({ id: billToPay.id, amount: billToPay.amount, name: billToPay.name });
+                setBillToPay(null);
+              }}
+            >Pay {billToPay ? formatMoney(billToPay.amount) : ""}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* ── Deeper tools (collapsible) ── paychecks, income, loans, cashflow */}
       <button
-        onClick={() => setShowMore(v => !v)}
+        onClick={() => setShowMore(v => {
+          const next = !v;
+          // The section opens BELOW the fold, so the first click looked like it
+          // did nothing and people clicked again (which closed it). Scroll to
+          // what was just revealed.
+          if (next) requestAnimationFrame(() => moreRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+          return next;
+        })}
+        ref={moreRef}
         className="flex items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors pt-2"
         data-testid="finance-toggle-more"
       >
@@ -1702,6 +1919,11 @@ export default function FinancePage() {
             </div>
             <Button className="w-full" onClick={() => {
               if (!newPaycheck.source.trim() || !newPaycheck.amount || parseFloat(newPaycheck.amount) <= 0 || !newPaycheck.expectedDate) return;
+              // Two $2,000 paychecks for the same day slipped in unnoticed.
+              const twin = (paychecks || []).find((pc: any) =>
+                Math.abs(Number(pc.amount) - parseFloat(newPaycheck.amount)) < 0.005
+                && String(pc.expected_date || "").slice(0, 10) === newPaycheck.expectedDate);
+              if (twin && !window.confirm(`"${twin.source}" already expects ${formatMoney(Number(twin.amount))} on that day. Add another?`)) return;
               // Snapshot payload BEFORE resetting the form (race fix).
               addPaycheckMut.mutate({ source: newPaycheck.source, amount: parseFloat(newPaycheck.amount), expectedDate: newPaycheck.expectedDate });
               // Close immediately — optimistic insert already populated the list.
@@ -1980,13 +2202,35 @@ export default function FinancePage() {
       {/* ── Loan Amortization Section ── */}
       <div className="space-y-2">
         <h2 className="micro-label text-muted-foreground flex items-center gap-1.5">
-          <Landmark className="h-3.5 w-3.5" /> Loan Schedules ({Object.keys(loanGroups).length})
+          <Landmark className="h-3.5 w-3.5" /> Loan Schedules ({Object.keys(loanGroups).length + loansWithoutSchedule.length})
         </h2>
-        {Object.keys(loanGroups).length === 0 ? (
-          <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
-            <p className="text-sm text-muted-foreground">No loan schedules found.</p>
+        {loansWithoutSchedule.length > 0 && (
+          <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
+            {loansWithoutSchedule.map((l) => (
+              <Link key={l.id} href={`/profiles/${l.id}`}
+                className="w-full px-3 py-2 flex items-center gap-3 text-left hover:bg-muted/40"
+                data-testid={`loan-projected-${l.id}`}>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold truncate">{l.name}</p>
+                  <p className="text-[11px] text-muted-foreground tabular-nums">
+                    {formatMoney(l.balance)} owed
+                    {l.rate > 0 && ` · ${(l.rate * 100).toFixed(2)}%`}
+                    {l.months > 0 && ` · ${l.months} mo left`}
+                  </p>
+                </div>
+                {l.payment > 0 && (
+                  <span className="text-xs font-semibold tabular-nums shrink-0">{formatMoney(l.payment)}/mo</span>
+                )}
+                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
+              </Link>
+            ))}
           </div>
-        ) : (
+        )}
+        {Object.keys(loanGroups).length === 0 && loansWithoutSchedule.length === 0 ? (
+          <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
+            <p className="text-sm text-muted-foreground">No loans with a balance and a term yet.</p>
+          </div>
+        ) : Object.keys(loanGroups).length === 0 ? null : (
           <>{Object.entries(loanGroups).sort(([a], [b]) => a.localeCompare(b)).map(([loanName, payments]: [string, any[]]) => {
             const nextUnpaid = payments.find((p: any) => !p.paid);
             return (
@@ -2047,15 +2291,19 @@ export default function FinancePage() {
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="micro-label text-muted-foreground flex items-center gap-1.5">
-            <BarChart3 className="h-3.5 w-3.5" /> Cash Flow — {new Date(cfMonth + '-01').toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}
+            <BarChart3 className="h-3.5 w-3.5" /> Cash Flow — {monthKeyLabel(cfMonth)}
           </h2>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddCashflowOpen(true)} data-testid="button-add-cashflow">
             <Plus className="h-3 w-3 mr-1" /> Add Entry
           </Button>
         </div>
         {cashflow.length === 0 ? (
-          <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
-            <p className="text-sm text-muted-foreground">No cashflow data available.</p>
+          <div className="rounded-xl border border-border/40 px-3 py-6 text-center space-y-1">
+            <p className="text-sm text-muted-foreground">No weekly plan for {monthKeyLabel(cfMonth)} yet.</p>
+            <p className="text-[11px] text-muted-foreground/80">
+              "Add Entry" projects a week's money in and out. The cards above already
+              show this month's actual cash flow.
+            </p>
           </div>
         ) : (
           <div className="rounded-xl border border-border/40 overflow-hidden">

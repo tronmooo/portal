@@ -346,7 +346,7 @@ const CATEGORY_MAP: Record<string, string> = {
   housing: "housing", rent: "housing", mortgage: "housing", home: "housing",
   utilities: "utilities", utility: "utilities", electric: "utilities", electricity: "utilities", water: "utilities", gas_bill: "utilities", internet: "utilities",
   transport: "transport", transportation: "transport", gas: "transport", fuel: "transport", rideshare: "transport", parking: "transport", transit: "transport",
-  automotive: "automotive", auto: "automotive", car: "automotive", vehicle: "vehicle",
+  automotive: "vehicle", auto: "vehicle", car: "vehicle", vehicle: "vehicle",
   insurance: "insurance",
   medical: "health", health: "health", healthcare: "health", pharmacy: "health",
   entertainment: "entertainment", streaming: "entertainment", games: "entertainment",

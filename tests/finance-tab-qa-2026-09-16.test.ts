@@ -8,6 +8,10 @@ import {
 } from "../shared/obligation-windows";
 import { buildCashTrend } from "../client/src/lib/cash-trend";
 import { liabilityFamily, isRecurringBill } from "../shared/liability-types";
+import { EXPENSE_CATEGORIES, canonicalExpenseCategory, categoryLabel } from "../shared/category-canon";
+import { findDuplicateExpense } from "../shared/expense-view";
+import { summarizeLiabilityDebt } from "../shared/finance-accounts";
+import { monthKeyLabel } from "../client/src/lib/dates";
 
 const bill = (over: Record<string, any> = {}) => ({
   amount: 100, frequency: "monthly", status: "active", nextDueDate: "2026-09-12", ...over,
@@ -145,5 +149,67 @@ describe("#5 an insurance premium is a recurring bill, so paying it logs an expe
   it("leaves real debt alone", () => {
     expect(liabilityFamily("auto_loan")).toBe("amortizing");
     expect(liabilityFamily("credit_card")).toBe("revolving");
+  });
+});
+
+describe("#11 one expense vocabulary", () => {
+  it("has no word that is also its own alias", () => {
+    // "automotive" used to sit in the canonical list AND alias to "vehicle",
+    // so Edit offered "Automotive" and Add offered "Vehicle" for one concept.
+    expect(EXPENSE_CATEGORIES).not.toContain("automotive");
+    expect(canonicalExpenseCategory("automotive")).toBe("vehicle");
+    expect(canonicalExpenseCategory("Automotive")).toBe("vehicle");
+  });
+
+  it("folds the spellings the filter used to offer but no form could produce", () => {
+    expect(canonicalExpenseCategory("phone")).toBe("utilities");
+    expect(canonicalExpenseCategory("personal")).toBe("personal");
+    expect(canonicalExpenseCategory("vehicle")).toBe("vehicle");
+  });
+
+  it("every canonical category has a label", () => {
+    for (const c of EXPENSE_CATEGORIES) expect(categoryLabel(c)).toBeTruthy();
+  });
+});
+
+describe("#14 a second identical expense is caught", () => {
+  const logged = [{ id: "a", description: "Dinner at Chili's", amount: 100, date: "2026-08-09" }];
+
+  it("matches on description, amount and day, ignoring case and padding", () => {
+    expect(findDuplicateExpense(logged, { description: "  dinner at chili's ", amount: 100, date: "2026-08-09" })?.id).toBe("a");
+  });
+
+  it("lets a different amount, day or description through", () => {
+    expect(findDuplicateExpense(logged, { description: "Dinner at Chili's", amount: 100, date: "2026-08-10" })).toBeNull();
+    expect(findDuplicateExpense(logged, { description: "Dinner at Chili's", amount: 60, date: "2026-08-09" })).toBeNull();
+    expect(findDuplicateExpense(logged, { description: "Lunch", amount: 100, date: "2026-08-09" })).toBeNull();
+  });
+});
+
+describe("#17 debt tracked as a liability shows up in the Accounts rollup", () => {
+  const loan = { id: "l1", type: "liability", type_key: "auto_loan", name: "Dodge", fields: { currentBalance: 49275 } };
+  const card = { id: "c1", type: "liability", type_key: "credit_card", name: "Visa", fields: { currentBalance: 1522 } };
+  const netflix = { id: "n1", type: "liability", type_key: "streaming", name: "Netflix", fields: { monthlyAmount: 14.99 } };
+
+  it("counts loans and cards that are not account profiles", () => {
+    expect(summarizeLiabilityDebt([loan, card])).toEqual({ loanDebt: 49275, creditDebt: 1522 });
+  });
+
+  it("leaves recurring service bills out — they are not a balance", () => {
+    expect(summarizeLiabilityDebt([netflix])).toEqual({ loanDebt: 0, creditDebt: 0 });
+  });
+
+  it("skips account profiles, which summarizeAccounts already counted", () => {
+    expect(summarizeLiabilityDebt([{ id: "a1", type: "account", fields: { kind: "loan", balance: 500 } }]))
+      .toEqual({ loanDebt: 0, creditDebt: 0 });
+  });
+});
+
+describe("#19 a month key reads as its own month in every zone", () => {
+  it("does not slip back a day into the previous month", () => {
+    // `new Date("2026-09-01")` is UTC midnight = Aug 31 west of Greenwich, so
+    // the Cash Flow heading read "August 2026" all through September.
+    expect(monthKeyLabel("2026-09")).toMatch(/September 2026/);
+    expect(monthKeyLabel("2026-01")).toMatch(/January 2026/);
   });
 });

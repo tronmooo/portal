@@ -28,7 +28,7 @@ import { isAccountProfile, accountKindMeta, accountKindOf } from "@shared/financ
 import { Pill } from "@/components/dashboard/visuals";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
-import { isPast, isUpcoming, parseDate, relativeDayLabel, daysFromToday, localTodayISO, localDaysFromNowISO, formatLocalDate } from "@/lib/dates";
+import { isPast, isUpcoming, parseDate, relativeDayLabel, daysFromToday, localTodayISO, localDaysFromNowISO, formatLocalDate, monthKeyLabel } from "@/lib/dates";
 import {
   type TrackerMetricDefinition,
   classifyMetricValue,
@@ -5256,7 +5256,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
   // ── spending chart data (monthly bar chart) ──────────────────
   const monthlyBarData = sortedMonths.slice(-12).map(m => ({
-    month: new Date(m + "-01").toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+    month: monthKeyLabel(m, { month: "short", year: "2-digit" }),
     amount: expensesByMonth[m] || 0,
   }));
 

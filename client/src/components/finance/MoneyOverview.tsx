@@ -71,12 +71,20 @@ function MiniBars({ series, color }: { series: number[]; color: string }) {
 }
 
 // One compact KPI card: label, big value, trend %, mini chart, color, click.
-function KpiCard({ label, value, icon, trend, tone, series, chartKind = "line", sub, onClick, testId }: {
+const TONE_HSL: Record<"pos" | "neg" | "warn" | "neutral", string> = {
+  pos: "155 65% 45%", neg: "0 72% 58%", warn: "38 96% 54%", neutral: "213 90% 62%",
+};
+
+function KpiCard({ label, value, icon, trend, tone, trendTone, series, chartKind = "line", sub, onClick, testId }: {
   label: string; value: string; icon: LucideIcon; trend?: string;
   tone: "pos" | "neg" | "warn" | "neutral";
+  /** Tone for the trend line alone — a FALLING spend is good news on a card
+   *  whose own colour is amber, and used to be painted as a warning. */
+  trendTone?: "pos" | "neg" | "warn" | "neutral";
   series?: number[]; chartKind?: "line" | "bars"; sub?: string; onClick: () => void; testId: string;
 }) {
-  const color = tone === "pos" ? "155 65% 45%" : tone === "neg" ? "0 72% 58%" : tone === "warn" ? "38 96% 54%" : "213 90% 62%";
+  const color = TONE_HSL[tone];
+  const trendColor = TONE_HSL[trendTone ?? tone];
   const hasChart = series && series.length >= 2;
   return (
     <button onClick={onClick} data-testid={testId}
@@ -89,7 +97,7 @@ function KpiCard({ label, value, icon, trend, tone, series, chartKind = "line", 
         <span className="micro-label text-muted-foreground leading-tight">{label}</span>
       </div>
       <div className="metric-value text-[26px] leading-none mt-2" style={{ color: `hsl(${color})` }}>{value}</div>
-      {trend && <div className="text-[11px] font-semibold mt-1" style={{ color: `hsl(${color})` }}>{trend}</div>}
+      {trend && <div className="text-[11px] font-semibold mt-1" style={{ color: `hsl(${trendColor})` }}>{trend}</div>}
       {sub && <div className="text-[11px] text-muted-foreground mt-1 truncate">{sub}</div>}
       {hasChart && (chartKind === "bars"
         ? <MiniBars series={series!} color={color} />
@@ -111,16 +119,25 @@ function catIcon(name: string): any {
 
 // Donut ring (inflow vs outflow) for the Cash Flow Overview.
 function DonutRing({ inflow, outflow, net }: { inflow: number; outflow: number; net: number }) {
-  const total = inflow + outflow || 1;
-  const inPct = inflow / total;
+  const total = inflow + outflow;
+  const inPct = total > 0 ? inflow / total : 0;
   const r = 42, c = 2 * Math.PI * r;
   return (
     <svg viewBox="0 0 120 120" className="w-28 h-28">
-      <circle cx="60" cy="60" r={r} fill="none" stroke="hsl(0 72% 55%)" strokeWidth="12" />
-      <circle cx="60" cy="60" r={r} fill="none" stroke="hsl(155 60% 48%)" strokeWidth="12"
-        strokeDasharray={`${(c * inPct).toFixed(1)} ${c.toFixed(1)}`} strokeLinecap="round"
-        transform="rotate(-90 60 60)" />
-      <text x="60" y="56" textAnchor="middle" className="fill-foreground" style={{ fontSize: 15, fontWeight: 700 }}>{money(Math.abs(net))}</text>
+      {/* The track is neutral when nothing has moved; red only stands for real
+          outflow. A rounded cap on a zero-length inflow arc still painted a
+          green sliver, so $0 of income read as "some income". */}
+      <circle cx="60" cy="60" r={r} fill="none"
+        stroke={outflow > 0 ? "hsl(0 72% 55%)" : "hsl(var(--muted))"} strokeWidth="12" />
+      {inflow > 0 && (
+        <circle cx="60" cy="60" r={r} fill="none" stroke="hsl(155 60% 48%)" strokeWidth="12"
+          strokeDasharray={`${(c * inPct).toFixed(1)} ${c.toFixed(1)}`}
+          strokeLinecap={inPct > 0.03 ? "round" : "butt"}
+          transform="rotate(-90 60 60)" />
+      )}
+      {/* The net is signed. A month $1,421 in the red rendered as "$1,421",
+          identical to a month $1,421 ahead. */}
+      <text x="60" y="56" textAnchor="middle" className="fill-foreground" style={{ fontSize: 15, fontWeight: 700 }}>{net < 0 ? `-${money(Math.abs(net))}` : money(net)}</text>
       <text x="60" y="72" textAnchor="middle" className="fill-muted-foreground" style={{ fontSize: 8 }}>NET · MONTH</text>
     </svg>
   );
@@ -182,6 +199,16 @@ export function MoneyOverview(props: {
   const worstBudget = budgets.slice().sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1)))[0];
   const worstPct = worstBudget ? Math.round((worstBudget.spent / (worstBudget.limit || 1)) * 100) : 0;
   const savingsRate = incomeMtd > 0 ? Math.round(((incomeMtd - spendMtd) / incomeMtd) * 100) : null;
+  // A move that rounds to 0.0% is flat, not a fall: net worth off by four
+  // cents used to draw a red ▼ beside "0.0% mo".
+  const nwTrend = (() => {
+    if (momPct == null) return {} as { trend?: string; trendTone?: "pos" | "neg" | "neutral" };
+    const flat = Math.abs(momPct) < 0.05;
+    return {
+      trend: `${flat ? "—" : momPct > 0 ? "▲" : "▼"} ${Math.abs(momPct).toFixed(1)}% mo`,
+      trendTone: (flat ? "neutral" : momPct > 0 ? "pos" : "neg") as "pos" | "neg" | "neutral",
+    };
+  })();
   const billsTotal = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0);
   // Sorted category breakdown with % of total spend.
   const catTotal = Object.values(spendByCategory).reduce((s, v) => s + (Number(v) || 0), 0) || 1;
@@ -197,13 +224,14 @@ export function MoneyOverview(props: {
       {/* Top KPI cards — each opens a drill-down popup or filters. */}
       <div className="flex flex-wrap gap-2">
         <KpiCard label="Net Worth" icon={Wallet} value={money(netWorth)} tone={netWorth < 0 ? "neg" : "pos"}
-          trend={momPct != null ? `${momPct >= 0 ? "▲" : "▼"} ${Math.abs(momPct).toFixed(1)}% mo` : undefined}
-          series={nwSeries} onClick={() => onOpenNetWorth?.()} testId="money-networth" />
+          {...nwTrend} series={nwSeries} onClick={() => onOpenNetWorth?.()} testId="money-networth" />
         <KpiCard label={`Cash Flow · ${monthLabel}`} icon={ArrowLeftRight} value={`${cashFlow >= 0 ? "+" : "-"}${money(Math.abs(cashFlow))}`}
           tone={cashFlow >= 0 ? "pos" : "neg"} sub={`IN ${money(cashIn)} · OUT ${money(cashOut)}`}
           onClick={() => onOpenCashFlow?.()} testId="money-cashflow" />
+        {/* trendTone: spending LESS than last month is good news, not a warning. */}
         <KpiCard label="Spend · MTD" icon={ShoppingCart} value={money(spendMtd)} tone="warn"
-          trend={spendTrendPct != null ? `${spendTrendPct >= 0 ? "▲" : "▼"} ${Math.abs(spendTrendPct).toFixed(0)}% mo` : undefined}
+          trend={spendTrendPct != null ? `${spendTrendPct > 0 ? "▲" : spendTrendPct < 0 ? "▼" : "—"} ${Math.abs(spendTrendPct).toFixed(0)}% mo` : undefined}
+          trendTone={spendTrendPct == null ? undefined : spendTrendPct < 0 ? "pos" : spendTrendPct > 0 ? "neg" : "neutral"}
           sub={worstBudget ? `${worstBudget.category} ${worstPct}%` : undefined}
           series={spendSeries} chartKind="bars"
           onClick={() => (onOpenSpend ? onOpenSpend() : onCategoryClick?.("all"))} testId="money-spend" />
@@ -373,7 +401,7 @@ export function MoneyOverview(props: {
                   <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${(assets / scale) * 100}%` }} /></div>
                 </div>
                 <div>
-                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums font-semibold text-red-500">-{money(liabilities)}</span></div>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums font-semibold text-red-500">{money(liabilities)}</span></div>
                   <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-red-500" style={{ width: `${(liabilities / scale) * 100}%` }} /></div>
                 </div>
                 <div className="border-t border-border pt-2 flex justify-between text-sm font-bold">
