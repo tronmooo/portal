@@ -80,6 +80,9 @@ export default defineConfig({
       'tests/tracker-identity.test.ts',
       'tests/tracker-shapes-domain.test.ts',
       'tests/tracker-units.test.ts',
+      // Fitness measurement semantics + the one calorie estimator (the
+      // "Squats shows 3 lbs" defect).
+      'tests/fitness-metrics.test.ts',
       'tests/entity-naming.test.ts',
       'tests/search-index.test.ts',
       'tests/tracker-health.test.ts',

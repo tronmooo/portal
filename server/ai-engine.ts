@@ -124,6 +124,7 @@ import {
 } from "@shared/estimation-engine";
 import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossessive, detectPossessiveOwner } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
+import { classifyFitnessActivity, isCalorieBearingActivity } from "@shared/fitness-metrics";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
@@ -6340,25 +6341,27 @@ ACTIVITY TRACKING ARCHITECTURE — follow exactly:
    NEVER use "Running" for basketball, tennis, soccer, or any non-running activity.
 
 3. EVERY FITNESS ENTRY MUST INCLUDE activityType in values:
-   Basketball example values: { activityType: "basketball", duration: 30, caloriesBurned: 210, intensity: "moderate" }
-   Running example values: { activityType: "running", distance: 5, duration: 50, pace: "10:00", caloriesBurned: 500 }
-   Tennis example values: { activityType: "tennis", duration: 60, caloriesBurned: 480, intensity: "high" }
-   Yoga example values: { activityType: "yoga", duration: 45, caloriesBurned: 135, style: "vinyasa" }
+   Basketball example values: { activityType: "basketball", duration: 30, intensity: "moderate" }
+   Running example values: { activityType: "running", distance: 5, duration: 50 }
+   Tennis example values: { activityType: "tennis", duration: 60, intensity: "high" }
+   Yoga example values: { activityType: "yoga", duration: 45, style: "vinyasa" }
+   Strength example values: { activityType: "squats", weight: 135, reps: 10, sets: 3 }
    The activityType field preserves identity so summaries ("cardio this week") can aggregate across Basketball + Running + Tennis WITHOUT merging their trackers.
 
-4. CALORIE ESTIMATION by activity:
-   - Running: ~100 cal/mile or ~10 cal/min
-   - Walking: ~80 cal/mile or ~5 cal/min
-   - Cycling: ~50 cal/mile or ~8 cal/min
-   - Swimming: ~10 cal/min
-   - Basketball: ~7 cal/min (moderate), ~9 cal/min (intense game)
-   - Tennis: ~8 cal/min
-   - Soccer: ~8 cal/min
-   - Weight lifting: ~5-7 cal/min
-   - Yoga: ~3 cal/min
-   - HIIT: ~12 cal/min
-   - Hiking: ~6 cal/min
-   Always include caloriesBurned as a derived field.
+4. NEVER COMPUTE caloriesBurned YOURSELF.
+   The server runs one deterministic estimator (shared/fitness-metrics) that
+   uses the OWNER'S body weight, the activity's MET value, duration, distance,
+   intensity and heart rate, and it labels the result as an estimate. Pass
+   caloriesBurned ONLY when the user (or their device) stated a number — e.g.
+   "my watch said 312 calories". A number you invent is stored as if the user
+   had said it, which silently outranks the real estimate everywhere.
+
+5. UNITS ARE PER FIELD, NEVER GUESSED FROM THE NUMBER.
+   weight/resistance → lb or kg · reps → reps · sets → sets · duration → minutes
+   · distance → miles · caloriesBurned → kcal · heartRate → bpm · steps → steps.
+   Put each quantity under its own key. Do NOT fold reps or sets into "weight",
+   and do NOT pass a weight for a bodyweight exercise the user did unloaded:
+   "25 push-ups" is { reps: 25, sets: 1 }, never { weight: 25 }.
 
 For FOOD/NUTRITION entries:
 - Always estimate calories if not given
@@ -8582,17 +8585,22 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       try {
         const canonType = canonActivity?.type;
         input.values = input.values || {};
-        if (canonType === "walking" || canonType === "running" || canonType === "cycling") {
-          // The model routinely invents caloriesBurned for cardio ("jogged an
-          // hour" → caloriesBurned: 600) despite being told to pass only
-          // explicit facts. A fabricated explicit value blocks the engine's
-          // provenance-labeled estimate — drop it unless the user actually
-          // talked about calories.
-          const cardioMsg = String((input as any).__userMessage || "");
-          if (cardioMsg && !/calor|kcal|burn/i.test(cardioMsg)) {
+        // The model routinely invents caloriesBurned ("jogged an hour" → 600;
+        // "played basketball" → 210) despite being told to pass only explicit
+        // facts. A fabricated value is indistinguishable from one the user
+        // stated, so it outranks the deterministic, body-weight-aware estimate
+        // on every screen. Drop it — for EVERY activity, not just cardio —
+        // unless the user actually talked about calories. (Nutrition is
+        // untouched: `calories` there is intake the model is meant to estimate.)
+        {
+          const actMsg = String((input as any).__userMessage || "");
+          const activity = classifyFitnessActivity(input.trackerName, undefined);
+          if (actMsg && isCalorieBearingActivity(activity) && !/calor|kcal|burn/i.test(actMsg)) {
             delete (input.values as any).caloriesBurned;
             delete (input.values as any).calories;
           }
+        }
+        if (canonType === "walking" || canonType === "running" || canonType === "cycling") {
           const targetProf: any = profiles.find(p => p.id === targetProfileId);
           const pf = targetProf?.fields || {};
           const heightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);

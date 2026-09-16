@@ -231,7 +231,7 @@ export default function WellnessPage() {
   });
 
   // ── Derive everything from the shared data ──
-  const vitals = extractVitals(trackers);
+  const vitals = extractVitals(trackers, { profiles });
   const wellnessScore = computeWellnessScore(trackers);
   const trackerCount = countWellnessTrackers(trackers);
 
@@ -360,7 +360,7 @@ export default function WellnessPage() {
   // is it blank?" report. The shared reader recognises activity by name and by
   // the shape of its fields, so the Wellness tab, the Executive card and the
   // trackers page all resolve the same walk.
-  const activityWeek = readActivity(trackers, { days: 7 });
+  const activityWeek = readActivity(trackers, { days: 7, profiles });
 
   // Dynamic per-tracker cards — one for EVERY metric the user actually logs,
   // whatever it is. This is what makes Wellness reflect the user's real data
