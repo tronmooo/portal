@@ -1,10 +1,11 @@
 import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
-import { toMonthlyAmount, isUpcomingBill } from "@shared/obligation-windows";
+import { toMonthlyAmount, isUpcomingBill, sumBillsDueThroughMonth, sumMonthlyIncomeForMonth } from "@shared/obligation-windows";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
+import { analyzeFitnessEntry, calorieContextForOwner, caloriesForStoredEntry, type CalorieContext } from "@shared/fitness-metrics";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 import { assertEventSpan } from "@shared/event-span";
@@ -491,7 +492,21 @@ export function formatTrackerValues(trackerName: string, values: Record<string, 
 
 // ---- Secondary data computation ----
 
-export function computeSecondaryData(trackerName: string, category: string, values: Record<string, any>): ComputedData {
+export function computeSecondaryData(
+  trackerName: string,
+  category: string,
+  values: Record<string, any>,
+  /** The OWNER's body weight / age / sex — resolved by the caller from the
+   *  entry's profile, never from the signed-in user. Omitted is safe: the
+   *  estimator falls back to a labelled population average. */
+  ownerCtx: CalorieContext = {},
+  /** The tracker's declared fields, so units (kg, sec, km) are read from the
+   *  schema rather than guessed from the numbers. */
+  fields?: Array<{ name: string; unit?: string | null; type?: string }> | null,
+  /** Estimation-engine provenance, so a mirrored estimate in `values` is not
+   *  mistaken for a calorie count the user stated. */
+  enrichment?: { estimated?: Record<string, { value: number } | undefined> } | null,
+): ComputedData {
   const computed: ComputedData = {};
   const name = trackerName.toLowerCase();
 
@@ -501,7 +516,6 @@ export function computeSecondaryData(trackerName: string, category: string, valu
     const duration = parseDuration(values.duration);
     if (distance > 0) {
       computed.distanceMiles = distance;
-      computed.caloriesBurned = Math.round(distance * 100);
       computed.intensity = distance > 6 ? "extreme" : distance > 4 ? "high" : distance > 2 ? "moderate" : "low";
     }
     if (duration > 0 && distance > 0) {
@@ -525,7 +539,6 @@ export function computeSecondaryData(trackerName: string, category: string, valu
     const distance = parseFloat(values.distance) || parseFloat(values.steps) / 2000 || 0;
     if (distance > 0) {
       computed.distanceMiles = distance;
-      computed.caloriesBurned = Math.round(distance * 80);
       computed.intensity = "low";
       computed.heartRateZone = "fat_burn";
     }
@@ -536,33 +549,29 @@ export function computeSecondaryData(trackerName: string, category: string, valu
     const distance = parseFloat(values.distance) || 0;
     if (distance > 0) {
       computed.distanceMiles = distance;
-      computed.caloriesBurned = Math.round(distance * 50);
       computed.intensity = distance > 20 ? "high" : distance > 10 ? "moderate" : "low";
     }
   }
 
   // Weight / Gym
   if (name.includes("weight") && category === "fitness") {
-    const duration = parseDuration(values.duration) || 45;
-    computed.caloriesBurned = Math.round(duration * 7);
-    computed.durationMinutes = duration;
+    const duration = parseDuration(values.duration);
+    if (duration > 0) computed.durationMinutes = duration;
     computed.intensity = "moderate";
   }
 
   // Yoga / Stretching
   if (name.includes("yoga") || name.includes("stretch") || name.includes("pilates")) {
-    const duration = parseDuration(values.duration) || 30;
-    computed.caloriesBurned = Math.round(duration * 4);
-    computed.durationMinutes = duration;
+    const duration = parseDuration(values.duration);
+    if (duration > 0) computed.durationMinutes = duration;
     computed.intensity = "low";
     computed.heartRateZone = "recovery";
   }
 
   // Swimming
   if (name.includes("swim")) {
-    const duration = parseDuration(values.duration) || 30;
-    computed.caloriesBurned = Math.round(duration * 10);
-    computed.durationMinutes = duration;
+    const duration = parseDuration(values.duration);
+    if (duration > 0) computed.durationMinutes = duration;
     computed.intensity = "high";
     computed.heartRateZone = "cardio";
   }
@@ -608,6 +617,27 @@ export function computeSecondaryData(trackerName: string, category: string, valu
       }
     }
   }
+
+  // ── Energy expenditure: ONE estimator, one number ───────────────────────
+  // This block replaced six per-activity formulas (distance × 100, duration ×
+  // 7, …) that ignored who was exercising, disagreed with each other, and
+  // covered neither strength work nor most sports. shared/fitness-metrics now
+  // owns the math for every surface; storing it here just means the dashboard
+  // and aggregates don't have to redo it. Explicitly logged calories are
+  // returned verbatim and flagged `logged` so no estimate can overwrite them.
+  try {
+    const fit = analyzeFitnessEntry(
+      { trackerName, category, fields, values, enrichment },
+      ownerCtx,
+    );
+    if (fit.calories) {
+      computed.caloriesBurned = fit.calories.value;
+      computed.caloriesBurnedSource = fit.calories.estimated ? "estimated" : "logged";
+      computed.caloriesBurnedMethod = fit.calories.method;
+      computed.caloriesBurnedConfidence = fit.calories.confidence;
+      computed.caloriesUsedDefaultWeight = fit.calories.usedDefaultWeight;
+    }
+  } catch { /* an estimate is never worth failing a write over */ }
 
   return computed;
 }
@@ -840,9 +870,13 @@ function generateInsights(
   let totalCalsBurned = 0;
   for (const t of trackers) {
     for (const e of t.entries) {
-      if (e.timestamp.slice(0, 10) === todayStr && e.computed?.caloriesBurned) {
-        totalCalsBurned += e.computed.caloriesBurned;
-      }
+      if (e.timestamp.slice(0, 10) !== todayStr) continue;
+      const ownerId = (e as any).profileId || (t.linkedProfiles || [])[0];
+      const cal = caloriesForStoredEntry(
+        t as any, e as any,
+        calorieContextForOwner(ownerId ? profiles.find(p => p.id === ownerId) : undefined),
+      );
+      if (cal) totalCalsBurned += cal.value;
     }
   }
   if (totalCalsBurned > 0) {
@@ -1283,10 +1317,14 @@ export class MemStorage implements IStorage {
     const { _enrichment: enrichmentMeta, ...rawInput } = { ...data.values } as Record<string, any>;
     // Same unit + value gates as SupabaseStorage.logEntry — every write path, one rule.
     const rawValues = normalizeTrackerEntry(tracker as any, rawInput).values;
-    const guard = sanitizeTrackerEntryValues(tracker.fields, rawValues);
+    const guard = sanitizeTrackerEntryValues(tracker.fields, rawValues, { name: tracker.name, category: tracker.category, unit: (tracker as any).unit });
     if (guard.error) throw new Error(guard.error);
     const values = guard.values;
-    const computed = { ...computeSecondaryData(tracker.name, tracker.category, values), ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}) } as any;
+    // Owner context (body weight / age / sex) for the calorie estimate — the
+    // entry's own profile, else the tracker's owner. Never the current user.
+    const ownerId = (data as any).profileId || (tracker.linkedProfiles || [])[0];
+    const ownerCtx = calorieContextForOwner(ownerId ? this.profiles.get(ownerId) : undefined);
+    const computed = { ...computeSecondaryData(tracker.name, tracker.category, values, ownerCtx, tracker.fields, enrichmentMeta as any), ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}) } as any;
     const entry: TrackerEntry = { id: randomUUID(), values, computed, notes: data.notes, mood: data.mood as any, tags: data.tags, timestamp: data.timestamp || new Date().toISOString() };
     tracker.entries.push(entry);
     let desc = `Logged ${tracker.name}: ${JSON.stringify(data.values)}`;
@@ -2489,6 +2527,11 @@ export class MemStorage implements IStorage {
         category: o.category,
       }));
 
+    const userYearMonth = `${thisYear}-${String(thisMonth + 1).padStart(2, '0')}`;
+    const incomesForMonth = Array.from(this.incomes.values()).filter(i => matchesFilter((i as any).linkedProfiles));
+    const recurringIncome = sumMonthlyIncomeForMonth(incomesForMonth as any[], userYearMonth);
+    const receivedPaycheckIncome = 0; // the in-memory storage keeps no paycheck table
+
     // Exact 52/12 and 26/12 multipliers (shared/obligation-windows.ts), the
     // same ones production uses — the truncated 4.33/2.17 drifted from it.
     const monthlyObligationTotal = obligations.reduce(
@@ -2525,6 +2568,13 @@ export class MemStorage implements IStorage {
         spendByCategory,
         upcomingBills,
         monthlyObligationTotal: Math.round(monthlyObligationTotal),
+        // Mirrors SupabaseStorage: cash OUT is spend + the bill money still
+        // owed this month, never the monthly-equivalent of every bill (which
+        // double-counted every bill already paid and every expense it wrote).
+        unpaidBillsThisMonth: Math.round(sumBillsDueThroughMonth(obligations as any[], userYearMonth)),
+        monthlyIncome: Math.round(recurringIncome + receivedPaycheckIncome),
+        recurringIncome: Math.round(recurringIncome),
+        receivedPaycheckIncome: Math.round(receivedPaycheckIncome),
       },
       overdueTasks,
       tasksDueToday,

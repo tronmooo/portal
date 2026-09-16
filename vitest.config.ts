@@ -80,6 +80,9 @@ export default defineConfig({
       'tests/tracker-identity.test.ts',
       'tests/tracker-shapes-domain.test.ts',
       'tests/tracker-units.test.ts',
+      // Fitness measurement semantics + the one calorie estimator (the
+      // "Squats shows 3 lbs" defect).
+      'tests/fitness-metrics.test.ts',
       'tests/entity-naming.test.ts',
       'tests/search-index.test.ts',
       'tests/tracker-health.test.ts',
@@ -131,6 +134,9 @@ export default defineConfig({
       'tests/wellness-metrics.test.ts',
       'tests/wellness-overview.test.tsx',
       'tests/wellness-dynamic.test.ts',
+      'tests/wellness-canon.test.ts',
+      'tests/wellness-readout.test.ts',
+      'tests/wellness-routes.test.ts',
       'tests/query-key-hygiene.test.ts',
       'tests/ai-tool-registry.test.ts',
       'tests/ai-envelope.test.ts',
@@ -323,6 +329,7 @@ export default defineConfig({
       'tests/public-auth-ui.dom.test.tsx',
       'tests/artifact-panel-failures.dom.test.tsx',
       'tests/editor-mobile-controls.test.ts',
+      'tests/finance-tab-qa-2026-09-16.test.ts',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       'tests/test-suite-discovery.test.ts',

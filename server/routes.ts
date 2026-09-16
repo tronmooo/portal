@@ -30,6 +30,7 @@ import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
 import { registerCacheBuster } from "./cache-bus";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
+import { collectMetrics, activityHistory, labPanels, weeklyBrief, resolveWellnessSubject, belongsToSubject } from "../shared/wellness-readout";
 import { updateTrackerEntryEverywhere, removeTrackerEntry } from "./tracker-entries";
 import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersionMaps, MAX_VERSION_LOOKAHEAD, dependenciesForPrefix } from "@shared/cache-domains";
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
@@ -4593,51 +4594,61 @@ ${JSON.stringify(ctx, null, 2)}`;
     }
   }));
 
-  // ---- Wellness AI Deep Dive (on-demand narrative) ----
-  // The Wellness tab computes deterministic findings on every load for free.
-  // This endpoint is called ONLY when the user taps "AI Deep Dive": it turns the
-  // same deterministic findings into a short, human narrative via Haiku, and
-  // falls back to a plain summary of those findings if the model is unavailable —
-  // so it never fails or blocks. Profile-scoped like every other read.
+  // ---- Wellness weekly brief (on-demand narrative) ----
+  // The Wellness tab computes its brief deterministically on every load for
+  // free; this endpoint turns the SAME facts into prose, and only when the user
+  // asks, so a visit costs no tokens.
+  //
+  // It reasons over the canonical readout (shared/wellness-readout.ts), not the
+  // generic insight engine. That engine's job is nudging, so it produced lines
+  // like "Hydration hasn't been logged in 24 days" — an accusation about a
+  // chore this tab no longer asks anyone to do. What goes to the model here is
+  // only what the DATA DID: metrics that have readings, trends against the
+  // user's own 30-day baseline, workouts that happened, lab values that are out
+  // of range. Absent sources are simply absent.
   app.post("/api/wellness/insights", asyncHandler(async (req, res) => {
     try {
       const idsRaw = (req.body?.profileIds ?? req.query.profileIds) as string | string[] | undefined;
       const ids = Array.isArray(idsRaw)
         ? idsRaw.filter((x) => typeof x === "string" && x)
         : (typeof idsRaw === "string" ? idsRaw.split(",").filter(Boolean) : []);
-      const [trackers, habits, obligations, profiles] = await Promise.all([
-        storage.getTrackers(), storage.getHabits(), storage.getObligations(), storage.getProfiles(),
-      ]);
-      const filterActive = ids.length > 0;
-      const filterCtx = await profileFilterCtx(ids, profiles);
-      const scoped = <T extends { linkedProfiles?: string[] }>(rows: T[]) =>
-        !filterActive ? rows : rows.filter((r) => passesProfileFilter((r as any).linkedProfiles, filterCtx));
-      const findings = computeKeyFindings({
-        trackers: scoped(trackers as any) as any,
-        obligations: scoped(obligations as any) as any,
-        habits: scoped(habits as any) as any,
-      } as any);
-      const healthFindings = findings.filter((f: any) => /tracker_|habit_/.test(String(f.kind))).slice(0, 12);
-      // Deterministic fallback narrative — a plain readout of the findings.
-      const fallbackNarrative = healthFindings.length === 0
-        ? "Not enough logged yet to spot trends. Keep logging your trackers and check back in a few days."
-        : healthFindings.slice(0, 5).map((f: any) => f.detail ? `${f.title} — ${f.detail}` : f.title).join(" ");
-      if (healthFindings.length === 0) {
-        return res.json({ narrative: fallbackNarrative, findingsCount: 0 });
+      const [trackers, profiles] = await Promise.all([storage.getTrackers(), storage.getProfiles()]);
+      // ONE SUBJECT, same rule as the page: the selected person, else self.
+      // Health data is never averaged across people.
+      const { subject, isSelf } = resolveWellnessSubject(profiles as any[], ids);
+      const mine = (trackers as any[]).filter((t) => belongsToSubject(t?.linkedProfiles, subject, isSelf));
+
+      const metrics = collectMetrics(mine as any);
+      const workouts = activityHistory(mine as any);
+      const labs = labPanels(metrics);
+      const brief = weeklyBrief({ metrics, workouts, labs });
+
+      // Nothing connected ⇒ say what would make this page work, and never
+      // pretend there is a trend.
+      if (brief.length === 0) {
+        return res.json({
+          narrative: "No health data is flowing in yet. Connect Apple Health or Health Connect, or add a lab report, and this brief will describe what changed.",
+          findingsCount: 0,
+        });
       }
-      const summary = healthFindings
-        .map((f: any) => `- [${f.severity}/${f.direction}] ${f.title}${f.detail ? `: ${f.detail}` : ""}`)
-        .join("\n");
+
+      const facts = brief.map((b) => `- ${b}`).join("\n");
       const decision = await aiDecide<{ narrative: string }>({
-        task: "wellness-deep-dive",
-        system: `You are a supportive health coach. You are given DETERMINISTIC findings computed from the user's own health tracker data. Write a short, warm, plain-language wellness summary (2-4 sentences) that ties the findings together and gives ONE concrete, encouraging suggestion. Do NOT invent numbers or metrics not present in the findings. Do NOT give medical diagnoses. Return ONLY JSON: {"narrative": "<text>"}`,
-        user: `Findings:\n${summary}\n\nReturn JSON only: {"narrative": "<2-4 sentence summary>"}`,
+        task: "wellness-weekly-brief",
+        system: `You write a short weekly health brief from FACTS that were computed from the user's own health data. Rules, in order of importance:
+1. Use ONLY the facts given. Never introduce a number, metric, date or trend that is not in them, and never restate one inaccurately.
+2. Never mention missing data, tracking gaps, streaks, goals, or anything the user should log — data arrives automatically and an absent metric is not a failure.
+3. No diagnoses, no medical advice, no alarm. Describe what the data did.
+4. 3-4 plain sentences, second person, calm and specific. Return ONLY JSON: {"narrative": "<text>"}`,
+        user: `Facts:\n${facts}\n\nReturn JSON only: {"narrative": "<3-4 sentence brief>"}`,
         timeoutMs: 6000,
         maxTokens: 320,
-        fallback: () => ({ narrative: fallbackNarrative }),
+        // The deterministic brief is already a correct readout, so the fallback
+        // loses only the prose.
+        fallback: () => ({ narrative: brief.join(" ") }),
         validate: (x: any) => x && typeof x === "object" && typeof x.narrative === "string" && x.narrative.length > 0,
       });
-      res.json({ narrative: decision.value.narrative, findingsCount: healthFindings.length });
+      res.json({ narrative: decision.value.narrative, findingsCount: brief.length });
     } catch (err: any) {
       log.error("[WellnessInsights]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to generate wellness insights" });
@@ -6178,13 +6189,13 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
   };
   // The tracker-scoped and by-id PATCH routes accept the same body; the
   // storage patch is built once so the two cannot drift.
-  const buildTrackerEntryPatch = (req: Request, trackerFields: any): { patch?: any; error?: string } => {
+  const buildTrackerEntryPatch = (req: Request, trackerFields: any, trackerCtx?: { name?: string | null; category?: string | null; unit?: string | null } | null): { patch?: any; error?: string } => {
     const { values, notes, mood, tags, timestamp, valuesToDelete } = req.body || {};
     const patch: any = {};
     // The same value gate as POST (server/tracker-entry-guard.ts), so an edit
     // can't smuggle a value the create path would have rejected.
     if (values && typeof values === "object") {
-      const guard = sanitizeTrackerEntryValues(trackerFields, values);
+      const guard = sanitizeTrackerEntryValues(trackerFields, values, trackerCtx);
       if (guard.error) return { error: guard.error };
       patch.values = guard.values;
     }
@@ -6242,7 +6253,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // here too turns a rejection into a clean 400 instead of a 500.
     {
       const tracker = await storage.getTracker(req.params.id);
-      const guard = sanitizeTrackerEntryValues(tracker?.fields, values);
+      const guard = sanitizeTrackerEntryValues(tracker?.fields, values, tracker ? { name: tracker.name, category: tracker.category, unit: (tracker as any).unit } : null);
       if (guard.error) return res.status(400).json({ error: guard.error });
       for (const k of Object.keys(guard.values)) (values as any)[k] = guard.values[k];
       // Pet-specific tighter bound — needs profile context the pure guard
@@ -6268,12 +6279,14 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     // The tracker's field definitions drive the value gate; only fetched when
     // there are values to gate (a notes-only edit never needed the tracker).
     let trackerFields: any = undefined;
+    let trackerCtx: { name?: string | null; category?: string | null; unit?: string | null } | undefined;
     if (req.body?.values && typeof req.body.values === "object") {
       const tracker = await storage.getTracker(req.params.id);
       if (!tracker) return res.status(404).json({ error: "Tracker not found" });
       trackerFields = tracker.fields;
+      trackerCtx = { name: tracker.name, category: tracker.category, unit: (tracker as any).unit };
     }
-    const built = buildTrackerEntryPatch(req, trackerFields);
+    const built = buildTrackerEntryPatch(req, trackerFields, trackerCtx);
     if (built.error) return res.status(400).json({ error: built.error });
     // A mirror entry re-dated to another day takes its habit check-in along
     // (server/tracker-entries).
@@ -6307,7 +6320,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     const located = await locateTrackerEntry(req.params.entryId);
     if (!located) return res.status(404).json({ error: "Entry not found" });
     // Same value gate + timestamp rule as the tracker-scoped PATCH above.
-    const built = buildTrackerEntryPatch(req, located.tracker.fields);
+    const built = buildTrackerEntryPatch(req, located.tracker.fields, { name: located.tracker.name, category: located.tracker.category, unit: (located.tracker as any).unit });
     if (built.error) return res.status(400).json({ error: built.error });
     const moved = await updateTrackerEntryEverywhere(storage, { trackerId: located.tracker.id, entryId: req.params.entryId, patch: built.patch }, getTimezone(req), log);
     if (!moved.ok) return res.status(404).json({ error: "Entry not found" });

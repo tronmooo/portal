@@ -11,9 +11,24 @@
 // Coercion is idempotent (a clean number passes through untouched), so a path
 // that already validated loses nothing by being validated again.
 
+import {
+  resolveCanonicalMetric,
+  validateCanonicalValue,
+} from "../shared/wellness-canon";
+
 export interface TrackerFieldish {
   name: string;
   type?: string;
+  unit?: string | null;
+}
+
+/** Identity of the tracker being written to, so the guard can tell WHICH
+ *  metric a bare `value` field is carrying. Optional: a caller that doesn't
+ *  know keeps the old field-name-only behaviour. */
+export interface TrackerContext {
+  name?: string | null;
+  category?: string | null;
+  unit?: string | null;
 }
 
 export interface GuardResult {
@@ -48,6 +63,7 @@ const META_KEYS = new Set(["_notes", "notes", "timestamp"]);
 export function sanitizeTrackerEntryValues(
   fields: ReadonlyArray<TrackerFieldish> | null | undefined,
   rawValues: Record<string, any> | null | undefined,
+  tracker?: TrackerContext | null,
 ): GuardResult {
   const values: Record<string, any> = { ...(rawValues || {}) };
 
@@ -104,6 +120,29 @@ export function sanitizeTrackerEntryValues(
     if (k === "hours" && v > 24) return { values, error: `Sleep ${v} hours is impossible. Max: 24.` };
     if (k === "calories" && v > 20000) return { values, error: `${v} calories is unrealistic. Max: 20,000.` };
     if (v > 100000) return { values, error: `Value ${v} for "${k}" exceeds maximum (100,000).` };
+  }
+
+  // ── Canonical metric bounds ──────────────────────────────────────────────
+  // The rules above bound a value by the name of the FIELD it landed in, which
+  // says nothing about a lab tracker whose only field is called "value": that
+  // is how "HbA1c 179 %" and "HDL 170 mg/dL" were stored. Resolve what the
+  // tracker actually measures and bound the number against THAT metric's
+  // physically possible range (shared/wellness-canon.ts — the same table the
+  // Wellness tab reads with).
+  //
+  // Requires the tracker's identity: a bare field called "temperature" says
+  // nothing about whether it is a fever or a fridge, so a caller that doesn't
+  // know which tracker it is writing to keeps the field-name rules above and
+  // nothing more.
+  for (const [k, v] of Object.entries(values)) {
+    if (!tracker?.name && !tracker?.category) break;
+    if (typeof v !== "number" || META_KEYS.has(k) || k.startsWith("_")) continue;
+    const metric = resolveCanonicalMetric(tracker?.name, tracker?.category, k);
+    if (!metric) continue;
+    const unit =
+      (fields || []).find((f) => f && f.name === k)?.unit || tracker?.unit || "";
+    const check = validateCanonicalValue(metric, v, unit);
+    if (!check.ok) return { values, error: check.error };
   }
 
   return { values };

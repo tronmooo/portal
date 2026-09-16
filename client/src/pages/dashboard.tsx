@@ -1,5 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
-import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { sumMonthIncomeNow } from "@shared/obligation-windows";
 import { localTodayISO } from "@/lib/dates";
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
@@ -475,8 +475,8 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
         {/* When nothing is logged yet this month, "$0" read as broken (user
             report on July 1). Show the recurring commitment so the number has
             context: expenses logged so far + bills/mo still coming. */}
-        {(finSnap?.monthlyObligationTotal ?? 0) > 0 && (
-          <span className="ml-1 text-[11px] text-muted-foreground tabular-nums">+${Math.round(finSnap.monthlyObligationTotal).toLocaleString()}/mo bills</span>
+        {(finSnap?.unpaidBillsThisMonth ?? finSnap?.monthlyObligationTotal ?? 0) > 0 && (
+          <span className="ml-1 text-[11px] text-muted-foreground tabular-nums">+${Math.round(Number(finSnap.unpaidBillsThisMonth ?? finSnap.monthlyObligationTotal)).toLocaleString()} bills still due</span>
         )}
       </div>
       <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
@@ -771,12 +771,18 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // window (supabase-storage.ts getStats/getDashboardEnhanced), so the
   // value cannot flip as the two endpoints race.
   const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
-  const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
+  // The snapshot owns the one income figure: recurring streams PLUS paychecks
+  // actually received. Summing the streams alone meant marking a paycheck
+  // received moved nothing on any tile.
+  const monthlyIncome = enhanced?.financeSnapshot?.monthlyIncome != null
+    ? Number(enhanced.financeSnapshot.monthlyIncome) || 0
+    : sumMonthIncomeNow(incomes, null, BROWSER_TIMEZONE);
   // BUG (user report: tile "Out $0" while the Cash Flow popup said "Out $1,020"):
   // the tile only counted logged expenses; the popup counts recurring bills too.
-  // Use the SAME definition as the popup: Out = month expenses + monthlyized
-  // active obligations (financeSnapshot.monthlyObligationTotal).
-  const monthlyRecurringOut = enhanced?.financeSnapshot?.monthlyObligationTotal ?? 0;
+  // Out = month expenses + the bill money STILL OWED this month. It used to add
+  // the monthly-equivalent of every bill, so a bill already paid was counted
+  // twice — once as the expense its payment wrote, once here.
+  const monthlyRecurringOut = Number(enhanced?.financeSnapshot?.unpaidBillsThisMonth ?? enhanced?.financeSnapshot?.monthlyObligationTotal ?? 0);
   const monthlyOut = monthlySpend + monthlyRecurringOut;
   const cashFlow = monthlyIncome - monthlyOut;
   // BUG (QA 2026-07-25): the tile flashed -$7,253 → +$28,247 → -$7,651 →
@@ -3817,10 +3823,13 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
   // source the drilldown popup uses) so the card headline and the popup total always match.
   // Falls back to stats?.monthlySpend for the brief window before enhanced data arrives.
   const monthlySpend = data?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
-  const monthlyIncome = useMemo(() => sumMonthlyIncomeNow(incomes || [], BROWSER_TIMEZONE), [incomes]);
-  // Same definition as the hero tile + Cash Flow popup: Out includes the
-  // monthlyized recurring obligations, not just logged expenses.
-  const cashFlow = monthlyIncome - monthlySpend - (data?.monthlyObligationTotal ?? 0);
+  const monthlyIncome = useMemo(
+    () => (data?.monthlyIncome != null ? Number(data.monthlyIncome) || 0 : sumMonthIncomeNow(incomes || [], null, BROWSER_TIMEZONE)),
+    [incomes, data?.monthlyIncome],
+  );
+  // Same definition as the hero tile + Cash Flow popup: Out includes the bills
+  // still owed this month, not the monthly-equivalent of ones already paid.
+  const cashFlow = monthlyIncome - monthlySpend - Number(data?.unpaidBillsThisMonth ?? data?.monthlyObligationTotal ?? 0);
   // Hide synthetic test rows unless the dashboard toggle is on (point 11).
   const showTestData = useShowTestData();
   const hideTest = (e: any) => showTestData || !isTestEntity(e);

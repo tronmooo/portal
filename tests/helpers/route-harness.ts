@@ -31,6 +31,10 @@ export interface FakeDb {
   tasks: any[];
   events: any[];
   documents: any[];
+  /** Trackers + their entries, for the tracker-entry value gate. Optional:
+   *  several suites build a FakeDb literal of their own, and a required field
+   *  here would leave `db.trackers` undefined inside the double. */
+  trackers?: any[];
   /** Call counter for the binary-materializing read, so a test can prove the
    *  metadata route never touches it. */
   getDocumentCalls: number;
@@ -63,6 +67,33 @@ export function makeFakeStorage(db: FakeDb) {
     // and the response-cache read is `if (cached) return res.json(cached)`. So
     // every cached endpoint served an empty array to the first caller and every
     // caller after it. These two make the double behave like a cold cache.
+    // Trackers: only implemented when a test seeds them (the default `[]` from
+    // the catch-all proxy is what every other test still sees).
+    getTrackers: async () => db.trackers || [],
+    // The chat lanes create a tracker and then log into it by id; without a
+    // real createTracker the follow-up logEntry found nothing and the turn
+    // reported no mutation.
+    createTracker: async (data: any) => {
+      const row = { id: id("tracker"), entries: [], fields: [], linkedProfiles: [], ...data };
+      (db.trackers ||= []).push(row);
+      return row;
+    },
+    getTracker: async (id: string) => (db.trackers || []).find((t) => t.id === id),
+    logEntry: async (data: any) => {
+      const t = (db.trackers || []).find((x) => x.id === data.trackerId);
+      if (!t) return undefined;
+      const row = { id: id("entry"), timestamp: data.timestamp || new Date().toISOString(), values: data.values, notes: data.notes };
+      t.entries = [...(t.entries || []), row];
+      return row;
+    },
+    updateTrackerEntry: async (trackerId: string, entryId: string, patch: any) => {
+      const t = (db.trackers || []).find((x) => x.id === trackerId);
+      const e = (t?.entries || []).find((x: any) => x.id === entryId);
+      if (!t || !e) return undefined;
+      if (patch.values) e.values = { ...e.values, ...patch.values };
+      if (patch.timestamp) e.timestamp = patch.timestamp;
+      return e;
+    },
     getResponseCache: async () => null,
     setResponseCache: async () => undefined,
     // Per-account lock (D261): a real map so two concurrent restores in a test contend like production.
@@ -383,7 +414,7 @@ export interface Harness {
 export async function startHarness(seed: Partial<FakeDb> = {}): Promise<Harness> {
   const db: FakeDb = {
     profiles: [], liabilityPayments: [], expenses: [], incomes: [], obligations: [],
-    tasks: [], events: [], documents: [], getDocumentCalls: 0,
+    tasks: [], events: [], documents: [], trackers: [], getDocumentCalls: 0,
     bumpDataVersionCalls: 0, domainVersions: {}, lastBumpedDomains: [], ...seed,
   };
   const storage = makeFakeStorage(db);

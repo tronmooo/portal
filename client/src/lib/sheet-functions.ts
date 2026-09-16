@@ -15,7 +15,7 @@
 //
 // Names match exactly (case-insensitive); fuzzy match falls back to substring.
 
-import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { sumMonthIncomeNow } from "@shared/obligation-windows";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { localTodayISO } from "@/lib/dates";
 import { useEffect, useMemo, useState } from "react";
@@ -85,7 +85,11 @@ export function useSheetSnapshot(enabled: boolean = true): Snapshot {
         const assets = Number(enh.totalAssetValue || 0);
         const liabilities = Number(enh.totalLiabilities || 0);
         const monthlySpend = Number(enh.financeSnapshot?.totalMonthlySpend ?? enh.totalMonthlySpend ?? 0);
-        const monthlyIncome = sumMonthlyIncomeNow(Array.isArray(incRes) ? incRes : [], BROWSER_TIMEZONE);
+        // The snapshot's income figure — recurring streams plus the paychecks
+        // that actually landed this month — so a sheet agrees with the tiles.
+        const monthlyIncome = enh.financeSnapshot?.monthlyIncome != null
+          ? Number(enh.financeSnapshot.monthlyIncome) || 0
+          : sumMonthIncomeNow(Array.isArray(incRes) ? incRes : [], null, BROWSER_TIMEZONE);
 
         // Budgets — current month's amounts. Compute spent per category from monthlyExpenseRecords if present.
         const monthExpenses: any[] = enh.monthlyExpenseRecords || [];

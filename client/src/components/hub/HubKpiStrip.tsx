@@ -12,7 +12,7 @@
 // /api/trackers (not bootstrap-seeded): the HEALTH chip shows "—" until it
 // lands, and its key/URL match the trackers page exactly so the cache is
 // shared with the Trackers tab.
-import { sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { sumMonthIncomeNow } from "@shared/obligation-windows";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { useState, useMemo, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -22,7 +22,7 @@ import { hashNavigate } from "@/lib/hashNavigate";
 import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useOverflowX } from "@/hooks/useOverflowX";
-import { computeHealthScore } from "@/lib/tracker-health";
+import { collectMetrics, wellnessScore, resolveWellnessSubject, belongsToSubject } from "@shared/wellness-readout";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
 import { groupDocumentDates } from "@shared/document-dates";
 import type { DashboardStats, Tracker } from "@shared/schema";
@@ -143,6 +143,14 @@ export function HubKpiStrip() {
     staleTime: 30_000,
     placeholderData: undefined,
   });
+  // Needed to resolve WHOSE wellness the chip is showing — health data is read
+  // for one person, never blended (same rule as pages/wellness.tsx). The slim
+  // profile list is already cached by the nav chrome, so this is free.
+  const { data: profilesLite } = useQuery<any[]>({
+    queryKey: ["/api/profiles/lite"],
+    queryFn: () => apiRequest("GET", "/api/profiles/lite").then(r => r.json()),
+    staleTime: 300_000,
+  });
 
   // NET WORTH — the server's filtered finance snapshot is the single source of
   // truth (same numbers HeroKPISection/NetWorthPopup trust, NW-5). No client
@@ -150,22 +158,40 @@ export function HubKpiStrip() {
   const snap = enhanced?.financeSnapshot;
   const netWorth = snap != null ? (snap.totalAssetValue ?? 0) - (snap.totalLiabilities ?? 0) : null;
 
-  // CASH FLOW — mirrors HeroKPISection's definition exactly: monthly incomes
-  // minus (month expenses + monthlyized active obligations).
+  // CASH FLOW — the ONE definition, straight off the snapshot:
+  //   IN  = recurring income + paychecks actually received
+  //   OUT = month expenses + bill money still owed this month
+  // OUT was `expenses + monthly-equivalent of every bill`, so every bill that
+  // had already been paid was counted twice (paying one writes an expense).
   const incomes: any[] = Array.isArray(incomesRaw) ? incomesRaw : incomesRaw?.items || [];
-  const monthlyIncome = sumMonthlyIncomeNow(incomes, BROWSER_TIMEZONE);
+  const monthlyIncome = snap?.monthlyIncome != null
+    ? Number(snap.monthlyIncome) || 0
+    : sumMonthIncomeNow(incomes, null, BROWSER_TIMEZONE);
   const monthlySpend = snap?.totalMonthlySpend ?? stats?.monthlySpend;
   const cashFlow = monthlySpend != null
-    ? monthlyIncome - (monthlySpend + (snap?.monthlyObligationTotal ?? 0))
+    ? monthlyIncome - (monthlySpend + Number(snap?.unpaidBillsThisMonth ?? snap?.monthlyObligationTotal ?? 0))
     : null;
 
-  // computeHealthScore returns null for BOTH "still loading" and "this scope
-  // has no health/fitness readings to score" — and the chip rendered "—" for
-  // both, so a person with no trackers looked like a broken tile next to a
-  // person with a score (QA report 2026-08-05, "Bob shows — while Mike shows
-  // 78"). Say which: "…" while the list is in flight, "—" once it has landed
-  // and there is genuinely nothing to score.
-  const health = trackers ? computeHealthScore(trackers) : null;
+  // WELLNESS — the SAME score the Wellness tab shows, computed by the same
+  // function over the same subject (shared/wellness-readout). The chip sits
+  // directly above that tab and navigates to it, so a second, differently
+  // derived number here is a contradiction on one screen: this chip read 75
+  // off the legacy tracker-activity score while the tab, rebuilt on the
+  // canonical metrics, read 96.
+  //
+  // Null means BOTH "still loading" and "nothing connected to score", and the
+  // chip rendered "—" for both — so a person with no trackers looked broken
+  // next to a person with a score (QA 2026-08-05, "Bob shows — while Mike
+  // shows 78"). Say which: "…" in flight, "—" once the list has landed.
+  const health = useMemo(() => {
+    if (!trackers) return null;
+    const { subject, isSelf } = resolveWellnessSubject(
+      (profilesLite || []) as any[],
+      mode === "selected" ? ids : [],
+    );
+    const mine = trackers.filter((t) => belongsToSubject((t as any).linkedProfiles, subject, isSelf));
+    return wellnessScore(collectMetrics(mine as any)).value;
+  }, [trackers, profilesLite, mode, ids.join(",")]);
   const healthValue = health != null ? String(health) : trackersPending ? "…" : "—";
 
   const streak = stats

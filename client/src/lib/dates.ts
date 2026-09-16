@@ -184,3 +184,18 @@ export function localDaysFromNowISO(n: number): string {
   d.setDate(d.getDate() + n);
   return d.toLocaleDateString("en-CA");
 }
+
+/**
+ * A "YYYY-MM" month key as a readable label ("September 2026").
+ *
+ * `new Date("2026-09-01")` is UTC midnight, which is August 31 for every
+ * negative-offset user — the Finance tab's Cash Flow heading read
+ * "August 2026" all through September. Anchoring mid-month and formatting in
+ * UTC keeps the label on the month the key names, in any zone.
+ */
+export function monthKeyLabel(ym: string, opts: Intl.DateTimeFormatOptions = { month: "long", year: "numeric" }): string {
+  const y = Number(String(ym).slice(0, 4));
+  const m = Number(String(ym).slice(5, 7));
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) return String(ym);
+  return new Date(Date.UTC(y, m - 1, 15)).toLocaleDateString(undefined, { ...opts, timeZone: "UTC" });
+}

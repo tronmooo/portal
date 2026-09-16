@@ -59,3 +59,24 @@ export function sortExpenses<T extends ExpenseLike>(list: readonly T[], sortBy: 
       return arr.sort((a, b) => time(b) - time(a) || (b.description || "").localeCompare(a.description || ""));
   }
 }
+
+/**
+ * An expense already logged with the same description, amount and day as the
+ * one being added. "Dinner at Chili's" ($100, Aug 9) was saved twice four
+ * minutes apart because nothing ever looked.
+ */
+export function findDuplicateExpense(
+  existing: ReadonlyArray<any> | null | undefined,
+  candidate: { description: string; amount: number; date?: string },
+): any | null {
+  const desc = candidate.description.trim().toLowerCase();
+  if (!desc) return null;
+  const day = String(candidate.date || "").slice(0, 10);
+  for (const e of existing || []) {
+    if (String(e?.description || "").trim().toLowerCase() !== desc) continue;
+    if (Math.abs(Number(e?.amount) - candidate.amount) >= 0.005) continue;
+    if (day && String(e?.date || "").slice(0, 10) !== day) continue;
+    return e;
+  }
+  return null;
+}
