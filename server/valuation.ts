@@ -1,4 +1,5 @@
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
+import { isPriorValuationKey } from "@shared/valuation/context";
 // ─── Asset valuation dossier ────────────────────────────────────────────────
 // Builds the complete "everything we know about this asset" context that the
 // valuation LLM calls (Perplexity primary, Anthropic fallback) receive, and
@@ -90,25 +91,10 @@ export interface AssetValuation {
 
 // Outputs of prior valuations. NEVER included in a new valuation prompt —
 // feeding them back anchors the model on its own previous answer (the
-// "same number every time" bug). Keys are matched case-insensitively.
-const PRIOR_VALUATION_KEYS = new Set([
-  "currentvalue",
-  "previousvalue",
-  "estimatedvalue",
-  "valuationmethod",
-  "valuationconfidence",
-  "valuationrange",
-  "valuationdate",
-  "valuationlow",
-  "valuationhigh",
-  "valuationfactors",
-  "valuationmissinginfo",
-  "lastvaluedat",
-]);
-
-export function isPriorValuationKey(key: string): boolean {
-  return PRIOR_VALUATION_KEYS.has(key.toLowerCase());
-}
+// "same number every time" bug). The key list is owned by the shared
+// valuation context builder, which uses it for the same reason (prior
+// outputs are not material inputs, so they are not fingerprinted either).
+export { isPriorValuationKey };
 
 const clip = (s: string, max: number) => (s.length > max ? s.slice(0, max - 1) + "…" : s);
 

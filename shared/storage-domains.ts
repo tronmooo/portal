@@ -135,6 +135,11 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
   Artifact: { domains: ["artifacts"], endpoint: "/api/artifacts" },
   ArtifactShareToken: { domains: ["artifacts"], endpoint: null },
   Preference: { domains: ["preferences"], endpoint: null },
+  // A stored estimate of an asset's current value (server/valuation). It is
+  // an input to net worth and every asset rollup, so it ripples like an asset
+  // write; the profile row itself is patched separately when the estimate is
+  // mirrored into fields (that write journals as a Profile write on its own).
+  AssetValuation: { domains: ["assets"], endpoint: null },
   Capture: { domains: ["journal"], endpoint: null },
 
   // Habit ↔ tracker: one completion writes both sides (server/habit-completion),
