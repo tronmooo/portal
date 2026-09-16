@@ -42,7 +42,9 @@ import { inferTrackerShapeId } from "@shared/tracker-shapes";
 // used to render as "3 lbs".
 import {
   analyzeFitnessEntry,
+  buildFitnessDisplay,
   calorieContextForOwner,
+  classifyFitnessActivity,
   caloriesForStoredEntry,
   formatCalories,
   readFitnessFacts,
@@ -2991,6 +2993,21 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
     const label = doseVal != null ? `${doseVal}${doseField?.unit ? ` ${doseField.unit}` : ""}` : "Daily dose";
     return [{ label, done: takenToday }];
   })();
+  // Energy burn for workouts/activities. "~" marks an estimate; a value the
+  // user logged themselves shows without it. Null when shared/fitness-metrics
+  // declined to estimate. Rendered on the VALUE ROW in both card layouts —
+  // the activity layout's lower column is height-clipped, so a chip there was
+  // present in the DOM and painted over by the weekday bars on a compact card.
+  const caloriePill = insight.calories ? (
+    <span
+      className="text-[11px] font-semibold rounded-full px-1.5 py-0.5 shrink-0 whitespace-nowrap tabular-nums"
+      style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}
+      title={insight.calories.method}
+      data-testid={`tracker-calories-${tracker.id}`}
+    >
+      {"\u{1F525}"} {insight.calories.estimated ? "~" : ""}{insight.calories.value.toLocaleString()} cal
+    </span>
+  ) : null;
   const kindEmoji = KIND_EMOJI[insight.iconKind];
   // Sports / fitness trends get the layered "effort zone" area look.
   const useZoneArea = insight.kind === "running" || insight.kind === "walking" || tracker.category === "fitness";
@@ -3026,12 +3043,12 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
     const chips: { emoji: string; label: string }[] = [];
     const hr = num(/^(avghr|heartrate|bpm|pulse|hr)$/) ?? num(/(avghr|heartrate|bpm)/);
     if (hr != null) chips.push({ emoji: "❤️", label: `${Math.round(hr)} bpm` });
-    // The canonical estimate (shared/fitness-metrics) — the same number the
-    // sentence and the server's stored `computed.caloriesBurned` carry. Only
-    // fall back to a raw value on the entry when this tracker is not fitness.
-    if (insight.calories) {
-      chips.push({ emoji: "🔥", label: `${insight.calories.estimated ? "~" : ""}${insight.calories.value.toLocaleString()} cal` });
-    } else {
+    // The canonical estimate is rendered as a pill on the value row (both
+    // layouts, one element — see caloriePill below), so it must not also
+    // appear here: in the activity layout this row is inside a clipped
+    // flex column and a compact card painted the bars over it. A raw calorie
+    // value on a NON-fitness tracker still gets a chip, as it always did.
+    if (!insight.calories) {
       const cal = num(/(caloriesburned|calories|kcal|^cal$)/);
       if (cal != null) chips.push({ emoji: "🔥", label: `${Math.round(cal)} cal` });
     }
@@ -3148,6 +3165,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
               {insight.bigPrimary}
             </span>
             {insight.bigUnit && <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>}
+            {caloriePill && <span className="ml-auto">{caloriePill}</span>}
           </div>
           {/* overflow-hidden so a tight card clips here instead of bleeding the
               chips up over the value line; chips stay on ONE line (no wrap). */}
@@ -3193,19 +3211,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
                 </span>
               )}
             </div>
-            {/* Energy burn for workouts/activities. "~" marks an estimate; a
-                value the user logged themselves shows without it. Never
-                rendered when shared/fitness-metrics declined to estimate. */}
-            {insight.calories && (
-              <span
-                className="text-[11px] font-semibold rounded-full px-1.5 py-0.5 shrink-0 whitespace-nowrap tabular-nums"
-                style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}
-                title={insight.calories.method}
-                data-testid={`tracker-calories-${tracker.id}`}
-              >
-                {"\u{1F525}"} {insight.calories.estimated ? "~" : ""}{insight.calories.value.toLocaleString()} cal
-              </span>
-            )}
+            {caloriePill}
             {visual.type === "ring" && (
               <RingProgress pct={visual.pct} color={ac} size={importance === "compact" ? 46 : 54} centerLabel={`${Math.round(visual.pct)}%`} />
             )}
@@ -6795,12 +6801,25 @@ export default function TrackersPage() {
             // Lisinopril tracker) — that reads as a useless repeat.
             const pf = t.fields.find(fld => fld.isPrimary)?.name || t.fields[0]?.name || "value";
             const vals = (last?.values || {}) as Record<string, any>;
+            // A workout tracker's declared first field is often `activityType`
+            // (text) or `sets` — so this column showed "strength" and bare,
+            // unlabelled numbers for the very trackers the card view leads with
+            // reps or pounds. Ask the semantic layer for the headline metric
+            // and print it WITH its unit, exactly as the card does.
+            const fitRow = (() => {
+              const activity = classifyFitnessActivity(t.name, t.category);
+              if (activity.kind === "non_fitness" || !last) return null;
+              const p = buildFitnessDisplay(activity, readFitnessFacts(vals, activity, t.fields as any), null).primary;
+              return p ? `${fmtNum(p.value, p.metric === "distance" ? 2 : 0)} ${p.unit}` : null;
+            })();
             let primary: any = vals[pf];
             if (primary == null || (typeof primary === "string" && primary.trim().toLowerCase() === t.name.trim().toLowerCase())) {
               const numEntry = Object.entries(vals).find(([k, val]) => k !== "_notes" && typeof val === "number" && isFinite(val));
               primary = numEntry ? numEntry[1] : (typeof primary === "string" ? primary : undefined);
             }
-            const meta = primary != null && !(typeof primary === "string" && primary.trim().toLowerCase() === t.name.trim().toLowerCase())
+            const meta = fitRow
+              ? fitRow
+              : primary != null && !(typeof primary === "string" && primary.trim().toLowerCase() === t.name.trim().toLowerCase())
               ? `${typeof primary === 'number' ? Number(primary).toFixed(1) : String(primary)}${typeof primary === 'number' && t.unit ? ' ' + t.unit : ''}`
               : (t.entries && t.entries.length > 0 ? `${t.entries.length} log${t.entries.length === 1 ? '' : 's'}` : "No data");
             const linked: string[] = (t.linkedProfiles || []) as string[];

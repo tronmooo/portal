@@ -859,10 +859,21 @@ export function calorieContextForOwner(
 }
 
 /**
- * "185", "185 lbs", "84 kg" → kilograms. A BARE number is read as pounds only
- * when the field name did not say kilograms — this is a unit-from-name
- * decision, not a unit-from-magnitude one.
+ * "185", "185 lbs", "84 kg", "300 lb (136.1 kg)" → kilograms.
+ *
+ * The app stores a profile weight the way it was entered, and its own field
+ * formatter writes the metric mirror in parentheses — real rows look like
+ * "184.6 lbs (83.7 kg)". So this scans for the FIRST number that carries a
+ * mass unit rather than requiring the whole string to be one; an anchored
+ * parse silently returned null for those rows, and every activity belonging to
+ * that person was then priced with the population default instead of their
+ * actual body weight.
+ *
+ * A BARE number is read as pounds only when the field NAME did not say
+ * kilograms — a unit-from-name decision, never a unit-from-magnitude one.
  */
+const MASS_READING = /(\d+(?:[.,]\d+)?)\s*(kgs?|kilograms?|kilos?|lbs?|pounds?|stone|st)\b/g;
+
 export function parseBodyWeightToKg(raw: unknown, keyImpliesKg = false): number | null {
   if (raw == null) return null;
   if (typeof raw === "number") {
@@ -871,14 +882,24 @@ export function parseBodyWeightToKg(raw: unknown, keyImpliesKg = false): number 
   }
   const s = String(raw).trim().toLowerCase();
   if (!s) return null;
-  const m = s.match(/^([\d.,]+)\s*([a-z]*)$/);
-  if (!m) return null;
-  const n = Number(m[1].replace(/,/g, ""));
+
+  // First unit-qualified reading wins: it is the value the user actually
+  // typed, with any parenthetical conversion trailing it.
+  MASS_READING.lastIndex = 0;
+  for (let m = MASS_READING.exec(s); m; m = MASS_READING.exec(s)) {
+    const n = Number(m[1].replace(",", "."));
+    if (!Number.isFinite(n) || n <= 0) continue;
+    const u = m[2];
+    if (/^(kgs?|kilograms?|kilos?)$/.test(u)) return n;
+    if (/^(stone|st)$/.test(u)) return n * 6.35029;
+    return n * KG_PER_LB;
+  }
+
+  // No unit anywhere — a bare number, possibly with thousands separators.
+  const bare = s.match(/^([\d,]+(?:\.\d+)?)$/);
+  if (!bare) return null;
+  const n = Number(bare[1].replace(/,/g, ""));
   if (!Number.isFinite(n) || n <= 0) return null;
-  const u = m[2];
-  if (MASS_UNITS.test(u)) return n;
-  if (/^(lb|lbs|pound|pounds)$/.test(u)) return n * KG_PER_LB;
-  if (/^(st|stone)$/.test(u)) return n * 6.35029;
   return keyImpliesKg ? n : n * KG_PER_LB;
 }
 
@@ -967,8 +988,13 @@ export function buildFitnessDisplay(
   if (facts.heartRate != null) detail.push(`${Math.round(facts.heartRate)} bpm`);
 
   const calLine = formatCalories(calories);
+  // The headline is already on the card, so the sentence repeats it only when
+  // no detail line already carries it — otherwise a reps-led card reads
+  // "12 reps · 12 reps × 3 sets".
+  const primaryToken = primary ? `${fmt(primary.value)} ${primary.unit}` : null;
+  const primaryCovered = !!primaryToken && detail.some((d) => d === primaryToken || d.startsWith(`${primaryToken} ×`));
   const sentence = [
-    primary ? `${fmt(primary.value)} ${primary.unit}` : null,
+    primaryCovered ? null : primaryToken,
     ...detail,
     calLine,
   ].filter(Boolean).join(" · ");

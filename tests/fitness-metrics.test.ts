@@ -29,6 +29,7 @@ import {
 import { computeSecondaryData } from "../server/storage";
 import { normalizeTrackerEntry } from "../server/tracker-normalize";
 import { readActivity } from "../client/src/lib/wellness-metrics";
+import { buildWellnessCards } from "../client/src/lib/wellness-dynamic";
 
 const SARAH = { name: "Sarah", fields: { weight: "135 lbs", sex: "female", age: 34 } };
 const BOB = { name: "Bob", fields: { weight: 210 } };
@@ -522,6 +523,20 @@ describe("contract: the trackers page owns no fitness unit of its own", () => {
     expect(offenders, `hardcoded lbs fallback at ${offenders.map(([n]) => n).join(", ")}`).toEqual([]);
   });
 
+  it("the compact list view reads its headline from the semantic layer too", () => {
+    // That column used `fields.find(isPrimary) || fields[0]`, which on a
+    // Squats tracker shaped [activityType, sets, reps, …] is a TEXT field —
+    // so the list printed "strength" as the latest measurement, and bare
+    // unlabelled numbers for every other workout.
+    const start = src.indexOf('const pf = t.fields.find(fld => fld.isPrimary)');
+    const end = src.indexOf('kind: "tracker"', start);
+    expect(start, "list-view row builder not found").toBeGreaterThan(-1);
+    expect(end, "tracker row push not found").toBeGreaterThan(start);
+    const listBlock = src.slice(start, end);
+    expect(listBlock).toMatch(/buildFitnessDisplay/);
+    expect(listBlock).toMatch(/classifyFitnessActivity/);
+  });
+
   it("renders the calorie estimate from the shared service, not a local formula", () => {
     expect(src).toMatch(/analyzeFitnessEntry/);
     expect(src).toMatch(/calorieContextForOwner/);
@@ -604,5 +619,96 @@ describe("the Wellness / Executive activity roll-up quotes the same number", () 
     const card = analyzeFitnessEntry({ trackerName: "Basketball", category: "fitness", values }, ctx);
     const a = readActivity([mkTracker(values, stored) as any], { profiles });
     expect(a.caloriesBurned).toBe(card.calories!.value);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe("profile weights as they are ACTUALLY stored", () => {
+  // Verbatim from the production `profiles.fields->>'weight'` column. The
+  // app's own field formatter appends the metric mirror in parentheses, and an
+  // anchored parse returned null for those rows — so every activity belonging
+  // to that person was silently priced with the population default instead of
+  // their real body weight.
+  const REAL: Array<[unknown, number | null]> = [
+    ["300 lb (136.1 kg)", 136.1],
+    ["184.6 lbs (83.7 kg)", 83.7],
+    ["51 lbs", 23.1],
+    [180, 81.6],
+    ["", null],
+    ["N/A", null],
+    [null, null],
+  ];
+  for (const [raw, kg] of REAL) {
+    it(`${JSON.stringify(raw)} → ${kg ?? "null"} kg`, () => {
+      const got = parseBodyWeightToKg(raw);
+      if (kg == null) expect(got).toBeNull();
+      else expect(got!).toBeCloseTo(kg, 0);
+    });
+  }
+
+  it("the imperial value and its own parenthetical metric mirror agree", () => {
+    expect(parseBodyWeightToKg("300 lb (136.1 kg)")!).toBeCloseTo(136.1, 0);
+    expect(parseBodyWeightToKg("136.1 kg")!).toBeCloseTo(136.1, 1);
+  });
+
+  it("a compound-weight owner is NOT priced with the population default", () => {
+    const sarah = calorieContextForOwner({ name: "Sarah Miller", fields: { weight: "300 lb (136.1 kg)", gender: "Female" } });
+    expect(sarah.bodyWeightKg!).toBeCloseTo(136.1, 0);
+    const d = analyzeFitnessEntry({ trackerName: "Basketball", category: "fitness", values: { duration: 30 } }, sarah);
+    expect(d.calories!.usedDefaultWeight).toBe(false);
+    expect(d.calories!.method).toContain("Sarah Miller's weight");
+    // Roughly double the 70 kg default's burn, because she is roughly double it.
+    const anon = analyzeFitnessEntry({ trackerName: "Basketball", category: "fitness", values: { duration: 30 } }, calorieContextForOwner({ name: "X", fields: {} }));
+    expect(d.calories!.value).toBeGreaterThan(anon.calories!.value * 1.7);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe("Wellness cards label the fitness metric they show", () => {
+  const mk = (name: string, fields: any[], values: Record<string, any>) => ({
+    id: name, name, category: "fitness", fields,
+    entries: [{ id: "e", values, computed: {}, timestamp: new Date().toISOString() }],
+  });
+
+  it("a Squats tracker shaped [activityType, sets, reps] leads with reps, not a bare set count", () => {
+    const [card] = buildWellnessCards([
+      mk("Squats", [{ name: "activityType", type: "text" }, { name: "sets", type: "number" }, { name: "reps", type: "number" }], { reps: 12, sets: 3 }),
+    ] as any);
+    expect(card.value).toBe(12);
+    expect(card.unit).toBe("reps");
+  });
+
+  it("a weightLbs field with no declared unit is still labelled lbs", () => {
+    const [card] = buildWellnessCards([
+      mk("Shoulder Press", [{ name: "weightLbs", type: "number" }, { name: "sets", type: "number" }, { name: "reps", type: "number" }], { reps: 10, sets: 3, weightLbs: 50 }),
+    ] as any);
+    expect(card.value).toBe(50);
+    expect(card.unit).toBe("lbs");
+  });
+
+  it("a duration sport reads in minutes", () => {
+    const [card] = buildWellnessCards([
+      mk("Basketball", [{ name: "activityType", type: "text" }, { name: "duration", type: "number" }], { duration: 30, activityType: "basketball" }),
+    ] as any);
+    expect(card.value).toBe(30);
+    expect(card.unit).toBe("min");
+  });
+
+  it("a sets-only entry says sets — never an unlabelled number, never pounds", () => {
+    const [card] = buildWellnessCards([
+      mk("Squats", [{ name: "weight", type: "number", unit: "lbs" }, { name: "sets", type: "number" }, { name: "reps", type: "number" }], { sets: 3 }),
+    ] as any);
+    expect(card.value).toBe(3);
+    expect(card.unit).toBe("sets");
+  });
+
+  it("non-fitness trackers keep their existing field-declared unit", () => {
+    const [card] = buildWellnessCards([
+      { id: "h", name: "Hydration", category: "health", unit: "oz",
+        fields: [{ name: "ounces", type: "number", unit: "oz", isPrimary: true }],
+        entries: [{ id: "e", values: { ounces: 20 }, computed: {}, timestamp: new Date().toISOString() }] },
+    ] as any);
+    expect(card.value).toBe(20);
+    expect(card.unit).toBe("oz");
   });
 });

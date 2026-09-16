@@ -7,6 +7,10 @@
 // real footprint and shows nothing they don't have.
 import type { Tracker } from "@shared/schema";
 import { getCanonicalGroup } from "./tracker-health";
+import {
+  classifyFitnessActivity, readFitnessFacts, buildFitnessDisplay,
+  type FitnessActivity, type FitnessPrimary,
+} from "@shared/fitness-metrics";
 
 export interface WellnessCard {
   id: string;
@@ -63,6 +67,25 @@ function primaryField(t: Tracker): string | null {
 
 const RECENT_MS = 14 * 86400000;
 
+/** One entry's value for a named fitness metric, or NaN when it has none. */
+function fitnessMetricValue(
+  values: Record<string, any> | undefined,
+  activity: FitnessActivity,
+  tracker: Tracker,
+  metric: FitnessPrimary["metric"],
+): number {
+  const f = readFitnessFacts(values, activity, tracker.fields as any);
+  const v = metric === "resistance" ? f.resistance?.value
+    : metric === "reps" ? f.reps
+    : metric === "sets" ? f.sets
+    : metric === "duration" ? f.duration
+    : metric === "distance" ? f.distance?.value
+    : metric === "steps" ? f.steps
+    : metric === "caloriesBurned" ? f.caloriesLogged
+    : undefined;
+  return typeof v === "number" && Number.isFinite(v) ? v : NaN;
+}
+
 /**
  * Build the dynamic wellness cards from the user's trackers. Only trackers with
  * at least one entry produce a card. Sorted most-relevant first (recent activity,
@@ -103,8 +126,20 @@ export function buildWellnessCards(trackers: Tracker[] | undefined): WellnessCar
       continue;
     }
 
-    const field = primaryField(t);
-    const numsAll = field ? sorted.map((e: any) => num(e.values?.[field])) : [];
+    // A workout tracker's "first numeric field" is not its headline metric:
+    // on a Squats tracker created as [activityType, sets, reps, …] it is the
+    // SET COUNT, which this card then rendered as a bare "3" with no unit —
+    // the same positional assumption that made the trackers page print
+    // "3 lbs". Ask the semantic layer instead, and label the number.
+    const activity = classifyFitnessActivity(t.name, t.category);
+    const fitPrimary: FitnessPrimary | null = activity.kind === "non_fitness"
+      ? null
+      : buildFitnessDisplay(activity, readFitnessFacts(sorted[0].values, activity, t.fields as any), null).primary;
+
+    const field = fitPrimary ? null : primaryField(t);
+    const numsAll = fitPrimary
+      ? sorted.map((e: any) => fitnessMetricValue(e.values, activity, t, fitPrimary.metric))
+      : field ? sorted.map((e: any) => num(e.values?.[field])) : [];
     const nums = numsAll.filter((n) => Number.isFinite(n));
 
     if (nums.length > 0) {
@@ -112,7 +147,9 @@ export function buildWellnessCards(trackers: Tracker[] | undefined): WellnessCar
       const prev = nums[1];
       const changePct = prev != null && prev !== 0 ? ((value - prev) / Math.abs(prev)) * 100 : null;
       const series = nums.slice(0, 14).reverse();
-      const unit = (t.fields || []).find((f: any) => f.name === field)?.unit || t.unit || "";
+      const unit = fitPrimary
+        ? fitPrimary.unit
+        : (t.fields || []).find((f: any) => f.name === field)?.unit || t.unit || "";
       cards.push({
         id: t.id, name: t.name, group, category,
         value, unit, series, changePct,
