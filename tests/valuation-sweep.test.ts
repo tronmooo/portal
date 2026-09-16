@@ -123,4 +123,18 @@ describe("Assets-tab valuation sweep", () => {
     await refreshValuation(storage, house.id, { reason: "scheduled", now: NOW });
     expect(calls).toBe(1);
   });
+
+  it("a record whose profile fingerprint is out of date is healed by the next fresh check, without re-valuing", async () => {
+    const { house } = await seed();
+    let calls = 0;
+    setEvidenceProvidersForTest([{ id: "live-search", supports: (_c, p) => p.providers.includes("live-search"), fetch: async (run) => { calls++; return [live(360000, run.now)]; } }]);
+    await refreshValuation(storage, house.id, { reason: "first_valuation", now: NOW });
+    const rec = (await storage.getAssetValuation(house.id))!;
+    await storage.touchAssetValuation(house.id, { ...rec, profileFingerprint: "stale-from-old-build" });
+    expect((await getValuationStatus(storage, { now: NOW })).find(r => r.profileId === house.id)!.fresh).toBe(false);
+    const out = await refreshValuation(storage, house.id, { reason: "scheduled", now: NOW });
+    expect(out.ran).toBe(false);
+    expect(calls).toBe(1);
+    expect((await getValuationStatus(storage, { now: NOW })).find(r => r.profileId === house.id)!.fresh).toBe(true);
+  });
 });

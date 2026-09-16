@@ -259,6 +259,15 @@ export async function refreshValuation(
   const quickCtx = buildValuationContext(bundleFromDetail(detail), now);
   const freshness = assessFreshness(previous, quickCtx.inputFingerprint, now, VALUATION_MODEL_VERSION);
   if (!opts.force && freshness.fresh) {
+    // The full check (which sees linked records) says nothing changed. If the
+    // stored profile-only fingerprint disagrees — a record written before
+    // spec fills were stamped, or by an older build — heal it in place so the
+    // Assets-tab sweep stops re-asking. Bookkeeping only: not journaled.
+    if (previous && previous.profileFingerprint !== quickCtx.profileFingerprint) {
+      const healed = { ...previous, profileFingerprint: quickCtx.profileFingerprint, checkedAt: now.toISOString() };
+      try { await storage.touchAssetValuation(profileId, healed); } catch { /* best-effort */ }
+      return { ...none, snapshot: { record: healed, supported: true, inputFingerprint: quickCtx.inputFingerprint, freshness } };
+    }
     return { ...none, snapshot: { record: previous, supported: true, inputFingerprint: quickCtx.inputFingerprint, freshness } };
   }
 
