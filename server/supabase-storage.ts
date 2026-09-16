@@ -74,7 +74,7 @@ import {
   isLiabilityProfile,
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
-import { isRecurringBill, isRecurringBillProfile } from "../shared/liability-types";
+import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName } from "../shared/liability-types";
 import {
   addCharge, removeCharge, setEstimate, setActual, normalizeBillingModel,
   resolveBillingModel, resolveOccurrenceAmount, billingModelMeta,
@@ -5621,8 +5621,10 @@ export class SupabaseStorage implements IStorage {
 
   /** Normalize a liability/bill name for identity: drop a trailing "payment"
    *  suffix, collapse whitespace, lowercase. "Water Bill payment" ≡ "Water Bill". */
+  // ONE definition of the bill/loan pairing name rule, shared with the payment
+  // path (server/liability-payments.ts) so the two cannot drift.
   private normLiabilityName(n: string): string {
-    return String(n || "").toLowerCase().replace(/\s+(bill\s+)?payments?$/i, "").replace(/\s+/g, " ").trim();
+    return normalizeLiabilityName(n);
   }
 
   /** Find an existing liability profile that IS this one (same normalized name,
@@ -5704,8 +5706,16 @@ export class SupabaseStorage implements IStorage {
     // (fields.linkedLiabilityId), so the two stay related without merging.
     const profiles = await this.getProfiles();
     const existing = await this.resolveExistingLiability(rawName, parent, profiles, { billShellsOnly: true });
-    const paysFor = existing ? undefined : await this.resolveExistingLiability(rawName, parent, profiles);
-    if (paysFor) billFields.linkedLiabilityId = paysFor.id;
+    // Which debt this bill PAYS, recorded whether or not a bill shell of the
+    // same name already exists. It used to be resolved only on the
+    // never-seen-before branch, so a bill created twice (or created as a shell
+    // first, which is the common path) ended up with no link at all — every
+    // bill in the field carries a null linkedLiabilityId, which is why paying
+    // a car-loan bill never moved the car loan.
+    const paysFor = await this.resolveExistingLiability(rawName, parent, profiles);
+    if (paysFor && paysFor.id !== existing?.id && !isRecurringBillProfile(paysFor)) {
+      billFields.linkedLiabilityId = paysFor.id;
+    }
     if (existing) {
       await this.updateProfile(existing.id, {
         name: rawName,

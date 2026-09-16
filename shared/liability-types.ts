@@ -90,3 +90,13 @@ export function isRecurringBillProfile(p: { type?: string | null; type_key?: str
   if (key) return isRecurringBill(key);
   return String(p.type || "").toLowerCase() === "subscription";
 }
+
+/**
+ * The bill/loan pairing name rule: "Car Loan payment" and "Car Loan" are the
+ * same debt under two records. Used by the storage upsert (so a bill created
+ * beside a loan records which one it pays) and by the payment path (so a bill
+ * whose link was never written can still be paired to its loan).
+ */
+export function normalizeLiabilityName(n: string): string {
+  return String(n || "").toLowerCase().replace(/\s+(bill\s+)?payments?$/i, "").replace(/\s+/g, " ").trim();
+}

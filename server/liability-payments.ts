@@ -13,7 +13,7 @@
 // That is not a synchronization bug, but it is the same disease: two code paths
 // answering one question. Both callers now land here.
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
-import { isRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
+import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName } from "@shared/liability-types";
 import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey, lastSeriesOccurrence } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
@@ -251,13 +251,43 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
  * (a bill has no balance to move).
  */
 export async function resolveServicedDebt(storage: IStorage, bill: any): Promise<any | null> {
+  const usable = (debt: any): boolean =>
+    !!debt && debt.id !== bill?.id
+    && (debt.type === "liability" || debt.type === "loan")
+    && !isRecurringBillProfile(debt);
+
   const linkedId = (bill?.fields || {}).linkedLiabilityId;
-  if (typeof linkedId !== "string" || !linkedId || linkedId === bill?.id) return null;
-  const debt: any = await Promise.resolve(storage.getProfile(linkedId)).catch(() => null);
-  if (!debt) return null;
-  if (debt.type !== "liability" && debt.type !== "loan") return null;
-  if (isRecurringBillProfile(debt)) return null;
-  return debt;
+  if (typeof linkedId === "string" && linkedId && linkedId !== bill?.id) {
+    const debt: any = await Promise.resolve(storage.getProfile(linkedId)).catch(() => null);
+    return usable(debt) ? debt : null;
+  }
+
+  // No stored link. Bills created beside a loan record it in
+  // `fields.linkedLiabilityId`, but the bills already in the field were made by
+  // doors that never wrote it — every one of them carries a null link — so the
+  // link alone would fix nothing for anybody's existing data.
+  //
+  // Fall back to the naming convention those doors DO follow: the bill is the
+  // loan's name plus "payment" ("Dodge Ram 2025 Auto Loan payment" beside
+  // "Dodge Ram 2025 Auto Loan"). Deliberately narrow — only a name that ends in
+  // "payment", only a match against a non-bill liability that actually carries
+  // a balance — because guessing wrong here moves the wrong debt.
+  const name = String(bill?.name || "");
+  if (!/\s+(bill\s+)?payments?$/i.test(name)) return null;
+  const target = normalizeLiabilityName(name);
+  if (!target) return null;
+  const profiles: any[] = await Promise.resolve(storage.getProfiles()).catch(() => [] as any[]);
+  const owner = (bill as any)?.parentProfileId ?? null;
+  const candidates = (profiles || []).filter((p: any) =>
+    usable(p) && normalizeLiabilityName(p.name) === target && resolveLiabilityBalance(p.fields || p) > 0);
+  const match = candidates.find((p: any) => (p.parentProfileId ?? null) === owner) || candidates[0];
+  if (!match) return null;
+  // Record what we resolved, so the pairing is explicit from here on and the
+  // inverse (unpayBillOccurrence) finds the same debt without re-guessing.
+  try {
+    await storage.updateProfile(bill.id, { fields: { linkedLiabilityId: match.id } } as any);
+  } catch { /* the payment is what matters; the link can be re-derived */ }
+  return match;
 }
 
 /**

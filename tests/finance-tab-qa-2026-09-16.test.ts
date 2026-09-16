@@ -7,7 +7,7 @@ import {
   monthEndDay, nextOccurrenceDay, sumMonthlyIncomeForMonth,
 } from "../shared/obligation-windows";
 import { buildCashTrend } from "../client/src/lib/cash-trend";
-import { liabilityFamily, isRecurringBill } from "../shared/liability-types";
+import { liabilityFamily, isRecurringBill, normalizeLiabilityName } from "../shared/liability-types";
 import { EXPENSE_CATEGORIES, canonicalExpenseCategory, categoryLabel } from "../shared/category-canon";
 import { findDuplicateExpense } from "../shared/expense-view";
 import { summarizeLiabilityDebt } from "../shared/finance-accounts";
@@ -211,5 +211,18 @@ describe("#19 a month key reads as its own month in every zone", () => {
     // the Cash Flow heading read "August 2026" all through September.
     expect(monthKeyLabel("2026-09")).toMatch(/September 2026/);
     expect(monthKeyLabel("2026-01")).toMatch(/January 2026/);
+  });
+});
+
+describe("#4 a bill named for a loan pays that loan", () => {
+  it("pairs '<loan> payment' with '<loan>'", () => {
+    expect(normalizeLiabilityName("Dodge Ram 2025 Auto Loan payment")).toBe("dodge ram 2025 auto loan");
+    expect(normalizeLiabilityName("Dodge Ram 2025 Auto Loan")).toBe("dodge ram 2025 auto loan");
+    expect(normalizeLiabilityName("Phone Bill Payments")).toBe("phone");
+  });
+
+  it("leaves a name that isn't a payment bill alone", () => {
+    expect(normalizeLiabilityName("Netflix")).toBe("netflix");
+    expect(normalizeLiabilityName("Internet Bill")).toBe("internet bill");
   });
 });
