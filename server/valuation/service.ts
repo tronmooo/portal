@@ -328,6 +328,7 @@ export async function refreshValuation(
       const filledDetail = { ...detail, fields: { ...(detail.fields || {}), ...filledSpecs } } as ProfileDetail;
       const filledCtx = buildValuationContext(bundleFromDetail(filledDetail, { history: bundle.history, aiSummary: bundle.aiSummary, understanding: ctx.understanding }), now);
       record.inputFingerprint = filledCtx.inputFingerprint;
+      record.profileFingerprint = filledCtx.profileFingerprint;
       record.materialInputs = filledCtx.materialInputs;
     }
 

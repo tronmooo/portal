@@ -111,4 +111,16 @@ describe("Assets-tab valuation sweep", () => {
     expect(row.fields.currentValueAsOf).toBe(out.snapshot!.record!.valuedAt);
     expect(row.fields.userEnteredValue).toBe(345000);
   });
+
+  it("specs the live search auto-filled do not make the list sweep re-value the asset", async () => {
+    const { house } = await seed();
+    let calls = 0;
+    setEvidenceProvidersForTest([{ id: "live-search", supports: (_c, p) => p.providers.includes("live-search"), fetch: async (run) => { calls++; return [{ ...live(360000, run.now), raw: { specs: { sqft: 1468, bedrooms: 4, yearBuilt: 2016 }, missing: [] } }]; } }]);
+    const out = await refreshValuation(storage, house.id, { reason: "first_valuation", now: NOW });
+    expect(out.filledSpecs).toEqual({ sqft: 1468, bedrooms: 4, yearBuilt: 2016 });
+    const row = (await getValuationStatus(storage, { now: NOW })).find(r => r.profileId === house.id)!;
+    expect(row.fresh).toBe(true);
+    await refreshValuation(storage, house.id, { reason: "scheduled", now: NOW });
+    expect(calls).toBe(1);
+  });
 });
