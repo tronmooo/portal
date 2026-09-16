@@ -1,162 +1,149 @@
 // @vitest-environment jsdom
 //
-// Render test for the DYNAMIC Wellness overview. Proves: the KPI strip draws
-// only tiles that have a value, a card renders for every dynamic metric the
-// user tracks, aggregate cards (habits/meds/appointments/…) render ONLY when
-// they have data (no empty placeholder cards), the quick-log row + AI Deep Dive
-// fire their callbacks, and a truly empty account shows a single nudge.
+// Render test for the REBUILT Wellness overview (2026-09). What it proves:
+//   * the page is five sections, not ninety cards;
+//   * a signal with no connected source says so instead of showing a zero or a
+//     goal ring the user is failing;
+//   * the score shows what it is made of and what it left out;
+//   * labs render by panel, flagged and with their trend;
+//   * nothing on the page asks the user to log anything.
 import React from "react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { WellnessOverview, type WellnessOverviewProps } from "../client/src/components/wellness/WellnessOverview";
-import type { WellnessCard } from "../client/src/lib/wellness-dynamic";
-
-vi.mock("wouter", () => ({ Link: ({ children }: any) => <>{children}</> }));
+import type { TodaySignal, LabPanel } from "../shared/wellness-readout";
 
 afterEach(cleanup);
 
-const card = (over: Partial<WellnessCard>): WellnessCard => ({
-  id: "t1", name: "Weight", group: "Health", category: "health",
-  value: 178, unit: "lbs", series: [180, 179, 178], changePct: -0.6,
-  direction: "down", favorable: "good", lastLogged: new Date().toISOString(),
-  entryCount: 10, ...over,
-});
+const signal = (over: Partial<TodaySignal> & Pick<TodaySignal, "key">): TodaySignal => ({
+  label: over.key, value: 7.2, unit: "h", caption: null, avg30: 7.8,
+  series: [7.9, 7.6, 7.2], at: new Date().toISOString(), higherBetter: true,
+  metricId: "sleep_hours", trackerId: "t1", ...over,
+} as TodaySignal);
 
-const base: WellnessOverviewProps = {
-  wellnessScore: 80, wellnessScoreLabel: "Good",
-  sleepHours: 7.4, sleepSeries: [6.8, 7.1, 7.4],
-  steps: 7842, stepsSeries: [5000, 6000, 7842],
-  restingHr: 54, restingHrSeries: [56, 55, 54],
-  hydrationOz: 64, hydrationGoal: 100,
-  calories: 1842, caloriesGoal: 2300,
-  streak: 12,
-  insights: ["Your sleep quality improved 12% this week."],
-  habits: [
-    { id: "h1", name: "Morning Stretch", done: true },
-    { id: "h2", name: "Meditate", done: false },
-  ],
-  habitsCompleted: 1,
-  schedule: [{ id: "e1", time: "8:00 AM", title: "Morning Run" }],
-  medications: [
-    { id: "m1", name: "Lisinopril", dose: "10mg", time: "8:00 AM", taken: true },
-    { id: "m2", name: "Metformin", dose: "500mg", time: "9:00 PM", taken: false },
-  ],
-  vitals: [],
-  sleep: { hours: 7.4 },
-  nutrition: { calories: 1842, caloriesGoal: 2300 },
-  mood: { value: 7, series: [6, 7, 7] },
-  activity: { workouts: 4 },
-  appointments: [{ id: "a1", date: "Jul 15", time: "10:00 AM", title: "General Checkup" }],
-  reminders: ["Drink 36 more oz of water."],
-  labs: [{ id: "l1", name: "Vitamin D", date: "Jun 28", status: "Optimal" }],
-  supplements: [{ id: "s1", name: "Magnesium Glycinate", dose: "200mg", schedule: "nightly" }],
-  documents: [{ id: "d1", name: "Insurance Card", date: "Jun 15, 2025" }],
-  conditions: [{ id: "c1", name: "Seasonal Allergies", note: "Mild" }],
-  allergies: [{ id: "al1", name: "Pollen", note: "Seasonal" }],
-  recentActivity: [{ id: "r1", text: "Logged workout", when: "45m ago" }],
-  weightUnit: "lbs",
-  missedHabits: [],
-  dynamicCards: [
-    card({ id: "t1", name: "Weight", group: "Health" }),
-    card({ id: "t2", name: "Running", group: "Fitness", category: "fitness", unit: "mi", value: 3, favorable: "good", direction: "up", changePct: 5 }),
-    card({ id: "t3", name: "Guitar", group: "Other", category: "custom", value: 4, unit: "logs · 14d", series: [], changePct: null, isCount: true, favorable: "neutral" }),
+const lipids: LabPanel = {
+  panel: "lipids", label: "Lipids", outOfRange: 1,
+  rows: [
+    { metricId: "ldl", label: "LDL", value: 138, unit: "mg/dL", at: "2026-08-01T00:00:00Z",
+      flag: "high", reference: "< 100 mg/dL", previous: 128, trackerId: "t-ldl", mergedFrom: 3 },
+    { metricId: "hdl", label: "HDL", value: 58, unit: "mg/dL", at: "2026-08-01T00:00:00Z",
+      flag: "normal", reference: "> 40 mg/dL", previous: null, trackerId: "t-hdl", mergedFrom: 1 },
   ],
 };
 
-describe("WellnessOverview (dynamic)", () => {
-  it("renders only KPI tiles that have a value", () => {
+const base: WellnessOverviewProps = {
+  score: {
+    value: 78,
+    components: [
+      { key: "sleep", label: "Sleep", score: 82, weight: 0.57, detail: "7.2 h last night" },
+      { key: "activity", label: "Activity", score: 71, weight: 0.43, detail: "8,400 steps" },
+      { key: "recovery", label: "Recovery", score: null, weight: 0, detail: "No recovery source connected" },
+    ],
+  },
+  signals: [
+    signal({ key: "sleep", label: "Sleep" }),
+    signal({ key: "activity", label: "Activity", value: 8400, unit: "steps", avg30: 7200, caption: "Steps", series: [7000, 7600, 8400] }),
+    signal({ key: "recovery", label: "Recovery", value: null, avg30: null, series: [] }),
+  ],
+  brief: ["Sleep is 36 min down vs. your average.", "You ran twice this week."],
+  panels: [lipids],
+  medications: [{ id: "m1", name: "Lisinopril", dose: "10mg", refill: "Refills Oct 4" }],
+  appointments: [{ id: "a1", title: "Dentist", date: "Oct 2", time: "9:00 AM" }],
+  documents: [{ id: "d1", name: "Lab report — August", date: "Aug 1", type: "lab_result" }],
+  allergies: [{ id: "al1", name: "Penicillin" }],
+  conditions: [],
+  workouts: [{ type: "Running", sessions: 2, minutes: 54, distance: 6.2, reps: null, lastAt: new Date().toISOString(), trackerId: "t-run" }],
+  sources: { sleep: true, activity: true, recovery: false, labs: true, body: false },
+  duplicates: [{ label: "HDL", sources: ["HDL", "HDL Cholesterol", "Lipid Panel — HDL"] }],
+};
+
+describe("Wellness overview — the readout", () => {
+  it("renders the five sections and nothing else", () => {
     render(<WellnessOverview {...base} />);
-    expect(screen.getByTestId("wellness-kpi-score").textContent).toContain("80");
-    expect(screen.getByTestId("wellness-kpi-sleep").textContent).toContain("7.4h");
-    expect(screen.getByTestId("wellness-kpi-activity").textContent).toContain("7,842");
-    // null KPI → tile absent
-    cleanup();
-    render(<WellnessOverview {...base} sleepHours={null} steps={null} restingHr={null} />);
-    expect(screen.queryByTestId("wellness-kpi-sleep")).toBeNull();
-    expect(screen.queryByTestId("wellness-kpi-activity")).toBeNull();
-    expect(screen.getByTestId("wellness-kpi-score")).toBeTruthy();
-  });
-
-  it("renders a dynamic card for EVERY tracked metric (incl. custom ones)", () => {
-    render(<WellnessOverview {...base} />);
-    expect(screen.getByTestId("wellness-metric-t1").textContent).toContain("Weight");
-    expect(screen.getByTestId("wellness-metric-t2").textContent).toContain("Running");
-    // custom non-numeric tracker still gets a card
-    expect(screen.getByTestId("wellness-metric-t3").textContent).toContain("Guitar");
-  });
-
-  it("renders habits and toggles via callback", () => {
-    const onToggleHabit = vi.fn();
-    render(<WellnessOverview {...base} onToggleHabit={onToggleHabit} />);
-    expect(screen.getByTestId("wellness-habits").textContent).toContain("1 / 2 done");
-    fireEvent.click(screen.getByTestId("wellness-habit-h2"));
-    expect(onToggleHabit).toHaveBeenCalledWith("h2", true);
-  });
-
-  it("renders medications with due/taken state and toggles", () => {
-    const onToggleMed = vi.fn();
-    render(<WellnessOverview {...base} onToggleMed={onToggleMed} />);
-    const meds = screen.getByTestId("wellness-medications");
-    expect(meds.textContent).toContain("Lisinopril 10mg");
-    expect(meds.textContent).toContain("1 due");
-    fireEvent.click(screen.getByTestId("wellness-med-toggle-m2"));
-    expect(onToggleMed).toHaveBeenCalledWith("m2", true);
-  });
-
-  it("renders labs, supplements, conditions, allergies when present", () => {
-    render(<WellnessOverview {...base} />);
-    expect(screen.getByTestId("wellness-labs").textContent).toContain("Vitamin D");
-    expect(screen.getByTestId("wellness-supplements").textContent).toContain("Magnesium Glycinate");
-    expect(screen.getByTestId("wellness-conditions").textContent).toContain("Seasonal Allergies");
-    expect(screen.getByTestId("wellness-allergies").textContent).toContain("Pollen");
-  });
-
-  it("fires the quick-log row callbacks", () => {
-    const onQuickLog = vi.fn();
-    render(<WellnessOverview {...base} onQuickLog={onQuickLog} />);
-    for (const kind of ["hydration", "weight", "sleep", "mood", "steps"] as const) {
-      fireEvent.click(screen.getByTestId(`wellness-quicklog-${kind}`));
-      expect(onQuickLog).toHaveBeenCalledWith(kind);
+    for (const id of ["wellness-brief", "wellness-labs", "wellness-care", "wellness-activity"]) {
+      expect(screen.getByTestId(id)).toBeTruthy();
     }
+    expect(screen.getAllByTestId(/^wellness-signal-/).length).toBeGreaterThanOrEqual(3);
   });
 
-  it("hides the quick-log row when no handler is wired", () => {
-    render(<WellnessOverview {...base} onQuickLog={undefined} />);
-    expect(screen.queryByTestId("wellness-quicklog")).toBeNull();
-    expect(screen.queryByTestId("wellness-quicklog-weight")).toBeNull();
+  it("asks the user to log nothing", () => {
+    const { container } = render(<WellnessOverview {...base} />);
+    expect(container.textContent).not.toMatch(/log |streak|hydration|missed habit/i);
+    expect(container.querySelector('[data-testid^="wellness-quicklog"]')).toBeNull();
   });
 
-  it("fires AI Deep Dive and renders the narrative", () => {
-    const onAiDeepDive = vi.fn();
-    render(<WellnessOverview {...base} onAiDeepDive={onAiDeepDive} aiNarrative="You're trending well — keep it up." />);
-    fireEvent.click(screen.getByTestId("wellness-ai-deepdive"));
-    expect(onAiDeepDive).toHaveBeenCalled();
-    expect(screen.getByTestId("wellness-insights").textContent).toContain("trending well");
+  it("tells a signal with no source apart from a signal of zero", () => {
+    render(<WellnessOverview {...base} />);
+    expect(screen.getByTestId("wellness-signal-recovery-empty").textContent).toMatch(/Connect a wearable/i);
+    expect(screen.queryByTestId("wellness-signal-sleep-empty")).toBeNull();
   });
 
-  it("hides empty aggregate cards instead of showing placeholders", () => {
-    render(<WellnessOverview {...base}
-      habits={[]} medications={[]} labs={[]} supplements={[]}
-      appointments={[]} conditions={[]} allergies={[]} documents={[]}
-      recentActivity={[]} reminders={[]} schedule={[]} missedHabits={[]} />);
-    // Aggregate cards with no data are ABSENT (dynamic — "if they don't have any…").
-    expect(screen.queryByTestId("wellness-habits")).toBeNull();
-    expect(screen.queryByTestId("wellness-medications")).toBeNull();
-    expect(screen.queryByTestId("wellness-labs")).toBeNull();
-    expect(screen.queryByTestId("wellness-appointments")).toBeNull();
-    // …but the dynamic metric cards still render.
-    expect(screen.getByTestId("wellness-metric-t1")).toBeTruthy();
+  it("reads each signal against the 30-day average, not a goal", () => {
+    render(<WellnessOverview {...base} />);
+    expect(screen.getByTestId("wellness-signal-sleep").textContent).toMatch(/below your 30-day average/);
+    expect(screen.getByTestId("wellness-signal-activity").textContent).toMatch(/above your 30-day average/);
   });
 
-  it("shows a single nudge for a truly empty account", () => {
-    render(<WellnessOverview {...base}
-      wellnessScore={null} sleepHours={null} steps={null} restingHr={null}
-      hydrationOz={null} calories={null} streak={null}
-      insights={[]} habits={[]} medications={[]} labs={[]} supplements={[]}
-      appointments={[]} conditions={[]} allergies={[]} documents={[]}
-      recentActivity={[]} reminders={[]} schedule={[]} missedHabits={[]}
-      dynamicCards={[]} onAiDeepDive={undefined} />);
-    expect(screen.getByTestId("wellness-empty").textContent).toContain("Nothing tracked yet");
-    expect(screen.queryByTestId("wellness-metric-t1")).toBeNull();
+  it("shows what the score is made of and what it left out", () => {
+    render(<WellnessOverview {...base} />);
+    expect(screen.getByTestId("wellness-score-value").textContent).toBe("78");
+    const breakdown = screen.getByTestId("wellness-score-breakdown").textContent || "";
+    expect(breakdown).toMatch(/Sleep\s*57%/);
+    expect(breakdown).toMatch(/Activity\s*43%/);
+    expect(breakdown).toMatch(/Recovery not counted — no source connected/);
+  });
+
+  it("groups labs by panel, flags out-of-range values and shows the trend", () => {
+    render(<WellnessOverview {...base} />);
+    expect(screen.getByTestId("wellness-panel-lipids")).toBeTruthy();
+    const ldl = screen.getByTestId("wellness-lab-ldl");
+    expect(ldl.textContent).toMatch(/High/);
+    expect(ldl.textContent).toMatch(/Ref < 100 mg\/dL/);
+    expect(screen.getByTestId("wellness-lab-ldl-trend").textContent).toBe("128 → 138");
+    // A normal value carries no flag.
+    expect(screen.getByTestId("wellness-lab-hdl").textContent).not.toMatch(/High|Low/);
+  });
+
+  it("shows medications as refill dates, not daily check-offs", () => {
+    render(<WellnessOverview {...base} />);
+    const med = screen.getByTestId("wellness-med-m1");
+    expect(med.textContent).toMatch(/Refills Oct 4/);
+    expect(med.querySelector("input,button")).toBeNull();
+  });
+
+  it("renders care, activity and sources from real records only", () => {
+    render(<WellnessOverview {...base} />);
+    expect(screen.getByTestId("wellness-appt-a1").textContent).toMatch(/Dentist/);
+    expect(screen.getByTestId("wellness-doc-d1").textContent).toMatch(/Lab report/);
+    expect(screen.getByTestId("wellness-workout-t-run").textContent).toMatch(/2 sessions · 54 min · 6.2 mi/);
+    expect(screen.getByTestId("wellness-source-recovery").textContent).toMatch(/not connected/);
+    expect(screen.getByTestId("wellness-duplicates").textContent).toMatch(/HDL \(3 trackers\)/);
+  });
+
+  it("fires the AI brief and renders its narrative in place of the computed one", () => {
+    const onAiBrief = vi.fn();
+    const { rerender } = render(<WellnessOverview {...base} onAiBrief={onAiBrief} />);
+    fireEvent.click(screen.getByTestId("wellness-ai-brief"));
+    expect(onAiBrief).toHaveBeenCalled();
+    rerender(<WellnessOverview {...base} onAiBrief={onAiBrief} aiNarrative="Sleep dipped; heart rate held steady." />);
+    expect(screen.getByTestId("wellness-brief-ai").textContent).toMatch(/Sleep dipped/);
+  });
+
+  it("says what is missing instead of rendering empty shells", () => {
+    render(<WellnessOverview
+      {...base}
+      brief={[]} panels={[]} workouts={[]} medications={[]} appointments={[]}
+      documents={[]} allergies={[]} conditions={[]}
+      score={{ value: null, components: base.score.components.map((c) => ({ ...c, score: null, weight: 0 })) }}
+    />);
+    expect(screen.getByTestId("wellness-labs").textContent).toMatch(/Photograph a lab report/);
+    expect(screen.getByTestId("wellness-care").textContent).toMatch(/No medications, appointments or health documents/);
+    expect(screen.getByTestId("wellness-activity").textContent).toMatch(/No workouts recorded/);
+    expect(screen.getByTestId("wellness-score").textContent).toMatch(/nothing to score/);
+  });
+
+  it("names the person when the data is not the user's own", () => {
+    render(<WellnessOverview {...base} subjectName="Linda" />);
+    expect(screen.getByTestId("wellness-subject").textContent).toMatch(/Linda's health data/);
   });
 });

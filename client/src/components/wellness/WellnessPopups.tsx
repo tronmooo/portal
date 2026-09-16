@@ -24,10 +24,19 @@ import {
 } from "lucide-react";
 import { BubbleModal, BubbleRow, BubbleEmpty } from "@/components/ui/bubble-modal";
 import { MiniBars, ProgressRing, Pill as TonePill, CountUp } from "@/components/dashboard/visuals";
-import type {
-  WellnessHabit, WellnessEvent, WellnessMed, WellnessAppt, WellnessLab,
-  WellnessSupp, WellnessDoc, WellnessListItem, WellnessActivityItem,
-} from "./WellnessOverview";
+// Row shapes these popups render. They used to be imported from
+// WellnessOverview; the Wellness tab's 2026-09 rebuild dropped the drill-downs
+// (its five sections show their rows inline), so the only caller left is the
+// dashboard's health card — and the shapes live with the popups that use them.
+export interface WellnessHabit { id: string; name: string; done: boolean; }
+export interface WellnessEvent { id: string; time: string; title: string; }
+export interface WellnessMed { id: string; name: string; dose?: string; time?: string; taken?: boolean; }
+export interface WellnessAppt { id: string; date: string; time?: string; title: string; }
+export interface WellnessLab { id: string; name: string; date?: string; status?: string; }
+export interface WellnessSupp { id: string; name: string; dose?: string; schedule?: string; }
+export interface WellnessDoc { id: string; name: string; date?: string; }
+export interface WellnessListItem { id: string; name: string; note?: string; }
+export interface WellnessActivityItem { id: string; text: string; when?: string; }
 
 export type WellnessPopupKind =
   | "score" | "sleep" | "activity" | "hr" | "hydration" | "calories" | "streak"
@@ -360,7 +369,7 @@ function renderBody(kind: WellnessPopupKind, d: WellnessPopupData, a: string):
               {d.medications.map((m) => (
                 <BubbleRow key={m.id} testId={`wellness-popup-med-${m.id}`}
                   title={m.name} accent={a}
-                  leading={<CheckMark done={m.taken} accent={a} />}
+                  leading={<CheckMark done={!!m.taken} accent={a} />}
                   meta={<>
                     {m.dose && <TonePill tone="neutral">{m.dose}</TonePill>}
                     {m.time && <TonePill tone={m.taken ? "good" : "attention"}>{m.time}</TonePill>}

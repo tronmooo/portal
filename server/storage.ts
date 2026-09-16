@@ -1264,7 +1264,7 @@ export class MemStorage implements IStorage {
     const { _enrichment: enrichmentMeta, ...rawInput } = { ...data.values } as Record<string, any>;
     // Same unit + value gates as SupabaseStorage.logEntry — every write path, one rule.
     const rawValues = normalizeTrackerEntry(tracker as any, rawInput).values;
-    const guard = sanitizeTrackerEntryValues(tracker.fields, rawValues);
+    const guard = sanitizeTrackerEntryValues(tracker.fields, rawValues, { name: tracker.name, category: tracker.category, unit: (tracker as any).unit });
     if (guard.error) throw new Error(guard.error);
     const values = guard.values;
     const computed = { ...computeSecondaryData(tracker.name, tracker.category, values), ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}) } as any;

@@ -1,43 +1,47 @@
-// ── Wellness tab (Health→Wellness redesign, 2026-07) ─────────────────────────
-// The health command center. It renders <WellnessOverview> from data pulled off
-// the SAME shared TanStack Query keys the Trackers grid and Executive dashboard
-// use — ["/api/trackers", mode, ...ids], ["/api/habits", …], ["/api/stats", …],
-// obligations, events, documents, profiles. Because reads share those keys and
-// writes invalidate them, anything logged here or anywhere else stays in sync
-// across every view (that's the "update once, shows everywhere" requirement).
+// ── Wellness tab ─────────────────────────────────────────────────────────────
+// A readout, not a logbook.
+//
+// Every number on this page arrives on its own — from a connected health source,
+// from a lab report the Photo AI pipeline read, or from records that already
+// exist elsewhere in the app (medication obligations, appointments, documents,
+// profile fields). There is no hydration ring to fill, no streak to keep and no
+// "you haven't logged this in 24 days": nothing here is the user's chore.
+//
+// Data rules this page enforces (the layout is worthless if the numbers lie):
+//   * ONE SUBJECT. Health data never blends. The page reads exactly one person
+//     — the selected profile, or "me" — so two different heights can no longer
+//     average into one body. Trackers, obligations and documents are filtered
+//     to that person (orphans, which predate profile linking, belong to self).
+//   * ONE METRIC PER MEASUREMENT. Everything resolves through the canonical
+//     registry (shared/wellness-canon.ts), so "HDL", "HDL Cholesterol" and
+//     "Lipid Panel — HDL" are one series, not three cards.
+//   * IMPOSSIBLE VALUES ARE NOT SHOWN. A reading outside a metric's physically
+//     possible range is dropped on read (and now rejected on write), so an
+//     HbA1c of 179 % can't sit next to a real one.
+//
+// Reads still ride the SAME shared TanStack Query keys as the Trackers grid and
+// the dashboard, so anything logged anywhere still shows up here.
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
-import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { parseLocalDate } from "@/lib/format";
-import { invalidateDomain } from "@/lib/cache-bus";
 import { withFullLimit } from "@/lib/list-limit";
-import { hashNavigate } from "@/lib/hashNavigate";
 import { useToast } from "@/hooks/use-toast";
-import { HeartPulse, Plus } from "lucide-react";
-import { BubbleModal } from "@/components/ui/bubble-modal";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
-import type { Tracker, Profile, Obligation, Document as Doc, CalendarEvent } from "@shared/schema";
-import {
-  extractVitals, readMetric, readActivity, computeWellnessScore, countWellnessTrackers,
-} from "@/lib/wellness-metrics";
-import { getCanonicalGroup } from "@/lib/tracker-health";
+import { HeartPulse } from "lucide-react";
+import type { Tracker, Profile, Obligation, Document as Doc } from "@shared/schema";
+import { isHealthDocument } from "@shared/health-documents";
 import { readField } from "@/lib/profile-fields";
-import { buildWellnessCards } from "@/lib/wellness-dynamic";
-import { computeKeyFindings } from "@shared/tracker-insights";
+import {
+  collectMetrics, todaySignals, labPanels, activityHistory, wellnessScore,
+  weeklyBrief, sourceState, mergedDuplicates, resolveWellnessSubject, belongsToSubject,
+} from "@shared/wellness-readout";
 import {
   WellnessOverview,
-  type WellnessMed, type WellnessSupp, type WellnessAppt,
+  type WellnessMed, type WellnessAppt, type WellnessDoc, type WellnessListItem,
 } from "@/components/wellness/WellnessOverview";
-import { WellnessPopup, type WellnessPopupKind } from "@/components/wellness/WellnessPopups";
-
-const HYDRATION_GOAL = 100; // oz/day — matches the reference dial
-const CALORIE_GOAL = 2300;  // kcal/day
-const todayCA = () => new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD (local)
 
 // Split a "Vitamin D 2000IU" style string into name + dose (best-effort).
 function splitDose(name: string): { name: string; dose?: string } {
@@ -45,52 +49,27 @@ function splitDose(name: string): { name: string; dose?: string } {
   return m ? { name: m[1].trim(), dose: m[2].trim() } : { name };
 }
 
-function relTime(iso?: string): string | undefined {
-  if (!iso) return undefined;
-  const diff = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(diff)) return undefined;
-  const min = Math.round(diff / 60000);
-  if (min < 1) return "now";
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.round(hr / 24)}d ago`;
-}
+const shortDate = (v?: string | null): string | undefined => {
+  if (!v) return undefined;
+  const d = parseLocalDate(v) ?? new Date(v);
+  return isNaN(d.getTime()) ? undefined : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+};
 
 export default function WellnessPage() {
   const embedded = useHubChrome();
   const { toast } = useToast();
   const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
-  const today = todayCA();
 
   // ── Shared queries (identical keys everywhere → connected views) ──
   const { data: trackers = [] } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/trackers${profileParam}`).then((r) => r.json()),
   });
-  const { data: habits = [] } = useQuery<any[]>({
-    queryKey: ["/api/habits", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", withFullLimit(`/api/habits${profileParam}`)).then((r) => r.json()),
-  });
-  const { data: stats } = useQuery<any>({
-    queryKey: ["/api/stats", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/stats${profileParam}`).then((r) => r.json()),
-  });
   const { data: obligations = [] } = useQuery<Obligation[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then((r) => r.json()),
   });
-  const { data: events = [] } = useQuery<CalendarEvent[]>({
-    queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", withFullLimit(`/api/events${profileParam}`)).then((r) => r.json()).catch(() => []),
-  });
-  // BUG-20260709-wellness-doc-leak: the Wellness hub renders under the global
-  // profile filter, but this read hit the bare /api/documents and `healthDocs`
-  // below filters only by category — so one person's medical/insurance/lab
-  // documents surfaced on another person's Wellness hub. Scope it like the
-  // events query above (server filters /api/documents by profileIds; orphans
-  // fall through to the self profile only).
   const { data: documents = [] } = useQuery<Doc[]>({
     queryKey: ["/api/documents", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", withFullLimit(`/api/documents${profileParam}`)).then((r) => r.json()).catch(() => []),
@@ -100,354 +79,110 @@ export default function WellnessPage() {
     queryFn: () => apiRequest("GET", "/api/profiles").then((r) => r.json()),
   });
 
-  // ── Habit check-in toggle — the SAME mutation shape the dashboard habit
-  // popup uses, invalidating ["/api/habits"] + ["/api/stats"] so the dashboard
-  // ring and Trackers habit view update in lockstep. ──
-  // Which detail popup is open. Popups render from data already fetched above,
-  // so opening one issues no request and shows no loading state.
-  const [popup, setPopup] = useState<WellnessPopupKind | null>(null);
-  const [togglingHabitId, setTogglingHabitId] = useState<string | null>(null);
-  const toggleHabit = useMutation({
-    mutationFn: async ({ id, next }: { id: string; next: boolean }) => {
-      const h = (habits || []).find((x: any) => x.id === id);
-      const existing = (h?.checkins || []).find((c: any) => c.date === today);
-      if (next) {
-        if (!existing) await apiRequest("POST", `/api/habits/${id}/checkin`, { date: today });
-      } else if (existing) {
-        // Idempotent untoggle: a 404 means the check-in is already gone (the
-        // rendered state was stale — e.g. a slow refetch after a previous
-        // toggle). The desired state already holds, so that is NOT an error;
-        // surfacing it as one is the "red error but it worked" report.
-        try {
-          await apiRequest("DELETE", `/api/habits/${id}/checkin/${existing.id}`);
-        } catch (e: any) {
-          if (!String(e?.message || "").startsWith("404")) throw e;
-        }
-      }
-    },
-    onMutate: async ({ id, next }) => {
-      setTogglingHabitId(id);
-      // Optimistic flip: without this the ring/checkbox waited for the write +
-      // refetch (8s+ on a cold serverless instance), so taps felt ignored and
-      // users tapped again — the stale second tap is what produced the 404s.
-      await queryClient.cancelQueries({ queryKey: ["/api/habits"] });
-      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/habits"] });
-      queryClient.setQueriesData<any[]>({ queryKey: ["/api/habits"] }, (old) =>
-        (old || []).map((h: any) => h.id === id
-          ? {
-              ...h,
-              checkins: next
-                ? [...(h.checkins || []).filter((c: any) => c.date !== today), { id: "tmp-" + Date.now(), date: today }]
-                : (h.checkins || []).filter((c: any) => c.date !== today),
-            }
-          : h));
-      return { prev };
-    },
-    onError: (_e, _v, ctx: any) => {
-      if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
-      toast({ title: "Failed to update habit", variant: "destructive" });
-    },
-    onSettled: () => {
-      setTogglingHabitId(null);
-      // Cache bus: ripples to every habit-linked surface in one call.
-      invalidateDomain("habits");
-    },
-  });
+  // ── The subject: exactly one person ──────────────────────────────────────
+  // "Everyone" is a perfectly good filter for bills. For a body it is not:
+  // under it this page averaged two people's heights (70 in and 67 in) into one
+  // BMI. So the subject is the selected person when one is selected, and "me"
+  // otherwise — never a blend.
+  const { subject, isSelf: subjectIsSelf } = resolveWellnessSubject(
+    (Array.isArray(profiles) ? profiles : []) as any[],
+    filterMode === "selected" ? filterIds : [],
+  );
+  const ownedBySubject = (linked?: string[] | null) => belongsToSubject(linked, subject, subjectIsSelf);
 
-  // ── Quick-log tracker entry: shared tracker-entry mutation → propagates ──
-  const quickLog = useMutation({
-    mutationFn: async ({ trackerId, field, amount }: { trackerId: string; field: string; amount: number }) =>
-      apiRequest("POST", `/api/trackers/${trackerId}/entries`, { values: { [field]: amount } }),
-    onSuccess: () => {
-      invalidateDomain("trackers");
-      toast({ title: "Logged" });
-    },
-    onError: () => toast({ title: "Couldn't log entry", variant: "destructive" }),
-  });
+  const myTrackers = (Array.isArray(trackers) ? trackers : []).filter((t: any) => ownedBySubject(t.linkedProfiles));
+  const myObligations = (Array.isArray(obligations) ? obligations : []).filter((o: any) => ownedBySubject(o.linkedProfiles));
+  const myDocuments = (Array.isArray(documents) ? documents : []).filter((d: any) => ownedBySubject(d.linkedProfiles));
 
-  // ── Medication mark-taken: POST the obligation's pay endpoint to record a
-  // payment dated today (untoggle deletes the latest). Invalidates obligations
-  // + stats + enhanced so the dashboard "N due today" and bills feed match. ──
-  const [togglingMedId, setTogglingMedId] = useState<string | null>(null);
-  const toggleMed = useMutation({
-    mutationFn: async ({ id, next }: { id: string; next: boolean }) => {
-      if (next) await apiRequest("POST", `/api/obligations/${id}/pay`, { date: today });
-      else {
-        // Idempotent untoggle: 404 = "No payments to undo" — the med is
-        // already unmarked (stale render / double tap). Desired state holds;
-        // don't turn it into a red "Couldn't update medication".
-        try {
-          await apiRequest("DELETE", `/api/obligations/${id}/last-payment`, {});
-        } catch (e: any) {
-          if (!String(e?.message || "").startsWith("404")) throw e;
-        }
-      }
-    },
-    onMutate: async ({ id, next }) => {
-      setTogglingMedId(id);
-      // Optimistic flip of the payment record the med card derives "taken
-      // today" from — same rationale as toggleHabit above.
-      await queryClient.cancelQueries({ queryKey: ["/api/obligations"] });
-      const prev = queryClient.getQueriesData<any[]>({ queryKey: ["/api/obligations"] });
-      queryClient.setQueriesData<any[]>({ queryKey: ["/api/obligations"] }, (old) =>
-        Array.isArray(old)
-          ? old.map((o: any) => o.id === id
-              ? {
-                  ...o,
-                  payments: next
-                    ? [...(o.payments || []), { id: "tmp-" + Date.now(), date: today, amount: o.amount }]
-                    : (o.payments || []).filter((p: any) => String(p.date || "").slice(0, 10) !== today),
-                }
-              : o)
-          : old);
-      return { prev };
-    },
-    onError: (_e, _v, ctx: any) => {
-      if (ctx?.prev) for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data);
-      toast({ title: "Couldn't update medication", variant: "destructive" });
-    },
-    onSettled: () => {
-      setTogglingMedId(null);
-      invalidateDomain("obligations");
-    },
-  });
+  // ── The readout ──────────────────────────────────────────────────────────
+  const metrics = collectMetrics(myTrackers);
+  const signals = todaySignals(metrics);
+  const panels = labPanels(metrics);
+  const workouts = activityHistory(myTrackers);
+  const score = wellnessScore(metrics);
+  const brief = weeklyBrief({ metrics, workouts, labs: panels });
+  const sources = sourceState(metrics);
+  const duplicates = mergedDuplicates(metrics);
 
-  // ── Inline quick-log dialog for point-in-time metrics (weight / mood /
-  // sleep / steps) that need a value, not a fixed increment. ──
-  const [logKind, setLogKind] = useState<null | "weight" | "mood" | "sleep" | "steps">(null);
-  const [logValue, setLogValue] = useState("");
+  // ── Care ─────────────────────────────────────────────────────────────────
+  // Medications show WHEN THEY RUN OUT, not a daily checkbox. Knowing a refill
+  // is due is useful; ticking a box every morning is the chore this page is
+  // getting rid of.
+  const isSupplement = (o: any) => /supplement|vitamin|omega|probiotic|magnesium|zinc|fish oil|creatine/i.test(`${o.name} ${o.category}`);
+  const medications: WellnessMed[] = myObligations
+    .filter((o: any) => o.kind === "medication" && o.status !== "cancelled")
+    .sort((a: any, b: any) => String(a.nextDueDate || "").localeCompare(String(b.nextDueDate || "")))
+    .slice(0, 12)
+    .map((o: any) => {
+      const { name, dose } = splitDose(o.name);
+      const refillRaw = o.fields?.refillDate || o.fields?.refill || (isSupplement(o) ? null : o.nextDueDate);
+      const refill = shortDate(refillRaw);
+      return {
+        id: o.id, name,
+        dose: dose || (o.fields?.dose as string | undefined),
+        refill: refill ? `Refills ${refill}` : undefined,
+        schedule: o.frequency,
+      };
+    });
 
-  // ── AI Deep Dive: an on-demand LLM narrative over the wellness data. Called
-  // ONLY when the user taps the button (no per-visit token cost). The server
-  // falls back to the deterministic findings if the model is unavailable. ──
+  const appointments: WellnessAppt[] = myObligations
+    .filter((o: any) => o.kind === "appointment" && o.status !== "cancelled" && o.nextDueDate)
+    .sort((a: any, b: any) => String(a.nextDueDate).localeCompare(String(b.nextDueDate)))
+    .slice(0, 8)
+    .map((o: any) => ({
+      id: o.id, title: o.name,
+      // parseLocalDate: a date-only value is local midnight, not UTC midnight
+      // (which showed the previous day in the Americas).
+      date: shortDate(o.nextDueDate) || "",
+      time: /T\d|:/.test(o.nextDueDate)
+        ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BROWSER_TIMEZONE })
+        : undefined,
+    }));
+
+  // Health documents BY TYPE (shared/health-documents.ts). The old name-regex
+  // filed two homeowners insurance policies under health records.
+  const healthDocs: WellnessDoc[] = myDocuments
+    .filter((d: any) => isHealthDocument(d))
+    .slice(0, 8)
+    .map((d: any) => ({
+      id: d.id,
+      name: d.title || d.name,
+      date: shortDate(d.expirationDate || d.createdAt),
+      type: d.type,
+    }));
+
+  // Allergies + conditions from the SUBJECT's profile only.
+  const splitList = (v: any): string[] =>
+    Array.isArray(v) ? v.map(String) : (typeof v === "string" ? v.split(/[,;]/).map((s) => s.trim()).filter(Boolean) : []);
+  const allergies: WellnessListItem[] = subject
+    ? splitList(readField((subject as any).fields, "allergies")).map((a, i) => ({ id: `al-${i}`, name: a })).slice(0, 8)
+    : [];
+  const conditions: WellnessListItem[] = subject
+    ? splitList(
+        readField((subject as any).fields, "conditions") ??
+        readField((subject as any).fields, "medicalConditions") ??
+        readField((subject as any).fields, "medical conditions"),
+      ).map((c, i) => ({ id: `co-${i}`, name: c })).slice(0, 8)
+    : [];
+
+  // ── AI brief (opt-in) ────────────────────────────────────────────────────
+  // The weekly brief above is computed from the data for free on every load.
+  // This turns the same facts into prose, and is called only when asked, so a
+  // visit costs no tokens.
   const [aiNarrative, setAiNarrative] = useState<string | null>(null);
-  const aiDeepDive = useMutation({
+  const aiBrief = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/wellness/insights${profileParam}`, {});
       return res.json();
     },
     onSuccess: (data: any) => setAiNarrative(typeof data?.narrative === "string" ? data.narrative : null),
-    onError: () => toast({ title: "Couldn't generate insights", variant: "destructive" }),
+    onError: () => toast({ title: "Couldn't generate the brief", variant: "destructive" }),
   });
-
-  // ── Derive everything from the shared data ──
-  const vitals = extractVitals(trackers);
-  const wellnessScore = computeWellnessScore(trackers);
-  const trackerCount = countWellnessTrackers(trackers);
-
-  const sleep = vitals.sleep;
-  const steps = vitals.steps;
-  const hydration = vitals.hydration;
-  const calories = vitals.calories;
-  const restingHr = vitals.restingHeartRate.value != null ? vitals.restingHeartRate : vitals.heartRate;
-  const streak = Array.isArray(stats?.streaks) && stats.streaks.length > 0
-    ? Math.max(...stats.streaks.map((s: any) => Number(s.days) || 0))
-    : (stats?.journalStreak ?? null);
-
-  // Habits (today's completion via checkins).
-  const activeHabits = (habits || []).filter((h: any) => !h.archivedAt);
-  const habitCards = activeHabits.map((h: any) => ({
-    id: h.id, name: h.name,
-    done: (h.checkins || []).some((c: any) => c.date === today),
-  }));
-  const habitsCompleted = habitCards.filter((h) => h.done).length;
-  // Missed habits = active habits not yet checked in today.
-  const missedHabits = habitCards.filter((h) => !h.done);
-
-  // Mental wellness = today's meditation/mindfulness minutes if a tracker exists.
-  const meditation = readMetric(trackers, [/meditat|mindful/], { unit: "min" });
-  const meditationMin = meditation.trackerId ? (meditation.value ?? null) : null;
-
-  // Today's schedule (calendar events dated today).
-  const schedule = (Array.isArray(events) ? events : [])
-    .filter((e: any) => String(e.date || "").slice(0, 10) === today)
-    .sort((a: any, b: any) => String(a.time || "").localeCompare(String(b.time || "")))
-    .map((e: any) => ({ id: e.id, time: e.allDay ? "All day" : (e.time || "—"), title: e.title }));
-
-  // Medications + supplements from obligations (kind=medication). "Due" when the
-  // next occurrence is today or past; taken-state lives in payments.
-  const medObligations = (Array.isArray(obligations) ? obligations : [])
-    .filter((o: any) => o.kind === "medication" && o.status !== "cancelled");
-  const isSupplement = (o: any) => /supplement|vitamin|omega|probiotic|magnesium|zinc|fish oil|creatine/i.test(`${o.name} ${o.category}`);
-  const takenToday = (o: any) => (o.payments || []).some((p: any) => String(p.date || "").slice(0, 10) === today);
-  const medications: WellnessMed[] = medObligations.filter((o: any) => !isSupplement(o)).slice(0, 8).map((o: any) => {
-    const { name, dose } = splitDose(o.name);
-    return {
-      id: o.id, name, dose: dose || (o.fields?.dose as string | undefined),
-      // Only a value that carries a clock time has one to show; a date-only
-      // nextDueDate used to render a fabricated "5:00 PM" (UTC midnight, local).
-      time: o.nextDueDate && /T\d|:/.test(String(o.nextDueDate)) ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BROWSER_TIMEZONE }) : undefined,
-      taken: takenToday(o),
-    };
-  });
-  const supplements: WellnessSupp[] = medObligations.filter(isSupplement).slice(0, 8).map((o: any) => {
-    const { name, dose } = splitDose(o.name);
-    return { id: o.id, name, dose, schedule: o.frequency };
-  });
-
-  // Upcoming appointments (obligations kind=appointment, future first).
-  const appointments: WellnessAppt[] = (Array.isArray(obligations) ? obligations : [])
-    .filter((o: any) => o.kind === "appointment" && o.status !== "cancelled" && o.nextDueDate)
-    .sort((a: any, b: any) => String(a.nextDueDate).localeCompare(String(b.nextDueDate)))
-    .slice(0, 6)
-    .map((o: any) => ({
-      id: o.id, title: o.name,
-      // parseLocalDate: a date-only value is local midnight, not UTC midnight
-      // (which showed the previous day in the Americas).
-      date: (parseLocalDate(o.nextDueDate) ?? new Date(o.nextDueDate)).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-      time: /T\d|:/.test(o.nextDueDate) ? new Date(o.nextDueDate).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: BROWSER_TIMEZONE }) : undefined,
-    }));
-
-  // Health documents (medical / lab / insurance / prescription / vaccination).
-  const healthDocs = (Array.isArray(documents) ? documents : [])
-    .filter((d: any) => !d.deletedAt && /medical|lab|health|insurance|prescription|vaccin|immuniz|blood|clinical/i.test(`${d.type} ${d.name} ${(d.tags || []).join(" ")}`))
-    .slice(0, 6)
-    .map((d: any) => ({
-      id: d.id, name: d.title || d.name,
-      date: (d.expirationDate || d.createdAt) ? (parseLocalDate(d.expirationDate || d.createdAt) ?? new Date(d.expirationDate || d.createdAt)).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : undefined,
-    }));
-
-  // Conditions + allergies from the scoped person/self profiles' fields.
-  const scopedPeople = (Array.isArray(profiles) ? profiles : []).filter((p: any) => {
-    if (!["person", "self"].includes(p.type)) return false;
-    if (filterMode === "selected" && filterIds.length > 0) return filterIds.includes(p.id);
-    return true;
-  });
-  const splitList = (v: any): string[] =>
-    Array.isArray(v) ? v.map(String) : (typeof v === "string" ? v.split(/[,;]/).map((s) => s.trim()).filter(Boolean) : []);
-  const allergies = scopedPeople.flatMap((p: any) =>
-    splitList(readField(p.fields, "allergies")).map((a, i) => ({ id: `${p.id}-al-${i}`, name: a, note: p.type === "self" ? undefined : p.name }))
-  ).slice(0, 6);
-  const conditions = scopedPeople.flatMap((p: any) => {
-    const raw = readField(p.fields, "conditions") ?? readField(p.fields, "medicalConditions") ?? readField(p.fields, "medical conditions");
-    return splitList(raw).map((c, i) => ({ id: `${p.id}-co-${i}`, name: c, note: p.type === "self" ? undefined : p.name }));
-  }).slice(0, 6);
-
-  // Lab results — cholesterol/glucose/lipid trackers, latest reading + status.
-  const labs = (Array.isArray(trackers) ? trackers : [])
-    .filter((t: any) => /cholesterol|glucose|lipid|a1c|hdl|ldl|triglyceride|vitamin d|tsh|thyroid/i.test(`${t.name} ${t.category}`))
-    .filter((t: any) => (t.entries || []).length > 0)
-    .slice(0, 5)
-    .map((t: any) => {
-      const m = readMetric([t], [/.*/]);
-      return {
-        id: t.id, name: t.name,
-        date: m.loggedAt ? new Date(m.loggedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: BROWSER_TIMEZONE }) : undefined,
-        status: m.value != null ? `${m.value}${m.unit ? " " + m.unit : ""}` : undefined,
-      };
-    });
-
-  // Recent activity from stats (already health/tracker-flavored).
-  const recentActivity = (Array.isArray(stats?.recentActivity) ? stats.recentActivity : [])
-    .slice(0, 6)
-    .map((r: any, i: number) => ({ id: String(i), text: r.description || r.type, when: relTime(r.timestamp) }));
-
-  // Vitals overview rows.
-  const fmtVital = (m: any, dp = 0) => m.value != null ? `${Number(m.value).toLocaleString("en-US", { maximumFractionDigits: dp })}${m.unit ? " " + m.unit : ""}` : "—";
-  const vitalRows = [
-    vitals.bloodPressureSys.value != null && { label: "Blood Pressure", value: `${vitals.bloodPressureSys.value}/${vitals.bloodPressureDia.value ?? "—"} mmHg`, change: null },
-    (vitals.heartRate.value != null) && { label: "Heart Rate", value: fmtVital(vitals.heartRate), change: vitals.heartRate.changePct },
-    vitals.bodyTemp.value != null && { label: "Body Temp", value: fmtVital(vitals.bodyTemp, 1), change: null },
-    vitals.weight.value != null && { label: "Weight", value: fmtVital(vitals.weight, 1), change: vitals.weight.changePct },
-    vitals.glucose.value != null && { label: "Blood Sugar", value: fmtVital(vitals.glucose), change: vitals.glucose.changePct },
-    vitals.bmi.value != null && { label: "BMI", value: fmtVital(vitals.bmi, 1), change: null },
-  ].filter(Boolean) as Array<{ label: string; value: string; change: number | null }>;
-
-  // Exercise & activity — ONE reader for the whole app (lib/wellness-metrics
-  // readActivity). This used to be a local loop over trackers whose CATEGORY
-  // resolved to the "Fitness" group, which silently dropped a tracker named
-  // "Walking" filed under anything else — the 2026-08-13 "I walked a mile, why
-  // is it blank?" report. The shared reader recognises activity by name and by
-  // the shape of its fields, so the Wellness tab, the Executive card and the
-  // trackers page all resolve the same walk.
-  const activityWeek = readActivity(trackers, { days: 7 });
-
-  // Dynamic per-tracker cards — one for EVERY metric the user actually logs,
-  // whatever it is. This is what makes Wellness reflect the user's real data
-  // instead of a predetermined list.
-  const dynamicCards = buildWellnessCards(trackers);
-
-  // AI wellness insights — REAL findings from the shared insight engine
-  // (trend / anomaly / streak / milestone, health-direction aware) over
-  // whatever the user tracks, instead of the old hardcoded template strings.
-  const keyFindings = computeKeyFindings({
-    trackers: (trackers as any) || [],
-    obligations: (obligations as any) || [],
-    habits: (habits as any) || [],
-    financeSnapshot: undefined,
-    netWorthHistory: [],
-  } as any);
-  const HEALTH_FINDING = /tracker_|habit_/;
-  const insights: string[] = keyFindings
-    .filter((f: any) => HEALTH_FINDING.test(String(f.kind)))
-    .map((f: any) => f.detail ? `${f.title} — ${f.detail}` : f.title);
-  // Light supplementary lines when the engine has little to say yet.
-  if (insights.length < 3) {
-    if (sleep.value != null) insights.push(sleep.value >= 7 ? `You slept ${sleep.value.toFixed(1)}h last night — right in the healthy range.` : `You slept ${sleep.value.toFixed(1)}h last night — aim for 7–9h.`);
-    if (hydration.value != null && hydration.value < HYDRATION_GOAL) insights.push(`You're at ${Math.round(hydration.value)} of ${HYDRATION_GOAL} oz of water today.`);
-    if (habitCards.length > 0) insights.push(`You've completed ${habitsCompleted} of ${habitCards.length} habits today.`);
-  }
-
-  // Health reminders — from active medication/appointment obligations + hydration.
-  const reminders: string[] = [];
-  const dueMedCount = medications.filter((m) => !m.taken).length;
-  if (dueMedCount > 0) reminders.push(`${dueMedCount} medication${dueMedCount > 1 ? "s" : ""} still to take today.`);
-  if (hydration.value != null && hydration.value < HYDRATION_GOAL) reminders.push(`Drink ${HYDRATION_GOAL - Math.round(hydration.value)} more oz of water.`);
-  if (appointments.length > 0) reminders.push(`${appointments.length} upcoming appointment${appointments.length > 1 ? "s" : ""}.`);
-
-  // The matched tracker metric behind each quick-log kind.
-  const metricForKind = (kind: "weight" | "mood" | "sleep" | "steps") =>
-    kind === "weight" ? vitals.weight : kind === "mood" ? vitals.mood : kind === "sleep" ? sleep : steps;
-  const logMeta: Record<"weight" | "mood" | "sleep" | "steps", { label: string; unit: string; step: string; placeholder: string }> = {
-    weight: { label: "Weight", unit: vitals.weightUnit, step: "0.1", placeholder: "176.5" },
-    mood: { label: "Mood", unit: "/ 10", step: "1", placeholder: "8" },
-    sleep: { label: "Sleep", unit: "hours", step: "0.1", placeholder: "7.5" },
-    steps: { label: "Steps", unit: "steps", step: "1", placeholder: "8000" },
-  };
-
-  const onQuickLog = (kind: "hydration" | "weight" | "mood" | "sleep" | "steps") => {
-    if (kind === "hydration") {
-      // Fast +8oz — no value prompt needed for an additive metric.
-      if (hydration.trackerId && hydration.primaryField) {
-        quickLog.mutate({ trackerId: hydration.trackerId, field: hydration.primaryField, amount: 8 });
-      } else {
-        toast({ title: "No hydration tracker yet", description: "Ask the AI in chat to start one." });
-      }
-      return;
-    }
-    // Point-in-time metrics open an inline value dialog.
-    const m = metricForKind(kind);
-    if (!m.trackerId) {
-      toast({ title: `No ${logMeta[kind].label.toLowerCase()} tracker yet`, description: "Ask the AI in chat to start one." });
-      hashNavigate("/trackers");
-      return;
-    }
-    setLogValue(m.value != null ? String(m.value) : "");
-    setLogKind(kind);
-  };
-
-  const submitQuickLog = () => {
-    if (!logKind) return;
-    const m = metricForKind(logKind);
-    const amount = parseFloat(logValue);
-    if (!m.trackerId || !m.primaryField || !Number.isFinite(amount)) {
-      toast({ title: "Enter a number", variant: "destructive" });
-      return;
-    }
-    quickLog.mutate({ trackerId: m.trackerId, field: m.primaryField, amount });
-    setLogKind(null);
-    setLogValue("");
-  };
 
   return (
-    // BUG-20260709-wellness-scroll: the hub <main> is overflow-hidden, so every
-    // hub page must own its scroll container (see dashboard/trackers/finance/…).
-    // Wellness was missing it, so tall content overflowed the clipped <main>
-    // (unreachable) and the last cards hid under the 60px fixed bottom nav.
-    // Mirror the peers: h-full + overflow-y-auto + pb-24 nav clearance.
+    // The hub <main> is overflow-hidden, so every hub page owns its scroll
+    // container (see dashboard/trackers/finance/…) and clears the 60px nav.
     <div
-      // Embedded gutters match the hub chrome above (HubShell: px-3 md:px-6);
-      // standalone matches PageContainer.
       className={`h-full overflow-y-auto overflow-x-hidden pb-24 ${embedded ? "px-3 md:px-6 py-3" : "container mx-auto px-3 sm:px-4 py-4 max-w-7xl"}`}
       style={{ WebkitOverflowScrolling: "touch" }}
     >
@@ -455,136 +190,30 @@ export default function WellnessPage() {
         <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
           <div>
             <h1 className="text-xl font-bold flex items-center gap-2"><HeartPulse className="w-5 h-5 text-red-500" /> Wellness</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Your health at a glance{trackerCount > 0 ? ` · ${trackerCount} tracker${trackerCount > 1 ? "s" : ""}` : ""}
-            </p>
+            <p className="text-sm text-muted-foreground mt-0.5">Read back from your health data — nothing to log</p>
           </div>
           <MultiProfileFilter onChange={() => {}} compact />
         </div>
       )}
 
       <WellnessOverview
-        wellnessScore={wellnessScore}
-        wellnessScoreLabel={wellnessScore == null ? undefined : wellnessScore >= 80 ? "Good" : wellnessScore >= 60 ? "Fair" : "Needs care"}
-        sleepHours={sleep.value}
-        sleepSeries={sleep.series}
-        steps={steps.value}
-        stepsSeries={steps.series}
-        restingHr={restingHr.value}
-        restingHrSeries={restingHr.series}
-        hydrationOz={hydration.value}
-        hydrationGoal={HYDRATION_GOAL}
-        calories={calories.value}
-        caloriesGoal={CALORIE_GOAL}
-        streak={streak}
-        insights={insights}
-        habits={habitCards}
-        habitsCompleted={habitsCompleted}
-        onToggleHabit={(id, next) => toggleHabit.mutate({ id, next })}
-        togglingHabitId={togglingHabitId}
-        missedHabits={missedHabits}
-        meditationMin={meditationMin}
-        recoveryScore={null}
-        schedule={schedule}
-        medications={medications}
-        onToggleMed={(id, next) => toggleMed.mutate({ id, next })}
-        togglingMedId={togglingMedId}
-        vitals={vitalRows}
-        sleep={{ hours: sleep.value ?? null }}
-        nutrition={{ calories: calories.value, caloriesGoal: CALORIE_GOAL }}
-        mood={{ value: vitals.mood.value, series: vitals.mood.series }}
-        activity={vitals.activity}
-        activityWeek={activityWeek}
-        appointments={appointments}
-        reminders={reminders}
-        labs={labs}
-        supplements={supplements}
-        documents={healthDocs}
-        conditions={conditions}
-        allergies={allergies}
-        recentActivity={recentActivity}
-        weightUnit={vitals.weightUnit}
-        onQuickLog={onQuickLog}
-        dynamicCards={dynamicCards}
-        onOpenPopup={(k) => setPopup(k as WellnessPopupKind)}
-        onAiDeepDive={() => aiDeepDive.mutate()}
-        aiDeepDiveLoading={aiDeepDive.isPending}
+        subjectName={subject && !subjectIsSelf ? subject.name : null}
+        score={score}
+        signals={signals}
+        brief={brief}
         aiNarrative={aiNarrative}
+        onAiBrief={() => aiBrief.mutate()}
+        aiBriefLoading={aiBrief.isPending}
+        panels={panels}
+        medications={medications}
+        appointments={appointments}
+        documents={healthDocs}
+        allergies={allergies}
+        conditions={conditions}
+        workouts={workouts}
+        sources={sources}
+        duplicates={duplicates}
       />
-
-      {popup && (
-        <WellnessPopup
-          kind={popup}
-          onClose={() => setPopup(null)}
-          d={{
-            wellnessScore,
-            wellnessScoreLabel: wellnessScore == null ? undefined : wellnessScore >= 80 ? "Good" : wellnessScore >= 60 ? "Fair" : "Needs care",
-            sleepHours: sleep.value, sleepSeries: sleep.series,
-            steps: steps.value, stepsSeries: steps.series,
-            restingHr: restingHr.value, restingHrSeries: restingHr.series,
-            hydrationOz: hydration.value, hydrationGoal: HYDRATION_GOAL,
-            calories: calories.value, caloriesGoal: CALORIE_GOAL,
-            streak,
-            // Every check-in date across the user's habits — the heatmap needs
-            // the history, not just the current run length.
-            checkinDates: (habits || []).flatMap((h: any) => (h.checkins || []).map((c: any) => String(c.date || "").slice(0, 10))).filter(Boolean),
-            insights,
-            aiNarrative,
-            habits: habitCards,
-            missedHabits,
-            schedule,
-            medications,
-            appointments,
-            reminders,
-            labs,
-            supplements,
-            documents: healthDocs,
-            conditions,
-            allergies,
-            recentActivity,
-            onToggleHabit: (id, next) => toggleHabit.mutate({ id, next }),
-            togglingHabitId,
-            onToggleMed: (id, next) => toggleMed.mutate({ id, next }),
-            togglingMedId,
-          }}
-        />
-      )}
-
-      {/* Inline quick-log dialog for weight / mood / sleep / steps — the same
-          shell every other popup uses, so a form and a drill-down are one app. */}
-      <BubbleModal
-        open={logKind != null}
-        onClose={() => { setLogKind(null); setLogValue(""); }}
-        title={`Log ${logKind ? logMeta[logKind].label : ""}`}
-        icon={Plus}
-        accent="199 89% 60%"
-        width="sm"
-        testId="wellness-quicklog-dialog"
-        footer={
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => { setLogKind(null); setLogValue(""); }}>Cancel</Button>
-            <Button size="sm" onClick={submitQuickLog} disabled={quickLog.isPending || !logValue.trim()} data-testid="wellness-log-submit">
-              {quickLog.isPending ? "Logging…" : "Log"}
-            </Button>
-          </div>
-        }
-      >
-        {logKind && (
-          <div className="space-y-2 pt-1">
-            <Label htmlFor="wellness-log-input" className="text-xs">{logMeta[logKind].label} ({logMeta[logKind].unit})</Label>
-            <Input
-              id="wellness-log-input" type="number" inputMode="decimal" autoFocus
-              step={logMeta[logKind].step} placeholder={logMeta[logKind].placeholder}
-              value={logValue} onChange={(e) => setLogValue(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") submitQuickLog(); }}
-              data-testid="wellness-log-input"
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Logs to your {metricForKind(logKind).trackerName || logMeta[logKind].label} tracker — updates everywhere.
-            </p>
-          </div>
-        )}
-      </BubbleModal>
     </div>
   );
 }
