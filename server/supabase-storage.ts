@@ -137,6 +137,7 @@ import {
   MOOD_SCORES,
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
+import { calorieContextForOwner, caloriesForStoredEntry, type CalorieContext } from "@shared/fitness-metrics";
 import { encryptField, decryptField, shouldEncryptMemory, ENCRYPTED_PREFIX } from "./crypto-util";
 import { setOwners } from "./ownership-writer";
 import { ProfileLinkFailure } from "./profile-link-failure";
@@ -500,8 +501,20 @@ function generateInsights(
     else if (avg >= 6) { insights.push({ id: randomUUID(), type: "mood_trend", title: "Great mood this week", description: "You've been feeling positive. Keep doing what's working!", severity: "positive", data: { avgMood: avg }, createdAt: now.toISOString() }); }
   }
 
+  // One estimator for the total, so it agrees with the cards it summarises.
+  // Entries written before it existed are recomputed at read time — no stored
+  // row is rewritten. Each is priced with its own owner's body weight.
   let totalCalsBurned = 0;
-  for (const t of trackers) { for (const e of t.entries) { if (localDayOf(e.timestamp, insightTz) === todayLocal && e.computed?.caloriesBurned) totalCalsBurned += e.computed.caloriesBurned; } }
+  for (const t of trackers) {
+    for (const e of t.entries) {
+      if (localDayOf(e.timestamp, insightTz) !== todayLocal) continue;
+      const ownerId = (e as any).profileId || (t.linkedProfiles || [])[0];
+      const owner = ownerId ? profiles.find((p: any) => p.id === ownerId) : undefined;
+      const cal = caloriesForStoredEntry(t as any, e as any, calorieContextForOwner(owner as any));
+      if (cal) totalCalsBurned += cal.value;
+    }
+  }
+  totalCalsBurned = Math.round(totalCalsBurned);
   if (totalCalsBurned > 0) { insights.push({ id: randomUUID(), type: "health_correlation", title: `${totalCalsBurned} calories burned today`, description: `Based on your logged activities. ${totalCalsBurned > 500 ? "Great active day!" : "Every bit counts."}`, severity: "positive", data: { caloriesBurned: totalCalsBurned }, createdAt: now.toISOString() }); }
 
   if (trackers.length > 0) {
@@ -3234,6 +3247,27 @@ export class SupabaseStorage implements IStorage {
     }
   }
 
+  /**
+   * Calorie context for the person an entry BELONGS TO.
+   *
+   * Owner = the entry's own `profileId`, falling back to the tracker's linked
+   * profile. Never the signed-in user: on a shared account, Sarah's basketball
+   * game must be priced with Sarah's body weight even when Bob is the session
+   * writing it. Returns an empty context (labelled population default, lower
+   * confidence) rather than throwing if the profile can't be read.
+   */
+  private async ownerCalorieContext(
+    tracker: Pick<Tracker, "linkedProfiles">,
+    entryProfileId?: string | null,
+  ): Promise<CalorieContext> {
+    try {
+      const ownerId = entryProfileId || (tracker.linkedProfiles || [])[0];
+      if (!ownerId) return {};
+      const profile = await this.getProfile(ownerId);
+      return calorieContextForOwner(profile as any);
+    } catch { return {}; }
+  }
+
   async logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined> {
     const tracker = await this.getTracker(data.trackerId);
     if (!tracker) return undefined;
@@ -3354,7 +3388,12 @@ export class SupabaseStorage implements IStorage {
     }
 
     const computed = {
-      ...computeSecondaryData(tracker.name, tracker.category, values),
+      ...computeSecondaryData(
+        tracker.name, tracker.category, values,
+        await this.ownerCalorieContext(tracker, (data as any).profileId),
+        tracker.fields,
+        enrichmentMeta as any,
+      ),
       validated,
       ...(enrichmentMeta ? { enrichment: enrichmentMeta } : {}),
     };
@@ -3480,6 +3519,11 @@ export class SupabaseStorage implements IStorage {
     // `entry_values`; this method used to read/write `values`, so EVERY edit
     // failed with a column error → the route returned "404 Entry not found".
     if (patch.timestamp) this.assertEntryNotInFuture(patch.timestamp);
+    // Owner context for the calorie recompute — resolved once, before the
+    // compare-and-swap loop, from the entry's own profile (not the viewer's).
+    const editOwnerCtx: CalorieContext = tracker
+      ? await this.ownerCalorieContext(tracker, (existing as any).profile_id ?? (patch as any).profileId)
+      : {};
     const buildUpdate = (row: any) => {
     const mergedValues = mergeAndApplyDeletes(
       row.entry_values || {},
@@ -3496,7 +3540,7 @@ export class SupabaseStorage implements IStorage {
     try {
       if (tracker) {
         update.computed = {
-          ...computeSecondaryData(tracker.name, tracker.category, mergedValues),
+          ...computeSecondaryData(tracker.name, tracker.category, mergedValues, editOwnerCtx, tracker.fields, row.computed?.enrichment),
           validated: (row.computed && row.computed.validated) ?? true,
         };
       }

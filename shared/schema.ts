@@ -439,7 +439,23 @@ export interface TrackerEntry {
 }
 
 export interface ComputedData {
+  /** Energy expenditure for this entry, in kcal. Produced by exactly one
+   *  helper — estimateCaloriesBurned() in shared/fitness-metrics — so the
+   *  trackers page, the dashboard, Wellness, activity history, aggregates and
+   *  the AI can never quote three different burns for the same workout. */
   caloriesBurned?: number;
+  /** Where caloriesBurned came from. "logged" means the user (or a device)
+   *  stated it and it must never be overwritten by an estimate. */
+  caloriesBurnedSource?: "logged" | "estimated";
+  /** Human-readable derivation ("MET 6.5 × Sarah's weight 82 kg × 30 min"),
+   *  surfaced in tooltips and in AI explanations of the number. */
+  caloriesBurnedMethod?: string;
+  /** 0..1. Low-confidence estimates are dropped rather than published. */
+  caloriesBurnedConfidence?: number;
+  /** True when no owner body weight was on file and a population average was
+   *  used — the signal a UI needs to say "add your weight for a better
+   *  estimate" instead of implying personal precision. */
+  caloriesUsedDefaultWeight?: boolean;
   caloriesConsumed?: number;
   macros?: { protein: number; carbs: number; fat: number; fiber?: number };
   pace?: string;

@@ -36,6 +36,22 @@ import {
 import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { inferTrackerShapeId } from "@shared/tracker-shapes";
+// THE fitness semantic layer: what each number in a workout entry MEANS, and
+// the one calorie estimator every surface shares. Nothing in this file may
+// re-derive a fitness unit — see shared/fitness-metrics.ts for why "3 sets"
+// used to render as "3 lbs".
+import {
+  analyzeFitnessEntry,
+  buildFitnessDisplay,
+  calorieContextForOwner,
+  classifyFitnessActivity,
+  caloriesForStoredEntry,
+  formatCalories,
+  readFitnessFacts,
+  type CalorieContext,
+  type CalorieEstimate,
+  type FitnessDisplay,
+} from "@shared/fitness-metrics";
 import { trackerFieldLabel, humanizeFieldName } from "@shared/field-label";
 import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -1954,6 +1970,10 @@ interface TrackerInsight {
   sparkValues: number[];
   trendPct: number | null;
   trendDir: "up" | "down" | "flat";
+  /** Estimated (or explicitly logged) energy burn for the latest entry.
+   *  Null when this tracker is not an activity, or when there was not enough
+   *  information to estimate responsibly. Never fabricated. */
+  calories?: CalorieEstimate | null;
   iconKind: "bp" | "weight" | "sleep" | "run" | "walk" | "drop" | "flame"
           | "music" | "book" | "game" | "brain" | "dumbbell" | "activity"
           | "bike";
@@ -2118,7 +2138,81 @@ function statusColors() {
   };
 }
 
-function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsight {
+/**
+ * The calorie number for a tracker's latest entry, and the ONLY place this
+ * page computes one. It delegates to shared/fitness-metrics so the card, the
+ * dashboard, Wellness, the server's stored `computed.caloriesBurned` and the
+ * AI all quote the same figure for the same workout.
+ */
+function fitnessForLatestEntry(
+  tracker: Tracker,
+  entry: { values?: Record<string, any>; computed?: any } | undefined,
+  ctx: CalorieContext,
+): FitnessDisplay {
+  const display = analyzeFitnessEntry({
+    trackerName: tracker.name,
+    category: tracker.category,
+    fields: tracker.fields as any,
+    values: entry?.values || {},
+    // Provenance: a `caloriesBurned` the estimation engine wrote must not be
+    // read back as a number the user stated.
+    enrichment: entry?.computed?.enrichment ?? null,
+  }, ctx);
+  // Prefer the figure the server already stored for this entry. For anything
+  // written by the current estimator the two are identical; for a row written
+  // before it existed, this is what keeps the card and the "calories burned
+  // today" total quoting the same number without rewriting stored data.
+  return { ...display, calories: caloriesForStoredEntry(tracker as any, entry as any, ctx) };
+}
+
+/**
+ * Card insight for a tracker.
+ *
+ * `fitnessCtx` carries the body weight / age / sex of the person the ACTIVITY
+ * BELONGS TO (resolved by the caller from the entry's own profileId). Omitting
+ * it is safe: the estimator falls back to a labelled population average and
+ * lowers its confidence, and drops the estimate entirely when that is not
+ * enough to be honest about.
+ */
+/** Stable identity for the "no owner context" case, so the memo below hits. */
+const NO_FITNESS_CTX: CalorieContext = Object.freeze({});
+
+// The insight now walks a tracker's entries to build its metric series, and
+// the grid asks for one per tracker on every render (bucketing, sorting). Memo
+// on the tracker object itself: react-query hands out a new object whenever the
+// data changes, so a stale entry can never be served.
+const INSIGHT_MEMO = new WeakMap<object, Map<string, TrackerInsight>>();
+
+function buildTrackerInsight(tracker: Tracker, goals: Goal[] = [], fitnessCtx: CalorieContext = NO_FITNESS_CTX): TrackerInsight {
+  const memoKey = `${goals.length}|${fitnessCtx.bodyWeightKg ?? ""}|${fitnessCtx.ownerLabel ?? ""}|${fitnessCtx.ageYears ?? ""}|${fitnessCtx.sex ?? ""}`;
+  let byKey = INSIGHT_MEMO.get(tracker as object);
+  const hit = byKey?.get(memoKey);
+  if (hit) return hit;
+  const built = buildTrackerInsightUncached(tracker, goals, fitnessCtx);
+  if (!byKey) { byKey = new Map(); INSIGHT_MEMO.set(tracker as object, byKey); }
+  byKey.set(memoKey, built);
+  return built;
+}
+
+function buildTrackerInsightUncached(tracker: Tracker, goals: Goal[], fitnessCtx: CalorieContext): TrackerInsight {
+  const base = buildTrackerInsightCore(tracker, goals, fitnessCtx);
+  if (base.calories !== undefined) return base;
+  const entries = (tracker.entries || []);
+  if (!base.hasData || entries.length === 0) return { ...base, calories: null };
+  const latest = entries.slice().sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  )[0];
+  const calories = fitnessForLatestEntry(tracker, latest, fitnessCtx).calories;
+  if (!calories) return { ...base, calories: null };
+  const line = formatCalories(calories);
+  // Append the burn to the sentence unless the branch already said it.
+  const insight = line && !/cal burned/i.test(base.insight)
+    ? `${base.insight}${base.insight.trim().endsWith(".") ? "" : "."} ${line[0].toUpperCase()}${line.slice(1)}.`
+    : base.insight;
+  return { ...base, calories, insight };
+}
+
+function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCtx: CalorieContext = NO_FITNESS_CTX): TrackerInsight {
   // PR J: Resolve a *real* user-created goal for this tracker. We only show
   // goal-based UI (progress bar, 'Goal X · Y%' subline, 'to go' insight,
   // 'Goal met' badge) when this is non-null. Otherwise the card shows the
@@ -2475,30 +2569,71 @@ function buildTrackerInsight(tracker: Tracker, goals: Goal[] = []): TrackerInsig
     };
   }
 
-  if (kind === "bench") {
-    const w = pickNum(last.values, "weight", "lbs", primaryField, "value") ?? (findAnyNumericValue(last.values)?.num ?? null);
-    const reps = pickNum(last.values, "reps", "rep_count");
-    const sets = pickNum(last.values, "sets", "set_count");
-    if (w == null && reps == null && sets == null) {
-      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "lbs",
-        subline: "", insight: "Log a set to start tracking.",
-        progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
+  // ── Workouts & activities ───────────────────────────────────────
+  // Every number here keeps the meaning it was STORED with. The old branch
+  // took "the first number it could find" and printed it with the bench-press
+  // template's unit, which is how a Squats entry of {reps:12, sets:3} rendered
+  // "3 lbs" under a subline that correctly read "12 reps · 3 sets".
+  // shared/fitness-metrics decides the headline metric from the activity and
+  // the facts; it will not show a weight that was never recorded, and it never
+  // promotes `sets` into the resistance slot.
+  const fitness = fitnessForLatestEntry(tracker, last, fitnessCtx);
+  const FITNESS_CARD_KINDS = new Set([
+    "strength", "bodyweight", "isometric", "sport", "cardio_duration", "generic_workout",
+  ]);
+  if (FITNESS_CARD_KINDS.has(fitness.activity.kind)) {
+    const p = fitness.primary;
+    if (!p) {
+      return { hasData: false, kind, importance, iconKind, bigPrimary: "—", bigUnit: "",
+        subline: "", insight: "Log a set or a session to start tracking.",
+        progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat",
+        calories: null };
     }
-    const subParts: string[] = [];
-    if (reps != null) subParts.push(`${reps} reps`);
-    if (sets != null) subParts.push(`${sets} sets`);
-    const subline = subParts.join(" · ");
-    const unit = (tracker.fields.find(f => f.name === "weight")?.unit) || tracker.unit || "lbs";
-    const big = w != null ? fmtNum(w, 0) : (reps != null ? `${reps}` : "—");
-    const bigUnit = w != null ? unit : (reps != null ? "reps" : "");
-    const insight = w != null
-      ? `Lifted ${fmtNum(w, 0)} ${unit}${reps != null ? ` × ${reps}` : ""}${sets != null ? ` × ${sets} sets` : ""}.`
-      : (reps != null ? `${reps} reps logged.` : "Session logged.");
+    // Spark/trend follow the SAME metric the headline shows, so the chart
+    // under a "12 reps" headline is a reps series and not a sets series.
+    const metricSeries = entries
+      .map((e) => {
+        const f = readFitnessFacts(e.values, fitness.activity, tracker.fields as any);
+        switch (p.metric) {
+          case "resistance": return f.resistance?.value ?? null;
+          case "reps": return f.reps ?? null;
+          case "sets": return f.sets ?? null;
+          case "duration": return f.duration ?? null;
+          case "distance": return f.distance?.value ?? null;
+          case "steps": return f.steps ?? null;
+          case "caloriesBurned": return f.caloriesLogged ?? null;
+          default: return null;
+        }
+      })
+      .filter((v): v is number => v != null && isFinite(v));
+    const mSum = (list: typeof entries) => list.reduce((a, e) => {
+      const f = readFitnessFacts(e.values, fitness.activity, tracker.fields as any);
+      const v = p.metric === "resistance" ? f.resistance?.value
+        : p.metric === "reps" ? f.reps
+        : p.metric === "sets" ? f.sets
+        : p.metric === "duration" ? f.duration
+        : p.metric === "distance" ? f.distance?.value
+        : p.metric === "steps" ? f.steps
+        : null;
+      return a + (v ?? 0);
+    }, 0);
+    const mLast7 = mSum(last7);
+    const mPrev7 = mSum(prev7);
+    const mTrendPct = mPrev7 > 0 ? ((mLast7 - mPrev7) / mPrev7) * 100 : null;
+    const mTrendDir: "up" | "down" | "flat" =
+      mTrendPct == null || Math.abs(mTrendPct) < 2 ? "flat" : mTrendPct > 0 ? "up" : "down";
+
+    const when = lastDate.toLocaleDateString("en-US", { month: "short", day: "numeric" });
     return {
       hasData: true, kind, importance, iconKind,
-      bigPrimary: big, bigUnit, subline,
-      insight, progressPct: null, statusBadge: freshness,
-      sparkValues, trendPct, trendDir,
+      bigPrimary: fmtNum(p.value, p.metric === "distance" ? 2 : 0),
+      bigUnit: p.unit,
+      subline: fitness.detail.join(" · "),
+      insight: `${fitness.sentence} — logged ${when}.`,
+      progressPct: null, statusBadge: freshness,
+      sparkValues: metricSeries.slice(0, 14).reverse(),
+      trendPct: mTrendPct, trendDir: mTrendDir,
+      calories: fitness.calories,
     };
   }
 
@@ -2647,7 +2782,7 @@ function NoDataPile({ trackers, onOpenDetail }: { trackers: any[]; onOpenDetail:
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5 mt-1.5">
           {trackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((t: any) => {
             const catAccent = getCategoryAccent(t.category);
-            const Icon = iconForKind(buildTrackerInsight(t).iconKind);
+            const Icon = iconForKind(iconKindFor(classifyTracker(t)));
             return (
               <button
                 key={t.id}
@@ -2812,7 +2947,22 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   // user actually set — no more fabricated 10k step / 64oz / 8h defaults.
   const { data: allGoals = [] } = useQuery<Goal[]>({ queryKey: goalsQueryKey([]) });
 
-  const insight = buildTrackerInsight(tracker, allGoals);
+  // Body weight for the calorie estimate must come from the OWNER of the
+  // activity — the profile the latest entry was logged for, falling back to
+  // the tracker's own linked profile — never from whoever is signed in. Sarah's
+  // basketball game is priced with Sarah's weight while Bob is looking at it.
+  const entriesForOwner = tracker.entries || [];
+  const latestEntryForOwner = entriesForOwner.length
+    ? [...entriesForOwner].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
+    : undefined;
+  const ownerProfileId = latestEntryForOwner?.profileId || (tracker.linkedProfiles || [])[0];
+  const ownerProfile = (allProfiles || []).find(p => p.id === ownerProfileId);
+  const fitnessCtx = useMemo(
+    () => calorieContextForOwner(ownerProfile),
+    [ownerProfile?.id, ownerProfile?.name, JSON.stringify(ownerProfile?.fields ?? null)],
+  );
+
+  const insight = buildTrackerInsight(tracker, allGoals, fitnessCtx);
   const catAccent = getCategoryAccent(tracker.category);
   const ac = `hsl(${catAccent})`;
   const Icon = iconForKind(insight.iconKind);
@@ -2843,6 +2993,21 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
     const label = doseVal != null ? `${doseVal}${doseField?.unit ? ` ${doseField.unit}` : ""}` : "Daily dose";
     return [{ label, done: takenToday }];
   })();
+  // Energy burn for workouts/activities. "~" marks an estimate; a value the
+  // user logged themselves shows without it. Null when shared/fitness-metrics
+  // declined to estimate. Rendered on the VALUE ROW in both card layouts —
+  // the activity layout's lower column is height-clipped, so a chip there was
+  // present in the DOM and painted over by the weekday bars on a compact card.
+  const caloriePill = insight.calories ? (
+    <span
+      className="text-[11px] font-semibold rounded-full px-1.5 py-0.5 shrink-0 whitespace-nowrap tabular-nums"
+      style={{ background: `hsl(${catAccent} / 0.14)`, color: ac }}
+      title={insight.calories.method}
+      data-testid={`tracker-calories-${tracker.id}`}
+    >
+      {"\u{1F525}"} {insight.calories.estimated ? "~" : ""}{insight.calories.value.toLocaleString()} cal
+    </span>
+  ) : null;
   const kindEmoji = KIND_EMOJI[insight.iconKind];
   // Sports / fitness trends get the layered "effort zone" area look.
   const useZoneArea = insight.kind === "running" || insight.kind === "walking" || tracker.category === "fitness";
@@ -2878,8 +3043,15 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
     const chips: { emoji: string; label: string }[] = [];
     const hr = num(/^(avghr|heartrate|bpm|pulse|hr)$/) ?? num(/(avghr|heartrate|bpm)/);
     if (hr != null) chips.push({ emoji: "❤️", label: `${Math.round(hr)} bpm` });
-    const cal = num(/(caloriesburned|calories|kcal|^cal$)/);
-    if (cal != null) chips.push({ emoji: "🔥", label: `${Math.round(cal)} cal` });
+    // The canonical estimate is rendered as a pill on the value row (both
+    // layouts, one element — see caloriePill below), so it must not also
+    // appear here: in the activity layout this row is inside a clipped
+    // flex column and a compact card painted the bars over it. A raw calorie
+    // value on a NON-fitness tracker still gets a chip, as it always did.
+    if (!insight.calories) {
+      const cal = num(/(caloriesburned|calories|kcal|^cal$)/);
+      if (cal != null) chips.push({ emoji: "🔥", label: `${Math.round(cal)} cal` });
+    }
     const dist = num(/(distance|miles|^mi$|^km$)/);
     if (dist != null) chips.push({ emoji: "📏", label: `${dist} mi` });
     const intensityStr = str(/(intensity|effort|zone|level)/);
@@ -2993,6 +3165,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
               {insight.bigPrimary}
             </span>
             {insight.bigUnit && <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>}
+            {caloriePill && <span className="ml-auto">{caloriePill}</span>}
           </div>
           {/* overflow-hidden so a tight card clips here instead of bleeding the
               chips up over the value line; chips stay on ONE line (no wrap). */}
@@ -3038,6 +3211,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
                 </span>
               )}
             </div>
+            {caloriePill}
             {visual.type === "ring" && (
               <RingProgress pct={visual.pct} color={ac} size={importance === "compact" ? 46 : 54} centerLabel={`${Math.round(visual.pct)}%`} />
             )}
@@ -6627,12 +6801,25 @@ export default function TrackersPage() {
             // Lisinopril tracker) — that reads as a useless repeat.
             const pf = t.fields.find(fld => fld.isPrimary)?.name || t.fields[0]?.name || "value";
             const vals = (last?.values || {}) as Record<string, any>;
+            // A workout tracker's declared first field is often `activityType`
+            // (text) or `sets` — so this column showed "strength" and bare,
+            // unlabelled numbers for the very trackers the card view leads with
+            // reps or pounds. Ask the semantic layer for the headline metric
+            // and print it WITH its unit, exactly as the card does.
+            const fitRow = (() => {
+              const activity = classifyFitnessActivity(t.name, t.category);
+              if (activity.kind === "non_fitness" || !last) return null;
+              const p = buildFitnessDisplay(activity, readFitnessFacts(vals, activity, t.fields as any), null).primary;
+              return p ? `${fmtNum(p.value, p.metric === "distance" ? 2 : 0)} ${p.unit}` : null;
+            })();
             let primary: any = vals[pf];
             if (primary == null || (typeof primary === "string" && primary.trim().toLowerCase() === t.name.trim().toLowerCase())) {
               const numEntry = Object.entries(vals).find(([k, val]) => k !== "_notes" && typeof val === "number" && isFinite(val));
               primary = numEntry ? numEntry[1] : (typeof primary === "string" ? primary : undefined);
             }
-            const meta = primary != null && !(typeof primary === "string" && primary.trim().toLowerCase() === t.name.trim().toLowerCase())
+            const meta = fitRow
+              ? fitRow
+              : primary != null && !(typeof primary === "string" && primary.trim().toLowerCase() === t.name.trim().toLowerCase())
               ? `${typeof primary === 'number' ? Number(primary).toFixed(1) : String(primary)}${typeof primary === 'number' && t.unit ? ' ' + t.unit : ''}`
               : (t.entries && t.entries.length > 0 ? `${t.entries.length} log${t.entries.length === 1 ? '' : 's'}` : "No data");
             const linked: string[] = (t.linkedProfiles || []) as string[];
@@ -7863,8 +8050,8 @@ export default function TrackersPage() {
                 // row so high-value metrics anchor each section.
                 const importanceWeight: Record<string, number> = { large: 0, normal: 1, compact: 2 };
                 const sortByImportance = (a: any, b: any) => {
-                  const ai = importanceWeight[buildTrackerInsight(a).importance];
-                  const bi = importanceWeight[buildTrackerInsight(b).importance];
+                  const ai = importanceWeight[importanceFor(classifyTracker(a))];
+                  const bi = importanceWeight[importanceFor(classifyTracker(b))];
                   return (ai - bi) || (a.name || '').localeCompare(b.name || '');
                 };
                 (Object.keys(buckets) as Bucket[]).forEach(k => buckets[k].sort(sortByImportance));
@@ -7895,7 +8082,7 @@ export default function TrackersPage() {
                           </h4>
                           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
                             {bt.map(tracker => {
-                              const imp = buildTrackerInsight(tracker).importance;
+                              const imp = importanceFor(classifyTracker(tracker));
                               // Large trackers (Weight/Sleep/BP/Run/Walk) take
                               // 2 columns on md+ so they read like the hero
                               // metrics they are. Compact trackers stay

@@ -8,6 +8,9 @@
 // it never copies one person's body numbers onto the other.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { planSharedActivityFanout } from "@shared/shared-activity";
+import {
+  calorieContextForOwner, classifyFitnessActivity, estimateCaloriesBurned,
+} from "@shared/fitness-metrics";
 
 process.env.ANTHROPIC_API_KEY = "test-key-not-used";
 
@@ -99,11 +102,24 @@ describe("the server fills in the participant the model forgot", () => {
     expect(hers!.values.duration).toBe(30);
     expect(hers!.values.intensity).toBe("high");
 
-    // What belongs to one body does not. Sarah is lighter, so her burn is
-    // lower — the two entries are different records, not one written twice.
-    expect(hers!.values.caloriesBurned).not.toBe(240);
-    expect(hers!.values.caloriesBurned).toBeLessThan(240);
+    // What belongs to one body does not carry over. The 240 the model invented
+    // for this sentence (it mentions no calories) is dropped on BOTH entries:
+    // a number nobody stated must not masquerade as one the user did, because
+    // an explicit value outranks the deterministic estimate everywhere.
+    // Each person's burn is then computed from THEIR OWN weight at write time
+    // by the one estimator in shared/fitness-metrics — Sarah is lighter, so
+    // hers is lower.
+    expect(hers!.values.caloriesBurned).toBeUndefined();
+    expect(mine!.values.caloriesBurned).toBeUndefined();
     expect(hers!.values._notes).toBeUndefined();
+    {
+      const soccer = classifyFitnessActivity("Soccer", "fitness");
+      const facts = { duration: 30, intensity: "vigorous" as const, unknownKeys: [] };
+      const hersCal = estimateCaloriesBurned(soccer, facts, calorieContextForOwner(SARAH));
+      const mineCal = estimateCaloriesBurned(soccer, facts, calorieContextForOwner(SELF));
+      expect(hersCal!.value).toBeLessThan(mineCal!.value);
+      expect(hersCal!.method).toContain("Sarah Miller's weight");
+    }
 
     // And the user is told about it: a card and a checklist row, not a silent write.
     expect(res.operations?.filter((o: Row) => o.tool === "log_tracker_entry")).toHaveLength(2);

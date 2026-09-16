@@ -12,6 +12,7 @@
 
 import type { Tracker, TrackerEntry } from "@shared/schema";
 import { getCanonicalGroup } from "./tracker-health";
+import { caloriesForStoredEntry, calorieContextForOwner } from "@shared/fitness-metrics";
 
 export interface WellnessMetric {
   /** Latest numeric value, or null when no numeric entry exists. */
@@ -166,7 +167,15 @@ const EMPTY_ACTIVITY: ActivitySummary = {
  */
 export function readActivity(
   trackers: Tracker[] | undefined | null,
-  opts: { now?: Date; days?: number } = {},
+  opts: {
+    now?: Date;
+    days?: number;
+    /** Profiles, so each entry's calories are priced with ITS OWN owner's body
+     *  weight. Optional: entries written by the current estimator already
+     *  carry the owner-weighted figure, so omitting this only affects rows
+     *  logged before it existed (which fall back to a population average). */
+    profiles?: Array<{ id: string; name?: string; fields?: Record<string, any> }> | null;
+  } = {},
 ): ActivitySummary {
   if (!Array.isArray(trackers) || trackers.length === 0) return { ...EMPTY_ACTIVITY };
   const now = opts.now || new Date();
@@ -185,6 +194,11 @@ export function readActivity(
   let minutes = 0, distance = 0, steps = 0, burned = 0, sessions = 0;
   let sawMinutes = false, sawDistance = false, sawSteps = false, sawBurn = false;
   let distanceUnit = "", trackerCount = 0;
+  const profiles = opts.profiles || [];
+  const ownerCtxFor = (t: Tracker, e: any) => {
+    const ownerId = e?.profileId || (t.linkedProfiles || [])[0];
+    return calorieContextForOwner(ownerId ? profiles.find((p) => p.id === ownerId) : undefined);
+  };
 
   for (const t of trackers) {
     if (!isActivityTracker(t)) continue;
@@ -195,11 +209,19 @@ export function readActivity(
       if (!e?.timestamp || !isToday(e.timestamp)) continue;
       let counted = false;
       // Server-computed values count too: a fitness entry can carry
-      // `computed.caloriesBurned` / `computed.durationMinutes` with nothing of
-      // the sort in `values`.
+      // `computed.durationMinutes` with nothing of the sort in `values`.
       const computed = (e as any).computed || {};
-      const cb = Number(computed.caloriesBurned);
-      if (Number.isFinite(cb) && cb > 0) { burned += cb; sawBurn = true; }
+      // Calories come from the ONE estimator, exactly once per entry. This
+      // used to add `computed.caloriesBurned` AND any calorie-shaped field in
+      // `values` — an entry carrying both was counted twice — and it trusted
+      // whatever the old per-activity formulas had stored, so this total could
+      // disagree with the tracker card it summarised.
+      const cal = caloriesForStoredEntry(
+        { name: t.name, category: t.category, fields: t.fields as any },
+        e as any,
+        ownerCtxFor(t, e),
+      );
+      if (cal) { burned += cal.value; sawBurn = true; }
       const cd = Number(computed.durationMinutes);
       if (Number.isFinite(cd) && cd > 0) { minutes += cd; sawMinutes = true; }
       for (const [field, raw] of Object.entries(e.values || {})) {
@@ -214,7 +236,9 @@ export function readActivity(
           if (!distanceUnit) distanceUnit = unitOf(field) || "mi";
           continue;
         }
-        if (CALORIE_FIELD_RE.test(field)) { burned += n; sawBurn = true; counted = true; continue; }
+        // Already accounted for above, via the canonical estimator. Still a
+        // logged metric, so the entry counts as a session.
+        if (CALORIE_FIELD_RE.test(field)) { counted = true; continue; }
       }
       // An entry with no field we recognise is still a session — the user
       // logged something, and "—" would be a lie.
@@ -285,7 +309,9 @@ export interface WellnessVitals {
 
 export function extractVitals(
   trackers: Tracker[] | undefined | null,
-  opts: { now?: Date } = {},
+  /** `profiles` is forwarded to readActivity so each entry's calories are
+   *  priced with its own owner's body weight. */
+  opts: { now?: Date; profiles?: Array<{ id: string; name?: string; fields?: Record<string, any> }> | null } = {},
 ): WellnessVitals {
   const bp = trackers?.find((t) => /blood\s*pressure|(^|\b)bp(\b|$)/.test(`${t.name} ${t.category}`.toLowerCase()));
   const bpSys = bp

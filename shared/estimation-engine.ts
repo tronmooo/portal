@@ -9,6 +9,18 @@
 // number came from and never passes an estimate off as user data.
 //
 // Pinned by tests/estimation-engine.test.ts.
+//
+// Calorie math is NOT duplicated here: this module derives distance, pace and
+// steps, then hands the result to the one canonical estimator in
+// shared/fitness-metrics so a walk priced in chat, on its tracker card and in
+// the dashboard aggregate is priced the same way once.
+
+import {
+  KG_PER_LB,
+  classifyFitnessActivity,
+  estimateCaloriesBurned,
+  type FitnessFacts,
+} from "./fitness-metrics";
 
 // ─── Provenance ──────────────────────────────────────────────────────────────
 
@@ -62,7 +74,7 @@ const emptyEnrichment = (activityType?: string): Enrichment => ({
 export const METERS_PER_MILE = 1609.344;
 export const METERS_PER_KM = 1000;
 export const ML_PER_FLOZ = 29.5735;
-export const KG_PER_LB = 0.45359237;
+export { KG_PER_LB };
 
 export function convertDistanceToMeters(value: number, unit: string): number | null {
   if (!isFinite(value)) return null;
@@ -363,34 +375,41 @@ export function enrichWalkRunEntry(
     }
   }
 
-  // calories: keep explicit; otherwise MET-based estimate.
+  // calories: keep explicit; otherwise defer to THE canonical estimator.
+  //
+  // This used to be a second MET table living here, so the same walk could be
+  // priced one way in chat and another on its tracker card. The derivation
+  // (distance, pace, duration) is this module's job; the energy math is
+  // shared/fitness-metrics' job, and only its.
   if (explicitCalories == null && workingMiles != null) {
-    const weightKg = ctx.weightKg && ctx.weightKg > 20 ? ctx.weightKg : DEFAULT_WEIGHT_KG;
-    const weightKnown = !!(ctx.weightKg && ctx.weightKg > 20);
-    const paceMin = out.calculated.paceMinutesPerMile?.value
-      ?? (durationExplicit && workingMiles > 0 ? minutes! / workingMiles : paceSource.pace);
-    const mph = 60 / paceMin;
-    let met: number;
-    if (activity === "running") met = Math.max(6, 1.61 * mph);
-    else if (activity === "cycling") met = mph >= 14 ? 10 : mph >= 12 ? 8 : mph >= 10 ? 6.8 : 4;
-    else met = mph >= 3.5 ? 5.0 : mph >= 2.8 ? 3.5 : 3.0;
-    if (intensity === "intense" || intensity === "hard" || intensity === "vigorous") met *= 1.15;
-    if (intensity === "light" || intensity === "easy") met *= 0.85;
-    const hours = (out.canonical.durationSeconds ?? workingMiles * paceSource.pace * 60) / 3600;
-    const kcal = met * weightKg * hours;
-    const conf = Math.max(0.35, Math.min(0.7, (weightKnown ? 0.6 : 0.4) + (durationExplicit ? 0.1 : 0)));
-    out.estimated.caloriesBurned = {
-      value: Math.round(kcal),
-      source: "estimated",
-      confidence: conf,
-      method: `MET ${round(met, 1)} × ${weightKnown ? "profile" : "default"} weight ${round(weightKg)}kg × ${round(hours, 2)}h`,
+    const minutesForCalories = (out.canonical.durationSeconds ?? workingMiles * paceSource.pace * 60) / 60;
+    const facts: FitnessFacts = {
+      distanceMiles: workingMiles,
+      distance: { value: workingMiles, unit: "mi" },
+      duration: minutesForCalories,
+      unknownKeys: [],
     };
-    out.assumptions.push({
-      field: "caloriesBurned",
-      assumption: weightKnown ? "Used profile weight" : "Used population default weight",
-      valueUsed: `${round(weightKg)} kg`,
-      confidence: conf,
-    });
+    if (intensity === "intense" || intensity === "hard" || intensity === "vigorous") facts.intensity = "vigorous";
+    else if (intensity === "light" || intensity === "easy") facts.intensity = "light";
+    const est = estimateCaloriesBurned(
+      classifyFitnessActivity(activity, "fitness"),
+      facts,
+      { bodyWeightKg: ctx.weightKg ?? null },
+    );
+    if (est) {
+      out.estimated.caloriesBurned = {
+        value: est.value,
+        source: "estimated",
+        confidence: est.confidence,
+        method: est.method,
+      };
+      out.assumptions.push({
+        field: "caloriesBurned",
+        assumption: est.usedDefaultWeight ? "Used population default weight" : "Used profile weight",
+        valueUsed: est.usedDefaultWeight ? `${DEFAULT_WEIGHT_KG} kg` : `${round(ctx.weightKg!)} kg`,
+        confidence: est.confidence,
+      });
+    }
   }
 
   return out;

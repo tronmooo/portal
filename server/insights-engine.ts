@@ -6,6 +6,7 @@ import type {
 import { MOOD_SCORES } from "@shared/schema";
 import { getUserToday, addDays as tzAddDays, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords, bareDateOf } from "@shared/date-rules";
+import { caloriesForStoredEntry, calorieContextForOwner } from "@shared/fitness-metrics";
 import {
   currentMonthYM,
   previousMonthYM,
@@ -53,7 +54,7 @@ export function generateSmartInsights(data: InsightsInput, timezone: string = DE
   analyzeGoals(data.goals, now, todayStr, insights);
 
   // --- Health Trends ---
-  analyzeHealth(data.trackers, todayStr, now, insights);
+  analyzeHealth(data.trackers, todayStr, now, insights, data.profiles);
 
   // --- Mood Trends ---
   analyzeMood(data.journal, now, insights);
@@ -362,7 +363,7 @@ function analyzeGoals(goals: Goal[], now: Date, todayStr: string, insights: Insi
 
 // ─── Health ──────────────────────────────────────────────────────────────────
 
-function analyzeHealth(trackers: Tracker[], todayStr: string, now: Date, insights: Insight[]) {
+function analyzeHealth(trackers: Tracker[], todayStr: string, now: Date, insights: Insight[], profiles: Profile[] = []) {
   // Weight trends
   const weightTracker = trackers.find(t => t.name.toLowerCase().includes("weight") && t.category === "health");
   if (weightTracker && weightTracker.entries.length >= 3) {
@@ -437,15 +438,21 @@ function analyzeHealth(trackers: Tracker[], todayStr: string, now: Date, insight
     }
   }
 
-  // Today's calories burned
+  // Today's calories burned. Read through the ONE estimator so this total
+  // matches the figures on the tracker cards exactly — including for entries
+  // written before the estimator existed, which it recomputes rather than
+  // rewriting. Each entry is priced with ITS OWN owner's body weight.
   let totalCalsBurned = 0;
   for (const t of trackers) {
     for (const e of t.entries) {
-      if (e.timestamp.slice(0, 10) === todayStr && e.computed?.caloriesBurned) {
-        totalCalsBurned += e.computed.caloriesBurned;
-      }
+      if (e.timestamp.slice(0, 10) !== todayStr) continue;
+      const ownerId = (e as any).profileId || (t.linkedProfiles || [])[0];
+      const owner = ownerId ? profiles.find(p => p.id === ownerId) : undefined;
+      const cal = caloriesForStoredEntry(t as any, e as any, calorieContextForOwner(owner));
+      if (cal) totalCalsBurned += cal.value;
     }
   }
+  totalCalsBurned = Math.round(totalCalsBurned);
   if (totalCalsBurned > 0) {
     insights.push({
       id: randomUUID(),
