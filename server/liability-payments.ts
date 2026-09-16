@@ -256,9 +256,17 @@ export async function resolveServicedDebt(storage: IStorage, bill: any): Promise
     && (debt.type === "liability" || debt.type === "loan")
     && !isRecurringBillProfile(debt);
 
+  // Every storage read here is best-effort: a storage that lacks the method
+  // throws SYNCHRONOUSLY, which `.catch()` on the returned promise never sees.
+  // Resolving the debt is an enrichment — it must never be able to fail the
+  // payment it is attached to.
+  const tryRead = async <T>(fn: () => T | Promise<T>, fallback: T): Promise<T> => {
+    try { return await fn(); } catch { return fallback; }
+  };
+
   const linkedId = (bill?.fields || {}).linkedLiabilityId;
   if (typeof linkedId === "string" && linkedId && linkedId !== bill?.id) {
-    const debt: any = await Promise.resolve(storage.getProfile(linkedId)).catch(() => null);
+    const debt: any = await tryRead(() => storage.getProfile(linkedId), null);
     return usable(debt) ? debt : null;
   }
 
@@ -276,7 +284,7 @@ export async function resolveServicedDebt(storage: IStorage, bill: any): Promise
   if (!/\s+(bill\s+)?payments?$/i.test(name)) return null;
   const target = normalizeLiabilityName(name);
   if (!target) return null;
-  const profiles: any[] = await Promise.resolve(storage.getProfiles()).catch(() => [] as any[]);
+  const profiles: any[] = await tryRead(() => storage.getProfiles?.() ?? [], [] as any[]);
   const owner = (bill as any)?.parentProfileId ?? null;
   const candidates = (profiles || []).filter((p: any) =>
     usable(p) && normalizeLiabilityName(p.name) === target && resolveLiabilityBalance(p.fields || p) > 0);
