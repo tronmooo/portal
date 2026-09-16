@@ -41,6 +41,13 @@ import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
+import {
+  summarizeTrackerToday,
+  resolveBodyWeightKg,
+  isDoseTracker,
+  shortAgo,
+} from "@shared/tracker-summary";
+import { parseFrequencyToDosesPerDay } from "@shared/medication-refills";
 import { CreateProfileDialog } from "@/components/CreateProfileDialog";
 import { AddAccountDialog } from "@/components/finance/AccountsSection";
 // One card shape and one heading treatment for every hub tab — the Executive
@@ -976,13 +983,53 @@ function detectSpecialization(tracker: Tracker): TrackerSpecialization {
   return "standard";
 }
 
+// ── useBodyWeightKg ──────────────────────────────────────────────────────────
+// Calorie estimates are MET × body mass × hours, so they need the person's own
+// weight to be about the person. It comes from the self profile's fields first
+// and their weight tracker's newest reading second; when neither knows, the
+// summary falls back to the population standard and labels the number as an
+// estimate. Both sources are already-cached queries, so this costs no request.
+function useBodyWeightKg(): number | null {
+  const qc = useQueryClient();
+  const { data: profiles } = useQuery<Profile[]>({
+    queryKey: ["/api/profiles"],
+    queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
+  });
+  const self = (profiles || []).find(p => (p as any).type === "self") || (profiles || [])[0];
+  const cachedTrackers = qc.getQueriesData<Tracker[]>({ queryKey: ["/api/trackers"] });
+  const trackerPool: Tracker[] = [];
+  for (const [, data] of cachedTrackers) if (Array.isArray(data)) trackerPool.push(...data);
+  return resolveBodyWeightKg({
+    profileFields: (self as any)?.fields || null,
+    trackers: trackerPool,
+  });
+}
+
+// A dose row's clock label. `timeTaken` is stored with seconds so two doses in
+// the same minute stay distinct rows; the display drops them again.
+function doseTimeLabel(e: TrackerEntry): string {
+  const raw = String((e.values as any)?.timeTaken || '').trim();
+  const withSeconds = raw.match(/^(\d{1,2}):(\d{2}):\d{2}(\s*[AaPp]\.?[Mm]\.?)?$/);
+  if (withSeconds) return `${withSeconds[1]}:${withSeconds[2]}${withSeconds[3] ? withSeconds[3] : ''}`;
+  if (raw) return raw;
+  return new Date(e.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
 // ── Medication Overview Component ─────────────────────────────────────────────
 function MedicationOverview({ tracker }: { tracker: Tracker }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const today = new Date().toLocaleDateString('en-CA');
   const todayEntries = tracker.entries.filter(e => new Date(e.timestamp).toLocaleDateString('en-CA') === today);
-  const takenToday = todayEntries.some(e => e.values?.adherence === 'taken' || e.values?.taken === true);
+  // A medication or supplement can be taken SEVERAL times a day (9 AM / 1 PM /
+  // 7 PM). The dose state is therefore a COUNT, never a boolean: the old
+  // old boolean flag hid every dose after the first and — because it also
+  // gated the log button away — made a second dose unloggable.
+  const dosesToday = todayEntries.length;
+  const lastDose = tracker.entries.length
+    ? tracker.entries.reduce((a, b) => (new Date(b.timestamp).getTime() > new Date(a.timestamp).getTime() ? b : a))
+    : undefined;
+  const lastDoseAgo = lastDose ? shortAgo(lastDose.timestamp) : '';
 
   // Extract medication details from fields defaults or latest entry
   const latestEntry = tracker.entries[tracker.entries.length - 1];
@@ -1011,10 +1058,12 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
 
   // Build the values for a dose log. Only include `dosage` when it's a real
   // number — never the bare unit — so the numeric-field check can't 400.
-  const buildLogValues = () => {
+  const buildLogValues = (at: Date = new Date()) => {
     const v: Record<string, any> = {
       drug: drugName,
-      timeTaken: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+      // Seconds are kept so two doses inside the same minute are still
+      // distinguishable rows; the UI formats this back to hour:minute.
+      timeTaken: at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }),
       adherence: 'taken',
     };
     if (dosageNum != null) v.dosage = dosageNum;
@@ -1022,24 +1071,32 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
     return v;
   };
 
-  // Log dose mutation — optimistic so the "Taken today" badge flips instantly
-  // and the day count rolls up before the network round-trip completes.
+  // Log dose mutation — optimistic so the dose tally increments instantly and
+  // the day count rolls up before the network round-trip completes.
   const logDoseMut = useMutation<any, Error, void, { prev: [readonly unknown[], unknown][]; tempId: string }>({
-    mutationFn: () => apiRequest('POST', `/api/trackers/${tracker.id}/entries`, {
-      values: buildLogValues(),
-      notes: `Dose taken at ${new Date().toLocaleTimeString()}`
-    }),
+    mutationFn: () => {
+      const at = new Date();
+      return apiRequest('POST', `/api/trackers/${tracker.id}/entries`, {
+        values: buildLogValues(at),
+        notes: `Dose taken at ${at.toLocaleTimeString()}`,
+        // Each press is a NEW occurrence, not a re-send of the last one. Without
+        // this the server's 5-minute identical-values dedup returns the first
+        // dose's row and the second dose is silently lost.
+        allowDuplicate: true,
+      });
+    },
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: ['/api/trackers'] });
       const prev = qc.getQueriesData({ queryKey: ['/api/trackers'] });
-      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const nowIso = new Date().toISOString();
+      const at = new Date();
+      const tempId = `temp-${at.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
+      const nowIso = at.toISOString();
       const tempEntry: any = {
         id: tempId,
         trackerId: tracker.id,
         timestamp: nowIso,
-        values: buildLogValues(),
-        notes: `Dose taken at ${new Date().toLocaleTimeString()}`,
+        values: buildLogValues(at),
+        notes: `Dose taken at ${at.toLocaleTimeString()}`,
         _optimistic: true,
       };
       // Inject the new entry into every cached tracker list that contains this
@@ -1074,11 +1131,15 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
     },
   });
 
-  // Adherence this week
+  // Adherence this week = doses taken ÷ doses EXPECTED. Expected comes from the
+  // tracker's own frequency ("twice daily" → 14 in a week), so a med taken 3×
+  // a day no longer reads as 300%-worth of entries crammed into a /7 divisor.
   const weekAgo = Date.now() - 7 * 86400000;
   const weekEntries = tracker.entries.filter(e => new Date(e.timestamp).getTime() > weekAgo);
-  const weekTaken = weekEntries.filter(e => e.values?.adherence === 'taken' || e.values?.taken === true).length;
-  const adherencePct = weekEntries.length > 0 ? Math.round((weekTaken / Math.max(7, weekEntries.length)) * 100) : 0;
+  const weekTaken = weekEntries.filter(e => e.values?.adherence !== 'skipped' && e.values?.adherence !== 'missed').length;
+  const dosesPerDay = parseFrequencyToDosesPerDay([tracker.unit, tracker.name, frequency].filter(Boolean).join(' '));
+  const expectedWeek = Math.max(1, Math.round(dosesPerDay * 7));
+  const adherencePct = Math.min(100, Math.round((weekTaken / expectedWeek) * 100));
 
   return (
     <div className="space-y-4">
@@ -1095,26 +1156,37 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
             {prescriber && <p className="text-sm text-muted-foreground">Prescriber: <span className="font-medium text-foreground">{prescriber}</span></p>}
             {refillDate && <p className="text-sm text-muted-foreground">Refill: <span className="font-medium text-foreground">{refillDate}</span></p>}
           </div>
-          {/* Today's status badge */}
-          <div className={`px-3 py-1.5 rounded-full text-xs font-bold ${
-            takenToday ? 'bg-green-500/20 text-green-500' : 'bg-amber-500/20 text-amber-500'
-          }`}>
-            {takenToday ? '✓ Taken today' : 'Not taken yet'}
+          {/* Today's dose count — a running tally, not a done/not-done flag. */}
+          <div
+            className={`px-3 py-1.5 rounded-full text-xs font-bold text-right ${
+              dosesToday > 0 ? 'bg-green-500/20 text-green-500' : 'bg-amber-500/20 text-amber-500'
+            }`}
+            data-testid="med-dose-count"
+          >
+            {dosesToday > 0
+              ? `${dosesToday} ${dosesToday === 1 ? 'dose' : 'doses'} today`
+              : 'Not taken yet'}
+            {dosesToday > 0 && lastDoseAgo && (
+              <span className="block font-medium opacity-80">Last: {lastDoseAgo}</span>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Quick Log Button */}
-      {!takenToday && (
-        <button
-          onClick={() => logDoseMut.mutate()}
-          disabled={logDoseMut.isPending}
-          className="w-full py-3 rounded-xl bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2"
-        >
-          <Pill className="h-4 w-4" />
-          {logDoseMut.isPending ? 'Logging...' : `Log ${dosageLabel ? `${dosageLabel} ` : ''}${drugName} Now`}
-        </button>
-      )}
+      {/* Quick Log Button — ALWAYS available. Logging a dose must never take
+          away the ability to log the next one: doses are independent
+          occurrences, so this button adds one rather than toggling a flag. */}
+      <button
+        onClick={() => logDoseMut.mutate()}
+        disabled={logDoseMut.isPending}
+        className="w-full py-3 rounded-xl bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-70"
+        data-testid="button-log-dose"
+      >
+        <Pill className="h-4 w-4" />
+        {logDoseMut.isPending
+          ? 'Logging...'
+          : `Log ${dosesToday > 0 ? 'another' : ''}${dosesToday > 0 ? ' ' : ''}${dosageLabel ? `${dosageLabel} ` : ''}${drugName} dose`}
+      </button>
 
       {/* Weekly Adherence */}
       <div className="grid grid-cols-2 gap-3">
@@ -1139,14 +1211,18 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
             d.setDate(d.getDate() - (6 - i));
             const dateStr = d.toLocaleDateString('en-CA');
             const dayEntries = tracker.entries.filter(e => new Date(e.timestamp).toLocaleDateString('en-CA') === dateStr);
-            const taken = dayEntries.some(e => e.values?.adherence === 'taken' || e.values?.taken === true);
+            // The day's DOSE COUNT: "2" reads the multi-dose day correctly
+            // where a single tick claimed one dose and hid the rest.
+            const dayDoses = dayEntries.length;
             const dayLabel = d.toLocaleDateString('en-US', { weekday: 'narrow' });
             return (
               <div key={i} className="flex-1 text-center">
-                <div className={`h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
-                  taken ? 'bg-green-500/20 text-green-500' : dateStr === today ? 'bg-amber-500/15 text-amber-500 border border-amber-500/30' : 'bg-muted/50 text-muted-foreground/40'
+                <div
+                  title={`${dayDoses} ${dayDoses === 1 ? 'dose' : 'doses'} on ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
+                  className={`h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
+                  dayDoses > 0 ? 'bg-green-500/20 text-green-500' : dateStr === today ? 'bg-amber-500/15 text-amber-500 border border-amber-500/30' : 'bg-muted/50 text-muted-foreground/40'
                 }`}>
-                  {taken ? '✓' : dateStr === today ? '•' : '–'}
+                  {dayDoses > 1 ? `${dayDoses}×` : dayDoses === 1 ? '✓' : dateStr === today ? '•' : '–'}
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-0.5">{dayLabel}</p>
               </div>
@@ -1160,8 +1236,15 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
         <div>
           <p className="text-xs font-medium text-muted-foreground mb-2">Recent Doses</p>
           <div className="space-y-1.5">
-            {tracker.entries.slice(-5).reverse().map((e, i) => (
-              <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/30 text-sm">
+            {/* Sort by timestamp rather than trusting array order: an optimistic
+                dose is prepended to the cached list, and each occurrence is its
+                own row — identical doses are never merged. */}
+            {tracker.entries
+              .slice()
+              .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+              .slice(0, 5)
+              .map((e, i) => (
+              <div key={(e as any).id || `${e.timestamp}-${i}`} className="flex items-center justify-between px-3 py-2 rounded-lg bg-muted/30 text-sm">
                 <div className="flex items-center gap-2">
                   <div className={`w-2 h-2 rounded-full ${e.values?.adherence === 'taken' || e.values?.taken ? 'bg-green-500' : 'bg-red-500'}`} />
                   <span>{(() => {
@@ -1172,7 +1255,7 @@ function MedicationOverview({ tracker }: { tracker: Tracker }) {
                   })()}</span>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {e.values?.timeTaken || new Date(e.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                  {doseTimeLabel(e)}
                   {' · '}
                   {new Date(e.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </span>
@@ -1878,12 +1961,14 @@ function getTrackerStatus(
     return { label: 'Low', ...RED };
   }
 
-  // Medication: today's dose taken?
+  // Medication: how many doses landed today. A count, not a done/not-done
+  // flag — several doses a day is normal, and "Taken" erased all but the first.
   if (spec === 'medication') {
     const today = new Date().toLocaleDateString('en-CA');
     const entries = tracker.entries || [];
-    const takenToday = entries.some(e => new Date(e.timestamp).toLocaleDateString('en-CA') === today);
-    return takenToday ? { label: 'Taken', ...GREEN } : { label: 'Due', ...YELLOW };
+    const dosesToday = entries.filter(e => new Date(e.timestamp).toLocaleDateString('en-CA') === today).length;
+    if (dosesToday === 0) return { label: 'Due', ...YELLOW };
+    return { label: dosesToday === 1 ? '1 dose' : `${dosesToday} doses`, ...GREEN };
   }
 
   // Weight / Running / generic: freshness-based status
@@ -2813,6 +2898,17 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   const { data: allGoals = [] } = useQuery<Goal[]>({ queryKey: goalsQueryKey([]) });
 
   const insight = buildTrackerInsight(tracker, allGoals);
+  // One canonical summary line per tracker (shared/tracker-summary.ts), so the
+  // card, the detail header and any future surface say the same thing: doses
+  // and visits COUNT, water totals for the day, a session shows duration plus
+  // weight-scaled calories, a lift shows reps × sets, a reading shows itself.
+  const bodyWeightKg = useBodyWeightKg();
+  const summary = summarizeTrackerToday(tracker, { bodyWeightKg });
+  // For a plain reading the per-kind insight already says something the number
+  // doesn't ("+2 lb this month", "Previous: 122/78"), so the summary only takes
+  // over the subline for the shapes it genuinely knows more about — tallies,
+  // daily totals, sessions and set structure.
+  const summaryLine = summary.shape === "measurement" ? "" : summary.line;
   const catAccent = getCategoryAccent(tracker.category);
   const ac = `hsl(${catAccent})`;
   const Icon = iconForKind(insight.iconKind);
@@ -2833,15 +2929,20 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   })();
   const visual = chooseCardVisual(tracker, insight, primaryNum, lastEntry);
   const gaugeSize = importance === "large" ? 84 : importance === "compact" ? 58 : 70;
-  // Medication/supplement checklist row (taken vs due today).
+  // Medication/supplement dose tally. A supplement can be taken several times
+  // a day, so the card reports HOW MANY doses landed today ("2 doses today")
+  // instead of a single checkbox that a first dose ticked and a second dose
+  // could not change.
   const medChecklist = (() => {
     if (visual.type !== "checklist") return null;
-    const today = new Date().toLocaleDateString("en-CA");
-    const takenToday = entries.some((e) => new Date(e.timestamp).toLocaleDateString("en-CA") === today);
     const doseField = tracker.fields?.find((f) => /dose|dosage|amount|qty|quantity|pill|tablet|capsule/i.test(f.name));
     const doseVal = doseField && lastEntry ? (lastEntry.values as any)[doseField.name] : undefined;
-    const label = doseVal != null ? `${doseVal}${doseField?.unit ? ` ${doseField.unit}` : ""}` : "Daily dose";
-    return [{ label, done: takenToday }];
+    const strength = doseVal != null ? `${doseVal}${doseField?.unit ? ` ${doseField.unit}` : ""}` : "";
+    const n = summary.countToday;
+    const label = n > 0
+      ? `${n} ${n === 1 ? "dose" : "doses"} today${strength ? ` · ${strength}` : ""}`
+      : (strength ? `${strength} — none today` : "No doses today");
+    return [{ label, done: n > 0 }];
   })();
   const kindEmoji = KIND_EMOJI[insight.iconKind];
   // Sports / fitness trends get the layered "effort zone" area look.
@@ -2930,9 +3031,9 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
               ? cleanTrackerName(tracker.name, allProfiles, tracker.linkedProfiles)
               : tracker.name}
           </p>
-          {insight.subline && (
-            <p className="text-[11px] text-muted-foreground truncate leading-tight mt-0.5">
-              {insight.subline}
+          {(summaryLine || insight.subline) && (
+            <p className="text-[11px] text-muted-foreground truncate leading-tight mt-0.5" data-testid={`tracker-summary-${tracker.id}`}>
+              {summaryLine || insight.subline}
             </p>
           )}
         </div>
@@ -2974,9 +3075,12 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
         </div>
       ) : visual.type === "checklist" ? (
         /* Medication / supplement: taken-vs-due rows. */
-        <div className="flex-1 px-3 pt-1 min-h-0 flex flex-col justify-center gap-2">
+        <div className="flex-1 px-3 pt-1 min-h-0 flex flex-col justify-center gap-1.5">
           {medChecklist && <ChecklistMini items={medChecklist} color={ac} />}
-          {importance !== "compact" && insight.hasData && (
+          {summary.lastLine && (
+            <p className="text-[11px] text-muted-foreground leading-tight">{summary.lastLine}</p>
+          )}
+          {importance !== "compact" && insight.hasData && !summary.lastLine && (
             <p className="text-[11px] text-muted-foreground leading-snug line-clamp-2">{insight.insight}</p>
           )}
         </div>
@@ -3482,8 +3586,8 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
         </div>
       ) : visual.type === "checklist" ? (
         <div className="flex-1 px-3 pt-1 min-h-0 flex flex-col justify-center gap-2">
-          <ChecklistMini items={[{ label: unit ? `Daily dose (${unit})` : "Daily dose", done: true }]} color={ac} />
-          <p className="text-[11px] text-muted-foreground leading-snug">Check off each dose as you take it.</p>
+          <ChecklistMini items={[{ label: unit ? `2 doses today · ${unit}` : "2 doses today", done: true }]} color={ac} />
+          <p className="text-[11px] text-muted-foreground leading-snug">Every dose you log counts — several a day is fine.</p>
         </div>
       ) : visual.type === "panel" ? (
         <div className="flex-1 px-3 pt-1.5 min-h-0 flex flex-col justify-center">
@@ -4958,7 +5062,12 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState<"all" | "7d" | "30d" | "90d">("all");
   const [profileFilter, setProfileFilter] = useState<string>("all");
-  const sortedEntries = [...tracker.entries].reverse();
+  // Sort by timestamp rather than reversing array order: an optimistically
+  // logged entry is PREPENDED to the cached list, so a plain reverse buried
+  // the dose the user just logged at the bottom of their history.
+  const sortedEntries = [...tracker.entries].sort(
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+  );
 
   // Profile filter: only show entries for selected profile
   const profileFiltered = profileFilter === "all" ? sortedEntries

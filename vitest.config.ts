@@ -140,6 +140,7 @@ export default defineConfig({
       'tests/dashboard-layout-guard.test.ts',
       'tests/notifications-v2.test.ts',
       'tests/medication-doses.test.ts',
+      'tests/tracker-summary.test.ts',
       'tests/ai-button-parity.test.ts',
       'tests/action-split.test.ts',
       'tests/bulk-extraction-normalize.test.ts',

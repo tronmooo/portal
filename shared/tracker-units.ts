@@ -228,3 +228,27 @@ export function unitsCompatible(
   if (da === null || db === null) return true;
   return da === db;
 }
+
+/**
+ * Canonical DISPLAY spelling for a unit that is already known.
+ *
+ * This is unit→unit, the same category as `canonUnit` in
+ * server/tracker-normalize: it never guesses a unit from a field name, it only
+ * settles on one spelling for the one a tracker already declared, so "lbs" and
+ * "pounds" read as "lb" everywhere instead of per-surface. An unrecognized unit
+ * passes through untouched — a unit we don't know is still the user's unit.
+ */
+export function displayUnit(unit: string | null | undefined): string {
+  const u = norm(unit);
+  if (!u) return "";
+  const CANON: Record<string, string> = {
+    lb: "lb", lbs: "lb", pound: "lb", pounds: "lb",
+    kg: "kg", kgs: "kg", kilogram: "kg", kilograms: "kg",
+    oz: "oz", ounce: "oz", ounces: "oz", floz: "oz",
+    min: "min", mins: "min", minute: "min", minutes: "min",
+    hr: "hr", hrs: "hr", hour: "hr", hours: "hr",
+    mi: "mi", mile: "mi", miles: "mi",
+    km: "km", kilometer: "km", kilometers: "km",
+  };
+  return CANON[u] || String(unit);
+}

@@ -488,6 +488,17 @@ export const insertTrackerEntrySchema = z.object({
   forProfile: z.string().optional(),
   profileId: z.string().optional(),
   timestamp: z.string().optional(),
+  /**
+   * Opt out of the 5-minute identical-values dedup in logEntry.
+   *
+   * The dedup exists to swallow an accidental double-fire (a retried HTTP
+   * request). It must NOT swallow a SECOND REAL OCCURRENCE: a medication or
+   * supplement can be taken several times a day (9 AM / 1 PM / 7 PM) and each
+   * dose is its own event with its own id and timestamp. A surface that knows
+   * the user deliberately asked for another occurrence — the med suite's
+   * "Log dose" button — sets this, and every occurrence is stored.
+   */
+  allowDuplicate: z.boolean().optional(),
 });
 
 export type InsertTrackerEntry = z.infer<typeof insertTrackerEntrySchema>;

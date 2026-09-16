@@ -3316,9 +3316,16 @@ export class SupabaseStorage implements IStorage {
     // `__skipHabitSync`): the 2nd and 3rd mirror of a "twice daily" habit are
     // identical rows moments apart BY DESIGN, and swallowing them handed back
     // the first row's id — so the un-check later deleted the only mirror.
+    //
+    // `allowDuplicate` is the same escape hatch for an explicit user action
+    // (the med suite's "Log dose" button). A medication or supplement can be
+    // taken several times a day and each dose is its own occurrence with its
+    // own id and timestamp — two doses logged minutes apart are two events,
+    // not a retried request, so they must never collapse into one row.
     const DEDUP_WINDOW_MS = 5 * 60 * 1000;
     const tsMs = Date.parse(ts);
-    if (!(data as any).__skipDedupe && Number.isFinite(tsMs)) {
+    const skipDedupe = (data as any).__skipDedupe === true || (data as any).allowDuplicate === true;
+    if (!skipDedupe && Number.isFinite(tsMs)) {
       const canonicalize = (obj: any): string => {
         if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return JSON.stringify(obj);
         const sortedKeys = Object.keys(obj).sort();

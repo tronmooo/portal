@@ -417,6 +417,32 @@ describe("#11 logEntry dedup", () => {
     expect(out.id).not.toBe("first");
   });
 
+  it("allowDuplicate (a deliberate second dose) writes its own row with its own id", async () => {
+    // Reported 2026-09-16: logging a Multivitamin dose hid the log button and
+    // a second dose the same day never landed. A medication can be taken many
+    // times a day (9 AM / 1 PM / 7 PM); each press is a new occurrence, so the
+    // 5-minute identical-values dedup must not swallow it.
+    const { s, inserts } = logStorage([{ id: "first", entry_values: { ounces: 24 }, timestamp: nowIso() }]);
+    const out = await s.logEntry({ trackerId: "t1", values: { ounces: 24 }, allowDuplicate: true });
+    expect(inserts).toHaveLength(1);
+    expect(out.id).not.toBe("first");
+    // The flag is a control signal, not data — it never reaches a column.
+    expect(inserts[0]).not.toHaveProperty("allowDuplicate");
+    expect(inserts[0].entry_values).not.toHaveProperty("allowDuplicate");
+  });
+
+  it("three deliberate doses minutes apart are three rows with three ids", async () => {
+    const stored: any[] = [];
+    const { s, inserts } = logStorage(stored);
+    const dose = { drug: "Multivitamin", adherence: "taken" };
+    for (let i = 0; i < 3; i++) {
+      const out = await s.logEntry({ trackerId: "t1", values: { ...dose }, allowDuplicate: true });
+      stored.push({ id: out.id, entry_values: out.values, timestamp: out.timestamp });
+    }
+    expect(inserts).toHaveLength(3);
+    expect(new Set(inserts.map((i: any) => i.id)).size).toBe(3);
+  });
+
   it("a backdated identical entry ('also 180 for yesterday') is not dropped against today's row", async () => {
     const { s, inserts, calls } = logStorage([{ id: "today", entry_values: { ounces: 24 }, timestamp: nowIso() }]);
     const yesterdayNoon = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
