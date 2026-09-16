@@ -7,14 +7,10 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import {
   summarizeTrackerToday,
-  estimateActivityCalories,
-  metForActivity,
-  resolveBodyWeightKg,
   isDoseTracker,
   isOccurrenceTracker,
   occurrenceNoun,
   shortAgo,
-  DEFAULT_BODY_WEIGHT_KG,
 } from "@shared/tracker-summary";
 import { displayUnit } from "@shared/tracker-units";
 
@@ -212,75 +208,6 @@ describe("the other tracker shapes each get their own honest line", () => {
   });
 });
 
-describe("calories are MET × body weight × hours", () => {
-  it("scales with the person's own weight", () => {
-    const light = estimateActivityCalories({ activityName: "Soccer", minutes: 30, bodyWeightKg: 60 })!;
-    const heavy = estimateActivityCalories({ activityName: "Soccer", minutes: 30, bodyWeightKg: 100 })!;
-    expect(light.calories).toBe(Math.round(7 * 60 * 0.5));
-    expect(heavy.calories).toBe(Math.round(7 * 100 * 0.5));
-    expect(heavy.calories).toBeGreaterThan(light.calories);
-    expect(light.weightKnown).toBe(true);
-  });
-
-  it("falls back to the population standard when the weight is unknown", () => {
-    const est = estimateActivityCalories({ activityName: "Soccer", minutes: 60 })!;
-    expect(est.weightKnown).toBe(false);
-    expect(est.weightKg).toBe(DEFAULT_BODY_WEIGHT_KG);
-    expect(est.calories).toBe(Math.round(7 * DEFAULT_BODY_WEIGHT_KG * 1));
-    expect(est.method).toContain("default weight");
-  });
-
-  it("ignores an implausible weight rather than scaling to it", () => {
-    const est = estimateActivityCalories({ activityName: "Soccer", minutes: 30, bodyWeightKg: 4 })!;
-    expect(est.weightKnown).toBe(false);
-    expect(est.weightKg).toBe(DEFAULT_BODY_WEIGHT_KG);
-  });
-
-  it("intensity moves the MET up and down", () => {
-    const base = estimateActivityCalories({ activityName: "Soccer", minutes: 30, bodyWeightKg: 80 })!;
-    const hard = estimateActivityCalories({ activityName: "Soccer", minutes: 30, bodyWeightKg: 80, intensity: "intense" })!;
-    const easy = estimateActivityCalories({ activityName: "Soccer", minutes: 30, bodyWeightKg: 80, intensity: "light" })!;
-    expect(hard.calories).toBeGreaterThan(base.calories);
-    expect(easy.calories).toBeLessThan(base.calories);
-  });
-
-  it("knows the MET of common activities and admits when it doesn't", () => {
-    expect(metForActivity("Soccer")).toBe(7);
-    expect(metForActivity("Evening Yoga")).toBe(2.5);
-    expect(metForActivity("Quarterly Budget Review")).toBeNull();
-    expect(estimateActivityCalories({ activityName: "Quarterly Budget Review", minutes: 30 })).toBeNull();
-  });
-
-  it("returns nothing for a zero or missing duration", () => {
-    expect(estimateActivityCalories({ activityName: "Soccer", minutes: 0 })).toBeNull();
-    expect(estimateActivityCalories({ activityName: "Soccer", minutes: NaN as any })).toBeNull();
-  });
-});
-
-describe("resolveBodyWeightKg", () => {
-  it("prefers the profile's own stated weight", () => {
-    const kg = resolveBodyWeightKg({ profileFields: { weight: "184.6 lbs" } });
-    expect(kg).toBeGreaterThan(83);
-    expect(kg).toBeLessThan(84.5);
-  });
-
-  it("falls back to the newest weight-tracker reading", () => {
-    const weightTracker = tracker({
-      name: "Weight",
-      category: "health",
-      unit: "lbs",
-      fields: [{ name: "weight", type: "number", unit: "lbs" }],
-      entries: [entry(at(6, 0, -3), { weight: 190 }), entry(at(6, 0), { weight: 184.6 })],
-    });
-    const kg = resolveBodyWeightKg({ profileFields: {}, trackers: [weightTracker], now: NOW })!;
-    expect(Math.round(kg)).toBe(84); // 184.6 lb, not the older 190
-  });
-
-  it("returns null when nobody recorded a weight", () => {
-    expect(resolveBodyWeightKg({ profileFields: {}, trackers: [] })).toBeNull();
-  });
-});
-
 describe("formatting helpers", () => {
   it("shortAgo reads in the units a person would use", () => {
     expect(shortAgo(NOW - 30_000, NOW)).toBe("just now");
@@ -335,13 +262,21 @@ describe("the medication suite never gates logging on a taken-today flag", () =>
     expect(SRC).not.toMatch(/weekTaken \/ Math\.max\(7/);
   });
 
-  it("does not read a bodyweight movement's rep count as a lifted weight", () => {
-    // "Lifted 12 reps × 12 × 3 sets" — primaryField on Squats IS "reps", and
-    // the bench branch used it as the load.
-    const i = SRC.indexOf('if (kind === "bench")');
-    expect(i).toBeGreaterThan(0);
-    const branch = SRC.slice(i, i + 700);
-    expect(branch).toContain('primaryField !== "reps" && primaryField !== "sets"');
+  it("routes fitness cards through the one fitness engine, not a local guess", () => {
+    // The old `kind === "bench"` branch read `primaryField` as the lifted
+    // weight, so Squats rendered "Lifted 12 reps × 12 × 3 sets". That branch is
+    // gone: shared/fitness-metrics decides the headline metric (pinned by
+    // tests/fitness-metrics.test.ts), and this page must not re-derive it.
+    expect(SRC).not.toContain('if (kind === "bench")');
+    expect(SRC).toContain("fitnessForLatestEntry(tracker, last, fitnessCtx)");
+  });
+
+  it("resolves body weight ONCE, from the activity's owner", () => {
+    // Two resolutions diverge; the owner-scoped one is correct (Sarah's game
+    // is priced with Sarah's weight, not the viewer's).
+    expect(SRC).toContain("calorieContextForOwner(ownerProfile)");
+    expect(SRC).not.toContain("useBodyWeightKg");
+    expect(SRC).toContain("bodyWeightKg: fitnessCtx.bodyWeightKg");
   });
 
   it("keeps an occurrence tracker with entries out of the No Data pile", () => {

@@ -24,8 +24,12 @@
 export const EXPENSE_CATEGORIES = [
   "general", "food", "transport", "health", "pet", "vehicle", "entertainment",
   "shopping", "utilities", "housing", "insurance", "subscription", "education",
-  "personal", "automotive", "travel",
+  "personal", "travel",
 ] as const;
+// "automotive" was in this list AND aliased to "vehicle" below. A vocabulary
+// that carries a word and its own alias is two buckets for one concept: the
+// Edit form offered "Automotive" while Add offered "Vehicle", and an exact
+// match always beat the alias, so both spellings survived in the data.
 export type CanonicalExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
 
 export const OBLIGATION_CATEGORIES = [
@@ -96,6 +100,10 @@ const ALIASES: Record<string, string> = {
   home: "housing",
   entertainment: "entertainment",
   fun: "entertainment",
+  // For EXPENSES there is no "communication" bucket, so a phone bill folds to
+  // utilities; obligations keep their own "communication" category because an
+  // exact canonical value always wins over this table.
+  communication: "utilities",
   phone: "communication",
   phonebill: "communication",
   phoneplan: "communication",
@@ -127,6 +135,12 @@ function resolve(raw: unknown, allowed: readonly string[], fallback: string): st
   if (allowed.includes(k)) return k;
   const aliased = ALIASES[k];
   if (aliased && allowed.includes(aliased)) return aliased;
+  // One more hop, for a word whose alias is itself canonical only in the OTHER
+  // vocabulary: "phone" → "communication" is an obligation category but not an
+  // expense one, and "communication" → "utilities" carries it the rest of the
+  // way. Bounded at two hops; the table has no longer chains.
+  const twice = aliased ? ALIASES[aliased] : undefined;
+  if (twice && allowed.includes(twice)) return twice;
   // The alias resolved to something this vocabulary doesn't carry (e.g.
   // "transport" is an expense category but not an obligation one) — fall back
   // rather than storing a value the type union forbids.

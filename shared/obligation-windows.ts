@@ -203,3 +203,183 @@ export function sumMonthlyIncomeForMonth(
   }
   return total;
 }
+
+// ─── Realized income: received paychecks ─────────────────────────────────────
+//
+// The money model has TWO income entities and only one of them was ever
+// counted. `incomes` are recurring streams (a salary, a retainer) and
+// `paychecks` are individual expected deposits the user marks "received".
+// Every income surface — INCOME · MTD, the Cash Flow IN leg, the savings rate,
+// the Cash Flow Trend — summed the streams alone, so marking a $2,000 paycheck
+// received moved nothing: income read $0 and the savings rate read "—" while a
+// confirmed deposit sat in the list right below. A confirmed paycheck is money
+// that actually arrived; it is income for the month it arrived in.
+
+export interface ReceivedPaycheckInput {
+  confirmed?: boolean | null;
+  received_date?: string | null;
+  receivedDate?: string | null;
+  expected_date?: string | null;
+  expectedDate?: string | null;
+  amount?: number | string | null;
+  actual_amount?: number | string | null;
+  actualAmount?: number | string | null;
+}
+
+/** The day a paycheck landed: its received date, else the day it was expected. */
+export function paycheckReceivedDay(p: ReceivedPaycheckInput | null | undefined): string | null {
+  const raw = p?.received_date ?? p?.receivedDate ?? p?.expected_date ?? p?.expectedDate;
+  return typeof raw === "string" && /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : null;
+}
+
+/** What a paycheck was actually worth: the posted actual, else the expected. */
+export function paycheckAmount(p: ReceivedPaycheckInput | null | undefined): number {
+  const actual = Number(p?.actual_amount ?? p?.actualAmount);
+  if (Number.isFinite(actual) && actual > 0) return actual;
+  const expected = Number(p?.amount);
+  return Number.isFinite(expected) ? expected : 0;
+}
+
+/** True for a paycheck the user has marked received. */
+export function isReceivedPaycheck(p: ReceivedPaycheckInput | null | undefined): boolean {
+  return p?.confirmed === true;
+}
+
+/** The paycheck money that landed in `ym` ("YYYY-MM"). Unconfirmed paychecks
+ *  are expectations, not income, and are never summed here. */
+export function sumReceivedPaychecksForMonth(
+  paychecks: ReadonlyArray<ReceivedPaycheckInput> | null | undefined,
+  ym: string,
+): number {
+  let total = 0;
+  for (const p of paychecks || []) {
+    if (!isReceivedPaycheck(p)) continue;
+    const day = paycheckReceivedDay(p);
+    if (!day || day.slice(0, 7) !== ym) continue;
+    total += paycheckAmount(p);
+  }
+  return total;
+}
+
+/**
+ * THE income figure for a calendar month: recurring streams that had started
+ * by then, plus the paychecks that actually landed in it. Every surface that
+ * shows "income this month" must use this — `sumMonthlyIncomeForMonth` alone
+ * is the projection half only.
+ */
+export function sumMonthIncome(
+  incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null; date?: string | null }> | null | undefined,
+  paychecks: ReadonlyArray<ReceivedPaycheckInput> | null | undefined,
+  ym: string,
+): number {
+  return sumMonthlyIncomeForMonth(incomes, ym) + sumReceivedPaychecksForMonth(paychecks, ym);
+}
+
+/** `sumMonthIncome` for the user's current month. */
+export function sumMonthIncomeNow(
+  incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null; date?: string | null }> | null | undefined,
+  paychecks: ReadonlyArray<ReceivedPaycheckInput> | null | undefined,
+  timezone: string,
+): number {
+  return sumMonthIncome(incomes, paychecks, getUserCurrentMonth(timezone));
+}
+
+// ─── Bill money still owed this month ────────────────────────────────────────
+//
+// Cash OUT was `this month's expenses + the monthly-equivalent of every active
+// bill`. Paying a bill writes an expense (server/liability-payments.ts §4), so
+// a paid bill landed in BOTH terms — paying Netflix pushed outflow UP by
+// $14.99 instead of leaving it flat. The monthly-equivalent term also ignored
+// WHEN a bill is due, so a bill due in October was outflow in September.
+//
+// The honest decomposition of a month's outflow is:
+//     money already spent (expenses, bill payments among them)
+//   + money still owed this month (bills whose occurrence has not been paid)
+// Paying a bill moves an amount from the second term to the first and the
+// total does not move. That is what these helpers compute.
+
+/** Last calendar day of `ym` ("YYYY-MM"), as YYYY-MM-DD. */
+export function monthEndDay(ym: string): string {
+  const y = Number(ym.slice(0, 4));
+  const m = Number(ym.slice(5, 7));
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${ym}-${String(last).padStart(2, "0")}`;
+}
+
+/** Step a YYYY-MM-DD forward by one period of `frequency`. Returns null for a
+ *  cadence with no next occurrence (one-off) or an unparseable date. */
+export function nextOccurrenceDay(day: string, frequency?: string | null): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const y = Number(day.slice(0, 4)), m = Number(day.slice(5, 7)), d = Number(day.slice(8, 10));
+  const byDays = (n: number) => {
+    const t = new Date(Date.UTC(y, m - 1, d + n));
+    return t.toISOString().slice(0, 10);
+  };
+  const byMonths = (n: number) => {
+    // Clamp to the target month's length so "the 31st" every month lands on
+    // the 30th/28th rather than rolling into the next month.
+    const target = new Date(Date.UTC(y, m - 1 + n, 1));
+    const len = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+    const dd = Math.min(d, len);
+    return `${target.getUTCFullYear()}-${String(target.getUTCMonth() + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+  };
+  switch (canonicalIncomeFrequency(frequency) ?? "monthly") {
+    case "daily": return byDays(1);
+    case "weekly": return byDays(7);
+    case "biweekly": return byDays(14);
+    case "semimonthly": return byDays(15);
+    case "monthly": return byMonths(1);
+    case "bimonthly": return byMonths(2);
+    case "quarterly": return byMonths(3);
+    case "semiannual": return byMonths(6);
+    case "yearly": return byMonths(12);
+    case "once": return null;
+    default: return byMonths(1);
+  }
+}
+
+export interface BillDueInput {
+  amount?: number | string | null;
+  frequency?: string | null;
+  nextDueDate?: string | Date | null;
+  status?: string | null;
+  recurrenceEnd?: string | null;
+}
+
+/** Guards a pathological cadence (daily over a long catch-up) from looping. */
+const MAX_OCCURRENCES_PER_MONTH = 62;
+
+/**
+ * The bill money still owed on or before the end of `ym`: every unpaid
+ * occurrence of every active obligation, overdue ones from earlier months
+ * included (still owed) and later months' excluded (not this month's money).
+ *
+ * Paying an occurrence advances the bill's `nextDueDate` past it, so a bill
+ * settled this month drops out of this sum on its own — its expense row is
+ * what carries it from then on.
+ */
+export function sumBillsDueThroughMonth(
+  obligations: ReadonlyArray<BillDueInput> | null | undefined,
+  ym: string,
+): number {
+  const end = monthEndDay(ym);
+  let total = 0;
+  for (const o of obligations || []) {
+    if (!isActiveObligation(o)) continue;
+    const raw = o?.nextDueDate;
+    const first = typeof raw === "string" ? raw.slice(0, 10)
+      : raw instanceof Date && !Number.isNaN(raw.getTime()) ? raw.toISOString().slice(0, 10) : "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(first) || first > end) continue;
+    const amount = Number(o?.amount);
+    if (!Number.isFinite(amount) || amount === 0) continue;
+    const stop = typeof o?.recurrenceEnd === "string" && /^\d{4}-\d{2}-\d{2}/.test(o.recurrenceEnd)
+      ? o.recurrenceEnd.slice(0, 10) : null;
+    let day: string | null = first;
+    for (let n = 0; day && day <= end && n < MAX_OCCURRENCES_PER_MONTH; n++) {
+      if (stop && day > stop) break;
+      total += amount;
+      day = nextOccurrenceDay(day, o?.frequency);
+    }
+  }
+  return total;
+}

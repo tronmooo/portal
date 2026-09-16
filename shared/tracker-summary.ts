@@ -14,25 +14,27 @@
 //   Weight       → "184.6 lb"
 //   Bathroom     → "3 visits today"
 //
-// Calories for a session-shaped activity are MET × body weight × hours — the
-// same physiology shared/estimation-engine.ts uses for walk/run/cycle, applied
-// to the sports that engine doesn't cover. The person's own weight is used when
-// a profile (or a weight tracker) records one; otherwise the population default
-// stands in and the number is marked as an estimate ("~280 cal") so a guess is
-// never presented as measured data.
+// Calories on a session line come from shared/fitness-metrics (the app's one
+// MET/body-weight engine) — this module only formats what that returns, and
+// marks an estimate with "~" so a guess is never shown as measured data.
 //
 // Pure and clock-injectable so tests can pin every line.
 
 import type { Tracker, TrackerEntry } from "./schema";
 import { parseFrequencyToDosesPerDay } from "./medication-refills";
-import { parseWeightToKg } from "./estimation-engine";
 // Unit spelling is decided in ONE place (shared/tracker-units.ts) — see the
 // no-inline-unit-guessing contract. This module never invents a unit.
 import { displayUnit } from "./tracker-units";
+// Calories are the fitness engine's job, not this module's — one MET table,
+// one body-weight resolution, one confidence model.
+import {
+  classifyFitnessActivity,
+  isCalorieBearingActivity,
+  readFitnessFacts,
+  estimateCaloriesBurned,
+} from "./fitness-metrics";
 
-const DAY = 86400000;
 /** Population average adult body mass, used when we don't know the person's. */
-export const DEFAULT_BODY_WEIGHT_KG = 70;
 
 const norm = (v: unknown) => String(v ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 const words = (v: unknown) => norm(v).replace(/[^a-z0-9 ]/g, " ");
@@ -61,137 +63,6 @@ function fmt(n: number, dp = 1): string {
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
-
-// ── Body weight resolution ───────────────────────────────────────────────────
-
-/**
- * The person's body mass in kg, from their profile fields first (the value they
- * stated about themselves) and their weight tracker's latest entry second.
- * Returns null when neither knows — callers then fall back to the standard.
- */
-export function resolveBodyWeightKg(input: {
-  profileFields?: Record<string, any> | null;
-  trackers?: Tracker[] | null;
-  now?: number;
-}): number | null {
-  const pf = input.profileFields || {};
-  const fromProfile = parseWeightToKg(
-    pf.weight ?? pf.weightLbs ?? pf.weight_lbs ?? pf.weightKg ?? pf.weight_kg ?? pf.bodyWeight,
-  );
-  if (fromProfile && fromProfile > 20) return fromProfile;
-
-  // A weight tracker's newest reading is the next best source of truth.
-  const now = Number.isFinite(input.now as number) ? (input.now as number) : Date.now();
-  let best: { ts: number; kg: number } | null = null;
-  for (const t of input.trackers || []) {
-    if (!/\b(weight|body ?weight|weigh ?in)\b/.test(words(t?.name))) continue;
-    const unit = norm(t.unit) || norm((t.fields || []).find((f) => /weight|mass/i.test(f.name))?.unit);
-    for (const e of t.entries || []) {
-      const raw = pick(e.values, "weight", "bodyWeight", "value", "lbs", "kg");
-      if (raw == null) continue;
-      const kg = unit === "kg" || unit === "kgs" ? raw : parseWeightToKg(raw);
-      if (!kg || kg <= 20) continue;
-      const ts = new Date(e.timestamp || 0).getTime();
-      if (!isFinite(ts) || ts > now + DAY) continue;
-      if (!best || ts > best.ts) best = { ts, kg };
-    }
-  }
-  return best ? best.kg : null;
-}
-
-// ── MET table: energy cost of an activity, per kg of body mass per hour ──────
-// Values from the Compendium of Physical Activities (Ainsworth et al.), rounded
-// to the moderate/recreational entry for each sport.
-const MET_TABLE: Array<{ re: RegExp; met: number }> = [
-  { re: /\b(soccer|football|futsal)\b/, met: 7 },
-  { re: /\b(basketball|hoops)\b/, met: 6.5 },
-  { re: /\b(hockey|lacrosse|rugby)\b/, met: 8 },
-  { re: /\b(boxing|kickbox|mma|martial|karate|judo|taekwondo)\b/, met: 9 },
-  { re: /\b(swim|swimming)\b/, met: 7 },
-  { re: /\b(tennis|squash|racquetball|padel|pickleball)\b/, met: 7 },
-  { re: /\b(badminton|table tennis|ping pong|volleyball)\b/, met: 4.5 },
-  { re: /\b(jump rope|jumping rope|skipping)\b/, met: 11 },
-  { re: /\b(hiit|circuit|crossfit|bootcamp)\b/, met: 8 },
-  { re: /\b(row|rowing|erg)\b/, met: 7 },
-  { re: /\b(elliptical|stair|stairmaster|treadmill)\b/, met: 5 },
-  { re: /\b(baseball|softball|cricket|golf)\b/, met: 4.5 },
-  { re: /\b(skate|skating|skateboard|rollerblad|ski|snowboard|surf)\b/, met: 6 },
-  { re: /\b(climb|climbing|bouldering)\b/, met: 8 },
-  { re: /\b(dance|dancing|zumba|aerobics)\b/, met: 6 },
-  { re: /\b(weight ?lifting|strength|gym|squat|deadlift|bench|press|lift|resistance)\b/, met: 5 },
-  { re: /\b(pilates|barre|calisthenics)\b/, met: 4 },
-  { re: /\b(yoga|stretch|stretching|mobility)\b/, met: 2.5 },
-  { re: /\b(walk|walking|hike|hiking)\b/, met: 3.5 },
-  { re: /\b(run|running|jog|jogging|sprint)\b/, met: 9.8 },
-  { re: /\b(bike|biking|cycl|cycling|spin)\b/, met: 7.5 },
-  { re: /\b(chess|reading|read|guitar|piano|meditat|mindful|gaming|videogame|study)\b/, met: 1.8 },
-];
-/** Generic "some kind of sport session" when the name isn't in the table. */
-const GENERIC_SPORT_MET = 6;
-
-/** MET for an activity name, or null when the name isn't recognizable. */
-export function metForActivity(activityName: string): number | null {
-  const s = words(activityName);
-  if (!s) return null;
-  for (const row of MET_TABLE) if (row.re.test(s)) return row.met;
-  return null;
-}
-
-const INTENSITY_FACTOR: Array<{ re: RegExp; factor: number }> = [
-  { re: /\b(max|all ?out|extreme|very (hard|intense)|vigorous|intense|hard)\b/, factor: 1.15 },
-  { re: /\b(light|easy|gentle|low|recovery|casual)\b/, factor: 0.85 },
-];
-
-export interface CalorieEstimate {
-  /** kcal burned over the session. */
-  calories: number;
-  /** MET used. */
-  met: number;
-  /** Body mass the estimate is scaled to. */
-  weightKg: number;
-  /** True when that mass came from the person rather than the default. */
-  weightKnown: boolean;
-  /** How it was derived, for provenance surfaces. */
-  method: string;
-}
-
-/**
- * kcal for a duration-based activity: MET × body-mass(kg) × hours. Uses the
- * person's own weight when known and the population default otherwise, so the
- * number is always physiologically grounded rather than a fixed constant.
- */
-export function estimateActivityCalories(input: {
-  activityName: string;
-  minutes: number;
-  bodyWeightKg?: number | null;
-  intensity?: unknown;
-  /** Used when the name is unrecognized but the entry is clearly a workout. */
-  assumeSport?: boolean;
-}): CalorieEstimate | null {
-  const minutes = numeric(input.minutes);
-  if (minutes == null || minutes <= 0) return null;
-  const named = metForActivity(input.activityName);
-  const met0 = named ?? (input.assumeSport ? GENERIC_SPORT_MET : null);
-  if (met0 == null) return null;
-
-  const intensity = norm(input.intensity);
-  let met = met0;
-  if (intensity) {
-    for (const row of INTENSITY_FACTOR) {
-      if (row.re.test(intensity)) { met *= row.factor; break; }
-    }
-  }
-  const weightKnown = !!(input.bodyWeightKg && input.bodyWeightKg > 20);
-  const weightKg = weightKnown ? (input.bodyWeightKg as number) : DEFAULT_BODY_WEIGHT_KG;
-  const hours = minutes / 60;
-  return {
-    calories: Math.round(met * weightKg * hours),
-    met: Math.round(met * 10) / 10,
-    weightKg: Math.round(weightKg),
-    weightKnown,
-    method: `MET ${Math.round(met * 10) / 10} × ${weightKnown ? "profile" : "default"} weight ${Math.round(weightKg)}kg × ${fmt(hours, 2)}h`,
-  };
-}
 
 // ── Occurrence trackers ──────────────────────────────────────────────────────
 
@@ -352,30 +223,23 @@ export function summarizeTrackerToday(tracker: Tracker, opts: TrackerSummaryOpts
   }
 
   // ── Session-shaped: a duration, optionally with calories. "30 min · ~280 cal"
+  //    Calorie math is NOT reimplemented here — shared/fitness-metrics owns it
+  //    (owner-scoped body weight, ACSM MET expression, confidence and basis).
   const minutes = pick(last.values, "duration", "minutes", "mins", "durationMinutes", "time", "sessionLength");
   const loggedCals = pick(last.values, "caloriesBurned", "calories_burned", "caloriesBurnt") ??
     numeric((last as any).computed?.caloriesBurned);
-  const isSportish = metForActivity(name) != null ||
+  const activity = classifyFitnessActivity(tracker.name || "", tracker.category || "");
+  const isSportish = isCalorieBearingActivity(activity) ||
     norm(tracker.category) === "fitness" || norm(tracker.category) === "sports";
   if (minutes != null && minutes > 0 && (isSportish || loggedCals != null)) {
     base.shape = "session";
     const parts = [`${fmt(minutes, 0)} min`];
-    if (loggedCals != null && loggedCals > 0) {
-      base.calories = Math.round(loggedCals);
-      parts.push(`${base.calories} cal`);
-    } else {
-      const est = estimateActivityCalories({
-        activityName: name,
-        minutes,
-        bodyWeightKg: opts.bodyWeightKg,
-        intensity: last.values?.intensity ?? last.values?.effort ?? last.values?.zone,
-        assumeSport: norm(tracker.category) === "fitness" || norm(tracker.category) === "sports",
-      });
-      if (est && est.calories > 0) {
-        base.calories = est.calories;
-        base.caloriesEstimated = true;
-        parts.push(`~${est.calories} cal`);
-      }
+    const facts = readFitnessFacts(last.values, activity, (tracker.fields || []) as any);
+    const est = estimateCaloriesBurned(activity, facts, { bodyWeightKg: opts.bodyWeightKg ?? null });
+    if (est && est.value > 0) {
+      base.calories = Math.round(est.value);
+      base.caloriesEstimated = est.estimated;
+      parts.push(`${est.estimated ? "~" : ""}${base.calories} cal`);
     }
     base.line = parts.join(" · ");
     return base;

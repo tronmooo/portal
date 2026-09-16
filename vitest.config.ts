@@ -80,6 +80,9 @@ export default defineConfig({
       'tests/tracker-identity.test.ts',
       'tests/tracker-shapes-domain.test.ts',
       'tests/tracker-units.test.ts',
+      // Fitness measurement semantics + the one calorie estimator (the
+      // "Squats shows 3 lbs" defect).
+      'tests/fitness-metrics.test.ts',
       'tests/entity-naming.test.ts',
       'tests/search-index.test.ts',
       'tests/tracker-health.test.ts',
@@ -158,6 +161,15 @@ export default defineConfig({
       'tests/asset-valuation.test.ts',
       'tests/improve-estimate.test.ts',
       'tests/lookup-value-route.test.ts',
+      // Universal automatic current-value system (2026-09-16): shared core,
+      // service against MemStorage, routes + latency benchmark, client hook.
+      'tests/valuation-context.test.ts',
+      'tests/valuation-planner.test.ts',
+      'tests/valuation-engine.test.ts',
+      'tests/valuation-freshness.test.ts',
+      'tests/valuation-service.test.ts',
+      'tests/valuation-routes.test.ts',
+      'tests/use-asset-valuation.dom.test.tsx',
       'tests/confirm-extraction-save.test.ts',
       'tests/confirm-extraction-actions.test.ts',
       'tests/extraction-review.dom.test.tsx',
@@ -314,6 +326,7 @@ export default defineConfig({
       'tests/public-auth-ui.dom.test.tsx',
       'tests/artifact-panel-failures.dom.test.tsx',
       'tests/editor-mobile-controls.test.ts',
+      'tests/finance-tab-qa-2026-09-16.test.ts',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       'tests/test-suite-discovery.test.ts',

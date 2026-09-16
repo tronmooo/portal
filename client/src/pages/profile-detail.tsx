@@ -28,7 +28,7 @@ import { isAccountProfile, accountKindMeta, accountKindOf } from "@shared/financ
 import { Pill } from "@/components/dashboard/visuals";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
-import { isPast, isUpcoming, parseDate, relativeDayLabel, daysFromToday, localTodayISO, localDaysFromNowISO, formatLocalDate } from "@/lib/dates";
+import { isPast, isUpcoming, parseDate, relativeDayLabel, daysFromToday, localTodayISO, localDaysFromNowISO, formatLocalDate, monthKeyLabel } from "@/lib/dates";
 import {
   type TrackerMetricDefinition,
   classifyMetricValue,
@@ -147,6 +147,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { ImproveEstimatePanel } from "@/components/asset/ImproveEstimatePanel";
+import { CurrentValueCard } from "@/components/asset/CurrentValueCard";
+import { useAssetValuation } from "@/hooks/useAssetValuation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -3162,9 +3164,17 @@ function InfoTab({ profile, onEdit }: { profile: ProfileDetail; onEdit: () => vo
   const legacy = <StaticInfoTab profile={profile} onEdit={onEdit} />;
   if (!dynamic) return legacy;
   return (
-    <DynamicOverview profileId={profile.id} fallback={legacy}>
-      <OverviewEditors profile={profile} />
-    </DynamicOverview>
+    <>
+      {/* Universal current-value estimate: shown for every owned thing, from
+          the stored record that rode in with the bootstrap. Never waits on a
+          provider or a model — those run in the background after this paints. */}
+      {isAssetTabProfile(profile as any) && (
+        <CurrentValueCard profileId={profile.id} fields={profile.fields} className="mb-3" />
+      )}
+      <DynamicOverview profileId={profile.id} fallback={legacy}>
+        <OverviewEditors profile={profile} />
+      </DynamicOverview>
+    </>
   );
 }
 
@@ -3330,6 +3340,8 @@ function StaticInfoTab({
     "previousValue", "previous_value",
     "valuationConfidence", "valuationMethod", "valuationDate", "valuationRange",
     "valuation_confidence", "valuation_method", "valuation_date", "valuation_range",
+    "valuationLow", "valuationHigh", "valuationFactors", "valuationMissingInfo", "valuationSources",
+    "currentValueSource", "current_value_source",
     "assetSubtype", "asset_subtype",
   ]);
   // Keys the ACCOUNT card above already renders (balance, limit, available,
@@ -5256,7 +5268,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
   // ── spending chart data (monthly bar chart) ──────────────────
   const monthlyBarData = sortedMonths.slice(-12).map(m => ({
-    month: new Date(m + "-01").toLocaleDateString("en-US", { month: "short", year: "2-digit" }),
+    month: monthKeyLabel(m, { month: "short", year: "2-digit" }),
     amount: expensesByMonth[m] || 0,
   }));
 
@@ -9779,7 +9791,6 @@ function InsightsTab({ profile }: { profile: any }) {
 }
 
 function ValuationTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
-  const { toast } = useToast();
   const f = profile.fields || {};
   const purchase = Number(f.purchasePrice) || 0;
   const current = Number(f.currentValue) || 0;
@@ -9792,67 +9803,24 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
     { key: "lastAppraisedDate", label: "Last Appraised" },
     { key: "marketNotes", label: "Market Notes" },
   ];
-  // Persisted market estimate (written by POST /lookup-value) + re-run.
-  const [reestimating, setReestimating] = useState(false);
-  const rerunEstimate = useCallback(async () => {
-    setReestimating(true);
-    try {
-      const res = await apiRequest("POST", `/api/profiles/${profileId}/lookup-value`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Lookup failed");
-      toast({ title: `Estimated at $${Number(data.currentValue).toLocaleString()}`, description: data.range ? `Range ${data.range}` : undefined });
-      invalidateDomains("profiles");
-      onChanged();
-    } catch (e: any) {
-      toast({ title: "Couldn't re-estimate", description: formatApiError(e), variant: "destructive" });
-    } finally {
-      setReestimating(false);
-    }
-  }, [profileId, onChanged, toast]);
-  const missingInfo: string[] = Array.isArray(f.valuationMissingInfo) ? f.valuationMissingInfo : [];
-  const factors: string[] = Array.isArray(f.valuationFactors) ? f.valuationFactors : [];
+  // The universal estimate (server/valuation): cached record first, background
+  // refresh when stale, full history here. Re-estimating goes through the same
+  // hook the card uses so the two can never disagree.
+  const { snapshot, refreshing, refresh } = useAssetValuation(profileId);
+  const missingInfo: string[] = snapshot?.record?.missingInfo?.length
+    ? snapshot.record.missingInfo
+    : (Array.isArray(f.valuationMissingInfo) ? f.valuationMissingInfo : []);
   return (
     <div className="space-y-3" data-testid="valuation-tab">
-      {/* Persisted market estimate — always visible inside the asset profile,
-          not only right after tapping Look up value. */}
-      {f.valuationMethod && current > 0 && (
-        <Card data-testid="valuation-market-estimate">
-          <CardContent className="pt-4 pb-3 space-y-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <p className="text-xs text-muted-foreground">Market Estimate</p>
-                <p className="text-lg font-bold tabular-nums">{formatCurrency(current)}</p>
-                {f.valuationRange && <p className="text-xs text-muted-foreground tabular-nums">Range: {f.valuationRange}</p>}
-              </div>
-              <div className="text-right shrink-0 space-y-1">
-                {f.valuationConfidence && (
-                  <Badge variant="secondary" className="text-[11px] capitalize">{f.valuationConfidence} confidence</Badge>
-                )}
-                <div>
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={rerunEstimate} disabled={reestimating} data-testid="valuation-rerun">
-                    <RefreshCw className={`h-3 w-3 mr-1 ${reestimating ? "animate-spin" : ""}`} />
-                    {reestimating ? "Estimating…" : "Re-estimate"}
-                  </Button>
-                </div>
-              </div>
-            </div>
-            {factors.length > 0 && (
-              <p className="text-[11px] text-muted-foreground"><span className="font-medium text-foreground/80">Based on:</span> {factors.join(" · ")}</p>
-            )}
-            {f.valuationDate && (
-              <p className="text-[11px] text-muted-foreground">Valued {formatLocalDate(f.valuationDate)}{f.valuationMethod ? ` · ${f.valuationMethod}` : ""}</p>
-            )}
-          </CardContent>
-        </Card>
-      )}
+      <CurrentValueCard profileId={profileId} fields={f} showHistory />
       {missingInfo.length > 0 && (
         <ImproveEstimatePanel
           profileId={profileId}
           fields={f}
           missingInfo={missingInfo}
           onSaved={onChanged}
-          onReestimate={rerunEstimate}
-          reestimating={reestimating}
+          onReestimate={() => { void refresh(); }}
+          reestimating={refreshing}
         />
       )}
       {purchase > 0 && current > 0 && (
@@ -13083,6 +13051,11 @@ export default function ProfileDetailPage() {
           // the template-string form [`/api/liabilities/${id}/parties`] for
           // parties, so both slots are seeded.
           if (b.assetParties) queryClient.setQueryData(["/api/assets", id, "parties"], b.assetParties);
+          // CACHE FIRST: the stored current-value estimate (+ freshness
+          // verdict) arrives with the asset itself. Seeding it here means the
+          // value card renders in the same paint as the profile; the hook
+          // then decides — off the render path — whether to refresh it.
+          if (b.valuation) queryClient.setQueryData(["/api/profiles", id, "valuation"], b.valuation);
           if (b.liabilityExtras && typeof b.liabilityExtras === "object") {
             const ex = b.liabilityExtras;
             if (ex.payments) queryClient.setQueryData([`/api/liabilities/${id}/payments`], ex.payments);

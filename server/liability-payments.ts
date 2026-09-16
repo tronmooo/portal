@@ -13,7 +13,7 @@
 // That is not a synchronization bug, but it is the same disease: two code paths
 // answering one question. Both callers now land here.
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
-import { isRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
+import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName } from "@shared/liability-types";
 import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey, lastSeriesOccurrence } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
@@ -244,6 +244,61 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
 }
 
 /**
+ * The debt a recurring bill services, if any. A bill created beside an existing
+ * loan or card records it in `fields.linkedLiabilityId`; paying the bill is
+ * paying that debt, so the balance and the interest split belong to it. Returns
+ * null when there is no link, the link is stale, or it points at another bill
+ * (a bill has no balance to move).
+ */
+export async function resolveServicedDebt(storage: IStorage, bill: any): Promise<any | null> {
+  const usable = (debt: any): boolean =>
+    !!debt && debt.id !== bill?.id
+    && (debt.type === "liability" || debt.type === "loan")
+    && !isRecurringBillProfile(debt);
+
+  // Every storage read here is best-effort: a storage that lacks the method
+  // throws SYNCHRONOUSLY, which `.catch()` on the returned promise never sees.
+  // Resolving the debt is an enrichment — it must never be able to fail the
+  // payment it is attached to.
+  const tryRead = async <T>(fn: () => T | Promise<T>, fallback: T): Promise<T> => {
+    try { return await fn(); } catch { return fallback; }
+  };
+
+  const linkedId = (bill?.fields || {}).linkedLiabilityId;
+  if (typeof linkedId === "string" && linkedId && linkedId !== bill?.id) {
+    const debt: any = await tryRead(() => storage.getProfile(linkedId), null);
+    return usable(debt) ? debt : null;
+  }
+
+  // No stored link. Bills created beside a loan record it in
+  // `fields.linkedLiabilityId`, but the bills already in the field were made by
+  // doors that never wrote it — every one of them carries a null link — so the
+  // link alone would fix nothing for anybody's existing data.
+  //
+  // Fall back to the naming convention those doors DO follow: the bill is the
+  // loan's name plus "payment" ("Dodge Ram 2025 Auto Loan payment" beside
+  // "Dodge Ram 2025 Auto Loan"). Deliberately narrow — only a name that ends in
+  // "payment", only a match against a non-bill liability that actually carries
+  // a balance — because guessing wrong here moves the wrong debt.
+  const name = String(bill?.name || "");
+  if (!/\s+(bill\s+)?payments?$/i.test(name)) return null;
+  const target = normalizeLiabilityName(name);
+  if (!target) return null;
+  const profiles: any[] = await tryRead(() => storage.getProfiles?.() ?? [], [] as any[]);
+  const owner = (bill as any)?.parentProfileId ?? null;
+  const candidates = (profiles || []).filter((p: any) =>
+    usable(p) && normalizeLiabilityName(p.name) === target && resolveLiabilityBalance(p.fields || p) > 0);
+  const match = candidates.find((p: any) => (p.parentProfileId ?? null) === owner) || candidates[0];
+  if (!match) return null;
+  // Record what we resolved, so the pairing is explicit from here on and the
+  // inverse (unpayBillOccurrence) finds the same debt without re-guessing.
+  try {
+    await storage.updateProfile(bill.id, { fields: { linkedLiabilityId: match.id } } as any);
+  } catch { /* the payment is what matters; the link can be re-derived */ }
+  return match;
+}
+
+/**
  * Record a payment against a liability and bring the liability itself up to
  * date, in one place.
  *
@@ -274,13 +329,55 @@ export async function applyLiabilityPayment(
   // same way. Reading `fields.subtype` here instead would let this function
   // call something a recurring bill while net worth still counted it as debt.
   if (isRecurringBillProfile(liability as any)) {
+    // ── …unless the bill SERVICES A DEBT ──────────────────────────────────
+    // A financed car is two records: the amortizing loan (balance, rate, term)
+    // and the monthly payment bill beside it, which records which liability it
+    // pays in `fields.linkedLiabilityId` (see resolveExistingLiability). Paying
+    // the bill used to touch neither the loan's balance nor its rate: the
+    // $912.40 Dodge payment left the loan at $49,275 and was booked as 100%
+    // principal / 0% interest while the loan ran at 6.49%. The payment row now
+    // carries the loan's own amortized split and the loan's balance moves.
+    const linkedDebt = await resolveServicedDebt(storage, liability);
+    let principalPortion = amount;
+    let interestPortion = 0;
+    let servicedBalance: number | undefined;
+    if (linkedDebt) {
+      let plan = planDebtPayment(linkedDebt, input);
+      const mutateLinked = (storage as any).mutateProfileFields as
+        | ((id: string, fn: (fresh: any) => any) => Promise<any>) | undefined;
+      if (plan.moves) {
+        const patch = (pl: DebtPaymentPlan) => ({
+          currentBalance: pl.newBalance, remainingBalance: pl.newBalance, loanBalance: pl.newBalance, lastPaidDate: paymentDate,
+        });
+        try {
+          if (typeof mutateLinked === "function") {
+            await mutateLinked.call(storage, linkedDebt.id, (fresh: any) => {
+              plan = planDebtPayment(fresh, input);
+              return plan.moves ? { fields: patch(plan) } : null;
+            });
+          } else {
+            await storage.updateProfile(linkedDebt.id, { fields: patch(plan) } as any);
+          }
+          servicedBalance = plan.newBalance;
+        } catch {
+          // A balance that would not move must not fake a split: fall back to
+          // the plain bill row rather than record interest nobody was charged.
+          plan = { ...plan, principal: amount, interest: 0, moves: false };
+        }
+      }
+      if (plan.moves) {
+        principalPortion = Math.abs(plan.principal);
+        interestPortion = Math.abs(plan.interest);
+      }
+    }
     const payment = await storage.createLiabilityPayment({
       ...(input.id ? { id: input.id } : {}),
       liabilityProfileId: liability.id,
       paymentDate,
       amount,
-      principalPortion: amount,
-      interestPortion: 0,
+      principalPortion,
+      interestPortion,
+      ...(servicedBalance != null ? { remainingBalanceAfter: servicedBalance } : {}),
       fees: Number(input.fees) || 0,
       paymentType: input.paymentType || "standard",
       sourceAccount: input.sourceAccount || null,
@@ -292,7 +389,11 @@ export async function applyLiabilityPayment(
     // the due date here too — unconditionally, anchored on today — which is how
     // a late catch-up payment skipped a month while the occurrence path
     // advanced from the occurrence date. One policy now, in one place.
-    return { payment, liability, newBalance: 0, principal: amount, interest: 0, recurring: true };
+    return {
+      payment, liability,
+      newBalance: servicedBalance ?? 0,
+      principal: principalPortion, interest: interestPortion, recurring: true,
+    };
   }
 
   // ── Amortizing / revolving / one-time debt ──────────────────────────────
@@ -615,6 +716,12 @@ async function findPaymentWithRetry(storage: IStorage, liabilityId: string, paym
   return paymentId ? { id: paymentId } : null;
 }
 
+/** The later of two YYYY-MM-DD days, ignoring anything unparseable. */
+function laterDay(a: unknown, b: string): string {
+  const prev = typeof a === "string" && /^\d{4}-\d{2}-\d{2}/.test(a) ? a.slice(0, 10) : "";
+  return prev && prev > b ? prev : b;
+}
+
 export async function payBillOccurrence(
   storage: IStorage,
   liabilityId: string,
@@ -642,10 +749,13 @@ export async function payBillOccurrence(
   // A payment aimed at a rescheduled occurrence's MOVED day settles the
   // occurrence under its anchor key (D221).
   if (input.occurrenceDate) occurrenceDate = resolveOccurrenceKey(f, occurrenceDate);
-  // Default the payment date to the occurrence's due date only when that day
-  // has arrived; paying a future bill early is money that left TODAY. The old
-  // default dated "Mark paid" on a bill due next week as next week's expense.
-  const paymentDate = String(input.paymentDate || (occurrenceDate > todayISO ? todayISO : occurrenceDate)).slice(0, 10);
+  // The payment date is the day the money moved, and that is TODAY unless the
+  // caller says otherwise. Defaulting an overdue occurrence to its own due date
+  // back-dated every catch-up payment: settling an Internet bill due Sep 12 on
+  // Sep 16 was recorded on Sep 12, while paying Netflix early was recorded
+  // today — two rules for one button, and a bill paid late in the following
+  // month landed its expense in the previous month's spend.
+  const paymentDate = String(input.paymentDate || todayISO).slice(0, 10);
   // An implicit "pay what's due" dated on or before the occurrence that was
   // paid last belongs to THAT occurrence: the regular payment on the 3rd
   // advanced the due date to next month, so a second amount sent the same day
@@ -758,7 +868,10 @@ export async function payBillOccurrence(
       status: "paid", paymentId, amount, actualAmount: amount, paidAmount: amount,
       postedAt: new Date().toISOString(), paymentDate, ...(account ? { accountId: account.id } : {}),
     };
-    const extra: Record<string, any> = { lastPaidDate: paymentDate };
+    // "Last paid" is the LATEST payment, so it never moves backwards: paying
+    // the Aug 15 cycle after the Sep 15 one had already been settled used to
+    // rewrite last-paid to August and make the bill look overdue again.
+    const extra: Record<string, any> = { lastPaidDate: laterDay(f.lastPaidDate, paymentDate) };
     let advanced: string | null = null;
     if (curDue && curDue === occurrenceDate) {
       const adv = advanceLiabilityDueDatePatch(f, occurrenceDate);
@@ -837,7 +950,7 @@ export async function payBillOccurrence(
       postedAt: new Date().toISOString(),
       ...(account ? { accountId: account.id } : {}),
     };
-    const patch: any = { occurrences: occ, lastPaidDate: paymentDate };
+    const patch: any = { occurrences: occ, lastPaidDate: laterDay(f.lastPaidDate, paymentDate) };
     if (curDue && curDue === occurrenceDate) {
       const adv = advanceLiabilityDueDatePatch(f, occurrenceDate);
       nextDueDate = adv.dueDate;
@@ -1086,7 +1199,12 @@ export async function unpayBillOccurrence(
     // A settlement payoff's written-off balance comes back too: the debt was
     // only closed because of that payment.
     const principal = signedPrincipal(target) + writtenOffOf(target);
-    const restores = !recurring && principal !== 0 && target.paymentType !== "skipped" && target.paymentType !== "deferred";
+    const movesBalance = principal !== 0 && target.paymentType !== "skipped" && target.paymentType !== "deferred";
+    // A bill that services a debt moved THAT debt's balance, not its own (see
+    // applyLiabilityPayment). Undoing it has to put the principal back on the
+    // loan, or retracting a car payment left the loan permanently lower.
+    const servicedDebt = recurring && movesBalance ? await resolveServicedDebt(storage, liability).catch(() => null) : null;
+    const restores = movesBalance && (!recurring || !!servicedDebt);
     // lastPaidDate: the latest remaining payment, or gone.
     const remaining = payments.filter((p: any) => p.id !== target.id).sort(byRecency);
     patch.lastPaidDate = remaining[0]?.paymentDate ?? null;
@@ -1100,7 +1218,20 @@ export async function unpayBillOccurrence(
     };
     const mutate = (storage as any).mutateProfileFields as
       | ((id: string, fn: (fresh: any) => any) => Promise<any>) | undefined;
-    if (restores && typeof mutate === "function") {
+    if (servicedDebt) {
+      // Two writes: the series rollback belongs to the bill, the balance to the
+      // loan it pays.
+      await storage.updateProfile(liabilityId, { fields: patch } as any);
+      if (typeof mutate === "function") {
+        await mutate.call(storage, servicedDebt.id, (fresh: any) => {
+          const restored = resolveLiabilityBalance(fresh) + principal;
+          return { fields: { currentBalance: restored, remainingBalance: restored, loanBalance: restored } };
+        });
+      } else {
+        const restored = resolveLiabilityBalance(servicedDebt) + principal;
+        await storage.updateProfile(servicedDebt.id, { fields: { currentBalance: restored, remainingBalance: restored, loanBalance: restored } } as any);
+      }
+    } else if (restores && typeof mutate === "function") {
       await mutate.call(storage, liabilityId, (fresh: any) => ({ fields: withBalance(fresh) }));
     } else {
       await storage.updateProfile(liabilityId, { fields: withBalance(liability) } as any);

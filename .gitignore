@@ -21,3 +21,4 @@ api/_bundle.mjs
 .vercel-tmp/
 api/chunks/
 tests/perf/out/
+.scratch/

@@ -35,6 +35,7 @@ import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersi
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
+import { getValuationSnapshot, refreshValuation, isValuableProfile } from "./valuation/service";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
@@ -940,6 +941,22 @@ function isReadOnlyPost(req: any): boolean {
   return req.method === "POST" && READONLY_POST_PATHS.has(req.path);
 }
 
+// CONDITIONAL writes: a POST that may or may not write, and says which through
+// the write journal. The background valuation refresh is the case: most runs
+// find the stored estimate still current and write nothing. Treating those as
+// ordinary writes would move the account-wide epoch (an empty journal reads as
+// "unclassifiable write") and cold-start every cache the user has, on every
+// profile open that happened to check — the exact stale-and-slow behaviour
+// the valuation cache exists to avoid. So for these paths an empty journal
+// means "nothing changed": no bust, no bump, no manifest. A run that DID
+// write journals its rows like any other request and gets the full barrier.
+const CONDITIONAL_WRITE_PATHS: RegExp[] = [
+  /^\/api\/profiles\/[^/]+\/valuation\/refresh$/,
+];
+export function isConditionalWritePath(method: string, path: string): boolean {
+  return method === "POST" && CONDITIONAL_WRITE_PATHS.some((re) => re.test(path));
+}
+
 // Pure predicate (exported for tests): does a request mutate user data and thus
 // need the per-user response cache busted? True for every non-idempotent method
 // and the AI-tool mutators (chat/upload), EXCEPT the read-only POST allowlist.
@@ -1029,8 +1046,10 @@ function writeBarrierMiddleware(req: any, res: any, next: any) {
   const journal = createWriteJournal();
 
   let barrierDone = false;
+  const conditional = isConditionalWritePath(method, req.path);
   const settle = (send: () => void, body: any) => {
     if (barrierDone || res.statusCode >= 400) { send(); return; }
+    if (conditional && !journal.dirty) { barrierDone = true; send(); return; }
     barrierDone = true;
     attachWriteManifest(res, journal);
     // Drain ONCE and reuse: the same domain list drives both the in-process
@@ -1130,12 +1149,22 @@ function cacheBustMiddleware(req: any, res: any, next: any) {
     // every user-scoped cache pre-handler AND on finish, twice per message.
     const uid = (req as any).userId as string | undefined;
     const chatGated = req.path === "/api/chat";
-    if (!chatGated) {
+    // Conditional writes (see isConditionalWritePath) bust nothing up front
+    // and, on finish, only what they actually wrote — the handler leaves the
+    // journaled domains in res.locals.conditionalWrote when it did write.
+    const conditional = isConditionalWritePath(req.method, req.path);
+    if (!chatGated && !conditional) {
       if (uid) bustUserCaches(uid); else clearAllCache();
     }
     res.on('finish', () => {
       if (res.statusCode >= 200 && res.statusCode < 400) {
         if (chatGated && !(res as any).locals?.chatMutated) return;
+        if (conditional) {
+          const wrote = (res as any).locals?.conditionalWrote as string[] | undefined;
+          if (!wrote || wrote.length === 0) return;
+          if (uid) bustUserCaches(uid, wrote); else clearAllCache();
+          return;
+        }
         if (uid) bustUserCaches(uid); else clearAllCache();
       }
     });
@@ -4915,11 +4944,17 @@ ${JSON.stringify(ctx, null, 2)}`;
       // PROFILE DETAIL has its own internal Promise.all batches (junction-table
       // lookups + entity fetch) — see supabase-storage.ts:getProfileDetail.
       // We run it in parallel with the lightweight pieces.
-      const [detail, allProfiles, assetPartyLinks, liabilityProfileLinks] = await Promise.all([
+      const [detail, allProfiles, assetPartyLinks, liabilityProfileLinks, storedValuation] = await Promise.all([
         storage.getProfileDetail(profileId),
         storage.getProfiles(),
         storage.getAssetPartyLinks ? storage.getAssetPartyLinks().catch(() => [] as any[]) : Promise.resolve([] as any[]),
         storage.getLiabilityProfileLinks ? storage.getLiabilityProfileLinks().catch(() => [] as any[]) : Promise.resolve([] as any[]),
+        // CACHE FIRST: the latest stored estimate rides along in the same
+        // round-trip (one indexed preference read, in parallel with the
+        // detail). No provider, no model, no calculation happens here.
+        typeof (storage as any).getAssetValuation === "function"
+          ? (storage as any).getAssetValuation(profileId).catch(() => null)
+          : Promise.resolve(null),
       ]);
       if (!detail) {
         try { (storage as any).disableRequestMemo?.(); } catch {}
@@ -5016,6 +5051,19 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
       const tree = buildTree(profileId, new Set(), 0);
 
+      // Freshness verdict for the estimate: a fingerprint over the material
+      // inputs in the detail we already hold, compared with the stored
+      // record. Pure and sub-millisecond; the client uses it to decide
+      // whether to kick off a background refresh after the page has painted.
+      let valuation: any = undefined;
+      if (isValuableProfile(detail as any)) {
+        try {
+          valuation = await getValuationSnapshot(storage, profileId, { detail: detail as any, record: storedValuation });
+        } catch (err: any) {
+          log.warn(`[valuation] snapshot failed for ${profileId}: ${err?.message || err}`);
+        }
+      }
+
       return {
         detail,
         tree,
@@ -5024,6 +5072,7 @@ ${JSON.stringify(ctx, null, 2)}`;
         liabilityProfileLinks,
         ...(assetParties !== undefined ? { assetParties } : {}),
         ...(liabilityExtras !== undefined ? { liabilityExtras } : {}),
+        ...(valuation !== undefined ? { valuation } : {}),
       };
     });
 
@@ -5303,6 +5352,16 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
     }
 
+    // A value the user types here is THEIR value. Mark its provenance so the
+    // background valuation (server/valuation) never mirrors an estimate over
+    // it — the estimate lives in its own record and is shown beside it.
+    if (req.body.fields && typeof req.body.fields === "object") {
+      const f = req.body.fields as Record<string, any>;
+      const typed = f.currentValue ?? f.current_value;
+      if (typed !== undefined && typed !== null && String(typed).trim() !== "" && f.currentValueSource === undefined) {
+        f.currentValueSource = "user";
+      }
+    }
     const previousName: string | undefined = renamedFromName;
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
@@ -5824,102 +5883,92 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       const { id } = req.params;
       const detail = await storage.getProfileDetail(id);
       if (!detail) return res.status(404).json({ error: "Profile not found" });
-
-      const valuableTypes = ["vehicle", "asset", "property", "investment"];
-      if (!valuableTypes.includes(detail.type)) {
+      if ((detail as any).userId && (detail as any).userId !== (req as AuthenticatedRequest).userId) {
+        return res.status(404).json({ error: "Profile not found" });
+      }
+      if (!isValuableProfile(detail as any)) {
         return res.status(400).json({ error: `Cannot estimate value for type '${detail.type}'` });
       }
 
-      // Include the existing AI summary (if any) as context — it often
-      // condenses maintenance gaps, mileage, and status the user cares about.
-      let aiSummaryText: string | null = null;
-      try {
-        const cachedSummary = await storage.getPreference(`profile_ai_${id}`);
-        if (cachedSummary) aiSummaryText = JSON.parse(cachedSummary)?.summary || null;
-      } catch { /* summary is optional context */ }
-
-      const valuation = await estimateAssetValue(
-        { type: detail.type, name: detail.name, fields: detail.fields || {} },
-        {
-          notes: (detail as any).notes,
-          aiSummary: aiSummaryText,
-          expenses: (detail.relatedExpenses || []).map(e => ({
-            description: e.description, amount: e.amount, category: e.category, date: e.date,
-          })),
-          documents: (detail.relatedDocuments || []).map(d => ({
-            name: d.name, type: d.type, extractedData: d.extractedData as any,
-          })),
-          timeline: (detail.timeline || []).slice(-10).map(t => ({
-            type: t.type, title: t.title, timestamp: t.timestamp,
-          })),
-        },
-      );
-
-      if (!valuation) {
-        return res.status(422).json({
-          error: "Could not determine a current market value from search results.",
-          method: "no data",
-        });
+      // The button is the user asking for a fresh estimate NOW: force the
+      // pipeline regardless of freshness. Persistence, history, and the
+      // mirror into profile fields (never over a user-entered value) all
+      // happen inside the service — the same path the background refresh uses.
+      const outcome = await refreshValuation(storage, id, { reason: "user_requested", force: true, detail: detail as any });
+      if (outcome.locked) {
+        return res.status(202).json({ error: "A valuation is already running for this asset — try again in a moment.", status: "in_progress" });
       }
-      // Phase 8: accept estimatedValue === 0 as a valid "no data" placeholder.
-      // We persist with low confidence so the user can edit manually instead of
-      // hitting a hard 422 error. The AI fallback path always returns a record.
-
-      const oldValue = (detail.fields as any)?.currentValue
-                    ?? (detail.fields as any)?.purchasePrice
-                    ?? 0;
-
-      // Specs the live search found on the item's own listing/record pages
-      // (sqft, bed/bath count, lot size, mileage…) auto-fill EMPTY profile
-      // fields — never overwriting anything the user entered — so the next
-      // estimate is tighter without the user re-typing public data.
-      const specFills: Record<string, any> = {};
-      for (const [k, v] of Object.entries(valuation.specs || {})) {
-        const existing = (detail.fields as any)?.[k];
-        if (existing === undefined || existing === null || String(existing).trim() === "") specFills[k] = v;
+      const record = outcome.snapshot?.record;
+      if (!record || record.status === "unsupported") {
+        return res.status(422).json({ error: "Could not determine a current market value.", method: "no data" });
       }
+      if (outcome.wrote) (res as any).locals.conditionalWrote = ["assets", "profiles"];
 
-      // DATA IS NOT DELETED — we merge into existing fields and preserve
-      // previousValue so the user can compare against the prior estimate.
-      const updatedFields = {
-        ...(detail.fields || {}),
-        ...specFills,
-        currentValue: valuation.estimatedValue,
-        valuationMethod: valuation.method,
-        valuationConfidence: valuation.confidence,
-        valuationRange: valuation.details,
-        valuationLow: valuation.lowValue || undefined,
-        valuationHigh: valuation.highValue || undefined,
-        valuationFactors: valuation.factorsConsidered,
-        valuationMissingInfo: valuation.missingInfo,
-        valuationDate: valuation.valuationDate,
-        ...(valuation.sources && valuation.sources.length ? { valuationSources: valuation.sources.join(", ") } : {}),
-        previousValue: oldValue,
-      };
-      await storage.updateProfile(id, { fields: updatedFields });
-
-      // Bust the AI summary cache so the next render reflects the new value.
-      try { await storage.setPreference(`profile_ai_${id}`, ""); } catch { /* ignore */ }
-
+      const range = record.low != null && record.high != null
+        ? `$${record.low.toLocaleString()} - $${record.high.toLocaleString()}` : "";
       res.json({
-        previousValue: Number(oldValue) || 0,
-        currentValue: valuation.estimatedValue,
-        low: valuation.lowValue || null,
-        high: valuation.highValue || null,
-        confidence: valuation.confidence,
-        method: valuation.method,
-        range: valuation.details,
-        factorsConsidered: valuation.factorsConsidered,
-        missingInfo: valuation.missingInfo,
-        valuationDate: valuation.valuationDate,
-        // Specs auto-filled from the live search (empty fields only).
-        filledSpecs: specFills,
-        sources: valuation.sources || [],
+        previousValue: outcome.previousValue ?? 0,
+        currentValue: record.value ?? 0,
+        low: record.low,
+        high: record.high,
+        confidence: record.confidenceLabel,
+        confidenceScore: record.confidence,
+        method: record.methodSummary,
+        methodology: record.methodology,
+        range,
+        status: record.status,
+        factorsConsidered: record.factors,
+        missingInfo: record.missingInfo,
+        valuationDate: record.valuedAt,
+        filledSpecs: outcome.filledSpecs,
+        sources: record.evidence.map(e => e.reference).filter((r): r is string => !!r && /^https?:\/\//.test(r)),
+        valuation: outcome.snapshot,
       });
     } catch (err: any) {
       log.error("[LookupValue]", err?.message || "unknown error");
       res.status(500).json({ error: "Failed to look up current value" });
     }
+  }));
+
+  // ── Universal current-value system ─────────────────────────────────────────
+  // GET  /api/profiles/:id/valuation            → the stored estimate + freshness verdict
+  //                                                (?history=1 adds the bounded history)
+  // POST /api/profiles/:id/valuation/refresh    → BACKGROUND refresh. Runs the
+  //      pipeline only when the stored estimate is stale (or `force`), holds a
+  //      per-asset lock so concurrent opens share one run, and is a
+  //      CONDITIONAL write: a run that changed nothing busts nothing.
+  app.get("/api/profiles/:id/valuation", asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const detail = await storage.getProfileDetail(id);
+    if (!detail) return res.status(404).json({ error: "Not found" });
+    if ((detail as any).userId && (detail as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    const snapshot = await getValuationSnapshot(storage, id, { detail: detail as any });
+    if (!snapshot) return res.status(404).json({ error: "Not found" });
+    const history = req.query.history === "1" || req.query.history === "true"
+      ? await storage.getAssetValuationHistory(id).catch(() => [])
+      : undefined;
+    res.json(history ? { ...snapshot, history } : snapshot);
+  }));
+
+  app.post("/api/profiles/:id/valuation/refresh", asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const detail = await storage.getProfileDetail(id);
+    if (!detail) return res.status(404).json({ error: "Not found" });
+    if ((detail as any).userId && (detail as any).userId !== (req as AuthenticatedRequest).userId) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    const force = req.body?.force === true;
+    const reason = force ? "user_requested" : "scheduled";
+    const outcome = await refreshValuation(storage, id, { reason, force, detail: detail as any });
+    if (outcome.wrote) (res as any).locals.conditionalWrote = ["assets", "profiles"];
+    res.status(outcome.locked ? 202 : 200).json({
+      snapshot: outcome.snapshot,
+      ran: outcome.ran,
+      changed: outcome.changed,
+      locked: outcome.locked,
+    });
   }));
 
   // ── Wave 3 #9: Stale asset valuation detector ───────────────────────

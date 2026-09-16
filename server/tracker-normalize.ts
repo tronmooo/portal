@@ -12,6 +12,30 @@
 // the UI can't display side-by-side. This module makes them match.
 
 import type { Tracker, TrackerField } from "../shared/schema";
+import { classifyFitnessActivity, metricKindForKey } from "../shared/fitness-metrics";
+
+/**
+ * Would landing `sourceKey` on `fieldName` change what the number MEANS?
+ *
+ * Generic quantity words ("value", "count", "amount", "total") are collapsed
+ * onto a tracker's primary numeric field so "drank 24 ounces" reaches
+ * Hydration's `ounces`. On a workout tracker whose primary field is the
+ * external load, that same collapse turns a bare count into pounds lifted —
+ * the "3 sets became 3 lbs" family of bug, at the INGESTION end rather than
+ * the rendering end. Resistance is only ever written from a key that actually
+ * names a weight.
+ */
+function wouldFabricateResistance(
+  tracker: Pick<Tracker, "fields" | "category" | "name">,
+  sourceKey: string,
+  fieldName: string,
+): boolean {
+  const activity = classifyFitnessActivity(tracker.name, (tracker as any).category);
+  if (activity.kind === "non_fitness") return false;
+  if (metricKindForKey(fieldName, activity) !== "resistance") return false;
+  const sourceKind = metricKindForKey(sourceKey, activity);
+  return sourceKind !== "resistance";
+}
 
 // ── Aliases that map AI/document-supplied field names → tracker fields ──
 // LHS = source key (lowercased), RHS = canonical field name we'll try
@@ -171,9 +195,9 @@ function resolveFieldName(
   const GENERIC_VALUE_KEYS = new Set(["amount", "value", "total", "count", "qty", "quantity", "level", "reading", "number", "measurement"]);
   if (GENERIC_VALUE_KEYS.has(lc) && parseNumericWithUnit(rawValue) !== null) {
     const primaryNum = fields.find(f => (f as any).isPrimary === true && f.type === "number");
-    if (primaryNum) return primaryNum.name;
+    if (primaryNum && !wouldFabricateResistance(tracker, sourceKey, primaryNum.name)) return primaryNum.name;
     const firstNum = fields.find(f => f.type === "number");
-    if (firstNum) return firstNum.name;
+    if (firstNum && !wouldFabricateResistance(tracker, sourceKey, firstNum.name)) return firstNum.name;
   }
 
   // 3. Single-field tracker: if there's only one numeric field, the user
@@ -189,7 +213,8 @@ function resolveFieldName(
   // numeric stays distinct so the entry keeps every metric and auto-extends the
   // tracker with the missing fields (2026-06-25: workout logs lost weight/reps).
   const numericFields = fields.filter(f => f.type === "number");
-  if (allowSingleNumericFallback && numericFields.length === 1 && parseNumericWithUnit(rawValue) !== null) {
+  if (allowSingleNumericFallback && numericFields.length === 1 && parseNumericWithUnit(rawValue) !== null
+      && !wouldFabricateResistance(tracker, sourceKey, numericFields[0].name)) {
     return numericFields[0].name;
   }
 

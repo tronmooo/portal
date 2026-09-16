@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 import { formatMoney, formatListDate } from "@/lib/format";
 import {
-  ACCOUNT_KINDS, accountViews, summarizeAccounts,
+  ACCOUNT_KINDS, accountViews, summarizeAccounts, summarizeLiabilityDebt,
   type AccountKind, type AccountView,
 } from "@shared/finance-accounts";
 
@@ -166,6 +166,9 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
 
   const accounts = useMemo(() => accountViews(profiles || []), [profiles]);
   const summary = useMemo(() => summarizeAccounts(profiles || []), [profiles]);
+  // Real loans and cards are liability profiles, not accounts. Without this the
+  // two debt tiles read $0 beside a Liabilities card showing the same debt.
+  const offAccountDebt = useMemo(() => summarizeLiabilityDebt(profiles || []), [profiles]);
 
   const people = useMemo(
     () => (profiles || []).filter((p: any) => p.type === "self" || p.type === "person"),
@@ -243,10 +246,10 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
             <Stat label="Cash on hand" value={summary.cash} testId="acct-total-cash" />
             <Stat label="Investments" value={summary.investments} testId="acct-total-investments" />
-            <Stat label="Card + credit debt" value={summary.creditDebt} tone="neg" testId="acct-total-credit" />
+            <Stat label="Card + credit debt" value={summary.creditDebt + offAccountDebt.creditDebt} tone="neg" testId="acct-total-credit" />
             <Stat
               label={summary.availableCredit != null ? "Available credit" : "Loan balances"}
-              value={summary.availableCredit ?? summary.loanDebt}
+              value={summary.availableCredit ?? (summary.loanDebt + offAccountDebt.loanDebt)}
               tone={summary.availableCredit != null ? "pos" : "neg"}
               testId="acct-total-secondary"
             />
