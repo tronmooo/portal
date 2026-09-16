@@ -3328,7 +3328,7 @@ export class SupabaseStorage implements IStorage {
     // lanes, extraction, habit mirror). The POST route used to be the only
     // path with bounds, so "log 8000 hours of sleep" stored happily from chat.
     {
-      const guard = sanitizeTrackerEntryValues(tracker.fields, values);
+      const guard = sanitizeTrackerEntryValues(tracker.fields, values, { name: tracker.name, category: tracker.category, unit: (tracker as any).unit });
       if (guard.error) throw new Error(guard.error);
       values = guard.values;
     }
@@ -3506,7 +3506,7 @@ export class SupabaseStorage implements IStorage {
     let patchValues = patch.values;
     if (patchValues && typeof patchValues === "object" && tracker) {
       const normalized = normalizeTrackerEntry(tracker as any, patchValues).values;
-      const guard = sanitizeTrackerEntryValues(tracker.fields, normalized);
+      const guard = sanitizeTrackerEntryValues(tracker.fields, normalized, { name: tracker.name, category: tracker.category, unit: (tracker as any).unit });
       if (guard.error) throw new Error(guard.error);
       patchValues = guard.values;
     }

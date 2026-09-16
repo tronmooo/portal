@@ -20,6 +20,7 @@
 // tokens, never substrings — "Multivitamin" is one token and survives, while
 // "Vitamin D" keeps the disambiguating "d".
 import { unitsCompatible } from "./tracker-units";
+import { resolveCanonicalMetric, LAB_PANELS } from "./wellness-canon";
 
 const NOISE_WORDS = new Set([
   "supplement", "supplements", "supp", "supps",
@@ -103,10 +104,25 @@ function tokensContain(container: string[], contained: string[]): boolean {
  * tracker instead of creating their own (user report 2026-08-02). "weighted"
  * is a different word than "weight" — only whole-token runs match now.
  */
+/** The canonical LAB metric a name refers to, or null when it isn't one. */
+function labMetricId(name: string | null | undefined): string | null {
+  const m = resolveCanonicalMetric(name);
+  return m && LAB_PANELS.includes(m.panel) ? m.id : null;
+}
+
 export function trackerNamesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   const ta = identityTokens(a);
   const tb = identityTokens(b);
   if (!ta.length || !tb.length) return false;
+  // A lab value IS its metric. "HDL", "HDL Cholesterol" and "Lipid Panel — HDL"
+  // share no token long enough for the containment rule below (the key "hdl"
+  // is three characters), so each lab report created another tracker for the
+  // same number — the reported HDL ×3, BMI ×3, Triglycerides ×3. The canonical
+  // registry answers the identity question directly for lab panels, where a
+  // metric name is the whole identity. Deliberately NOT applied outside them:
+  // "Running distance" and "Cycling distance" are both `distance` and are two
+  // different trackers.
+  if (labMetricId(a) && labMetricId(a) === labMetricId(b)) return true;
   const ka = ta.join("");
   const kb = tb.join("");
   if (ka === kb) return true;

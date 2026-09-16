@@ -111,8 +111,11 @@ describe("global search results go somewhere", () => {
 describe("wellness metric cards open the tracker they show", () => {
   const src = read("client/src/components/wellness/WellnessOverview.tsx");
 
-  it("links to the card's own tracker, not the bare list", () => {
-    expect(/href=\{`#\/trackers\?tracker=\$\{card\.id\}`\}/.test(src)).toBe(true);
+  it("links to the row's own tracker, not the bare list", () => {
+    // 2026-09: the per-tracker card grid became lab rows and workout rows;
+    // each still deep-links the tracker whose reading it shows.
+    expect(/href=\{`#\/trackers\?tracker=\$\{row\.trackerId\}`\}/.test(src)).toBe(true);
+    expect(/href=\{`#\/trackers\?tracker=\$\{w\.trackerId\}`\}/.test(src)).toBe(true);
   });
 
   it("has no hardcoded /trackers link left", () => {
