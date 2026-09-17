@@ -462,6 +462,10 @@ const habitIcon = (name: string): LucideIcon =>
 // events read as distinct at a glance (matches the mock's colored dots).
 const DOT_ROTATION = ["217 91% 65%", "262 70% 62%", "25 95% 58%", "155 65% 45%", "330 80% 62%"];
 
+/** Habits listed on the Executive card before the rest fold into a "N more"
+ *  link. Anything past this was previously dropped without a trace. */
+const HABIT_CARD_LIMIT = 6;
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, ready = true }: {
@@ -744,7 +748,17 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     || eventsToday.find((e: any) => !e.time);
 
   // Habits — scheduled-today only (shared/habit-schedule).
-  const habitsDueToday = (habits || []).filter((h: any) => isHabitDueOn(h, todayStr));
+  //
+  // Sorted on fields that a check-in NEVER touches. The card shows the first
+  // few habits, so any ordering that moves with completion state (done last,
+  // or the server's row order before it was pinned) makes the habit you just
+  // tapped drop off the bottom — the "I marked it off and it disappeared"
+  // report. Position is a property of the habit, not of today's progress.
+  const habitsDueToday = (habits || [])
+    .filter((h: any) => isHabitDueOn(h, todayStr))
+    .sort((a: any, b: any) =>
+      String(a.createdAt || "").localeCompare(String(b.createdAt || "")) ||
+      String(a.id || "").localeCompare(String(b.id || "")));
   const habitsDoneCount = habitsDueToday.filter((h: any) => isHabitDoneOn(h, todayStr)).length;
   const habitPct = habitsDueToday.length > 0 ? Math.round((habitsDoneCount / habitsDueToday.length) * 100) : 0;
 
@@ -1242,7 +1256,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     </p>
                   </div>
                   <div className="flex-1 min-w-0 space-y-1.5">
-                    {habitsDueToday.slice(0, 6).map((h: any) => {
+                    {habitsDueToday.slice(0, HABIT_CARD_LIMIT).map((h: any) => {
                       const hp = habitDayProgress(h, todayStr);
                       const done = isHabitDoneOn(h, todayStr);
                       const HIcon = habitIcon(String(h.name || ""));
@@ -1278,6 +1292,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                         </button>
                       );
                     })}
+                    {habitsDueToday.length > HABIT_CARD_LIMIT && (
+                      <button
+                        onClick={() => setPopup("habits")}
+                        className="w-full flex items-center gap-1 px-2 pt-1 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
+                        data-testid="exec-habits-more"
+                      >
+                        {habitsDueToday.length - HABIT_CARD_LIMIT} more habit{habitsDueToday.length - HABIT_CARD_LIMIT === 1 ? "" : "s"} today
+                        <ChevronRight className="h-3 w-3" aria-hidden="true" />
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
