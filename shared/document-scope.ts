@@ -1,3 +1,4 @@
+import { isInScope } from "./scope";
 // shared/document-scope.ts
 // =============================================================================
 // Which documents are a profile's documents? ONE answer.
@@ -69,7 +70,12 @@ export function documentsForProfile<T extends DocumentLinkShape>(
   opts: DocumentsForProfileOptions = {},
 ): T[] {
   if (!docs || !profileId) return [];
-  const descendants = opts.includeDescendants ? new Set(opts.includeDescendants) : null;
+  // Descendant ownership is a scope question, answered by the one scope rule
+  // (shared/scope isInScope) rather than a hand-rolled intersection.
+  const descendantIds = opts.includeDescendants ? Array.from(opts.includeDescendants) : [];
+  const descendantScope = descendantIds.length > 0
+    ? { selectedIds: descendantIds, selfIds: new Set<string>() }
+    : null;
   // Merge first, then decide — so the latest copy's links are the ones
   // judged. A document unlinked since the embed was cached is still in the
   // embed with the old links; the live list row, arriving later, replaces
@@ -83,8 +89,8 @@ export function documentsForProfile<T extends DocumentLinkShape>(
   const out: T[] = [];
   for (const doc of byId.values()) {
     const direct = isDocumentOfProfile(doc, profileId);
-    const viaDescendant = !direct && !!descendants && Array.isArray(doc.linkedProfiles)
-      && doc.linkedProfiles.some((id) => descendants.has(id));
+    const viaDescendant = !direct && !!descendantScope && Array.isArray(doc.linkedProfiles)
+      && isInScope(doc.linkedProfiles, descendantScope, "out_of_scope");
     if (direct || viaDescendant) out.push(doc);
   }
   return out;
