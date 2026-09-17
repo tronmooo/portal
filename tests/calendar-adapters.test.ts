@@ -183,6 +183,78 @@ describe("seriesFromObligations", () => {
   });
 });
 
+// User report 2026-09-17: the "Dodge Ram Auto Loan" liability profile and the
+// "Dodge Ram Auto Loan payment" bill beside it rendered as two rows — one paid,
+// one not — because the bill emitted no completion marks and its name, due day
+// and anchor all differed by a hair from the loan's.
+describe("obligation completion marks", () => {
+  const bill = {
+    id: "ob-dodge", name: "Dodge Ram Auto Loan payment", amount: 912, frequency: "monthly",
+    category: "loan", nextDueDate: "2026-08-31", linkedProfiles: [JOE],
+  };
+
+  it("marks the occurrence a payment row settles, not only the pay date", () => {
+    // Paid two days early: the Aug 31 occurrence is what was settled.
+    const [s] = seriesFromObligations([{ ...bill, payments: [{ id: "p1", amount: 912, date: "2026-08-29" }] }]);
+    expect(s.completedDates).toEqual(["2026-08-29", "2026-08-31"]);
+  });
+
+  it("maps an early payment forward to the bill it pays, not back a month", () => {
+    const first = { ...bill, nextDueDate: "2026-09-01" };
+    const [s] = seriesFromObligations([{ ...first, payments: [{ id: "p1", amount: 912, date: "2026-08-28" }] }]);
+    expect(s.completedDates).toContain("2026-09-01");
+    expect(s.completedDates).not.toContain("2026-08-01");
+  });
+
+  it("clamps the settled occurrence into short months", () => {
+    const [s] = seriesFromObligations([{ ...bill, payments: [{ id: "p1", amount: 912, date: "2026-09-29" }] }]);
+    expect(s.completedDates).toContain("2026-09-30");
+  });
+
+  it("reads per-occurrence paid and skipped marks from fields.occurrences", () => {
+    const [s] = seriesFromObligations([{
+      ...bill,
+      fields: { occurrences: { "2026-07-31": { status: "paid" }, "2026-06-30": { status: "skipped" }, junk: { status: "paid" } } },
+    }]);
+    expect(s.completedDates).toEqual(["2026-07-31"]);
+    expect(s.skippedDates).toEqual(["2026-06-30"]);
+  });
+
+  it("emits no marks for a bill with no payment history", () => {
+    const [s] = seriesFromObligations([bill]);
+    expect(s.completedDates).toBeUndefined();
+    expect(s.skippedDates).toBeUndefined();
+  });
+
+  it("end to end: the loan and its bill are ONE row per month, August paid", () => {
+    const loan = {
+      id: "loan-dodge", name: "Dodge Ram Auto Loan", type: "liability", type_key: "auto_loan",
+      parentProfileId: JOE,
+      fields: {
+        nextDueDate: "2026-08-30", monthlyPayment: 912, frequency: "monthly",
+        occurrences: { "2026-08-30": { status: "paid" } },
+      },
+    };
+    const paidBill = { ...bill, payments: [{ id: "p1", amount: 912, date: "2026-08-29" }] };
+    const series = seriesFromAll({ profiles: [joeProfile, loan], obligations: [paidBill] });
+    const rows = buildCalendarOccurrences(series, { todayISO: "2026-09-17", lookbackDays: 45 })
+      .filter((o) => o.date >= "2026-08-01" && o.date <= "2026-09-30" && o.kind !== "birthday");
+    expect(rows.map((o) => [o.date, o.status])).toEqual([
+      ["2026-08-31", "done"], ["2026-09-30", "upcoming"],
+    ]);
+    expect(rows[0].amount).toBe(912);
+  });
+
+  it("end to end: Mike's identical loan payment is still his own row", () => {
+    const MIKE = "mike-id";
+    const mikesBill = { ...bill, id: "ob-mike", linkedProfiles: [MIKE] };
+    const series = seriesFromAll({ profiles: [joeProfile], obligations: [bill, mikesBill] });
+    const aug = buildCalendarOccurrences(series, { todayISO: "2026-09-17", lookbackDays: 45 })
+      .filter((o) => o.date === "2026-08-31");
+    expect(aug).toHaveLength(2);
+  });
+});
+
 describe("seriesFromLiabilityProfiles", () => {
   const mortgage = {
     id: "liab-1", name: "Lakeview mortgage", type: "liability", type_key: "mortgage",

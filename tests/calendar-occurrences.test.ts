@@ -24,6 +24,8 @@ import {
   sourceHref,
   relativeDayLabel,
   nextAnnual,
+  isEquivalentPayment,
+  stripGeneratedSuffix,
   type CalendarSeries,
 } from "../shared/calendar-occurrences";
 
@@ -504,6 +506,140 @@ describe("one payment, one occurrence — whatever label it wears", () => {
       source: { ...asSubscription.source, id: "ob-spotify", profileId: "spotify-id", linkedRecordId: "spotify-id" },
     };
     expect(dedupeSeries([asSubscription, spotify])).toHaveLength(2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// User report 2026-09-17: a loan payment shown TWICE — once from the liability
+// profile ("Dodge Ram Auto Loan", due day 30, Aug 30 marked paid) and once
+// from the bill written beside it ("Dodge Ram Auto Loan payment", $912, due
+// day 31, no marks) — so Aug 30/31 and Sep 30 read as both paid and unpaid.
+//
+// The bill carried no `linkedLiabilityId` (older doors never wrote it), so it
+// anchored on the person while the loan anchored on itself; the titles
+// differed by a trailing "payment"; the days differed by one. Every fallback
+// signal missed by a hair.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("the Dodge Ram case: a loan and its 'payment' bill are one payment", () => {
+  const SEP_17 = "2026-09-17";
+  const LOAN = "loan-dodge";
+  const MIKE = "mike-profile-id";
+
+  const loan: CalendarSeries = {
+    id: `liability:${LOAN}`, kind: "liability", title: "Dodge Ram Auto Loan",
+    source: {
+      system: "liability", id: LOAN, profileId: LOAN, ownerIds: [LOAN, JOE],
+      href: `#/profiles/${LOAN}`, linkedRecordId: LOAN, linkedLabel: "Liability",
+    },
+    baseDate: "2026-08-30", recurrence: "monthly", amount: 912,
+    completedDates: ["2026-08-30"],
+  };
+  // No linkedRecordId: the bill knows only its person. No completion marks.
+  const bill: CalendarSeries = {
+    id: "obligation:ob-dodge", kind: "bill", title: "Dodge Ram Auto Loan payment",
+    source: { system: "obligation", id: "ob-dodge", profileId: JOE, ownerIds: [JOE], href: "#" },
+    baseDate: "2026-08-31", recurrence: "monthly", amount: 912,
+  };
+
+  const monthly = (list: CalendarSeries[]) =>
+    buildCalendarOccurrences(list, { todayISO: SEP_17, lookbackDays: 45 })
+      .filter((o) => o.date >= "2026-08-01" && o.date <= "2026-09-30");
+
+  it("treats the two as equivalent payments", () => {
+    expect(isEquivalentPayment(loan, bill)).toBe(true);
+  });
+
+  it("renders ONE row per month — August paid, September not", () => {
+    const rows = monthly([loan, bill]);
+    expect(rows.map((o) => o.date)).toEqual(["2026-08-31", "2026-09-30"]);
+    expect(rows[0].status).toBe("done");
+    expect(rows[1].status).toBe("upcoming");
+    expect(rows.map((o) => o.amount)).toEqual([912, 912]);
+  });
+
+  it("keeps the paid month whichever record survives", () => {
+    // Same records, the other order in — the survivor is chosen by rank, not
+    // by arrival, and the absorbed record's paid month travels with it.
+    const rows = monthly([bill, loan]);
+    expect(rows.map((o) => [o.date, o.status])).toEqual([
+      ["2026-08-31", "done"], ["2026-09-30", "upcoming"],
+    ]);
+    const [survivor] = dedupeSeries([bill, loan]);
+    expect(survivor.series.id).toBe(bill.id);
+    expect(survivor.duplicateIds).toEqual([loan.id]);
+    // The loan's Aug 30 is restated on the survivor's day-of-month.
+    expect(survivor.series.completedDates).toContain("2026-08-31");
+  });
+
+  it("unions paid marks when the bill also carries its own", () => {
+    const paidBill: CalendarSeries = { ...bill, completedDates: ["2026-07-31"] };
+    const [survivor] = dedupeSeries([loan, paidBill]);
+    expect(survivor.series.completedDates).toEqual(
+      expect.arrayContaining(["2026-07-31", "2026-08-30", "2026-08-31"]),
+    );
+  });
+
+  it("merges through the identity key too, once the bill is linked", () => {
+    const linked: CalendarSeries = {
+      ...bill, source: { ...bill.source, linkedRecordId: LOAN, linkedLabel: "Liability" },
+    };
+    expect(seriesIdentityKey(linked)).toBe(seriesIdentityKey(loan));
+    const [survivor] = dedupeSeries([loan, linked]);
+    expect(survivor.series.completedDates).toContain("2026-08-31");
+    expect(monthly([loan, linked]).map((o) => [o.date, o.status])).toEqual([
+      ["2026-08-31", "done"], ["2026-09-30", "upcoming"],
+    ]);
+  });
+
+  it("treats days 28–31 as one month-end slot, and nothing else", () => {
+    const on = (day: string): CalendarSeries => ({ ...bill, baseDate: `2026-08-${day}` });
+    expect(isEquivalentPayment(loan, on("28"))).toBe(true);
+    expect(isEquivalentPayment(loan, on("29"))).toBe(true);
+    expect(isEquivalentPayment(loan, on("31"))).toBe(true);
+    expect(isEquivalentPayment(loan, on("27"))).toBe(false);
+    expect(isEquivalentPayment(loan, on("15"))).toBe(false);
+    // The 3rd and the 17th are still two charges.
+    expect(isEquivalentPayment(on("03"), on("17"))).toBe(false);
+  });
+
+  it("strips a generated '— Payment' suffix as well as a bare 'payment'", () => {
+    expect(stripGeneratedSuffix("Dodge Ram Auto Loan — Payment")).toBe("Dodge Ram Auto Loan");
+    expect(stripGeneratedSuffix("Dodge Ram Auto Loan – Payments")).toBe("Dodge Ram Auto Loan");
+    const dashed: CalendarSeries = { ...bill, title: "Dodge Ram Auto Loan — Payment" };
+    expect(isEquivalentPayment(loan, dashed)).toBe(true);
+  });
+
+  it("never merges records owned by different people", () => {
+    const mikesBill: CalendarSeries = {
+      ...bill, id: "obligation:ob-mike",
+      source: { system: "obligation", id: "ob-mike", profileId: MIKE, ownerIds: [MIKE], href: "#" },
+    };
+    expect(isEquivalentPayment(loan, mikesBill)).toBe(false);
+    expect(dedupeSeries([loan, bill, mikesBill])).toHaveLength(2);
+    const rows = monthly([loan, bill, mikesBill]).filter((o) => o.date === "2026-08-31");
+    expect(rows).toHaveLength(2);
+  });
+
+  it("never merges two genuinely different bills on the same day for one person", () => {
+    const water: CalendarSeries = {
+      ...bill, id: "obligation:water", title: "Water Bill", amount: 60, baseDate: "2026-08-15",
+    };
+    const power: CalendarSeries = {
+      ...bill, id: "obligation:power", title: "Power Bill", amount: 120, baseDate: "2026-08-15",
+    };
+    expect(isEquivalentPayment(water, power)).toBe(false);
+    expect(dedupeSeries([water, power])).toHaveLength(2);
+    expect(monthly([water, power]).filter((o) => o.date === "2026-08-15")).toHaveLength(2);
+  });
+
+  it("never merges the same name for a different amount", () => {
+    const smaller: CalendarSeries = { ...bill, id: "obligation:smaller", amount: 450 };
+    expect(isEquivalentPayment(loan, smaller)).toBe(false);
+    expect(dedupeSeries([loan, smaller])).toHaveLength(2);
+    // …but a missing amount on one side is not a disagreement.
+    const unpriced: CalendarSeries = { ...bill, amount: undefined };
+    expect(isEquivalentPayment(loan, unpriced)).toBe(true);
+    expect(dedupeSeries([loan, unpriced])[0].series.amount).toBe(912);
   });
 });
 
