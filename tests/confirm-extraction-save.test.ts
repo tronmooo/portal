@@ -733,3 +733,153 @@ describe("POST /api/chat/confirm-extraction — driver license (2026-08-20)", ()
     expect(live).toEqual([["name", "Jane Doe"]]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A person is not a filing cabinet (2026-09-17).
+//
+// A parking ticket belonging to "Sarah" was confirmed and its dueDate ended up
+// as `fields.dueDate` on the user's OWN profile, rendering "DUE DATE
+// 2026-09-25" on the Info page. Two defects: every ticked scalar was written
+// onto whichever profile was resolved, and when the AI pick failed the route
+// defaulted to the self profile even though the ticket named someone else.
+describe("POST /api/chat/confirm-extraction — a parking ticket in someone else's name", () => {
+  let server: Server;
+  let base: string;
+
+  const ticketDoc = () => ({
+    id: "doc-ticket",
+    name: "Parking Violation Notice",
+    type: "parking_ticket",
+    mimeType: "image/jpeg",
+    extractedData: {},
+    linkedProfiles: [],
+    tags: [],
+  });
+
+  const TICKET_FIELDS = [
+    { key: "violator", value: "Sarah Miller" },
+    { key: "dueDate", value: "09/25/2026" },
+    { key: "fineAmount", value: "$45.00" },
+    { key: "citationNumber", value: "RV62045871" },
+  ];
+
+  const liveFields = (id: string) =>
+    Object.entries(stubState.profiles.get(id).fields || {}).filter(([k, v]) => !k.startsWith("_") && v !== null);
+
+  beforeEach(async () => {
+    stubState.profiles.clear();
+    stubState.documents.clear();
+    stubState.expenses.length = 0;
+    stubState.trackers.length = 0;
+    aiTasks.length = 0;
+    stubState.profiles.set("profile-alex", { id: "profile-alex", name: "Alex", type: "self", fields: {}, tags: [], notes: "" });
+    stubState.documents.set("doc-ticket", ticketDoc());
+
+    const app = express();
+    app.use(express.json());
+    server = createServer(app);
+    await registerRoutes(server, app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    vi.unstubAllEnvs();
+  });
+
+  const confirm = (body: Record<string, any> = {}) =>
+    fetch(`${base}/api/chat/confirm-extraction`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        extractionId: "doc-ticket",
+        confirmedFields: TICKET_FIELDS,
+        createCalendarEvents: [],
+        trackerEntries: [],
+        ...body,
+      }),
+    });
+
+  it("writes nothing onto Alex, keeps the due date on the document, and files the ticket under Sarah", async () => {
+    stubState.profiles.set("profile-sarah", { id: "profile-sarah", name: "Sarah Miller", type: "person", fields: {}, tags: [], notes: "" });
+
+    const res = await confirm();
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.failures).toEqual([]);
+    expect(data.success).toBe(true);
+
+    // Nothing about the ticket is a fact about Alex.
+    expect(liveFields("profile-alex")).toEqual([]);
+    // Nor about Sarah — the due date, the fine and the citation number
+    // describe the ticket. The link is what makes it hers.
+    expect(liveFields("profile-sarah")).toEqual([]);
+    expect(data.saved.join("; ")).toContain("Kept on the document (not Sarah Miller)");
+
+    // The document keeps everything, with the date in the one parseable form
+    // the date-rule engine derives the calendar entry from.
+    const doc = stubState.documents.get("doc-ticket");
+    expect(doc.extractedData.dueDate).toBe("2026-09-25");
+    expect(doc.extractedData.fineAmount).toBe("$45.00");
+    expect(doc.extractedData.citationNumber).toBe("RV62045871");
+    expect(doc.extractedData.violator).toBe("Sarah Miller");
+  });
+
+  it("the same ticket confirmed FOR Sarah by the caller still keeps its fields off her profile", async () => {
+    stubState.profiles.set("profile-sarah", { id: "profile-sarah", name: "Sarah Miller", type: "person", fields: { phone: "555-0100" }, tags: [], notes: "" });
+
+    const res = await confirm({ targetProfileId: "profile-sarah" });
+    const data = await res.json();
+    expect(data.failures).toEqual([]);
+    expect(liveFields("profile-sarah")).toEqual([["phone", "555-0100"]]);
+    expect(liveFields("profile-alex")).toEqual([]);
+    expect(stubState.documents.get("doc-ticket").extractedData.dueDate).toBe("2026-09-25");
+  });
+
+  it("when no profile matches Sarah, nothing lands on self and the response says why", async () => {
+    const res = await confirm();
+    expect(res.status).toBe(200);
+    const data = await res.json();
+
+    expect(liveFields("profile-alex")).toEqual([]);
+    const doc = stubState.documents.get("doc-ticket");
+    expect(doc.extractedData.dueDate).toBe("2026-09-25");
+    // Not silent: the fields are on the document only, and the reason is named.
+    expect(data.success).toBe(false);
+    expect(data.failures.join("; ")).toMatch(/no profile matches "Sarah Miller"/);
+  });
+
+  it("a document that names nobody still defaults to self, as it always did", async () => {
+    const res = await confirm({
+      confirmedFields: [
+        { key: "insurer", value: "Progressive" },
+        { key: "coverageType", value: "Full Coverage" },
+      ],
+    });
+    const data = await res.json();
+    expect(data.failures).toEqual([]);
+    expect(stubState.profiles.get("profile-alex").fields.insurer).toBe("Progressive");
+    expect(stubState.profiles.get("profile-alex").fields.coverageType).toBe("Full Coverage");
+  });
+
+  it("a person's own attributes on the same document still reach the person", async () => {
+    stubState.profiles.set("profile-sarah", { id: "profile-sarah", name: "Sarah Miller", type: "person", fields: {}, tags: [], notes: "" });
+    const res = await confirm({
+      confirmedFields: [
+        ...TICKET_FIELDS,
+        { key: "dateOfBirth", value: "1988-03-14" },
+        { key: "address", value: "742 Pixel Loop" },
+      ],
+    });
+    const data = await res.json();
+    expect(data.failures).toEqual([]);
+    const sarah = stubState.profiles.get("profile-sarah").fields;
+    expect(sarah.dateOfBirth).toBe("1988-03-14");
+    expect(sarah.address).toBe("742 Pixel Loop");
+    expect(sarah).not.toHaveProperty("dueDate");
+    expect(sarah).not.toHaveProperty("fineAmount");
+    expect(sarah).not.toHaveProperty("citationNumber");
+    expect(liveFields("profile-alex")).toEqual([]);
+  });
+});

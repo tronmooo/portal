@@ -43,9 +43,11 @@ import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
 import { normalizeDateString } from "@shared/extraction-normalize";
 import {
   mergeStructuredRecords, allergyKey, medicationKey, conditionKey, surgeryKey,
+  personFieldScope, personNameFields, profileNamedBy,
   type ExtractionItem, type ExtractionDestination,
   type ProfileAllergy, type ProfileMedication, type ProfileCondition, type ProfileSurgery,
 } from "@shared/extraction-destinations";
+import { entityFamily } from "@shared/entity-shape";
 import { findIdentityMatches } from "@shared/tracker-identity";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
@@ -3340,18 +3342,33 @@ ${JSON.stringify(ctx, null, 2)}`;
       // the whole AI profile-pick silently fell back to the self profile.
       const unwrap = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
 
-      // If no profile was selected, AI-pick the best profile from extracted fields.
-      // Falls back to self profile (legacy behaviour) if AI can't decide.
+      // If no profile was selected, pick the best profile from extracted fields:
+      // a deterministic name match first, the AI second. Falls back to the
+      // self profile ONLY when the document names nobody — a receipt, a spec
+      // sheet. A document that names a person the household does not have
+      // (2026-09-17: Sarah's parking ticket, in an account with no Sarah) is
+      // NOT the user's own; its fields stay on the document and the response
+      // says so, instead of the ticket's due date landing on the user's Info
+      // page as if it were theirs.
       let resolvedProfileId = targetProfileId;
-      let resolvedProfileSource: "caller" | "ai" | "self-default" | "none" = targetProfileId ? "caller" : "none";
+      let resolvedProfileSource: "caller" | "name" | "ai" | "self-default" | "none" = targetProfileId ? "caller" : "none";
+      // The name the document printed and nobody matched — named in the
+      // response so "saved to the document only" says why.
+      let unmatchedPersonName: string | null = null;
       if (!resolvedProfileId && confirmedFields && confirmedFields.length > 0) {
         const profiles = await storage.getProfiles();
-        if (profiles.length > 0) {
+        const namedFields = personNameFields(confirmedFields.map((f: any) => ({ key: String(f?.key ?? ""), value: f?.value })));
+        const named = profiles.length > 0 ? profileNamedBy(namedFields, profiles as any[]) : null;
+        if (named) {
+          resolvedProfileId = named.id;
+          resolvedProfileSource = "name";
+          log.info(`[confirm-extraction] Name-matched profile: ${named.name} (${named.id})`);
+        }
+        if (!resolvedProfileId && profiles.length > 0) {
           // Wave 2 #4 — AI picks the best profile from extracted name-ish fields.
           try {
-            const nameish = confirmedFields
-              .filter((f: any) => /name|holder|owner|insured|patient|recipient|licensee|driver|policyhold/i.test(f.key))
-              .map((f: any) => `${f.key}: ${unwrap(f.value)}`)
+            const nameish = namedFields
+              .map((f) => `${f.key}: ${f.value}`)
               .join("\n");
             if (nameish) {
               const decision = await aiPickIndex({
@@ -3374,11 +3391,18 @@ ${JSON.stringify(ctx, null, 2)}`;
           }
         }
         if (!resolvedProfileId) {
-          const selfProfile = profiles.find((p: any) => p.type === 'self');
-          if (selfProfile) {
-            resolvedProfileId = selfProfile.id;
-            resolvedProfileSource = "self-default";
-            log.info(`[confirm-extraction] Fell back to self profile: ${selfProfile.name} (${selfProfile.id})`);
+          if (namedFields.length > 0) {
+            // The document says who it is about, and that is not anyone here.
+            // Guessing "self" is how somebody else's ticket became the user's.
+            unmatchedPersonName = namedFields[0].value;
+            log.info(`[confirm-extraction] Document names "${unmatchedPersonName}" and no profile matches — not defaulting to self`);
+          } else {
+            const selfProfile = profiles.find((p: any) => p.type === 'self');
+            if (selfProfile) {
+              resolvedProfileId = selfProfile.id;
+              resolvedProfileSource = "self-default";
+              log.info(`[confirm-extraction] Fell back to self profile: ${selfProfile.name} (${selfProfile.id})`);
+            }
           }
         }
       }
@@ -3511,12 +3535,35 @@ ${JSON.stringify(ctx, null, 2)}`;
           return s;
         }
 
+        // ═══ A PERSON IS NOT A FILING CABINET (2026-09-17) ═══
+        // For an asset, a vehicle or a liability every ticked field IS a fact
+        // about the record — a receipt's service date belongs on the car. For
+        // a PERSON, the document's own dates, amounts and reference numbers
+        // (a ticket's due date, fine and citation number) describe the
+        // document, not the person, and writing them onto the profile put
+        // "DUE DATE 2026-09-25" on the user's Info page. They stay on the
+        // document's extractedData — Step 0 already saved them there, and
+        // shared/date-rules derives the calendar and Upcoming entries from
+        // that copy. One rule, in shared/extraction-destinations, so the
+        // review pane and this route agree on what a person's field is.
+        const targetProfile = resolvedProfileId
+          ? await storage.getProfile(resolvedProfileId).catch(() => undefined)
+          : undefined;
+        const targetIsPerson = !!targetProfile
+          && entityFamily(targetProfile.type, (targetProfile as any).type_key ?? (targetProfile as any).typeKey) === "person";
+        const keptOnDocument: string[] = [];
+
         for (const field of (confirmedFields || [])) {
           const key = field.key;
           const val = unwrap(field.value);
 
           // Skip document-metadata fields — they belong on the document, not the profile
           if (DOC_ONLY_FIELDS.has(key)) { skippedFields.push(key); continue; }
+
+          if (targetIsPerson && personFieldScope({ key, value: val }) === "document") {
+            keptOnDocument.push(key);
+            continue;
+          }
 
           // ONE spelling. This used to write `dateOfBirth` AND `birthday`, and
           // the twin sweep below then nulled one of them anyway — so the pair
@@ -3544,9 +3591,14 @@ ${JSON.stringify(ctx, null, 2)}`;
         // The structured arrays count as "something to write": a report whose
         // only ticked rows are allergies has no scalar profileFields, and
         // gating on those alone dropped them silently.
+        if (keptOnDocument.length > 0 && targetProfile) {
+          // Say what stayed off the person — a confirmation that quietly wrote
+          // fewer fields than were ticked reads as a failed save.
+          saved.push(`Kept on the document (not ${targetProfile.name}): ${keptOnDocument.join(", ")}`);
+        }
         if (resolvedProfileId && (Object.keys(profileFields).length > 0 || hasStructuredMedical)) {
           try {
-            const profile = await storage.getProfile(resolvedProfileId);
+            const profile = targetProfile ?? await storage.getProfile(resolvedProfileId);
             if (profile) {
               const existingFields: Record<string, any> = profile.fields || {};
 
@@ -3686,11 +3738,23 @@ ${JSON.stringify(ctx, null, 2)}`;
             console.error("Failed to save fields to profile:", pErr?.message);
             failures.push(`profile fields: ${pErr?.message || "unknown error"}`);
           }
+        } else if (resolvedProfileId && targetProfile && keptOnDocument.length > 0) {
+          // Nothing to write onto the person, but the document is still
+          // theirs: a ticket with only a due date, a fine and a citation
+          // number is Sarah's ticket, and the link is what puts it on her
+          // Documents tab and scopes its derived dates to her.
+          try {
+            await storage.linkProfileTo(resolvedProfileId, "document", extractionId);
+            await storage.propagateDocumentToAncestors(extractionId, resolvedProfileId);
+          } catch { /* may already be linked */ }
         } else if (!resolvedProfileId && Object.keys(profileFields).length > 0) {
           // The user ticked fields but no destination profile could be
-          // resolved (none selected, no AI match, no self profile). Say so —
-          // the fields are on the document, NOT on any profile.
-          failures.push(`no profile selected — ${Object.keys(profileFields).length} confirmed field(s) were saved to the document only`);
+          // resolved (none selected, no name or AI match, no self profile —
+          // or the document names someone the household does not have). Say
+          // so — the fields are on the document, NOT on any profile.
+          failures.push(unmatchedPersonName
+            ? `no profile matches "${unmatchedPersonName}" — ${Object.keys(profileFields).length} confirmed field(s) were saved to the document only`
+            : `no profile selected — ${Object.keys(profileFields).length} confirmed field(s) were saved to the document only`);
         }
       }
 
