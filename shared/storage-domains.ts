@@ -124,6 +124,11 @@ export const STORAGE_NOUN_TARGETS: Record<string, StorageTarget> = {
   ProfileFrom: { domains: PROFILE_DOMAINS, endpoint: null },   // unlinkProfileFrom
 
   Task: { domains: ["tasks"], endpoint: "/api/tasks" },
+  // repairRecurringTasks — the missed-occurrence rollover; removeLegacyReminderTasks —
+  // the sweep of the retired reminder cron's leftovers. Both touch several
+  // task rows at once, so there is no single returned row to patch in.
+  RecurringTasks: { domains: ["tasks"], endpoint: null },
+  LegacyReminderTasks: { domains: ["tasks"], endpoint: null },
   Expense: { domains: ["expenses"], endpoint: "/api/expenses" },
   Income: { domains: ["incomes"], endpoint: "/api/incomes" },
   Paycheck: { domains: ["incomes"], endpoint: "/api/paychecks" },

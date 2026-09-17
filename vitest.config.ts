@@ -98,6 +98,7 @@ export default defineConfig({
       'tests/series-detect.test.ts',
       'tests/dated-items.test.ts',
       'tests/task-one-time-vs-recurring.test.tsx',
+      'tests/recurring-task-rollover.test.ts',
       'tests/date-math.test.ts',
       'tests/calendar-window.test.ts',
       'tests/local-jwt.test.ts',

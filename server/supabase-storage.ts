@@ -56,7 +56,8 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 }
 import { getUserToday, getUserCurrentMonth, parseLocalDate, toLocalDateStr, localDayOf, addDays as tzAddDays, DEFAULT_TIMEZONE } from "../shared/timezone";
 import { prepareProfileFields } from "../shared/registry-fields";
-import { nextRecurringTaskSpawn } from "../shared/recurrence";
+import { nextRecurringTaskSpawn, rollForwardRecurringTask } from "../shared/recurrence";
+import { isLegacyReminderTask, LEGACY_REMINDER_TASK_SOURCE } from "../shared/legacy-reminder-tasks";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
@@ -3879,6 +3880,61 @@ export class SupabaseStorage implements IStorage {
       .update({ deleted_at: new Date().toISOString() })
       .eq("id", id).eq("user_id", this.userId).is("deleted_at", null).select("id");
     return !error && Array.isArray(data) && data.length > 0;
+  }
+
+  /**
+   * Carry every open recurring task that was never ticked off forward to its
+   * latest occurrence on or before `todayISO` (shared/recurrence
+   * rollForwardRecurringTask), and trash the open occurrence of a series that
+   * has already ended. Nothing else on the row changes — the missed
+   * occurrences were not done, so `rdone:` stays — and a row that moved under
+   * us (a completion racing this scan) is left to the completion, which
+   * spawns the next occurrence itself.
+   */
+  async repairRecurringTasks(todayISO: string): Promise<{ advanced: number; ended: number }> {
+    const today = String(todayISO || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) return { advanced: 0, ended: 0 };
+    const { data, error } = await this.supabase.from("tasks")
+      .select("id, status, due_date, tags")
+      .eq("user_id", this.userId).is("deleted_at", null)
+      .neq("status", "done").lt("due_date", today);
+    if (error) throw error;
+    let advanced = 0, ended = 0;
+    for (const r of data || []) {
+      const tags = Array.isArray(r.tags) ? r.tags.map(String) : [];
+      if (!tags.some((t) => t.startsWith("recur:"))) continue;
+      const roll = rollForwardRecurringTask({ dueDate: r.due_date, tags, status: r.status }, today);
+      if (!roll) continue;
+      if ("ended" in roll) {
+        if (await this.deleteTask(r.id)) ended++;
+        continue;
+      }
+      const { data: moved, error: upErr } = await this.supabase.from("tasks")
+        .update({ due_date: roll.dueDate, tags: roll.tags })
+        .eq("id", r.id).eq("user_id", this.userId).is("deleted_at", null)
+        .eq("due_date", r.due_date).neq("status", "done")
+        .select("id");
+      if (upErr) throw upErr;
+      if (Array.isArray(moved) && moved.length > 0) advanced++;
+    }
+    if (advanced || ended) this.clearRequestMemo();
+    return { advanced, ended };
+  }
+
+  /** Trash the open `Reminder: …` tasks the retired reminder cron minted (shared/legacy-reminder-tasks). */
+  async removeLegacyReminderTasks(): Promise<number> {
+    const { data, error } = await this.supabase.from("tasks")
+      .select("id, title, status, due_date, tags, source")
+      .eq("user_id", this.userId).is("deleted_at", null)
+      .eq("source", LEGACY_REMINDER_TASK_SOURCE).is("due_date", null);
+    if (error) throw error;
+    let removed = 0;
+    for (const r of data || []) {
+      if (!isLegacyReminderTask({ title: r.title, status: r.status, dueDate: r.due_date, tags: r.tags, source: r.source })) continue;
+      if (await this.deleteTask(r.id)) removed++;
+    }
+    if (removed) this.clearRequestMemo();
+    return removed;
   }
 
   async restoreTask(id: string): Promise<boolean> {

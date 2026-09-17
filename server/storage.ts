@@ -20,6 +20,8 @@ import { deleteProfileFields } from "@shared/profile-field-identity";
 import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
+import { rollForwardRecurringTask } from "@shared/recurrence";
+import { isLegacyReminderTask } from "@shared/legacy-reminder-tasks";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 import { generateSchedule } from "@shared/liability-schedule";
@@ -104,6 +106,20 @@ export interface IStorage {
   createTask(data: InsertTask): Promise<Task>;
   updateTask(id: string, data: Partial<Task>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
+  /**
+   * Carry every open recurring task whose due date is behind `todayISO`
+   * forward to its latest occurrence on or before today, and retire the
+   * open occurrence of a series that has already ended (shared/recurrence
+   * rollForwardRecurringTask). Returns how many rows moved and how many
+   * were retired.
+   */
+  repairRecurringTasks(todayISO: string): Promise<{ advanced: number; ended: number }>;
+  /**
+   * Trash the undated `Reminder: …` tasks the retired reminder cron left
+   * behind (source "reminder", tag "reminder", no due date). Returns how many
+   * went.
+   */
+  removeLegacyReminderTasks(): Promise<number>;
 
   // Expenses
   getExpenses(profileIds?: string[]): Promise<Expense[]>;
@@ -1439,6 +1455,26 @@ export class MemStorage implements IStorage {
     return updated;
   }
   async deleteTask(id: string) { return this.tasks.delete(id); }
+  async repairRecurringTasks(todayISO: string) {
+    let advanced = 0, ended = 0;
+    for (const t of Array.from(this.tasks.values())) {
+      const roll = rollForwardRecurringTask(t, todayISO);
+      if (!roll) continue;
+      if ("ended" in roll) { this.tasks.delete(t.id); ended++; continue; }
+      this.tasks.set(t.id, { ...t, dueDate: roll.dueDate, tags: roll.tags, updatedAt: new Date().toISOString() });
+      advanced++;
+    }
+    return { advanced, ended };
+  }
+  async removeLegacyReminderTasks() {
+    let n = 0;
+    for (const t of Array.from(this.tasks.values())) {
+      if (!isLegacyReminderTask(t)) continue;
+      this.tasks.delete(t.id);
+      n++;
+    }
+    return n;
+  }
 
   // ---- Expenses ----
   async getExpenses() { return Array.from(this.expenses.values()); }
