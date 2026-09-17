@@ -99,6 +99,7 @@ import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
+import { isTestEntity } from "../shared/test-data";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth } from "../shared/obligation-windows";
 
 // PostgREST `.or()` filters are built by string concatenation, so a value
@@ -7520,7 +7521,7 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // ENHANCED DASHBOARD
   // ============================================================
-  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<any> {
+  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<any> {
     const now = new Date();
     // Use user's timezone for 'today' — toISOString() is UTC and causes
     // events to disappear after ~5pm PST when UTC rolls to the next day
@@ -7612,7 +7613,12 @@ export class SupabaseStorage implements IStorage {
     // table (superset of the widened scope) — skip the extra fetch.
     const expenseSourceEnh = (fpIds && ownedAssetSetEnh.size > 0 && !opts?.sharedFetches)
       ? await this.getExpenses(expenseScopeIdsEnh) : rawExpenses;
-    const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh));
+    // Synthetic QA rows (shared/test-data) are hidden from every list by
+    // default, but this snapshot counted them: an expense named to match the
+    // test patterns raised Spend while never appearing in the list. The same
+    // predicate, the same default, and the same opt-in the lists honour.
+    const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh)
+      && (opts?.includeTestData || !isTestEntity(e)));
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
     // Same canonical scope rule the /api/incomes and /api/paychecks routes
     // apply, so the snapshot's income total equals the lists the Finance tab
@@ -7823,7 +7829,7 @@ export class SupabaseStorage implements IStorage {
       assetBreakdown.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: gross * share / 100 });
     }
     assetBreakdown.sort((a, b) => b.value - a.value);
-    const liabilityBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
+    const liabilityBreakdown: Array<{ id: string; name: string; type: string; typeKey: string | null; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
       // Only real balance-sheet debt. Recurring service bills (utility/streaming/
       // phone) are tracked as liabilities for Bills/Cash Flow but excluded from the
@@ -7833,7 +7839,11 @@ export class SupabaseStorage implements IStorage {
       if (gross <= 0) continue;
       const share = shareForLiability(p);
       if (share <= 0) continue;
-      liabilityBreakdown.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: gross * share / 100 });
+      // typeKey: the Accounts rollup splits this same list into "Loan
+      // balances" and "Card + credit debt". Reading the breakdown — rather than
+      // re-summing profiles without the ownership rule — is what keeps that
+      // tile equal to the Balance Sheet ($50,151 vs $49,829 was Jane's loan).
+      liabilityBreakdown.push({ id: p.id, name: p.name, type: p.type, typeKey: ((p as any).type_key ?? (p as any).typeKey ?? null), grossValue: gross, share, value: gross * share / 100 });
     }
     liabilityBreakdown.sort((a, b) => b.value - a.value);
 

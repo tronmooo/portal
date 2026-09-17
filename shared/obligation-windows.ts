@@ -198,6 +198,16 @@ export function sumMonthlyIncomeForMonth(
   let total = 0;
   for (const i of incomes || []) {
     const start = typeof i?.date === "string" && /^\d{4}-\d{2}/.test(i.date) ? i.date.slice(0, 7) : null;
+    // A one-time income is not a stream: its "monthly equivalent" is $0, which
+    // is right for a projection and wrong for the month it actually landed in.
+    // A $750 freelance payment dated Aug 22 is $750 of August income and
+    // nothing in any other month. Summed as a monthly-equivalent it counted
+    // for nothing anywhere, so a month funded entirely by one-off income read
+    // "In: $0" on the trend chart.
+    if (canonicalIncomeFrequency(i?.frequency) === "once") {
+      if (start === ym) total += Number(i?.amount) || 0;
+      continue;
+    }
     if (start && start > ym) continue;
     total += toMonthlyAmount(Number(i?.amount) || 0, i?.frequency);
   }

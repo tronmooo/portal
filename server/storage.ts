@@ -2,6 +2,7 @@ import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { toMonthlyAmount, isUpcomingBill, sumBillsDueThroughMonth, sumMonthlyIncomeForMonth } from "@shared/obligation-windows";
+import { isTestEntity } from "@shared/test-data";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
@@ -255,7 +256,7 @@ export interface IStorage {
   // JS passesProfileFilter pass — always the correctness authority — still
   // runs, so results are identical; only the number of round trips changes.
   getStats(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<DashboardStats>;
-  getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<Record<string, unknown>>;
+  getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<Record<string, unknown>>;
 
   // Net-worth snapshots (W4-5)
   takeNetWorthSnapshot(profileIds?: string[]): Promise<Array<{ profileId: string | null; assetsTotal: number; liabilitiesTotal: number; netWorth: number; snapshotDate: string }>>;
@@ -2391,7 +2392,7 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Enhanced Dashboard Data ----
-  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<any> {
+  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<any> {
     const now = new Date();
     const today = getUserToday();
     const thisMonth = now.getMonth();
@@ -2494,7 +2495,7 @@ export class MemStorage implements IStorage {
     }
 
     // Finance snapshot — spending by category this month + upcoming bills
-    const expenses = Array.from(this.expenses.values()).filter(e => matchesFilter((e as any).linkedProfiles));
+    const expenses = Array.from(this.expenses.values()).filter(e => matchesFilter((e as any).linkedProfiles) && (opts?.includeTestData || !isTestEntity(e as any)));
     const monthlyExpenses = expenses.filter(e => {
       const d = new Date(e.date);
       return d.getMonth() === thisMonth && d.getFullYear() === thisYear;

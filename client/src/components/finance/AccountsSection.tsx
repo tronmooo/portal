@@ -40,7 +40,7 @@ import {
 } from "lucide-react";
 import { formatMoney, formatListDate } from "@/lib/format";
 import {
-  ACCOUNT_KINDS, accountViews, summarizeAccounts, summarizeLiabilityDebt,
+  ACCOUNT_KINDS, accountViews, summarizeAccounts, summarizeLiabilityDebt, isAccountProfile,
   type AccountKind, type AccountView,
 } from "@shared/finance-accounts";
 
@@ -146,7 +146,13 @@ export function AddAccountDialog({ open, onOpenChange, profiles, onCreated }: {
   );
 }
 
-export function AccountsSection({ profiles }: { profiles: any[] }) {
+export function AccountsSection({ profiles, debtBreakdown }: {
+  profiles: any[];
+  /** financeSnapshot.liabilityBreakdown — the ownership-weighted rows the
+   *  Balance Sheet sums. When present, the two debt tiles read from it so
+   *  they equal the Balance Sheet by construction. */
+  debtBreakdown?: Array<{ id: string; typeKey?: string | null; type?: string; value: number }>;
+}) {
   const { toast } = useToast();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<AccountView | null>(null);
@@ -168,7 +174,21 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
   const summary = useMemo(() => summarizeAccounts(profiles || []), [profiles]);
   // Real loans and cards are liability profiles, not accounts. Without this the
   // two debt tiles read $0 beside a Liabilities card showing the same debt.
-  const offAccountDebt = useMemo(() => summarizeLiabilityDebt(profiles || []), [profiles]);
+  const offAccountDebt = useMemo(() => {
+    if (Array.isArray(debtBreakdown)) {
+      // Rows for account-type profiles are already in `summary`.
+      const accountIds = new Set((profiles || []).filter(isAccountProfile).map((p: any) => p.id));
+      let loanDebt = 0, creditDebt = 0;
+      for (const r of debtBreakdown) {
+        if (accountIds.has(r.id)) continue;
+        const key = String(r.typeKey ?? "").toLowerCase();
+        if (key === "credit_card" || key === "line_of_credit" || key === "credit_line") creditDebt += Number(r.value) || 0;
+        else loanDebt += Number(r.value) || 0;
+      }
+      return { loanDebt, creditDebt };
+    }
+    return summarizeLiabilityDebt(profiles || []);
+  }, [profiles, debtBreakdown]);
 
   const people = useMemo(
     () => (profiles || []).filter((p: any) => p.type === "self" || p.type === "person"),

@@ -1119,7 +1119,7 @@ export type InsertIncome = z.input<typeof insertIncomeSchema>;
 // Keep in sync with EXPENSE_CATEGORIES in shared/category-canon.ts.
 // "automotive" was removed: it is an alias of "vehicle", and carrying both let
 // one concept be stored under two names.
-export type ExpenseCategory = "general" | "food" | "transport" | "health" | "pet" | "vehicle" | "entertainment" | "shopping" | "utilities" | "housing" | "insurance" | "subscription" | "education" | "personal" | "travel";
+export type ExpenseCategory = "general" | "food" | "transport" | "health" | "pet" | "vehicle" | "entertainment" | "shopping" | "utilities" | "housing" | "insurance" | "subscription" | "education" | "personal" | "travel" | "debt";
 export type ObligationCategory = "housing" | "utilities" | "insurance" | "subscription" | "loan" | "medical" | "education" | "transportation" | "communication" | "general";
 
 export const EVENT_CATEGORY_COLORS: Record<EventCategory, string> = {

@@ -24,8 +24,12 @@
 export const EXPENSE_CATEGORIES = [
   "general", "food", "transport", "health", "pet", "vehicle", "entertainment",
   "shopping", "utilities", "housing", "insurance", "subscription", "education",
-  "personal", "travel",
+  "personal", "travel", "debt",
 ] as const;
+// "debt" (2026-09-17): the bill that pays a car loan carried the obligation
+// category "loan", which this vocabulary had no bucket for, so every loan
+// payment folded to "general" and a $912 car payment was 72–82% of the
+// "General" slice of the spending chart.
 // "automotive" was in this list AND aliased to "vehicle" below. A vocabulary
 // that carries a word and its own alias is two buckets for one concept: the
 // Edit form offered "Automotive" while Add offered "Vehicle", and an exact
@@ -128,11 +132,22 @@ function key(raw: unknown): string {
   return String(raw ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
-function resolve(raw: unknown, allowed: readonly string[], fallback: string): string {
+// Spellings that mean one thing for expenses and another for obligations.
+// "loan" IS an obligation category (the bill's kind); as an expense it is the
+// money that went to a debt. The shared table can only carry one target, so
+// the expense resolver consults this first.
+const EXPENSE_ALIASES: Record<string, string> = {
+  loan: "debt", loans: "debt", debt: "debt", debts: "debt", credit: "debt",
+  loanpayment: "debt", debtpayment: "debt", carpayment: "debt", mortgagepayment: "debt",
+};
+
+function resolve(raw: unknown, allowed: readonly string[], fallback: string, extra?: Record<string, string>): string {
   const k = key(raw);
   if (!k) return fallback;
   // An exact canonical value always wins over the alias table.
   if (allowed.includes(k)) return k;
+  const own = extra?.[k];
+  if (own && allowed.includes(own)) return own;
   const aliased = ALIASES[k];
   if (aliased && allowed.includes(aliased)) return aliased;
   // One more hop, for a word whose alias is itself canonical only in the OTHER
@@ -152,7 +167,7 @@ function resolve(raw: unknown, allowed: readonly string[], fallback: string): st
  * Unknown input becomes "general" — never stored verbatim.
  */
 export function canonicalExpenseCategory(raw: unknown): CanonicalExpenseCategory {
-  return resolve(raw, EXPENSE_CATEGORIES, "general") as CanonicalExpenseCategory;
+  return resolve(raw, EXPENSE_CATEGORIES, "general", EXPENSE_ALIASES) as CanonicalExpenseCategory;
 }
 
 /**
@@ -161,7 +176,7 @@ export function canonicalExpenseCategory(raw: unknown): CanonicalExpenseCategory
  * answers "general" for those).
  */
 export function foldExpenseCategory(raw: unknown): CanonicalExpenseCategory | null {
-  const folded = resolve(raw, EXPENSE_CATEGORIES, "");
+  const folded = resolve(raw, EXPENSE_CATEGORIES, "", EXPENSE_ALIASES);
   return folded ? (folded as CanonicalExpenseCategory) : null;
 }
 
@@ -194,6 +209,7 @@ export function categoryLabel(canonical: string): string {
     pet: "Pet",
     vehicle: "Vehicle",
     communication: "Phone & Internet",
+    debt: "Debt payments",
   };
   const k = key(canonical);
   if (overrides[k]) return overrides[k];
