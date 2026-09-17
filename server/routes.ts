@@ -4265,14 +4265,17 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = cacheUserKey(req as AuthenticatedRequest, "enhanced:");
-    const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
+    // The hidden "show test data" toggle: the lists it reveals must add up to
+    // the totals it reveals, so the snapshot takes the same switch.
+    const includeTestData = String(req.query.includeTestData || "") === "1";
+    const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}${includeTestData ? ":test" : ""}`;
     const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
     // PERF 2026-05-30: same memo treatment as /api/stats so getDashboardEnhanced's
     // internal fanouts share fetched tables.
     try { (storage as any).enableRequestMemo?.(); } catch {}
     // dedupe: concurrent identical requests share one DB query
-    const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds));
+    const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds, includeTestData ? { includeTestData } : undefined));
     try { (storage as any).disableRequestMemo?.(); } catch {}
     // 60-second cache (same rationale as /api/stats above).
     setCache(cacheKey, data, 60 * 1000);

@@ -375,11 +375,12 @@ describe("#4 paying the loan bill moves the loan", () => {
   });
 });
 
-describe("#6 a payment is dated the day the money moved", () => {
-  it("does not back-date a late catch-up to the bill's due date", async () => {
-    // Internet Bill due Sep 12, settled Sep 16. It used to be recorded on
-    // Sep 12 — and a bill paid late in the next month landed its expense in
-    // the previous month's spend.
+describe("#6 one date rule: the payment is dated the day the money moved, the expense the period it pays for", () => {
+  it("a late catch-up: cash today, expense in the bill's own month", async () => {
+    // Internet Bill due Sep 12, settled later. Two earlier rules disagreed —
+    // the overdue case was back-dated, the early case was dated today — and
+    // dating the expense by payment day put "Rent — Jul 1" (paid by the
+    // autopay catch-up on Sep 6) into September's spend.
     const internet = {
       id: "bill-net", name: "Internet Bill", type: "liability", type_key: "internet",
       parentProfileId: "person-1",
@@ -388,12 +389,12 @@ describe("#6 a payment is dated the day the money moved", () => {
     const storage = fakeStorage([internet]);
     const out = await payBillOccurrence(storage, "bill-net", { source: "route" }, "UTC");
     const today = new Date().toISOString().slice(0, 10);
-    expect(out.occurrenceDate).toBe("2026-09-12");   // settles the right cycle…
-    expect(out.payment.paymentDate).toBe(today);      // …on the day it was paid
-    expect(storage.expenses[0].date).toBe(today);
+    expect(out.occurrenceDate).toBe("2026-09-12");
+    expect(out.payment.paymentDate).toBe(today);           // the cash date
+    expect(storage.expenses[0].date).toBe("2026-09-12");   // the period it pays for
   });
 
-  it("dates an early payment today too — one rule, not two", async () => {
+  it("paying next month's bill early is next month's spend, not this month's", async () => {
     const netflix = {
       id: "bill-nf", name: "Netflix", type: "liability", type_key: "streaming",
       parentProfileId: "person-1",
@@ -402,6 +403,55 @@ describe("#6 a payment is dated the day the money moved", () => {
     const storage = fakeStorage([netflix]);
     const out = await payBillOccurrence(storage, "bill-nf", { source: "route" }, "UTC");
     expect(out.payment.paymentDate).toBe(new Date().toISOString().slice(0, 10));
+    expect(storage.expenses[0].date).toBe("2099-01-22");
+  });
+});
+
+describe("#8 a loan payment is a debt payment, not 'General' spending", () => {
+  it("logs the serviced-debt bill under the debt bucket", async () => {
+    const storage = fakeStorage([DODGE_LOAN, { ...DODGE_BILL, fields: { ...DODGE_BILL.fields, category: "loan" } }]);
+    await payBillOccurrence(storage, "bill-dodge", { source: "route" }, "America/Los_Angeles");
+    expect(storage.expenses[0].category).toBe("debt");
+  });
+
+  it("folds the obligation spelling 'loan' to the expense bucket 'debt'", () => {
+    expect(canonicalExpenseCategory("loan")).toBe("debt");
+    expect(canonicalExpenseCategory("Car payment")).toBe("debt");
+    expect(categoryLabel("debt")).toBe("Debt payments");
+    expect(EXPENSE_CATEGORIES).toContain("debt");
+  });
+});
+
+describe("#2 (round 2) a one-time income counts in the month it landed", () => {
+  const august = [
+    { description: "Freelance", amount: 750, frequency: "once", date: "2026-08-22" },
+    { description: "DoorDash", amount: 175, frequency: "once", date: "2026-08-22" },
+    { description: "Paycheck", amount: 1250, frequency: "once", date: "2026-08-10" },
+  ];
+
+  it("is the whole amount in its own month", () => {
+    // These three were $0 in every month: the monthly-equivalent of a
+    // one-off is nothing, so August read "In: $0" against $2,175 of income.
+    expect(sumMonthlyIncomeForMonth(august, "2026-08")).toBe(2175);
+  });
+
+  it("is nothing in any other month", () => {
+    expect(sumMonthlyIncomeForMonth(august, "2026-09")).toBe(0);
+    expect(sumMonthlyIncomeForMonth(august, "2026-07")).toBe(0);
+  });
+
+  it("still projects a recurring stream from its start month on", () => {
+    const salary = [{ description: "Salary", amount: 3000, frequency: "monthly", date: "2026-08-01" }];
+    expect(sumMonthlyIncomeForMonth(salary, "2026-07")).toBe(0);
+    expect(sumMonthlyIncomeForMonth(salary, "2026-08")).toBe(3000);
+    expect(sumMonthlyIncomeForMonth(salary, "2026-09")).toBe(3000);
+  });
+
+  it("shows up on the trend chart", () => {
+    const trend = buildCashTrend([{ date: "2026-08-09", amount: 2825 }], august, "2026-09-17", "America/Los_Angeles");
+    const aug = trend.find(p => p.month === "Aug")!;
+    expect(aug.inflow).toBe(2175);
+    expect(aug.net).toBe(-650);
   });
 });
 
@@ -424,5 +474,21 @@ describe("#7 last-paid never moves backwards", () => {
     }, "UTC");
     const after = await storage.getProfile("bill-ins");
     expect(after.fields.lastPaidDate).toBe("2026-09-15");
+  });
+});
+
+describe("#5 (round 2) the snapshot counts only what the list shows", () => {
+  it("leaves synthetic QA rows out of Spend unless asked to include them", async () => {
+    // A "QA Test …" expense raised Spend by $500 while never appearing in the
+    // list — the list applied shared/test-data's patterns, the snapshot didn't.
+    const { MemStorage } = await import("../server/storage");
+    const s = new MemStorage();
+    const ym = new Date().toISOString().slice(0, 7);
+    await s.createExpense({ description: "Groceries", amount: 40, category: "food", date: `${ym}-03`, linkedProfiles: [], tags: [] } as any);
+    await s.createExpense({ description: "QA Test Coffee", amount: 500, category: "food", date: `${ym}-04`, linkedProfiles: [], tags: [] } as any);
+    const hidden: any = await s.getDashboardEnhanced();
+    expect(hidden.financeSnapshot.totalMonthlySpend).toBe(40);
+    const shown: any = await s.getDashboardEnhanced(undefined, undefined, { includeTestData: true });
+    expect(shown.financeSnapshot.totalMonthlySpend).toBe(540);
   });
 });

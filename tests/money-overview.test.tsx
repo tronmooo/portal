@@ -71,9 +71,12 @@ describe("MoneyOverview", () => {
       spendByCategory={{ dining: 368, shopping: 312, groceries: 74 }} onCategoryClick={onCategoryClick} />);
     expect(screen.getByTestId("money-cashflow-overview").textContent).toContain("Inflow");
     const cats = screen.getByTestId("money-categories");
-    expect(cats.textContent).toContain("dining");
+    // Rendered through the shared categoryLabel (round-2 QA: the card said
+    // "Debt" for a bucket every other surface calls "Debt payments").
+    expect(cats.textContent).toContain("Dining");
     // sorted highest-first → dining before groceries
-    expect(cats.textContent!.indexOf("dining")).toBeLessThan(cats.textContent!.indexOf("groceries"));
+    expect(cats.textContent!.indexOf("Dining")).toBeLessThan(cats.textContent!.indexOf("Groceries"));
+    // The click still hands back the raw key the filter understands.
     fireEvent.click(screen.getByTestId("money-cat-dining"));
     expect(onCategoryClick).toHaveBeenCalledWith("dining");
   });

@@ -1,5 +1,6 @@
 import { changedFieldsOnly } from "@shared/field-patch";
 import { localTodayISO, formatLocalDate, monthKeyLabel } from "@/lib/dates";
+import { addDays } from "@shared/timezone";
 import { buildCashTrend } from "@/lib/cash-trend";
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,7 +17,7 @@ import { useShowTestData } from "@/lib/showTestData";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
-import { toMonthlyAmount, sumMonthIncomeNow } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthIncomeNow, canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -152,6 +153,7 @@ export default function FinancePage() {
   });
   // Accounts, for the "Paid from" picker. Derived from the profile list that is
   // already loaded — one fetch, one source of truth, no second account list.
+  const showTestData = useShowTestData();
   const accountOptions = useMemo(() => accountViews(profiles || []), [profiles]);
   const accountIdSet = useMemo(() => new Set(accountOptions.map((a) => a.id)), [accountOptions]);
   // "Dinner at Chili's" $100 was saved twice four minutes apart and nothing
@@ -174,8 +176,11 @@ export default function FinancePage() {
   // whole page on a cold serverless recompute. staleTime + mutation-driven
   // invalidation (every write invalidates these keys) already keep them fresh.
   const { data: enhanced } = useQuery<any>({
-    queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json()),
+    queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds, ...(showTestData ? ["test"] : [])],
+    // The snapshot skips synthetic QA rows unless the hidden toggle is on —
+    // the same rule the expense list applies — so Spend never counts a row
+    // the list doesn't show.
+    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}${showTestData ? `${profileParam ? "&" : "?"}includeTestData=1` : ""}`).then(r => r.json()),
   });
   const { data: expenses, isLoading, error, refetch } = useQuery<Expense[]>({
     queryKey: ["/api/expenses", filterMode, ...filterIds],
@@ -890,7 +895,6 @@ export default function FinancePage() {
     assetPartyLinks: assetPartyLinks || [],
     liabilityProfileLinks: liabilityProfileLinks || [],
   }), [filterMode, filterIds, profiles, assetPartyLinks, liabilityProfileLinks]);
-  const showTestData = useShowTestData();
   const profileFiltered = useMemo(
     () => (expenses || []).filter(e => passesProfileFilter(e.linkedProfiles, filterCtx) && (showTestData || !isTestEntity(e))),
     [expenses, filterCtx, showTestData],
@@ -1219,6 +1223,7 @@ export default function FinancePage() {
           cards. All values derive from data already fetched above. */}
       {(() => {
         const snap = enhanced?.financeSnapshot || {};
+        const ymNowTop = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
         const assetValue = Number(snap.totalAssetValue || 0);
         const liabilities = Number(snap.totalLiabilities || 0);
         const netWorth = assetValue - liabilities;
@@ -1228,9 +1233,21 @@ export default function FinancePage() {
           .map((r: any) => Number(r.netWorth ?? r.net_worth ?? 0))
           .filter((n: number) => Number.isFinite(n))
           .reverse();
-        const momPct = nwSeries.length >= 2 && nwSeries[0] !== 0
-          ? ((nwSeries[nwSeries.length - 1] - nwSeries[0]) / Math.abs(nwSeries[0])) * 100
-          : (typeof snap.spendTrend === "number" ? null : null);
+        // Month-over-month means against ~30 days ago — not against the first
+        // point of a 120-day series, which for a new account is a near-zero
+        // snapshot and turned an ordinary month into "▲1201%".
+        const momPct = (() => {
+          const rows = (Array.isArray(nwHistory) ? nwHistory : [])
+            .map((r: any) => ({ day: String(r.snapshotDate ?? r.snapshot_date ?? "").slice(0, 10), nw: Number(r.netWorth ?? r.net_worth ?? NaN) }))
+            .filter((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.day) && Number.isFinite(r.nw))
+            .sort((a, b) => a.day.localeCompare(b.day));
+          if (rows.length < 2) return null;
+          const latest = rows[rows.length - 1];
+          const cutoff = addDays(latest.day, -30);
+          const base = rows.filter((r) => r.day <= cutoff).pop() ?? rows[0];
+          if (base.day === latest.day || Math.abs(base.nw) < 1) return null;
+          return ((latest.nw - base.nw) / Math.abs(base.nw)) * 100;
+        })();
 
         // Cash flow, from the ONE definition the snapshot owns:
         //   IN  = recurring income streams + paychecks actually received
@@ -1242,6 +1259,10 @@ export default function FinancePage() {
         const monthlyIncome = snap.monthlyIncome != null
           ? Number(snap.monthlyIncome) || 0
           : sumMonthIncomeNow(incomes || [], paychecks || [], BROWSER_TIMEZONE);
+        // The one-off part of this month's income, so the card can say what
+        // the figure is made of (the snapshot's recurringIncome includes it).
+        const oneTimeIncomeNow = (incomes || []).reduce((sum: number, i: any) =>
+          canonicalIncomeFrequency(i?.frequency) === "once" && String(i?.date || "").slice(0, 7) === ymNowTop ? sum + (Number(i?.amount) || 0) : sum, 0);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const billsStillOwed = Number(snap.unpaidBillsThisMonth ?? snap.monthlyObligationTotal ?? 0) || 0;
         const cashOut = spendMtd + billsStillOwed;
@@ -1305,6 +1326,9 @@ export default function FinancePage() {
             spendMtd={spendMtd}
             spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
             incomeMtd={monthlyIncome}
+            incomeParts={snap.recurringIncome != null && snap.receivedPaycheckIncome != null
+              ? `recurring ${formatMoney(Number(snap.recurringIncome) - oneTimeIncomeNow)} · one-time ${formatMoney(oneTimeIncomeNow)} · paychecks ${formatMoney(Number(snap.receivedPaycheckIncome))}`
+              : undefined}
             budgets={budgetRows}
             bills={upcomingBillsList}
             spendByCategory={spendByCat}
@@ -1366,7 +1390,10 @@ export default function FinancePage() {
               spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
               spendByCategory={spendByCat} monthExpenses={monthExpenses} />
             <IncomePopup open={financePopup === "income"} onOpenChange={closer}
-              incomes={incomes || []} monthlyIncome={monthlyIncome} />
+              incomes={incomes || []} paychecks={paychecks || []} monthlyIncome={monthlyIncome} ym={ymNow}
+              onEditIncome={(inc) => { setFinancePopup(null); setEditingIncome(inc); }}
+              onDeleteIncome={(inc) => { setFinancePopup(null); setIncomeToDelete(inc); }}
+              onDeletePaycheck={(pc) => { setFinancePopup(null); setPaycheckToDelete(pc); }} />
             <BillsDuePopup open={financePopup === "bills"} onOpenChange={closer}
               bills={upcomingBills}
               onPayBill={(bill) => setBillToPay({ id: bill.id, name: bill.name, amount: bill.amount, dueDate: bill.dueDate })}
@@ -1453,7 +1480,8 @@ export default function FinancePage() {
           investment/brokerage profiles too), so the balances here are the same
           rows that feed Net Worth, the balance sheet and cash flow above —
           one record per account, never a second copy of the same money. */}
-      <AccountsSection profiles={(profiles as any[]) || []} />
+      <AccountsSection profiles={(profiles as any[]) || []}
+        debtBreakdown={Array.isArray(enhanced?.financeSnapshot?.liabilityBreakdown) ? enhanced.financeSnapshot.liabilityBreakdown : undefined} />
 
       {/* ── Expenses ──────────────────────────────────────────────────────
           THE place you look up a spend, and therefore the place the search,
@@ -1786,8 +1814,8 @@ export default function FinancePage() {
             <AlertDialogDescription>
               {billToPay ? `${formatMoney(billToPay.amount)}` : ""}
               {billToPay?.dueDate ? ` due ${formatLocalDate(billToPay.dueDate, { month: "long", day: "numeric" })}` : ""}.
-              {" "}This records the payment, logs it as an expense dated today and moves the
-              bill on to its next cycle. You can undo it right after.
+              {" "}This records the payment, logs it as an expense for that billing period and
+              moves the bill on to its next cycle. You can undo it right after.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1940,7 +1968,7 @@ export default function FinancePage() {
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="micro-label text-muted-foreground flex items-center gap-1.5">
-            <TrendingUp className="h-3.5 w-3.5" /> Income ({incomes.length})
+            <TrendingUp className="h-3.5 w-3.5" /> Income sources ({incomes.length})
           </h2>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setAddIncomeOpen(true)} data-testid="button-add-income">
             <Plus className="h-3 w-3 mr-1" /> Add Income
@@ -1948,7 +1976,7 @@ export default function FinancePage() {
         </div>
         {incomes.length === 0 ? (
           <div className="rounded-xl border border-border/40 px-3 py-6 text-center">
-            <p className="text-sm text-muted-foreground">No recurring income yet.</p>
+            <p className="text-sm text-muted-foreground">No income sources yet — add a recurring one (salary, rent you collect) or a one-time one (a bonus, a side job).</p>
           </div>
         ) : (
           <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
@@ -1961,9 +1989,13 @@ export default function FinancePage() {
                   <>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium truncate">{inc.description}</p>
-                      <p className="text-[11px] text-muted-foreground capitalize">
-                        {inc.frequency || 'monthly'}
-                        {inc.date ? ` · ${formatLocalDate(inc.date, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}
+                      <p className="text-[11px] text-muted-foreground">
+                        {/* Say which kind it is; "monthly" and "once" alone read as
+                            the same list, which is how a one-off bonus and a salary
+                            looked interchangeable. */}
+                        {canonicalIncomeFrequency(inc.frequency) === "once"
+                          ? `One-time${inc.date ? ` · ${formatLocalDate(inc.date, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}`
+                          : `Recurring · ${String(inc.frequency || 'monthly')}${inc.date ? ` · from ${formatLocalDate(inc.date, { month: 'short', day: 'numeric', year: 'numeric' })}` : ''}`}
                       </p>
                     </div>
                     <span className="text-xs font-bold tabular-nums">{formatMoney(Number(inc.amount || 0))}</span>
@@ -2182,7 +2214,7 @@ export default function FinancePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this income?</AlertDialogTitle>
             <AlertDialogDescription>
-              {incomeToDelete ? `"${incomeToDelete.description}" ($${Number(incomeToDelete.amount || 0).toLocaleString()}) will be permanently deleted.` : "This income will be permanently deleted."}
+              {incomeToDelete ? `"${incomeToDelete.description}" ($${Number(incomeToDelete.amount || 0).toLocaleString()}) will be removed.` : "This income will be removed."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2446,7 +2478,7 @@ export default function FinancePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete this paycheck?</AlertDialogTitle>
             <AlertDialogDescription>
-              {paycheckToDelete ? `“${paycheckToDelete.source}” ($${Number(paycheckToDelete.actual_amount ?? paycheckToDelete.amount ?? 0).toLocaleString()}) will be permanently deleted.` : "This paycheck will be permanently deleted."}
+              {paycheckToDelete ? `“${paycheckToDelete.source}” ($${Number(paycheckToDelete.actual_amount ?? paycheckToDelete.amount ?? 0).toLocaleString()}) will be removed.` : "This paycheck will be removed."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2469,7 +2501,7 @@ export default function FinancePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Expense?</AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteConfirmId && (() => { const e = profileFiltered.find(x => x.id === deleteConfirmId); return e ? `"${e.description}" ($${e.amount.toFixed(2)}) will be permanently deleted.` : 'This expense will be permanently deleted.'; })()}
+              {deleteConfirmId && (() => { const e = profileFiltered.find(x => x.id === deleteConfirmId); return e ? `"${e.description}" ($${e.amount.toFixed(2)}) will be removed.` : 'This expense will be removed.'; })()}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

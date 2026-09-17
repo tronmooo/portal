@@ -247,7 +247,7 @@ export function HubKpiStrip() {
         icon={Wallet}
         accent={tabAccent("finance")}
         label="Net Worth"
-        value={netWorth == null ? "—" : `${netWorth < 0 ? "-" : ""}${fmtMoney(netWorth)}`}
+        value={netWorth == null ? "—" : `${netWorth < 0 ? "-" : ""}$${fmtMoney(netWorth)}`}
         tone={netWorth != null && netWorth < 0 ? "neg" : undefined}
         onClick={() => setPopup("networth")}
         testId="hub-kpi-networth"
@@ -256,7 +256,7 @@ export function HubKpiStrip() {
         icon={ArrowLeftRight}
         accent={tabAccent("finance")}
         label="Cash Flow"
-        value={cashFlow == null ? "—" : `${cashFlow >= 0 ? "+" : "-"}${fmtMoney(cashFlow)}`}
+        value={cashFlow == null ? "—" : `${cashFlow >= 0 ? "+" : "-"}$${fmtMoney(cashFlow)}`}
         tone={cashFlow == null ? undefined : cashFlow >= 0 ? "pos" : "neg"}
         onClick={() => setPopup("cashflow")}
         testId="hub-kpi-cashflow"

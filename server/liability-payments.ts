@@ -58,6 +58,9 @@ export interface LiabilityPaymentResult {
   interest: number;
   /** True when this was a recurring bill: a charge logged, no balance moved. */
   recurring: boolean;
+  /** The loan or card a recurring bill moved (fields.linkedLiabilityId or the
+   *  "<loan> payment" pairing) — absent for an ordinary service bill. */
+  servicedDebtId?: string;
 }
 
 /** A row's principal with its direction: a reversal put money back, everything else took it off. */
@@ -393,6 +396,7 @@ export async function applyLiabilityPayment(
       payment, liability,
       newBalance: servicedBalance ?? 0,
       principal: principalPortion, interest: interestPortion, recurring: true,
+      ...(linkedDebt ? { servicedDebtId: linkedDebt.id as string } : {}),
     };
   }
 
@@ -985,8 +989,21 @@ export async function payBillOccurrence(
 
   // ── 4. expense (recurring bills only) ───────────────────────────────────
   // A paid bill is money actually spent; without this row budgets and monthly
-  // spend never see bill payments at all. Loan payments move a balance instead
-  // — logging principal as spending would distort budgets.
+  // spend never see bill payments at all.
+  //
+  // The expense is dated to the PERIOD the bill pays for (its occurrence), not
+  // the day the money moved. The payment row keeps the cash date. Dated by
+  // payment day, the autopay cron's catch-up — one occurrence per run — put
+  // "Rent — Jul 1" on Sep 6 and "Rent — Aug 1" on Sep 7, so three months of
+  // rent were September spend; paying October's Internet bill early made it
+  // September's second Internet bill. Month-of-occurrence is also the only
+  // rule consistent with the cash-flow model (spend this month + bills still
+  // owed this month): paying an occurrence moves it from "owed" to "spent"
+  // in the SAME month and the total stays put, whenever it is paid.
+  //
+  // A bill that services a debt logs under "debt", never "general": the
+  // obligation's "loan" category had no expense bucket and a $912 car payment
+  // was most of the "General" slice.
   let expenseId: string | null = null;
   const logExpense = input.logExpense ?? (recurring && f.autoLogExpense !== false);
   if (recurring && logExpense && amount > 0) {
@@ -1001,9 +1018,9 @@ export async function payBillOccurrence(
       const owners = Array.from(new Set([(liability as any).parentProfileId || liabilityId, ...parties]));
       const expense = await storage.createExpense({
         amount,
-        category: String(f.category || "bills"),
+        category: ledger.servicedDebtId ? "debt" : String(f.category || "bills"),
         description: `${liability.name} — ${occurrenceDate}`,
-        date: paymentDate,
+        date: occurrenceDate,
         linkedProfiles: owners,
         // The payment:<id> tag is the join key unpayBillOccurrence uses to
         // retract this exact expense. Not display metadata — an inverse's key.
