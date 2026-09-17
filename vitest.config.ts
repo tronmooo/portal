@@ -218,6 +218,7 @@ export default defineConfig({
       'tests/reminder-cron.test.ts',
       'tests/timed-tasks.test.ts',
       'tests/habit-occurrences.test.ts',
+      'tests/habit-list-order.test.ts',
       'tests/habit-tracker-link.test.ts',
       'tests/habit-completion-pipeline.test.ts',
       'tests/qa-2026-08-22-findings.test.ts',
