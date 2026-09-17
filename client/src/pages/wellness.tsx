@@ -33,6 +33,8 @@ import { useToast } from "@/hooks/use-toast";
 import { HeartPulse } from "lucide-react";
 import type { Tracker, Profile, Obligation, Document as Doc } from "@shared/schema";
 import { isHealthDocument } from "@shared/health-documents";
+import { isMedicationTracker } from "@shared/medication-doses";
+import { trackerNamesMatch } from "@shared/tracker-identity";
 import { readField } from "@/lib/profile-fields";
 import {
   collectMetrics, todaySignals, labPanels, activityHistory, wellnessScore,
@@ -95,7 +97,9 @@ export default function WellnessPage() {
   const myDocuments = (Array.isArray(documents) ? documents : []).filter((d: any) => ownedBySubject(d.linkedProfiles));
 
   // ── The readout ──────────────────────────────────────────────────────────
-  const metrics = collectMetrics(myTrackers);
+  // "Today" is the browser's day: the readout's freshness windows (today /
+  // last night) must agree with the clock the person is looking at.
+  const metrics = collectMetrics(myTrackers, { timezone: BROWSER_TIMEZONE });
   const signals = todaySignals(metrics);
   const panels = labPanels(metrics);
   const body = bodyVitals(metrics);
@@ -110,10 +114,9 @@ export default function WellnessPage() {
   // is due is useful; ticking a box every morning is the chore this page is
   // getting rid of.
   const isSupplement = (o: any) => /supplement|vitamin|omega|probiotic|magnesium|zinc|fish oil|creatine/i.test(`${o.name} ${o.category}`);
-  const medications: WellnessMed[] = myObligations
+  const medsFromBills: WellnessMed[] = myObligations
     .filter((o: any) => o.kind === "medication" && o.status !== "cancelled")
     .sort((a: any, b: any) => String(a.nextDueDate || "").localeCompare(String(b.nextDueDate || "")))
-    .slice(0, 12)
     .map((o: any) => {
       const { name, dose } = splitDose(o.name);
       const refillRaw = o.fields?.refillDate || o.fields?.refill || (isSupplement(o) ? null : o.nextDueDate);
@@ -125,6 +128,21 @@ export default function WellnessPage() {
         schedule: o.frequency,
       };
     });
+  // A medication in this app IS a tracker (category "medication", its entries
+  // the dose ledger — shared/medication-doses). Care read only the bills
+  // table, so a person with Vitamin D and Multivitamin trackers was told "No
+  // medications". Trackers fill the list; a bill for the same drug is merged.
+  const medsFromTrackers: WellnessMed[] = myTrackers
+    .filter((t: any) => isMedicationTracker(t))
+    .filter((t: any) => !medsFromBills.some((m) => trackerNamesMatch(m.name, t.name)))
+    .map((t: any) => {
+      const { name, dose } = splitDose(String(t.name || ""));
+      const last = (t.entries || []).slice(-1)[0];
+      const doseText = dose || (last?.values?.dosage != null ? String(last.values.dosage) : undefined);
+      const schedule = String(last?.values?.frequency || t.unit || "").trim() || undefined;
+      return { id: t.id, name, dose: doseText, schedule };
+    });
+  const medications: WellnessMed[] = [...medsFromBills, ...medsFromTrackers].slice(0, 12);
 
   const appointments: WellnessAppt[] = myObligations
     .filter((o: any) => o.kind === "appointment" && o.status !== "cancelled" && o.nextDueDate)

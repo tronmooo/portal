@@ -107,7 +107,11 @@ function SignalTile({ signal }: { signal: TodaySignal }) {
         <span className="micro-label text-muted-foreground leading-tight">{signal.label}</span>
       </div>
       {signal.value == null ? (
-        <p className="text-xs text-muted-foreground mt-3" data-testid={`wellness-signal-${signal.key}-empty`}>{meta.connect}</p>
+        <p className="text-xs text-muted-foreground mt-3" data-testid={`wellness-signal-${signal.key}-empty`}>
+          {signal.lastAt
+            ? `${signal.key === "sleep" ? "No sleep recorded last night" : "No reading today"} · last ${new Date(signal.lastAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+            : meta.connect}
+        </p>
       ) : (
         <>
           <div className="flex items-baseline gap-1.5 mt-2">
@@ -159,7 +163,7 @@ function ScoreCard({ score }: { score: WellnessScore }) {
           ))}
           {live.length < score.components.length && (
             <p className="text-[11px] text-muted-foreground pt-1">
-              {score.components.filter((c) => c.score == null).map((c) => c.label).join(" and ")} not counted — no source connected.
+              {score.components.filter((c) => c.score == null).map((c) => `${c.label} not counted — ${c.detail.charAt(0).toLowerCase()}${c.detail.slice(1)}`).join(". ")}.
             </p>
           )}
         </div>
@@ -230,6 +234,7 @@ function WorkoutRow({ w }: { w: WorkoutGroup }) {
     w.minutes != null ? `${fmt(w.minutes)} min` : null,
     w.distance != null ? `${fmt(w.distance, 1)} mi` : null,
     w.reps != null ? `${fmt(w.reps)} reps` : null,
+    w.sets != null ? `${fmt(w.sets)} sets` : null,
   ].filter(Boolean).join(" · ");
   return (
     <a href={`#/trackers?tracker=${w.trackerId}`}

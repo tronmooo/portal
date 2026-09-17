@@ -10,6 +10,7 @@
 import { useMemo, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { isInScope as scopeIsInScope, selfIdsFrom, withAncestorOwnerIds } from "@shared/scope";
+import { netWorthChange } from "@shared/net-worth-change";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { isRecurringBill } from "@shared/liability-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -303,19 +304,13 @@ export function NetWorthPopup({
     pts[pts.length - 1] = netWorth;
     return pts;
   }, [nwHistory, netWorth]);
+  // ONE month-over-month rule (shared/net-worth-change), same as the Finance
+  // page and the Executive card. BUG-4's guards (trivial or sign-flipping
+  // baseline → $ delta only) live there now.
   const nwTrend = useMemo(() => {
-    if (nwSeries.length < 2) return null;
-    const first = nwSeries[0], last = nwSeries[nwSeries.length - 1];
-    if (!isFinite(first) || !isFinite(last)) return null;
-    const delta = last - first;
-    // BUG-4: only show a % when the baseline is non-trivial and the series
-    // doesn't cross zero — otherwise a near-zero or sign-flipping baseline
-    // yields a nonsensical percentage (e.g. "-109.9%"). Fall back to the $ delta.
-    const baselineTooSmall = Math.abs(first) < 1;
-    const signFlipped = (first < 0) !== (last < 0);
-    const pct = baselineTooSmall || signFlipped ? null : (delta / Math.abs(first)) * 100;
-    return { pct, up: delta >= 0, delta };
-  }, [nwSeries]);
+    const c = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth);
+    return c ? { pct: c.pct, up: c.up, delta: c.delta ?? 0 } : null;
+  }, [nwHistory, netWorth]);
   const nwPath = useMemo(() => {
     const s = nwSeries.length >= 2 ? nwSeries : null;
     if (!s) return null;

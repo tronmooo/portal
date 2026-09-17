@@ -23,6 +23,7 @@
 // the dashboard KPI tiles use.
 import { sumMonthIncomeNow } from "@shared/obligation-windows";
 import { isDoneToday } from "@shared/task-counts";
+import { netWorthChange } from "@shared/net-worth-change";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -689,19 +690,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // truth (same numbers the hub strip and Net Worth popup trust).
   const snap = enhanced?.financeSnapshot;
   const netWorth = snap != null ? (snap.totalAssetValue ?? 0) - (snap.totalLiabilities ?? 0) : null;
+  // ONE month-over-month rule (shared/net-worth-change): the Finance page,
+  // this card and the Net Worth popup read the same baseline, so they can no
+  // longer disagree (1201.1% vs 1241.7% on the same account).
   const nwTrend = useMemo(() => {
-    if (netWorth == null) return null;
-    const rows = (Array.isArray(nwHistory) ? [...nwHistory] : [])
-      .sort((a, b) => String(a.snapshotDate).localeCompare(String(b.snapshotDate)));
-    if (rows.length === 0) return null;
-    const first = Number(rows[0]?.netWorth) || 0;
-    const delta = netWorth - first;
-    // Only claim a % on a non-trivial, sign-stable baseline — otherwise fall
-    // back to the $ delta (same guard as the Net Worth popup, BUG-4).
-    const pct = Math.abs(first) < 1 || (first < 0) !== (netWorth < 0)
-      ? null : (delta / Math.abs(first)) * 100;
-    return { pct, delta, up: delta >= 0 };
-  }, [nwHistory, netWorth]);
+    const c = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, todayStr);
+    return c ? { pct: c.pct, delta: c.delta ?? 0, up: c.up } : null;
+  }, [nwHistory, netWorth, todayStr]);
 
   // Cash flow — mirrors HubKpiStrip/HeroKPISection exactly: monthly income
   // minus (month expenses + monthlyized active obligations).

@@ -220,6 +220,13 @@ export function HubKpiStrip() {
   const minDocDays = expDocs.length > 0
     ? Math.min(...expDocs.map((d: any) => (typeof d.daysUntil === "number" ? d.daysUntil : Infinity)))
     : null;
+  // The chip's count is every expiring document; its caption used to be
+  // driven by the single soonest one, so one overdue plus one due in 8 days
+  // read "2 · overdue". Count the two states separately.
+  const overdueDocs = expDocs.filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil < 0).length;
+  const docsSub = expDocs.length === 0 ? undefined
+    : overdueDocs > 0 ? `${overdueDocs} overdue${expDocs.length > overdueDocs ? ` · ${expDocs.length - overdueDocs} soon` : ""}`
+    : minDocDays != null && isFinite(minDocDays) ? `≤${minDocDays}d` : undefined;
 
   // Each chip wears the colour of the tab it belongs to, from the one place
   // those colours are declared.
@@ -295,8 +302,8 @@ export function HubKpiStrip() {
         accent={tabAccent("documents")}
         label="Docs Exp"
         value={String(expDocs.length)}
-        sub={minDocDays != null && isFinite(minDocDays) ? (minDocDays < 0 ? "overdue" : `≤${minDocDays}d`) : undefined}
-        subTone={minDocDays != null && minDocDays < 0 ? "neg" : "warn"}
+        sub={docsSub}
+        subTone={overdueDocs > 0 ? "neg" : "warn"}
         onClick={() => setPopup("docs")}
         testId="hub-kpi-docs"
       />

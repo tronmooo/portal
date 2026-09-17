@@ -27,11 +27,21 @@ export interface WellnessMetric {
   loggedAt: string | null;
   /** % change latest-vs-previous entry, or null. */
   changePct: number | null;
+  /**
+   * True when `value` is null ONLY because nothing was logged inside the
+   * window the caller asked for (today, last night) while an older reading
+   * exists — `lastValue`/`loggedAt` say what and when. A tile labelled
+   * "today" must never show that older reading as if it were today's.
+   */
+  stale: boolean;
+  /** The newest reading of any age (what `value` was before the window). */
+  lastValue: number | null;
 }
 
 const EMPTY: WellnessMetric = {
   value: null, unit: "", trackerId: null, trackerName: null,
   primaryField: null, series: [], loggedAt: null, changePct: null,
+  stale: false, lastValue: null,
 };
 
 /** The tracker's primary field — mirrors trackers.tsx: first isPrimary, else
@@ -57,16 +67,27 @@ function entriesNewestFirst(t: Tracker): TrackerEntry[] {
 export function readMetric(
   trackers: Tracker[] | undefined | null,
   patterns: RegExp[],
-  opts: { field?: string; unit?: string } = {},
+  opts: { field?: string; unit?: string; fieldPattern?: RegExp } = {},
 ): WellnessMetric {
   if (!Array.isArray(trackers) || trackers.length === 0) return { ...EMPTY };
+  // `fieldPattern` pins the match to a tracker that actually records the
+  // metric: "Calories" used to take the FIRST tracker whose category was
+  // nutrition — a two-cup Coffee tracker — and print its count as "2 kcal".
+  const fieldFor = (t: Tracker): string | null => {
+    if (opts.field) return opts.field;
+    if (!opts.fieldPattern) return primaryFieldOf(t);
+    const primary = primaryFieldOf(t);
+    if (opts.fieldPattern.test(primary)) return primary;
+    const f = (t.fields || []).find((x) => opts.fieldPattern!.test(x.name || ""));
+    return f ? f.name : null;
+  };
   const match = trackers.find((t) => {
     const hay = `${t.name || ""} ${t.category || ""}`.toLowerCase();
-    return patterns.some((p) => p.test(hay));
+    return patterns.some((p) => p.test(hay)) && fieldFor(t) !== null;
   });
   if (!match) return { ...EMPTY };
 
-  const field = opts.field || primaryFieldOf(match);
+  const field = fieldFor(match) || primaryFieldOf(match);
   const ordered = entriesNewestFirst(match);
   const nums = ordered
     .map((e) => Number(e.values?.[field]))
@@ -91,7 +112,38 @@ export function readMetric(
     series,
     loggedAt: ordered[0]?.timestamp || null,
     changePct,
+    stale: false,
+    lastValue: value,
   };
+}
+
+/** Local calendar day of a timestamp, for "is this today's" tests. */
+function localDay(ts: string | Date): number | null {
+  const t = ts instanceof Date ? ts : new Date(ts);
+  if (isNaN(t.getTime())) return null;
+  return Date.UTC(t.getFullYear(), t.getMonth(), t.getDate()) / 86400000;
+}
+
+/**
+ * The latest reading only if it falls within the last `windowDays` local
+ * days (0 = today only, 1 = today or yesterday — "last night" for sleep).
+ * Outside the window the metric reads as stale: no value, the old one kept
+ * in `lastValue` so a tile can say "last logged Aug 22" instead of
+ * presenting a three-week-old night as last night's.
+ */
+export function readRecentMetric(
+  trackers: Tracker[] | undefined | null,
+  patterns: RegExp[],
+  opts: { field?: string; unit?: string; fieldPattern?: RegExp; now?: Date; windowDays?: number } = {},
+): WellnessMetric {
+  const base = readMetric(trackers, patterns, opts);
+  if (base.value == null || !base.loggedAt) return base;
+  const now = opts.now || new Date();
+  const today = localDay(now)!;
+  const day = localDay(base.loggedAt);
+  const windowDays = Math.max(0, Math.floor(opts.windowDays ?? 0));
+  if (day != null && today - day <= windowDays && day <= today + 1) return base;
+  return { ...base, value: null, stale: true, lastValue: base.value };
 }
 
 // ── Activity ─────────────────────────────────────────────────────────────────
@@ -259,11 +311,14 @@ export function readActivity(
 
 /** Sum today's numeric entries for a matched tracker (for additive metrics like
  *  hydration / steps / calories where the daily total, not the last reading,
- *  is what matters). Falls back to the latest value when nothing logged today. */
+ *  is what matters). When nothing was logged today the metric is STALE — value
+ *  null, the newest older reading in `lastValue` — never the old total under a
+ *  "today" label (QA 2026-09-17: "Water 20 oz" from Sep 2, "3,137 steps today"
+ *  with nothing logged today). */
 export function readDailyTotal(
   trackers: Tracker[] | undefined | null,
   patterns: RegExp[],
-  opts: { field?: string; unit?: string; now?: Date } = {},
+  opts: { field?: string; unit?: string; fieldPattern?: RegExp; now?: Date } = {},
 ): WellnessMetric {
   const base = readMetric(trackers, patterns, opts);
   if (!base.trackerId || !Array.isArray(trackers)) return base;
@@ -279,8 +334,8 @@ export function readDailyTotal(
     .filter((e) => isToday(e.timestamp))
     .map((e) => Number(e.values?.[field]))
     .filter((n) => Number.isFinite(n));
-  if (todays.length === 0) return base;
-  return { ...base, value: todays.reduce((s, n) => s + n, 0) };
+  if (todays.length === 0) return { ...base, value: null, stale: base.value != null, lastValue: base.value };
+  return { ...base, value: todays.reduce((s, n) => s + n, 0), stale: false };
 }
 
 // ── Named vitals bundle ──────────────────────────────────────────────────────
@@ -340,9 +395,12 @@ export function extractVitals(
     glucose: readMetric(trackers, [/glucose|blood\s*sugar/], { unit: "mg/dL" }),
     cholesterol: readMetric(trackers, [/cholesterol|lipid/]),
     bmi: readMetric(trackers, [/\bbmi\b/]),
-    sleep: readMetric(trackers, [/sleep/], { unit: "h" }),
-    hydration: readDailyTotal(trackers, [/hydration|water/], { unit: "oz" }),
-    calories: readDailyTotal(trackers, [/calorie|kcal|energy intake|nutrition/], { unit: "kcal" }),
+    // "Last night" is last night: today's or yesterday's entry, nothing older.
+    sleep: readRecentMetric(trackers, [/sleep/], { unit: "h", now: opts.now, windowDays: 1 }),
+    hydration: readDailyTotal(trackers, [/hydration|water/], { unit: "oz", now: opts.now }),
+    // The tracker must actually record energy — a field named calories/kcal —
+    // so a nutrition-category "Coffee" tracker's cup count never reads as kcal.
+    calories: readDailyTotal(trackers, [/calorie|kcal|energy intake|nutrition/], { unit: "kcal", now: opts.now, fieldPattern: /calorie|kcal|energy/i }),
     steps,
     mood: readMetric(trackers, [/mood/], { unit: "/ 10" }),
     weightUnit: readMetric(trackers, [/weight/]).unit || "lbs",

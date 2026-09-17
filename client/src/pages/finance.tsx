@@ -49,6 +49,7 @@ import { isNetWorthLiabilityProfile, resolveLiabilityBalance } from "@shared/ass
 import { isAmortizable } from "@shared/liability-types";
 import { resolveAnnualRate, computeAmortizedPayment } from "@shared/liability-calc";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { netWorthChange } from "@shared/net-worth-change";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { useToast } from "@/hooks/use-toast";
@@ -976,14 +977,21 @@ export default function FinancePage() {
   // own — so a car loan with a balance, a 6.49% rate and a monthly payment
   // showed as "Loan Schedules (0) · No loan schedules found." Its projected
   // schedule lives on the loan's own page, so list it and link there.
-  const loansWithoutSchedule = useMemo(() => {
-    const scheduled = new Set(loanSchedules.map((e: any) => String(e.loan_name || "").toLowerCase()));
+  // ONE scope test for the profile-backed money on this page. The Accounts
+  // card was handed the unfiltered list, so "Loan balances" carried another
+  // person's student loan while the page was scoped to you.
+  const profileInScope = useMemo(() => {
     const emptySelfIds = new Set<string>();
-    const inScope = (p: any) => filterMode === "everyone" || filterIds.length === 0 || isInScope(
+    return (p: any) => filterMode === "everyone" || filterIds.length === 0 || isInScope(
       ownerCandidatesForProfile(p, assetPartyLinks, liabilityProfileLinks, profiles),
       { selectedIds: filterIds, selfIds: emptySelfIds },
       "out_of_scope",
     );
+  }, [profiles, filterMode, filterIds, assetPartyLinks, liabilityProfileLinks]);
+  const scopedProfiles = useMemo(() => ((profiles as any[]) || []).filter(profileInScope), [profiles, profileInScope]);
+  const loansWithoutSchedule = useMemo(() => {
+    const scheduled = new Set(loanSchedules.map((e: any) => String(e.loan_name || "").toLowerCase()));
+    const inScope = profileInScope;
     return (profiles || [])
       .filter((p: any) => !p.deletedAt && !p.deleted_at && inScope(p)
         && isNetWorthLiabilityProfile(p)
@@ -999,7 +1007,7 @@ export default function FinancePage() {
       })
       .filter((l: { balance: number }) => l.balance > 0)
       .sort((a: { balance: number }, b: { balance: number }) => b.balance - a.balance);
-  }, [profiles, loanSchedules, filterMode, filterIds, assetPartyLinks, liabilityProfileLinks]);
+  }, [profiles, loanSchedules, profileInScope]);
 
   // ── Early returns (after ALL hooks including useMemo) ──
   if (isLoading) {
@@ -1223,14 +1231,16 @@ export default function FinancePage() {
         const liabilities = Number(snap.totalLiabilities || 0);
         const netWorth = assetValue - liabilities;
 
-        // Net-worth trend: history is newest-first → reverse to oldest→newest.
+        // Net-worth trend: the ONE month-over-month rule every surface uses
+        // (shared/net-worth-change) — a real 30-day baseline against the live
+        // total, or no percentage at all.
+        const nwChange = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }));
+        const momPct = nwChange?.pct ?? null;
+        // Sparkline points, oldest → newest (history arrives newest-first).
         const nwSeries = (Array.isArray(nwHistory) ? nwHistory : [])
           .map((r: any) => Number(r.netWorth ?? r.net_worth ?? 0))
           .filter((n: number) => Number.isFinite(n))
           .reverse();
-        const momPct = nwSeries.length >= 2 && nwSeries[0] !== 0
-          ? ((nwSeries[nwSeries.length - 1] - nwSeries[0]) / Math.abs(nwSeries[0])) * 100
-          : (typeof snap.spendTrend === "number" ? null : null);
 
         // Cash flow, from the ONE definition the snapshot owns:
         //   IN  = recurring income streams + paychecks actually received
@@ -1453,7 +1463,7 @@ export default function FinancePage() {
           investment/brokerage profiles too), so the balances here are the same
           rows that feed Net Worth, the balance sheet and cash flow above —
           one record per account, never a second copy of the same money. */}
-      <AccountsSection profiles={(profiles as any[]) || []} />
+      <AccountsSection profiles={scopedProfiles} people={(profiles as any[]) || []} />
 
       {/* ── Expenses ──────────────────────────────────────────────────────
           THE place you look up a spend, and therefore the place the search,

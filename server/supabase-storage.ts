@@ -3274,6 +3274,13 @@ export class SupabaseStorage implements IStorage {
   async logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined> {
     const tracker = await this.getTracker(data.trackerId);
     if (!tracker) return undefined;
+    // An entry on a tracker with exactly one owner is that owner's entry. A
+    // door that sends no profileId (the trackers page's dose button, the
+    // habit mirror before it learned to) used to store null, and every
+    // per-person reader then dropped the row.
+    if (!data.profileId && Array.isArray(tracker.linkedProfiles) && tracker.linkedProfiles.length === 1 && tracker.linkedProfiles[0]) {
+      data = { ...data, profileId: tracker.linkedProfiles[0] };
+    }
 
     // Provenance metadata (per-value source/confidence/assumptions from the
     // estimation engine) rides in on values._enrichment but belongs on the

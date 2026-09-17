@@ -146,7 +146,12 @@ export function AddAccountDialog({ open, onOpenChange, profiles, onCreated }: {
   );
 }
 
-export function AccountsSection({ profiles }: { profiles: any[] }) {
+/**
+ * `profiles` is the SCOPED list (the page's people filter applied) and feeds
+ * every total; `people`, when given, is the unfiltered list so the add-account
+ * dialog can still assign an account to anyone.
+ */
+export function AccountsSection({ profiles, people: allPeople }: { profiles: any[]; people?: any[] }) {
   const { toast } = useToast();
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<AccountView | null>(null);
@@ -171,8 +176,8 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
   const offAccountDebt = useMemo(() => summarizeLiabilityDebt(profiles || []), [profiles]);
 
   const people = useMemo(
-    () => (profiles || []).filter((p: any) => p.type === "self" || p.type === "person"),
-    [profiles],
+    () => (allPeople || profiles || []).filter((p: any) => p.type === "self" || p.type === "person"),
+    [allPeople, profiles],
   );
 
   const refresh = () => invalidateDomains("profiles", "assets", "liabilities", "dashboard");
@@ -214,7 +219,7 @@ export function AccountsSection({ profiles }: { profiles: any[] }) {
         onClick={() => setAddOpen(true)} data-testid="btn-add-account">
         <Plus className="w-3.5 h-3.5 mr-1" />Add account
       </Button>
-      <AddAccountDialog open={addOpen} onOpenChange={setAddOpen} profiles={profiles} />
+      <AddAccountDialog open={addOpen} onOpenChange={setAddOpen} profiles={allPeople || profiles} />
     </>
   );
 

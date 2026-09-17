@@ -99,7 +99,7 @@ describe("Wellness overview — the readout", () => {
     const breakdown = screen.getByTestId("wellness-score-breakdown").textContent || "";
     expect(breakdown).toMatch(/Sleep\s*57%/);
     expect(breakdown).toMatch(/Activity\s*43%/);
-    expect(breakdown).toMatch(/Recovery not counted — no source connected/);
+    expect(breakdown).toMatch(/Recovery not counted — no recovery source connected/);
   });
 
   it("groups labs by panel, flags out-of-range values and shows the trend", () => {

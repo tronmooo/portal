@@ -184,8 +184,11 @@ export function extractionDateRows(
       derived,
       // Actionable dates default to ON. The user asked to be shown the date and
       // given the choice — not to have to hunt for a checkbox to get the
-      // behaviour the app already intends.
-      defaultAddToCalendar: true,
+      // behaviour the app already intends. A BIRTHDAY on a document is the
+      // exception: a lab report's date-of-birth line is not a calendar entry
+      // the person asked for (it produced yearly "Birthday — Apex Health
+      // Diagnostics…" events), so it is shown unticked — one tap adds it.
+      defaultAddToCalendar: derived,
       daysUntil,
       countdown: opts.today ? countdownLabel(iso, opts.today, cls.ruleType) : null,
     });

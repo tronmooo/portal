@@ -4618,7 +4618,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       const { subject, isSelf } = resolveWellnessSubject(profiles as any[], ids);
       const mine = (trackers as any[]).filter((t) => belongsToSubject(t?.linkedProfiles, subject, isSelf));
 
-      const metrics = collectMetrics(mine as any);
+      const metrics = collectMetrics(mine as any, { timezone: (storage as any)._timezone });
       const workouts = activityHistory(mine as any);
       const labs = labPanels(metrics);
       const brief = weeklyBrief({ metrics, workouts, labs });
@@ -6268,6 +6268,12 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
         }
       }
     }
+    // OWNER. The UI's "Log dose" / quick-log doors send no profileId, and the
+    // row was stored with none — so the person's own Vitamin D dose counted
+    // for nobody and the dashboard kept saying "7 doses unlogged this week".
+    // Same rule the AI door already applies: the active scope's one person,
+    // else (in logEntry) the tracker's sole owner.
+    applyActiveProfileScope(req, req.body, "profileId");
     const parsed = insertTrackerEntrySchema.safeParse({ ...req.body, trackerId: req.params.id });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     const entry = await storage.logEntry(parsed.data);

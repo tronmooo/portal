@@ -23,7 +23,14 @@ import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isHoldingVisible, isOwnershipKnown } from "@/lib/holding-visibility";
-import { liabilityFamily } from "@shared/liability-types";
+import { countsTowardNetWorth, liabilityFamily } from "@shared/liability-types";
+
+// A loan secured by an asset (the truck's auto loan, parented to the truck)
+// is balance-sheet DEBT and belongs on the Liabilities tab wherever debt is
+// listed. The "nested under an asset → only on the asset's page" rule was
+// written for accessories (a service plan for a TV), not for a $48k loan,
+// which the tab then omitted while listing its $912/mo payment.
+const nestedDebtStaysListed = (p: any): boolean => countsTowardNetWorth((p as any)?.type_key ?? (p as any)?.typeKey);
 import { passesProfileFilter, pushdownSelection } from "@shared/profile-filter";
 import {
   ASSET_TAB_TYPES, assetTypeLabel, isAssetTabProfile, isLiabilityTabProfile,
@@ -2851,7 +2858,10 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
   }
 
   const isNum = typeof rawPrim === "number" || !isNaN(Number(rawPrim));
-  const big = isNum ? fmtNum(Number(rawPrim), 1) : String(rawPrim).slice(0, 14);
+  // A yes/no value reads as a word, never the raw token ("Fish Oil: true").
+  const boolWord = typeof rawPrim === "boolean" ? (rawPrim ? "Yes" : "No")
+    : /^(true|yes)$/i.test(String(rawPrim)) ? "Yes" : /^(false|no)$/i.test(String(rawPrim)) ? "No" : null;
+  const big = isNum ? fmtNum(Number(rawPrim), 1) : (boolWord ?? String(rawPrim).slice(0, 14));
   // Use the inferred unit for whichever key actually held the number, so
   // generic field names like "activity" still get a real unit from the
   // tracker name (Guitar → min, Walking → steps, etc.).
@@ -6481,7 +6491,7 @@ export default function TrackersPage() {
     }).length;
     const liabilities = (profiles || []).filter(p => {
       if (!isLiabilityLikeProfile(p)) return false;
-      if (hasAssetAncestor(p)) return false;
+      if (hasAssetAncestor(p) && !nestedDebtStaysListed(p)) return false;
       if (isShowAll) return true;
       return isLiabilityVisible(p.id, p.parentProfileId);
     }).length;
@@ -6951,7 +6961,8 @@ export default function TrackersPage() {
             if (!isShowAll && !isLiabilityVisible(p.id, pParent)) return;
             // Hide liabilities nested under an asset (e.g. "Service plan for
             // Sony TV" nested under TV — shows only inside the TV detail page).
-            if (hasAssetAncestor(p)) return;
+            // Real debt (a secured loan) stays listed.
+            if (hasAssetAncestor(p) && !nestedDebtStaysListed(p)) return;
             const f = (p.fields as any) || {}; const fin = f.finance || {};
             const bal = toNum(f.currentBalance) ?? toNum(f.remainingBalance) ?? toNum(f.loanBalance) ?? toNum(f.balance) ?? toNum(fin.remainingBalance) ?? toNum(fin.loanBalance) ?? toNum(fin.balance);
             const cost = toNum(f.cost) ?? toNum(f.amount) ?? toNum(f.monthlyPayment) ?? toNum(fin.monthlyPayment);
@@ -7485,8 +7496,9 @@ export default function TrackersPage() {
         const liabs = (profiles || []).filter(p => {
           if (!isLiabilityLikeProfile(p)) return false;
           // Hide liabilities nested under an asset — they live inside the
-          // parent asset's detail page (Linked Liabilities section).
-          if (_liabHasAssetAncestor(p)) return false;
+          // parent asset's detail page (Linked Liabilities section). Real
+          // debt (a secured loan) stays listed.
+          if (_liabHasAssetAncestor(p) && !nestedDebtStaysListed(p)) return false;
           // Profile-level scope — route through canonical isLiabilityVisible
           // so co-owners via liability_profile_links are also visible (matches
           // every other surface and the chip counts).

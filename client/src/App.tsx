@@ -773,6 +773,10 @@ function AppRouter() {
         <Route path="/chat" component={ChatPage} />
         <Route path="/" component={RootRedirect} />
         <Route path="/dashboard" component={DashboardPage} />
+        {/* The dashboard's focus modes are addressable, so a link to the
+            Executive tab lands on it instead of "Page not found". */}
+        <Route path="/dashboard/executive" component={DashboardPage} />
+        <Route path="/dashboard/daily" component={DashboardPage} />
         <Route path="/trackers" component={TrackersPage} />
         <Route path="/linked" component={TrackersPage} />
         <Route path="/liabilities" component={TrackersPage} />

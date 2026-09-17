@@ -219,6 +219,7 @@ export default defineConfig({
       'tests/timed-tasks.test.ts',
       // Missed repeating tasks roll on to their next occurrence (QA 2026-09-17).
       'tests/recurring-task-rollover.test.ts',
+      'tests/qa-2026-09-17-findings.test.ts',
       'tests/habit-occurrences.test.ts',
       'tests/habit-tracker-link.test.ts',
       'tests/habit-completion-pipeline.test.ts',

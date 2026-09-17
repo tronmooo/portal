@@ -196,7 +196,28 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
 
           const wantsEvent = action.payload?.createEvent === true
             || !(action.payload?.fields && action.payload?.profileId);
+          // IDEMPOTENT, like the profile-field write: the same document
+          // re-confirmed (or re-extracted) used to add the same event again —
+          // duplicate yearly "Birthday — Apex Health Diagnostics" rows. The
+          // action's dedupeKey rides on the event as a tag and is checked
+          // before another is created.
+          const dedupeTag = `dk:${action.dedupeKey}`;
+          let alreadyOnCalendar: any = null;
           if (wantsEvent) {
+            try {
+              const existing = await storage.getEvents();
+              alreadyOnCalendar = (existing || []).find((e: any) =>
+                Array.isArray(e?.tags) && e.tags.includes(dedupeTag)
+                || (String(e?.title || "") === String(action.payload?.title || action.title)
+                  && String(e?.date || "").slice(0, 10) === String(action.payload?.date || "").slice(0, 10)
+                  && Array.isArray(e?.linkedDocuments) && e.linkedDocuments.includes(input.documentId)),
+              ) || null;
+            } catch { /* a failed lookup must not block the write */ }
+          }
+          if (wantsEvent && alreadyOnCalendar) {
+            parts.push(`"${alreadyOnCalendar.title}" is already on the calendar`);
+            didSomething = true;
+          } else if (wantsEvent) {
             const profileId = action.payload?.profileId ? String(action.payload.profileId) : "";
             const recurrence = String(action.payload?.recurrence || "none");
             const ev = await storage.createEvent({
@@ -210,6 +231,7 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
               linkedProfiles: profileId ? [profileId] : [],
               tags: [
                 "document-extraction",
+                dedupeTag,
                 ...(action.payload?.ruleType ? [`rule:${action.payload.ruleType}`] : []),
                 ...(recurrence !== "none" ? ["recurring"] : []),
               ],

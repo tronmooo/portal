@@ -74,14 +74,49 @@ describe("wellness-metrics", () => {
     expect(readDailyTotal([t], [/hydration|water/], { now }).value).toBe(40);
   });
 
-  it("readDailyTotal falls back to latest when nothing logged today", () => {
+  it("readDailyTotal is STALE, not the old total, when nothing was logged today", () => {
+    // QA 2026-09-17: "3,137 steps today" with nothing logged today — the tile
+    // used to fall back to the newest entry of any age.
     const now = new Date("2026-07-08T20:00:00Z");
     const t = tracker({
       name: "Steps", category: "fitness",
       fields: [{ name: "steps", type: "number", isPrimary: true }],
       entries: [{ id: "e1", values: { steps: 7842 }, computed: {}, timestamp: ISO("2026-07-06T09:00:00Z") }] as any,
     });
-    expect(readDailyTotal([t], [/steps/], { now }).value).toBe(7842);
+    const m = readDailyTotal([t], [/steps/], { now });
+    expect(m.value).toBeNull();
+    expect(m.stale).toBe(true);
+    expect(m.lastValue).toBe(7842);
+    expect(m.loggedAt).toBe(ISO("2026-07-06T09:00:00Z"));
+  });
+
+  it("sleep reads last night only — a three-week-old night is stale", () => {
+    const now = new Date("2026-09-17T15:00:00Z");
+    const mk = (ts: string) => tracker({
+      name: "Sleep", category: "health", unit: "h",
+      fields: [{ name: "hours", type: "number", isPrimary: true }],
+      entries: [{ id: "e1", values: { hours: 6.75 }, computed: {}, timestamp: ISO(ts) }] as any,
+    });
+    expect(extractVitals([mk("2026-08-22T14:00:00Z")], { now }).sleep).toMatchObject({ value: null, stale: true, lastValue: 6.75 });
+    expect(extractVitals([mk("2026-09-16T14:00:00Z")], { now }).sleep.value).toBe(6.75);
+    expect(extractVitals([mk("2026-09-17T14:00:00Z")], { now }).sleep.value).toBe(6.75);
+  });
+
+  it("calories never reads a nutrition tracker that records no energy", () => {
+    const now = new Date("2026-09-17T15:00:00Z");
+    const coffee = tracker({
+      id: "coffee", name: "Coffee", category: "nutrition",
+      fields: [{ name: "cups", type: "number", isPrimary: true }],
+      entries: [{ id: "e1", values: { cups: 2 }, computed: {}, timestamp: ISO("2026-09-17T14:00:00Z") }] as any,
+    });
+    const meals = tracker({
+      id: "meals", name: "Nutrition", category: "nutrition",
+      fields: [{ name: "calories", type: "number", isPrimary: true, unit: "kcal" }],
+      entries: [{ id: "e2", values: { calories: 640 }, computed: {}, timestamp: ISO("2026-09-17T13:00:00Z") }] as any,
+    });
+    expect(extractVitals([coffee, meals], { now }).calories.value).toBe(640);
+    expect(extractVitals([coffee], { now }).calories.value).toBeNull();
+    expect(extractVitals([coffee], { now }).calories.stale).toBe(false);
   });
 
   it("extractVitals splits blood pressure into systolic/diastolic fields", () => {

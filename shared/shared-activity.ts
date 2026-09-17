@@ -66,6 +66,9 @@ export interface PlannedFanout {
 const PERSON_DERIVED = new Set([
   "caloriesburned", "calories_burned", "caloriesburnt",
   "steps", "stepcount", "step_count",
+  // A body measurement is one body's — never copied onto the other person.
+  "weight", "bodyweight", "body_weight", "bmi", "bodyfat", "body_fat", "bodyfatpct",
+  "ounces", "oz", "ml", "milliliters", "hydration", "water",
   "speedmph", "pace", "paceminutespermile",
   "heartrate", "avgheartrate", "heart_rate", "maxheartrate",
   "_enrichment",
@@ -73,6 +76,16 @@ const PERSON_DERIVED = new Set([
   // ("played with Sarah this afternoon") and is simply wrong on Sarah's row.
   "_notes",
 ]);
+
+/**
+ * Trackers whose entries describe ONE body or one person's intake: a weight,
+ * a blood pressure, a glass of water, a meal, a dose, a night's sleep. Two
+ * people can share a run; they cannot share a weigh-in.
+ */
+const PERSONAL_RECORD_RE = /\b(weight|weigh|bmi|body\s*fat|blood\s*pressure|\bbp\b|glucose|blood\s*sugar|heart\s*rate|resting\s*hr|hrv|sleep|hydration|water|nutrition|calories|meals?|food|diet|medication|meds?|dose|vitamin|supplement|mood|temperature)\b/i;
+export function isPersonalRecordTracker(trackerName: string | null | undefined): boolean {
+  return PERSONAL_RECORD_RE.test(String(trackerName || ""));
+}
 
 function numeric(v: any): number | null {
   const n = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(/[^0-9.-]/g, ""));
@@ -152,7 +165,11 @@ export function planSharedActivityFanout(opts: {
     // mentions by name covers the rest.
     const canonical = resolveCanonicalActivity(shared.clause)?.trackerName;
     const sources = writes.filter((w) =>
-      (canonical && trackerNamesMatch(w.trackerName, canonical)) || mentionsTracker(shared.clause, w.trackerName),
+      // A personal record is never a shared activity, whatever the sentence
+      // said: "Sarah and I had breakfast, I drank 20 oz and weighed 175" used
+      // to copy the Hydration, Nutrition and Weight rows onto Sarah too.
+      !isPersonalRecordTracker(w.trackerName) &&
+      ((canonical && trackerNamesMatch(w.trackerName, canonical)) || mentionsTracker(shared.clause, w.trackerName)),
     );
     // The model logged nothing for this activity — nothing to fan out FROM.
     // Inventing an entry from a sentence alone is a different, riskier job.

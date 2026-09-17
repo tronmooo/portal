@@ -359,7 +359,15 @@ export async function completeHabitOccurrence(
           // one completion. Give the tracker a `completions` field the first
           // time, so the entry is a first-class, chartable row rather than an
           // unknown value silently dropped from the card.
-          const hasSuppliedValues = !!opts.values && Object.keys(opts.values).length > 0;
+          // The mirror carries the MEASUREMENT when there is one: the value the
+          // check-in supplied, else the amount the habit itself declares
+          // ("Drink 64 oz" at 4/day → 16 oz), on the tracker's primary numeric
+          // field. "Morning Water" used to mirror `{completions: 1}` into
+          // Hydration — a row with no ounces the Water tile could not read.
+          const mirrorValues = opts.values && Object.keys(opts.values).length > 0
+            ? opts.values
+            : impliedMirrorValues(habit, tracker, opts.value);
+          const hasSuppliedValues = !!mirrorValues && Object.keys(mirrorValues).length > 0;
           if (!hasSuppliedValues && !(tracker.fields || []).some(f => f.name === "completions")) {
             try {
               await storage.updateTracker(tracker.id, {
@@ -376,7 +384,7 @@ export async function completeHabitOccurrence(
             const entry = await storage.logEntry({
               trackerId: tracker.id,
               values: {
-                ...(hasSuppliedValues ? opts.values : { completions: 1 }),
+                ...(hasSuppliedValues ? mirrorValues : { completions: 1 }),
                 [HABIT_MIRROR_KEY]: habit.id,
               },
               notes: opts.notes || `${habit.name} — habit check-in`,
@@ -639,4 +647,34 @@ export async function autoCheckinLinkedHabits(
     }
   } catch { /* propagation is best-effort */ }
   return results;
+}
+
+/**
+ * The measurement a bare check-in implies for its linked tracker, or null
+ * when the habit is a plain "did it" (make my bed) — then the mirror records
+ * one completion as before.
+ *
+ *   - the value the check-in itself carried (a number) wins;
+ *   - else a quantity in the habit's name ("Drink 64 oz of water", "Walk
+ *     10,000 steps") divided by the day's target — each check-in is one
+ *     share of the day's amount.
+ *
+ * The amount lands on the tracker's primary numeric field (never on a
+ * `completions` counter), so Hydration gets `ounces`, Steps gets `steps`.
+ */
+export function impliedMirrorValues(
+  habit: { name?: string | null; targetPerDay?: number | null },
+  tracker: { fields?: Array<{ name: string; type?: string; isPrimary?: boolean }> | null },
+  suppliedValue?: unknown,
+): Record<string, any> | null {
+  const fields = (tracker.fields || []).filter((f) => f && f.name && f.name !== "completions");
+  const target = fields.find((f) => f.isPrimary && f.type === "number") || fields.find((f) => f.type === "number");
+  if (!target) return null;
+  const supplied = typeof suppliedValue === "number" ? suppliedValue : parseFloat(String(suppliedValue ?? ""));
+  if (Number.isFinite(supplied) && supplied > 0) return { [target.name]: supplied };
+  const m = String(habit.name || "").replace(/,/g, "").match(/(\d+(?:\.\d+)?)\s*(?:oz|ounces?|ml|l|liters?|litres?|cups?|glasses?|steps?|miles?|mi|km|kilometers?|minutes?|mins?|hours?|hrs?|pages?|reps?|lbs?|kg|mg|g)\b/i);
+  if (!m) return null;
+  const perDay = Math.max(1, Math.floor(Number(habit.targetPerDay) || 1));
+  const amount = Math.round((parseFloat(m[1]) / perDay) * 100) / 100;
+  return Number.isFinite(amount) && amount > 0 ? { [target.name]: amount } : null;
 }

@@ -155,7 +155,7 @@ export interface TrackerSummaryOpts {
  * while still taking the summary for the shapes it says more about.
  */
 export type SummaryShape =
-  | "dose" | "strength" | "session" | "occurrence" | "additive" | "measurement" | "empty";
+  | "dose" | "strength" | "session" | "occurrence" | "additive" | "measurement" | "dual" | "empty";
 
 export interface TrackerSummary {
   /** The headline one-liner, e.g. "2 doses today" or "30 min · ~280 cal". */
@@ -296,6 +296,16 @@ export function summarizeTrackerToday(tracker: Tracker, opts: TrackerSummaryOpts
   if (isAdditive && todays.length > 0 && todayTotal !== 0) {
     base.shape = "additive";
     base.line = `${fmt(todayTotal, todayTotal % 1 === 0 ? 0 : 1)}${unit ? ` ${unit}` : ""} today`;
+    return base;
+  }
+
+  // ── Dual: a blood pressure is two numbers. "122/78 mmHg" — the systolic
+  //    alone ("122 mmHg") is not a blood pressure reading.
+  const sys = pick(last.values, "systolic", "sys", "systolic_bp");
+  const dia = pick(last.values, "diastolic", "dia", "diastolic_bp");
+  if (sys != null && dia != null) {
+    base.shape = "dual";
+    base.line = `${fmt(sys, 0)}/${fmt(dia, 0)}${unit ? ` ${unit}` : " mmHg"}`;
     return base;
   }
 

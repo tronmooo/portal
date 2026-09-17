@@ -627,7 +627,7 @@ export function DocumentReviewScreen({
 
             <div className="bubble p-3.5 space-y-2.5" data-testid="review-doc-info">
               <h3 className="micro-label text-muted-foreground">Document Info</h3>
-              <InfoRow label="Document Type" value={understanding?.documentType || prettify(extraction.documentType)} />
+              <InfoRow label="Document Type" value={prettify(understanding?.documentType || extraction.documentType)} />
               <InfoRow label="Category" value={extraction.label} />
               <InfoRow label="Extracted" value={extractedAt} />
               {typeof confidenceScore === "number" && confidenceScore > 0 && (

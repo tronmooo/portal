@@ -88,8 +88,9 @@ describe("Today's three signals", () => {
     tracker({ name: "Sleep", unit: "h", entries: [
       entry({ value: 7.6 }, daysAgo(10)), entry({ value: 7.4 }, daysAgo(5)), entry({ value: 6.6 }, daysAgo(1)),
     ] }),
-    tracker({ name: "Steps", entries: [entry({ steps: 9100 }, daysAgo(1))] }),
-    tracker({ name: "Resting Heart Rate", entries: [entry({ value: 52 }, daysAgo(9)), entry({ value: 56 }, daysAgo(1))] }),
+    // Activity and recovery are TODAY's readings; sleep is last night's.
+    tracker({ name: "Steps", entries: [entry({ steps: 9100 }, daysAgo(0))] }),
+    tracker({ name: "Resting Heart Rate", entries: [entry({ value: 52 }, daysAgo(9)), entry({ value: 56 }, daysAgo(0))] }),
   ];
 
   it("fills sleep, activity and recovery from whatever is connected", () => {
@@ -99,6 +100,25 @@ describe("Today's three signals", () => {
     expect(s[0].avg30).toBeCloseTo(7.5, 5); // the baseline the tile compares against
     expect(s[1].value).toBe(9100);
     expect(s[2].caption).toBe("Resting heart rate");
+  });
+
+  it("never presents an old reading as today's (QA 2026-09-17: sleep from Aug 22 shown as last night)", () => {
+    const s = todaySignals(collectMetrics([
+      tracker({ name: "Sleep", unit: "h", entries: [entry({ value: 6.75 }, daysAgo(25))] }),
+      tracker({ name: "Steps", entries: [entry({ steps: 3137 }, daysAgo(2))] }),
+    ], { now: NOW }));
+    expect(s[0].value).toBeNull();
+    expect(s[0].lastAt).toBe(daysAgo(25)); // the tile can say "last logged Aug 22"
+    expect(s[1].value).toBeNull();
+    expect(s[1].lastAt).toBe(daysAgo(2));
+    const score = wellnessScore(collectMetrics([
+      tracker({ name: "Sleep", unit: "h", entries: [entry({ value: 6.75 }, daysAgo(25))] }),
+      tracker({ name: "Steps", entries: [entry({ steps: 3137 }, daysAgo(2))] }),
+    ], { now: NOW }));
+    expect(score.value).toBeNull(); // not 70 from three-week-old numbers
+    expect(score.components.map((c) => c.detail)).toEqual([
+      "No sleep recorded last night", "No activity recorded today", "No recovery source connected",
+    ]);
   });
 
   it("says a signal has no source instead of showing a zero", () => {
@@ -173,8 +193,8 @@ describe("the score shows its working", () => {
   it("splits 40/30/30 when all three are connected", () => {
     const m = collectMetrics([
       tracker({ name: "Sleep", entries: [entry({ value: 8 }, daysAgo(1))] }),
-      tracker({ name: "Steps", entries: [entry({ steps: 8000 }, daysAgo(1))] }),
-      tracker({ name: "Resting HR", entries: [entry({ value: 55 }, daysAgo(1))] }),
+      tracker({ name: "Steps", entries: [entry({ steps: 8000 }, daysAgo(0))] }),
+      tracker({ name: "Resting HR", entries: [entry({ value: 55 }, daysAgo(0))] }),
     ], { now: NOW });
     const score = wellnessScore(m);
     expect(score.components.map((c) => Math.round(c.weight * 100))).toEqual([40, 30, 30]);

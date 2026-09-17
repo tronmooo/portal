@@ -60,6 +60,17 @@ export interface DoseWindowOpts {
   now?: number;
 }
 
+/** Does this entry record a dose being taken, without saying so in `adherence`? */
+export function hasDoseEvidence(values: Record<string, any> | null | undefined): boolean {
+  if (!values || typeof values !== "object") return false;
+  if (values.taken === true || norm(values.taken) === "true" || norm(values.taken) === "yes") return true;
+  if (values.dosage != null && values.dosage !== "" || values.dose != null && values.dose !== "") return true;
+  if (values.timeTaken || values.time_taken) return true;
+  if (Number(values.completions) > 0 || Number(values.doses) > 0 || Number(values.count) > 0) return true;
+  if (values._habitId) return true;
+  return false;
+}
+
 /** Expected vs logged doses for a medication over the window. */
 export function computeMissedDoses(tracker: Tracker, opts: DoseWindowOpts = {}) {
   const days = Math.max(1, Math.min(90, Number(opts.days) || 7));
@@ -78,7 +89,12 @@ export function computeMissedDoses(tracker: Tracker, opts: DoseWindowOpts = {}) 
     return ts >= effectiveStart && ts <= now;
   });
   const byAdherence = (kind: string) => inWindow.filter((e) => norm(e?.values?.adherence) === kind);
-  const taken = byAdherence("taken").length;
+  // A row logged without the adherence word — the trackers page's dose
+  // button, a habit check-in mirrored in, an AI log that stored `taken:true`,
+  // a plain dosage — is still a dose that was taken. Only an explicit skip or
+  // miss says otherwise. Counting only the literal "taken" made a week with
+  // six logged doses read "7 doses unlogged".
+  const taken = inWindow.filter((e) => norm(e?.values?.adherence) === "taken" || (!e?.values?.adherence && hasDoseEvidence(e?.values))).length;
   const skipped = byAdherence("skipped").length;
   const explicitMissed = byAdherence("missed").length;
   // Gap = expected doses with no entry at all (unlogged ≠ confirmed missed —

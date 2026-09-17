@@ -22,6 +22,7 @@
 // endpoint reasons over the SAME readout, so the page and the narrative can't
 // describe different data. Unit-tested in tests/wellness-readout.test.ts.
 import type { Tracker, TrackerEntry } from "./schema";
+import { localDayOf, addDays } from "./timezone";
 import {
   resolveCanonicalMetric, validateCanonicalValue, flagAgainstReference,
   formatReference, getCanonicalMetric, LAB_PANELS, PANEL_LABELS,
@@ -41,6 +42,13 @@ export interface MetricSeries {
   /** Oldest → newest, canonical unit, impossible values already removed. */
   readings: Reading[];
   latest: Reading | null;
+  /**
+   * The latest reading INSIDE the metric's freshness window — today for an
+   * activity or recovery signal, last night (today or yesterday) for sleep —
+   * or null. "Today" tiles and the score read this, never `latest`: a sleep
+   * entry from Aug 22 was being shown as "6h 45m last night" on Sep 17.
+   */
+  latestFresh: Reading | null;
   previous: Reading | null;
   /** Mean of the readings in the last 30 days (excluding today's), or null. */
   avg30: number | null;
@@ -71,16 +79,22 @@ const META_KEY = /^_|^(notes|note|timestamp|source|mood|tags)$/i;
  * every value on the report — and several trackers that resolve to the same id
  * merge into a single series ordered by time.
  */
+/** Days back a reading still counts as "today's" for the signal it feeds. */
+function freshWindowDays(metricId: string): number {
+  return metricId === "sleep_hours" ? 1 : 0; // last night = today or yesterday
+}
+
 export function collectMetrics(
   trackers: Tracker[] | undefined | null,
-  opts: { now?: Date } = {},
+  opts: { now?: Date; timezone?: string } = {},
 ): Map<string, MetricSeries> {
   const now = opts.now ? opts.now.getTime() : Date.now();
+  const todayISO = localDayOf(new Date(now), opts.timezone) || new Date(now).toISOString().slice(0, 10);
   const byId = new Map<string, MetricSeries>();
   const push = (metric: CanonicalMetric, r: Reading) => {
     let s = byId.get(metric.id);
     if (!s) {
-      s = { metric, readings: [], latest: null, previous: null, avg30: null, sources: [] };
+      s = { metric, readings: [], latest: null, latestFresh: null, previous: null, avg30: null, sources: [] };
       byId.set(metric.id, s);
     }
     s.readings.push(r);
@@ -123,6 +137,9 @@ export function collectMetrics(
   for (const s of byId.values()) {
     s.readings.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
     s.latest = s.readings[s.readings.length - 1] || null;
+    const freshFrom = addDays(todayISO, -freshWindowDays(s.metric.id));
+    const latestDay = s.latest ? localDayOf(s.latest.at, opts.timezone) : null;
+    s.latestFresh = s.latest && latestDay && latestDay >= freshFrom ? s.latest : null;
     s.previous = s.readings.length > 1 ? s.readings[s.readings.length - 2] : null;
     const window = s.readings.filter((r) => {
       const age = now - new Date(r.at).getTime();
@@ -141,7 +158,8 @@ export function collectMetrics(
 export interface TodaySignal {
   key: "sleep" | "activity" | "recovery";
   label: string;
-  /** Latest value, canonical unit. Null when nothing is connected yet. */
+  /** Today's value (last night's for sleep), canonical unit. Null when nothing
+   *  is connected yet OR nothing was recorded inside the window. */
   value: number | null;
   unit: string;
   /** What the value is (e.g. "Resting HR"), when the signal has variants. */
@@ -151,6 +169,9 @@ export interface TodaySignal {
   /** Last ~30 values oldest→newest for the trend line. */
   series: number[];
   at: string | null;
+  /** When the newest reading of ANY age was taken — so an empty tile can say
+   *  "last logged Aug 22" instead of pretending nothing was ever connected. */
+  lastAt: string | null;
   /** Higher is better for this signal? Drives the delta's tone. */
   higherBetter: boolean;
   /** The metric id behind the value, so the UI can deep-link its tracker. */
@@ -167,14 +188,15 @@ function signalFrom(
 ): TodaySignal {
   return {
     key, label, caption,
-    value: m?.latest?.value ?? null,
+    value: m?.latestFresh?.value ?? null,
     unit: m?.metric.unit ?? "",
     avg30: m?.avg30 ?? null,
     series: (m?.readings || []).slice(-30).map((r) => r.value),
-    at: m?.latest?.at ?? null,
+    at: m?.latestFresh?.at ?? null,
+    lastAt: m?.latest?.at ?? null,
     higherBetter,
     metricId: m?.metric.id ?? null,
-    trackerId: m?.latest?.trackerId ?? null,
+    trackerId: (m?.latestFresh ?? m?.latest)?.trackerId ?? null,
   };
 }
 
@@ -185,12 +207,13 @@ export function todaySignals(metrics: Map<string, MetricSeries>): TodaySignal[] 
   const steps = metrics.get("steps");
   const mins = metrics.get("exercise_minutes");
   const dist = metrics.get("distance");
-  const act = steps?.latest ? steps : mins?.latest ? mins : dist?.latest ? dist : steps || mins || dist;
+  const act = steps?.latestFresh ? steps : mins?.latestFresh ? mins : dist?.latestFresh ? dist
+    : steps?.latest ? steps : mins?.latest ? mins : dist?.latest ? dist : steps || mins || dist;
   // Recovery prefers HRV (the better signal) but resting HR is what most
   // people have.
   const hrv = metrics.get("hrv");
   const rhr = metrics.get("resting_hr");
-  const rec = hrv?.latest ? hrv : rhr;
+  const rec = hrv?.latestFresh ? hrv : rhr?.latestFresh ? rhr : hrv?.latest ? hrv : rhr;
   return [
     signalFrom(sleep, "sleep", "Sleep", null, true),
     signalFrom(act, "activity", "Activity", act?.metric.label ?? null, true),
@@ -282,14 +305,21 @@ const ACTIVITY_NAME =
 
 const DURATION_FIELD = /(duration|minutes?|\bmins?\b|\btime\b|active)/i;
 const DISTANCE_FIELD = /(distance|miles?|\bmi\b|kilometers?|\bkm\b|meters?|laps?)/i;
-const REP_FIELD = /(reps?|sets?|count|quantity|amount)/i;
+// Reps and sets are different things: 8 reps × 4 sets is 32 reps, not 12.
+// One regex used to add both into a single "reps" number ("24 reps" for a
+// session logged as 8 × 4 — sets ignored, then summed in as if reps).
+const REPS_FIELD = /\breps?\b|repetitions?/i;
+const SETS_FIELD = /\bsets?\b/i;
 
 export interface WorkoutGroup {
   type: string;
   sessions: number;
   minutes: number | null;
   distance: number | null;
+  /** Total repetitions across the window — reps × sets per session. */
   reps: number | null;
+  /** Total sets across the window, when the tracker records them. */
+  sets: number | null;
   lastAt: string | null;
   trackerId: string;
 }
@@ -316,8 +346,8 @@ export function activityHistory(
     // A tracker that IS a canonical metric is a SIGNAL, not a workout type:
     // "Steps" belongs in Today, not in the list of things you trained at.
     if (resolveCanonicalMetric(t.name, (t as any).category)) continue;
-    let sessions = 0, minutes = 0, distance = 0, reps = 0;
-    let sawMin = false, sawDist = false, sawReps = false;
+    let sessions = 0, minutes = 0, distance = 0, reps = 0, sets = 0;
+    let sawMin = false, sawDist = false, sawReps = false, sawSets = false;
     let lastAt: string | null = null;
     for (const e of t.entries || []) {
       const ts = e?.timestamp ? new Date(e.timestamp).getTime() : NaN;
@@ -327,14 +357,18 @@ export function activityHistory(
       const computed: any = (e as any).computed || {};
       const cd = num(computed.durationMinutes);
       if (Number.isFinite(cd) && cd > 0) { minutes += cd; sawMin = true; }
+      let entryReps: number | null = null, entrySets: number | null = null;
       for (const [field, raw] of Object.entries(e.values || {})) {
         if (META_KEY.test(field)) continue;
         const v = num(raw);
         if (!Number.isFinite(v) || v <= 0) continue;
         if (DURATION_FIELD.test(field)) { minutes += v; sawMin = true; continue; }
         if (DISTANCE_FIELD.test(field)) { distance += v; sawDist = true; continue; }
-        if (REP_FIELD.test(field)) { reps += v; sawReps = true; continue; }
+        if (SETS_FIELD.test(field)) { entrySets = (entrySets ?? 0) + v; continue; }
+        if (REPS_FIELD.test(field)) { entryReps = (entryReps ?? 0) + v; continue; }
       }
+      if (entryReps != null) { reps += entryReps * (entrySets ?? 1); sawReps = true; }
+      if (entrySets != null) { sets += entrySets; sawSets = true; }
     }
     if (sessions === 0) continue;
     groups.push({
@@ -342,6 +376,7 @@ export function activityHistory(
       minutes: sawMin ? Math.round(minutes) : null,
       distance: sawDist ? Math.round(distance * 10) / 10 : null,
       reps: sawReps ? reps : null,
+      sets: sawSets ? sets : null,
       lastAt, trackerId: t.id,
     });
   }
@@ -385,15 +420,23 @@ function bandScore(v: number, low: number, high: number, tolerance: number): num
 export function wellnessScore(metrics: Map<string, MetricSeries>): WellnessScore {
   const parts: Array<{ key: ScoreComponent["key"]; label: string; score: number | null; detail: string }> = [];
 
-  const sleep = metrics.get("sleep_hours")?.latest?.value ?? null;
+  // FRESH readings only. The score said 70 from a sleep entry three weeks
+  // old and a step count from a day nothing was logged; a component with no
+  // reading inside its window is not counted, and its detail says why.
+  const sleepSeries = metrics.get("sleep_hours");
+  const sleep = sleepSeries?.latestFresh?.value ?? null;
   parts.push({
     key: "sleep", label: "Sleep",
     score: sleep == null ? null : bandScore(sleep, 7, 9, 4),
-    detail: sleep == null ? "No sleep source connected" : `${round1(sleep)} h last night`,
+    detail: sleep != null ? `${round1(sleep)} h last night`
+      : sleepSeries?.latest ? "No sleep recorded last night"
+      : "No sleep source connected",
   });
 
-  const steps = metrics.get("steps")?.latest?.value ?? null;
-  const mins = metrics.get("exercise_minutes")?.latest?.value ?? null;
+  const stepsSeries = metrics.get("steps");
+  const minsSeries = metrics.get("exercise_minutes");
+  const steps = stepsSeries?.latestFresh?.value ?? null;
+  const mins = minsSeries?.latestFresh?.value ?? null;
   const activityScore = steps != null ? Math.min(100, Math.round((steps / 8000) * 100))
     : mins != null ? Math.min(100, Math.round((mins / 30) * 100))
     : null;
@@ -402,21 +445,22 @@ export function wellnessScore(metrics: Map<string, MetricSeries>): WellnessScore
     score: activityScore,
     detail: steps != null ? `${Math.round(steps).toLocaleString()} steps`
       : mins != null ? `${Math.round(mins)} active min`
+      : stepsSeries?.latest || minsSeries?.latest ? "No activity recorded today"
       : "No activity source connected",
   });
 
   const hrv = metrics.get("hrv");
   const rhr = metrics.get("resting_hr");
   let recovery: number | null = null;
-  let recoveryDetail = "No recovery source connected";
-  if (hrv?.latest && hrv.avg30) {
+  let recoveryDetail = hrv?.latest || rhr?.latest ? "No recovery reading today" : "No recovery source connected";
+  if (hrv?.latestFresh && hrv.avg30) {
     // HRV is meaningful only against your own baseline.
-    const ratio = hrv.latest.value / hrv.avg30;
+    const ratio = hrv.latestFresh.value / hrv.avg30;
     recovery = Math.max(0, Math.min(100, Math.round(ratio * 80)));
-    recoveryDetail = `HRV ${Math.round(hrv.latest.value)} ms vs ${Math.round(hrv.avg30)} ms avg`;
-  } else if (rhr?.latest) {
-    recovery = bandScore(rhr.latest.value, 40, 65, 30);
-    recoveryDetail = `Resting HR ${Math.round(rhr.latest.value)} bpm`;
+    recoveryDetail = `HRV ${Math.round(hrv.latestFresh.value)} ms vs ${Math.round(hrv.avg30)} ms avg`;
+  } else if (rhr?.latestFresh) {
+    recovery = bandScore(rhr.latestFresh.value, 40, 65, 30);
+    recoveryDetail = `Resting HR ${Math.round(rhr.latestFresh.value)} bpm`;
   }
   parts.push({ key: "recovery", label: "Recovery", score: recovery, detail: recoveryDetail });
 
