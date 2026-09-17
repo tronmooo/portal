@@ -324,3 +324,77 @@ describe("formatMeasurement / isProseValue", () => {
     expect(isProseValue("138/86 mmHg")).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A person is not a filing cabinet (2026-09-17): which of a document's fields
+// are facts about the PERSON, and which describe the document itself.
+import { personFieldScope, personNameFields, profileNamedBy } from "@shared/extraction-destinations";
+
+describe("personFieldScope — a person's facts vs the document's", () => {
+  it("keeps a ticket's due date, fine and citation number on the document", () => {
+    expect(personFieldScope({ key: "dueDate", value: "2026-09-25" })).toBe("document");
+    expect(personFieldScope({ key: "fineAmount", value: "$45.00" })).toBe("document");
+    expect(personFieldScope({ key: "amountDue", value: "45" })).toBe("document");
+    expect(personFieldScope({ key: "citationNumber", value: "RV62045871" })).toBe("document");
+    expect(personFieldScope({ key: "violationCode", value: "12.36.140" })).toBe("document");
+  });
+
+  it("keeps expiration, renewal, payment and account references on the document", () => {
+    expect(personFieldScope({ key: "expirationDate", value: "2030-03-21" })).toBe("document");
+    expect(personFieldScope({ key: "renewalDate", value: "2027-01-01" })).toBe("document");
+    expect(personFieldScope({ key: "paymentDate", value: "2026-10-01" })).toBe("document");
+    expect(personFieldScope({ key: "accountNumber", value: "0001234" })).toBe("document");
+    expect(personFieldScope({ key: "invoiceNumber", value: "INV-9" })).toBe("document");
+    expect(personFieldScope({ key: "totalAmount", value: "120.00" })).toBe("document");
+  });
+
+  it("sends the person's stable attributes to the profile", () => {
+    for (const key of ["dateOfBirth", "gender", "bloodType", "address", "phone", "email", "lastName", "licenseNumber", "policyNumber", "memberId"]) {
+      expect(personFieldScope({ key, value: "x" }), key).toBe("profile");
+    }
+    expect(personFieldScope({ key: "anniversary", value: "2010-06-12" })).toBe("profile");
+  });
+
+  it("does not put the name the document is about onto the profile as a field", () => {
+    expect(personFieldScope({ key: "violator", value: "Sarah Miller" })).toBe("document");
+    expect(personFieldScope({ key: "namedInsured", value: "Sarah Miller" })).toBe("document");
+  });
+
+  it("ignores file metadata and unplaceable dates, and keeps everything else as before", () => {
+    expect(personFieldScope({ key: "fileName", value: "scan.png" })).toBe("document");
+    expect(personFieldScope({ key: "openHouse", value: "2026-09-02", isDate: true })).toBe("document");
+    expect(personFieldScope({ key: "insurer", value: "Progressive" })).toBe("profile");
+    expect(personFieldScope({ key: "coverageType", value: "Full Coverage" })).toBe("profile");
+  });
+});
+
+describe("personNameFields / profileNamedBy — who a document is about", () => {
+  const alex = { id: "alex", name: "Alex" };
+  const sarah = { id: "sarah", name: "Sarah Miller" };
+
+  it("reads the name-bearing fields and skips organisations and metadata", () => {
+    const named = personNameFields([
+      { key: "violator", value: "Sarah Miller" },
+      { key: "providerName", value: "PG&E" },
+      { key: "fileName", value: "ticket.jpg" },
+      { key: "organizationName", value: "City of Springfield" },
+      { key: "citationNumber", value: "RV62045871" },
+    ]);
+    expect(named).toEqual([{ key: "violator", value: "Sarah Miller" }]);
+  });
+
+  it("matches the profile the printed name spells, however it is printed", () => {
+    expect(profileNamedBy([{ key: "violator", value: "SARAH J. MILLER" }], [alex, sarah])?.id).toBe("sarah");
+    expect(profileNamedBy([{ key: "patient", value: "Miller, Sarah" }], [alex, sarah])?.id).toBe("sarah");
+    expect(profileNamedBy([{ key: "firstName", value: "Sarah" }, { key: "lastName", value: "Miller" }], [alex, sarah])?.id).toBe("sarah");
+    expect(profileNamedBy([{ key: "name", value: "Alex" }], [alex, sarah])?.id).toBe("alex");
+  });
+
+  it("matches nobody rather than guessing", () => {
+    expect(profileNamedBy([{ key: "violator", value: "Sarah Miller" }], [alex])).toBeNull();
+    expect(profileNamedBy([{ key: "insurer", value: "Progressive" }], [alex, sarah])).toBeNull();
+    // Two Millers: an ambiguous name is not a match.
+    expect(profileNamedBy([{ key: "lastName", value: "Miller" }, { key: "firstName", value: "S" }],
+      [sarah, { id: "tom", name: "Tom Miller" }])).toBeNull();
+  });
+});

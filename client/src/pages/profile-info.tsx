@@ -21,6 +21,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { useProfileDocuments } from "@/hooks/useProfileDocuments";
 import { infoFieldsForType, readField, computeAge } from "@/lib/profile-fields";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
@@ -274,6 +275,12 @@ function SingleProfileInfo({ id }: { id: string }) {
     staleTime: 30_000,
   });
 
+  // The SAME query and the SAME rule as the Documents tab (shared/document-
+  // scope), so the count this page shows is the length of the list that tab
+  // renders. Reading the server embed alone counted a document the tab did
+  // not list (2026-09-17: "Documents 3" here, 2 there).
+  const documents: any[] = useProfileDocuments<any>(id, profile?.relatedDocuments);
+
   useEffect(() => {
     if (profile?.name) document.title = `${profile.name} · Info — Portol`;
   }, [profile?.name]);
@@ -517,7 +524,6 @@ function SingleProfileInfo({ id }: { id: string }) {
   const timeline: any[] = Array.isArray(profile.timeline) ? profile.timeline.slice(0, 6) : [];
   const journal: any[] = Array.isArray(profile.relatedJournal) ? profile.relatedJournal : [];
   const latestJournal = journal[0];
-  const documents: any[] = Array.isArray(profile.relatedDocuments) ? profile.relatedDocuments : [];
   const initial = (profile.name || "?").charAt(0).toUpperCase();
   const isSelf = profile.type === "self";
   // One rule, read by the screen and by DELETE /api/profiles/:id.

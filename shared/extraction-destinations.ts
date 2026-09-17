@@ -500,6 +500,155 @@ export function suggestDestination(input: SuggestInput): ExtractionDestination {
   return "profile";
 }
 
+// ─── Person profiles: a fact about the PERSON, or a fact about the DOCUMENT? ──
+//
+// Bug report 2026-09-17 (parking ticket): a citation belonging to "Sarah" was
+// confirmed and its `dueDate` ended up as `fields.dueDate` on the user's OWN
+// profile, so the Info page announced "DUE DATE 2026-09-25" as if it were a
+// fact about Alex. Two things went wrong, and the helpers below are the one
+// answer to each:
+//
+//   1. Every ticked scalar was written onto whichever profile was resolved.
+//      That is right for an asset — a receipt's service date IS a fact about
+//      the car — but a person is not a filing cabinet: a fine, a citation
+//      number and a payment deadline describe the ticket, not the person.
+//      `personFieldScope` says which is which. Document-scoped keys stay on
+//      the document's extractedData, which is where shared/date-rules already
+//      derives their calendar and Upcoming entries from.
+//
+//   2. When the document named a person nobody in the household matched, the
+//      route fell back to the SELF profile. `personNameFields` is how the
+//      route knows a document names somebody at all, so it can decline to
+//      guess; `profileNamedBy` is the deterministic match it tries first.
+
+/**
+ * Keys whose VALUE is who the document is about. A parking ticket says
+ * "violator", a policy "named insured", a report "patient" — the value is a
+ * person's name, and the only thing to do with it is pick the profile.
+ */
+const PERSON_NAME_KEYS =
+  /(^name$|fullname|firstname|lastname|givenname|surname|familyname|patient|holder|owner|insured|recipient|licensee|driver|violator|offender|registrant|applicant|customer|client|^member$|membername|subscriber|borrower|tenant|beneficiary|employee|student|guest|passenger|traveler|payer|payee|billto|issuedto|addressee|policyhold)/;
+
+/**
+ * Keys that contain one of the words above but name an organisation, a place
+ * or a thing rather than a person. `providerName: PG&E` must not read as
+ * "this bill names somebody", or a utility bill would never reach anyone.
+ */
+const NOT_A_PERSON_NAME_KEYS =
+  /(company|organi[sz]ation|business|provider|bank|agency|agent|carrier|insurer|lender|institution|facility|clinic|hospital|pharmacy|vendor|merchant|store|dealer|shop|issuer|employer|school|manufacturer|brand|product|plan|street|file|document|report|item|city|state|county|country|user|login|drug|medication|test|lab|doctor|physician|prescriber|signed|court|officer|title|nick|middle)/;
+
+/**
+ * The name-bearing fields among a document's confirmed fields — the fields
+ * that say WHO it is about. Empty when the document names nobody (a receipt,
+ * a utility bill, a spec sheet), in which case the route may still fall back
+ * to the self profile as it always has.
+ */
+export function personNameFields(
+  fields: ReadonlyArray<{ key: string; value: unknown }>,
+): Array<{ key: string; value: string }> {
+  const out: Array<{ key: string; value: string }> = [];
+  for (const f of fields) {
+    const key = normKey(f?.key);
+    if (!key) continue;
+    if (DOC_METADATA_KEYS.has(key)) continue;
+    if (!PERSON_NAME_KEYS.test(key)) continue;
+    if (NOT_A_PERSON_NAME_KEYS.test(key)) continue;
+    const value = unwrapValue(f.value);
+    if (typeof value !== "string") continue;
+    const v = value.trim();
+    // A name is a few words — not a number, a date or a sentence.
+    if (v.length < 2 || v.length > 80) continue;
+    if (/\d{3,}/.test(v)) continue;
+    if (v.split(/\s+/).length > 6) continue;
+    out.push({ key: f.key, value: v });
+  }
+  return out;
+}
+
+/** True when the confirmed fields name a person (see personNameFields). */
+export function namesAPerson(fields: ReadonlyArray<{ key: string; value: unknown }>): boolean {
+  return personNameFields(fields).length > 0;
+}
+
+const nameTokens = (s: string): string[] =>
+  String(s ?? "").toLowerCase().normalize("NFKD").replace(/[^a-z\s]/g, " ").split(/\s+/)
+    // "Sarah J. Miller" vs "Sarah Miller": initials and honorifics do not decide.
+    .filter((t) => t.length > 1 && !/^(mr|mrs|ms|dr|jr|sr|ii|iii|iv|the|of|and)$/.test(t));
+
+/**
+ * The ONE profile a document's name-bearing fields point at, decided without a
+ * model: every word of the profile's name appears in a printed name (so
+ * "Sarah Miller" matches "SARAH J MILLER" and "Miller, Sarah"), or a one-word
+ * profile name equals a one-word printed name. Null when nothing matches —
+ * and null, deliberately, when two profiles match the same printed name,
+ * because guessing between two people is the mistake this exists to stop.
+ */
+export function profileNamedBy<P extends { id: string; name?: string | null }>(
+  fields: ReadonlyArray<{ key: string; value: unknown }>,
+  profiles: ReadonlyArray<P>,
+): P | null {
+  const printed = personNameFields(fields).map((f) => nameTokens(f.value)).filter((t) => t.length > 0);
+  if (printed.length === 0) return null;
+  // A licence prints the name as `firstName` + `lastName`; the union of every
+  // printed word is what a two-word profile name is matched against.
+  const everyWord = new Set(printed.flat());
+  const matches = new Map<string, P>();
+  for (const p of profiles) {
+    const own = nameTokens(p.name ?? "");
+    if (own.length === 0) continue;
+    const hit = own.length >= 2
+      ? own.every((w) => everyWord.has(w))
+      : printed.some((words) => words.length === 1 && words[0] === own[0]);
+    if (hit) matches.set(p.id, p);
+  }
+  if (matches.size !== 1) return null;
+  return matches.values().next().value ?? null;
+}
+
+/**
+ * Keys whose value describes the document's own transaction — what is owed,
+ * by when, under which reference — rather than a lasting characteristic of a
+ * person. They live on the document. Spelled out rather than "anything with a
+ * number in it", because `licenseNumber` and `memberId` ARE about the person
+ * (PROFILE_KEYS, which is checked first).
+ */
+const DOCUMENT_SCOPED_KEYS =
+  /(due|amount|fine|fee$|fees|penalt|total|subtotal|balance|premium|deductible|copay|coinsurance|cost|price|charge|paid|payment|invoice|receipt|citation|ticket|violation|infraction|offen[cs]e|court|docket|case(number|no|id)|claim(number|no|id)|confirmation|reference(number|no|id)|order(number|no|id)|tracking|transaction|check(number|no)|accountnumber|accountno|acctno|acct$|routing|expir|renew|effective|maturity|issued|issuedate|servicedate|visitdate|reportdate|statementdate|billingdate|billdate|periodstart|periodend|term$|termlength|frequency|interest|apr$|rate$)/;
+
+/**
+ * Where a scalar field confirmed for a PERSON belongs.
+ *
+ * Conservative in the same direction as suggestDestination: a person's stable
+ * attributes (PROFILE_KEYS) always reach the profile, the document's own
+ * dates, amounts and reference numbers always stay on the document, and
+ * anything neither list can place goes to the profile as it always did.
+ * Assets are not routed through here at all — a car's service date IS a fact
+ * about the car.
+ */
+export function personFieldScope(input: SuggestInput): "profile" | "document" {
+  const key = normKey(input.key);
+  const label = normKey(input.label ?? input.key);
+  if (!key) return "document";
+  if (DOC_METADATA_KEYS.has(key) || DOC_METADATA_KEYS.has(label)) return "document";
+  // The person's own attributes beat every heuristic below — including
+  // `policyNumber` and `memberId`, which name the person's OWN cover.
+  if (PROFILE_KEYS.test(key) || PROFILE_KEYS.test(label)) return "profile";
+  // A birthday or an anniversary is the person's date, whatever it is called.
+  if (/(birth|anniversar|wedding)/.test(key)) return "profile";
+  // "violator: Sarah Miller" says WHO the document is about; the link between
+  // document and profile already records that.
+  if (personNameFields([{ key: input.key, value: input.value ?? "x" }]).length > 0) return "document";
+  if (DOCUMENT_SCOPED_KEYS.test(key) || DOCUMENT_SCOPED_KEYS.test(label)) return "document";
+  const dest = suggestDestination({ ...input, family: "person" });
+  if (dest === "calendar" || dest === "task" || dest === "ignore") return "document";
+  return "profile";
+}
+
+/** `{value, confidence}` → value; anything else as is. */
+function unwrapValue(v: unknown): unknown {
+  return (v && typeof v === "object" && "value" in (v as any)) ? (v as any).value : v;
+}
+
 /** True when a value reads as a sentence rather than a datum. */
 export function isProseValue(value: unknown): boolean {
   if (typeof value !== "string") return false;

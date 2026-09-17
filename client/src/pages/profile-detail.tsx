@@ -283,6 +283,8 @@ import type { ProfileDetail, Profile, Document, TimelineEntry, Tracker } from "@
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomains, patchQueries, patchProfileDetailList, composeRestores } from "@/lib/cache-bus";
 import { useResyncedState } from "@/hooks/useResyncedState";
+import { useProfileDocuments } from "@/hooks/useProfileDocuments";
+import { isDocumentOfProfile } from "@shared/document-scope";
 import { checkProfileRename } from "@shared/profile-rename";
 import { isReservedFieldKey } from "@shared/profile-field-identity";
 import { allocatePayment } from "@shared/liability-calc";
@@ -4375,29 +4377,12 @@ function DocumentsTab({
   const { view: docView, setView: setDocView } = useLinkedView(); // Wave 15: list/sheet toggle
 
   // SINGLE SOURCE OF TRUTH for documents: the canonical `/api/documents` list,
-  // filtered by `linkedProfiles` — the exact source + filter the global Linked
-  // page uses. Previously this tab relied ONLY on the server `relatedDocuments`
-  // embed, so a doc could show on the Linked page (filtered by linkedProfiles)
-  // yet be missing here if the embed and the list ever diverged. We now union
-  // the embed with the live list so any document linked to this profile (or a
-  // child profile) ALWAYS appears. See ARCHITECTURE.md §2 (Documents).
-  // PERF 2026-07-21: profile-scoped fetch (existing ?profileId= filter) instead
-  // of the global list — a large account's global document list dominated this
-  // tab's payload, and the global default page (100) could even MISS this
-  // profile's docs. Prefix invalidations on ["/api/documents"] still match.
-  const { data: allDocsRaw } = useQuery<any[]>({
-    queryKey: ["/api/documents", profileId, "profile-scoped"],
-    queryFn: async () => (await apiRequest("GET", `/api/documents?profileId=${encodeURIComponent(profileId)}&limit=500`)).json(),
-  });
-  const documents = useMemo(() => {
-    const byId = new Map<string, any>();
-    for (const d of (embeddedDocuments || [])) byId.set(d.id, d);
-    for (const d of (allDocsRaw || [])) {
-      const linked: string[] = (d.linkedProfiles || []) as string[];
-      if (linked.includes(profileId)) byId.set(d.id, { ...byId.get(d.id), ...d });
-    }
-    return Array.from(byId.values());
-  }, [embeddedDocuments, allDocsRaw, profileId]);
+  // unioned with the server `relatedDocuments` embed and judged by ONE rule
+  // (shared/document-scope: the document's own `linkedProfiles` names this
+  // profile). The Info tab reads the same hook, so its "Documents N" is the
+  // length of this list — the 2026-09-17 report (Info 3, this tab 2) was the
+  // two surfaces counting by different rules. See ARCHITECTURE.md §2.
+  const documents: any[] = useProfileDocuments<any>(profileId, embeddedDocuments);
 
   // ── Child-asset documents (Section 5) ──
   const isAssetTypeForDocs = profileType ? NESTED_ASSET_TYPES.includes(profileType as NestedAssetType) : false;
@@ -4443,7 +4428,9 @@ function DocumentsTab({
         const cpDocs = (cp as any).relatedDocuments || [];
         return cpDocs.map((d: any) => ({ ...d, _fromProfileId: cp.id, _fromProfileName: cp.name }));
       })
-      .filter((d: any) => !directDocIds.has(d.id))
+      // A document linked to THIS profile is in the list above, whatever
+      // else it is also linked to — the same rule the list is built by.
+      .filter((d: any) => !directDocIds.has(d.id) && !isDocumentOfProfile(d, profileId))
       // Dedupe by document id
       .filter((d: any, idx: number, arr: any[]) => arr.findIndex((x: any) => x.id === d.id) === idx);
   }, [isAssetTypeForDocs, descendantIdSetForDocs, childProfiles, directDocIds]);
