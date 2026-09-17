@@ -1511,6 +1511,8 @@ export class SupabaseStorage implements IStorage {
       // habits.linked_profiles is JSONB → JSON containment form.
       this.supabase.from("habits").select("*")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
+        // Same stable ordering as getHabits — see the note there.
+        .order("created_at", { ascending: true }).order("id", { ascending: true })
         .then(r => r.data || []),
     ]);
 
@@ -5298,6 +5300,15 @@ export class SupabaseStorage implements IStorage {
       // PERF (durable-fix-phase1): DB pushdown via idx_habits_linked_profiles.
       let habitsQuery = this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null);
       habitsQuery = this._applyProfileFilter(habitsQuery, await this.pushdownIds(profileIds));
+      // ORDER IS NOT OPTIONAL (bug 2026-09-17: "I checked my habit off and it
+      // vanished"). An unordered SELECT returns rows in whatever order the heap
+      // hands back, and checking a habit in UPDATEs its row (current_streak /
+      // longest_streak) — which moves that row within the result. Any surface
+      // that shows the first N habits therefore dropped the habit the user had
+      // just tapped, which reads as the habit disappearing mid-day rather than
+      // advancing to 1 of 3. Oldest-first + id tiebreak is stable across reads
+      // and across check-ins: a habit stays where the user left it.
+      habitsQuery = habitsQuery.order("created_at", { ascending: true }).order("id", { ascending: true });
       // Fetch habits first, then constrain child rows to those parents. This
       // remains two total queries (not N+1) while avoiding a transfer of every
       // check-in owned by unrelated profiles.
