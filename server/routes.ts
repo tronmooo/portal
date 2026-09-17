@@ -2349,16 +2349,22 @@ export async function registerRoutes(
       // bills never auto-logged. Run both from the daily job — one schedule,
       // three tasks — and report each outcome; one failing must not stop the
       // others.
-      const [snapshot, dueScan] = await Promise.allSettled([
+      const [snapshot, dueScan, taskRollover] = await Promise.allSettled([
         runNetWorthSnapshot(),
         runLiabilityDueScan(),
+        runRecurringTaskRollover(),
       ]);
       const settle = (label: string, r: PromiseSettledResult<any>) => {
         if (r.status === "fulfilled") return r.value;
         log.error(`[Cron Daily Maintenance] ${label}`, (r.reason as any)?.message || r.reason);
         return { error: "failed" };
       };
-      res.json({ swept, snapshot: settle("snapshot", snapshot), dueScan: settle("due-scan", dueScan) });
+      res.json({
+        swept,
+        snapshot: settle("snapshot", snapshot),
+        dueScan: settle("due-scan", dueScan),
+        taskRollover: settle("task-rollover", taskRollover),
+      });
     } catch (err: any) {
       log.error("[Cron Daily Maintenance]", err?.message || err);
       res.status(500).json({ error: "Cron failed" });
@@ -2430,6 +2436,52 @@ export async function registerRoutes(
   // This is the liability-native replacement for materializeOccurrences.
   const REMINDER_WINDOW_DAYS = 3;
   // Also run by the daily-maintenance job (the one vercel.json schedules).
+  // ---- Cron: recurring-task rollover + legacy reminder sweep ----
+  // Every user's skipped recurring chores move to their current occurrence on
+  // the user's own calendar day (see rollRecurringTasksForward for the why),
+  // and the open `Reminder: …` tasks the retired reminder cron minted go to
+  // the trash (shared/legacy-reminder-tasks). Also run by the daily-maintenance
+  // job, which is the one vercel.json schedules.
+  async function runRecurringTaskRollover(): Promise<{ advanced: number; ended: number; remindersRetired: number; users: number }> {
+      const { createClient } = await import("@supabase/supabase-js");
+      const url = process.env.VITE_SUPABASE_URL;
+      const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!url || !key) throw new Error("Supabase admin env vars missing");
+      const admin = createClient(url, key);
+      const { data: usersList, error: listErr } = await (admin as any).auth.admin.listUsers({ perPage: 1000 });
+      if (listErr) throw listErr;
+      const users = usersList?.users || [];
+      const { createScopedStorage, requestStorageContext } = await import("./storage");
+
+      let advanced = 0, ended = 0, remindersRetired = 0;
+      for (const u of users) {
+        try {
+          const scoped = createScopedStorage(u.id);
+          await new Promise<void>((resolve) => {
+            requestStorageContext.run(scoped, async () => {
+              try {
+                const userTz = await userTimezoneFor(scoped);
+                (scoped as any)._timezone = userTz;
+                const rolled = await scoped.repairRecurringTasks(getUserToday(userTz));
+                const retired = await scoped.removeLegacyReminderTasks();
+                advanced += rolled.advanced;
+                ended += rolled.ended;
+                remindersRetired += retired;
+                if (rolled.advanced || rolled.ended || retired) await afterCronWrites(u.id);
+              } catch (e: any) {
+                log.error(`[Cron Task Rollover] user ${String(u.id).slice(0, 8)}`, e?.message || e);
+              } finally {
+                resolve();
+              }
+            });
+          });
+        } catch (e: any) {
+          log.error(`[Cron Task Rollover] user ${String(u.id).slice(0, 8)}`, e?.message || e);
+        }
+      }
+      return { advanced, ended, remindersRetired, users: users.length };
+  }
+
   async function runLiabilityDueScan(): Promise<{ autopaid: number; reminded: number }> {
       const { createClient } = await import("@supabase/supabase-js");
       const url = process.env.VITE_SUPABASE_URL;
@@ -4213,14 +4265,17 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = cacheUserKey(req as AuthenticatedRequest, "enhanced:");
-    const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}`;
+    // The hidden "show test data" toggle: the lists it reveals must add up to
+    // the totals it reveals, so the snapshot takes the same switch.
+    const includeTestData = String(req.query.includeTestData || "") === "1";
+    const cacheKey = `enhanced:${userId}:${filterIds?.join(",") || "all"}${includeTestData ? ":test" : ""}`;
     const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
     // PERF 2026-05-30: same memo treatment as /api/stats so getDashboardEnhanced's
     // internal fanouts share fetched tables.
     try { (storage as any).enableRequestMemo?.(); } catch {}
     // dedupe: concurrent identical requests share one DB query
-    const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds));
+    const data = await dedupe(cacheKey, () => storage.getDashboardEnhanced(undefined, filterIds, includeTestData ? { includeTestData } : undefined));
     try { (storage as any).disableRequestMemo?.(); } catch {}
     // 60-second cache (same rationale as /api/stats above).
     setCache(cacheKey, data, 60 * 1000);
@@ -4269,14 +4324,21 @@ ${JSON.stringify(ctx, null, 2)}`;
     // The user's month, not UTC's: late on the last evening of a month (US
     // zones) the UTC default already pointed the budget block at next month.
     const month = (req.query.month as string) || getUserCurrentMonth(getTimezone(req));
-    const userId = cacheUserKey(req as AuthenticatedRequest, "bootstrap:");
+    let userId = cacheUserKey(req as AuthenticatedRequest, "bootstrap:");
     const filterKey = filterIds?.join(",") || "all";
-    const cacheKey = `bootstrap:${userId}:${filterKey}:${month}`;
+    let cacheKey = `bootstrap:${userId}:${filterKey}:${month}`;
     // Shared cache: an instance that never computed this bootstrap can still
     // serve it in one indexed read if ANY instance (or the warmup ping)
     // computed it in the last 30s — the cold-open killer was every instance
     // recomputing the same aggregation.
-    const cached = await getCachedShared(cacheKey);
+    let cached = await getCachedShared(cacheKey);
+    // The dashboard's task counts read `dueDate` too: a skipped chore has to
+    // have moved before they are computed (see rollRecurringTasksForward).
+    if (!cached && await rollRecurringTasksForward(req as AuthenticatedRequest)) {
+      userId = cacheUserKey(req as AuthenticatedRequest, "bootstrap:");
+      cacheKey = `bootstrap:${userId}:${filterKey}:${month}`;
+      cached = await getCachedShared(cacheKey);
+    }
     if (cached) return res.json(cached);
 
     // PERF (profile-switch, 2026-08-05): the raw tables this handler reads are
@@ -6446,10 +6508,48 @@ Rules:
   }));
 
   // ---- Tasks ----
+  /**
+   * A recurring chore that was never ticked off moves on its own.
+   *
+   * A series is one row at its next due date, and only completing it stepped
+   * that date (spawnNextRecurringTask). Skip a week and the row stayed put:
+   * "Put out the trash" read "35 days overdue" from Aug 13 while the calendar,
+   * which projects the rule, had it on today — two answers for one chore. The
+   * rollover (shared/recurrence rollForwardRecurringTask) carries the row to
+   * its latest occurrence on or before today, so every reader of `dueDate` —
+   * the tasks page, the dashboard counts, the bell — agrees.
+   *
+   * The daily job runs it for every user; this runs it on a cache miss of the
+   * reads that show tasks, for the hours before that job, and for a deploy
+   * that has no schedule. Returns true when a row moved, in which case the
+   * caller's cache key was computed against a version this write just moved
+   * and must be re-derived.
+   */
+  async function rollRecurringTasksForward(req: AuthenticatedRequest): Promise<boolean> {
+    const uid = req.userId;
+    if (!uid) return false;
+    try {
+      const { advanced, ended } = await storage.repairRecurringTasks(getUserToday(getTimezone(req)));
+      if (!advanced && !ended) return false;
+      bustUserCaches(uid, ["tasks"]);
+      const v = await bumpDataVersionNow(uid, ["tasks"]);
+      if (v) (req as any).__dataVersions = mergeVersionMaps((req as any).__dataVersions || {}, v);
+      return true;
+    } catch (e: any) {
+      log.warn(`[tasks] recurring rollover skipped: ${e?.message || e}`);
+      return false;
+    }
+  }
+
   app.get("/api/tasks", asyncHandler(async (req, res) => {
-    const uid = cacheUserKey(req as AuthenticatedRequest, "tasks:");
-    const ck = `tasks:${uid}`;
-    const hit = getCached(ck);
+    let uid = cacheUserKey(req as AuthenticatedRequest, "tasks:");
+    let ck = `tasks:${uid}`;
+    let hit = getCached(ck);
+    if (!hit && await rollRecurringTasksForward(req as AuthenticatedRequest)) {
+      uid = cacheUserKey(req as AuthenticatedRequest, "tasks:");
+      ck = `tasks:${uid}`;
+      hit = getCached(ck);
+    }
     let items: Awaited<ReturnType<typeof storage.getTasks>> = hit || await dedupe(ck, () => storage.getTasks());
     if (!hit) setCache(ck, items, 5 * 60 * 1000); // version-stamped key (migration 010): fresh by construction; TTL only bounds memory
     // Support both ?profileId=x (single) and ?profileIds=x,y (multi)
@@ -8953,13 +9053,22 @@ Rules:
 
   app.get("/api/notifications", asyncHandler(async (req, res) => {
     try {
-      const userId = cacheUserKey(req as AuthenticatedRequest, "notifications:");
-      const notifCacheKey = `notifications:${userId}`;
+      let userId = cacheUserKey(req as AuthenticatedRequest, "notifications:");
+      let notifCacheKey = `notifications:${userId}`;
       // Make profile filter part of the cache key so two different filters
       // don't share the same cached payload (was returning unfiltered list).
       const _pIdsForKey = (req.query.profileIds as string | undefined) || (req.query.profileId as string | undefined) || "";
-      const fullKey = _pIdsForKey ? `${notifCacheKey}:${_pIdsForKey}` : notifCacheKey;
-      const notifCached = getCached(fullKey);
+      let fullKey = _pIdsForKey ? `${notifCacheKey}:${_pIdsForKey}` : notifCacheKey;
+      let notifCached = getCached(fullKey);
+      // The bell's "overdue" / "due today" come from `dueDate` as well: a
+      // skipped chore moves before the list is built, and the key is
+      // re-derived against the version that move bumped.
+      if (!notifCached && await rollRecurringTasksForward(req as AuthenticatedRequest)) {
+        userId = cacheUserKey(req as AuthenticatedRequest, "notifications:");
+        notifCacheKey = `notifications:${userId}`;
+        fullKey = _pIdsForKey ? `${notifCacheKey}:${_pIdsForKey}` : notifCacheKey;
+        notifCached = getCached(fullKey);
+      }
       if (notifCached) return res.json(notifCached);
 
       // Notification building lives in server/notification-service.ts so the

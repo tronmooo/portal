@@ -75,6 +75,38 @@ describe("MoneyPopups", () => {
     expect(el.textContent).toContain("% of income");
   });
 
+  it("IncomePopup lists everything the month's income is made of, with actions", () => {
+    // Round-2 QA: "$2,000 in Income · MTD and nothing anywhere to delete." The
+    // number counted a received paycheck; the popup listed streams only.
+    const onDeleteIncome = vi.fn();
+    const onDeletePaycheck = vi.fn();
+    render(<IncomePopup open onOpenChange={noop} monthlyIncome={3950} ym="2026-09"
+      incomes={[
+        { id: "i1", description: "Salary", amount: 1200, frequency: "monthly", date: "2026-01-01" },
+        { id: "i2", description: "Bonus", amount: 750, frequency: "once", date: "2026-09-05" },
+        { id: "i3", description: "Old gig", amount: 999, frequency: "once", date: "2026-08-22" }, // not this month
+        { id: "i4", description: "Starts next month", amount: 5000, frequency: "monthly", date: "2026-10-01" },
+      ]}
+      paychecks={[
+        { id: "p1", source: "Employer", amount: 2000, expected_date: "2026-09-09", confirmed: true, received_date: "2026-09-16" },
+        { id: "p2", source: "Monthly Income", amount: 2000, expected_date: "2026-09-09", confirmed: false },
+      ]}
+      onDeleteIncome={onDeleteIncome} onDeletePaycheck={onDeletePaycheck} />);
+    const el = screen.getByTestId("popup-income");
+    expect(el.textContent).toContain("Recurring (1)");
+    expect(el.textContent).toContain("One-time (1)");
+    expect(el.textContent).toContain("Paychecks received (1)");
+    expect(el.textContent).toContain("Employer");
+    expect(el.textContent).not.toContain("Old gig");
+    expect(el.textContent).not.toContain("Starts next month");
+    expect(el.textContent).not.toContain("Monthly Income");   // not received → not income
+    expect(el.textContent).toContain("/ year recurring");
+    fireEvent.click(screen.getByTestId("income-popup-delete-p1"));
+    expect(onDeletePaycheck).toHaveBeenCalledWith(expect.objectContaining({ id: "p1" }));
+    fireEvent.click(screen.getByTestId("income-popup-delete-i2"));
+    expect(onDeleteIncome).toHaveBeenCalledWith(expect.objectContaining({ id: "i2" }));
+  });
+
   it("BillsDuePopup groups bills on the timeline and Pay fires the callback", () => {
     const onPayBill = vi.fn();
     render(<BillsDuePopup open onOpenChange={noop} onPayBill={onPayBill} payingId={null}

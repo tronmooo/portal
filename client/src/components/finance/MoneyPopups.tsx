@@ -32,9 +32,10 @@ import {
 import {
   ArrowDownToLine, ArrowUpFromLine, CalendarDays, Flame, Gauge, Layers,
   Receipt, RefreshCw, Sparkles, Waves, Zap, ShoppingCart, Utensils, Car,
-  HeartPulse, Home, Film, CreditCard, Package, PiggyBank,
+  HeartPulse, Home, Film, CreditCard, Package, PiggyBank, Pencil, Trash2,
 } from "lucide-react";
-import { toMonthlyAmount } from "@shared/obligation-windows";
+import { toMonthlyAmount, canonicalIncomeFrequency, isReceivedPaycheck, paycheckReceivedDay, paycheckAmount } from "@shared/obligation-windows";
+import { formatLocalDate } from "@/lib/dates";
 import { dayLabel } from "@shared/now-rank";
 import type { MoneyBill } from "@/components/finance/MoneyOverview";
 
@@ -331,45 +332,124 @@ export function SpendPopup({
 const STREAM_COLORS = ["155 65% 45%", "173 60% 44%", "199 89% 60%", "262 80% 66%", "38 96% 54%", "330 80% 62%", "0 72% 58%", "240 10% 60%"];
 
 export function IncomePopup({
-  open, onOpenChange, incomes, monthlyIncome,
+  open, onOpenChange, incomes, paychecks = [], monthlyIncome, ym, onDeleteIncome, onDeletePaycheck, onEditIncome,
 }: {
   open: boolean; onOpenChange: (o: boolean) => void;
-  incomes: any[]; monthlyIncome: number;
+  incomes: any[];
+  /** Expected paychecks — the received ones are part of this month's income. */
+  paychecks?: any[];
+  monthlyIncome: number;
+  /** "YYYY-MM" the figure is for. Defaults to the browser's current month. */
+  ym?: string;
+  onDeleteIncome?: (income: any) => void;
+  onDeletePaycheck?: (paycheck: any) => void;
+  onEditIncome?: (income: any) => void;
 }) {
   const emerald = "hsl(155 65% 45%)";
-  const sources = useMemo(() => (incomes || [])
-    .map((i: any, idx: number) => ({
-      id: i.id || String(idx),
-      label: i.name || i.source || i.category || "Income",
-      freq: String(i.frequency || "monthly"),
-      monthly: toMonthlyAmount(Number(i.amount) || 0, i.frequency),
-      raw: Number(i.amount) || 0,
-    }))
-    .filter((s) => s.monthly > 0)
-    .sort((a, b) => b.monthly - a.monthly), [incomes]);
-  const total = sources.reduce((s, x) => s + x.monthly, 0) || monthlyIncome || 1;
-  const top = sources[0];
+  const month = ym || new Date().toLocaleDateString("en-CA").slice(0, 7);
+  // Everything INCOME · MTD is made of, and nothing it isn't. The popup used
+  // to list recurring streams only, so a $2,000 paycheck marked received
+  // showed up in the number with nothing anywhere to explain or delete it.
+  const groups = useMemo(() => {
+    const recurring: any[] = [];
+    const oneTime: any[] = [];
+    for (const i of incomes || []) {
+      const freq = canonicalIncomeFrequency(i?.frequency) ?? "monthly";
+      const start = typeof i?.date === "string" ? i.date.slice(0, 7) : "";
+      if (freq === "once") {
+        if (start === month) oneTime.push({ id: i.id, label: i.description || i.name || i.source || "Income", raw: Number(i.amount) || 0, monthly: Number(i.amount) || 0, freq, date: i.date, source: i });
+        continue;
+      }
+      if (start && start > month) continue;   // starts after this month
+      recurring.push({ id: i.id, label: i.description || i.name || i.source || "Income", raw: Number(i.amount) || 0, monthly: toMonthlyAmount(Number(i.amount) || 0, i.frequency), freq, date: i.date, source: i });
+    }
+    const received = (paychecks || [])
+      .filter((p) => isReceivedPaycheck(p) && (paycheckReceivedDay(p) || "").slice(0, 7) === month)
+      .map((p) => ({ id: p.id, label: p.source || "Paycheck", raw: paycheckAmount(p), monthly: paycheckAmount(p), freq: "received", date: paycheckReceivedDay(p), source: p }));
+    const sort = (a: any, b: any) => b.monthly - a.monthly;
+    return { recurring: recurring.sort(sort), oneTime: oneTime.sort(sort), received: received.sort(sort) };
+  }, [incomes, paychecks, month]);
+  const all = [...groups.recurring, ...groups.oneTime, ...groups.received];
+  const recurringTotal = groups.recurring.reduce((s, x) => s + x.monthly, 0);
+  const total = all.reduce((s, x) => s + x.monthly, 0) || monthlyIncome || 1;
+  const top = all.slice().sort((a, b) => b.monthly - a.monthly)[0];
+
+  const Section = ({ title, hint, rows, kind }: { title: string; hint: string; rows: any[]; kind: "income" | "paycheck" }) => (
+    <div>
+      <div className="flex items-baseline justify-between mb-1">
+        <p className="micro-label text-muted-foreground">{title} <span className="text-foreground/70">({rows.length})</span></p>
+        <p className="text-[11px] text-muted-foreground">{hint}</p>
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground px-1 py-2">None this month.</p>
+      ) : (
+        <div className="bubble divide-y divide-border/60">
+          {rows.map((s, i) => {
+            const share = Math.round((s.monthly / total) * 100);
+            const color = STREAM_COLORS[i % STREAM_COLORS.length];
+            const onDelete = kind === "income" ? onDeleteIncome : onDeletePaycheck;
+            return (
+              <div key={s.id} className="px-3 py-2.5" data-testid={`income-source-${s.id}`}>
+                <div className="flex items-center gap-2.5">
+                  <span className="h-8 w-1 rounded-full shrink-0" style={{ background: `hsl(${color})` }} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold truncate">{s.label}</p>
+                    <p className="text-[11px] text-muted-foreground capitalize">
+                      {s.freq === "received" ? `Received ${s.date ? formatLocalDate(s.date, { month: "short", day: "numeric" }) : ""}`
+                        : s.freq === "once" ? `One-time · ${s.date ? formatLocalDate(s.date, { month: "short", day: "numeric" }) : ""}`
+                        : `${s.freq}${s.freq !== "monthly" ? ` · $${fmt(s.raw)} each` : ""}`}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs font-bold tabular-nums" style={{ color: `hsl(${color})` }}>
+                      ${fmt(s.monthly)}{s.freq !== "once" && s.freq !== "received" && <span className="text-muted-foreground font-normal">/mo</span>}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground tabular-nums">{share}% of income</p>
+                  </div>
+                  {(onDelete || (kind === "income" && onEditIncome)) && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      {kind === "income" && onEditIncome && (
+                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label={`Edit ${s.label}`}
+                          onClick={() => onEditIncome(s.source)} data-testid={`income-popup-edit-${s.id}`}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {onDelete && (
+                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-destructive" aria-label={`Delete ${s.label}`}
+                          onClick={() => onDelete(s.source)} data-testid={`income-popup-delete-${s.id}`}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="mt-1.5 ml-3.5 h-1 rounded-full bg-muted overflow-hidden">
+                  <div className="h-full rounded-full" style={{ width: `${share}%`, background: `hsl(${color})` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <BubbleModal open={open} onClose={() => onOpenChange(false)} testId="popup-income"
       title="Income · this month" icon={Sparkles} accent={EMERALD}>
+      {/* The yearly figure projects the RECURRING part only — twelve times a
+          one-off bonus or a single paycheck is not a run-rate. */}
       <PopupHero accent={EMERALD} value={`$${fmt(monthlyIncome)}`}
-        caption={<>≈ <span className="font-semibold text-foreground">${fmt(monthlyIncome * 12)}</span> / year</>} />
-        {/* Stacked source ribbon */}
-        {sources.length > 0 && (
+        caption={<>recurring <span className="font-semibold text-foreground">${fmt(recurringTotal)}</span>
+          {" · "}one-time <span className="font-semibold text-foreground">${fmt(groups.oneTime.reduce((s, x) => s + x.monthly, 0))}</span>
+          {" · "}paychecks <span className="font-semibold text-foreground">${fmt(groups.received.reduce((s, x) => s + x.monthly, 0))}</span>
+          {recurringTotal > 0 && <> · ≈ <span className="font-semibold text-foreground">${fmt(recurringTotal * 12)}</span> / year recurring</>}</>} />
+        {all.length > 0 && (
           <div className="mt-3">
             <div className="flex h-3 w-full overflow-hidden rounded-full">
-              {sources.map((s, i) => (
-                <div key={s.id} title={`${s.label} · $${fmt(s.monthly)}/mo`}
+              {all.map((s, i) => (
+                <div key={s.id} title={`${s.label} · $${fmt(s.monthly)}`}
                   style={{ width: `${(s.monthly / total) * 100}%`, background: `hsl(${STREAM_COLORS[i % STREAM_COLORS.length]})` }} />
-              ))}
-            </div>
-            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
-              {sources.slice(0, 4).map((s, i) => (
-                <span key={s.id} className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: `hsl(${STREAM_COLORS[i % STREAM_COLORS.length]})` }} />
-                  {s.label}
-                </span>
               ))}
             </div>
           </div>
@@ -378,9 +458,9 @@ export function IncomePopup({
       <div className="space-y-3">
         <div className="grid grid-cols-3 gap-2">
           {[
-            ["Sources", String(sources.length)],
+            ["Sources", String(all.length)],
             ["Largest", top ? `${Math.round((top.monthly / total) * 100)}%` : "—"],
-            ["Avg / source", sources.length ? `$${fmt(total / sources.length)}` : "—"],
+            ["Avg / source", all.length ? `$${fmt(total / all.length)}` : "—"],
           ].map(([l, v]) => (
             <div key={l} className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-2 py-2 text-center">
               <p className="micro-label text-muted-foreground">{l}</p>
@@ -389,35 +469,14 @@ export function IncomePopup({
           ))}
         </div>
 
-        {sources.length === 0 ? (
-          <p className="text-xs text-muted-foreground text-center py-6">No income sources yet — add income from the Finance tab.</p>
+        {all.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-6">No income this month — add a recurring or one-time income from the Finance tab.</p>
         ) : (
-          <div className="bubble divide-y divide-/60">
-            {sources.map((s, i) => {
-              const share = Math.round((s.monthly / total) * 100);
-              const color = STREAM_COLORS[i % STREAM_COLORS.length];
-              return (
-                <div key={s.id} className="px-3 py-2.5" data-testid={`income-source-${s.id}`}>
-                  <div className="flex items-center gap-2.5">
-                    <span className="h-8 w-1 rounded-full shrink-0" style={{ background: `hsl(${color})` }} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-semibold truncate">{s.label}</p>
-                      <p className="text-[11px] text-muted-foreground capitalize">
-                        {s.freq}{s.freq !== "monthly" ? ` · $${fmt(s.raw)} each` : ""}
-                      </p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-xs font-bold tabular-nums" style={{ color: `hsl(${color})` }}>${fmt(s.monthly)}<span className="text-muted-foreground font-normal">/mo</span></p>
-                      <p className="text-[11px] text-muted-foreground tabular-nums">{share}% of income</p>
-                    </div>
-                  </div>
-                  <div className="mt-1.5 ml-3.5 h-1 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full rounded-full" style={{ width: `${share}%`, background: `hsl(${color})` }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <>
+            <Section title="Recurring" hint="every month, monthly-equivalent" rows={groups.recurring} kind="income" />
+            <Section title="One-time" hint="dated this month" rows={groups.oneTime} kind="income" />
+            <Section title="Paychecks received" hint="marked received this month" rows={groups.received} kind="paycheck" />
+          </>
         )}
       </div>
     </BubbleModal>

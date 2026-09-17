@@ -57,6 +57,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 import { getUserToday, getUserCurrentMonth, parseLocalDate, toLocalDateStr, localDayOf, addDays as tzAddDays, DEFAULT_TIMEZONE } from "../shared/timezone";
 import { prepareProfileFields } from "../shared/registry-fields";
 import { nextRecurringTaskSpawn, rollForwardRecurringTask } from "../shared/recurrence";
+import { isLegacyReminderTask, LEGACY_REMINDER_TASK_SOURCE } from "../shared/legacy-reminder-tasks";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
@@ -99,6 +100,7 @@ import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
+import { isTestEntity } from "../shared/test-data";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth } from "../shared/obligation-windows";
 
 // PostgREST `.or()` filters are built by string concatenation, so a value
@@ -1513,6 +1515,8 @@ export class SupabaseStorage implements IStorage {
       // habits.linked_profiles is JSONB → JSON containment form.
       this.supabase.from("habits").select("*")
         .eq("user_id", this.userId).is("deleted_at", null).contains("linked_profiles", JSON.stringify([id]))
+        // Same stable ordering as getHabits — see the note there.
+        .order("created_at", { ascending: true }).order("id", { ascending: true })
         .then(r => r.data || []),
     ]);
 
@@ -3654,47 +3658,8 @@ export class SupabaseStorage implements IStorage {
       q = this._applyProfileFilter(q, await this.pushdownIds(profileIds));
       const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
-      return this.rollForwardRecurringTasks((data || []).map(r => this.rowToTask(r)));
+      return (data || []).map(r => this.rowToTask(r));
     });
-  }
-
-  /**
-   * Move every MISSED repeating task on to its next occurrence (or close a
-   * series whose `runtil:` has passed) and persist the move, so that every
-   * reader of the list — the Tasks page, the Executive tab, the bell, the
-   * calendar, chat — sees the same due date.
-   *
-   * A repeating task's stored date only ever advanced on completion; one the
-   * user never ticked off stayed put and read "35 days overdue" for ever
-   * while the calendar projection said it was due today. The step is the
-   * shared rule (shared/recurrence rollForwardRecurringTask): same anchor,
-   * missed occurrences skipped, `rdone:` untouched. A write failure leaves
-   * the stored row as it was and the list still reflects the roll-forward,
-   * so a flaky write can never resurrect the stale date on screen.
-   */
-  private async rollForwardRecurringTasks(tasks: Task[]): Promise<Task[]> {
-    const today = getUserToday(this._timezone);
-    const out: Task[] = [];
-    const writes: PromiseLike<unknown>[] = [];
-    for (const task of tasks) {
-      const move = rollForwardRecurringTask(task, today);
-      if (!move) { out.push(task); continue; }
-      const patch = move.kind === "advance"
-        ? { due_date: move.dueDate, tags: move.tags }
-        : { status: "done" as const };
-      const rolled: Task = move.kind === "advance"
-        ? { ...task, dueDate: move.dueDate, tags: move.tags }
-        : { ...task, status: "done" };
-      out.push(rolled);
-      writes.push(
-        this.supabase.from("tasks").update(patch).eq("id", task.id).eq("user_id", this.userId)
-          .then(({ error }: { error: any }) => {
-            if (error) console.warn(`[getTasks] could not roll forward recurring task ${task.id.slice(0, 8)}: ${error.message}`);
-          }),
-      );
-    }
-    if (writes.length) await Promise.all(writes);
-    return out;
   }
 
   async getTask(id: string): Promise<Task | undefined> {
@@ -3928,6 +3893,61 @@ export class SupabaseStorage implements IStorage {
       .update({ deleted_at: new Date().toISOString() })
       .eq("id", id).eq("user_id", this.userId).is("deleted_at", null).select("id");
     return !error && Array.isArray(data) && data.length > 0;
+  }
+
+  /**
+   * Carry every open recurring task that was never ticked off forward to its
+   * latest occurrence on or before `todayISO` (shared/recurrence
+   * rollForwardRecurringTask), and trash the open occurrence of a series that
+   * has already ended. Nothing else on the row changes — the missed
+   * occurrences were not done, so `rdone:` stays — and a row that moved under
+   * us (a completion racing this scan) is left to the completion, which
+   * spawns the next occurrence itself.
+   */
+  async repairRecurringTasks(todayISO: string): Promise<{ advanced: number; ended: number }> {
+    const today = String(todayISO || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) return { advanced: 0, ended: 0 };
+    const { data, error } = await this.supabase.from("tasks")
+      .select("id, status, due_date, tags")
+      .eq("user_id", this.userId).is("deleted_at", null)
+      .neq("status", "done").lt("due_date", today);
+    if (error) throw error;
+    let advanced = 0, ended = 0;
+    for (const r of data || []) {
+      const tags = Array.isArray(r.tags) ? r.tags.map(String) : [];
+      if (!tags.some((t) => t.startsWith("recur:"))) continue;
+      const roll = rollForwardRecurringTask({ dueDate: r.due_date, tags, status: r.status }, today);
+      if (!roll) continue;
+      if ("ended" in roll) {
+        if (await this.deleteTask(r.id)) ended++;
+        continue;
+      }
+      const { data: moved, error: upErr } = await this.supabase.from("tasks")
+        .update({ due_date: roll.dueDate, tags: roll.tags })
+        .eq("id", r.id).eq("user_id", this.userId).is("deleted_at", null)
+        .eq("due_date", r.due_date).neq("status", "done")
+        .select("id");
+      if (upErr) throw upErr;
+      if (Array.isArray(moved) && moved.length > 0) advanced++;
+    }
+    if (advanced || ended) this.clearRequestMemo();
+    return { advanced, ended };
+  }
+
+  /** Trash the open `Reminder: …` tasks the retired reminder cron minted (shared/legacy-reminder-tasks). */
+  async removeLegacyReminderTasks(): Promise<number> {
+    const { data, error } = await this.supabase.from("tasks")
+      .select("id, title, status, due_date, tags, source")
+      .eq("user_id", this.userId).is("deleted_at", null)
+      .eq("source", LEGACY_REMINDER_TASK_SOURCE).is("due_date", null);
+    if (error) throw error;
+    let removed = 0;
+    for (const r of data || []) {
+      if (!isLegacyReminderTask({ title: r.title, status: r.status, dueDate: r.due_date, tags: r.tags, source: r.source })) continue;
+      if (await this.deleteTask(r.id)) removed++;
+    }
+    if (removed) this.clearRequestMemo();
+    return removed;
   }
 
   async restoreTask(id: string): Promise<boolean> {
@@ -5293,9 +5313,17 @@ export class SupabaseStorage implements IStorage {
       // check-in (which UPDATEs the habits row) moved that habit to the end
       // of the list — past the dashboard card's cut-off, so "Bathroom" (1 of
       // 3 done) vanished from the card the moment it was checked in.
-      let habitsQuery = this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null)
-        .order("created_at", { ascending: true }).order("id", { ascending: true });
+      let habitsQuery = this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null);
       habitsQuery = this._applyProfileFilter(habitsQuery, await this.pushdownIds(profileIds));
+      // ORDER IS NOT OPTIONAL (bug 2026-09-17: "I checked my habit off and it
+      // vanished"). An unordered SELECT returns rows in whatever order the heap
+      // hands back, and checking a habit in UPDATEs its row (current_streak /
+      // longest_streak) — which moves that row within the result. Any surface
+      // that shows the first N habits therefore dropped the habit the user had
+      // just tapped, which reads as the habit disappearing mid-day rather than
+      // advancing to 1 of 3. Oldest-first + id tiebreak is stable across reads
+      // and across check-ins: a habit stays where the user left it.
+      habitsQuery = habitsQuery.order("created_at", { ascending: true }).order("id", { ascending: true });
       // Fetch habits first, then constrain child rows to those parents. This
       // remains two total queries (not N+1) while avoiding a transfer of every
       // check-in owned by unrelated profiles.
@@ -7588,7 +7616,7 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // ENHANCED DASHBOARD
   // ============================================================
-  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<any> {
+  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<any> {
     const now = new Date();
     // Use user's timezone for 'today' — toISOString() is UTC and causes
     // events to disappear after ~5pm PST when UTC rolls to the next day
@@ -7680,7 +7708,12 @@ export class SupabaseStorage implements IStorage {
     // table (superset of the widened scope) — skip the extra fetch.
     const expenseSourceEnh = (fpIds && ownedAssetSetEnh.size > 0 && !opts?.sharedFetches)
       ? await this.getExpenses(expenseScopeIdsEnh) : rawExpenses;
-    const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh));
+    // Synthetic QA rows (shared/test-data) are hidden from every list by
+    // default, but this snapshot counted them: an expense named to match the
+    // test patterns raised Spend while never appearing in the list. The same
+    // predicate, the same default, and the same opt-in the lists honour.
+    const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh)
+      && (opts?.includeTestData || !isTestEntity(e)));
     const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
     // Same canonical scope rule the /api/incomes and /api/paychecks routes
     // apply, so the snapshot's income total equals the lists the Finance tab
@@ -7891,7 +7924,7 @@ export class SupabaseStorage implements IStorage {
       assetBreakdown.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: gross * share / 100 });
     }
     assetBreakdown.sort((a, b) => b.value - a.value);
-    const liabilityBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
+    const liabilityBreakdown: Array<{ id: string; name: string; type: string; typeKey: string | null; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
       // Only real balance-sheet debt. Recurring service bills (utility/streaming/
       // phone) are tracked as liabilities for Bills/Cash Flow but excluded from the
@@ -7901,7 +7934,11 @@ export class SupabaseStorage implements IStorage {
       if (gross <= 0) continue;
       const share = shareForLiability(p);
       if (share <= 0) continue;
-      liabilityBreakdown.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: gross * share / 100 });
+      // typeKey: the Accounts rollup splits this same list into "Loan
+      // balances" and "Card + credit debt". Reading the breakdown — rather than
+      // re-summing profiles without the ownership rule — is what keeps that
+      // tile equal to the Balance Sheet ($50,151 vs $49,829 was Jane's loan).
+      liabilityBreakdown.push({ id: p.id, name: p.name, type: p.type, typeKey: ((p as any).type_key ?? (p as any).typeKey ?? null), grossValue: gross, share, value: gross * share / 100 });
     }
     liabilityBreakdown.sort((a, b) => b.value - a.value);
 

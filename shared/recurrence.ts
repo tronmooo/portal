@@ -193,16 +193,17 @@ export function seriesEnded(rule: RecurrenceRule, nextDate: string | null): bool
   return false;
 }
 
-function fmtShort(dateStr: string): string {
+function fmtShort(dateStr: string, now: Date = new Date()): string {
   const d = new Date(dateStr + "T00:00:00");
-  // Keep the year whenever it is not the current one: "until Aug 2" for a
-  // series that runs until 2028-08-02 read as if the repeat had already ended.
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  return d.toLocaleDateString("en-US", sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
+  // "until Aug 2" for a series that runs until 2028 read as already ended:
+  // the year is the whole point of the date once it isn't this year's.
+  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString("en-US", opts);
 }
 
 // Human-readable schedule summary, e.g. "Repeats every 2 weeks on Friday until Dec 31".
-export function humanSummary(rule: RecurrenceRule, dueDate?: string): string {
+export function humanSummary(rule: RecurrenceRule, dueDate?: string, now: Date = new Date()): string {
   if (!rule.freq) return "Does not repeat";
   let s = "Repeats ";
   if (rule.unit === "day") s += rule.interval === 1 ? "daily" : `every ${rule.interval} days`;
@@ -219,7 +220,7 @@ export function humanSummary(rule: RecurrenceRule, dueDate?: string): string {
     if (dom) s += ` on day ${dom}`;
   } else if (rule.unit === "year") s += "yearly";
   else s += "on a schedule";
-  if (rule.until) s += ` until ${fmtShort(rule.until)}`;
+  if (rule.until) s += ` until ${fmtShort(rule.until, now)}`;
   else if (rule.count) {
     const left = Math.max(0, rule.count - rule.done);
     s += ` — ${left} of ${rule.count} left`;
@@ -263,37 +264,50 @@ export function nextRecurringTaskSpawn(
 }
 
 /**
- * What a MISSED occurrence of a repeating task becomes once its date has
- * passed: the series' next occurrence on or after today, or the end of the
- * series when that next date lies past `runtil:`.
+ * What a recurring task that was never ticked off should look like TODAY.
  *
- * A recurring task stores one row — its next due date — and that row only
- * advanced when the user completed it. A weekly chore nobody ticked off
- * therefore sat on its first date for ever, "35 days overdue", while the
- * calendar (which projects the series) and the bell said it was due today.
- * Rolling the stored date forward is what makes every reader agree: the
- * chore is due on its next scheduled day, not on the one that was missed.
+ * A series stores one row at its next due date and only completion moves it
+ * (nextRecurringTaskSpawn). Skip a weekly chore and nothing ever advances it:
+ * "Put out the trash" sat on Aug 13 reading "35 days overdue" five weeks
+ * later, while the calendar — which projects occurrences from the rule — had
+ * it on today. This is the other half of that projection: the row's due date
+ * is carried forward to the LATEST occurrence on or before today. The
+ * occurrences it passes were missed, not done, so `rdone:` is untouched and
+ * the series keeps its anchor (weekday, day of month); a weekly chore missed
+ * two days ago still reads two days overdue, never a month.
  *
- * Returns null when nothing changes: a one-time task, a completed row, a
- * paused series (its history stays where it is), an undated row, or a row
- * whose due date is today or later. Missed occurrences are NOT counted as
- * done — `rdone:` only ever counts completions.
+ * Returns null when nothing changes: a one-time task, a done or paused row, a
+ * due date today or later, or a series whose next occurrence is still ahead.
+ * Returns `{ ended: true }` for a series that has already run out — its
+ * `runtil:` is behind today — and whose last occurrence went unfinished: it
+ * cannot be caught up on and the caller retires it.
  */
 export function rollForwardRecurringTask(
   task: { dueDate?: string | null; tags?: string[] | null; status?: string | null },
   todayISO: string,
-): { kind: "advance"; dueDate: string; tags: string[] } | { kind: "ended" } | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(todayISO || ""))) return null;
+): { dueDate: string; tags: string[] } | { ended: true } | null {
+  const today = String(todayISO || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(today)) return null;
   if (String(task?.status || "") === "done") return null;
   const tags = Array.isArray(task?.tags) ? task.tags.map(String) : [];
   const base = String(task?.dueDate || "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(base) || base >= todayISO) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(base) || base >= today) return null;
   const rule = withAnchorDay(parseRecurrence(tags), base);
   if (!rule.freq || !rule.unit || rule.paused) return null;
-  let next = base;
-  for (let guard = 0; next < todayISO && guard < 5000; guard++) next = advance(next, rule);
-  if (next < todayISO) return null; // could not reach today (should be impossible)
-  if (rule.until && next > rule.until) return { kind: "ended" };
-  if (rule.count && rule.done >= rule.count) return { kind: "ended" };
-  return { kind: "advance", dueDate: next, tags: recurrenceToTags(rule, tags) };
+  // The series ended before today and this occurrence was its last.
+  if (rule.until && rule.until < today) return { ended: true };
+  // An `rcount:` series on its final occurrence has nowhere to step to; a
+  // missed occurrence is not a completed one, so it stays where it is.
+  if (rule.count && rule.done + 1 >= rule.count) return null;
+  let cur = base;
+  // Bounded: 5,000 daily steps is thirteen years; a series older than that
+  // still moves forward and finishes on a later call.
+  for (let guard = 0; guard < 5000; guard++) {
+    const next = advance(cur, rule);
+    if (next > today || next <= cur) break;
+    if (rule.until && next > rule.until) break;
+    cur = next;
+  }
+  if (cur === base) return null;
+  return { dueDate: cur, tags: recurrenceToTags(rule, tags) };
 }

@@ -2,6 +2,7 @@ import { logger } from "./logger";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { toMonthlyAmount, isUpcomingBill, sumBillsDueThroughMonth, sumMonthlyIncomeForMonth } from "@shared/obligation-windows";
+import { isTestEntity } from "@shared/test-data";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
@@ -20,6 +21,8 @@ import { deleteProfileFields } from "@shared/profile-field-identity";
 import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
 import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
+import { rollForwardRecurringTask } from "@shared/recurrence";
+import { isLegacyReminderTask } from "@shared/legacy-reminder-tasks";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 import { generateSchedule } from "@shared/liability-schedule";
@@ -104,6 +107,20 @@ export interface IStorage {
   createTask(data: InsertTask): Promise<Task>;
   updateTask(id: string, data: Partial<Task>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
+  /**
+   * Carry every open recurring task whose due date is behind `todayISO`
+   * forward to its latest occurrence on or before today, and retire the
+   * open occurrence of a series that has already ended (shared/recurrence
+   * rollForwardRecurringTask). Returns how many rows moved and how many
+   * were retired.
+   */
+  repairRecurringTasks(todayISO: string): Promise<{ advanced: number; ended: number }>;
+  /**
+   * Trash the undated `Reminder: …` tasks the retired reminder cron left
+   * behind (source "reminder", tag "reminder", no due date). Returns how many
+   * went.
+   */
+  removeLegacyReminderTasks(): Promise<number>;
 
   // Expenses
   getExpenses(profileIds?: string[]): Promise<Expense[]>;
@@ -255,7 +272,7 @@ export interface IStorage {
   // JS passesProfileFilter pass — always the correctness authority — still
   // runs, so results are identical; only the number of round trips changes.
   getStats(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<DashboardStats>;
-  getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<Record<string, unknown>>;
+  getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<Record<string, unknown>>;
 
   // Net-worth snapshots (W4-5)
   takeNetWorthSnapshot(profileIds?: string[]): Promise<Array<{ profileId: string | null; assetsTotal: number; liabilitiesTotal: number; netWorth: number; snapshotDate: string }>>;
@@ -1439,6 +1456,26 @@ export class MemStorage implements IStorage {
     return updated;
   }
   async deleteTask(id: string) { return this.tasks.delete(id); }
+  async repairRecurringTasks(todayISO: string) {
+    let advanced = 0, ended = 0;
+    for (const t of Array.from(this.tasks.values())) {
+      const roll = rollForwardRecurringTask(t, todayISO);
+      if (!roll) continue;
+      if ("ended" in roll) { this.tasks.delete(t.id); ended++; continue; }
+      this.tasks.set(t.id, { ...t, dueDate: roll.dueDate, tags: roll.tags, updatedAt: new Date().toISOString() });
+      advanced++;
+    }
+    return { advanced, ended };
+  }
+  async removeLegacyReminderTasks() {
+    let n = 0;
+    for (const t of Array.from(this.tasks.values())) {
+      if (!isLegacyReminderTask(t)) continue;
+      this.tasks.delete(t.id);
+      n++;
+    }
+    return n;
+  }
 
   // ---- Expenses ----
   async getExpenses() { return Array.from(this.expenses.values()); }
@@ -2391,7 +2428,7 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Enhanced Dashboard Data ----
-  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[]): Promise<any> {
+  async getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<any> {
     const now = new Date();
     const today = getUserToday();
     const thisMonth = now.getMonth();
@@ -2494,7 +2531,7 @@ export class MemStorage implements IStorage {
     }
 
     // Finance snapshot — spending by category this month + upcoming bills
-    const expenses = Array.from(this.expenses.values()).filter(e => matchesFilter((e as any).linkedProfiles));
+    const expenses = Array.from(this.expenses.values()).filter(e => matchesFilter((e as any).linkedProfiles) && (opts?.includeTestData || !isTestEntity(e as any)));
     const monthlyExpenses = expenses.filter(e => {
       const d = new Date(e.date);
       return d.getMonth() === thisMonth && d.getFullYear() === thisYear;

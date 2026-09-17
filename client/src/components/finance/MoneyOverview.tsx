@@ -18,6 +18,7 @@ import {
   BarChart3, Target, Landmark, TrendingDown, Sparkles, type LucideIcon,
 } from "lucide-react";
 import { dayLabel } from "@shared/now-rank";
+import { categoryLabel } from "@shared/category-canon";
 import { UPCOMING_BILL_WINDOW_DAYS } from "@shared/obligation-windows";
 import { Medallion } from "@/components/dashboard/visuals";
 import { SectionHeading } from "@/components/ui/section-heading";
@@ -111,7 +112,7 @@ const CAT_ICON: Record<string, any> = {
   groceries: ShoppingCart, food: Utensils, dining: Utensils, "food & dining": Utensils,
   transport: Car, vehicle: Car, health: HeartPulse, medical: HeartPulse,
   housing: Home, rent: Home, utilities: Zap, entertainment: Film,
-  subscriptions: CreditCard, shopping: ShoppingCart,
+  subscriptions: CreditCard, shopping: ShoppingCart, debt: Landmark, "debt payments": Landmark,
 };
 function catIcon(name: string): any {
   return CAT_ICON[name.toLowerCase()] || Package;
@@ -154,6 +155,9 @@ export function MoneyOverview(props: {
   spendMtd: number;
   spendTrendPct?: number | null;  // spend vs last month %
   incomeMtd?: number;
+  /** "recurring $X · one-time $Y · paychecks $Z" — what the Income figure is
+   *  made of, so a number nobody can find the source of never appears alone. */
+  incomeParts?: string;
   budgets: Array<{ category: string; limit: number; spent: number }>;
   // The upcoming-bill window (shared/obligation-windows UPCOMING_BILL_WINDOW_DAYS)
   // exactly as the dashboard tile and the BillsDuePopup receive it. ONE list:
@@ -188,7 +192,7 @@ export function MoneyOverview(props: {
 }) {
   const {
     netWorth, assets, liabilities, momPct, nwSeries, cashIn, cashOut, spendMtd,
-    spendTrendPct, incomeMtd = 0, budgets, bills, spendByCategory = {}, alerts = [],
+    spendTrendPct, incomeMtd = 0, incomeParts, budgets, bills, spendByCategory = {}, alerts = [],
     assetBreakdown, liabilityBreakdown, monthLabel,
     cashTrend = [], spendSeries, incomeSeries, billsSeries,
     onPayBill, payingId,
@@ -235,7 +239,8 @@ export function MoneyOverview(props: {
           sub={worstBudget ? `${worstBudget.category} ${worstPct}%` : undefined}
           series={spendSeries} chartKind="bars"
           onClick={() => (onOpenSpend ? onOpenSpend() : onCategoryClick?.("all"))} testId="money-spend" />
-        <KpiCard label="Income · MTD" icon={TrendingUp} value={money(incomeMtd)} tone="pos" sub="this month"
+        <KpiCard label="Income · MTD" icon={TrendingUp} value={money(incomeMtd)} tone="pos"
+          sub={incomeParts ?? "this month"}
           series={incomeSeries} chartKind="bars"
           onClick={() => (onOpenIncome ?? onOpenCashFlow)?.()} testId="money-income" />
         <KpiCard label="Bills Due" icon={Receipt} value={String(bills.length)} tone={bills.some(b => b.status === "overdue") ? "neg" : "warn"}
@@ -276,7 +281,7 @@ export function MoneyOverview(props: {
                   className="w-full text-left group" data-testid={`money-cat-${c.name}`}>
                   <div className="flex items-baseline gap-2 text-xs">
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ background: `hsl(${CAT_COLORS[i % CAT_COLORS.length]})` }} />
-                    <span className="capitalize truncate group-hover:text-foreground">{c.name}</span>
+                    <span className="truncate group-hover:text-foreground">{categoryLabel(c.name)}</span>
                     <span className="ml-auto tabular-nums font-semibold">{money(c.amount)}</span>
                     <span className="tabular-nums text-muted-foreground w-10 text-right">{(c.pct * 100).toFixed(1)}%</span>
                   </div>
@@ -345,7 +350,7 @@ export function MoneyOverview(props: {
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2">
-                      <span className="text-xs font-semibold capitalize truncate">{b.category}</span>
+                      <span className="text-xs font-semibold truncate">{categoryLabel(b.category)}</span>
                       <span className={`ml-auto text-sm font-bold tabular-nums ${tone.text}`}>{pct}%</span>
                     </div>
                     <div className="mt-1 h-1.5 rounded-full bg-muted overflow-hidden">

@@ -20,6 +20,8 @@ import { activityHistory } from "@shared/wellness-readout";
 import { netWorthChange } from "@shared/net-worth-change";
 import { computeMissedDoses, hasDoseEvidence } from "@shared/medication-doses";
 import { summarizeTrackerToday } from "@shared/tracker-summary";
+import { countTasksByDay, isDoneToday } from "@shared/task-counts";
+import { humanSummary, parseRecurrence } from "@shared/recurrence";
 
 describe("habit → tracker mirror carries the measurement", () => {
   const hydration = { fields: [{ name: "ounces", type: "number", unit: "oz", isPrimary: true }] };
@@ -141,5 +143,32 @@ describe("a blood pressure summary is both numbers", () => {
     } as any, { now: Date.UTC(2026, 8, 17, 12), todayKey: "2026-09-17" });
     expect(s.shape).toBe("dual");
     expect(s.line).toBe("122/78 mmHg");
+  });
+});
+
+describe("countTasksByDay — one rule for every task surface", () => {
+  const TODAY = "2026-09-17";
+  const tz = "America/Los_Angeles";
+  const tasks = [
+    { status: "todo", dueDate: "2026-09-10" },                     // overdue
+    { status: "todo", dueDate: "2026-09-17" },                     // today
+    { status: "todo", dueDate: "2026-10-01" },                     // upcoming
+    { status: "todo", dueDate: null },                             // undated
+    { status: "done", dueDate: "2026-09-17", updatedAt: "2026-09-17T18:00:00Z" }, // done today (11am PT)
+    { status: "done", dueDate: "2026-08-01", updatedAt: "2026-08-01T18:00:00Z" }, // done last month
+    { status: "done", updatedAt: "2026-09-18T05:00:00Z" },         // 10pm PT Sep 17 → still today
+  ];
+  it("buckets by due day and counts completions on today's calendar day", () => {
+    expect(countTasksByDay(tasks, TODAY, tz)).toEqual({ overdue: 1, dueToday: 1, upcoming: 1, undated: 1, doneToday: 2, doneAll: 3 });
+  });
+  it("never counts an all-time completion as today's (the popup's 13/55)", () => {
+    expect(isDoneToday({ status: "done", updatedAt: "2026-08-01T18:00:00Z" }, TODAY, tz)).toBe(false);
+    expect(isDoneToday({ status: "todo", updatedAt: "2026-09-17T18:00:00Z" }, TODAY, tz)).toBe(false);
+  });
+});
+
+describe("humanSummary — the until date keeps its year", () => {
+  it("says which year a far-off end date is in", () => {
+    expect(humanSummary(parseRecurrence(["recur:weekly", "runtil:2028-08-02"]), "2026-09-23", new Date("2026-09-17T12:00:00Z"))).toContain("until Aug 2, 2028");
   });
 });
