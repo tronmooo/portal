@@ -37,6 +37,17 @@ function wouldFabricateResistance(
   return sourceKind !== "resistance";
 }
 
+// A DISCRETE count ("2 cups of coffee" → count: 2, "2 slices" → quantity: 2)
+// must not be stored as a CONTINUOUS quantity. The Nutrition shape's primary
+// field is `calories`, so {count: 2} became calories: 2 and the dashboard
+// read "2 kcal". Energy, mass, volume, distance and duration fields only take
+// the amount-like words; a count keeps its own key.
+const COUNT_KEYS = new Set(["count", "qty", "quantity", "number"]);
+const CONTINUOUS_FIELD = /calor|kcal|energy|weight|mass|grams?|\bkg\b|\blbs?\b|ounces?|\boz\b|\bml\b|liters?|litres?|distance|miles?|\bkm\b|meters?|minutes?|duration|hours?/i;
+function wouldFabricateQuantity(sourceKey: string, fieldName: string): boolean {
+  return COUNT_KEYS.has(sourceKey.toLowerCase()) && CONTINUOUS_FIELD.test(fieldName);
+}
+
 // ── Aliases that map AI/document-supplied field names → tracker fields ──
 // LHS = source key (lowercased), RHS = canonical field name we'll try
 // to find on the tracker. If the tracker has a field with that name we
@@ -195,9 +206,9 @@ function resolveFieldName(
   const GENERIC_VALUE_KEYS = new Set(["amount", "value", "total", "count", "qty", "quantity", "level", "reading", "number", "measurement"]);
   if (GENERIC_VALUE_KEYS.has(lc) && parseNumericWithUnit(rawValue) !== null) {
     const primaryNum = fields.find(f => (f as any).isPrimary === true && f.type === "number");
-    if (primaryNum && !wouldFabricateResistance(tracker, sourceKey, primaryNum.name)) return primaryNum.name;
+    if (primaryNum && !wouldFabricateResistance(tracker, sourceKey, primaryNum.name) && !wouldFabricateQuantity(sourceKey, primaryNum.name)) return primaryNum.name;
     const firstNum = fields.find(f => f.type === "number");
-    if (firstNum && !wouldFabricateResistance(tracker, sourceKey, firstNum.name)) return firstNum.name;
+    if (firstNum && !wouldFabricateResistance(tracker, sourceKey, firstNum.name) && !wouldFabricateQuantity(sourceKey, firstNum.name)) return firstNum.name;
   }
 
   // 3. Single-field tracker: if there's only one numeric field, the user

@@ -2567,7 +2567,7 @@ function HealthSection({ data }: { data: any[] }) {
                     style={isNumeric ? { color: statusColor } : undefined}
                     title={!isNumeric ? String(displayVal) : undefined}
                   >
-                    {isNumeric ? Number(displayVal).toLocaleString(undefined, { maximumFractionDigits: 1 }) : displayVal}
+                    {item.latestLabel && item.dailyTotal == null ? item.latestLabel : isNumeric ? Number(displayVal).toLocaleString(undefined, { maximumFractionDigits: 1 }) : displayVal}
                   </span>
                 }
                 unit={isNumeric && item.unit ? item.unit : undefined}
@@ -2600,7 +2600,7 @@ function HealthSection({ data }: { data: any[] }) {
             <DialogDescription className="text-xs">{selectedTracker?.entries || 0} entries · {selectedTracker?.unit || ""}</DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
-            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Latest</span><span className="font-semibold">{selectedTracker?.latestValue} {selectedTracker?.unit}</span></div>
+            <div className="flex justify-between text-xs"><span className="text-muted-foreground">Latest</span><span className="font-semibold">{selectedTracker?.latestLabel ?? selectedTracker?.latestValue} {selectedTracker?.unit}</span></div>
             <div className="flex justify-between text-xs"><span className="text-muted-foreground">7-day avg</span><span>{selectedTracker?.average} {selectedTracker?.unit}</span></div>
             <div className="flex justify-between text-xs"><span className="text-muted-foreground">Trend</span><span className="flex items-center gap-1"><TrendIcon trend={selectedTracker?.trend || "flat"} /> {selectedTracker?.trendValue > 0 ? `Δ ${selectedTracker.trendValue}` : "Stable"}</span></div>
             <div className="flex justify-between text-xs"><span className="text-muted-foreground">Entries</span><span>{selectedTracker?.entryCount} in last 7 days</span></div>

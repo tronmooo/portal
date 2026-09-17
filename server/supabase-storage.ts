@@ -7827,7 +7827,15 @@ export class SupabaseStorage implements IStorage {
         // glass logged after 5 pm Pacific counted toward TOMORROW).
         dailyTotal = hydrationDailyTotal(t.entries, primaryField.name, todayStr, this._timezone);
       }
-      healthSnapshot.push({ trackerId: t.id, name: t.name, category: t.category, unit: primaryField.unit || t.unit || '', latestValue: latest, average: Math.round(avg * 10) / 10, trend: trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat', trendValue: Math.round(Math.abs(trend) * 10) / 10, entryCount: recent.length, lastEntry: recent[recent.length - 1]?.timestamp, dailyTotal });
+      // A dual reading (blood pressure) is BOTH numbers: the card used to show
+      // the systolic alone ("122 mmHg"), which is not a blood pressure.
+      const lastEntry = recent[recent.length - 1];
+      const diaField = t.fields.find((f: any) => /^(dia|diastolic|diastolic_bp|dbp)$/i.test(String(f.name)));
+      const dia = diaField ? Number(lastEntry?.values?.[diaField.name]) : NaN;
+      const latestLabel = /^(sys|systolic|systolic_bp|sbp)$/i.test(String(primaryField.name)) && Number.isFinite(dia)
+        ? `${Math.round(latest)}/${Math.round(dia)}`
+        : undefined;
+      healthSnapshot.push({ trackerId: t.id, name: t.name, category: t.category, unit: primaryField.unit || t.unit || '', latestValue: latest, latestLabel, average: Math.round(avg * 10) / 10, trend: trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat', trendValue: Math.round(Math.abs(trend) * 10) / 10, entryCount: recent.length, lastEntry: lastEntry?.timestamp, dailyTotal });
     }
 
     const monthlyExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === userYearMonth);

@@ -22,6 +22,7 @@ import { computeMissedDoses, hasDoseEvidence } from "@shared/medication-doses";
 import { summarizeTrackerToday } from "@shared/tracker-summary";
 import { sanitizeTrackerEntryValues } from "../server/tracker-entry-guard";
 import { documentExpirationDate } from "@shared/date-rules";
+import { normalizeTrackerEntry } from "../server/tracker-normalize";
 import { countTasksByDay, isDoneToday } from "@shared/task-counts";
 import { humanSummary, parseRecurrence } from "@shared/recurrence";
 
@@ -203,5 +204,18 @@ describe("an entry with no values is refused on a tracker that has fields", () =
   it("refuses {} on Weight but allows it on a field-less occurrence tracker", () => {
     expect(sanitizeTrackerEntryValues([{ name: "weight", type: "number" }] as any, {}, { name: "Weight", category: "health" }).error).toMatch(/At least one value/);
     expect(sanitizeTrackerEntryValues([], {}, { name: "Meditation", category: "wellness" }).error).toBeUndefined();
+  });
+});
+
+describe("a count is not a calorie", () => {
+  const nutrition: any = { name: "Nutrition", category: "nutrition", fields: [{ name: "calories", type: "number", unit: "kcal", isPrimary: true }, { name: "protein", type: "number", unit: "g" }] };
+  it("keeps {count: 2} off the calories field", () => {
+    const { values } = normalizeTrackerEntry(nutrition, { count: 2 });
+    expect(values.calories).toBeUndefined();
+  });
+  it("still lands an amount on the primary field", () => {
+    const hydration: any = { name: "Hydration", category: "health", fields: [{ name: "ounces", type: "number", unit: "oz", isPrimary: true }] };
+    expect(normalizeTrackerEntry(hydration, { amount: 24 }).values.ounces).toBe(24);
+    expect(normalizeTrackerEntry(nutrition, { amount: 640 }).values.calories).toBe(640);
   });
 });
