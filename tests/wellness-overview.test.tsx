@@ -130,6 +130,15 @@ describe("Wellness overview — the readout", () => {
     expect(screen.getByTestId("wellness-lab-hemoglobin").textContent).toMatch(/15\.1 g\/dL/);
   });
 
+  it("links a value read off a lab report to the document, not a tracker", () => {
+    render(<WellnessOverview {...base} panels={[{
+      ...lipids, rows: [{ ...lipids.rows[0], metricId: "vitamin_d", label: "Vitamin D", trackerId: "doc:doc-vitd" }],
+    }]} />);
+    expect(screen.getByTestId("wellness-lab-vitamin_d").getAttribute("href")).toBe("#/documents?doc=doc-vitd");
+    render(<WellnessOverview {...base} />);
+    expect(screen.getByTestId("wellness-lab-ldl").getAttribute("href")).toBe("#/trackers?tracker=t-ldl");
+  });
+
   it("shows medications as refill dates, not daily check-offs", () => {
     render(<WellnessOverview {...base} />);
     const med = screen.getByTestId("wellness-med-m1");

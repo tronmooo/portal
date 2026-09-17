@@ -22,7 +22,9 @@
 // endpoint reasons over the SAME readout, so the page and the narrative can't
 // describe different data. Unit-tested in tests/wellness-readout.test.ts.
 import type { Tracker, TrackerEntry } from "./schema";
-import { localDayOf, addDays } from "./timezone";
+import { localDayOf, addDays, zonedTimeToUTC } from "./timezone";
+import { isHealthDocument, type HealthDocLike } from "./health-documents";
+import { normalizeDateString } from "./extraction-normalize";
 import {
   resolveCanonicalMetric, validateCanonicalValue, flagAgainstReference,
   formatReference, getCanonicalMetric, LAB_PANELS, PANEL_LABELS,
@@ -84,14 +86,21 @@ function freshWindowDays(metricId: string): number {
   return metricId === "sleep_hours" ? 1 : 0; // last night = today or yesterday
 }
 
-export function collectMetrics(
-  trackers: Tracker[] | undefined | null,
-  opts: { now?: Date; timezone?: string } = {},
-): Map<string, MetricSeries> {
-  const now = opts.now ? opts.now.getTime() : Date.now();
-  const todayISO = localDayOf(new Date(now), opts.timezone) || new Date(now).toISOString().slice(0, 10);
-  const byId = new Map<string, MetricSeries>();
-  const push = (metric: CanonicalMetric, r: Reading) => {
+export interface CollectOptions {
+  now?: Date;
+  timezone?: string;
+  /**
+   * Documents whose extractedData holds readings — a lab report the Photo AI
+   * pipeline read. Their values merge into the same series as the trackers'
+   * (see collectDocumentMetrics), so a Vitamin D result that only ever lived
+   * on the document no longer leaves Labs saying "No lab values".
+   */
+  documents?: HealthDocumentLike[] | null;
+}
+
+/** Appends a reading to its series in `byId`, creating the series on first use. */
+function seriesBuilder(byId: Map<string, MetricSeries>) {
+  return (metric: CanonicalMetric, r: Reading) => {
     let s = byId.get(metric.id);
     if (!s) {
       s = { metric, readings: [], latest: null, latestFresh: null, previous: null, avg30: null, sources: [] };
@@ -100,6 +109,34 @@ export function collectMetrics(
     s.readings.push(r);
     if (!s.sources.some((x) => x.id === r.trackerId)) s.sources.push({ id: r.trackerId, name: r.trackerName });
   };
+}
+
+/** Order each series and derive latest / fresh / previous / 30-day mean. */
+function finalizeSeries(byId: Map<string, MetricSeries>, now: number, timezone?: string): Map<string, MetricSeries> {
+  const todayISO = localDayOf(new Date(now), timezone) || new Date(now).toISOString().slice(0, 10);
+  for (const s of byId.values()) {
+    s.readings.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+    s.latest = s.readings[s.readings.length - 1] || null;
+    const freshFrom = addDays(todayISO, -freshWindowDays(s.metric.id));
+    const latestDay = s.latest ? localDayOf(s.latest.at, timezone) : null;
+    s.latestFresh = s.latest && latestDay && latestDay >= freshFrom ? s.latest : null;
+    s.previous = s.readings.length > 1 ? s.readings[s.readings.length - 2] : null;
+    const window = s.readings.filter((r) => {
+      const age = now - new Date(r.at).getTime();
+      return age > 0 && age <= 30 * DAY && r !== s.latest;
+    });
+    s.avg30 = window.length > 0 ? window.reduce((a, r) => a + r.value, 0) / window.length : null;
+  }
+  return byId;
+}
+
+export function collectMetrics(
+  trackers: Tracker[] | undefined | null,
+  opts: CollectOptions = {},
+): Map<string, MetricSeries> {
+  const now = opts.now ? opts.now.getTime() : Date.now();
+  const byId = new Map<string, MetricSeries>();
+  const push = seriesBuilder(byId);
 
   for (const t of trackers || []) {
     if (!t) continue;
@@ -134,20 +171,270 @@ export function collectMetrics(
     }
   }
 
-  for (const s of byId.values()) {
-    s.readings.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
-    s.latest = s.readings[s.readings.length - 1] || null;
-    const freshFrom = addDays(todayISO, -freshWindowDays(s.metric.id));
-    const latestDay = s.latest ? localDayOf(s.latest.at, opts.timezone) : null;
-    s.latestFresh = s.latest && latestDay && latestDay >= freshFrom ? s.latest : null;
-    s.previous = s.readings.length > 1 ? s.readings[s.readings.length - 2] : null;
-    const window = s.readings.filter((r) => {
-      const age = now - new Date(r.at).getTime();
-      return age > 0 && age <= 30 * DAY && r !== s.latest;
-    });
-    s.avg30 = window.length > 0 ? window.reduce((a, r) => a + r.value, 0) / window.length : null;
+  finalizeSeries(byId, now, opts.timezone);
+  if (opts.documents && opts.documents.length > 0) {
+    return mergeMetrics(byId, collectDocumentMetrics(opts.documents, opts), opts);
   }
   return byId;
+}
+
+// ── Documents ────────────────────────────────────────────────────────────────
+// A lab report the Photo AI pipeline read keeps its values on the document's
+// extractedData (the source of truth for that upload). The extraction MAY also
+// have logged them into trackers, but only when the user confirmed that step —
+// and a report whose values were saved to the document alone left Labs saying
+// "No lab values" while the numbers sat one tab over. So the readout reads
+// documents too, resolving each value through the same canon as a tracker
+// field, dated from the report itself, and merged into the same series.
+
+export interface HealthDocumentLike extends HealthDocLike {
+  id: string;
+  extractedData?: Record<string, any> | null;
+  createdAt?: string | null;
+}
+
+/** Reading.trackerId of a value read from a document: `doc:<documentId>`. */
+export const DOC_SOURCE_PREFIX = "doc:";
+
+/** The document id behind a reading's source, or null when it is a tracker. */
+export function documentIdOfSource(trackerId: string | null | undefined): string | null {
+  const id = String(trackerId ?? "");
+  return id.startsWith(DOC_SOURCE_PREFIX) && id.length > DOC_SOURCE_PREFIX.length ? id.slice(DOC_SOURCE_PREFIX.length) : null;
+}
+
+/**
+ * Keys of a report that are ABOUT the report, never a result: who, where,
+ * when, reference ranges, flags. `date` matters most — "2026-09-01" parses as
+ * the number 2026, and "collectionDate" is not a metric.
+ */
+const DOC_META_KEY =
+  /date|\bdob\b|birth|name$|patient|provider|facility|clinic|physician|doctor|ordered|address|phone|fax|account|accession|\bmrn\b|number|status|page|signed|reference|range|flag|method|comment|interpretation|summary|notes?$|^_|calendar/i;
+
+/** Keys that hold a reading's number inside a row / envelope object. */
+const VALUE_KEY = /^(value|result|resultValue|reading|measurement|level|amount)$/i;
+/** Keys that hold the reading's unit inside a row / envelope object. */
+const UNIT_KEY = /^(unit|units|uom)$/i;
+/** Keys that name the test inside a row object. */
+const ROW_NAME_KEY = /^(name|test|testName|analyte|marker|parameter|item|label|component|measure|metric)$/i;
+/** Keys that date a single row (a panel drawn on a different day). */
+const ROW_DATE_KEY = /^(date|collectionDate|collected|dateCollected|reportDate|resultDate|drawn|testDate)$/i;
+/** Top-level keys so generic that only the document's title can say what they measure. */
+const GENERIC_VALUE_KEY = /^(value|result|results?|level|reading|measurement)$/i;
+
+const BP_KEY = /blood\s*pressure|\bbp\b/i;
+
+/**
+ * "HemoglobinA1C" → "Hemoglobin A1C", "LDLCholesterol" → "LDL Cholesterol",
+ * "vitamin_b12" → "vitamin b12". The canon's patterns are written for the
+ * words a report prints, with word boundaries; extraction keys are camelCase
+ * and would never reach `\ba1c\b` otherwise.
+ */
+function wordsOf(key: string): string {
+  return key
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/[_.\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+const BP_VALUE = /^\s*(\d{2,3})\s*\/\s*(\d{2,3})\b/;
+
+/** "32 ng/mL", "< 5", 32, "5.8%" → the number and whatever unit rode with it. */
+function parseMeasure(raw: unknown): { value: number; unit: string } | null {
+  if (typeof raw === "number") return Number.isFinite(raw) ? { value: raw, unit: "" } : null;
+  if (typeof raw !== "string") return null;
+  const m = raw.match(/^\s*(?:[<>≤≥]=?\s*)?([-+]?\d+(?:[.,]\d+)?)\s*([a-zA-Zµμ%][a-zA-Zµμ%/0-9.^²³]*)?/);
+  if (!m) return null;
+  const value = parseFloat(m[1].replace(",", "."));
+  return Number.isFinite(value) ? { value, unit: m[2] || "" } : null;
+}
+
+function isPlainObject(v: unknown): v is Record<string, any> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/** { value: 32, unit: "ng/mL", referenceRange: "30-100" } — one datum in an envelope. */
+function envelopeMeasure(obj: Record<string, any>): { value: number; unit: string } | null {
+  const valueKey = Object.keys(obj).find((k) => VALUE_KEY.test(k));
+  if (valueKey == null) return null;
+  const inner = obj[valueKey];
+  const parsed = isPlainObject(inner) ? envelopeMeasure(inner) : parseMeasure(inner);
+  if (!parsed) return null;
+  const unitKey = Object.keys(obj).find((k) => UNIT_KEY.test(k));
+  const unit = unitKey != null && typeof obj[unitKey] === "string" ? obj[unitKey] : parsed.unit;
+  return { value: parsed.value, unit };
+}
+
+function rowName(obj: Record<string, any>): string | null {
+  const k = Object.keys(obj).find((key) => ROW_NAME_KEY.test(key) && typeof obj[key] === "string" && obj[key].trim());
+  return k != null ? String(obj[k]).trim() : null;
+}
+
+function rowDay(obj: Record<string, any>): string | null {
+  const k = Object.keys(obj).find((key) => ROW_DATE_KEY.test(key));
+  return k != null ? normalizeDateString(obj[k]) : null;
+}
+
+/**
+ * The day the report's values were TRUE — the collection / draw date first,
+ * then the report or result date, then a service, visit or test date, then a
+ * bare "date". Never a birth date, an expiry, a due date or an issue date.
+ * Falls back to the upload day (createdAt) when the report printed none.
+ */
+export function documentReportDay(doc: HealthDocumentLike, timezone?: string): string | null {
+  const data = isPlainObject(doc.extractedData) ? doc.extractedData : {};
+  let best: { rank: number; day: string } | null = null;
+  for (const [key, raw] of Object.entries(data)) {
+    if (!/date|collected$|reported$|drawn$/i.test(key)) continue;
+    if (/birth|\bdob\b|expir|due|issue|print|next|follow|upload|creat|receiv|calendar|^_/i.test(key)) continue;
+    const day = typeof raw === "string" || typeof raw === "number" ? normalizeDateString(raw) : null;
+    if (!day) continue;
+    const rank = /collect|specimen|draw/i.test(key) ? 0
+      : /report|result/i.test(key) ? 1
+      : /test|service|visit|exam|encounter|lab|order/i.test(key) ? 2
+      : /^date$/i.test(key) ? 3 : 4;
+    if (!best || rank < best.rank) best = { rank, day };
+  }
+  if (best) return best.day;
+  return doc.createdAt ? localDayOf(doc.createdAt, timezone) : null;
+}
+
+/**
+ * Every plausible reading in the health documents, keyed by canonical metric
+ * id — the same shape collectMetrics returns, so the two merge.
+ *
+ * extractedData has no fixed schema. The shapes the pipeline produces, and
+ * each is handled:
+ *   * a flat key:            { vitaminD: "32 ng/mL" }, { VitaminD: "27" }
+ *   * an envelope:           { vitaminD: { value: 32, unit: "ng/mL" } }
+ *   * a nested panel:        { cholesterol: { hdl: 50, ldl: 100, total: 180 } }
+ *   * rows:                  { labResults: [{ test: "Vitamin D", value: 32, unit: "ng/mL" }] }
+ *   * blood pressure:        { bloodPressure: "138/86" }
+ * A key resolves the way a tracker field does: its own name first (with the
+ * metric's exclude veto over the surrounding keys), then with its parent key.
+ * Each reading is dated from the report (documentReportDay) at local noon —
+ * exactly where confirm-extraction places the tracker entry it may also have
+ * logged, so the two dedupe on merge.
+ */
+export function collectDocumentMetrics(
+  documents: HealthDocumentLike[] | undefined | null,
+  opts: { now?: Date; timezone?: string } = {},
+): Map<string, MetricSeries> {
+  const now = opts.now ? opts.now.getTime() : Date.now();
+  const byId = new Map<string, MetricSeries>();
+  const push = seriesBuilder(byId);
+
+  for (const doc of documents || []) {
+    if (!doc || !doc.id || !isHealthDocument(doc)) continue;
+    const data = isPlainObject(doc.extractedData) ? doc.extractedData : null;
+    if (!data) continue;
+    const day = documentReportDay(doc, opts.timezone);
+    if (!day) continue;
+    const trackerId = `${DOC_SOURCE_PREFIX}${doc.id}`;
+    const title = String(doc.title || doc.name || "").trim();
+    const trackerName = title || "Document";
+
+    const atFor = (d: string): string | null => {
+      const at = zonedTimeToUTC(d, 12, 0, opts.timezone);
+      if (isNaN(at.getTime()) || at.getTime() > now + DAY) return null;
+      return at.toISOString();
+    };
+
+    const emit = (rawKey: string, rawParent: string, measure: { value: number; unit: string }, d: string, topLevel: boolean) => {
+      const key = wordsOf(rawKey);
+      const parent = wordsOf(rawParent);
+      const byKey = resolveCanonicalMetric(key);
+      const hay = `${parent} ${key}`;
+      let metric = byKey && !(byKey.exclude && byKey.exclude.test(hay)) ? byKey : resolveCanonicalMetric(parent, key);
+      // A top-level "result" says nothing on its own; the document's title
+      // does ("Vitamin D results"). Only for a generic key — a title never
+      // gets to rename a key that has a meaning of its own.
+      if (!metric && topLevel && GENERIC_VALUE_KEY.test(key)) metric = resolveCanonicalMetric(title, key);
+      if (!metric) return;
+      const check = validateCanonicalValue(metric, measure.value, measure.unit);
+      if (!check.ok) return; // impossible value — same rule as a tracker
+      const at = atFor(d);
+      if (!at) return;
+      push(metric, { value: check.canonical, at, trackerId, trackerName });
+    };
+
+    const emitRow = (row: Record<string, any>, parent: string, d: string) => {
+      const name = rowName(row);
+      const measure = envelopeMeasure(row);
+      if (!name || !measure) return;
+      emit(name, parent, measure, rowDay(row) || d, false);
+    };
+
+    const walk = (key: string, raw: any, parent: string, d: string, depth: number) => {
+      if (depth > 4 || raw == null) return;
+      if (META_KEY.test(key) || DOC_META_KEY.test(key)) return;
+      if (Array.isArray(raw)) {
+        for (const el of raw) if (isPlainObject(el)) emitRow(el, key, d);
+        return;
+      }
+      if (isPlainObject(raw)) {
+        if (rowName(raw) && envelopeMeasure(raw)) { emitRow(raw, parent, d); return; }
+        const env = envelopeMeasure(raw);
+        if (env) { emit(key, parent, env, rowDay(raw) || d, depth === 0); return; }
+        const nextParent = `${parent} ${key}`.trim();
+        for (const [k, v] of Object.entries(raw)) walk(k, v, nextParent, d, depth + 1);
+        return;
+      }
+      if (typeof raw === "string" && BP_KEY.test(wordsOf(`${parent} ${key}`))) {
+        const bp = raw.match(BP_VALUE);
+        if (bp) {
+          emit("systolic", key, { value: +bp[1], unit: "mmHg" }, d, false);
+          emit("diastolic", key, { value: +bp[2], unit: "mmHg" }, d, false);
+          return;
+        }
+      }
+      const measure = parseMeasure(raw);
+      if (measure) emit(key, parent, measure, d, depth === 0);
+    };
+
+    for (const [key, raw] of Object.entries(data)) walk(key, raw, "", day, 0);
+  }
+
+  return finalizeSeries(byId, now, opts.timezone);
+}
+
+/** Identity of a reading for dedupe: same local day, same canonical value. */
+function readingKey(r: Reading, timezone?: string): string {
+  return `${localDayOf(r.at, timezone) || r.at.slice(0, 10)}|${Math.round(r.value * 1000) / 1000}`;
+}
+
+/**
+ * One map from two: `b`'s readings join `a`'s series (creating a series when
+ * `a` has none). A reading in `b` that repeats one already in `a` — same
+ * metric, same local day, same value — is dropped: the extraction that saved
+ * a lab value to the document may ALSO have logged it into a tracker, and
+ * that is one measurement, not a trend from 32 to 32.
+ */
+export function mergeMetrics(
+  a: Map<string, MetricSeries>,
+  b: Map<string, MetricSeries>,
+  opts: { now?: Date; timezone?: string } = {},
+): Map<string, MetricSeries> {
+  const now = opts.now ? opts.now.getTime() : Date.now();
+  const byId = new Map<string, MetricSeries>();
+  const push = seriesBuilder(byId);
+  const seen = new Map<string, Set<string>>();
+  for (const s of a.values()) {
+    const keys = new Set<string>();
+    for (const r of s.readings) { push(s.metric, r); keys.add(readingKey(r, opts.timezone)); }
+    seen.set(s.metric.id, keys);
+  }
+  for (const s of b.values()) {
+    const keys = seen.get(s.metric.id) || new Set<string>();
+    for (const r of s.readings) {
+      const k = readingKey(r, opts.timezone);
+      if (keys.has(k)) continue;
+      push(s.metric, r);
+      keys.add(k);
+    }
+    seen.set(s.metric.id, keys);
+  }
+  return finalizeSeries(byId, now, opts.timezone);
 }
 
 // ── Today ────────────────────────────────────────────────────────────────────

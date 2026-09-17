@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { Medallion } from "@/components/dashboard/visuals";
 import { SectionHeading } from "@/components/ui/section-heading";
-import type { TodaySignal, LabPanel, LabRow, WorkoutGroup, WellnessScore, SourceState } from "@shared/wellness-readout";
+import { documentIdOfSource, type TodaySignal, type LabPanel, type LabRow, type WorkoutGroup, type WellnessScore, type SourceState } from "@shared/wellness-readout";
 
 // Shapes the Care section renders. Kept here because pages/wellness.tsx maps
 // obligations/documents/profile fields into them.
@@ -197,9 +197,12 @@ const shortDay = (iso: string) => {
 
 function LabRowView({ row }: { row: LabRow }) {
   const moved = row.previous != null && row.previous !== row.value;
+  // A value read straight off a lab report has no tracker to open; the
+  // document is where that number came from.
+  const docId = documentIdOfSource(row.trackerId);
   return (
     <a
-      href={`#/trackers?tracker=${row.trackerId}`}
+      href={docId ? `#/documents?doc=${docId}` : `#/trackers?tracker=${row.trackerId}`}
       className="flex items-center justify-between gap-3 py-1.5 border-b border-border/40 last:border-0 hover:bg-muted/40 rounded px-1 -mx-1"
       data-testid={`wellness-lab-${row.metricId}`}
     >

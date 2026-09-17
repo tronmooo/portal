@@ -14,6 +14,7 @@ import { describe, it, expect } from "vitest";
 import {
   collectMetrics, todaySignals, labPanels, activityHistory, wellnessScore,
   weeklyBrief, sourceState, mergedDuplicates, resolveWellnessSubject, belongsToSubject, bodyVitals,
+  collectDocumentMetrics, mergeMetrics, documentReportDay, documentIdOfSource,
 } from "../shared/wellness-readout";
 
 const NOW = new Date("2026-09-16T12:00:00Z");
@@ -348,5 +349,134 @@ describe("body & vitals are shown, not just collected", () => {
     const m = collectMetrics(trackers, { now: NOW });
     expect(bodyVitals(m).flatMap((p) => p.rows).some((r) => r.metricId === "hdl")).toBe(false);
     expect(labPanels(m).flatMap((p) => p.rows).some((r) => r.metricId === "weight")).toBe(false);
+  });
+});
+
+// ── Lab values that live on a document ───────────────────────────────────────
+// USER REPORT (2026-09-17): Labs said "No lab values" with a Vitamin D report
+// uploaded. The values were saved to the document's extractedData and the
+// readout only ever read trackers.
+describe("lab values read from a document", () => {
+  const TZ = "America/Los_Angeles";
+  const doc = (over: any): any => ({
+    id: over.id || "doc-vitd", name: over.name || "vitamin-d.pdf", title: over.title ?? "Vitamin D results",
+    type: over.type || "lab_results", tags: over.tags || [], linkedProfiles: [],
+    createdAt: over.createdAt || daysAgo(3), extractedData: over.extractedData, deletedAt: over.deletedAt ?? null,
+  });
+
+  it("puts a Vitamin D of 32 ng/mL dated 2026-09-01 in the Vitamins panel", () => {
+    const m = collectDocumentMetrics([doc({ extractedData: { collectionDate: "2026-09-01", vitaminD: "32 ng/mL", patientName: "Test" } })], { now: NOW, timezone: TZ });
+    const panels = labPanels(m);
+    const vit = panels.find((p) => p.panel === "vitamins")!;
+    expect(vit).toBeTruthy();
+    expect(vit.rows).toHaveLength(1);
+    expect(vit.rows[0]).toMatchObject({ metricId: "vitamin_d", value: 32, unit: "ng/mL", flag: "normal", trackerId: "doc:doc-vitd" });
+    // Dated from the report at local noon, not from the upload.
+    expect(vit.rows[0].at).toBe("2026-09-01T19:00:00.000Z");
+    expect(m.get("vitamin_d")!.sources).toEqual([{ id: "doc:doc-vitd", name: "Vitamin D results" }]);
+    expect(documentIdOfSource(vit.rows[0].trackerId)).toBe("doc-vitd");
+    expect(documentIdOfSource("t-hdl")).toBeNull();
+  });
+
+  it("reaches the page through collectMetrics(trackers, { documents })", () => {
+    const m = collectMetrics([], { now: NOW, timezone: TZ, documents: [doc({ extractedData: { collectionDate: "2026-09-01", vitaminD: 32 } })] });
+    expect(labPanels(m).flatMap((p) => p.rows).map((r) => r.metricId)).toEqual(["vitamin_d"]);
+    expect(sourceState(m).labs).toBe(true);
+  });
+
+  it("flags an out-of-range value", () => {
+    const m = collectDocumentMetrics([doc({ extractedData: { collectionDate: "2026-09-01", vitaminD: "22 ng/mL" } })], { now: NOW, timezone: TZ });
+    const panels = labPanels(m);
+    expect(panels[0].rows[0].flag).toBe("low");
+    expect(panels[0].outOfRange).toBe(1);
+    expect(weeklyBrief({ metrics: m, workouts: [], labs: panels, now: NOW }).join(" ")).toMatch(/Vitamin D at 22 ng\/mL, below/);
+  });
+
+  it("does not double count the tracker entry the extraction also logged", () => {
+    // confirm-extraction stamps its tracker entry at local noon of the report date.
+    const noon = new Date("2026-09-01T19:00:00.000Z").toISOString();
+    const trackers = [tracker({ name: "Vitamin D", unit: "ng/mL", entries: [entry({ value: 32 }, noon)] })];
+    const documents = [doc({ extractedData: { collectionDate: "2026-09-01", vitaminD: "32 ng/mL" } })];
+    const m = collectMetrics(trackers, { now: NOW, timezone: TZ, documents });
+    const s = m.get("vitamin_d")!;
+    expect(s.readings).toHaveLength(1);
+    expect(s.previous).toBeNull();
+    expect(labPanels(m)[0].rows[0].previous).toBeNull(); // not "32 → 32"
+    // A different day is a different measurement and keeps the trend.
+    const older = collectMetrics(trackers, { now: NOW, timezone: TZ, documents: [doc({ extractedData: { collectionDate: "2026-03-01", vitaminD: 27 } })] });
+    expect(older.get("vitamin_d")!.readings.map((r) => r.value)).toEqual([27, 32]);
+    expect(labPanels(older)[0].rows[0].previous).toBe(27);
+  });
+
+  it("contributes nothing from a document that is not a health record", () => {
+    const m = collectDocumentMetrics([
+      doc({ id: "d-rx", type: "receipt", title: "Pharmacy receipt", extractedData: { vitaminD: "12.99", totalAmount: 32 } }),
+      doc({ id: "d-home", type: "insurance_policy", title: "Homeowners policy", extractedData: { glucose: 95 } }),
+      doc({ id: "d-gone", type: "lab_results", deletedAt: daysAgo(1), extractedData: { vitaminD: 32 } }),
+    ], { now: NOW, timezone: TZ });
+    expect([...m.keys()]).toEqual([]);
+  });
+
+  it("reads the shapes extraction produces — rows, envelopes, nested panels, BP strings", () => {
+    const m = collectDocumentMetrics([doc({ extractedData: {
+      reportDate: "09/01/2026",
+      labResults: [
+        { test: "Vitamin D, 25-Hydroxy", value: 32, unit: "ng/mL", referenceRange: "30-100" },
+        { name: "Glucose", result: "104", units: "mg/dL", flag: "H" },
+        { test: "Comments", value: "See note" },
+      ],
+      cholesterol: { hdl: 48, ldl: { value: 128, unit: "mg/dL" }, total: 204 },
+      bloodPressure: "138/86",
+      HemoglobinA1C: "5.8%",
+      patientName: "Sarah 2", dateOfBirth: "1988-03-14", accessionNumber: "A123456",
+    } })], { now: NOW, timezone: TZ });
+    const by = (id: string) => m.get(id)?.latest?.value;
+    expect(by("vitamin_d")).toBe(32);
+    expect(by("glucose")).toBe(104);
+    expect(by("hdl")).toBe(48);
+    expect(by("ldl")).toBe(128);
+    expect(by("total_cholesterol")).toBe(204);
+    expect(by("bp_systolic")).toBe(138);
+    expect(by("bp_diastolic")).toBe(86);
+    expect(by("hba1c")).toBe(5.8);
+    expect(m.get("vitamin_d")!.latest!.at).toBe("2026-09-01T19:00:00.000Z");
+    // Nothing about the patient or the paperwork became a reading.
+    expect([...m.keys()].sort()).toEqual(["bp_diastolic", "bp_systolic", "glucose", "hba1c", "hdl", "ldl", "total_cholesterol", "vitamin_d"]);
+  });
+
+  it("reads confirm-extraction's flat keys and drops an impossible value", () => {
+    const m = collectDocumentMetrics([doc({ extractedData: { VitaminD: "27", HemoglobinA1C: "179", LDLCholesterol: "128 mg/dL", vitamin_b12: 450, collectionDate: "2026-09-01" } })], { now: NOW, timezone: TZ });
+    expect(m.get("vitamin_d")!.latest!.value).toBe(27);
+    expect(m.get("ldl")!.latest!.value).toBe(128);
+    expect(m.get("vitamin_b12")!.latest!.value).toBe(450);
+    expect(m.has("hba1c")).toBe(false); // 179 % is not an A1c — same rule as a tracker
+  });
+
+  it("dates from the report — collection first, then report, then the upload day", () => {
+    expect(documentReportDay(doc({ extractedData: { reportDate: "2026-09-03", collectionDate: "2026-09-01", dateOfBirth: "1988-03-14" } }))).toBe("2026-09-01");
+    expect(documentReportDay(doc({ extractedData: { reportDate: "2026-09-03", dateOfBirth: "1988-03-14", expirationDate: "2030-01-01" } }))).toBe("2026-09-03");
+    expect(documentReportDay(doc({ createdAt: "2026-09-10T20:00:00.000Z", extractedData: { dateOfBirth: "1988-03-14" } }), TZ)).toBe("2026-09-10");
+    // A future-dated report is a typo, not a measurement.
+    const m = collectDocumentMetrics([doc({ extractedData: { collectionDate: "2027-09-01", vitaminD: 32 } })], { now: NOW, timezone: TZ });
+    expect(m.has("vitamin_d")).toBe(false);
+  });
+
+  it("uses the document's title only for a generic key", () => {
+    const m = collectDocumentMetrics([
+      doc({ id: "d1", title: "Vitamin D results", extractedData: { collectionDate: "2026-09-01", result: "32 ng/mL" } }),
+      // A "Lipid Panel" title must not turn an age into a cholesterol.
+      doc({ id: "d2", title: "Lipid Panel", extractedData: { collectionDate: "2026-09-01", patientAge: 61 } }),
+    ], { now: NOW, timezone: TZ });
+    expect([...m.keys()]).toEqual(["vitamin_d"]);
+    expect(m.get("vitamin_d")!.latest!.value).toBe(32);
+  });
+
+  it("mergeMetrics keeps both sources visible and both orders of readings", () => {
+    const a = collectMetrics([tracker({ name: "HDL", entries: [entry({ value: 52 }, daysAgo(200))] })], { now: NOW, timezone: TZ });
+    const b = collectDocumentMetrics([doc({ id: "d-lip", title: "Lipid panel", extractedData: { collectionDate: "2026-09-01", hdl: 58 } })], { now: NOW, timezone: TZ });
+    const m = mergeMetrics(a, b, { now: NOW, timezone: TZ });
+    expect(m.get("hdl")!.readings.map((r) => r.value)).toEqual([52, 58]);
+    expect(m.get("hdl")!.sources.map((s) => s.id)).toEqual(["t-HDL", "doc:d-lip"]);
+    expect(labPanels(m)[0].rows[0].mergedFrom).toBe(2);
   });
 });

@@ -99,7 +99,13 @@ export default function WellnessPage() {
   // ── The readout ──────────────────────────────────────────────────────────
   // "Today" is the browser's day: the readout's freshness windows (today /
   // last night) must agree with the clock the person is looking at.
-  const metrics = collectMetrics(myTrackers, { timezone: BROWSER_TIMEZONE });
+  //
+  // Documents feed it too: a lab report's values live on the document's
+  // extractedData, and Labs said "No lab values" beside an uploaded Vitamin D
+  // result because only trackers were read. The readout resolves those values
+  // through the same canon and dedupes them against any tracker entry the
+  // extraction also logged (shared/wellness-readout collectDocumentMetrics).
+  const metrics = collectMetrics(myTrackers, { timezone: BROWSER_TIMEZONE, documents: myDocuments });
   const signals = todaySignals(metrics);
   const panels = labPanels(metrics);
   const body = bodyVitals(metrics);

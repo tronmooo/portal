@@ -4694,13 +4694,16 @@ ${JSON.stringify(ctx, null, 2)}`;
       const ids = Array.isArray(idsRaw)
         ? idsRaw.filter((x) => typeof x === "string" && x)
         : (typeof idsRaw === "string" ? idsRaw.split(",").filter(Boolean) : []);
-      const [trackers, profiles] = await Promise.all([storage.getTrackers(), storage.getProfiles()]);
+      const [trackers, profiles, documents] = await Promise.all([storage.getTrackers(), storage.getProfiles(), storage.getDocuments()]);
       // ONE SUBJECT, same rule as the page: the selected person, else self.
       // Health data is never averaged across people.
       const { subject, isSelf } = resolveWellnessSubject(profiles as any[], ids);
       const mine = (trackers as any[]).filter((t) => belongsToSubject(t?.linkedProfiles, subject, isSelf));
+      // Lab values a report left on its document (same subject rule) reach the
+      // brief through the same readout as the page — see collectDocumentMetrics.
+      const myDocuments = (documents as any[]).filter((d) => belongsToSubject(d?.linkedProfiles, subject, isSelf));
 
-      const metrics = collectMetrics(mine as any, { timezone: (storage as any)._timezone });
+      const metrics = collectMetrics(mine as any, { timezone: (storage as any)._timezone, documents: myDocuments });
       const workouts = activityHistory(mine as any);
       const labs = labPanels(metrics);
       const brief = weeklyBrief({ metrics, workouts, labs });
