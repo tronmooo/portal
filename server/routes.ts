@@ -2661,15 +2661,34 @@ export async function registerRoutes(
         : [];
 
       const baseName = String(fileName).replace(/\.[^.]+$/, "");
-      const doc = await storage.createDocument({
-        name: baseName,
-        type: "saved",
-        mimeType,
-        fileData: clean,
-        extractedData: note ? { note: String(note).slice(0, 2000) } : undefined,
-        linkedProfiles: safeProfileIds,
-        tags: ["saved-only"],
-      } as any);
+      // Same byte fingerprint the extracting upload tags its document with, so
+      // a file saved here and then uploaded for extraction (or saved twice) is
+      // ONE document, not two copies of the same policy.
+      const uploadHashTag = `sha256:${createHash("sha256").update(clean).digest("hex").slice(0, 32)}`;
+      let doc: any = null;
+      let deduped = false;
+      try {
+        const existing = (await storage.getDocuments()).find((d: any) => !d.deletedAt && Array.isArray(d.tags) && d.tags.includes(uploadHashTag));
+        if (existing) {
+          doc = existing;
+          deduped = true;
+          const missing = safeProfileIds.filter((id) => !(existing.linkedProfiles || []).includes(id));
+          if (missing.length > 0) {
+            await storage.updateDocument(existing.id, { linkedProfiles: [...(existing.linkedProfiles || []), ...missing] } as any);
+          }
+        }
+      } catch { /* the lookup is best-effort; a failure saves a copy as before */ }
+      if (!doc) {
+        doc = await storage.createDocument({
+          name: baseName,
+          type: "saved",
+          mimeType,
+          fileData: clean,
+          extractedData: note ? { note: String(note).slice(0, 2000) } : undefined,
+          linkedProfiles: safeProfileIds,
+          tags: ["saved-only", uploadHashTag],
+        } as any);
+      }
 
       // Resolve profile names for confirmation message
       let linkedProfilesResolved: Array<{ id: string; name: string }> = [];
@@ -2691,6 +2710,7 @@ export async function registerRoutes(
         documentName: doc.name,
         linkedProfiles: linkedProfilesResolved,
         savedAt: new Date().toISOString(),
+        ...(deduped ? { deduped: true } : {}),
       });
     } catch (err: any) {
       log.error("[Upload.saveOnly]", err?.message || "unknown error");

@@ -2293,11 +2293,12 @@ export async function processFileUpload(
 
   const uploadHashTag = `sha256:${createHash("sha256").update(cleanBase640).digest("hex").slice(0, 32)}`;
   try {
+    // Byte-identical to a document already on file — whenever it was
+    // uploaded. This guard used to look back one hour only, so the same
+    // homeowners policy uploaded again the next day was saved a second time.
     const recentDocs = await storage.getDocuments();
-    const cutoffMs = Date.now() - 60 * 60 * 1000;
     const existingUpload = (recentDocs || []).find((d: any) =>
-      Array.isArray(d.tags) && d.tags.includes(uploadHashTag) &&
-      new Date(d.createdAt || 0).getTime() >= cutoffMs
+      !d.deletedAt && Array.isArray(d.tags) && d.tags.includes(uploadHashTag)
     );
     if (existingUpload) {
       console.log(`[Upload] Duplicate upload of "${fileName}" — reusing document ${existingUpload.id} instead of reprocessing`);

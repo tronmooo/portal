@@ -1891,7 +1891,7 @@ function NestedAssetSections({
 // cache key) produces an identical shape. Imported at the top of this file.
 
 function getExpirationStatus(doc: Document): "expired" | "soon" | "ok" | null {
-  const expField = doc.extractedData?.expirationDate || doc.extractedData?.expiry || doc.extractedData?.expiration;
+  const expField = doc.expirationDate || doc.extractedData?.expirationDate || doc.extractedData?.expiry || doc.extractedData?.expiration;
   if (!expField) return null;
   const exp = new Date(expField as string);
   if (isNaN(exp.getTime())) return null;
@@ -4610,7 +4610,7 @@ function DocumentsTab({
             { key: "size", label: "Size", width: "80px", align: "right", render: (d: any) => d.size ? `${(d.size / 1024).toFixed(0)} KB` : "—" },
             { key: "uploaded", label: "Uploaded", width: "110px", render: (d: any) => d.createdAt ? new Date(d.createdAt).toLocaleDateString() : "—" },
             { key: "expiration", label: "Expires", width: "110px", render: (d: any) => {
-              const exp = d.extractedData?.expirationDate || d.extractedData?.expiry || d.extractedData?.expiration;
+              const exp = d.expirationDate || d.extractedData?.expirationDate || d.extractedData?.expiry || d.extractedData?.expiration;
               if (!exp) return "—";
               const status = getExpirationStatus(d);
               return <span className={status === "expired" ? "text-red-500" : status === "soon" ? "text-amber-500" : ""}>{new Date(exp).toLocaleDateString()}</span>;
@@ -4625,7 +4625,7 @@ function DocumentsTab({
         <div className="space-y-2">
           {filteredDocs.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).slice(0, docsShown).map(doc => {
             const expStatus = getExpirationStatus(doc);
-            const expDate = doc.extractedData?.expirationDate || doc.extractedData?.expiry || doc.extractedData?.expiration;
+            const expDate = doc.expirationDate || doc.extractedData?.expirationDate || doc.extractedData?.expiry || doc.extractedData?.expiration;
             return (
               <Card
                 key={doc.id}

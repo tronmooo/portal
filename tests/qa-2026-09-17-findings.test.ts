@@ -20,6 +20,8 @@ import { activityHistory } from "@shared/wellness-readout";
 import { netWorthChange } from "@shared/net-worth-change";
 import { computeMissedDoses, hasDoseEvidence } from "@shared/medication-doses";
 import { summarizeTrackerToday } from "@shared/tracker-summary";
+import { sanitizeTrackerEntryValues } from "../server/tracker-entry-guard";
+import { documentExpirationDate } from "@shared/date-rules";
 import { countTasksByDay, isDoneToday } from "@shared/task-counts";
 import { humanSummary, parseRecurrence } from "@shared/recurrence";
 
@@ -170,5 +172,36 @@ describe("countTasksByDay — one rule for every task surface", () => {
 describe("humanSummary — the until date keeps its year", () => {
   it("says which year a far-off end date is in", () => {
     expect(humanSummary(parseRecurrence(["recur:weekly", "runtil:2028-08-02"]), "2026-09-23", new Date("2026-09-17T12:00:00Z"))).toContain("until Aug 2, 2028");
+  });
+});
+
+describe("a supplement dose is not a blood level", () => {
+  it("accepts 2000 IU on a Vitamin D medication tracker", () => {
+    const fields = [{ name: "dosage", type: "number", unit: "IU" }, { name: "adherence", type: "select" }];
+    const r = sanitizeTrackerEntryValues(fields as any, { dosage: 2000 }, { name: "Vitamin D", category: "medication", unit: "IU" });
+    expect(r.error).toBeUndefined();
+    expect(r.values.dosage).toBe(2000);
+  });
+  it("still refuses an impossible Vitamin D LAB value", () => {
+    const r = sanitizeTrackerEntryValues([{ name: "value", type: "number", unit: "ng/mL" }] as any, { value: 2000 }, { name: "Vitamin D", category: "health", unit: "ng/mL" });
+    expect(r.error).toMatch(/outside the possible range/);
+  });
+});
+
+describe("a document's expiration date is derived from what was extracted", () => {
+  it("fills the field that was declared and never written", () => {
+    const doc = { id: "d1", name: "Homeowners Policy", type: "insurance", linkedProfiles: ["self"], extractedData: { policyNumber: "HO-1", expirationDate: "2026-09-25", effectiveDate: "2025-09-25" }, createdAt: "2026-09-01T00:00:00Z" };
+    expect(documentExpirationDate(doc)).toBe("2026-09-25");
+  });
+  it("is empty when nothing on the document expires", () => {
+    expect(documentExpirationDate({ id: "d2", name: "Receipt", type: "receipt", linkedProfiles: [], extractedData: { total: 12.5, date: "2026-09-10" }, createdAt: "2026-09-10T00:00:00Z" })).toBeUndefined();
+    expect(documentExpirationDate(null)).toBeUndefined();
+  });
+});
+
+describe("an entry with no values is refused on a tracker that has fields", () => {
+  it("refuses {} on Weight but allows it on a field-less occurrence tracker", () => {
+    expect(sanitizeTrackerEntryValues([{ name: "weight", type: "number" }] as any, {}, { name: "Weight", category: "health" }).error).toMatch(/At least one value/);
+    expect(sanitizeTrackerEntryValues([], {}, { name: "Meditation", category: "wellness" }).error).toBeUndefined();
   });
 });

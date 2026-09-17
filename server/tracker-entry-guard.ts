@@ -102,6 +102,13 @@ export function sanitizeTrackerEntryValues(
   if (meaningful.length > 0 && !hasValue) {
     return { values, error: "At least one value is required. Cannot log an empty entry." };
   }
+  // No keys at all on a tracker that HAS fields is the same empty entry: the
+  // POST route accepted `{ values: {} }` and stored a row with nothing in it.
+  // (A field-less occurrence tracker — "Meditation", logged by the tap — keeps
+  // logging `{}`; the row itself is the record there.)
+  if (meaningful.length === 0 && Array.isArray(fields) && fields.length > 0) {
+    return { values, error: "At least one value is required. Cannot log an empty entry." };
+  }
 
   // ── NaN / negatives ──────────────────────────────────────────────────────
   for (const [k, v] of Object.entries(values)) {
@@ -134,9 +141,17 @@ export function sanitizeTrackerEntryValues(
   // nothing about whether it is a fever or a fridge, so a caller that doesn't
   // know which tracker it is writing to keeps the field-name rules above and
   // nothing more.
+  // A DOSE is not a blood level. A supplement tracker named "Vitamin D"
+  // resolves to the vitamin-D lab metric (1–200 ng/mL), so "2000 IU" —
+  // an ordinary daily dose — was refused as "outside the possible range".
+  // A medication/supplement tracker, or a dose-shaped field, is bounded by the
+  // field-name rules above only.
+  const doseTracker = /^(medication|medications|supplement|supplements|meds?)$/i.test(String(tracker?.category || "").trim());
+  const DOSE_KEY = /^(dosage|dose|doses|units?|iu|mg|mcg|ml|pills?|tablets?|capsules?|drops?|puffs?|completions|taken|servings?)$/i;
   for (const [k, v] of Object.entries(values)) {
     if (!tracker?.name && !tracker?.category) break;
     if (typeof v !== "number" || META_KEYS.has(k) || k.startsWith("_")) continue;
+    if (doseTracker || DOSE_KEY.test(k)) continue;
     const metric = resolveCanonicalMetric(tracker?.name, tracker?.category, k);
     if (!metric) continue;
     const unit =

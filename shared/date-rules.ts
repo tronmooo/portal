@@ -1624,3 +1624,21 @@ export function normalizeEntityDateFields<T extends Record<string, any>>(
 
   return { fields: walk(fields, 0, "") as T, changed };
 }
+
+/**
+ * The date a document runs out, derived from its extracted data by the same
+ * rules the calendar and the "Docs Exp" chip use — the earliest expiration /
+ * end / cancellation rule on the document. `Document.expirationDate` was
+ * declared and never written (no column, no writer), so every reader that
+ * trusted it saw nothing; this is what fills it.
+ */
+export function documentExpirationDate(doc: any): string | undefined {
+  if (!doc?.id) return undefined;
+  let best: string | undefined;
+  for (const rule of rulesFromDocuments([doc])) {
+    if (!EXPIRY_RULE_TYPES.has(rule.ruleType)) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rule.date || ""))) continue;
+    if (!best || rule.date < best) best = rule.date;
+  }
+  return best;
+}

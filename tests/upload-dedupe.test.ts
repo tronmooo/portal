@@ -169,24 +169,39 @@ describe("processFileUpload — idempotent re-upload guard", () => {
     expect(result.pendingExtraction.semanticDegraded).toBeTruthy();
   });
 
-  it("ignores stale hash matches outside the dedupe window", async () => {
+  it("reuses a byte-identical document however old it is (QA 2026-09-17: a policy saved twice)", async () => {
     stubState.documents.push({
       id: "doc-old",
       name: "Old upload",
       type: "other",
       mimeType: "image/jpeg",
-      createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2h ago
+      createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), // a month ago
       tags: [HASH_TAG],
       extractedData: {},
     });
 
-    // Outside the window the guard must NOT short-circuit — processing
-    // proceeds and (with the AI mocked to fail) falls into the error path
-    // that still stores the document. Either way a NEW document is created.
+    // The guard used to look back one hour only, so the same file uploaded
+    // again the next day became a second document. Same bytes = same document.
     const result = await processFileUpload("image.jpg", "image/jpeg", FILE_BASE64);
-    expect(result.documentId).not.toBe("doc-old");
+    expect(result.documentId).toBe("doc-old");
+    expect(stubState.created).toHaveLength(0);
+  });
+
+  it("does not reuse a document that was deleted", async () => {
+    stubState.documents.push({
+      id: "doc-gone",
+      name: "Deleted upload",
+      type: "other",
+      mimeType: "image/jpeg",
+      createdAt: new Date().toISOString(),
+      deletedAt: new Date().toISOString(),
+      tags: [HASH_TAG],
+      extractedData: {},
+    });
+    const result = await processFileUpload("image.jpg", "image/jpeg", FILE_BASE64);
+    expect(result.documentId).not.toBe("doc-gone");
     expect(stubState.created.length).toBeGreaterThan(0);
-    // The new document carries the hash tag so the NEXT retry dedupes.
     expect(stubState.created[0].tags).toContain(HASH_TAG);
   });
+
 });

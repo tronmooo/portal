@@ -61,7 +61,7 @@ import { isLegacyReminderTask, LEGACY_REMINDER_TASK_SOURCE } from "../shared/leg
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
-import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "../shared/date-rules";
+import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule, documentExpirationDate } from "../shared/date-rules";
 import { deleteProfileFields, mergeFieldWrite } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter, effectiveSelection, pushdownSelection } from "../shared/profile-filter";
@@ -1228,13 +1228,17 @@ export class SupabaseStorage implements IStorage {
   }
 
   private rowToDocument(r: any): Document {
-    return {
+    const doc: Document = {
       id: r.id, name: r.name, type: r.type, mimeType: r.mime_type,
       fileData: r.file_data || "", storagePath: r.storage_path || undefined,
       extractedData: r.extracted_data || {},
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [],
       createdAt: r.created_at, updatedAt: r.updated_at || r.created_at,
     };
+    // Derived, never stored: the same expiry rule the calendar reads.
+    const exp = documentExpirationDate({ ...doc, deletedAt: r.deleted_at });
+    if (exp) (doc as any).expirationDate = exp;
+    return doc;
   }
 
   private rowToHabitCheckin(r: any): HabitCheckin {
