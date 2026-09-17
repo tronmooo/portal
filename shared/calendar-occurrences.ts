@@ -35,7 +35,8 @@
 // Pure, dependency-free, no I/O. Pinned by tests/calendar-occurrences.test.ts.
 
 import { expandRecurrenceDates, addDaysISO } from "./recurring-dates";
-import { addYearsISO, weekdaySetFor } from "./date-math";
+import { addYearsISO, weekdaySetFor, daysInMonth } from "./date-math";
+import { normalizeLiabilityName } from "./liability-types";
 
 // ─── Kinds ───────────────────────────────────────────────────────────────────
 
@@ -404,6 +405,21 @@ const slug = (s: unknown) =>
   String(s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
 
 /**
+ * The name a PAYMENT is identified by.
+ *
+ * User report 2026-09-17: "Dodge Ram Auto Loan" (the liability profile, with
+ * its paid months) and "Dodge Ram Auto Loan payment" (the bill the loan's
+ * creation door wrote beside it, with none) rendered twice on Aug 30/31 and
+ * Sep 30 — one paid, one not. They are ONE payment. The bill/loan pairing rule
+ * the payment path already uses (`normalizeLiabilityName`, which drops a
+ * trailing "payment" / "bill payment") is applied here too, after any
+ * generated "— Payment due" style suffix is removed, so the two names agree.
+ */
+function paymentName(title: unknown): string {
+  return slug(normalizeLiabilityName(stripGeneratedSuffix(String(title ?? ""))));
+}
+
+/**
  * The semantic identity of a series — what real-world recurring date it is.
  *
  * Two series with the same key are the SAME date and must render once:
@@ -431,7 +447,7 @@ export function seriesIdentityKey(series: CalendarSeries): string {
   // different bills on the same liability stay two bills.
   if (PAYMENT_KINDS.has(series.kind)) {
     const anchor = series.source.linkedRecordId || owner;
-    const name = slug(series.title);
+    const name = paymentName(series.title);
     // Amount is part of the identity: two charges with the same name on the
     // same account for DIFFERENT sums are two charges, not one. A missing
     // amount stays blank so a liability that records no figure can still merge
@@ -551,7 +567,7 @@ export interface DedupedSeries {
  * documents never merge.
  */
 const GENERATED_SUFFIX_RE =
-  /\s*[—–-]\s*(expiration|expires|expiry|expire|renewal|renews|renew|due|payment due|start date)\s*$/i;
+  /\s*[—–-]\s*(expiration|expires|expiry|expire|renewal|renews|renew|due|payment due|payments?|start date)\s*$/i;
 
 export function stripGeneratedSuffix(title: string): string {
   let out = String(title ?? "").trim();
@@ -585,19 +601,96 @@ export function isDuplicateOneTimeDate(a: CalendarSeries, b: CalendarSeries): bo
   return false;
 }
 
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Recurrences whose slot is a day-of-month. */
+const MONTH_CADENCES = new Set(["monthly", "bimonthly", "quarterly"]);
+
+/**
+ * Days 28–31 are ONE slot: "end of the month".
+ *
+ * A loan due on the 30th and the bill written beside it as due on the 31st
+ * are the same charge — the calendar already clamps both onto Feb 28 and
+ * Sep 30 — so the day-of-month slot compares `min(day, 28)`. Nothing below
+ * the 28th is touched: the 3rd and the 17th remain two charges.
+ */
+const MONTH_END_SLOT = 28;
+
 /** The scheduling fingerprint of a series: same rule AND same slot. */
 function anchorSignature(series: CalendarSeries): string {
   const rec = String(series.recurrence || "").toLowerCase();
   const base = String(series.baseDate || "").slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(base)) return `${rec}:?`;
+  if (!ISO_DAY_RE.test(base)) return `${rec}:?`;
   if (rec === "yearly") return `${rec}:${base.slice(5)}`;               // MM-DD
   if (rec === "weekly" || rec === "biweekly") {
     return `${rec}:${new Date(`${base}T12:00:00`).getDay()}`;           // weekday
   }
-  if (rec === "monthly" || rec === "bimonthly" || rec === "quarterly") {
-    return `${rec}:${base.slice(8, 10)}`;                               // day-of-month
+  if (MONTH_CADENCES.has(rec)) {                                        // day-of-month
+    const day = Math.min(Number(base.slice(8, 10)), MONTH_END_SLOT);
+    return `${rec}:${String(day).padStart(2, "0")}`;
   }
   return `${rec}:${base}`;
+}
+
+/**
+ * A date on the ABSORBED series, restated on the survivor's day-of-month.
+ *
+ * When the loan's Aug 30 (paid) folds into the bill's Aug 31, the survivor
+ * generates Aug 31 — so the paid mark must read "2026-08-31" or the month
+ * renders unpaid again. Only month-cadence survivors restate; anything else
+ * keeps the date verbatim. Returns null when nothing changes.
+ */
+function restateOnSurvivorSlot(date: string, survivor: CalendarSeries): string | null {
+  const rec = String(survivor.recurrence || "").toLowerCase();
+  const base = String(survivor.baseDate || "").slice(0, 10);
+  if (!MONTH_CADENCES.has(rec) || !ISO_DAY_RE.test(base) || !ISO_DAY_RE.test(date)) return null;
+  const anchorDay = Number(base.slice(8, 10));
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(5, 7));
+  const day = Math.min(anchorDay, daysInMonth(year, month - 1));
+  const out = `${date.slice(0, 7)}-${String(day).padStart(2, "0")}`;
+  return out === date ? null : out;
+}
+
+/** Winner's dates ∪ loser's dates, the loser's also restated on the winner's slot. */
+function unionDates(
+  winner: CalendarSeries,
+  loser: CalendarSeries,
+  key: "completedDates" | "skippedDates",
+): string[] {
+  const out = new Set<string>(winner[key] || []);
+  for (const date of loser[key] || []) {
+    if (!date) continue;
+    out.add(date);
+    const restated = restateOnSurvivorSlot(date, winner);
+    if (restated) out.add(restated);
+  }
+  return [...out].sort();
+}
+
+/**
+ * The survivor of a merge, carrying what the absorbed record knew.
+ *
+ * Dedup used to keep the winner VERBATIM, so when the bill (higher-ranked)
+ * absorbed the loan profile, every paid month recorded on the loan vanished
+ * and the merged row read "unpaid". A merge is a union of what both records
+ * know: completed and skipped dates from both sides, and the amount when only
+ * the loser carried one. Returns the winner itself when there is nothing to
+ * absorb.
+ */
+function absorbSeriesState(winner: CalendarSeries, loser: CalendarSeries): CalendarSeries {
+  const completedDates = unionDates(winner, loser, "completedDates");
+  const skippedDates = unionDates(winner, loser, "skippedDates");
+  const fillAmount = winner.amount == null && loser.amount != null;
+  const grew = completedDates.length !== (winner.completedDates?.length || 0)
+    || skippedDates.length !== (winner.skippedDates?.length || 0);
+  if (!grew && !fillAmount) return winner;
+  return {
+    ...winner,
+    ...(completedDates.length ? { completedDates } : {}),
+    ...(skippedDates.length ? { skippedDates } : {}),
+    ...(fillAmount ? { amount: loser.amount } : {}),
+  };
 }
 
 function ownerSet(series: CalendarSeries): Set<string> {
@@ -608,6 +701,9 @@ function ownerSet(series: CalendarSeries): Set<string> {
   return out;
 }
 
+/** Two amounts this close are one figure (rounding), not two charges. */
+const AMOUNT_TOLERANCE = 0.005;
+
 /**
  * Could these two series be the same real-world payment?
  *
@@ -616,10 +712,12 @@ function ownerSet(series: CalendarSeries): Set<string> {
  */
 export function isEquivalentPayment(a: CalendarSeries, b: CalendarSeries): boolean {
   if (!isPaymentKind(a.kind) || !isPaymentKind(b.kind)) return false;
-  if (slug(a.title) !== slug(b.title) || !slug(a.title)) return false;
+  const name = paymentName(a.title);
+  if (!name || name !== paymentName(b.title)) return false;
   if (anchorSignature(a) !== anchorSignature(b)) return false;
-  // Different amounts mean different charges, however alike the names.
-  if (a.amount != null && b.amount != null && Math.abs(a.amount - b.amount) > 0.005) return false;
+  // Different amounts mean different charges, however alike the names. A
+  // missing amount on either side is not a disagreement.
+  if (a.amount != null && b.amount != null && Math.abs(a.amount - b.amount) > AMOUNT_TOLERANCE) return false;
   const oa = ownerSet(a);
   const ob = ownerSet(b);
   if (oa.size === 0 || ob.size === 0) return true; // one side unowned — no conflict
@@ -653,10 +751,9 @@ export function mergeEquivalentPayments(groups: DedupedSeries[]): DedupedSeries[
     match.duplicateIds = [
       ...match.duplicateIds, ...group.duplicateIds, loser.id,
     ].filter((id) => id !== winner.id);
-    // The obligation usually wins but may lack the amount the event carried.
-    match.series = winner.amount == null && loser.amount != null
-      ? { ...winner, amount: loser.amount }
-      : winner;
+    // The obligation usually wins but may lack the amount — or the paid
+    // months — the record it absorbed carried.
+    match.series = absorbSeriesState(winner, loser);
   }
   return out;
 }
@@ -672,9 +769,13 @@ export function dedupeSeries(list: readonly CalendarSeries[]): DedupedSeries[] {
       continue;
     }
     if (seriesPriority(s) > seriesPriority(held.series)) {
-      byIdentity.set(key, { series: s, duplicateIds: [...held.duplicateIds, held.series.id] });
+      byIdentity.set(key, {
+        series: absorbSeriesState(s, held.series),
+        duplicateIds: [...held.duplicateIds, held.series.id],
+      });
     } else {
       held.duplicateIds.push(s.id);
+      held.series = absorbSeriesState(held.series, s);
     }
   }
   // A SHADOW that ends up alone in its group is still a shadow.

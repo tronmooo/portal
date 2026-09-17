@@ -22,7 +22,7 @@ import {
   sourceHref,
 } from "./calendar-occurrences";
 import { parseRecurringMeta, expandRecurrenceDates } from "./recurring-dates";
-import { addYearsISO } from "./date-math";
+import { addYearsISO, daysInMonth } from "./date-math";
 import { canonicalObligationCategory } from "./category-canon";
 import { resolveBillingModel, resolveOccurrenceAmount } from "./liability-billing";
 import { groupMaterializedSeries } from "./series-detect";
@@ -281,6 +281,8 @@ export function seriesFromObligations(obligations: readonly any[]): CalendarSeri
           : inferKindFromText(o.name, o.category) === "custom" ? "bill" : inferKindFromText(o.name, o.category);
     const profileId = Array.isArray(o.linkedProfiles) ? o.linkedProfiles[0] : undefined;
     const liabilityId = o.linkedLiabilityId || undefined;
+    const baseDate = clip(o.nextDueDate);
+    const recurrence = frequencyToRecurrence(o.frequency);
     out.push({
       id: `obligation:${o.id}`,
       kind,
@@ -308,14 +310,114 @@ export function seriesFromObligations(obligations: readonly any[]): CalendarSeri
         linkedRecordId: liabilityId || undefined,
         linkedLabel: liabilityId ? "Liability" : undefined,
       },
-      baseDate: clip(o.nextDueDate),
-      recurrence: frequencyToRecurrence(o.frequency),
+      baseDate,
+      recurrence,
       recurrenceEnd: isISO(o.recurrenceEnd) ? clip(o.recurrenceEnd) : undefined,
       amount: typeof o.amount === "number" ? o.amount : undefined,
       paused: o.status === "paused",
+      ...obligationCompletionState(o, baseDate, recurrence),
     });
   }
   return out;
+}
+
+/**
+ * Completion marks for an obligation, shaped for a CalendarSeries.
+ *
+ * User report 2026-09-17: the loan profile ("Dodge Ram Auto Loan") carried its
+ * paid months in `fields.occurrences`, but the bill written beside it ("Dodge
+ * Ram Auto Loan payment") emitted NO completion marks — so whichever record
+ * survived dedup, the merged row could read "unpaid" for a month that had a
+ * payment on file. An obligation knows it was paid two ways:
+ *
+ *   • `fields.occurrences[date].status` — the pay path's per-occurrence mark,
+ *     keyed by the canonical due date (same shape as a liability profile);
+ *   • `payments[]` — the hydrated liability_payments rows, whose `date` is the
+ *     day the money moved, which may sit a few days off the due date.
+ *
+ * A payment row marks its own date AND the nearest occurrence on the series'
+ * grid (Aug 28 paid → the Sep 1 bill, not Aug 1), which is what the schedule
+ * card's exact-date match already assumes when payments land on the due day.
+ */
+function obligationCompletionState(
+  o: any,
+  baseDate: string,
+  recurrence: string,
+): Pick<CalendarSeries, "completedDates" | "skippedDates"> {
+  const completed = new Set<string>();
+  const skipped = new Set<string>();
+
+  const raw = o?.fields?.occurrences;
+  if (raw && typeof raw === "object") {
+    for (const [date, ov] of Object.entries(raw as Record<string, any>)) {
+      if (!isISO(date) || !ov || typeof ov !== "object") continue;
+      if (ov.status === "paid") completed.add(clip(date));
+      else if (ov.status === "skipped") skipped.add(clip(date));
+    }
+  }
+
+  for (const p of Array.isArray(o?.payments) ? o.payments : []) {
+    const paidOn = clip(p?.date ?? p?.paymentDate ?? p?.payment_date);
+    if (!isISO(paidOn)) continue;
+    completed.add(paidOn);
+    const canonical = nearestOccurrenceDate(paidOn, baseDate, recurrence);
+    if (canonical) completed.add(canonical);
+  }
+
+  return {
+    ...(completed.size ? { completedDates: [...completed].sort() } : {}),
+    ...(skipped.size ? { skippedDates: [...skipped].sort() } : {}),
+  };
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** Whole days between two YYYY-MM-DD dates (absolute). */
+function daysBetween(a: string, b: string): number {
+  const ms = Math.abs(Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`));
+  return Math.round(ms / 86_400_000);
+}
+
+/**
+ * The series occurrence a payment made on `paidOn` most plausibly settles.
+ *
+ * Month cadences: the anchor day-of-month (clamped to each month's length) in
+ * the payment's month and its two neighbours, whichever is nearest. Yearly:
+ * the anchor MM-DD in the nearest year. A one-off has exactly one occurrence.
+ * Weekly and daily cadences are too dense to guess, so only the exact date
+ * (already recorded by the caller) counts. Returns null when there is no
+ * better answer than the payment date itself.
+ */
+function nearestOccurrenceDate(paidOn: string, baseDate: string, recurrence: string): string | null {
+  if (!isISO(baseDate)) return null;
+  const rec = String(recurrence || "none").toLowerCase();
+  if (rec === "none") return baseDate;
+  const year = Number(paidOn.slice(0, 4));
+  const month = Number(paidOn.slice(5, 7));
+  let candidates: string[] = [];
+  if (rec === "monthly" || rec === "bimonthly" || rec === "quarterly" || rec === "semiannual") {
+    const anchorDay = Number(baseDate.slice(8, 10));
+    for (const step of [-1, 0, 1]) {
+      // Date normalizes month 0 and month 13 into the neighbouring year.
+      const d = new Date(Date.UTC(year, month - 1 + step, 1));
+      const y = d.getUTCFullYear();
+      const m = d.getUTCMonth();
+      candidates.push(`${y}-${pad2(m + 1)}-${pad2(Math.min(anchorDay, daysInMonth(y, m)))}`);
+    }
+  } else if (rec === "yearly") {
+    const mm = Number(baseDate.slice(5, 7));
+    const dd = Number(baseDate.slice(8, 10));
+    for (const y of [year - 1, year, year + 1]) {
+      candidates.push(`${y}-${pad2(mm)}-${pad2(Math.min(dd, daysInMonth(y, mm - 1)))}`);
+    }
+  } else {
+    return null;
+  }
+  candidates = candidates.filter(isISO);
+  if (candidates.length === 0) return null;
+  let best = candidates[0];
+  for (const c of candidates) if (daysBetween(c, paidOn) < daysBetween(best, paidOn)) best = c;
+  return best;
 }
 
 // ─── Liability profiles ──────────────────────────────────────────────────────
