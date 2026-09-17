@@ -620,6 +620,100 @@ function IdentityHeader({ spec }: { spec: OverviewSpec }) {
   );
 }
 
+/**
+ * ADD YOUR OWN FIELD
+ *
+ * The composition decides how what we know about a thing is presented — it
+ * does not decide what is worth knowing. Anything at all can be recorded here
+ * ("Color", "Where the spare key is", "Tenant's name") and it lands in the
+ * same field bag every composed value reads from, so it is grouped, formatted
+ * and inline-editable from the next render on like any other fact.
+ */
+function AddFieldCard({ profileId }: { profileId: string }) {
+  const [open, setOpen] = useState(false);
+  const [key, setKey] = useState("");
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const write = useFieldWrite(profileId);
+
+  // Both halves are required: a key with no value is stored and then filtered
+  // straight back out of the composition, which is the disappearing act this
+  // card exists to end.
+  const ready = key.trim() !== "" && value.trim() !== "";
+
+  const submit = async () => {
+    if (!ready) return;
+    setSaving(true);
+    const ok = await write(key.trim(), value);
+    setSaving(false);
+    if (ok) { setOpen(false); setKey(""); setValue(""); }
+  };
+
+  if (!open) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 w-full text-xs gap-1 text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen(true)}
+        data-testid="overview-add-field"
+      >
+        <Plus className="h-3 w-3" /> Add field
+      </Button>
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-3 space-y-2">
+        <div className="flex gap-2">
+          <Input
+            className="h-8 text-xs flex-1"
+            placeholder="Field name"
+            aria-label="Field name"
+            autoFocus
+            value={key}
+            onChange={e => setKey(e.target.value)}
+            onKeyDown={e => { if (e.key === "Escape") setOpen(false); }}
+            data-testid="overview-add-field-key"
+          />
+          <Input
+            className="h-8 text-xs flex-1"
+            placeholder="Value"
+            aria-label="Value"
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Escape") setOpen(false);
+              if (e.key === "Enter") void submit();
+            }}
+            data-testid="overview-add-field-value"
+          />
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => { setOpen(false); setKey(""); setValue(""); }}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            className="h-7 text-xs"
+            disabled={saving || !ready}
+            onClick={submit}
+            data-testid="overview-add-field-save"
+          >
+            {saving ? "Saving…" : "Add"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function AttentionStrip({ spec }: { spec: OverviewSpec }) {
   if (spec.attentionItems.length === 0) return null;
   return (
@@ -683,6 +777,7 @@ export function DynamicOverview({
       <IdentityHeader spec={spec} />
       <AttentionStrip spec={spec} />
       {spec.sections.map(section => renderSection(section, profileId))}
+      <AddFieldCard profileId={profileId} />
       {children}
     </div>
   );

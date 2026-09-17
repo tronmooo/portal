@@ -143,6 +143,24 @@ describe("the composed Overview reaches the screen", () => {
     });
   });
 
+  it("lets the reader record a fact the composition never asked for", async () => {
+    renderOverview();
+    await screen.findByTestId("dynamic-overview");
+    fireEvent.click(await screen.findByTestId("overview-add-field"));
+    fireEvent.change(await screen.findByTestId("overview-add-field-key"), {
+      target: { value: "Color of the house" },
+    });
+    fireEvent.change(screen.getByTestId("overview-add-field-value"), {
+      target: { value: "sage green" },
+    });
+    fireEvent.click(screen.getByTestId("overview-add-field-save"));
+    await waitFor(() => {
+      expect(calls.some(c =>
+        c.method === "PATCH" && c.url === "/api/profiles/house" &&
+        c.body?.fields?.["Color of the house"] === "sage green")).toBe(true);
+    });
+  });
+
   it("falls back rather than blanking the page when composition is unavailable", async () => {
     failOverview = true;
     renderOverview(<div data-testid="legacy-overview">legacy</div>);

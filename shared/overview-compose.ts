@@ -817,14 +817,20 @@ export function composeOverview(input: ComposeInput): OverviewSpec {
   }
 
   // 11 — grouped details for everything primary/secondary that hasn't found a
-  //      home. Detailed/administrative facts are NOT dumped here; they are
-  //      recorded as routed elsewhere so the Overview stays a summary.
+  //      home. Detailed facts stay out of the main flow so the Overview reads
+  //      as a summary, but they are NOT discarded: they collect in a collapsed
+  //      "More details" card at the bottom. A fact the user typed in has to be
+  //      somewhere on the page — before this, a custom field the classifier
+  //      happened to read as a spec (material, size, a support phone) was
+  //      accepted by the API and then rendered nowhere at all.
   const remaining = allValues.filter(v => !claimed.has(v.semanticKey));
   const groups = new Map<string, OverviewValue[]>();
+  const deferredDetail: OverviewValue[] = [];
   for (const v of remaining) {
     const sem = fieldSemantics(v.semanticKey, v.value);
     const rank = IMPORTANCE_RANK[v.importance];
     if (rank >= IMPORTANCE_RANK.detailed) {
+      deferredDetail.push(v);
       routedElsewhere.push({ semanticKey: v.semanticKey, destination: DESTINATIONS[sem.role] || "Details" });
       continue;
     }
@@ -863,6 +869,21 @@ export function composeOverview(input: ComposeInput): OverviewSpec {
         collapsed: i >= 2 || vs.every(v => v.importance !== "primary"),
         values: vs.sort((a, b) => IMPORTANCE_RANK[a.importance] - IMPORTANCE_RANK[b.importance]),
       });
+    });
+  }
+
+  // 11b — the catch-all. Collapsed, last of the field cards, and never
+  //       filtered by taste: whatever the user chose to record about this
+  //       thing is readable and editable here even when nothing else on the
+  //       page has a natural slot for it.
+  if (deferredDetail.length > 0) {
+    sections.push({
+      id: "moreDetails",
+      component: "groupedDetails",
+      title: "More details",
+      priority: 55,
+      collapsed: true,
+      values: deferredDetail.sort((a, b) => IMPORTANCE_RANK[a.importance] - IMPORTANCE_RANK[b.importance]),
     });
   }
 

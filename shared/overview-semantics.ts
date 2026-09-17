@@ -211,9 +211,13 @@ export function fieldSemantics(rawKey: string, value: unknown): FieldSemantics {
     }
   }
   const displayType = inferDisplayType(key, value, role);
+  // A key with spaces in it was typed by a person ("Color of the house"), not
+  // written by the app or a model — echo it back exactly as they wrote it
+  // rather than title-casing it into "Color Of The House".
+  const label = /\s/.test(rawKey) ? rawKey.trim() : humanizeFieldName(key);
   const semantics: FieldSemantics = {
     key,
-    label: humanizeFieldName(key),
+    label,
     role,
     displayType,
     importance: baseImportance(key, role, value),

@@ -90,7 +90,7 @@ describe("relevance: the Overview is a summary, not a database dump", () => {
     expect(keys).not.toContain("_internalFlag");
   });
 
-  it("routes lower-value detail elsewhere instead of dumping it on the Overview", () => {
+  it("keeps lower-value detail out of the main flow but still on the page", () => {
     const spec = composeOverview(input({
       entity: {
         id: "p3", name: "Workstation", type: "asset",
@@ -103,8 +103,38 @@ describe("relevance: the Overview is a summary, not a database dump", () => {
     const routed = (spec.meta.routedElsewhere || []).map(r => r.semanticKey);
     expect(routed).toContain("processor");
     expect(routed).toContain("supportPhone");
-    const shown = spec.sections.flatMap(s => (s.values || []).map(v => v.semanticKey));
-    expect(shown).not.toContain("processor");
+    // Detail never sits in an expanded card competing with the summary...
+    const upFront = spec.sections
+      .filter(s => !s.collapsed)
+      .flatMap(s => (s.values || []).map(v => v.semanticKey));
+    expect(upFront).not.toContain("processor");
+    // ...but it is never discarded either — it is one tap away, and editable.
+    const more = spec.sections.find(s => s.id === "moreDetails");
+    expect(more?.collapsed).toBe(true);
+    const deferred = (more?.values || []).map(v => v.semanticKey);
+    expect(deferred).toContain("processor");
+    expect(deferred).toContain("supportPhone");
+  });
+
+  it("shows a field the user invented that fits no known category", () => {
+    const spec = composeOverview(input({
+      entity: {
+        id: "p3b", name: "1247 Oak St", type: "property",
+        fields: {
+          currentValue: 480000,
+          "Color of the house": "sage green",
+          "Where the spare key is": "under the third planter",
+        },
+      },
+    }));
+    const shown = spec.sections.flatMap(s => (s.values || []));
+    const color = shown.find(v => v.semanticKey === "Color of the house");
+    expect(color?.value).toBe("sage green");
+    // Labelled exactly as it was typed, not title-cased into "Color Of The
+    // House", and editable in place like any composed field.
+    expect(color?.label).toBe("Color of the house");
+    expect(color?.editable?.fieldKey).toBe("Color of the house");
+    expect(shown.map(v => v.semanticKey)).toContain("Where the spare key is");
   });
 
   it("does not spread a handful of facts over a wall of near-empty cards", () => {
