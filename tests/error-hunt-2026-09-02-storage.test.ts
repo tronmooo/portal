@@ -1,6 +1,6 @@
 // Regression coverage for the 2026-09-02 error-hunting round — storage layer.
 // One describe per ledger item; each pins the lowest-level shared cause.
-import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import {
@@ -624,6 +624,10 @@ describe("#13 restoring a row re-owns it to live profiles", () => {
 // #14 spawnNextRecurringTask uses the shared recurrence step
 // ─────────────────────────────────────────────────────────────────────────────
 describe("#14 spawnNextRecurringTask follows shared/recurrence", () => {
+  // Pinned clock: the spawn steps a late completion forward to the first
+  // occurrence on or after the user's today, so these expectations only hold
+  // on the day they were written. (They went red on 2026-09-08.)
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-09-03T12:00:00Z")); });
   function spawnStorage(tz = "America/Los_Angeles", liveTasks: any[] = []) {
     const created: any[] = [];
     const { client, calls } = chainClient((table, op) => {
@@ -813,6 +817,10 @@ describe("D76 canonicalObligationStatus", () => {
 
 // D77 — two completions racing past the sibling check must not spawn two clones.
 describe("D77 recurring spawn clone id is deterministic per series + date", () => {
+  // Pinned clock: the spawn steps a late completion forward to the first
+  // occurrence on or after the user's today, so these expectations only hold
+  // on the day they were written. (They went red on 2026-09-08.)
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-09-03T12:00:00Z")); });
   it("derives the same uuid for the same (series row, next date) and swallows the PK clash", async () => {
     const inserted: any[] = [];
     let first = true;

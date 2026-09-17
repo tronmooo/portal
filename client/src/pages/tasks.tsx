@@ -13,6 +13,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
+import { countTasksByDay } from "@shared/task-counts";
 import { isRecurring, humanSummary, parseRecurrence, userTags } from "@shared/recurrence";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { withFullLimit } from "@/lib/list-limit";
@@ -649,18 +650,14 @@ export default function TasksPage() {
   const sortedActive = useMemo(() => activeTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')), [activeTasks]);
   const sortedCompleted = useMemo(() => completedTasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')), [completedTasks]);
   // v2 summary band: overdue / today / upcoming / done.
+  // The buckets are the shared rule (shared/task-counts) so this band, the
+  // Tasks popup and the Executive tab agree: "Done" here used to be every
+  // completed task ever (14) while the Executive tab said "5 completed today".
   const taskSummary = useMemo(() => {
-    const todayStr = new Date().toLocaleDateString("en-CA");
-    let overdue = 0, dueToday = 0, upcoming = 0;
-    for (const t of activeTasks) {
-      const d = String(t.dueDate || "").slice(0, 10);
-      if (!d) continue;
-      if (d < todayStr) overdue++;
-      else if (d === todayStr) dueToday++;
-      else upcoming++;
-    }
-    return { overdue, dueToday, upcoming, done: completedTasks.length };
-  }, [activeTasks, completedTasks]);
+    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+    const c = countTasksByDay(profileFilteredTasks, todayStr, BROWSER_TIMEZONE);
+    return { overdue: c.overdue, dueToday: c.dueToday, upcoming: c.upcoming, done: c.doneToday };
+  }, [profileFilteredTasks]);
 
   if (isLoading) {
     return (
@@ -708,7 +705,7 @@ export default function TasksPage() {
           { label: "Overdue", value: taskSummary.overdue, accent: "0 72% 55%", icon: AlertTriangle },
           { label: "Today", value: taskSummary.dueToday, accent: "43 85% 52%", icon: Flame },
           { label: "Upcoming", value: taskSummary.upcoming, accent: "200 80% 55%", icon: CalendarDays },
-          { label: "Done", value: taskSummary.done, accent: "155 60% 48%", icon: CheckCircle2 },
+          { label: "Done today", value: taskSummary.done, accent: "155 60% 48%", icon: CheckCircle2 },
         ].map((s, i) => (
           <MetricCard key={s.label} label={s.label} countTo={s.value} accent={s.accent}
             icon={s.icon} testId={`tasks-summary-${s.label.toLowerCase()}`}

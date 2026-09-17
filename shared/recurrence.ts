@@ -195,7 +195,10 @@ export function seriesEnded(rule: RecurrenceRule, nextDate: string | null): bool
 
 function fmtShort(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  // Keep the year whenever it is not the current one: "until Aug 2" for a
+  // series that runs until 2028-08-02 read as if the repeat had already ended.
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString("en-US", sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
 }
 
 // Human-readable schedule summary, e.g. "Repeats every 2 weeks on Friday until Dec 31".
@@ -257,4 +260,40 @@ export function nextRecurringTaskSpawn(
   }
   if (seriesEnded(rule, next)) return null;
   return { dueDate: next, tags: recurrenceToTags({ ...rule, done: rule.done + 1 }, tags) };
+}
+
+/**
+ * What a MISSED occurrence of a repeating task becomes once its date has
+ * passed: the series' next occurrence on or after today, or the end of the
+ * series when that next date lies past `runtil:`.
+ *
+ * A recurring task stores one row — its next due date — and that row only
+ * advanced when the user completed it. A weekly chore nobody ticked off
+ * therefore sat on its first date for ever, "35 days overdue", while the
+ * calendar (which projects the series) and the bell said it was due today.
+ * Rolling the stored date forward is what makes every reader agree: the
+ * chore is due on its next scheduled day, not on the one that was missed.
+ *
+ * Returns null when nothing changes: a one-time task, a completed row, a
+ * paused series (its history stays where it is), an undated row, or a row
+ * whose due date is today or later. Missed occurrences are NOT counted as
+ * done — `rdone:` only ever counts completions.
+ */
+export function rollForwardRecurringTask(
+  task: { dueDate?: string | null; tags?: string[] | null; status?: string | null },
+  todayISO: string,
+): { kind: "advance"; dueDate: string; tags: string[] } | { kind: "ended" } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(todayISO || ""))) return null;
+  if (String(task?.status || "") === "done") return null;
+  const tags = Array.isArray(task?.tags) ? task.tags.map(String) : [];
+  const base = String(task?.dueDate || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(base) || base >= todayISO) return null;
+  const rule = withAnchorDay(parseRecurrence(tags), base);
+  if (!rule.freq || !rule.unit || rule.paused) return null;
+  let next = base;
+  for (let guard = 0; next < todayISO && guard < 5000; guard++) next = advance(next, rule);
+  if (next < todayISO) return null; // could not reach today (should be impossible)
+  if (rule.until && next > rule.until) return { kind: "ended" };
+  if (rule.count && rule.done >= rule.count) return { kind: "ended" };
+  return { kind: "advance", dueDate: next, tags: recurrenceToTags(rule, tags) };
 }

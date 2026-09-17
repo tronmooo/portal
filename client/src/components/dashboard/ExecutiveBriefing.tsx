@@ -22,7 +22,7 @@
 // "Taken", managed recurring dates get "Done". Popups are the same components
 // the dashboard KPI tiles use.
 import { sumMonthIncomeNow } from "@shared/obligation-windows";
-import { localDayOf } from "@shared/timezone";
+import { isDoneToday } from "@shared/task-counts";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -727,7 +727,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // day. Slicing the instant compared UTC's date with the user's, so a chore
   // finished this morning east of Greenwich (or last night in the US) read
   // as "0 completed today".
-  const doneToday = (tasks || []).filter((t: any) => t.status === "done" && localDayOf(t.completedAt || t.updatedAt || null, BROWSER_TIMEZONE) === todayStr).length;
+  const doneToday = (tasks || []).filter((t: any) => isDoneToday(t, todayStr, BROWSER_TIMEZONE)).length;
   const sortedPending = pending.slice().sort((a: any, b: any) =>
     (daysFromToday(a.dueDate) ?? 9e9) - (daysFromToday(b.dueDate) ?? 9e9));
 
@@ -744,7 +744,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     || eventsToday.find((e: any) => !e.time);
 
   // Habits — scheduled-today only (shared/habit-schedule).
-  const habitsDueToday = (habits || []).filter((h: any) => isHabitDueOn(h, todayStr));
+  // Ordered on purpose — still to do first, then partly done, then done, by
+  // name within each — so a habit that was just checked in moves DOWN the
+  // visible list instead of dropping off it. (The list used to come in the
+  // database's heap order, which a check-in reshuffled: "Bathroom", 1 of 3
+  // done, vanished from the card the moment it was tapped.)
+  const habitsDueToday = (habits || []).filter((h: any) => isHabitDueOn(h, todayStr)).sort((a: any, b: any) => {
+    const rank = (h: any) => { const hp = habitDayProgress(h, todayStr); return hp.isComplete ? 2 : hp.completed > 0 ? 1 : 0; };
+    return rank(a) - rank(b) || String(a.name || "").localeCompare(String(b.name || ""));
+  });
+  const habitsNotScheduled = (habits || []).length - habitsDueToday.length;
   const habitsDoneCount = habitsDueToday.filter((h: any) => isHabitDoneOn(h, todayStr)).length;
   const habitPct = habitsDueToday.length > 0 ? Math.round((habitsDoneCount / habitsDueToday.length) * 100) : 0;
 
@@ -1239,6 +1248,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     />
                     <p className="text-[11px] text-muted-foreground text-center leading-tight">
                       {habitsDoneCount} / {habitsDueToday.length} complete<br />today
+                      {habitsNotScheduled > 0 && <><br /><span className="text-muted-foreground/70">{habitsNotScheduled} not scheduled</span></>}
                     </p>
                   </div>
                   <div className="flex-1 min-w-0 space-y-1.5">
@@ -1278,6 +1288,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                         </button>
                       );
                     })}
+                    {habitsDueToday.length > 6 && (
+                      <button
+                        type="button"
+                        onClick={() => setPopup("habits")}
+                        className="w-full text-left text-[11px] text-muted-foreground hover:text-foreground px-1 py-0.5"
+                        data-testid="exec-habits-more"
+                      >
+                        +{habitsDueToday.length - 6} more
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

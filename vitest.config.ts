@@ -217,6 +217,8 @@ export default defineConfig({
       'tests/design-system-drift.test.ts',
       'tests/reminder-cron.test.ts',
       'tests/timed-tasks.test.ts',
+      // Missed repeating tasks roll on to their next occurrence (QA 2026-09-17).
+      'tests/recurring-task-rollover.test.ts',
       'tests/habit-occurrences.test.ts',
       'tests/habit-tracker-link.test.ts',
       'tests/habit-completion-pipeline.test.ts',

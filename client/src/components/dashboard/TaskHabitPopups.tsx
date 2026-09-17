@@ -6,12 +6,13 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { isDoneToday } from "@shared/task-counts";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import {
@@ -518,7 +519,10 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
 
   const tabCounts = { today: overdueTasks.length + todayTasks.length, onetime: oneTimeTasks.length, recurring: recurringTasks.length, upcoming: upcomingPending.length };
   // Today progress (done today vs total touched today) for the summary bar.
-  const doneToday = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).length, [tasks]);
+  // "Done today" is the SAME count the Executive tab shows: tasks completed
+  // on today's calendar day. It used to count every completed task ever
+  // ("13/55 done today" beside the Executive tab's "5 completed today").
+  const doneToday = useMemo(() => tasks.filter((t: any) => isDoneToday(t, todayStr, BROWSER_TIMEZONE)).length, [tasks, todayStr]);
   const todayTotal = overdueTasks.length + todayTasks.length + doneToday;
 
   // Priority color lines — critical adds a distinct violet above the rest.
@@ -1461,14 +1465,19 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   const todayRollup = habitsDayRollup(active, today);
   const completedToday = todayRollup.completed;
   const bestStreak = active.reduce((m: number, h: any) => Math.max(m, h.currentStreak || 0), 0);
-  const allTimeCheckins = active.reduce((s: number, h: any) => s + (h.checkins || []).length, 0);
+  // Check-ins IN THE SELECTED PERIOD. This chip sits in a row the period
+  // tabs scope, but it used to sum every check-in row the API returned (the
+  // last 400 days) — "25 check-ins" under the Today tab on a day with 6.
+  const windowSet = new Set(windowDates);
+  const checkinsInWindow = active.reduce((s: number, h: any) =>
+    s + (h.checkins || []).filter((c: any) => windowSet.has(String(c?.date || '').slice(0, 10))).length, 0);
   const completedStat = period === 'today' ? completedToday : completedInWindow;
 
   const STAT_CHIPS = [
     { Icon: CheckCircle2, color: '155 60% 48%', value: period === 'today' ? `${completedToday}/${todayRollup.required}` : completedStat, label: 'Completed' },
     { Icon: Flame, color: '28 90% 55%', value: bestStreak, label: 'Day Streak' },
     { Icon: Target, color: '262 70% 62%', value: totalActive, label: 'Habits' },
-    { Icon: ListChecks, color: '205 90% 58%', value: allTimeCheckins, label: 'Check-ins' },
+    { Icon: ListChecks, color: '205 90% 58%', value: checkinsInWindow, label: period === 'today' ? 'Check-ins today' : 'Check-ins' },
   ];
   const TIME_FILTERS = [
     { key: 'all', label: 'All' }, { key: 'morning', label: '☀️ Morning' },

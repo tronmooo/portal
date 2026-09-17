@@ -10,7 +10,7 @@
 // D145  Renaming a cap onto an existing category left two caps for one bucket.
 // D146  The AI budget tools defaulted the month to Los Angeles time for every
 //       user; they now use the requesting user's timezone.
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi, beforeEach } from "vitest";
 import express from "express";
 import { createServer, type Server } from "http";
 import type { AddressInfo } from "net";
@@ -1360,6 +1360,10 @@ describe("D193: 'undo' with the post-write row re-applies only the keys the tool
 
 // ─── D194: un-completing a chore spares a next occurrence the user edited ───
 describe("D194: retracting a spawned occurrence only removes an untouched clone", () => {
+  // Pinned clock: the retract re-derives the spawn's date from the user's
+  // today, so the clone dated Sep 10 is only "the" clone while today ≤ Sep 10.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2026-09-03T12:00:00Z")); });
+  afterEach(() => { vi.useRealTimers(); });
   const prev = { id: "t-1", title: "Weekly bins", description: "", priority: "medium", dueDate: "2026-09-03", dueTime: null, status: "done", tags: ["recur:weekly"], linkedProfiles: ["self-1"] };
   const cloneOf = (extra: Record<string, any>) => ({ id: "t-1-next", title: "Weekly bins", description: "", priority: "medium", dueDate: "2026-09-10", dueTime: null, status: "todo", tags: ["recur:weekly", "rdone:1"], linkedProfiles: ["self-1"], ...extra });
   function retractWith(clone: any) {

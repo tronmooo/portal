@@ -56,7 +56,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 }
 import { getUserToday, getUserCurrentMonth, parseLocalDate, toLocalDateStr, localDayOf, addDays as tzAddDays, DEFAULT_TIMEZONE } from "../shared/timezone";
 import { prepareProfileFields } from "../shared/registry-fields";
-import { nextRecurringTaskSpawn } from "../shared/recurrence";
+import { nextRecurringTaskSpawn, rollForwardRecurringTask } from "../shared/recurrence";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
@@ -1242,14 +1242,17 @@ export class SupabaseStorage implements IStorage {
     };
   }
 
-  private rowToHabit(r: any, checkins: HabitCheckin[]): Habit {
+  private rowToHabit(r: any, checkins: HabitCheckin[], opts: { checkinsLoaded?: boolean } = {}): Habit {
     // Live streaks: the stored current_streak column is a snapshot from the
     // last check-in WRITE, so it silently goes stale as days pass without one
     // — a habit last checked Monday still showed "1🔥" on Thursday while its
     // never-checked neighbors showed 0. Recompute from the loaded check-ins on
-    // every read; callers that don't load check-ins (deleted-habit listings)
-    // keep the stored snapshot.
-    const live = checkins.length > 0
+    // every read; only a caller that did not load check-ins at all (the
+    // deleted-habit listing) keeps the stored snapshot. An EMPTY loaded list
+    // is a real streak of 0, not "unknown": a habit whose last check-in fell
+    // out of the 400-day window used to hydrate with its frozen stored streak.
+    const checkinsLoaded = opts.checkinsLoaded ?? checkins.length > 0;
+    const live = checkinsLoaded
       ? calculateStreak(checkins, r.target_per_day || 1, this._timezone, { frequency: r.frequency, targetDays: r.target_days || null, startDate: r.start_date || null, endDate: r.end_date || null } as HabitScheduleShape)
       : { current: r.current_streak || 0, longest: r.longest_streak || 0 };
     return {
@@ -1565,7 +1568,7 @@ export class SupabaseStorage implements IStorage {
     const relatedDocuments = (documentsRes as any[]).map((r: any) => this.rowToDocument({ ...r, file_data: "" }));
     const relatedObligations = (obligationsRes as any[]).map((r: any) => this.rowToObligation(r, (paymentsByObligation.get(r.id) || []).map((p: any) => this.rowToPayment(p))));
     const relatedJournal = (journalRows as any[]).map((r: any) => this.rowToJournalEntry(r));
-    const relatedHabits = (habitsRes as any[]).map((r: any) => this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map((c: any) => this.rowToHabitCheckin(c))));
+    const relatedHabits = (habitsRes as any[]).map((r: any) => this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map((c: any) => this.rowToHabitCheckin(c)), { checkinsLoaded: true }));
 
     // Child profiles: profiles whose parentProfileId points to this profile.
     // PLUS: assets/liabilities where this profile is a CO-OWNER via the link
@@ -3644,8 +3647,47 @@ export class SupabaseStorage implements IStorage {
       q = this._applyProfileFilter(q, await this.pushdownIds(profileIds));
       const { data, error } = await q.order("created_at", { ascending: false });
       if (error) throw error;
-      return (data || []).map(r => this.rowToTask(r));
+      return this.rollForwardRecurringTasks((data || []).map(r => this.rowToTask(r)));
     });
+  }
+
+  /**
+   * Move every MISSED repeating task on to its next occurrence (or close a
+   * series whose `runtil:` has passed) and persist the move, so that every
+   * reader of the list — the Tasks page, the Executive tab, the bell, the
+   * calendar, chat — sees the same due date.
+   *
+   * A repeating task's stored date only ever advanced on completion; one the
+   * user never ticked off stayed put and read "35 days overdue" for ever
+   * while the calendar projection said it was due today. The step is the
+   * shared rule (shared/recurrence rollForwardRecurringTask): same anchor,
+   * missed occurrences skipped, `rdone:` untouched. A write failure leaves
+   * the stored row as it was and the list still reflects the roll-forward,
+   * so a flaky write can never resurrect the stale date on screen.
+   */
+  private async rollForwardRecurringTasks(tasks: Task[]): Promise<Task[]> {
+    const today = getUserToday(this._timezone);
+    const out: Task[] = [];
+    const writes: PromiseLike<unknown>[] = [];
+    for (const task of tasks) {
+      const move = rollForwardRecurringTask(task, today);
+      if (!move) { out.push(task); continue; }
+      const patch = move.kind === "advance"
+        ? { due_date: move.dueDate, tags: move.tags }
+        : { status: "done" as const };
+      const rolled: Task = move.kind === "advance"
+        ? { ...task, dueDate: move.dueDate, tags: move.tags }
+        : { ...task, status: "done" };
+      out.push(rolled);
+      writes.push(
+        this.supabase.from("tasks").update(patch).eq("id", task.id).eq("user_id", this.userId)
+          .then(({ error }: { error: any }) => {
+            if (error) console.warn(`[getTasks] could not roll forward recurring task ${task.id.slice(0, 8)}: ${error.message}`);
+          }),
+      );
+    }
+    if (writes.length) await Promise.all(writes);
+    return out;
   }
 
   async getTask(id: string): Promise<Task | undefined> {
@@ -5240,7 +5282,12 @@ export class SupabaseStorage implements IStorage {
   async getHabits(profileIds?: string[]): Promise<Habit[]> {
     return this.memo(`getHabits${this._fk(profileIds)}`, async () => {
       // PERF (durable-fix-phase1): DB pushdown via idx_habits_linked_profiles.
-      let habitsQuery = this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null);
+      // ORDERED. Without an ORDER BY the rows come back in heap order, and a
+      // check-in (which UPDATEs the habits row) moved that habit to the end
+      // of the list — past the dashboard card's cut-off, so "Bathroom" (1 of
+      // 3 done) vanished from the card the moment it was checked in.
+      let habitsQuery = this.supabase.from("habits").select("*").eq("user_id", this.userId).is("deleted_at", null)
+        .order("created_at", { ascending: true }).order("id", { ascending: true });
       habitsQuery = this._applyProfileFilter(habitsQuery, await this.pushdownIds(profileIds));
       // Fetch habits first, then constrain child rows to those parents. This
       // remains two total queries (not N+1) while avoiding a transfer of every
@@ -5270,9 +5317,23 @@ export class SupabaseStorage implements IStorage {
         arr.push(c);
         checkinsByHabit.set(c.habit_id, arr);
       }
-      return habitRows.map(r =>
-        this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map(c => this.rowToHabitCheckin(c)))
+      const habits = habitRows.map(r =>
+        this.rowToHabit(r, (checkinsByHabit.get(r.id) || []).map(c => this.rowToHabitCheckin(c)), { checkinsLoaded: true })
       );
+      // Self-heal the stored snapshot. current_streak is only ever written by
+      // a check-in, so five habits nobody touched since Sep 10 still said 1 in
+      // the database a week later while every screen (live) said 0. Write the
+      // live value back where it differs — diff-only, so an untouched row's
+      // updated_at (an optimistic-concurrency token) never moves.
+      const heals: PromiseLike<unknown>[] = habitRows.flatMap((r: any, i: number) => {
+        const h = habits[i];
+        if ((r.current_streak || 0) === h.currentStreak && (r.longest_streak || 0) === h.longestStreak) return [];
+        return [this.supabase.from("habits").update({ current_streak: h.currentStreak, longest_streak: h.longestStreak })
+          .eq("id", r.id).eq("user_id", this.userId)
+          .then(({ error }: { error: any }) => { if (error) console.warn(`[getHabits] could not refresh stored streak for ${String(r.id).slice(0, 8)}: ${error.message}`); })];
+      });
+      if (heals.length) await Promise.all(heals);
+      return habits;
     });
   }
 
@@ -5280,7 +5341,7 @@ export class SupabaseStorage implements IStorage {
     const { data, error } = await this.supabase.from("habits").select("*").eq("id", id).eq("user_id", this.userId).is("deleted_at", null).single();
     if (error || !data) return undefined;
     const { data: checkins } = await this.supabase.from("habit_checkins").select("*").eq("habit_id", id).eq("user_id", this.userId).order("date", { ascending: true });
-    return this.rowToHabit(data, (checkins || []).map(c => this.rowToHabitCheckin(c)));
+    return this.rowToHabit(data, (checkins || []).map(c => this.rowToHabitCheckin(c)), { checkinsLoaded: true });
   }
 
   async createHabit(data: InsertHabit): Promise<Habit> {
