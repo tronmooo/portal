@@ -100,6 +100,26 @@ describe("the weekly-brief endpoint", () => {
     expect(hers.data.narrative).toMatch(/Weight is/);
   });
 
+  it("reads a lab value that only lives on a document (Labs said 'No lab values')", async () => {
+    h = await startHarness({
+      profiles: [SELF, LINDA],
+      trackers: [],
+      documents: [
+        { id: "doc-vitd", name: "vitamin-d.pdf", title: "Vitamin D results", type: "lab_results", mimeType: "application/pdf",
+          fileData: "", tags: [], linkedProfiles: [SELF.id], createdAt: iso(3),
+          extractedData: { collectionDate: iso(10).slice(0, 10), vitaminD: "22 ng/mL", patientName: "Test" } },
+        // Linda's report must not reach my brief.
+        { id: "doc-linda", name: "linda.pdf", title: "Lipid panel", type: "lab_results", mimeType: "application/pdf",
+          fileData: "", tags: [], linkedProfiles: [LINDA.id], createdAt: iso(3),
+          extractedData: { collectionDate: iso(10).slice(0, 10), ldl: "160 mg/dL" } },
+      ],
+    });
+    const r = await h.api("POST", "/api/wellness/insights", {});
+    expect(r.status).toBe(200);
+    expect(r.data.narrative).toMatch(/Vitamin D at 22 ng\/mL, below/);
+    expect(r.data.narrative).not.toMatch(/LDL/);
+  });
+
   it("says what would make the page work when nothing is connected", async () => {
     h = await startHarness({ profiles: [SELF], trackers: [] });
     const r = await h.api("POST", "/api/wellness/insights", {});
