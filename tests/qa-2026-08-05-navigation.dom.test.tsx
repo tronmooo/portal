@@ -114,7 +114,9 @@ describe("wellness metric cards open the tracker they show", () => {
   it("links to the row's own tracker, not the bare list", () => {
     // 2026-09: the per-tracker card grid became lab rows and workout rows;
     // each still deep-links the tracker whose reading it shows.
-    expect(/href=\{`#\/trackers\?tracker=\$\{row\.trackerId\}`\}/.test(src)).toBe(true);
+    // A lab row read from a DOCUMENT links the document instead (2026-09-17),
+    // so the tracker deep link is one arm of a conditional now.
+    expect(/`#\/trackers\?tracker=\$\{row\.trackerId\}`/.test(src)).toBe(true);
     expect(/href=\{`#\/trackers\?tracker=\$\{w\.trackerId\}`\}/.test(src)).toBe(true);
   });
 
