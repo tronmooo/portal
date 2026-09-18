@@ -44,6 +44,30 @@ function storageKey(): string {
 
 let _state: FilterState = loadFromStorage();
 
+// QA 2026-09-18 BUG-01: the store must be the ONLY writer that can change the
+// scope without a user gesture, and it must never do so silently. `_userChose`
+// records that an explicit setter ran this session (a click on a switcher, a
+// chat "switch to X" command). Once it is set, nothing may re-seed the default
+// scope: a transient auth blip that dropped the persisted key used to make
+// `initDefaultProfileFilter` pick the first `self` profile it found — a
+// different person each time when the account has several self-typed rows —
+// and the header silently flipped from "Everyone" to "Poop" 39s after the user
+// chose Everyone, or from Poop to "Bob Robertson" while a task was saving.
+let _userChose = false;
+// The uid the in-memory state was loaded for. `setActiveUserForFilter` used to
+// reload from storage on every call, so a same-user auth refresh could replace
+// a live selection with a stale or missing persisted value.
+let _loadedForUid: string | null = null;
+
+/** Fresh, unaliased copy — callers may hold or mutate the result freely. */
+function cloneState(s: FilterState): FilterState {
+  return { mode: s.mode, selectedIds: [...s.selectedIds], selectedNames: [...s.selectedNames] };
+}
+
+function currentUid(): string {
+  try { return localStorage.getItem(USER_ID_KEY) || ""; } catch { return ""; }
+}
+
 // Referentially-stable snapshot for reactive consumers (useSyncExternalStore).
 // getProfileFilter() intentionally returns a FRESH object every call (callers
 // rely on that for defensive copies), which makes it unusable as a
@@ -71,7 +95,19 @@ function rebuildSnapshot(): void {
 function loadFromStorage(): FilterState {
   try {
     const raw = localStorage.getItem(storageKey());
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // A corrupt or partial value must not become the live state: ids and
+      // names are parallel arrays and every reader indexes one by the other.
+      if (parsed && (parsed.mode === "everyone" || parsed.mode === "selected")) {
+        const ids = Array.isArray(parsed.selectedIds) ? parsed.selectedIds.filter((x: unknown) => typeof x === "string" && !!x) : [];
+        const names = Array.isArray(parsed.selectedNames) ? parsed.selectedNames.map((x: unknown) => (typeof x === "string" ? x : "")) : [];
+        if (parsed.mode === "selected" && ids.length > 0) {
+          return { mode: "selected", selectedIds: ids, selectedNames: ids.map((_: string, i: number) => names[i] || "") };
+        }
+        if (parsed.mode === "everyone") return { mode: "everyone", selectedIds: [], selectedNames: [] };
+      }
+    }
   } catch {}
   return { mode: "everyone", selectedIds: [], selectedNames: [] };
 }
@@ -87,6 +123,16 @@ export function setActiveUserForFilter(userId: string | null) {
       localStorage.removeItem(USER_ID_KEY);
     }
   } catch {}
+  // QA 2026-09-18 BUG-01: a same-user re-auth (token refresh, resume, the
+  // provisional→real user swap at boot) must not replace a selection the user
+  // made this session. Re-persist it if the stored copy went missing, and
+  // otherwise leave memory alone. Only a DIFFERENT user reloads from storage.
+  if (userId && _loadedForUid === userId && _userChose) {
+    if (!hasStoredFilter()) persistOnly();
+    return;
+  }
+  _loadedForUid = userId;
+  _userChose = false;
   _state = loadFromStorage();
   rebuildSnapshot();
   try {
@@ -103,6 +149,8 @@ export function setActiveUserForFilter(userId: string | null) {
  *  next sign-in for the same user (filter persists across sign-out). */
 export function clearProfileFilterForUser() {
   _state = { mode: "everyone", selectedIds: [], selectedNames: [] };
+  _userChose = false;
+  _loadedForUid = null;
   rebuildSnapshot();
   try {
     const uid = localStorage.getItem(USER_ID_KEY) || "";
@@ -115,6 +163,15 @@ export function clearProfileFilterForUser() {
     if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
       window.dispatchEvent(new CustomEvent(FILTER_EVENT, { detail: { ..._state } }));
     }
+  } catch {}
+}
+
+/** Write the in-memory state to storage without broadcasting (nothing changed). */
+function persistOnly() {
+  try {
+    const json = JSON.stringify(_state);
+    localStorage.setItem(storageKey(), json);
+    sessionStorage.setItem(STORAGE_KEY, json);
   } catch {}
 }
 
@@ -146,7 +203,11 @@ export function subscribeProfileFilter(
   if (typeof window === "undefined") return () => {};
   const handler = (e: Event) => {
     const detail = (e as CustomEvent).detail as FilterState | undefined;
-    cb(detail ? { ...detail } : getProfileFilter());
+    // Deep copy: the arrays in `_state` were handed to React state by
+    // reference and then mutated in place by toggleFilterProfile, so
+    // `idsEqual(prev, next)` compared an array with itself and skipped the
+    // update (QA 2026-09-18 BUG-01 aliasing).
+    cb(detail ? cloneState(detail) : getProfileFilter());
   };
   window.addEventListener(FILTER_EVENT, handler as EventListener);
   // Also react to other tabs writing to localStorage
@@ -154,7 +215,10 @@ export function subscribeProfileFilter(
     // Only react to the current user's namespaced key (ST3 fix).
     if (e.key !== storageKey()) return;
     try {
-      _state = e.newValue ? JSON.parse(e.newValue) : { mode: "everyone", selectedIds: [], selectedNames: [] };
+      // Re-read through the validating loader so a malformed cross-tab write
+      // can't become the live state.
+      _state = loadFromStorage();
+      _userChose = true; // the other tab's choice is a user choice too
       rebuildSnapshot();
       cb(getProfileFilter());
     } catch {}
@@ -173,7 +237,7 @@ export function subscribeProfileFilter(
  *  getProfileFilterSnapshot() with subscribeProfileFilterRaw() (see
  *  hooks/useProfileScope.ts), never this. */
 export function getProfileFilter(): FilterState {
-  return { ..._state };
+  return cloneState(_state);
 }
 
 /** Referentially-stable snapshot for useSyncExternalStore. The SAME object is
@@ -212,12 +276,54 @@ export function hasStoredFilter(): boolean {
  * Idempotent: once a value is stored (here or via a user action) this is a
  * no-op, so a user who deliberately picks "Everyone" is never overridden.
  */
-export function initDefaultProfileFilter(profiles: Array<{ id: string; name?: string; type?: string }> | null | undefined): void {
+export function initDefaultProfileFilter(profiles: Array<{ id: string; name?: string; type?: string; createdAt?: string | Date | null }> | null | undefined): void {
   if (hasStoredFilter()) return;
+  // QA 2026-09-18 BUG-01: never re-seed over a choice made this session, even
+  // if the persisted copy went missing — re-persist that choice instead.
+  if (_userChose) { persistOnly(); return; }
   if (!profiles || profiles.length === 0) return;
-  const self = profiles.find(p => p?.type === "self");
+  const self = pickPrimarySelf(profiles);
   if (!self) return; // no primary user → keep Everyone (Household) default
   setFilterSelected([self.id], [self.name || "Me"]);
+}
+
+/**
+ * The ONE self profile the app treats as "me". Accounts can carry several
+ * self-typed rows (imports, seeders, an old "Me" placeholder); `find()` on an
+ * unordered list returned a different one on each fetch, so every re-seed
+ * could land on a different person. Oldest wins, then lowest id — stable
+ * across fetches and tabs.
+ */
+export function pickPrimarySelf<T extends { id: string; type?: string; createdAt?: string | Date | null }>(profiles: ReadonlyArray<T>): T | undefined {
+  const selves = profiles.filter(p => p?.type === "self" && typeof p.id === "string");
+  if (selves.length <= 1) return selves[0];
+  const ts = (p: T) => {
+    const t = p.createdAt ? new Date(p.createdAt as any).getTime() : NaN;
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+  };
+  return [...selves].sort((a, b) => (ts(a) - ts(b)) || a.id.localeCompare(b.id))[0];
+}
+
+/**
+ * Refresh the DISPLAY names of the current selection from a loaded profile
+ * list (a rename landed). Never changes ids or mode and never warms a scope —
+ * it is a label fix, not a scope change, so it must not look like one to the
+ * rest of the app (QA 2026-09-18 BUG-01: MultiProfileFilter used
+ * setFilterSelected for this, a full scope write on every profiles refetch).
+ */
+export function refreshFilterNames(profiles: Array<{ id: string; name?: string }> | null | undefined): void {
+  if (!profiles || profiles.length === 0) return;
+  if (_state.mode !== "selected" || _state.selectedIds.length === 0) return;
+  let changed = false;
+  const names = _state.selectedIds.map((id, i) => {
+    const p = profiles.find(x => x.id === id);
+    const next = (p?.name || _state.selectedNames[i] || "");
+    if (next !== _state.selectedNames[i]) changed = true;
+    return next;
+  });
+  if (!changed) return;
+  _state = { mode: "selected", selectedIds: [..._state.selectedIds], selectedNames: names };
+  saveToStorage();
 }
 
 /**
@@ -246,6 +352,10 @@ export function reconcileProfileFilter(
   if (_state.mode !== "selected" || _state.selectedIds.length === 0) return;
   const live = (id: string) => profiles.some(p => p.id === id);
   if (_state.selectedIds.every(live)) return;
+  // QA 2026-09-18 BUG-01: only a COMPLETE list may re-point the scope. A
+  // scoped or partial fetch (one that lacks the self profile) must never
+  // re-map a live selection by name onto a different row.
+  if (!profiles.some(p => p?.type === "self")) return;
 
   const ids: string[] = [];
   const names: string[] = [];
@@ -277,7 +387,7 @@ export function reconcileProfileFilter(
     // is far more likely a partial/scoped fetch than a mass deletion, so in
     // that case leave the stored selection alone and let a later, complete
     // list heal it.
-    const self = profiles.find(p => p?.type === "self");
+    const self = pickPrimarySelf(profiles);
     if (!self) return;
     _state = { mode: "selected", selectedIds: [self.id], selectedNames: [self.name || "Me"] };
   }
@@ -313,6 +423,7 @@ function warmScope(mode: FilterMode, ids: string[]): void {
 /** Set filter to "everyone" (no filtering) */
 export function setFilterEveryone() {
   _state = { mode: "everyone", selectedIds: [], selectedNames: [] };
+  _userChose = true;
   saveToStorage();
   // BUG-20260715-everyone-zeros: entering Everyone must always re-aggregate.
   // Every dashboard query is keyed [endpoint, mode, ...ids]; the "everyone"
@@ -340,9 +451,23 @@ export function setFilterEveryone() {
 
 /** Set filter to specific profile IDs */
 export function setFilterSelected(ids: string[], names: string[]) {
-  _state = { mode: "selected", selectedIds: [...ids], selectedNames: [...names] };
+  const cleanIds = ids.filter((id, i) => typeof id === "string" && !!id && ids.indexOf(id) === i);
+  if (cleanIds.length === 0) return; // an empty selection is not a scope (see toggleFilterProfile)
+  const cleanNames = cleanIds.map(id => names[ids.indexOf(id)] || "");
+  _userChose = true;
+  // Same scope → no write, no broadcast, no re-warm. Idempotent callers
+  // (effects keyed on a profiles refetch) used to fan out a full scope change
+  // for a value that had not moved.
+  if (_state.mode === "selected"
+    && _state.selectedIds.length === cleanIds.length
+    && _state.selectedIds.every((id, i) => id === cleanIds[i])
+    && _state.selectedNames.every((n, i) => n === cleanNames[i])) {
+    if (!hasStoredFilter()) persistOnly();
+    return;
+  }
+  _state = { mode: "selected", selectedIds: cleanIds, selectedNames: cleanNames };
   saveToStorage();
-  warmScope("selected", ids);
+  warmScope("selected", cleanIds);
 }
 
 /**
@@ -361,6 +486,8 @@ export function setFilterSelected(ids: string[], names: string[]) {
  * meaningful scope is the safer thing to keep.
  */
 export function toggleFilterProfile(id: string, name: string) {
+  if (!id) return;
+  _userChose = true;
   if (_state.mode === "everyone") {
     // Switching from everyone to selected — start with just this one
     _state = { mode: "selected", selectedIds: [id], selectedNames: [name] };
@@ -369,11 +496,19 @@ export function toggleFilterProfile(id: string, name: string) {
     if (idx >= 0) {
       // Never empty the selection — that used to silently become "Everyone".
       if (_state.selectedIds.length === 1) return;
-      _state.selectedIds.splice(idx, 1);
-      _state.selectedNames.splice(idx, 1);
+      // New arrays, never splice/push in place: the old arrays were shared by
+      // reference with React state in every page that read getProfileFilter().
+      _state = {
+        mode: "selected",
+        selectedIds: _state.selectedIds.filter((_, i) => i !== idx),
+        selectedNames: _state.selectedNames.filter((_, i) => i !== idx),
+      };
     } else {
-      _state.selectedIds.push(id);
-      _state.selectedNames.push(name);
+      _state = {
+        mode: "selected",
+        selectedIds: [..._state.selectedIds, id],
+        selectedNames: [..._state.selectedNames, name],
+      };
     }
   }
   saveToStorage();
