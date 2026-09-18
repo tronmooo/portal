@@ -28,7 +28,7 @@ import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
-import { groupDocumentDates, ruleIdsOf } from "@shared/document-dates";
+import { groupDocumentDates, ruleIdsOf, summarizeDocumentUrgency } from "@shared/document-dates";
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
 import { useLiveTotal } from "@/lib/derived-aggregates";
 import { netWorthView, isNetWorthLoaded } from "@/lib/net-worth-view";
@@ -582,7 +582,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
           Tap to snooze · {Math.abs(mostOverdue.daysUntil)}d overdue
         </p>
       ) : (
-        <p className="text-[11px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{count} expiring soon</p>
+        <p className="text-[11px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{summarizeDocumentUrgency(docs).label}</p>
       )}
       {isUrgent && (
         <div className="mt-1.5 relative z-10">
@@ -1461,13 +1461,8 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
             </DialogTitle>
             <DialogDescription className="text-xs">
               {(() => {
-                const expiredCt = visibleDocs.filter((d: any) => normalizeFilter(d.status) === normalizeFilter("expired")).length;
-                const soonCt = visibleDocs.filter((d: any) => normalizeFilter(d.status) === normalizeFilter("expiring_soon")).length;
-                const upcomingCt = visibleDocs.length - expiredCt - soonCt;
-                const parts: string[] = [];
-                if (expiredCt > 0) parts.push(`${expiredCt} expired`);
-                if (soonCt > 0) parts.push(`${soonCt} expiring soon`);
-                if (upcomingCt > 0) parts.push(`${upcomingCt} upcoming`);
+                // Same split the Documents card caption uses (F-57).
+                const parts = summarizeDocumentUrgency(visibleDocs).label.split(" · ").filter(Boolean);
                 return parts.length > 0
                   ? `${parts.join(" · ")}. Tap to view, snooze to hide for 30 days.`
                   : "Documents with an upcoming or past due / expiration date. Snooze to hide for 30 days.";

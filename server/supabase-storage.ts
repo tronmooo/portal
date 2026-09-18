@@ -56,6 +56,7 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 }
 import { getUserToday, getUserCurrentMonth, parseLocalDate, toLocalDateStr, localDayOf, addDays as tzAddDays, DEFAULT_TIMEZONE } from "../shared/timezone";
 import { prepareProfileFields } from "../shared/registry-fields";
+import { describeCount } from "../shared/field-label";
 import { nextRecurringTaskSpawn, rollForwardRecurringTask } from "../shared/recurrence";
 import { isLegacyReminderTask, LEGACY_REMINDER_TASK_SOURCE } from "../shared/legacy-reminder-tasks";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
@@ -7581,8 +7582,9 @@ export class SupabaseStorage implements IStorage {
               const parts = [cal != null ? `${cal} cal` : null, protein != null ? `${protein}g protein` : null, carbs != null ? `${carbs}g carbs` : null, fat != null ? `${fat}g fat` : null].filter(Boolean);
               return `${t.name}: ${parts.join(', ')}`;
             }
-            if (nums.length === 1) return `${t.name}: ${nums[0][1]} ${nums[0][0]}`;
-            const summary = nums.slice(0, 2).map(([k, v]) => `${v} ${k}`).join(', ');
+            // "Brush Teeth: 1 completion" — the noun agrees with the count.
+            if (nums.length === 1) return `${t.name}: ${describeCount(nums[0][1], nums[0][0])}`;
+            const summary = nums.slice(0, 2).map(([k, v]) => describeCount(v, k)).join(', ');
             return `${t.name}: ${summary}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
           })(),
           timestamp: e.timestamp,

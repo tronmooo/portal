@@ -30,7 +30,8 @@ import {
 import { cn } from "@/lib/utils";
 import { stringifyField, previewUnrenderable, isLineItemArray, formatLineItem } from "@/lib/field-display";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
-import { useDocumentBlobUrl, classifyDocument, prefetchDocumentBlob, wasFileDiscarded, DISCARDED_FILE_TAG } from "@/lib/document-preview";
+import { useDocumentBlobUrl, classifyDocument, prefetchDocumentBlob, wasFileDiscarded } from "@/lib/document-preview";
+import { userVisibleTags } from "@shared/system-tags";
 import { classifyDateField, bareDateOf, daysBetweenISO, countdownLabel } from "@shared/date-rules";
 import { UPCOMING_WINDOW_DAYS } from "@shared/extraction-calendar";
 
@@ -239,8 +240,11 @@ function PreviewPanel({ doc }: { doc: Document }) {
 
   return (
     <div className="flex flex-col h-full bubble overflow-hidden">
-      {/* Zoom toolbar */}
-      <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/10 shrink-0">
+      {/* Zoom toolbar — only when there is a file to zoom. An extract-only
+          upload kept no bytes, and zoom buttons over "This file wasn't kept"
+          promised something that cannot happen (QA 2026-09-18, F-66). */}
+      {!fileDiscarded && (
+      <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-muted/10 shrink-0" data-testid="doc-zoom-toolbar">
         <Button
           variant="ghost" size="icon" className="h-7 w-7"
           onClick={zoomOut} disabled={zoom <= 0.25}
@@ -270,6 +274,7 @@ function PreviewPanel({ doc }: { doc: Document }) {
           <RotateCw className="h-3.5 w-3.5" />
         </Button>
       </div>
+      )}
 
       {/* Preview */}
       <div className="flex-1 overflow-hidden relative">
@@ -676,12 +681,12 @@ function DataPanel({
           </section>
 
           {/* Tags */}
-          {doc.tags && doc.tags.some((t) => !t.startsWith("sha256:") && t !== DISCARDED_FILE_TAG) && (
+          {userVisibleTags(doc.tags).length > 0 && (
             <section>
               <h3 className="micro-label text-muted-foreground mb-2">Tags</h3>
               <div className="flex flex-wrap gap-1" data-testid="tags-list">
-                {/* sha256: tags are the upload-dedupe content hash — internal, never shown */}
-                {doc.tags.filter((tag) => !tag.startsWith("sha256:") && tag !== DISCARDED_FILE_TAG).map((tag) => (
+                {/* System tags (sha256: dedupe hash, image-discarded) are internal, never shown */}
+                {userVisibleTags(doc.tags).map((tag) => (
                   <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0">{tag}</Badge>
                 ))}
               </div>

@@ -71,7 +71,7 @@ import type { AttentionItem } from "@shared/attention";
 // One relative-due formatter for the whole app. Interpolating a raw `daysUntil`
 // is what once produced "Lawn care ($40) due in -29d".
 import { dayLabel } from "@shared/now-rank";
-import { groupDocumentDates } from "@shared/document-dates";
+import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-dates";
 import { buildExecutiveSections, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
@@ -775,7 +775,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       .filter((d: any) => !snoozedDocumentIds.includes(d.ruleId) && !snoozedDocumentIds.includes(d.documentId))
       .filter((d: any) => typeof d.daysUntil === "number"),
   ).sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
-  const docsSoonCount = visibleDocs.filter((d: any) => d.daysUntil <= 30).length;
+  // Expired and expiring are different states (F-57): the ring counts the
+  // still-valid ones running out, and the caption says both numbers.
+  const docsUrgency = summarizeDocumentUrgency(visibleDocs);
+  const docsSoonCount = docsUrgency.expiringSoon;
 
   // Wellness — same extraction the Wellness tab uses, from the same trackers,
   // so a walk logged anywhere shows up on both.
@@ -978,7 +981,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     }
   };
 
-  const feedLoading = anyBriefPending && sections.length === 0;
+  // Hold the skeleton grid until the enhanced snapshot has landed too: with
+  // tasks in and the snapshot still in flight the grid rendered a run of
+  // cards with nothing in them, which read as blank space for the 4–7s the
+  // snapshot takes (QA 2026-09-18, F-63). The stuck banner above still takes
+  // over at 12s, so this can never be the permanent state.
+  const feedLoading = anyBriefPending && (sections.length === 0 || (enhanced === undefined && !briefStuck));
   const loadingDots = "…";
 
   // Overview bar strings
@@ -1380,7 +1388,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       accent={CARD_ACCENTS.documents} size={72} stroke={6}
                       label={String(docsSoonCount)} sublabel="expiring"
                     />
-                    <p className="text-[11px] text-muted-foreground mt-1.5">soon</p>
+                    <p className="text-[11px] text-muted-foreground mt-1.5 text-center max-w-[6rem]" data-testid="exec-docs-caption">
+                      {docsUrgency.label || "soon"}
+                    </p>
                   </div>
                   <div className="flex-1 min-w-0 space-y-1.5">
                     {visibleDocs.slice(0, 4).map((d: any) => {

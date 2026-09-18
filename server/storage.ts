@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { toMonthlyAmount, isUpcomingBill, sumBillsDueThroughMonth, sumMonthlyIncomeForMonth } from "@shared/obligation-windows";
 import { isTestEntity } from "@shared/test-data";
+import { describeCount } from "@shared/field-label";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
@@ -2394,8 +2395,9 @@ export class MemStorage implements IStorage {
             const nums = Object.entries(e.values).filter(([,v]) => typeof v === 'number') as [string, number][];
             const strs = Object.entries(e.values).filter(([,v]) => typeof v === 'string' && v) as [string, string][];
             if (nums.length === 0 && strs.length === 0) return `Logged ${t.name}`;
-            if (nums.length === 1) return `${t.name}: ${nums[0][1]} ${nums[0][0]}`;
-            const summary = nums.slice(0, 2).map(([k, v]) => `${v} ${k}`).join(', ');
+            // "Brush Teeth: 1 completion" — the noun agrees with the count.
+            if (nums.length === 1) return `${t.name}: ${describeCount(nums[0][1], nums[0][0])}`;
+            const summary = nums.slice(0, 2).map(([k, v]) => describeCount(v, k)).join(', ');
             return `${t.name}: ${summary}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
           })(),
           timestamp: e.timestamp,

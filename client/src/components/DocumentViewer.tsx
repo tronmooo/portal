@@ -43,6 +43,8 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { fieldExpiryStatus } from "@shared/date-rules";
 import { getUserToday } from "@shared/timezone";
+import { humanizeDocumentFieldKey } from "@shared/field-label";
+import { userVisibleTags } from "@shared/system-tags";
 import { cn } from "@/lib/utils";
 import {
   useDocumentBlobUrl,
@@ -88,13 +90,10 @@ interface Profile {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function formatFieldLabel(key: string): string {
-  return key
-    .replace(/_/g, " ")
-    .replace(/([A-Z])/g, " $1")
-    .replace(/^\s/, "")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
+// Field keys are the extractor's ("LAST4", "policyNumber") — the shared
+// humaniser spells them out ("Last 4 digits") instead of title-casing the raw
+// token (QA 2026-09-18, F-55).
+const formatFieldLabel = humanizeDocumentFieldKey;
 
 function getExpirationStatus(key: string, value: any): "expired" | "soon" | "valid" | null {
   return fieldExpiryStatus(key, value, getUserToday(BROWSER_TIMEZONE));
@@ -804,7 +803,7 @@ export function DocumentViewerDialog({
   const knownNoFile = !!meta && meta.hasFile === false && !displayData;
   const shouldShowPreview = !knownNoFile;
   const hasFile = meta?.hasFile === true;
-  const formatFieldKey = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase()).trim();
+  const formatFieldKey = humanizeDocumentFieldKey;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1243,12 +1242,12 @@ function ExtractedDataPanel({
           </div>
 
           {/* Tags */}
-          {doc.tags && doc.tags.some((t) => !t.startsWith("sha256:") && t !== DISCARDED_FILE_TAG) && (
+          {userVisibleTags(doc.tags).length > 0 && (
             <div>
               <p className="micro-label text-muted-foreground mb-2">Tags</p>
               <div className="flex flex-wrap gap-1" data-testid="tags-list">
-                {/* sha256: tags are the upload-dedupe content hash — internal, never shown */}
-                {doc.tags.filter((tag) => !tag.startsWith("sha256:") && tag !== DISCARDED_FILE_TAG).map((tag) => (
+                {/* System tags (sha256: dedupe hash, image-discarded) are internal, never shown */}
+                {userVisibleTags(doc.tags).map((tag) => (
                   <Badge key={tag} variant="secondary" className="text-xs px-1.5 py-0">{tag}</Badge>
                 ))}
               </div>
