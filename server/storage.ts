@@ -2568,7 +2568,7 @@ export class MemStorage implements IStorage {
 
     const userYearMonth = `${thisYear}-${String(thisMonth + 1).padStart(2, '0')}`;
     const incomesForMonth = Array.from(this.incomes.values()).filter(i => matchesFilter((i as any).linkedProfiles));
-    const recurringIncome = sumMonthlyIncomeForMonth(incomesForMonth as any[], userYearMonth);
+    const recurringIncome = sumMonthlyIncomeForMonth(incomesForMonth as any[], userYearMonth, today);
     const receivedPaycheckIncome = 0; // the in-memory storage keeps no paycheck table
 
     // Exact 52/12 and 26/12 multipliers (shared/obligation-windows.ts), the

@@ -7896,7 +7896,8 @@ export class SupabaseStorage implements IStorage {
     // paychecks that actually landed in it. Marking a paycheck received used
     // to move nothing at all (INCOME · MTD stayed $0, savings rate stayed "—").
     const receivedPaycheckIncome = sumReceivedPaychecksForMonth(allPaychecksEnh as any[], userYearMonth);
-    const recurringIncome = sumMonthlyIncomeForMonth(allIncomesEnh as any[], userYearMonth);
+    // Month-TO-DATE: a stream whose first pay day is still ahead is not income yet (F-13).
+    const recurringIncome = sumMonthlyIncomeForMonth(allIncomesEnh as any[], userYearMonth, today);
     const monthlyIncome = recurringIncome + receivedPaycheckIncome;
 
     // Calendar days in the user's zone: `new Date("YYYY-MM-DD") < now` listed a

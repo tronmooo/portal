@@ -126,7 +126,7 @@ import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossess
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { classifyFitnessActivity, isCalorieBearingActivity } from "@shared/fitness-metrics";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
-import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthlyIncomeNow, findDuplicatePaycheck } from "@shared/obligation-windows";
 import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
 import { signedPrincipal, retractPaymentOfExpense, payBillOccurrence, unpayBillOccurrence, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
@@ -9403,6 +9403,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     }
 
     case "log_expected_paycheck": {
+      // Same source, day and amount as an existing row → that row (F-14).
+      const dup = findDuplicatePaycheck(await storage.getPaychecks().catch(() => [] as any[]), input);
+      if (dup) return { result: dup, alreadyExisted: true, message: `An expected paycheck from ${dup.source} for that day and amount already exists.` };
       const r = await storage.createPaycheck({ source: input.source, amount: input.amount, expected_date: input.expected_date, notes: input.notes });
       return { result: r, actions: [{ type: "create", category: "paycheck", data: r }] };
     }

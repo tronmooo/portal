@@ -5,8 +5,80 @@
 //   • F-10  the "this month" net-worth delta is measured against a real
 //           30-day baseline rebuilt from the items themselves — an asset that
 //           merely got ENTERED inside the window is not a monthly gain.
+//   • F-11  an income record is the authority for its amount on the calendar;
+//           an "income" recurring date typed onto the calendar no longer wins.
+//   • F-13  INCOME · MTD counts a stream only once its pay day has arrived.
+//   • F-14  an expected paycheck a received twin covers is satisfied, not
+//           overdue, and an identical paycheck is not created twice.
 import { describe, it, expect } from "vitest";
 import { netWorthChange, reconstructNetWorthBaseline, itemValueAt, acquisitionDateOf } from "@shared/net-worth-change";
+import { dedupeSeries, type CalendarSeries } from "@shared/calendar-occurrences";
+import { seriesFromIncomes } from "@shared/calendar-adapters";
+import {
+  sumMonthlyIncomeForMonth, sumMonthIncome, latePaychecks, paycheckStatus, findDuplicatePaycheck, isSatisfiedExpectedPaycheck,
+} from "@shared/obligation-windows";
+
+describe("F-11 one amount per income source", () => {
+  const owner = "p-self";
+  const incomeRecord = seriesFromIncomes([{ id: "inc1", description: "Northwind Logistics", amount: 95_000, frequency: "yearly", date: "2026-01-15", linkedProfiles: [owner] }])[0];
+  const typedRule: CalendarSeries = {
+    id: "event:e1", kind: "income", title: "Northwind Logistics", baseDate: "2026-01-15", recurrence: "yearly", amount: 105_000,
+    source: { system: "event", id: "e1", profileId: owner, ownerIds: [owner] } as any,
+  };
+
+  it("the Finance income record wins the merge whichever was adapted first", () => {
+    for (const order of [[typedRule, incomeRecord], [incomeRecord, typedRule]]) {
+      const merged = dedupeSeries(order);
+      expect(merged).toHaveLength(1);
+      expect(merged[0].series.source.system).toBe("income");
+      expect(merged[0].series.amount).toBe(95_000);
+      expect(merged[0].duplicateIds).toEqual(["event:e1"]);
+    }
+  });
+});
+
+describe("F-13 INCOME · MTD only counts income received by today", () => {
+  const streams = [
+    { description: "Monthly Paycheck", amount: 1_000, frequency: "monthly", date: "2026-09-30" },
+    { description: "Salary", amount: 3_000, frequency: "monthly", date: "2026-06-01" },
+    { description: "Bonus", amount: 500, frequency: "once", date: "2026-09-25" },
+  ];
+  it("a stream whose first pay day is still ahead is not income yet", () => {
+    expect(sumMonthlyIncomeForMonth(streams, "2026-09", "2026-09-18")).toBe(3_000);
+    expect(sumMonthlyIncomeForMonth(streams, "2026-09", "2026-09-30")).toBe(4_500);
+  });
+  it("a whole past month is unchanged", () => {
+    expect(sumMonthlyIncomeForMonth(streams, "2026-09")).toBe(4_500);
+    expect(sumMonthlyIncomeForMonth(streams, "2026-10")).toBe(4_000);
+  });
+  it("received paychecks still count in the to-date figure", () => {
+    expect(sumMonthIncome(streams, [{ confirmed: true, received_date: "2026-09-09", amount: 2_000 }], "2026-09", "2026-09-18")).toBe(5_000);
+  });
+});
+
+describe("F-14 a received twin satisfies an expected paycheck", () => {
+  const received = { id: "a", source: "Employer", amount: 2_000, expected_date: "2026-09-09", confirmed: true, received_date: "2026-09-09" };
+  const expected = { id: "b", source: "Monthly Income", amount: 2_000, expected_date: "2026-09-09", confirmed: false };
+  const other = { id: "c", source: "Side gig", amount: 400, expected_date: "2026-09-10", confirmed: false };
+  const all = [received, expected, other];
+
+  it("is not late and reads as covered", () => {
+    expect(isSatisfiedExpectedPaycheck(expected, all)).toBe(true);
+    expect(latePaychecks(all, "2026-09-18").map((p) => p.id)).toEqual(["c"]);
+    expect(paycheckStatus(expected, all, "2026-09-18")).toBe("satisfied");
+    expect(paycheckStatus(other, all, "2026-09-18")).toBe("overdue");
+    expect(paycheckStatus(received, all, "2026-09-18")).toBe("received");
+    expect(paycheckStatus({ ...other, expected_date: "2026-09-25" }, all, "2026-09-18")).toBe("upcoming");
+  });
+  it("a different amount or day is a different deposit", () => {
+    expect(isSatisfiedExpectedPaycheck({ ...expected, amount: 2_100 }, all)).toBe(false);
+    expect(isSatisfiedExpectedPaycheck({ ...expected, expected_date: "2026-09-10" }, all)).toBe(false);
+  });
+  it("creating an identical paycheck finds the existing row", () => {
+    expect(findDuplicatePaycheck(all, { source: " employer ", amount: 2000, expected_date: "2026-09-09T00:00:00Z" })?.id).toBe("a");
+    expect(findDuplicatePaycheck(all, { source: "Employer", amount: 2000, expected_date: "2026-09-23" })).toBeNull();
+  });
+});
 
 describe("F-10 net-worth change: a young snapshot table is not a monthly gain", () => {
   const today = "2026-09-18";

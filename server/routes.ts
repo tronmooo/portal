@@ -471,7 +471,7 @@ import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE, toCents, validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
 import { normalizeMonthKey, budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
 import { canonicalizeRegistryFields } from "@shared/registry-fields";
-import { canonicalIncomeFrequency } from "@shared/obligation-windows";
+import { canonicalIncomeFrequency, findDuplicatePaycheck } from "@shared/obligation-windows";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
 import { generateSmartInsights } from "./insights-engine";
@@ -7232,6 +7232,10 @@ Rules:
     if (isNaN(dParsed.getTime())) {
       return res.status(400).json({ error: "expected_date must be a valid date" });
     }
+    // An identical expected paycheck (source, day, amount) is the same
+    // deposit — return it instead of a second row (QA 2026-09-18 F-14).
+    const dup = findDuplicatePaycheck(await storage.getPaychecks().catch(() => [] as any[]), { source: source.trim(), amount: numAmount, expected_date });
+    if (dup) return res.json(dup);
     const created = await storage.createPaycheck({ source: source.trim(), amount: numAmount, expected_date, notes });
     const uid_pc1 = cacheUserKey(req as AuthenticatedRequest);
     // Bug fix: paychecks list cache had a 3-min TTL but no busting on create —

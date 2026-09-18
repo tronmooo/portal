@@ -17,7 +17,7 @@ import { useShowTestData } from "@/lib/showTestData";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
-import { toMonthlyAmount, sumMonthIncomeNow, canonicalIncomeFrequency } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthIncomeNow, canonicalIncomeFrequency, latePaychecks as latePaychecksOf, paycheckStatus } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -1293,8 +1293,9 @@ export default function FinancePage() {
         if (savingsRate != null && savingsRate >= 15) alerts.push({ id: "savings", tone: "pos", text: `Great job — you're saving ${savingsRate}% of income this month.` });
         // An expected paycheck whose date has passed and that was never marked
         // received. Two of them sat overdue in the list while nothing above it
-        // said a word.
-        const latePaychecks = (paychecks || []).filter((pc: any) => !pc.confirmed && String(pc.expected_date || "").slice(0, 10) < todayLocalISO);
+        // said a word. One that a received row for the same day and amount
+        // already covers is satisfied, not late (F-14).
+        const latePaychecks = latePaychecksOf(paychecks || [], todayLocalISO);
         if (latePaychecks.length > 0) alerts.push({
           id: "paychecks-late", tone: "warn",
           text: `${latePaychecks.length} expected paycheck${latePaychecks.length > 1 ? "s are" : " is"} past its date and not marked received ($${latePaychecks.reduce((sum: number, pc: any) => sum + (Number(pc.actual_amount ?? pc.amount) || 0), 0).toLocaleString()}).`,
@@ -1873,6 +1874,9 @@ export default function FinancePage() {
               const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
               const expectedISO = (pc.expected_date || '').slice(0, 10);
               const isFuture = expectedISO && expectedISO > todayISO;
+              // ONE status rule (shared/obligation-windows): a row a received
+              // twin already covers reads "Covered", never "Overdue" (F-14).
+              const status = paycheckStatus(pc, paychecks, todayISO);
               return (
               <ExpandableRow
                 key={pc.id}
@@ -1888,6 +1892,8 @@ export default function FinancePage() {
                     <span className="text-xs font-bold tabular-nums">{formatMoney(pc.actual_amount || pc.amount)}</span>
                     {pc.confirmed ? (
                       <span className="text-[11px] font-semibold text-green-500 flex items-center gap-0.5 shrink-0"><Check className="h-3 w-3" /> Received</span>
+                    ) : status === "satisfied" ? (
+                      <span className="text-[11px] font-medium text-muted-foreground shrink-0" title="A received paycheck for the same day and amount already covers this one">Covered</span>
                     ) : isFuture ? (
                       <span className="text-[11px] font-medium text-muted-foreground shrink-0">Upcoming</span>
                     ) : (

@@ -12,7 +12,7 @@
 // page — MUST import from this module. Inline 4.33/2.17 or hardcoded
 // 7/30 day constants are bugs.
 
-import { getUserCurrentMonth } from "./timezone";
+import { getUserCurrentMonth, getUserToday } from "./timezone";
 
 export const UPCOMING_BILL_WINDOW_DAYS = 30;
 export const MS_PER_DAY = 86_400_000;
@@ -181,7 +181,7 @@ export function sumMonthlyIncomeNow(
   incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null; date?: string | null }> | null | undefined,
   timezone: string,
 ): number {
-  return sumMonthlyIncomeForMonth(incomes, getUserCurrentMonth(timezone));
+  return sumMonthlyIncomeForMonth(incomes, getUserCurrentMonth(timezone), getUserToday(timezone));
 }
 
 /**
@@ -194,10 +194,21 @@ export function sumMonthlyIncomeNow(
 export function sumMonthlyIncomeForMonth(
   incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null; date?: string | null }> | null | undefined,
   ym: string,
+  /**
+   * Month-TO-DATE cut (YYYY-MM-DD): income whose (first) pay day is after this
+   * day has not been received yet and does not count. Omit for a whole past
+   * month. QA 2026-09-18 F-13: a "Monthly Paycheck" first dated Sep 30 was
+   * $1,000 of INCOME · MTD on Sep 18, inflating cash flow and the savings rate.
+   */
+  throughDay?: string | null,
 ): number {
   let total = 0;
+  const cut = typeof throughDay === "string" && /^\d{4}-\d{2}-\d{2}$/.test(throughDay) ? throughDay : null;
   for (const i of incomes || []) {
+    const startDay = typeof i?.date === "string" && /^\d{4}-\d{2}-\d{2}/.test(i.date) ? i.date.slice(0, 10) : null;
     const start = typeof i?.date === "string" && /^\d{4}-\d{2}/.test(i.date) ? i.date.slice(0, 7) : null;
+    // Not received yet: its pay day is still ahead of the cut.
+    if (cut && startDay && startDay > cut) continue;
     // A one-time income is not a stream: its "monthly equivalent" is $0, which
     // is right for a projection and wrong for the month it actually landed in.
     // A $750 freelance payment dated Aug 22 is $750 of August income and
@@ -255,6 +266,75 @@ export function isReceivedPaycheck(p: ReceivedPaycheckInput | null | undefined):
   return p?.confirmed === true;
 }
 
+// ─── Duplicate / satisfied expected paychecks ────────────────────────────────
+//
+// QA 2026-09-18 F-14: "Employer · Expected Sep 9 · $2,000 · Received" sat
+// next to "Monthly Income · Expected Sep 9 · $2,000 · Overdue", and the
+// second drove a standing "1 expected paycheck is past its date" warning
+// under an income figure that already counted the $2,000. One deposit, two
+// rows. An expected paycheck for the same day and amount as a received one
+// is SATISFIED by it, and creating a paycheck identical to an existing one
+// (source, day, amount) returns the existing row.
+
+export interface PaycheckIdentityInput extends ReceivedPaycheckInput {
+  id?: string | null;
+  source?: string | null;
+}
+
+const normSource = (s: unknown) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+const expectedDay = (p: ReceivedPaycheckInput | null | undefined): string | null => {
+  const raw = p?.expected_date ?? p?.expectedDate;
+  return typeof raw === "string" && /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : null;
+};
+const sameMoney = (a: number, b: number) => Math.abs(a - b) < 0.005;
+
+/** True when `received` (a confirmed paycheck) is the deposit `expected` was waiting for: same expected day and the same amount. */
+export function paycheckSatisfiedBy(expected: PaycheckIdentityInput, received: PaycheckIdentityInput): boolean {
+  if (expected === received || (expected.id && received.id && expected.id === received.id)) return false;
+  if (!isReceivedPaycheck(received) || isReceivedPaycheck(expected)) return false;
+  const day = expectedDay(expected);
+  if (!day || day !== expectedDay(received)) return false;
+  return sameMoney(Number(expected.amount) || 0, Number(received.amount) || 0)
+    || sameMoney(Number(expected.amount) || 0, paycheckAmount(received));
+}
+
+/** An unconfirmed paycheck that a confirmed row already covers. */
+export function isSatisfiedExpectedPaycheck(p: PaycheckIdentityInput, all: ReadonlyArray<PaycheckIdentityInput> | null | undefined): boolean {
+  if (isReceivedPaycheck(p)) return false;
+  return (all || []).some((other) => paycheckSatisfiedBy(p, other));
+}
+
+/** Expected paychecks past their day, not received and not covered by a received twin. */
+export function latePaychecks<T extends PaycheckIdentityInput>(paychecks: ReadonlyArray<T> | null | undefined, todayISO: string): T[] {
+  const all = paychecks || [];
+  return all.filter((p) => {
+    if (isReceivedPaycheck(p)) return false;
+    const day = expectedDay(p);
+    if (!day || day >= todayISO) return false;
+    return !isSatisfiedExpectedPaycheck(p, all);
+  });
+}
+
+/** What a paycheck row should say. */
+export function paycheckStatus(p: PaycheckIdentityInput, all: ReadonlyArray<PaycheckIdentityInput> | null | undefined, todayISO: string): "received" | "satisfied" | "upcoming" | "overdue" {
+  if (isReceivedPaycheck(p)) return "received";
+  if (isSatisfiedExpectedPaycheck(p, all)) return "satisfied";
+  const day = expectedDay(p);
+  return day && day > todayISO ? "upcoming" : "overdue";
+}
+
+/** The existing paycheck a new one would duplicate: same source, same expected day, same amount. */
+export function findDuplicatePaycheck<T extends PaycheckIdentityInput>(
+  existing: ReadonlyArray<T> | null | undefined,
+  input: { source?: string | null; amount?: number | string | null; expected_date?: string | null; expectedDate?: string | null },
+): T | null {
+  const day = expectedDay(input);
+  const src = normSource(input.source);
+  const amt = Number(input.amount) || 0;
+  if (!day || !src) return null;
+  return (existing || []).find((p) => normSource(p.source) === src && expectedDay(p) === day && sameMoney(Number(p.amount) || 0, amt)) ?? null;
+}
+
 /** The paycheck money that landed in `ym` ("YYYY-MM"). Unconfirmed paychecks
  *  are expectations, not income, and are never summed here. */
 export function sumReceivedPaychecksForMonth(
@@ -281,17 +361,19 @@ export function sumMonthIncome(
   incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null; date?: string | null }> | null | undefined,
   paychecks: ReadonlyArray<ReceivedPaycheckInput> | null | undefined,
   ym: string,
+  /** Month-to-date cut (YYYY-MM-DD) — see `sumMonthlyIncomeForMonth`. */
+  throughDay?: string | null,
 ): number {
-  return sumMonthlyIncomeForMonth(incomes, ym) + sumReceivedPaychecksForMonth(paychecks, ym);
+  return sumMonthlyIncomeForMonth(incomes, ym, throughDay) + sumReceivedPaychecksForMonth(paychecks, ym);
 }
 
-/** `sumMonthIncome` for the user's current month. */
+/** `sumMonthIncome` for the user's current month, to date. */
 export function sumMonthIncomeNow(
   incomes: ReadonlyArray<{ amount?: number | string | null; frequency?: string | null; date?: string | null }> | null | undefined,
   paychecks: ReadonlyArray<ReceivedPaycheckInput> | null | undefined,
   timezone: string,
 ): number {
-  return sumMonthIncome(incomes, paychecks, getUserCurrentMonth(timezone));
+  return sumMonthIncome(incomes, paychecks, getUserCurrentMonth(timezone), getUserToday(timezone));
 }
 
 // ─── Bill money still owed this month ────────────────────────────────────────
