@@ -98,16 +98,20 @@ declare global {
  * built-in default below is used. To add more admins, set
  * `ADMIN_EMAILS=alice@example.com,bob@example.com` in the environment.
  */
-export function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  // Local SQLite dev mode bypasses auth entirely; mirror that here so
-  // /api/cleanup/* stays callable in dev without Supabase configured.
-  if (!isSupabaseStorage()) return next();
+export function isAdminEmail(email: string | undefined | null): boolean {
   const raw = process.env.ADMIN_EMAILS || "tronmoooo@gmail.com";
   const allowed = new Set(
     raw.split(",").map(e => e.trim().toLowerCase()).filter(Boolean)
   );
-  const email = (req.userEmail || "").toLowerCase();
-  if (!email || !allowed.has(email)) {
+  const normalized = (email || "").toLowerCase();
+  return !!normalized && allowed.has(normalized);
+}
+
+export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  // Local SQLite dev mode bypasses auth entirely; mirror that here so
+  // /api/cleanup/* stays callable in dev without Supabase configured.
+  if (!isSupabaseStorage()) return next();
+  if (!isAdminEmail(req.userEmail)) {
     return res.status(403).json({ error: "Admin access required" });
   }
   return next();
@@ -453,6 +457,27 @@ function isRecoverySession(accessToken: string): boolean {
   return amr.some((m: any) => m === "recovery" || (m && typeof m === "object" && m.method === "recovery"));
 }
 
+/**
+ * The client IP for rate limiting. Both entries set `trust proxy` to 1, so
+ * Express derives req.ip from the X-Forwarded-For value written by the ONE
+ * trusted hop in front of us (Vercel's edge) and ignores anything a client
+ * prepends. Never read X-Forwarded-For directly here: a caller can set that
+ * header to anything, which would let them dodge every per-IP limit.
+ */
+export function getClientIp(req: Request): string {
+  return req.ip || req.socket?.remoteAddress || "unknown";
+}
+
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,255}\.[^\s@]{2,}$/;
+const PASSWORD_MIN = 8;
+const PASSWORD_MAX = 128;
+function validEmail(v: unknown): v is string {
+  return typeof v === "string" && v.length <= 320 && EMAIL_RE.test(v.trim());
+}
+function validNewPassword(v: unknown): v is string {
+  return typeof v === "string" && v.length >= PASSWORD_MIN && v.length <= PASSWORD_MAX;
+}
+
 export function registerAuthRoutes(app: Express) {
   // Per-IP rate limiter for auth endpoints. Bounded so a flood of unique
   // IPs (e.g. a botnet probing /api/auth/login) cannot grow this map
@@ -512,7 +537,7 @@ export function registerAuthRoutes(app: Express) {
 
   // Sign up with email/password
   app.post("/api/auth/signup", async (req: Request, res: Response) => {
-    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    const clientIp = getClientIp(req);
     if (checkAuthRateLimit(clientIp, 5, 300000)) { // 5 signups per 5 minutes per IP
       return res.status(429).json({ error: "Too many signup attempts. Please wait and try again." });
     }
@@ -520,9 +545,15 @@ export function registerAuthRoutes(app: Express) {
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
-    const { email, password, captchaToken } = req.body;
+    const { email, password, captchaToken } = req.body || {};
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password required" });
+    }
+    if (!validEmail(email)) {
+      return res.status(400).json({ error: "Enter a valid email address" });
+    }
+    if (!validNewPassword(password)) {
+      return res.status(400).json({ error: `Password must be ${PASSWORD_MIN}-${PASSWORD_MAX} characters` });
     }
 
     // Per-email rate limit (stops one IP from cycling addresses, and stops
@@ -572,7 +603,7 @@ export function registerAuthRoutes(app: Express) {
 
   // Sign in with email/password
   app.post("/api/auth/signin", async (req: Request, res: Response) => {
-    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    const clientIp = getClientIp(req);
     if (checkAuthRateLimit(clientIp)) {
       return res.status(429).json({ error: "Too many login attempts. Please wait a minute and try again." });
     }
@@ -580,8 +611,8 @@ export function registerAuthRoutes(app: Express) {
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
-    const { email, password } = req.body;
-    if (!email || !password) {
+    const { email, password } = req.body || {};
+    if (!email || !password || typeof email !== "string" || typeof password !== "string") {
       return res.status(400).json({ error: "Email and password required" });
     }
 
@@ -606,17 +637,24 @@ export function registerAuthRoutes(app: Express) {
 
   // Refresh token
   app.post("/api/auth/refresh", async (req: Request, res: Response) => {
+    // Refresh tokens are long-lived bearer secrets; an attacker guessing or
+    // replaying them gets the same per-IP throttle as password guessing.
+    if (checkAuthRateLimit(`refresh:${getClientIp(req)}`, 60, 60000)) {
+      return res.status(429).json({ error: "Too many requests. Please wait and try again." });
+    }
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
-    const { refresh_token } = req.body;
-    if (!refresh_token) {
+    const { refresh_token } = req.body || {};
+    if (!refresh_token || typeof refresh_token !== "string") {
       return res.status(400).json({ error: "Refresh token required" });
     }
 
     const { data, error } = await supabase.auth.refreshSession({ refresh_token });
     if (error || !data.session) {
-      return res.status(401).json({ error: error?.message || "Session expired" });
+      // Never echo the upstream error: it names why the token failed, which
+      // helps an attacker distinguish a revoked token from a malformed one.
+      return res.status(401).json({ error: "Session expired" });
     }
 
     res.json({
@@ -632,12 +670,13 @@ export function registerAuthRoutes(app: Express) {
   // Get current user
   app.get("/api/auth/me", async (req: Request, res: Response) => {
     const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: "Not authenticated" });
+    if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Not authenticated" });
 
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
-    const token = authHeader.replace("Bearer ", "");
+    const token = authHeader.slice("Bearer ".length).trim();
+    if (!token || token.length < 20) return res.status(401).json({ error: "Invalid token" });
     const { data: { user }, error } = await supabase.auth.getUser(token);
     if (error || !user) {
       return res.status(401).json({ error: "Invalid token" });
@@ -653,7 +692,7 @@ export function registerAuthRoutes(app: Express) {
 
   // Change password (authenticated)
   app.post("/api/auth/change-password", async (req: Request, res: Response) => {
-    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    const clientIp = getClientIp(req);
     if (checkAuthRateLimit(clientIp, 5, 300000)) {
       return res.status(429).json({ error: "Too many password change attempts. Please wait and try again." });
     }
@@ -665,9 +704,9 @@ export function registerAuthRoutes(app: Express) {
     if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Not authenticated" });
     const token = authHeader.split(" ")[1];
 
-    const { currentPassword, newPassword } = req.body;
-    if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    const { currentPassword, newPassword } = req.body || {};
+    if (!validNewPassword(newPassword)) {
+      return res.status(400).json({ error: `Password must be ${PASSWORD_MIN}-${PASSWORD_MAX} characters` });
     }
     if (!currentPassword || typeof currentPassword !== "string") {
       return res.status(400).json({ error: "Current password is required" });
@@ -694,13 +733,16 @@ export function registerAuthRoutes(app: Express) {
       { password: newPassword }
     );
 
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      console.error("[auth] change-password update failed:", error.message);
+      return res.status(400).json({ error: "Could not update password" });
+    }
     res.json({ success: true });
   });
 
   // Forgot password — sends a reset link email via Supabase
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
-    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    const clientIp = getClientIp(req);
     if (checkAuthRateLimit(clientIp, 3, 300000)) {
       return res.status(429).json({ error: "Too many reset requests. Please wait and try again." });
     }
@@ -708,8 +750,8 @@ export function registerAuthRoutes(app: Express) {
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
-    const { email } = req.body;
-    if (!email) {
+    const { email } = req.body || {};
+    if (!validEmail(email)) {
       return res.status(400).json({ error: "Email is required" });
     }
 
@@ -733,7 +775,7 @@ export function registerAuthRoutes(app: Express) {
   // Reset password — updates password using the access token from the reset link.
   // Only a token minted by the recovery flow is accepted (see isRecoverySession).
   app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
-    const clientIp = req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    const clientIp = getClientIp(req);
     if (checkAuthRateLimit(clientIp, 5, 300000)) {
       return res.status(429).json({ error: "Too many reset attempts. Please wait and try again." });
     }
@@ -741,12 +783,12 @@ export function registerAuthRoutes(app: Express) {
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
-    const { access_token, password } = req.body;
-    if (!access_token || !password) {
+    const { access_token, password } = req.body || {};
+    if (!access_token || typeof access_token !== "string" || !password) {
       return res.status(400).json({ error: "Access token and new password are required" });
     }
-    if (password.length < 8) {
-      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    if (!validNewPassword(password)) {
+      return res.status(400).json({ error: `Password must be ${PASSWORD_MIN}-${PASSWORD_MAX} characters` });
     }
 
     // Use the access token to set the user context, then update password
@@ -778,12 +820,20 @@ export function registerAuthRoutes(app: Express) {
 
   // Exchange OAuth tokens (handles redirect from Supabase after Google sign-in)
   app.post("/api/auth/callback", async (req: Request, res: Response) => {
+    // Every call verifies a token upstream and may seed a new account, so it
+    // gets the same per-IP throttle as sign-in.
+    if (checkAuthRateLimit(`callback:${getClientIp(req)}`, 20, 60000)) {
+      return res.status(429).json({ error: "Too many requests. Please wait and try again." });
+    }
     const supabase = getSupabaseAuth();
     if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
 
-    const { access_token, refresh_token } = req.body;
-    if (!access_token) {
+    const { access_token, refresh_token } = req.body || {};
+    if (!access_token || typeof access_token !== "string") {
       return res.status(400).json({ error: "Access token required" });
+    }
+    if (refresh_token != null && typeof refresh_token !== "string") {
+      return res.status(400).json({ error: "Invalid refresh token" });
     }
 
     try {

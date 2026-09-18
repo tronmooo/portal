@@ -476,7 +476,7 @@ import { canonicalIncomeFrequency } from "@shared/obligation-windows";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
 import { generateSmartInsights } from "./insights-engine";
-import { requireAdmin, resolveUserFromRequest, isUniqueViolation } from "./auth";
+import { requireAdmin, isAdminEmail, resolveUserFromRequest, isUniqueViolation } from "./auth";
 
 const isProd = process.env.NODE_ENV === "production";
 const log = {
@@ -484,6 +484,27 @@ const log = {
   warn: (...args: any[]) => console.warn("[Portol]", ...args),
   error: (...args: any[]) => console.error("[Portol]", ...args),
 };
+
+// File types the upload doors accept. One list, so a door added later can't
+// quietly accept types the others reject.
+const ALLOWED_UPLOAD_MIMES = new Set([
+  "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic",
+  "application/pdf", "text/plain", "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+// Types that a browser executes when it opens them. A stored document is
+// served back under the type it was saved with (and, via the signed-URL
+// path, from the storage origin), so these must never be stored as documents.
+const BLOCKED_DOCUMENT_MIMES = new Set([
+  "text/html", "application/xhtml+xml", "image/svg+xml",
+  "application/javascript", "text/javascript", "application/x-javascript",
+  "application/xml", "text/xml",
+]);
+function acceptableDocumentMime(mimeType: unknown): boolean {
+  if (mimeType === undefined || mimeType === null) return true; // schema default applies
+  if (typeof mimeType !== "string" || mimeType.length > 100) return false;
+  return !BLOCKED_DOCUMENT_MIMES.has(mimeType.trim().toLowerCase().split(";")[0]);
+}
 
 // Simple rate limiter
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -1492,8 +1513,11 @@ export async function registerRoutes(
       "http://localhost:5000",
     ];
     const origin = req.headers.origin;
-    if (origin && allowedOrigins.some(o => origin.startsWith(o))) {
+    // Exact match only. `startsWith` let https://portol.me.evil.com through,
+    // and the credentials header below would then have applied to it.
+    if (origin && allowedOrigins.includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
     // X-Timezone / X-Active-Profile / X-Data-Version are sent by the web client
@@ -1551,6 +1575,11 @@ export async function registerRoutes(
   // it and we can pull stacks with `vercel logs`. No DB write, no auth
   // required (errors must be reportable even when the user is mid-crash).
   app.post("/api/client-errors", express.json({ limit: "64kb" }) as any, (req, res) => {
+    // Public and unauthenticated by design, so it is the one endpoint anyone
+    // can write to our logs through. Cap it per IP.
+    if (rateLimit(`client-errors:${req.ip || "unknown"}`, 30, 60_000)) {
+      return res.status(429).end();
+    }
     try {
       const { section, message, stack, componentStack, url, userAgent, ts } = req.body || {};
       const uid = cacheUserKey(req as AuthenticatedRequest);
@@ -1819,6 +1848,16 @@ export async function registerRoutes(
       if (message.length > 5000) {
         return res.status(400).json({ error: "Message too long (max 5000 characters)" });
       }
+      // `history` is replayed into the model context verbatim. Bound it: the
+      // last 40 turns, and no more than 200k characters in total, so a client
+      // can't turn the 10 MB body limit into a 10 MB prompt.
+      if (history != null && !Array.isArray(history)) {
+        return res.status(400).json({ error: "history must be an array" });
+      }
+      const boundedHistory = Array.isArray(history) ? history.slice(-40) : undefined;
+      if (boundedHistory && JSON.stringify(boundedHistory).length > 200_000) {
+        return res.status(400).json({ error: "Conversation history too large" });
+      }
 
       // Build identity + turn clock: X-Portol-Rev confirms from the device
       // which deploy served the reply; the [chat-timing] log below shows where
@@ -1881,7 +1920,9 @@ export async function registerRoutes(
       const cleanMessage = sanitize(message);
       // Opt-in routing diagnostics: clients never send this, but a probe can pass
       // { debug: true } to see which provider served the reply (meta.attempts).
-      const debug = req.body?.debug === true;
+      // Provider error text can carry key fingerprints and model names, so
+      // the debug view is for the operator, not every account.
+      const debug = req.body?.debug === true && isAdminEmail((req as AuthenticatedRequest).userEmail);
       // Capture classifier, OFF the reply's critical path (perf fix): it still
       // starts in parallel, but the route no longer blocks the reply on a full
       // Haiku round-trip. When the engine routed the message (projections exist
@@ -1908,7 +1949,7 @@ export async function registerRoutes(
         ? req.body.sourceMessageId
         : undefined;
       const tEngineStart = Date.now();
-      const result = await (processMessage as any)(cleanMessage, Array.isArray(history) ? history : undefined, userId, {
+      const result = await (processMessage as any)(cleanMessage, boundedHistory, userId, {
         profileFilterIds,
         debug,
         sourceMessageId,
@@ -2802,6 +2843,13 @@ export async function registerRoutes(
         const fileSizeBytes = Math.ceil((fileData.length * 3) / 4);
         if (fileSizeBytes > 10 * 1024 * 1024) {
           results.push({ fileName, reply: `Skipped — file too large (${(fileSizeBytes / 1024 / 1024).toFixed(1)}MB, max 10MB)`, actions: [], results: [] });
+          continue;
+        }
+        // Same allow-list as the single-file upload: a stored object is served
+        // back with the type it was uploaded under, so an unchecked type here
+        // would let an HTML file be stored and rendered from storage.
+        if (!ALLOWED_UPLOAD_MIMES.has(String(mimeType || "image/jpeg"))) {
+          results.push({ fileName, reply: `Skipped — unsupported file type (${mimeType})`, actions: [], results: [] });
           continue;
         }
 
@@ -4312,8 +4360,9 @@ ${JSON.stringify(ctx, null, 2)}`;
     }
     try {
       const summary = await (storage as any).repairOwnershipConsistency();
-      // Repair may rewrite linked_profiles on any entity type — drop all caches.
-      bustAllCaches();
+      // Repair may rewrite linked_profiles on any entity type — drop this
+      // user's caches (not every user's on the instance).
+      bustUserCaches(cacheUserKey(req as AuthenticatedRequest));
       res.json({ success: true, summary });
     } catch (err: any) {
       log.error("[OwnershipRepair]", err?.message || err);
@@ -5739,6 +5788,11 @@ ${JSON.stringify(ctx, null, 2)}`;
   // ── Find current market value via web search ──────────────────────────────────
   app.get("/api/profiles/:id/find-value", asyncHandler(async (req, res) => {
     const { id } = req.params;
+    // Each call is a web search plus a model call with no cache in front of
+    // it, so it gets its own per-user budget.
+    if (rateLimit(`find-value:${(req as AuthenticatedRequest).userId || req.ip}`, 10, 60_000)) {
+      return res.status(429).json({ error: "Too many value lookups. Please wait a minute." });
+    }
     const profile = await storage.getProfile(id);
     if (!profile) return res.status(404).json({ error: "Profile not found" });
 
@@ -5827,15 +5881,19 @@ Respond ONLY in JSON format:
       });
     } catch (err: any) {
       console.error("[routes] find-value failed:", err?.message, err?.status, err?.error);
-      const detail = err?.error?.error?.message || err?.message || "Unknown error";
-      res.status(500).json({ error: `Failed to estimate value: ${detail}` });
+      // The upstream message can name the provider, its model or key state;
+      // it's logged above and never sent to the client.
+      res.status(500).json({ error: "Failed to estimate value. Please try again later." });
     }
   }));
 
   app.get("/api/profiles/:id/ai-summary", asyncHandler(async (req, res) => {
     try {
       const { id } = req.params;
-      const force = req.query.force === "true";
+      // `force` bypasses the 2-hour cache and costs a model call each time, so
+      // past a small per-user budget it is treated as a normal cached read.
+      const force = req.query.force === "true"
+        && !rateLimit(`ai-summary-force:${(req as AuthenticatedRequest).userId || req.ip}`, 10, 60_000);
 
       // Check cache first (2-hour TTL)
       const cacheKey = `profile_ai_${id}`;
@@ -7635,6 +7693,9 @@ Rules:
     if (!req.body.type || typeof req.body.type !== "string") {
       return res.status(400).json({ error: "Document type is required" });
     }
+    if (!acceptableDocumentMime(req.body.mimeType)) {
+      return res.status(415).json({ error: "Unsupported file type" });
+    }
     try {
       // Wave 1 #2 — AI auto-link to profile when caller didn't specify any.
       // Reads the doc name + extracted fields and picks the best matching profile
@@ -7700,6 +7761,9 @@ Rules:
     if (req.body.name !== undefined) {
       if (typeof req.body.name !== "string" || !req.body.name.trim()) return res.status(400).json({ error: "Document name must be a non-empty string" });
       req.body.name = sanitize(req.body.name);
+    }
+    if (req.body.mimeType !== undefined && !acceptableDocumentMime(req.body.mimeType)) {
+      return res.status(415).json({ error: "Unsupported file type" });
     }
     // Editing a document's expiration by hand is the same write as extracting
     // it, so it normalizes the same way — change 2034 to 2036 here and the
@@ -7827,6 +7891,10 @@ Rules:
   // Bulk re-extraction across every stored document. Runs sequentially to stay
   // within model rate limits; returns a per-document summary of recovered fields.
   app.post("/api/documents/reextract-all", asyncHandler(async (req, res) => {
+    // One model call per stored document — a handful of runs an hour is plenty.
+    if (rateLimit(`reextract-all:${(req as AuthenticatedRequest).userId || req.ip}`, 3, 60 * 60_000)) {
+      return res.status(429).json({ error: "Re-extraction was run recently. Please try again later." });
+    }
     const docs = await storage.getDocuments();
     const results: Array<{ id: string; name: string; ok: boolean; addedKeys: string[]; message: string }> = [];
     let totalNewFields = 0;
@@ -7993,7 +8061,9 @@ Rules:
     const result = await resp.json();
     if (!resp.ok) {
       console.error('[send-email] Resend error:', result);
-      return res.status(500).json({ error: result.message || result.name || "Email failed to send", detail: result });
+      // The provider's response is logged above; its body (which can include
+      // account and domain details) is never returned to the client.
+      return res.status(502).json({ error: "Email failed to send. Please try again later." });
     }
     res.json({ success: true, emailId: result.id, attached: hasAttachment, filename: hasAttachment ? filename : undefined });
   }));
@@ -8795,6 +8865,10 @@ Rules:
       const parsed = insertArtifactSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
       req.body = { ...req.body, ...parsed.data };
+      // The share token is minted only by POST /:id/share (random bytes) and
+      // cleared only by DELETE /:id/share. Accepting it here would let a caller
+      // point their own artifact at somebody else's public link.
+      delete (req.body as any).shareToken;
       if (metadataToDelete && metadataToDelete.length > 0) {
         (req.body as any).metadataToDelete = metadataToDelete;
       } else {
@@ -8917,9 +8991,10 @@ Rules:
     // Per-IP rate limit: 10 requests / minute is generous for a real viewer
     // (page loads once, then it's cached) but cuts enumeration throughput by
     // ~6 orders of magnitude vs the unlimited baseline.
-    const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim()
-      || req.socket.remoteAddress
-      || "unknown";
+    // req.ip honours `trust proxy` (set in both entries): it is the address the
+    // trusted hop in front of us saw, not the first — client-writable — entry
+    // of X-Forwarded-For.
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
     if (rateLimit(`public-artifact:${ip}`, 10, 60_000)) {
       return res.status(429).json(NOT_FOUND_BODY);
     }
@@ -9352,6 +9427,11 @@ Rules:
 
   // ---- Export / Import ----
   app.get("/api/export", asyncHandler(async (req, res) => {
+    // A full-account dump is the most expensive read there is; nobody needs
+    // more than a few an hour.
+    if (rateLimit(`export:${(req as AuthenticatedRequest).userId || req.ip}`, 10, 60 * 60_000)) {
+      return res.status(429).json({ error: "Too many exports. Please try again later." });
+    }
     try {
       // PERF FIX: was 12 sequential awaits — each one a Supabase round trip
       // serialized after the previous. On a typical user this means ~1.5s of
@@ -10035,7 +10115,9 @@ If unsure, use "other". Use "subscription" for recurring services; "vehicle" for
   // ---- AI Digest ----
   app.get("/api/ai-digest", asyncHandler(async (req, res) => {
     try {
-      const force = req.query.force === "true";
+      // See ai-summary: a forced regeneration is a model call, so it is budgeted.
+      const force = req.query.force === "true"
+        && !rateLimit(`ai-digest-force:${(req as AuthenticatedRequest).userId || req.ip}`, 5, 60_000);
 
       // Check cache first (stored in preferences as ai_digest)
       if (!force) {
@@ -10934,7 +11016,12 @@ No emojis. No prose outside the JSON.`,
         entity_type,
         entity_id: typeof body.entity_id === "string" ? body.entity_id.slice(0, 200) : null,
         entity_name: typeof body.entity_name === "string" ? body.entity_name.slice(0, 500) : null,
-        details: body.details && typeof body.details === "object" ? body.details : {},
+        details: (() => {
+          if (!body.details || typeof body.details !== "object") return {};
+          // Bound the free-form blob so a runaway client can't fill the table.
+          try { return JSON.stringify(body.details).length > 20_000 ? { truncated: true } : body.details; }
+          catch { return {}; }
+        })(),
         source: typeof body.source === "string" ? body.source.slice(0, 100) : "manual",
       };
       const { data, error } = await (storage as any).supabase
@@ -11006,7 +11093,13 @@ No emojis. No prose outside the JSON.`,
   // ---- Preferences ----
   app.get("/api/preferences/:key", asyncHandler(async (req, res) => {
     try {
-      const value = await storage.getPreference(req.params.key);
+      // OAuth and system keys are written by the server only; there is no
+      // reason for a client to read a refresh token back.
+      const key = req.params.key;
+      if (["gcal_", "oauth_", "system_", "internal_"].some(p => key.startsWith(p))) {
+        return res.status(404).json({ error: "Preference not found" });
+      }
+      const value = await storage.getPreference(key);
       if (value === null) return res.json({ value: null });
       res.json({ value });
     } catch (err: any) {
@@ -11927,7 +12020,8 @@ No emojis. No prose outside the JSON.`,
   app.get("/api/ownership-history", asyncHandler(async (req, res) => {
     const subjectId = (req.query.subjectId as string) || undefined;
     const counterpartyId = (req.query.counterpartyId as string) || undefined;
-    const limit = req.query.limit ? Number(req.query.limit) : 200;
+    const requested = req.query.limit ? Number(req.query.limit) : 200;
+    const limit = Number.isFinite(requested) ? Math.min(Math.max(Math.floor(requested), 1), 1000) : 200;
     const rows = await storage.getOwnershipHistory({ subjectId, counterpartyId, limit });
     res.json(rows);
   }));

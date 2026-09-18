@@ -8,7 +8,10 @@
  * Account provisioned 2026-05-28 via /api/auth/signup.
  */
 export const SMOKE_EMAIL = "portol-smoke@aol.com";
-export const SMOKE_PASSWORD = "Smoke-Test-2026!";
+// Overridable so the password can be rotated without a code change (set
+// SMOKE_PASSWORD in CI secrets); the literal remains only as the fallback for
+// the dedicated, data-free smoke account.
+export const SMOKE_PASSWORD = process.env.SMOKE_PASSWORD || "Smoke-Test-2026!";
 export const SMOKE_USER_ID = "229685c4-8dcb-4349-8448-57fc38e6e3d2";
 
 // API base — overridable so the same suite can hit local dev or production.

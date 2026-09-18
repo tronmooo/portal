@@ -62,11 +62,12 @@ export function htmlToPlainText(html: string): string {
     // SSR fallback — naive strip.
     return html.replace(/<[^>]+>/g, " ");
   }
-  const div = document.createElement("div");
-  div.innerHTML = html;
+  // DOMParser builds an inert document: unlike `div.innerHTML = html`, no
+  // script runs and no <img onerror> fires while we extract the text.
+  const body = new DOMParser().parseFromString(html, "text/html").body;
   // Convert <br> and block elements to spaces so word boundaries survive.
-  div.querySelectorAll("br").forEach(br => br.replaceWith(" "));
-  return div.textContent || "";
+  body.querySelectorAll("br").forEach(br => br.replaceWith(" "));
+  return body.textContent || "";
 }
 
 /**

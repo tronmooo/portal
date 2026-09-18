@@ -824,7 +824,12 @@ export class SupabaseStorage implements IStorage {
     columnKind: "jsonb" | "array" = "jsonb",
   ): Q {
     if (!profileIds || profileIds.length === 0) return q;
-    const orClause = profileIds
+    // Ids come from the query string. An id with `,` `(` `)` or `.` in it
+    // would be read as PostgREST filter syntax inside the .or() clause; a
+    // malformed id cannot match a row anyway, so it is dropped here.
+    const safeIds = profileIds.filter(isPostgrestSafe);
+    if (safeIds.length === 0) return q;
+    const orClause = safeIds
       .map(id => {
         if (columnKind === "array") {
           // PG array literal: {uuid}. UUIDs are quote-safe (hex + dashes).
@@ -2610,7 +2615,7 @@ export class SupabaseStorage implements IStorage {
   async getResponseCache(key: string): Promise<any | null> {
     const { data, error } = await this.supabase
       .from("response_cache").select("payload,expires_at")
-      .eq("key", key).maybeSingle();
+      .eq("key", key).eq("user_id", this.userId).maybeSingle();
     if (error) throw error;
     if (!data) return null;
     if (new Date(data.expires_at).getTime() <= Date.now()) return null;
@@ -8754,6 +8759,25 @@ export class SupabaseStorage implements IStorage {
     try {
       const bucket = this.supabase.storage.from(DOCUMENTS_BUCKET);
       let removed = 0;
+      // Objects live at the path each document row records — `${uid}/${docId}.${ext}`
+      // for uploads, `${uid}/${docId}/${name}` for rows migrated out of the DB.
+      // Storage keys are flat, so listing the user's folder returns the
+      // migrated rows' `${docId}` segment as a placeholder that remove() can't
+      // delete. Take the exact paths (and their previews) from the rows first.
+      const { data: pathRows } = await this.supabase
+        .from("documents").select("storage_path")
+        .eq("user_id", uid).not("storage_path", "is", null);
+      const exact = Array.from(new Set(
+        (pathRows || [])
+          .map((r: any) => r?.storage_path)
+          .filter((p: any): p is string => typeof p === "string" && p.startsWith(`${uid}/`))
+          .flatMap((p) => [p, `${p}${PREVIEW_SUFFIX}`]),
+      ));
+      for (let i = 0; i < exact.length; i += 500) {
+        const { error: rmErr } = await bucket.remove(exact.slice(i, i + 500));
+        if (rmErr) throw rmErr;
+      }
+      removed += exact.length;
       for (let offset = 0; ; offset += 1000) {
         const { data: files, error: listErr } = await bucket.list(uid, { limit: 1000, offset });
         if (listErr) throw listErr;

@@ -12,6 +12,14 @@ import { authMiddleware, registerAuthRoutes } from "./auth";
 const app = express();
 const httpServer = createServer(app);
 
+// Exactly one trusted proxy hop (Vercel's edge, or a local reverse proxy) sits
+// in front of the app, so req.ip is the address that hop saw — not whatever a
+// client wrote into X-Forwarded-For. The per-IP rate limits in auth.ts and
+// routes.ts depend on this; without it every user shared one bucket.
+app.set("trust proxy", 1);
+// Don't advertise the framework.
+app.disable("x-powered-by");
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
@@ -64,9 +72,15 @@ const initPromise = (async () => {
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
     console.error("Server Error:", err);
     if (res.headersSent) return next(err);
+    // A 4xx from the body parser (malformed JSON, payload too large) carries a
+    // message that is safe and useful to the client. Anything else is an
+    // internal failure whose message can name tables, hosts or stack frames —
+    // log it above, but never send it to the browser.
+    const message = status >= 400 && status < 500 && typeof err.message === "string"
+      ? err.message
+      : "Internal Server Error";
     return res.status(status).json({ message });
   });
 
