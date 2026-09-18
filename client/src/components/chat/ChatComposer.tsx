@@ -176,12 +176,36 @@ export const ChatComposer = forwardRef<ChatComposerHandle, ChatComposerProps>(fu
   );
 
   const handleSubmit = () => {
-    if (onSubmit(input)) setInput("");
+    // The LATEST draft, through the ref rather than the render closure, and
+    // cleared synchronously BEFORE the parent dispatches the send. The old
+    // order — send first, clear on a truthy return — let a re-render land
+    // between the two with the draft still in state, so roughly one send in
+    // five stayed in the box after appearing in the thread, and Send again
+    // sent it twice (QA 2026-09-18 F-45). State, ref AND the DOM value are
+    // cleared together so no controlled-value round trip can restore it; a
+    // rejected send (one already in flight) hands the draft back untouched.
+    const draft = inputValueRef.current;
+    if (!draft.trim()) return;
+    setInput("");
+    inputValueRef.current = "";
+    if (textareaRef.current) textareaRef.current.value = "";
+    try { sessionStorage.removeItem('portol_chat_prefill'); } catch {}
+    if (!onSubmit(draft)) {
+      // React bails out of a re-render when state lands where it started, so
+      // the DOM value is put back by hand too.
+      setInput(draft);
+      inputValueRef.current = draft;
+      if (textareaRef.current) textareaRef.current.value = draft;
+    }
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
+      // Enter that commits an IME composition is not a send; a held key that
+      // auto-repeats is one send, not one per repeat.
+      if ((e.nativeEvent as any)?.isComposing) return;
       e.preventDefault();
+      if (e.repeat) return;
       handleSubmit();
     }
   };
