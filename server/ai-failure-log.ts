@@ -67,13 +67,24 @@ export function recordChatFailure(
       "ai",
       `[chat-mismatch] ${record.mismatchType} turn=${record.turnId} tool=${record.toolSelected ?? "-"} ` +
         `intent=${record.parsedIntent ? `${record.parsedIntent.entity}/${record.parsedIntent.operation}@${record.parsedIntent.confidence}` : "-"} ` +
-        `msg=${JSON.stringify(record.userMessage)} claim=${JSON.stringify(record.assistantClaim ?? "")} ` +
-        `result=${JSON.stringify(record.toolResult ?? "")}${record.detail ? ` detail=${JSON.stringify(record.detail)}` : ""}`,
+        `msg=${JSON.stringify(redactForLog(record.userMessage))} claim=${JSON.stringify(redactForLog(record.assistantClaim ?? ""))} ` +
+        `result=${JSON.stringify(redactForLog(record.toolResult ?? ""))}${record.detail ? ` detail=${JSON.stringify(record.detail)}` : ""}`,
     );
   } catch {
     /* logging must never break a chat turn */
   }
   return record;
+}
+
+/**
+ * What a chat turn said is the user's health, money and family in their own
+ * words. In production the log line keeps only the shape (length) of each
+ * text; the full record still lives in the in-memory ring for the
+ * observability seam below.
+ */
+function redactForLog(text: string): string {
+  if (process.env.NODE_ENV !== "production") return text;
+  return text ? `<redacted ${text.length} chars>` : "";
 }
 
 /** Newest first. Test/observability seam. */

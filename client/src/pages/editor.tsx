@@ -735,8 +735,9 @@ export default function EditorPage() {
   const downloadDoc = async () => {
     const { Document, Packer, Paragraph, HeadingLevel, TextRun } = await import("docx");
     // Convert HTML → Paragraph[]. Lightweight: split on block tags and strip remaining tags.
-    const tmp = document.createElement("div");
-    tmp.innerHTML = docHtml;
+    // Parse into an inert document rather than a live <div>: assigning
+    // innerHTML would fire <img onerror> handlers in the document's HTML.
+    const tmp = new DOMParser().parseFromString(docHtml || "", "text/html").body;
     const paragraphs: any[] = [];
     tmp.querySelectorAll("h1,h2,h3,p,li,pre,blockquote").forEach((el) => {
       const text = el.textContent || "";
@@ -982,9 +983,9 @@ export default function EditorPage() {
 
   const docStats = useMemo(() => {
     if (type !== "doc") return "";
-    const tmp = typeof document !== "undefined" ? document.createElement("div") : null;
-    if (!tmp) return "";
-    tmp.innerHTML = docHtml || "";
+    if (typeof DOMParser === "undefined") return "";
+    // Inert parse — see downloadDoc. Same text extraction, no side effects.
+    const tmp = new DOMParser().parseFromString(docHtml || "", "text/html").body;
     const text = (tmp.textContent || "").trim();
     // Split on any whitespace AND filter out empty tokens. Without the .filter,
     // a stray leading/trailing whitespace (e.g. from a trailing <br>) or a
