@@ -3133,7 +3133,12 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   const timeAgo = lastEntry ? timeAgoShort(lastEntry.timestamp) : null;
 
   const importance = sizeOverride || insight.importance;
-  const cardHeight = importance === "large" ? 196 : importance === "normal" ? 180 : 156;
+  // Every tracker card is the SAME height, whatever its importance. The old
+  // per-importance ladder (196 / 180 / 156) made the low-signal cards render
+  // visibly shorter than their neighbours in the same grid row, which read as
+  // a rendering bug rather than a hierarchy. Width (the col-span-2 a "large"
+  // tracker still gets) carries the hierarchy now; height is uniform.
+  const cardHeight = 196;
 
   // Pick a kind-appropriate visual (gauge / ring / radial / sparkline).
   const primaryNum = (() => {
@@ -3144,7 +3149,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
     return found ? { field: found.key, num: found.num } : null;
   })();
   const visual = chooseCardVisual(tracker, insight, primaryNum, lastEntry);
-  const gaugeSize = importance === "large" ? 84 : importance === "compact" ? 58 : 70;
+  const gaugeSize = importance === "large" ? 84 : 70;
   // Medication/supplement dose tally. A supplement can be taken several times
   // a day, so the card reports HOW MANY doses landed today ("2 doses today")
   // instead of a single checkbox that a first dose ticked and a second dose
@@ -3248,11 +3253,11 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       // The bubble owns the surface — radius, gradient wash, layered shadow —
       // driven by --accent-hsl. Setting background/border/shadow inline here is
       // what kept this card looking flat while the rest of the app moved.
-      className="bubble bubble-interactive overflow-hidden cursor-pointer flex flex-col relative pressable"
-      // minHeight, not height: a strength headline wraps to three lines on a
-      // narrow two-column grid, and a hard height cropped the weekday bars and
-      // ran the footer under them. The card keeps its floor so a row still
-      // reads as a ladder, and grows only when it has to.
+      className="bubble bubble-interactive overflow-hidden cursor-pointer flex flex-col relative pressable h-full"
+      // h-full + minHeight: inside the tracker grid (fixed gridAutoRows) the
+      // card fills its row so every card in the view is exactly the same size;
+      // minHeight keeps the same floor if the card is ever rendered outside a
+      // height-constrained grid.
       style={{ ["--accent-hsl" as any]: catAccent, minHeight: cardHeight }}
       onClick={() => onOpenDetail?.(tracker.id)}
       role="button"
@@ -3369,7 +3374,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
               {" · "}{activityData.sessions} session{activityData.sessions === 1 ? "" : "s"}
               {activityData.sessions > 0 ? ` · ~${activityData.avg}/session` : ""}
             </p>
-            <div className="px-3 pb-2"><WeekdayBars data={activityData.series} color={ac} height={importance === "large" ? 52 : importance === "compact" ? 34 : 44} /></div>
+            <div className="px-3 pb-2"><WeekdayBars data={activityData.series} color={ac} height={importance === "large" ? 52 : 44} /></div>
           </div>
         </>
       ) : (
@@ -3417,12 +3422,12 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
             {visual.type === "gauge" ? (
               <div className="px-3 pb-2"><LinearZoneGauge value={visual.value} min={visual.min} max={visual.max} zones={visual.zones} /></div>
             ) : visual.type === "areaZone" ? (
-              <div className="w-full"><TrendArea values={visual.values} color={ac} min={visual.min} max={visual.max} zones={visual.zones} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} /></div>
+              <div className="w-full"><TrendArea values={visual.values} color={ac} min={visual.min} max={visual.max} zones={visual.zones} height={importance === "large" ? 58 : 46} /></div>
             ) : visual.type === "spark" && insight.sparkValues.length >= 2 ? (
               <div className="w-full">
                 {useZoneArea
-                  ? <ZoneAreaChart values={insight.sparkValues} color={ac} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} />
-                  : <TrendArea values={insight.sparkValues} color={ac} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} />}
+                  ? <ZoneAreaChart values={insight.sparkValues} color={ac} height={importance === "large" ? 58 : 46} />
+                  : <TrendArea values={insight.sparkValues} color={ac} height={importance === "large" ? 58 : 46} />}
               </div>
             ) : visual.type === "spark" && insight.hasData ? (
               <div className="px-3 pb-2"><div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/20 to-transparent" /></div>
@@ -8286,7 +8291,7 @@ export default function TrackersPage() {
                             <span style={{ color: b.dot }}>{b.label}</span>
                             <span className="text-muted-foreground font-normal">({bt.length})</span>
                           </h4>
-                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 items-stretch" style={{ gridAutoRows: 196 }}>
                             {bt.map(tracker => {
                               const imp = importanceFor(classifyTracker(tracker));
                               // Large trackers (Weight/Sleep/BP/Run/Walk) take
@@ -8296,7 +8301,7 @@ export default function TrackersPage() {
                               // we only need to override for large.
                               const span = imp === 'large' ? 'sm:col-span-2 md:col-span-2' : '';
                               return (
-                                <div key={tracker.id} className={span}>
+                                <div key={tracker.id} className={`h-full ${span}`}>
                                   <TrackerCard tracker={tracker} hideProfilePrefix onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />
                                 </div>
                               );
