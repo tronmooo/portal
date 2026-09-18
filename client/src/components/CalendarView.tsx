@@ -608,7 +608,7 @@ function EventFormDialog({
               <div className="space-y-1.5 max-h-36 overflow-y-auto" data-testid="event-link-groups">
                 {linkGroups.map(g => (
                   <div key={g.id} data-testid={`event-link-group-${g.id}`}>
-                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">{g.label}</p>
+                    <p className="micro-label mb-0.5">{g.label}</p>
                     <div className="flex flex-wrap gap-1.5">
                       {g.items.map(p => {
                         const linked = form.linkedProfiles.includes(p.id);
