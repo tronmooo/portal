@@ -9,6 +9,7 @@ import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { analyzeFitnessEntry, calorieContextForOwner, caloriesForStoredEntry, type CalorieContext } from "@shared/fitness-metrics";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
+import { formatMoneyMajor } from "@shared/money";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 import { assertEventSpan } from "@shared/event-span";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
@@ -304,6 +305,8 @@ export interface IStorage {
   getAssetValuationHistory(profileId: string, limit?: number): Promise<import("@shared/valuation/types").ValuationHistoryEntry[]>;
   /** Every stored latest record for this user, keyed by profile id (one read for the Assets-tab sweep). */
   listAssetValuations(): Promise<Record<string, import("@shared/valuation/types").ValuationRecord>>;
+  /** Every stored valuation history for this user, keyed by profile id (one read for the net-worth baseline rebuild). */
+  listAssetValuationHistories(): Promise<Record<string, import("@shared/valuation/types").ValuationHistoryEntry[]>>;
   /** The cached semantic understanding of an asset's shape (server/valuation/understanding). Not journaled: it is a cache, not user data. */
   getValuationUnderstanding(profileId: string): Promise<import("@shared/valuation/types").AssetUnderstanding | null>;
   cacheValuationUnderstanding(profileId: string, understanding: import("@shared/valuation/types").AssetUnderstanding): Promise<void>;
@@ -2418,7 +2421,7 @@ export class MemStorage implements IStorage {
           })),
         ...expenses.slice(-3).map(e => ({
           type: 'expense',
-          description: `$${e.amount} — ${e.description}`,
+          description: `${formatMoneyMajor(e.amount)} — ${e.description}`,
           timestamp: e.date || e.createdAt,
         })),
       ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),
@@ -2576,7 +2579,7 @@ export class MemStorage implements IStorage {
 
     const userYearMonth = `${thisYear}-${String(thisMonth + 1).padStart(2, '0')}`;
     const incomesForMonth = Array.from(this.incomes.values()).filter(i => matchesFilter((i as any).linkedProfiles));
-    const recurringIncome = sumMonthlyIncomeForMonth(incomesForMonth as any[], userYearMonth);
+    const recurringIncome = sumMonthlyIncomeForMonth(incomesForMonth as any[], userYearMonth, today);
     const receivedPaycheckIncome = 0; // the in-memory storage keeps no paycheck table
 
     // Exact 52/12 and 26/12 multipliers (shared/obligation-windows.ts), the
@@ -2779,6 +2782,16 @@ export class MemStorage implements IStorage {
       if (!k.startsWith(prefix)) continue;
       const rec = readValuationRecord(v);
       if (rec) out[k.slice(prefix.length)] = rec;
+    }
+    return out;
+  }
+  async listAssetValuationHistories() {
+    const out: Record<string, import("@shared/valuation/types").ValuationHistoryEntry[]> = {};
+    const prefix = valuationHistoryKey("");
+    for (const [k, v] of this.preferences) {
+      if (!k.startsWith(prefix)) continue;
+      const rows = readValuationHistory(v);
+      if (rows.length > 0) out[k.slice(prefix.length)] = rows;
     }
     return out;
   }

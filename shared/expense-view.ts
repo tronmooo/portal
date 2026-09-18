@@ -13,12 +13,24 @@ export type ExpenseSort =
   | "name-asc";
 
 export interface ExpenseLike {
+  id?: string | null;
   description?: string | null;
   vendor?: string | null;
   category?: string | null;
   amount?: number | null;
   date?: string | null;
+  createdAt?: string | null;
 }
+
+// Same-day rows order by when they were entered, newest first, so an expense
+// just added lands at the top of today's rows rather than second (QA
+// 2026-09-18 F-22 — the date sort compared the day only). Id is the final
+// tie-break so two rows never swap between renders.
+function created(e: ExpenseLike): number {
+  const t = new Date(e.createdAt || "").getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+const byId = (a: ExpenseLike, b: ExpenseLike) => String(b.id || "").localeCompare(String(a.id || ""));
 
 /**
  * True if the expense matches a free-text query. Matches against description,
@@ -47,16 +59,16 @@ export function sortExpenses<T extends ExpenseLike>(list: readonly T[], sortBy: 
   const arr = list.slice();
   switch (sortBy) {
     case "date-asc":
-      return arr.sort((a, b) => time(a) - time(b) || (a.description || "").localeCompare(b.description || ""));
+      return arr.sort((a, b) => time(a) - time(b) || created(a) - created(b) || (a.description || "").localeCompare(b.description || "") || byId(b, a));
     case "amount-desc":
-      return arr.sort((a, b) => (b.amount || 0) - (a.amount || 0));
+      return arr.sort((a, b) => (b.amount || 0) - (a.amount || 0) || time(b) - time(a) || created(b) - created(a) || byId(a, b));
     case "amount-asc":
-      return arr.sort((a, b) => (a.amount || 0) - (b.amount || 0));
+      return arr.sort((a, b) => (a.amount || 0) - (b.amount || 0) || time(b) - time(a) || created(b) - created(a) || byId(a, b));
     case "name-asc":
-      return arr.sort((a, b) => (a.description || "").localeCompare(b.description || ""));
+      return arr.sort((a, b) => (a.description || "").localeCompare(b.description || "") || time(b) - time(a) || byId(a, b));
     case "date-desc":
     default:
-      return arr.sort((a, b) => time(b) - time(a) || (b.description || "").localeCompare(a.description || ""));
+      return arr.sort((a, b) => time(b) - time(a) || created(b) - created(a) || (b.description || "").localeCompare(a.description || "") || byId(a, b));
   }
 }
 

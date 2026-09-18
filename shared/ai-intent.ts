@@ -170,10 +170,25 @@ const READ_VERBS =
  * they say already exists. "Create an asset for my Dodge Ram" is false even
  * though a Dodge Ram profile may exist.
  */
+/**
+ * A CORRECTION of something just logged — "wait that gas was actually 72.50",
+ * "oops, I meant Friday", "no, it cost $45 not $38". The record was named in
+ * the previous turn; this turn only fixes one of its values. It is an UPDATE
+ * even though no update verb appears, and it must never create a second
+ * record (QA 2026-09-18 F-20: two Gas rows after a price correction).
+ */
+const CORRECTION =
+  /\b(?:actually|instead|oops|whoops|my\s+(?:bad|mistake)|correction|i\s+meant|meant\s+to\s+say|should\s+(?:have\s+been|be)|not\s+\$?\d)\b|\b(?:it|that|this)\s+(?:was|is)\s+(?:actually\s+)?\$?\d/;
+
+export function isCorrection(message: string): boolean {
+  const m = lc(message);
+  return !!m && CORRECTION.test(m);
+}
+
 export function hasExplicitUpdateIntent(message: string): boolean {
   const m = lc(message);
   if (!m) return false;
-  return UPDATE_VERBS.test(m) || EXISTING_REFERENCE.test(m);
+  return UPDATE_VERBS.test(m) || EXISTING_REFERENCE.test(m) || CORRECTION.test(m);
 }
 
 export function detectOperation(message: string): IntentOperation {
@@ -192,6 +207,7 @@ export function detectOperation(message: string): IntentOperation {
   if (createAt !== -1 && (updateAt === -1 || createAt < updateAt)) return "create";
   if (updateAt !== -1) return "update";
   if (EXISTING_REFERENCE.test(m)) return "update";
+  if (CORRECTION.test(m)) return "update";
   if (READ_VERBS.test(m)) return "read";
   return "unknown";
 }

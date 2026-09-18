@@ -146,6 +146,7 @@ export function areEntitiesCompatible(a: IntentEntity, b: IntentEntity): boolean
 
 export type RoutingMismatch =
   | "create_downgraded_to_update"
+  | "update_upgraded_to_create"
   | "entity_mismatch"
   | "stale_turn_replay"
   | "duplicate_create_in_turn";
@@ -162,6 +163,19 @@ export interface RoutingViolation {
   /** What the user is told if this ends the turn. Always safe to render. */
   userMessage: string;
 }
+
+/** The update tool a correction should have used for each entity. */
+const UPDATE_TOOL_FOR: Partial<Record<IntentEntity, string>> = {
+  asset: "update_profile",
+  profile: "update_profile",
+  habit: "update_habit",
+  task: "update_task",
+  event: "update_event",
+  expense: "update_expense",
+  income: "update_income",
+  obligation: "update_obligation",
+  goal: "update_goal",
+};
 
 /** The create tool that should have been used for each entity. */
 const CREATE_TOOL_FOR: Partial<Record<IntentEntity, string>> = {
@@ -268,6 +282,34 @@ export function checkToolAgainstIntent(
         (want ? `Call ${want} instead. ` : "") +
         `If a record with that name already exists and creating a duplicate would be wrong, ASK the user which they want — do not update on your own.`,
       userMessage: `You asked me to create that, but a similar record already exists. Do you want a new one, or should I update the existing record?`,
+    };
+  }
+
+  // ── 3. Correction silently upgraded to create ─────────────────────────────
+  // The user corrected a value ("wait that gas was actually $72.50") or
+  // asked for an edit, and nothing in the message asks for a new record. A
+  // create tool here writes a SECOND row next to the one being corrected
+  // (QA 2026-09-18 F-20). The update tool is the only legitimate call.
+  if (
+    actualOperation === "create" &&
+    sameEntity.length > 0 &&
+    sameEntity.every((i) => i.operation === "update") &&
+    hasExplicitUpdateIntent(normalized.message)
+  ) {
+    const intent = sameEntity[0];
+    const want = UPDATE_TOOL_FOR[intent.entity];
+    return {
+      mismatchType: "update_upgraded_to_create",
+      tool: toolName,
+      expectedEntity: intent.entity,
+      actualEntity,
+      expectedOperation: "update",
+      actualOperation,
+      modelDirective:
+        `Blocked: the user is correcting or updating an existing ${intent.entity}, not adding a new one. ` +
+        (want ? `Call ${want} on the record from the previous turn instead. ` : "") +
+        `Never create a second record for a correction.`,
+      userMessage: `I read that as a correction to the existing ${intent.entity}, so I didn't add a new one. Tell me which record to change if I got that wrong.`,
     };
   }
 

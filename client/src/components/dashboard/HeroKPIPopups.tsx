@@ -308,9 +308,9 @@ export function NetWorthPopup({
   // page and the Executive card. BUG-4's guards (trivial or sign-flipping
   // baseline → $ delta only) live there now.
   const nwTrend = useMemo(() => {
-    const c = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth);
-    return c ? { pct: c.pct, up: c.up, delta: c.delta ?? 0 } : null;
-  }, [nwHistory, netWorth]);
+    const c = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, undefined, snap?.netWorthBaseline ?? null);
+    return c ? { pct: c.pct, up: c.up, delta: c.delta ?? 0, monthly: c.monthly, baselineDate: c.baselineDate } : null;
+  }, [nwHistory, netWorth, snap?.netWorthBaseline]);
   const nwPath = useMemo(() => {
     const s = nwSeries.length >= 2 ? nwSeries : null;
     if (!s) return null;
@@ -349,7 +349,7 @@ export function NetWorthPopup({
                 <p className="text-[11px] font-semibold tabular-nums" style={{ color: nwTrend.up ? "hsl(155 60% 44%)" : "hsl(0 80% 60%)" }}>
                   {nwTrend.up ? "▲" : "▼"} {nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : `$${fmt(Math.abs(nwTrend.delta))}`}
                 </p>
-                <p className="text-[11px] text-muted-foreground">{nwTrend.delta >= 0 ? "+" : "−"}${fmt(Math.abs(nwTrend.delta))} this period</p>
+                <p className="text-[11px] text-muted-foreground">{nwTrend.delta >= 0 ? "+" : "−"}${fmt(Math.abs(nwTrend.delta))} {nwTrend.monthly ? "this month" : `since ${nwTrend.baselineDate || "first snapshot"}`}</p>
               </div>
             )}
           </div>

@@ -484,6 +484,12 @@ const AUTHORITY: Partial<Record<OccurrenceKind, SourceSystem>> = {
   document: "document",
   task: "task",
   habit: "habit",
+  // The Finance income record owns a paycheck's amount and cadence. Without
+  // this an "income"-kind recurring date typed onto the calendar tied with
+  // the record and, being adapted first, won — so Recurring & Important
+  // Dates read "$105,000/year" for a source Finance listed at $95,000
+  // (QA 2026-09-18 F-11).
+  income: "income",
 };
 
 /**

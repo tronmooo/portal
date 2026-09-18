@@ -6356,13 +6356,37 @@ export default function TrackersPage() {
       // it's parented to Test).
       return isAssetVisible(p.id, pParent);
     });
+    // Count what the cards SHOW under the active nesting chip. The chips
+    // counted every asset (Tires and a mouse nested under a MacBook included)
+    // while the default card view lists top-level items only, so the chips
+    // added to 8 over 5 cards (QA 2026-09-18 F-19).
+    const byIdForCounts = new Map<string, any>();
+    (profiles || []).forEach(p => byIdForCounts.set(p.id, p));
+    const nestedUnderAsset = (p: any): boolean => {
+      let cur: any = p;
+      for (let i = 0; i < 32 && cur; i++) {
+        const pid = cur.parentProfileId;
+        if (!pid) return false;
+        const par = byIdForCounts.get(pid);
+        if (!par) return false;
+        if (ASSET_TAB_TYPES.has(par.type)) return true;
+        cur = par;
+      }
+      return false;
+    };
+    const shown = visible.filter(p => {
+      const nested = nestedUnderAsset(p);
+      if (assetNestingFilter === "nested") return nested;
+      if (assetNestingFilter === "hasChildren") return (profiles || []).some(x => x.id !== p.id && ASSET_TAB_TYPES.has(x.type) && x.parentProfileId === p.id);
+      return !nested;
+    });
     const counts: Record<string, number> = {};
-    for (const p of visible) {
+    for (const p of shown) {
       const lab = assetTypeLabel(p.type);
       counts[lab] = (counts[lab] || 0) + 1;
     }
     return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b));
-  }, [profiles, filterMode, filterIds, assetPartyLinks, serverScopedAssetIds]);
+  }, [profiles, filterMode, filterIds, assetPartyLinks, serverScopedAssetIds, assetNestingFilter]);
 
   // Subscriptions/recurring bills are conceptually liabilities (things you owe
   // every month) so they live in the same Liabilities bucket alongside loans,

@@ -128,7 +128,8 @@ import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossess
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { classifyFitnessActivity, isCalorieBearingActivity } from "@shared/fitness-metrics";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
-import { toMonthlyAmount, sumMonthlyIncomeNow } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthlyIncomeNow, findDuplicatePaycheck } from "@shared/obligation-windows";
+import { guessExpenseCategory } from "@shared/expense-category-guess";
 import { DEFAULT_TIMEZONE, getUserCurrentMonth, todayAtTimeISO, addZonedDays, getZonedParts, zonedTimeToUTC, parseUserDateTime, normalizeClockTime, toLocalDateStr, toLocalTimeStr, getUserToday, addDays } from "@shared/timezone";
 import { signedPrincipal, retractPaymentOfExpense, payBillOccurrence, unpayBillOccurrence, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense } from "./liability-payments";
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
@@ -9440,6 +9441,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     }
 
     case "log_expected_paycheck": {
+      // Same source, day and amount as an existing row → that row (F-14).
+      const dup = findDuplicatePaycheck(await storage.getPaychecks().catch(() => [] as any[]), input);
+      if (dup) return { result: dup, alreadyExisted: true, message: `An expected paycheck from ${dup.source} for that day and amount already exists.` };
       const r = await storage.createPaycheck({ source: input.source, amount: input.amount, expected_date: input.expected_date, notes: input.notes });
       return { result: r, actions: [{ type: "create", category: "paycheck", data: r }] };
     }
@@ -10423,21 +10427,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // Server-side category inference fallback when AI sends 'general'
       let inferredCategory = input.category || "general";
       if (inferredCategory === "general") {
-        const desc = (input.description || "").toLowerCase();
-        const vendor = (input.vendor || "").toLowerCase();
-        const combined = `${desc} ${vendor}`;
-        if (/vet|pet food|dog food|cat food|grooming|flea|treats|chewy/.test(combined)) inferredCategory = "pet";
-        else if (/groceries|restaurant|food|coffee|lunch|dinner|breakfast|pizza|burger|sandwich|sushi|taco|donut|latte|starbucks|mcdonald|chipotle|uber eats|doordash/.test(combined)) inferredCategory = "food";
-        else if (/uber|lyft|gas|fuel|parking|toll|transit|bus|train|flight|airline/.test(combined)) inferredCategory = "transport";
-        else if (/oil change|tire|car wash|mechanic|auto|vehicle|detailing/.test(combined)) inferredCategory = "vehicle";
-        else if (/doctor|pharmacy|cvs|walgreens|gym|dentist|hospital|medical|prescription|copay/.test(combined)) inferredCategory = "health";
-        else if (/netflix|spotify|hulu|disney|apple music|youtube|subscription/.test(combined)) inferredCategory = "subscription";
-        else if (/rent|mortgage|hoa/.test(combined)) inferredCategory = "housing";
-        else if (/electric|water|internet|phone|cable|utility|att|verizon|comcast/.test(combined)) inferredCategory = "utilities";
-        else if (/amazon|walmart|target|clothes|shoes|electronics|bestbuy|apple store/.test(combined)) inferredCategory = "shopping";
-        else if (/movie|game|concert|ticket|bar|drinks|bowling|arcade/.test(combined)) inferredCategory = "entertainment";
-        else if (/school|tuition|textbook|course|udemy/.test(combined)) inferredCategory = "education";
-        else if (/insurance|geico|allstate|progressive|state farm/.test(combined)) inferredCategory = "insurance";
+        // The same keyword classifier the Add Expense form suggests from
+        // (shared/expense-category-guess) — one vocabulary, both paths.
+        inferredCategory = guessExpenseCategory(input.description, input.vendor) || "general";
         // Bug #43: if text inference still came up empty but we have a forProfile,
         // use the profile's TYPE as a strong hint (pet → pet, vehicle → vehicle, etc.).
         if (inferredCategory === "general" && input.forProfile) {

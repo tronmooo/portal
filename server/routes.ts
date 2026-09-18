@@ -471,7 +471,8 @@ import type { ParsedAction, Tracker, CalendarEvent } from "@shared/schema";
 import { isWholeCents, SUB_CENT_AMOUNT_MESSAGE, toCents, validateTransactionAmount, validateProfileMoneyFields } from "@shared/quick-add";
 import { normalizeMonthKey, budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
 import { canonicalizeRegistryFields } from "@shared/registry-fields";
-import { canonicalIncomeFrequency } from "@shared/obligation-windows";
+import { canonicalIncomeFrequency, findDuplicatePaycheck } from "@shared/obligation-windows";
+import { profileValueFingerprint } from "@shared/profile-summary-fingerprint";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
 import { generateSmartInsights } from "./insights-engine";
@@ -5839,6 +5840,14 @@ Respond ONLY in JSON format:
       const { id } = req.params;
       const force = req.query.force === "true";
 
+      // Load the full profile detail
+      const detail = await storage.getProfileDetail(id);
+      if (!detail) return res.status(404).json({ error: "Profile not found" });
+      // The figures this summary is written from. A cached summary carrying a
+      // different fingerprint is stale whatever wrote the value — the form,
+      // the chat or the estimator's write-back (F-56).
+      const fingerprint = profileValueFingerprint(detail);
+
       // Check cache first (2-hour TTL)
       const cacheKey = `profile_ai_${id}`;
       if (!force) {
@@ -5846,7 +5855,7 @@ Respond ONLY in JSON format:
         if (cached) {
           try {
             const parsed = JSON.parse(cached);
-            if (parsed.generatedAt) {
+            if (parsed.generatedAt && parsed.fingerprint === fingerprint) {
               const age = Date.now() - new Date(parsed.generatedAt).getTime();
               if (age < 7200000) { // 2 hour TTL
                 // Re-normalize on read: older cache entries (written before the
@@ -5858,16 +5867,13 @@ Respond ONLY in JSON format:
                   actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
                   highlights: Array.isArray(parsed.highlights) ? parsed.highlights : [],
                   generatedAt: parsed.generatedAt,
+                  fingerprint,
                 });
               }
             }
           } catch (err) { console.error("[routes:profile-ai-summary] cache parse failed:", err); }
         }
       }
-
-      // Load the full profile detail
-      const detail = await storage.getProfileDetail(id);
-      if (!detail) return res.status(404).json({ error: "Profile not found" });
 
       // Build compact data snapshot for the profile
       const now = new Date();
@@ -6020,6 +6026,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
         actionItems: Array.isArray(aiData.actionItems) ? aiData.actionItems : [],
         highlights: Array.isArray(aiData.highlights) ? aiData.highlights : [],
         generatedAt: now.toISOString(),
+        fingerprint,
       };
 
       // Cache the result
@@ -7235,6 +7242,10 @@ Rules:
     if (isNaN(dParsed.getTime())) {
       return res.status(400).json({ error: "expected_date must be a valid date" });
     }
+    // An identical expected paycheck (source, day, amount) is the same
+    // deposit — return it instead of a second row (QA 2026-09-18 F-14).
+    const dup = findDuplicatePaycheck(await storage.getPaychecks().catch(() => [] as any[]), { source: source.trim(), amount: numAmount, expected_date });
+    if (dup) return res.json(dup);
     const created = await storage.createPaycheck({ source: source.trim(), amount: numAmount, expected_date, notes });
     const uid_pc1 = cacheUserKey(req as AuthenticatedRequest);
     // Bug fix: paychecks list cache had a 3-min TTL but no busting on create —

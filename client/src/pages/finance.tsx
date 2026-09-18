@@ -12,13 +12,14 @@ import { EXPENSE_CATEGORIES, categoryLabel, canonicalExpenseCategory } from "@sh
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { matchesExpenseSearch, sortExpenses, findDuplicateExpense, type ExpenseSort } from "@shared/expense-view";
+import { guessExpenseCategory } from "@shared/expense-category-guess";
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { parseHighlight, stripHighlight, HIGHLIGHT_MS } from "@shared/record-highlight";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
-import { toMonthlyAmount, sumMonthIncomeNow, canonicalIncomeFrequency } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthIncomeNow, canonicalIncomeFrequency, latePaychecks as latePaychecksOf, paycheckStatus } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -246,6 +247,9 @@ export default function FinancePage() {
   // and let the user override it.
   const todayLocalISO = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+  // True once the user chose a category by hand — the description-driven
+  // suggestion (F-23) never overrides an explicit pick.
+  const [categoryPicked, setCategoryPicked] = useState(false);
   // BUG-023: track whether the user has attempted to submit so we can show
   // red borders on empty required fields instead of just a quiet inline hint.
   const [addAttempt, setAddAttempt] = useState(false);
@@ -1119,7 +1123,7 @@ export default function FinancePage() {
                 dialog stays here (it is a portal, and `addOpen` is also driven
                 by the ?new=expense deep link), but its trigger now sits in the
                 Recent Expenses header, where expenses are actually browsed. */}
-            <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setAddAttempt(false); } }}>
+            <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setCategoryPicked(false); setAddAttempt(false); } }}>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Add Expense</DialogTitle>
@@ -1129,7 +1133,9 @@ export default function FinancePage() {
                     <Input
                       placeholder="What was it for?"
                       value={newExpense.description}
-                      onChange={e => setNewExpense(p => ({ ...p, description: e.target.value }))}
+                      // Suggest the category from the words (the same classifier
+                      // chat uses) until the user picks one themselves (F-23).
+                      onChange={e => setNewExpense(p => ({ ...p, description: e.target.value, ...(categoryPicked ? {} : { category: guessExpenseCategory(e.target.value, p.vendor) || "general" }) }))}
                       data-testid="input-expense-description"
                       aria-invalid={addAttempt && !newExpense.description.trim() ? true : undefined}
                       className={addAttempt && !newExpense.description.trim() ? "border-destructive focus-visible:ring-destructive" : ""}
@@ -1147,7 +1153,7 @@ export default function FinancePage() {
                         className={addAttempt && (!newExpense.amount || parseFloat(newExpense.amount) <= 0) ? "border-destructive focus-visible:ring-destructive" : ""}
                       /></div>
                     <div><Label className="text-xs">Category</Label>
-                      <Select value={newExpense.category} onValueChange={v => setNewExpense(p => ({ ...p, category: v }))}>
+                      <Select value={newExpense.category} onValueChange={v => { setCategoryPicked(true); setNewExpense(p => ({ ...p, category: v })); }}>
                         <SelectTrigger data-testid="select-expense-category"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {EXPENSE_CATEGORY_OPTIONS.map(c => (<SelectItem key={c} value={c}>{categoryLabel(c)}</SelectItem>))}
@@ -1249,7 +1255,7 @@ export default function FinancePage() {
                       addExpenseMutation.mutate(payload);
                       // Close immediately — optimistic insert already populated the list.
                       setAddOpen(false);
-                      setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+                      setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setCategoryPicked(false);
                       setExpenseAccountId("");
                       setAddAttempt(false);
                     }}
@@ -1282,7 +1288,7 @@ export default function FinancePage() {
         // Net-worth trend: the ONE month-over-month rule every surface uses
         // (shared/net-worth-change) — a real 30-day baseline against the live
         // total, or no percentage at all.
-        const nwChange = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }));
+        const nwChange = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }), snap.netWorthBaseline ?? null);
         const momPct = nwChange?.pct ?? null;
         // Sparkline points, oldest → newest (history arrives newest-first).
         const nwSeries = (Array.isArray(nwHistory) ? nwHistory : [])
@@ -1336,8 +1342,9 @@ export default function FinancePage() {
         if (savingsRate != null && savingsRate >= 15) alerts.push({ id: "savings", tone: "pos", text: `Great job — you're saving ${savingsRate}% of income this month.` });
         // An expected paycheck whose date has passed and that was never marked
         // received. Two of them sat overdue in the list while nothing above it
-        // said a word.
-        const latePaychecks = (paychecks || []).filter((pc: any) => !pc.confirmed && String(pc.expected_date || "").slice(0, 10) < todayLocalISO);
+        // said a word. One that a received row for the same day and amount
+        // already covers is satisfied, not late (F-14).
+        const latePaychecks = latePaychecksOf(paychecks || [], todayLocalISO);
         if (latePaychecks.length > 0) alerts.push({
           id: "paychecks-late", tone: "warn",
           text: `${latePaychecks.length} expected paycheck${latePaychecks.length > 1 ? "s are" : " is"} past its date and not marked received ($${latePaychecks.reduce((sum: number, pc: any) => sum + (Number(pc.actual_amount ?? pc.amount) || 0), 0).toLocaleString()}).`,
@@ -1838,7 +1845,7 @@ export default function FinancePage() {
                 if (duplicateExpense) {
                   addExpenseMutation.mutate(duplicateExpense.payload);
                   setAddOpen(false);
-                  setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+                  setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setCategoryPicked(false);
                   setExpenseAccountId("");
                 }
                 setDuplicateExpense(null);
@@ -1917,6 +1924,9 @@ export default function FinancePage() {
               const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
               const expectedISO = (pc.expected_date || '').slice(0, 10);
               const isFuture = expectedISO && expectedISO > todayISO;
+              // ONE status rule (shared/obligation-windows): a row a received
+              // twin already covers reads "Covered", never "Overdue" (F-14).
+              const status = paycheckStatus(pc, paychecks, todayISO);
               return (
               <ExpandableRow
                 key={pc.id}
@@ -1932,6 +1942,8 @@ export default function FinancePage() {
                     <span className="text-xs font-bold tabular-nums">{formatMoney(pc.actual_amount || pc.amount)}</span>
                     {pc.confirmed ? (
                       <span className="text-[11px] font-semibold text-green-500 flex items-center gap-0.5 shrink-0"><Check className="h-3 w-3" /> Received</span>
+                    ) : status === "satisfied" ? (
+                      <span className="text-[11px] font-medium text-muted-foreground shrink-0" title="A received paycheck for the same day and amount already covers this one">Covered</span>
                     ) : isFuture ? (
                       <span className="text-[11px] font-medium text-muted-foreground shrink-0">Upcoming</span>
                     ) : (
