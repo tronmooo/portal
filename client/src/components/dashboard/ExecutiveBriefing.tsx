@@ -72,7 +72,7 @@ import type { AttentionItem } from "@shared/attention";
 // is what once produced "Lawn care ($40) due in -29d".
 import { dayLabel } from "@shared/now-rank";
 import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-dates";
-import { buildExecutiveSections, type ExecSectionId } from "@shared/executive-sections";
+import { buildExecutiveSections, normalizeAiSuggestions, type AiSuggestion, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
@@ -615,23 +615,27 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   }, [anyBriefPending]);
 
   // ── AI recommendations — tap to generate, never on load ────────────────────
-  const [recommendations, setRecommendations] = useState<any[] | null>(null);
-  const generateRecommendations = useMutation({
-    mutationFn: async () => {
+  // The advice lives in the query cache under a scope-keyed slot rather than
+  // in component state: a mutation's onSuccess is dropped when the card
+  // re-mounts mid-request (a scope flip, a skeleton swap), which left four
+  // well-formed suggestions on the wire and nothing on screen (QA 2026-09-18
+  // F-44). `enabled: false` keeps it off the mount path — a dashboard open must
+  // never be a model call — and the button refetches on demand. A scope switch
+  // changes the key, so advice computed for other data never carries over.
+  const advice = useQuery<AiSuggestion[]>({
+    queryKey: ["/api/dashboard/ai-suggestions", mode, ...ids, "exec"],
+    enabled: false,
+    retry: false,
+    staleTime: Infinity,
+    queryFn: async () => {
       const r = await apiRequest("GET", `/api/dashboard/ai-suggestions?force=true${param ? `&${param.slice(1)}` : ""}`);
-      return r.json();
+      return normalizeAiSuggestions(await r.json());
     },
-    onSuccess: (d: any) => {
-      const rows = Array.isArray(d?.suggestions) ? d.suggestions : [];
-      setRecommendations(rows);
-      if (rows.length === 0) {
-        toast({ title: "Nothing to suggest yet", description: "Add a little more data and try again." });
-      }
-    },
-    onError: () => toast({ title: "Couldn't generate recommendations", variant: "destructive" }),
   });
-  // A scope switch invalidates the advice — it was computed for other data.
-  useEffect(() => { setRecommendations(null); }, [mode, ids.join(",")]);
+  const recommendations: AiSuggestion[] | null = advice.data ?? null;
+  const adviceLoading = advice.isFetching;
+  const adviceError = !adviceLoading && advice.isError;
+  const generateRecommendations = () => { void advice.refetch(); };
 
   // ── Route every record to exactly one feed slot ────────────────────────────
   const snoozedDocumentIds = useMemo(() => Object.keys(loadDocSnoozeMap()), [allExpiringDocs.length]);
@@ -1095,15 +1099,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <div className="flex items-center gap-1">
                   {/* Advice costs a model call, so it stays a deliberate tap. */}
                   <button
-                    onClick={() => generateRecommendations.mutate()}
-                    disabled={generateRecommendations.isPending}
+                    onClick={generateRecommendations}
+                    disabled={adviceLoading}
                     className="inline-flex items-center gap-1 rounded-md border border-border h-[26px] px-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-50"
                     data-testid="exec-recommendations-generate"
                     aria-label="Generate AI advice"
                     title={recommendations ? "Refresh AI advice" : "AI advice"}
                   >
                     <Sparkles className="h-3 w-3" aria-hidden="true" />
-                    {generateRecommendations.isPending ? "…" : <span className="sr-only">AI advice</span>}
+                    {adviceLoading ? "…" : <span className="sr-only">AI advice</span>}
                   </button>
                   <button
                     onClick={() => setFiltersOpen(o => !o)}
@@ -1118,6 +1122,45 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               }
             >
               {filtersOpen && <div className="mb-2"><AttentionFilters prefs={prefs} onChange={setPrefs} /></div>}
+              {/* AI advice renders HERE, next to the button that asked for it —
+                  not in a separate card at the foot of the grid, where a user
+                  watching this card never saw it arrive (F-44). */}
+              {(adviceLoading || adviceError || recommendations) && (
+                <div className="mb-2 rounded-lg border border-border/60 px-2.5 py-2"
+                  style={{ ["--accent-hsl" as any]: CARD_ACCENTS.recommendations }}
+                  data-testid="exec-card-recommendations" aria-live="polite">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Sparkles className="h-3 w-3" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }} aria-hidden="true" />
+                    <span className="text-[11px] font-extrabold tracking-[0.14em] uppercase" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }}>
+                      AI advice
+                    </span>
+                  </div>
+                  {adviceLoading ? (
+                    <p className="text-[12px] text-muted-foreground flex items-center gap-2" data-testid="exec-recommendations-loading">
+                      <span className="inline-block h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin" aria-hidden="true" />
+                      Generating advice…
+                    </p>
+                  ) : adviceError ? (
+                    <p className="text-[12px] text-destructive flex items-center justify-between gap-2" data-testid="exec-recommendations-error">
+                      <span>Couldn't generate advice.</span>
+                      <button type="button" onClick={generateRecommendations} className="underline font-medium">Retry</button>
+                    </p>
+                  ) : recommendationItems.length === 0 ? (
+                    <p className="text-[12px] text-muted-foreground" data-testid="exec-recommendations-empty">
+                      Nothing to suggest yet — add a little more data and try again.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {recommendationItems.map((i) => (
+                        <div key={i.key} className="bubble-row px-2.5 py-2" data-testid={`exec-recommendation-${i.key}`}>
+                          <p className="text-[13px] font-semibold leading-tight">{i.title}</p>
+                          {i.reason && <p className="text-[11px] text-muted-foreground mt-0.5">{i.reason}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {attentionItems.length === 0 ? (
                 <div className="py-4 text-center" data-testid="exec-attention-clear">
                   <PartyPopper className="h-6 w-6 mx-auto mb-1.5" style={{ color: "hsl(155 60% 45%)" }} aria-hidden="true" />
@@ -1505,22 +1548,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               )}
             </ExecCard>
 
-            {/* ── AI Recommendations — only once the user asked ────────────── */}
-            {recommendationItems.length > 0 && (
-              <ExecCard
-                id="recommendations" icon={Sparkles} title="AI Recommendations"
-                accent={CARD_ACCENTS.recommendations} index={9}
-              >
-                <div className="space-y-1.5">
-                  {recommendationItems.map((i) => (
-                    <div key={i.key} className="bubble-row px-2.5 py-2" style={{ ["--accent-hsl" as any]: CARD_ACCENTS.recommendations }}>
-                      <p className="text-[13px] font-semibold leading-tight">{i.title}</p>
-                      {i.reason && <p className="text-[11px] text-muted-foreground mt-0.5">{i.reason}</p>}
-                    </div>
-                  ))}
-                </div>
-              </ExecCard>
-            )}
           </div>
 
           {/* ── Recent Activity — full width, at the very bottom ───────────── */}

@@ -1,5 +1,7 @@
-import { parseLocalDate } from "@/lib/format";
+import { parseLocalDate, formatFullDate } from "@/lib/format";
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { highlightHref } from "@shared/record-highlight";
 import { useLocation } from "wouter";
 import {
   Command,
@@ -64,6 +66,9 @@ interface Expense {
   description: string;
   amount?: number | string;
   category?: string;
+  date?: string;
+  profileId?: string;
+  linkedProfiles?: string[];
 }
 interface CalendarEvent {
   id: number;
@@ -72,6 +77,9 @@ interface CalendarEvent {
   /** The API's event rows carry `date`; `startDate` is the calendar-adapter spelling. */
   date?: string;
   category?: string;
+  /** True for a date derived from a profile's fields (no event row of its own). */
+  virtual?: boolean;
+  href?: string;
 }
 interface Document {
   id: number;
@@ -244,6 +252,15 @@ export function CommandSearchProvider({ children }: { children: React.ReactNode 
 export function CommandSearch() {
   const { open, setOpen } = useCommandSearch();
   const [, navigate] = useLocation();
+  // Owner names for result rows come from the cached profile list — the
+  // palette reads the ONE profiles slot rather than fetching its own.
+  const queryClient = useQueryClient();
+  const ownerName = (row: { profileId?: string; linkedProfiles?: string[] }): string => {
+    const profiles = (queryClient.getQueryData<any[]>(["/api/profiles"]) || []);
+    const id = row.profileId || (Array.isArray(row.linkedProfiles) ? row.linkedProfiles[0] : undefined);
+    if (!id) return "";
+    return profiles.find((p) => p?.id === id)?.name || "";
+  };
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResults | null>(null);
@@ -360,16 +377,15 @@ export function CommandSearch() {
     [findFreshPrefixSuperset]
   );
 
-  // Reset on close
+  // Reset on close AND on open: a keystroke that slipped in between (F-49)
+  // must not be the start of the next search.
   useEffect(() => {
-    if (!open) {
-      setQuery("");
-      setResults(null);
-      setLoading(false);
-      setSearchError(false);
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      if (abortRef.current) abortRef.current.abort();
-    }
+    setQuery("");
+    setResults(null);
+    setLoading(false);
+    setSearchError(false);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (abortRef.current) abortRef.current.abort();
   }, [open]);
 
   const handleSelect = useCallback(
@@ -391,13 +407,32 @@ export function CommandSearch() {
     [navigate, setOpen]
   );
 
+  // ── Where a result lands ───────────────────────────────────────────────────
+  // An expense lands on its ROW: Finance reads the highlight, scrolls to it
+  // and flashes it (F-52). A profile-derived date (a birthday read from
+  // someone's fields) opens the profile that carries it.
+  const expenseTarget = (e: Expense) => highlightHref("/dashboard/finance", "expense", e.id);
+  const eventTarget = (e: CalendarEvent) => (e.virtual && e.href ? e.href : "/calendar");
+
   // ── Helpers for subtitle text ──────────────────────────────────────────────
   const profileSubtitle = (p: Profile) => p.type ? `Type: ${p.type}` : "Profile";
   const trackerSubtitle = (t: Tracker) => t.category ?? "Tracker";
   const taskSubtitle = (t: Task) =>
     t.priority ? `Priority: ${t.priority}${t.completed ? " · Done" : ""}` : t.completed ? "Completed" : "Task";
-  const expenseSubtitle = (e: Expense) =>
-    e.amount != null ? `$${e.amount}${e.category ? ` · ${e.category}` : ""}` : e.category ?? "Expense";
+  // Three "Groceries" rows at $30 / $60 / $30 are only tellable apart by their
+  // date, and — when the palette is showing everyone's records — by whose
+  // they are (F-52).
+  const expenseSubtitle = (e: Expense) => {
+    const parts: string[] = [];
+    if (e.amount != null) parts.push(`$${e.amount}`);
+    if (e.date) parts.push(formatFullDate(e.date));
+    if (e.category) parts.push(e.category);
+    if (filterSignature() === "all") {
+      const who = ownerName(e);
+      if (who) parts.push(who);
+    }
+    return parts.join(" · ") || "Expense";
+  };
   const eventSubtitle = (e: CalendarEvent) => {
     const when = e.startDate || e.date;
     return when ? (parseLocalDate(when)?.toLocaleDateString() ?? when) : e.category ?? "Event";
@@ -422,26 +457,21 @@ export function CommandSearch() {
       open={open}
       onOpenChange={setOpen}
       aria-label="Global search"
+      // The server already matched (and the cache narrows with itemMatches);
+      // cmdk's own fuzzy pass over "type-<uuid>-title" values must not get a
+      // second vote on which rows survive (F-48).
+      shouldFilter={false}
     >
+      {/* Typing in the box only ever types. The old single-letter jumps
+          (I → Insights, F → Finance…) fired on the first character of every
+          search, so "insurance" navigated away on its "i" (F-49). The quick
+          actions below are still one arrow-key away when the box is empty. */}
       <CommandInput
         placeholder="Search everything… (Esc to close)"
         value={query}
         onValueChange={handleQueryChange}
+        autoFocus
         data-testid="input-command-search"
-        onKeyDown={(e) => {
-          // QA Bug 10: when the search box is empty, single-letter shortcuts
-          // (D / C / T / P / F / K / H / J / L / A / O / S / I) should jump to
-          // the matching destination instead of being typed as a query.
-          if (query.length === 0 && !e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
-            const key = e.key.toUpperCase();
-            const hit = QUICK_ACTIONS.find((a) => a.shortcut === key);
-            if (hit) {
-              e.preventDefault();
-              e.stopPropagation();
-              handleSelect(hit.path);
-            }
-          }
-        }}
       />
       <CommandList className="max-h-[420px]">
         {/* QA Bug 6: render the spinner only while loading AND we don't yet
@@ -562,13 +592,13 @@ export function CommandSearch() {
                   <CommandItem
                     key={`expense-${e.id}`}
                     value={`expense-${e.id}-${e.description}`}
-                    onSelect={() => handleSelect("/dashboard/finance", query)}
+                    onSelect={() => handleSelect(expenseTarget(e), query)}
                     data-testid={`item-search-expense-${e.id}`}
                   >
                     <DollarSign className="shrink-0 text-amber-500" />
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{e.description}</span>
-                      <span className="truncate text-xs text-muted-foreground">
+                      <span className="truncate text-xs text-muted-foreground" data-testid={`item-search-expense-${e.id}-meta`}>
                         {expenseSubtitle(e)}
                       </span>
                     </div>
@@ -583,7 +613,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`event-${e.id}`}
                     value={`event-${e.id}-${e.title}`}
-                    onSelect={() => handleSelect("/calendar", query)}
+                    onSelect={() => handleSelect(eventTarget(e), query)}
                     data-testid={`item-search-event-${e.id}`}
                   >
                     <Calendar className="shrink-0 text-sky-500" />
@@ -754,9 +784,6 @@ export function CommandSearch() {
                 >
                   <action.icon className="shrink-0 text-muted-foreground" />
                   <span className="text-sm">{action.label}</span>
-                  <kbd className="ml-auto pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-xs font-medium text-muted-foreground opacity-100">
-                    {action.shortcut}
-                  </kbd>
                 </CommandItem>
               ))}
             </CommandGroup>

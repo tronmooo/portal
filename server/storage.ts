@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { toMonthlyAmount, isUpcomingBill, sumBillsDueThroughMonth, sumMonthlyIncomeForMonth } from "@shared/obligation-windows";
 import { isTestEntity } from "@shared/test-data";
+import { searchCorpus } from "@shared/search-match";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
@@ -2715,42 +2716,20 @@ export class MemStorage implements IStorage {
 
   // ---- Search ----
   async search(query: string): Promise<any[]> {
-    const q = query.toLowerCase();
-    const results: any[] = [];
-    for (const p of this.profiles.values()) {
-      if (p.name.toLowerCase().includes(q) || p.type.includes(q) || p.tags.some(t => t.includes(q))) results.push({ ...p, _type: "profile" });
-    }
-    for (const t of this.trackers.values()) {
-      if (t.name.toLowerCase().includes(q) || t.category.includes(q)) results.push({ ...t, _type: "tracker" });
-    }
-    for (const t of this.tasks.values()) {
-      if (t.title.toLowerCase().includes(q) || t.tags.some(tag => tag.includes(q))) results.push({ ...t, _type: "task" });
-    }
-    for (const e of this.expenses.values()) {
-      if (e.description.toLowerCase().includes(q) || e.category.includes(q) || (e.vendor && e.vendor.toLowerCase().includes(q))) results.push({ ...e, _type: "expense" });
-    }
-    for (const h of this.habits.values()) {
-      if (h.name.toLowerCase().includes(q)) results.push({ ...h, _type: "habit" });
-    }
-    for (const o of this.obligations.values()) {
-      if (o.name.toLowerCase().includes(q) || o.category.includes(q)) results.push({ ...o, _type: "obligation" });
-    }
-    for (const a of this.artifacts.values()) {
-      if (a.title.toLowerCase().includes(q) || a.content.toLowerCase().includes(q) || a.tags.some(t => t.includes(q))) results.push({ ...a, _type: "artifact" });
-    }
-    for (const j of this.journal.values()) {
-      if (j.content.toLowerCase().includes(q) || j.tags.some(t => t.includes(q))) results.push({ ...j, _type: "journal" });
-    }
-    for (const m of this.memories.values()) {
-      if (m.key.toLowerCase().includes(q) || m.value.toLowerCase().includes(q)) results.push({ ...m, _type: "memory" });
-    }
-    for (const ev of Array.from(this.events.values())) {
-      if (ev.title.toLowerCase().includes(q) || (ev.description || "").toLowerCase().includes(q) || (ev.location || "").toLowerCase().includes(q) || (ev.category || "").toLowerCase().includes(q)) results.push({ ...ev, _type: "event" });
-    }
-    for (const d of Array.from(this.documents.values())) {
-      if ((d.name || "").toLowerCase().includes(q) || String((d as any).category || "").toLowerCase().includes(q) || String((d as any).type || "").toLowerCase().includes(q)) results.push({ ...d, _type: "document" });
-    }
-    return results;
+    // Same matcher as production storage — see shared/search-match.
+    return searchCorpus({
+      profiles: Array.from(this.profiles.values()),
+      trackers: Array.from(this.trackers.values()),
+      tasks: Array.from(this.tasks.values()),
+      expenses: Array.from(this.expenses.values()),
+      habits: Array.from(this.habits.values()),
+      obligations: Array.from(this.obligations.values()),
+      artifacts: Array.from(this.artifacts.values()),
+      journal: Array.from(this.journal.values()),
+      memories: Array.from(this.memories.values()),
+      events: Array.from(this.events.values()),
+      documents: Array.from(this.documents.values()),
+    }, query);
   }
 
   // ---- Preferences ----

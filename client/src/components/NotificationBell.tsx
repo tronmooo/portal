@@ -3,7 +3,6 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Bell,
   FileText,
@@ -311,8 +310,11 @@ export function NotificationBell() {
           )}
         </div>
 
-        {/* Notification List */}
-        <ScrollArea className="max-h-[400px]">
+        {/* Notification List — a plain scrolling box. The Radix ScrollArea
+            here had a max-height on its root and a `h-full` viewport inside,
+            which never constrained: six notices, five visible, no scrollbar
+            (F-50). */}
+        <div className="max-h-[400px] overflow-y-auto overscroll-contain" data-testid="notification-list">
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
               <div className="animate-spin h-5 w-5 border-2 border-muted-foreground border-t-transparent rounded-full" />
@@ -350,7 +352,7 @@ export function NotificationBell() {
               )}
             </div>
           )}
-        </ScrollArea>
+        </div>
       </PopoverContent>
     </Popover>
   );
@@ -413,7 +415,9 @@ function NotificationItem({
         <Icon className="h-4 w-4" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium leading-tight truncate" data-testid={`notification-title-${notification.id}`}>
+        {/* Wraps (min-w-0 on the parent): a long title used to run past the
+            panel's right edge (F-50). */}
+        <p className="text-sm font-medium leading-tight break-words line-clamp-2" data-testid={`notification-title-${notification.id}`}>
           {notification.title}
         </p>
         <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">

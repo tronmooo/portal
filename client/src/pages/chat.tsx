@@ -61,6 +61,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatComposer";
 import { streamChat } from "@/components/chat/chat-stream";
+import { isDuplicateResend, type LastSend } from "@shared/chat-progress";
+import { ThinkingBubble } from "@/components/chat/ThinkingBubble";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -1310,15 +1312,8 @@ function BatchAttachmentPanel({
 
 // ── Main chat page ────────────────────────────────────────────────────────────
 // Module-level chat history cache — persists across navigation without localStorage
-function SlowResponseHint() {
-  const [show, setShow] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setShow(true), 10000);
-    return () => clearTimeout(t);
-  }, []);
-  if (!show) return null;
-  return <span className="text-xs text-muted-foreground animate-in fade-in">Still working… complex requests take longer</span>;
-}
+// The assistant's "thinking" placeholder (F-46) lives in
+// components/chat/ThinkingBubble.tsx.
 
 // Chat history cache moved to lib/chat-cache.ts (PERF Phase 1.5): auth.tsx
 // needs clearChatCache() at sign-out, and importing it from this page dragged
@@ -1891,13 +1886,20 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
 
-        {msg.role === "user" && msg.content?.trim() && (
-          <div className="flex justify-end mt-1">
-            <CopyButton
-              value={msg.content}
-              iconOnly
-              className="opacity-60 hover:opacity-100 text-primary-foreground/80 hover:text-primary-foreground hover:bg-primary-foreground/10"
-            />
+        {msg.role === "user" && (
+          // Copy sits on the timestamp row, not on a row of its own above it,
+          // so the two never stack into one another (F-47).
+          <div className="flex justify-end items-center gap-1.5 mt-1">
+            <span className="text-xs text-primary-foreground/70 tabular-nums" data-testid={`message-time-${msg.id}`}>
+              {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            {msg.content?.trim() && (
+              <CopyButton
+                value={msg.content}
+                iconOnly
+                className="opacity-60 hover:opacity-100 text-primary-foreground/80 hover:text-primary-foreground hover:bg-primary-foreground/10"
+              />
+            )}
           </div>
         )}
 
@@ -2448,12 +2450,15 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
 
-        {/* Timestamp */}
-        <div className="mt-1.5 flex justify-end">
-          <span className="text-xs text-muted-foreground/60">
-            {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </span>
-        </div>
+        {/* Timestamp — the user's own rides on the copy row above (F-47): a
+            muted-foreground tint on the primary bubble was unreadable. */}
+        {msg.role !== "user" && (
+          <div className="mt-1.5 flex justify-end">
+            <span className="text-xs text-muted-foreground/60" data-testid={`message-time-${msg.id}`}>
+              {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2540,6 +2545,8 @@ export default function ChatPage() {
   // duplicating commands. This ref is set synchronously the instant a send
   // commits, so the second rapid send is rejected immediately.
   const sendingRef = useRef(false);
+  // What was last dispatched, for the duplicate-resend guard (F-45).
+  const lastSendRef = useRef<LastSend | null>(null);
   const addMoreFileInputRef = useRef<HTMLInputElement>(null);
   const batchIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const queryClient = useQueryClient();
@@ -2814,7 +2821,11 @@ export default function ChatPage() {
     // or error), so the next message can be sent. The live-stream scratch is
     // cleared HERE (after onSuccess appended the real message / onError
     // appended the failure notice) so the swap is a single paint, no gap.
-    onSettled: () => { sendingRef.current = false; endLiveStream(); },
+    onSettled: () => {
+      sendingRef.current = false;
+      if (lastSendRef.current) lastSendRef.current = { ...lastSendRef.current, at: Date.now() };
+      endLiveStream();
+    },
   });
 
   // Retry a failed send: clear the failed flag on the same bubble and re-POST.
@@ -3487,6 +3498,9 @@ export default function ChatPage() {
     // is in flight (isPending). The ref catches the same-tick race isPending misses.
     if (sendingRef.current || isPending) return false;
     if (!msg) return false;
+    // The same text again, while the last send is in flight or within a beat
+    // of it finishing, is a stuck draft being re-sent, not a new message (F-45).
+    if (isDuplicateResend(lastSendRef.current, msg, Date.now(), sendingRef.current)) return true;
 
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
@@ -3524,6 +3538,7 @@ export default function ChatPage() {
 
     setMessages((prev) => [...prev, userMsg]);
     sendingRef.current = true; // lock BEFORE mutate so a rapid second send can't slip through
+    lastSendRef.current = { text: msg, at: Date.now() };
     chatMutation.mutate({ message: msg, userMsgId: userMsg.id });
     return true;
   };
@@ -3558,6 +3573,15 @@ export default function ChatPage() {
   };
 
   const isPending = chatMutation.isPending || uploadMutation.isPending || batchUploadMutation.isPending || saveOnlyMutation.isPending;
+  // The thinking bubble mounts a render after the user's message is appended,
+  // so bring it into view too — a placeholder just below the fold is no
+  // better than none (F-46). Same at-bottom guard as the append effect.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (isPending && el && atBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "instant" as ScrollBehavior });
+    }
+  }, [isPending]);
   const hasAttachments = attachments.length > 0;
   const isBatch = attachments.length > 1;
 
@@ -3727,35 +3751,10 @@ export default function ChatPage() {
           {/* Typing indicator — while a tool runs, names it (live progress)
               instead of the anonymous bouncing dots. */}
           {isPending && (
-            <div className="flex items-start gap-2">
-              <div className="bg-muted rounded-lg px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <div className="flex gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '0ms'}} />
-                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '150ms'}} />
-                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" style={{animationDelay: '300ms'}} />
-                  </div>
-                  {liveStream && liveStream.runningTools.length > 0 ? (
-                    <span className="text-xs text-muted-foreground truncate max-w-[240px]" data-testid="live-tool-indicator">
-                      {(() => {
-                        const t = liveStream.runningTools[liveStream.runningTools.length - 1];
-                        const label = (t.label || "").trim();
-                        const name = t.tool.replace(/_/g, " ");
-                        return label && label !== t.tool ? `${name}: ${label}…` : `${name}…`;
-                      })()}
-                    </span>
-                  ) : (uploadMutation.isPending || batchUploadMutation.isPending) ? (
-                    // Uploads have no tool stream — say what's happening instead
-                    // of anonymous dots for the whole 10-30s round trip.
-                    <span className="text-xs text-muted-foreground" data-testid="upload-progress-indicator">
-                      Uploading &amp; reading your document…
-                    </span>
-                  ) : (
-                    <SlowResponseHint />
-                  )}
-                </div>
-              </div>
-            </div>
+            <ThinkingBubble
+              runningTools={liveStream?.runningTools ?? []}
+              uploading={uploadMutation.isPending || batchUploadMutation.isPending}
+            />
           )}
         </div>
       </div>

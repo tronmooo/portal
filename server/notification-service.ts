@@ -11,7 +11,8 @@ import { getUserToday, parseLocalDate } from "@shared/timezone";
 import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "@shared/recurring-dates";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
-import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords } from "@shared/date-rules";
+import { rulesFromAll, daysBetweenISO, isAlertDateRule } from "@shared/date-rules";
+import { dateRuleNotice, overdueTaskSeverity } from "@shared/notification-rules";
 import { isActiveObligation } from "@shared/obligation-windows";
 import { BILL_REMINDER_TASK_PREFIX } from "./liability-payments";
 import { taskOccurrenceLabel } from "@shared/task-occurrences";
@@ -138,15 +139,20 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   for (const rule of rulesFromAll({ profiles, documents })) {
     if (!rule.active || !isAlertDateRule(rule)) continue;
     const isDoc = rule.sourceEntityType === "document";
-    const words = dateRuleAlertWords(rule.ruleType);
     const diff = daysBetweenISO(todayStr, rule.date);
     if (diff > 30) continue;
     // The PATH, so a nested date keeps a stable id; for a top-level field it is
     // the key the old scan used, so existing dismissals still apply.
     const key = rule.sourcePath || rule.sourceField;
     const name = rule.subtitle || rule.label;
-    const [pastTitle, soonTitle, laterTitle, futureVerb, pastVerb] = words;
-    const base = {
+    // Copy and loudness come from ONE shared rule (shared/notification-rules):
+    // the notice names the document, or the person's field by its human
+    // label, never the storage key, and the date reads "Jun 1, 2026" (F-51).
+    const notice = dateRuleNotice({
+      ruleType: rule.ruleType, isDocument: isDoc, entityName: name,
+      fieldKey: isDoc ? undefined : key, diff, date: rule.rawValue || rule.date,
+    });
+    notifications.push({
       // The DATE is part of the id (D244): a dismissal is of one fact — this
       // expiry, this due day — never of every later one. Correct the date, or
       // let the next occurrence arrive, and the notice is new again.
@@ -155,30 +161,10 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       entityId: rule.sourceEntityId,
       entityType: isDoc ? "document" : "profile",
       dueDate: rule.rawValue || rule.date,
-    };
-    const shown = rule.rawValue || rule.date;
-    if (diff < 0) {
-      notifications.push({
-        ...base,
-        severity: "critical",
-        title: isDoc ? `${pastTitle}: ${name}` : `${pastTitle}: ${name} - ${key}`,
-        message: `${key} ${pastVerb} ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago (${shown})`,
-      });
-    } else if (diff <= 7) {
-      notifications.push({
-        ...base,
-        severity: "warning",
-        title: isDoc ? `${soonTitle}: ${name}` : `${soonTitle}: ${name} - ${key}`,
-        message: `${key} ${futureVerb} ${diff === 0 ? "today" : `in ${diff} day${diff !== 1 ? "s" : ""}`} (${shown})`,
-      });
-    } else {
-      notifications.push({
-        ...base,
-        severity: "info",
-        title: isDoc ? `${laterTitle}: ${name}` : `${laterTitle}: ${name} - ${key}`,
-        message: `${key} ${futureVerb} in ${diff} days (${shown})`,
-      });
-    }
+      severity: notice.severity,
+      title: notice.title,
+      message: notice.message,
+    });
   }
 
   // --- Task Due Dates ---
@@ -211,7 +197,10 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       notifications.push({
         id: `task-overdue-${task.id}-${String(task.dueDate).slice(0, 10)}`,
         type: "task_overdue",
-        severity: "critical",
+        // A slipped errand is a warning; only an urgent task long past its day
+        // is critical (F-53). The bell groups by this, so every overdue task no
+        // longer sits under one red CRITICAL rail next to a lapsed policy.
+        severity: overdueTaskSeverity(Math.abs(diff), task.priority),
         title: `Overdue: ${occurrence}`,
         message: `Was due ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago${atTime(task)}`,
         entityId: task.id,
