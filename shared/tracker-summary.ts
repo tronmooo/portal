@@ -30,9 +30,33 @@ import { displayUnit } from "./tracker-units";
 import {
   classifyFitnessActivity,
   isCalorieBearingActivity,
-  readFitnessFacts,
-  estimateCaloriesBurned,
+  caloriesForStoredEntry,
+  type CalorieContext,
 } from "./fitness-metrics";
+
+/**
+ * Mean of a per-entry value PER LOCAL DAY: entries on one day are summed, then
+ * the days are averaged. This is what "average calories" means for a meal log
+ * (three meals of 430 are one 1,290-calorie day, not three of 430) and it can
+ * never be an entry count wearing a unit ("Avg 2 cal", QA 2026-09-18 F-34).
+ * Days with no numeric value are not days.
+ */
+export function averagePerDay(
+  entries: ReadonlyArray<{ timestamp: string; values?: Record<string, any> | null }>,
+  valueOf: (entry: { timestamp: string; values?: Record<string, any> | null }) => number | null | undefined,
+): number | null {
+  const byDay = new Map<string, number>();
+  for (const e of entries || []) {
+    const v = valueOf(e);
+    if (v == null || !Number.isFinite(v)) continue;
+    const day = new Date(e.timestamp).toLocaleDateString("en-CA");
+    byDay.set(day, (byDay.get(day) || 0) + v);
+  }
+  if (byDay.size === 0) return null;
+  let total = 0;
+  for (const v of byDay.values()) total += v;
+  return total / byDay.size;
+}
 
 /** Population average adult body mass, used when we don't know the person's. */
 
@@ -145,8 +169,13 @@ export interface TrackerSummaryOpts {
   now?: number;
   /** Person's body mass, for weight-scaled calorie estimates. */
   bodyWeightKg?: number | null;
+  /** The owner's full calorie context (weight, age, sex) — the SAME one the
+   *  card's calorie pill is priced with, so the two can't disagree. */
+  calorieContext?: CalorieContext;
   /** Local day key (YYYY-MM-DD). Defaults to the runtime's local day. */
   todayKey?: string;
+  /** Leave calories off the session line (a caller already shows them). */
+  includeCalories?: boolean;
 }
 
 /**
@@ -257,12 +286,16 @@ export function summarizeTrackerToday(tracker: Tracker, opts: TrackerSummaryOpts
   if (minutes != null && minutes > 0 && (isSportish || loggedCals != null)) {
     base.shape = "session";
     const parts = [`${fmt(minutes, 0)} min`];
-    const facts = readFitnessFacts(last.values, activity, (tracker.fields || []) as any);
-    const est = estimateCaloriesBurned(activity, facts, { bodyWeightKg: opts.bodyWeightKg ?? null });
+    // ONE calorie figure per entry: a value the person logged wins outright;
+    // otherwise the estimate — priced by the same function, with the same
+    // owner context and provenance, as the card's pill (caloriesForStoredEntry).
+    // Two estimators once printed "139 cal" and "~145 cal" for one walk.
+    const ctx: CalorieContext = opts.calorieContext ?? { bodyWeightKg: opts.bodyWeightKg ?? null };
+    const est = caloriesForStoredEntry(tracker as any, last as any, ctx);
     if (est && est.value > 0) {
       base.calories = Math.round(est.value);
       base.caloriesEstimated = est.estimated;
-      parts.push(`${est.estimated ? "~" : ""}${base.calories} cal`);
+      if (opts.includeCalories !== false) parts.push(`${est.estimated ? "~" : ""}${base.calories} cal`);
     }
     base.line = parts.join(" · ");
     return base;

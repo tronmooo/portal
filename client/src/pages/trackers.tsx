@@ -67,7 +67,10 @@ import EditableTitle from "@/components/EditableTitle";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
-import { summarizeTrackerToday, occurrenceNoun, shortAgo, isLabValueTracker } from "@shared/tracker-summary";
+import { summarizeTrackerToday, occurrenceNoun, shortAgo, isLabValueTracker, averagePerDay } from "@shared/tracker-summary";
+import { classifyBloodPressure } from "@shared/blood-pressure";
+import { isRestingHeartRateReading } from "@shared/wellness-canon";
+import { trackerNeedsAttention, favorableDirectionFor } from "@shared/tracker-attention";
 import { computeMissedDoses } from "@shared/medication-doses";
 import { CreateProfileDialog } from "@/components/CreateProfileDialog";
 import { AddAccountDialog } from "@/components/finance/AccountsSection";
@@ -1972,16 +1975,14 @@ function getTrackerStatus(
   const RED = { bg: 'rgba(239,68,68,0.15)', fg: '#dc2626' };
   const BLUE = { bg: 'rgba(59,130,246,0.15)', fg: '#2563eb' };
 
-  // Blood pressure: AHA categories
+  // Blood pressure: ONE verdict for the pair (shared/blood-pressure.ts) — the
+  // same one the Wellness tab's Body & vitals rows show.
   if (spec === 'bloodpressure') {
     const sys = (lastEntry.values['systolic'] ?? lastEntry.values['systolic_pressure']) as number | undefined;
     const dia = (lastEntry.values['diastolic'] ?? lastEntry.values['diastolic_pressure']) as number | undefined;
     if (sys == null || dia == null) return null;
-    if (sys >= 180 || dia >= 120) return { label: 'Crisis', ...RED };
-    if (sys >= 140 || dia >= 90) return { label: 'High', ...RED };
-    if (sys >= 130 || dia >= 80) return { label: 'Elevated', ...YELLOW };
-    if (sys < 90 || dia < 60) return { label: 'Low', ...YELLOW };
-    return { label: 'In range', ...GREEN };
+    const bp = classifyBloodPressure(sys, dia);
+    return { label: bp.label, ...(bp.tone === "good" ? GREEN : bp.tone === "warn" ? YELLOW : RED) };
   }
 
   // Sleep: hours per night
@@ -2327,9 +2328,18 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
   const kind = classifyTracker(tracker);
   const iconKind = iconKindFor(kind);
   const importance = importanceFor(kind);
-  const entries = (tracker.entries || []).slice().sort(
+  const allEntries = (tracker.entries || []).slice().sort(
     (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
+  // A heart-rate tracker is read as RESTING heart rate: a 171 bpm peak logged
+  // with a workout context is left out of the average and the headline, so
+  // the card cannot say "Avg 114.5 bpm" over a 58 bpm reading (QA 2026-09-18
+  // F-35). Entries with no context count. Same rule as the Wellness readout
+  // (shared/wellness-canon isRestingHeartRateReading).
+  const restingOnly = /heart\s*rate|\bpulse\b|\bbpm\b|\bhr\b/i.test(tracker.name || "")
+    ? allEntries.filter((e) => isRestingHeartRateReading(e.values))
+    : allEntries;
+  const entries = restingOnly.length > 0 ? restingOnly : allEntries;
   // Headline reads the latest entry — but if that entry has no usable numeric
   // value (e.g. a malformed sleep log that stored a clock time instead of
   // hours), fall back to the most recent entry that DOES, so one bad row can't
@@ -2399,22 +2409,16 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
         trendPct: null, trendDir: "flat",
       };
     }
-    let status = { label: "In range", ...C.GREEN };
-    if (sys >= 180 || dia >= 120) status = { label: "Crisis", ...C.RED };
-    else if (sys >= 140 || dia >= 90) status = { label: "High", ...C.RED };
-    else if (sys >= 130 || dia >= 80) status = { label: "Elevated", ...C.YELLOW };
-    else if (sys < 90 || dia < 60) status = { label: "Low", ...C.YELLOW };
+    // ONE verdict for the pair (shared/blood-pressure.ts): 121/76 is
+    // "Elevated" here and on the Wellness tab, never "In range" on one and
+    // "High" on the other.
+    const bp = classifyBloodPressure(sys, dia);
+    const status = { label: bp.label, ...(bp.tone === "good" ? C.GREEN : bp.tone === "warn" ? C.YELLOW : C.RED) };
     const prev = entries[1];
     const prevSys = prev ? pickNum(prev.values, "systolic", "systolic_pressure", "sbp") : null;
     const prevDia = prev ? pickNum(prev.values, "diastolic", "diastolic_pressure", "dbp") : null;
     const prevStr = (prevSys != null && prevDia != null) ? `Previous: ${prevSys}/${prevDia}` : "";
-    const insight = status.label === "In range"
-      ? `Blood pressure is ${sys}/${dia} — within a normal range.`
-      : status.label === "Elevated"
-        ? `Slightly elevated at ${sys}/${dia}. Worth keeping an eye on.`
-        : status.label === "High" || status.label === "Crisis"
-          ? `${sys}/${dia} is elevated — consider talking to your doctor.`
-          : `${sys}/${dia} is on the low side.`;
+    const insight = bp.sentence;
     return {
       hasData: true, kind, importance, iconKind,
       bigPrimary: `${sys}/${dia}`, bigUnit: "mmHg",
@@ -2621,9 +2625,14 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
         subline: "", insight: "Log a meal or workout to start tracking calories.",
         progressPct: null, statusBadge: null, sparkValues, trendPct: null, trendDir: "flat" };
     }
-    const avg = numericValues.length ? numericValues.reduce((a, b) => a + b, 0) / numericValues.length : null;
-    const subline = avg != null ? `Avg ${fmtNum(avg, 0)} cal` : "";
-    const insight = `${fmtNum(cals, 0)} cal logged.${avg != null ? ` Average is ${fmtNum(avg, 0)}.` : ""}`;
+    // Average CALORIES PER DAY, over the same field the headline reads. The
+    // old average ran over the tracker's primary field — an entry count on a
+    // meal-shaped tracker — and printed "Avg 2 cal" beside "430 cal" (QA
+    // 2026-09-18 F-34).
+    const calorieField = (["calories", "kcal", "value"] as const).find((k) => pickNum(last.values, k) != null) ?? primaryField;
+    const avg = averagePerDay(entries, (e) => pickNum(e.values ?? undefined, calorieField));
+    const subline = avg != null ? `Avg ${fmtNum(avg, 0)} cal / day` : "";
+    const insight = `${fmtNum(cals, 0)} cal logged.${avg != null ? ` Average is ${fmtNum(avg, 0)} cal a day.` : ""}`;
     return {
       hasData: true, kind, importance, iconKind,
       bigPrimary: fmtNum(cals, 0), bigUnit: "cal",
@@ -3117,7 +3126,11 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   // shapes the fitness engine does not cover: doses and bathroom visits COUNT,
   // water totals for the day, a reading shows itself. Body weight comes from
   // the owner-scoped calorie context above — never a second resolution of it.
-  const summary = summarizeTrackerToday(tracker, { bodyWeightKg: fitnessCtx.bodyWeightKg });
+  // The calorie pill on the value row already shows this entry's burn, so the
+  // tally line leaves it out — "34 min · 139 cal" beside "🔥 ~145 cal" was two
+  // figures for one walk (QA 2026-09-18 F-36). When there is no pill the tally
+  // prices the entry through the SAME estimator (shared/fitness-metrics).
+  const summary = summarizeTrackerToday(tracker, { calorieContext: fitnessCtx, includeCalories: !insight.calories });
   // The per-kind insight is richer wherever it says something the tally can't
   // ("+2 lb this month", "185 lb × 8 reps · 3 sets", "Previous: 122/78"), so
   // the tally only takes the subline when the insight left it empty or the
@@ -8225,23 +8238,26 @@ export default function TrackersPage() {
                 // every tracker into one of four piles based on its last
                 // entry timestamp and whether it has a clinical concern. The
                 // "No Data" pile collapses behind a single pill.
-                type Bucket = "active" | "recent" | "attention" | "empty";
-                const buckets: Record<Bucket, typeof g.trackers> = { active: [], recent: [], attention: [], empty: [] };
+                type Bucket = "active" | "recent" | "attention" | "earlier" | "empty";
+                const buckets: Record<Bucket, typeof g.trackers> = { active: [], recent: [], attention: [], earlier: [], empty: [] };
                 const todayKey = new Date().toLocaleDateString('en-CA');
                 const SEVEN_DAYS = 7 * 86400000;
                 for (const t of g.trackers) {
                   const ins = buildTrackerInsight(t);
                   if (!ins.hasData) { buckets.empty.push(t); continue; }
-                  // Attention: any tracker whose insight produced a red/yellow
-                  // status badge OR an incomplete BP reading.
-                  const sb = ins.statusBadge;
-                  const isAttention = sb && (
-                    sb.label === 'High' || sb.label === 'Crisis' ||
-                    sb.label === 'Elevated' || sb.label === 'Low' ||
-                    sb.label === 'Incomplete' || sb.label === 'Stale'
-                  );
-                  if (isAttention) { buckets.attention.push(t); continue; }
+                  // Attention means out of range, overdue against the
+                  // tracker's own cadence, or trending the wrong way
+                  // (shared/tracker-attention.ts) — never "not logged this
+                  // week": that rule filed 31 of 34 trackers here, "In range"
+                  // and "This month" ones included (QA 2026-09-18 F-40).
                   const entries = (t.entries || []);
+                  const isAttention = trackerNeedsAttention({
+                    statusLabel: ins.statusBadge?.label ?? null,
+                    entryTimestamps: entries.map((e) => e.timestamp),
+                    trendPct: ins.trendPct,
+                    favorableDirection: favorableDirectionFor(t.name, t.category),
+                  });
+                  if (isAttention) { buckets.attention.push(t); continue; }
                   const last = entries.length
                     ? [...entries].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0]
                     : null;
@@ -8249,7 +8265,7 @@ export default function TrackersPage() {
                   const lastDay = last ? new Date(last.timestamp).toLocaleDateString('en-CA') : '';
                   if (lastDay === todayKey) buckets.active.push(t);
                   else if (Date.now() - lastTs <= SEVEN_DAYS) buckets.recent.push(t);
-                  else buckets.attention.push(t); // stale → also "needs attention"
+                  else buckets.earlier.push(t);
                 }
                 // Sort within each bucket: by importance first (large→compact),
                 // then by name. Pushes Weight / Sleep / BP to the top of their
@@ -8267,6 +8283,7 @@ export default function TrackersPage() {
                   { key: 'active', label: 'Active Today', dot: '#16a34a' },
                   { key: 'attention', label: 'Needs Attention', dot: '#dc2626' },
                   { key: 'recent', label: 'Recently Logged', dot: '#2563eb' },
+                  { key: 'earlier', label: 'Logged Earlier', dot: '#6b7280' },
                 ];
                 const visibleBuckets = BUCKET_DEFS.filter(b => buckets[b.key].length > 0);
 
