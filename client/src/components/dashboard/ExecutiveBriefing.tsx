@@ -698,9 +698,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // this card and the Net Worth popup read the same baseline, so they can no
   // longer disagree (1201.1% vs 1241.7% on the same account).
   const nwTrend = useMemo(() => {
-    const c = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, todayStr);
-    return c ? { pct: c.pct, delta: c.delta ?? 0, up: c.up } : null;
-  }, [nwHistory, netWorth, todayStr]);
+    const c = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, todayStr, snap?.netWorthBaseline ?? null);
+    return c ? { pct: c.pct, delta: c.delta ?? 0, up: c.up, monthly: c.monthly, baselineDate: c.baselineDate } : null;
+  }, [nwHistory, netWorth, todayStr, snap?.netWorthBaseline]);
 
   // Cash flow — mirrors HubKpiStrip/HeroKPISection exactly: monthly income
   // minus (month expenses + monthlyized active obligations).
@@ -983,8 +983,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
   // Overview bar strings
   const nwValue = netWorth == null ? loadingDots : `${netWorth < 0 ? "-" : ""}${fmtUSD(Math.abs(netWorth))}`;
+  // A delta measured from a snapshot younger than 30 days is not "this
+  // month" — it is labelled by the day it is measured from (F-10).
   const nwSub = nwTrend
-    ? `${nwTrend.up ? "↑" : "↓"} ${nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : fmtUSD(Math.abs(nwTrend.delta))} this month`
+    ? `${nwTrend.up ? "↑" : "↓"} ${nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : fmtUSD(Math.abs(nwTrend.delta))} ${nwTrend.monthly ? "this month" : `since ${nwTrend.baselineDate || "first snapshot"}`}`
     : "this month";
   const cfValue = cashFlow == null ? loadingDots : `${cashFlow >= 0 ? "+" : "-"}${fmtUSD(Math.abs(cashFlow))}`;
   const nextDate = nextImportant?.daysUntil != null ? dateFromDays(nextImportant.daysUntil) : null;

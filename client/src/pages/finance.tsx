@@ -1239,7 +1239,7 @@ export default function FinancePage() {
         // Net-worth trend: the ONE month-over-month rule every surface uses
         // (shared/net-worth-change) — a real 30-day baseline against the live
         // total, or no percentage at all.
-        const nwChange = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }));
+        const nwChange = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }), snap.netWorthBaseline ?? null);
         const momPct = nwChange?.pct ?? null;
         // Sparkline points, oldest → newest (history arrives newest-first).
         const nwSeries = (Array.isArray(nwHistory) ? nwHistory : [])

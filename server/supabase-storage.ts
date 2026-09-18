@@ -61,6 +61,7 @@ import { isLegacyReminderTask, LEGACY_REMINDER_TASK_SOURCE } from "../shared/leg
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
 import { trackerIdentityKey } from "../shared/tracker-identity";
 import { seriesFromEvents, seriesFromIncomes } from "../shared/calendar-adapters";
+import { reconstructNetWorthBaseline, acquisitionDateOf, type BaselineItem } from "../shared/net-worth-change";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule, documentExpirationDate } from "../shared/date-rules";
 import { deleteProfileFields, mergeFieldWrite } from "../shared/profile-field-identity";
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
@@ -7954,6 +7955,42 @@ export class SupabaseStorage implements IStorage {
     }
     liabilityBreakdown.sort((a, b) => b.value - a.value);
 
+    // The 30-day net-worth baseline every "this month" caption measures
+    // against (shared/net-worth-change). The stored snapshot row is corrected
+    // for items entered after it was written; with no row that old the items'
+    // own values at the cutoff are used. QA 2026-09-18 F-10: the snapshot
+    // table was two days old and half-populated, so a $1.6M household read
+    // "↑ $1,488,253 this month".
+    const netWorthBaseline = await (async () => {
+      try {
+        const cutoff = tzAddDays(today, -30);
+        const [storedRows, histories] = await Promise.all([
+          this.getNetWorthHistory(noFilterBreak ? undefined : fpIds, 60).catch(() => [] as Array<{ snapshotDate: string; netWorth: number }>),
+          this.listAssetValuationHistories().catch(() => ({} as Record<string, Array<{ valuedAt: string; value: number | null }>>)),
+        ]);
+        const onOrBefore = storedRows.filter(r => String(r.snapshotDate).slice(0, 10) <= cutoff)
+          .sort((a, b) => String(a.snapshotDate).localeCompare(String(b.snapshotDate)));
+        const storedRow = onOrBefore.length > 0 ? onOrBefore[onOrBefore.length - 1] : null;
+        const byId = new Map(allProfiles.map(p => [p.id, p] as const));
+        const items: BaselineItem[] = [
+          ...assetBreakdown.map(row => {
+            const p: any = byId.get(row.id);
+            return {
+              value: row.value, sign: 1 as const,
+              createdAt: p?.createdAt ?? null,
+              acquiredOn: acquisitionDateOf(p?.fields),
+              history: (histories[row.id] || []).map(h => ({ date: h.valuedAt, value: h.value == null ? null : h.value * row.share / 100 })),
+            };
+          }),
+          ...liabilityBreakdown.map(row => {
+            const p: any = byId.get(row.id);
+            return { value: row.value, sign: -1 as const, createdAt: p?.createdAt ?? null, acquiredOn: acquisitionDateOf(p?.fields) };
+          }),
+        ];
+        return reconstructNetWorthBaseline(items, cutoff, storedRow);
+      } catch { return null; }
+    })();
+
     // A recurring event happens today when today is one of its occurrences,
     // not only on the day it was created (a daily standup never appeared).
     const todaysEvents = allEvents.filter(e => eventOccursOn(e as any, today)).map(e => ({ id: e.id, title: e.title, time: e.time, endTime: e.endTime, category: e.category, location: e.location }));
@@ -7973,6 +8010,7 @@ export class SupabaseStorage implements IStorage {
         monthlyIncome,
         recurringIncome,
         receivedPaycheckIncome,
+        netWorthBaseline,
         totalAssetValue: (() => {
           // Asset profiles: vehicles, real estate, investments, accounts, generic assets, even loans
           // (a loan profile may carry the asset's market value separately from its remaining balance).
@@ -8346,6 +8384,18 @@ export class SupabaseStorage implements IStorage {
     for (const row of data || []) {
       const rec = readValuationRecord(row.value);
       if (rec) out[String(row.key).slice(prefix.length)] = rec;
+    }
+    return out;
+  }
+  async listAssetValuationHistories() {
+    const prefix = valuationHistoryKey("");
+    const { data, error } = await this.supabase.from("preferences").select("key,value")
+      .eq("user_id", this.userId).like("key", `${prefix}%`);
+    if (error) throw error;
+    const out: Record<string, import("@shared/valuation/types").ValuationHistoryEntry[]> = {};
+    for (const row of data || []) {
+      const rows = readValuationHistory(row.value);
+      if (rows.length > 0) out[String(row.key).slice(prefix.length)] = rows;
     }
     return out;
   }

@@ -299,6 +299,8 @@ export interface IStorage {
   getAssetValuationHistory(profileId: string, limit?: number): Promise<import("@shared/valuation/types").ValuationHistoryEntry[]>;
   /** Every stored latest record for this user, keyed by profile id (one read for the Assets-tab sweep). */
   listAssetValuations(): Promise<Record<string, import("@shared/valuation/types").ValuationRecord>>;
+  /** Every stored valuation history for this user, keyed by profile id (one read for the net-worth baseline rebuild). */
+  listAssetValuationHistories(): Promise<Record<string, import("@shared/valuation/types").ValuationHistoryEntry[]>>;
   /** The cached semantic understanding of an asset's shape (server/valuation/understanding). Not journaled: it is a cache, not user data. */
   getValuationUnderstanding(profileId: string): Promise<import("@shared/valuation/types").AssetUnderstanding | null>;
   cacheValuationUnderstanding(profileId: string, understanding: import("@shared/valuation/types").AssetUnderstanding): Promise<void>;
@@ -2791,6 +2793,16 @@ export class MemStorage implements IStorage {
       if (!k.startsWith(prefix)) continue;
       const rec = readValuationRecord(v);
       if (rec) out[k.slice(prefix.length)] = rec;
+    }
+    return out;
+  }
+  async listAssetValuationHistories() {
+    const out: Record<string, import("@shared/valuation/types").ValuationHistoryEntry[]> = {};
+    const prefix = valuationHistoryKey("");
+    for (const [k, v] of this.preferences) {
+      if (!k.startsWith(prefix)) continue;
+      const rows = readValuationHistory(v);
+      if (rows.length > 0) out[k.slice(prefix.length)] = rows;
     }
     return out;
   }
