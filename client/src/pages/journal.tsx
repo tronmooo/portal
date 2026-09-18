@@ -298,7 +298,10 @@ export default function JournalPage() {
       setLastSavedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
       invalidateDomain("journal");
       if (finalize) {
-        toast({ title: draftId ? "Entry updated" : "Entry saved" });
+        // QA 2026-09-18: the autosave creates the draft row before Save is
+        // pressed, so `draftId` is set for a brand-new entry too — "updated"
+        // is only right when an EXISTING entry was reopened for editing.
+        toast({ title: editingEntry ? "Entry updated" : "Entry saved" });
         resetForm();
         setShowCreate(false);
       }
@@ -464,8 +467,8 @@ export default function JournalPage() {
       <PageHeader
         title="Journal"
         subtitle={filterMode === "selected" && filterLabel
-          ? `${entries.length} entries · ${filterLabel}`
-          : `${entries.length} entries`}
+          ? `${entries.length} ${entries.length === 1 ? "entry" : "entries"} · ${filterLabel}`
+          : `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`}
         icon={BookOpen}
         accent={JOURNAL_ACCENT}
         backHref="/dashboard"

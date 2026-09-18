@@ -4,7 +4,40 @@ import { Check, ChevronRight, Circle } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const DropdownMenu = DropdownMenuPrimitive.Root
+// QA 2026-09-18 BUG-23: Escape did not close the hub profile switcher (a
+// Radix DropdownMenu) while it did close the notifications popover. Radix
+// dismisses a layer on Escape ONLY when it is the highest DismissableLayer,
+// and a Radix Toast is a DismissableLayer too — so any toast that appears
+// AFTER a menu opened (a save confirmation, a "profile switched" notice)
+// silently owns Escape until it goes away, and the menu stays open. The
+// wrapper below keeps the root's open state and closes the menu from the
+// content's own keydown whenever Escape reaches it un-handled, which is
+// exactly the case Radix skipped. Menus that pass `open`/`onOpenChange`
+// keep working unchanged: the state stays theirs, we only call the setter.
+const DropdownMenuCloseContext = React.createContext<(() => void) | null>(null)
+
+const DropdownMenu = ({
+  open: openProp,
+  defaultOpen,
+  onOpenChange,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) => {
+  const isControlled = openProp !== undefined
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(!!defaultOpen)
+  const open = isControlled ? !!openProp : uncontrolledOpen
+  const onOpenChangeRef = React.useRef(onOpenChange)
+  onOpenChangeRef.current = onOpenChange
+  const setOpen = React.useCallback((next: boolean) => {
+    if (!isControlled) setUncontrolledOpen(next)
+    onOpenChangeRef.current?.(next)
+  }, [isControlled])
+  const close = React.useCallback(() => setOpen(false), [setOpen])
+  return (
+    <DropdownMenuCloseContext.Provider value={close}>
+      <DropdownMenuPrimitive.Root open={open} onOpenChange={setOpen} {...props} />
+    </DropdownMenuCloseContext.Provider>
+  )
+}
 
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger
 
@@ -57,7 +90,9 @@ DropdownMenuSubContent.displayName =
 const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
->(({ className, sideOffset = 4, ...props }, ref) => (
+>(({ className, sideOffset = 4, onKeyDown, ...props }, ref) => {
+  const close = React.useContext(DropdownMenuCloseContext)
+  return (
   <DropdownMenuPrimitive.Portal>
     <DropdownMenuPrimitive.Content
       ref={ref}
@@ -66,10 +101,23 @@ const DropdownMenuContent = React.forwardRef<
         "z-50 max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-[8rem] overflow-y-auto overflow-x-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 origin-[--radix-dropdown-menu-content-transform-origin]",
         className
       )}
+      onKeyDown={(e) => {
+        onKeyDown?.(e)
+        // BUG-23 fallback (see DropdownMenu above): Radix's own Escape
+        // handling runs first, at document capture, and marks the native
+        // event handled when it closes the menu. An Escape that arrives
+        // here un-handled was skipped because another layer (a toast) sat
+        // above the menu — close it ourselves.
+        if (e.key === "Escape" && !e.nativeEvent.defaultPrevented && close) {
+          e.preventDefault()
+          close()
+        }
+      }}
       {...props}
     />
   </DropdownMenuPrimitive.Portal>
-))
+  )
+})
 DropdownMenuContent.displayName = DropdownMenuPrimitive.Content.displayName
 
 const DropdownMenuItem = React.forwardRef<

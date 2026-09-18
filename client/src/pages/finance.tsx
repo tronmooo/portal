@@ -1638,7 +1638,10 @@ export default function FinancePage() {
 
       {/* Edit Expense Dialog */}
       <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setEditingExpense(null); setEditForm({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "", accountId: "" }); setEditSaving(false); } }}>
-        <DialogContent className="max-w-sm">
+        {/* QA 2026-09-18: the form outgrew a 950px window and its title was
+            clipped at the top with no way to scroll — cap it to the viewport
+            and let the body scroll. */}
+        <DialogContent className="max-w-sm max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Expense</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Description</Label><Input value={editForm.description} onChange={e => setEditForm(f => ({...f, description: e.target.value}))} /></div>

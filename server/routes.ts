@@ -47,6 +47,7 @@ import {
   type ExtractionItem, type ExtractionDestination,
   type ProfileAllergy, type ProfileMedication, type ProfileCondition, type ProfileSurgery,
 } from "@shared/extraction-destinations";
+import { userVisibleMemories } from "@shared/memory-visibility";
 import { entityFamily } from "@shared/entity-shape";
 import { findIdentityMatches } from "@shared/tracker-identity";
 import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
@@ -9081,7 +9082,10 @@ Rules:
   // ---- Memory ----
   app.get("/api/memories", asyncHandler(async (req, res) => {
     try {
-      let items: any[] = await storage.getMemories();
+      // QA 2026-09-18 BUG-19: the app's own bookkeeping rows ("tracker-
+      // category:<name>" learned classifications, category "system") are
+      // not facts the user told the chat — they never reach the listing.
+      let items: any[] = userVisibleMemories(await storage.getMemories());
       const profileId = req.query.profileId as string | undefined;
       if (profileId) {
         items = items.filter((item: any) =>
@@ -9236,7 +9240,13 @@ Rules:
         const ownerIndex = buildOwnerIndex(records);
         const selfIds = selfIdsFrom(allProfiles as any[]);
         const isAssetOrLiability = (type?: string) => !!type && (ASSET_PROFILE_TYPES.has(type) || LIABILITY_PROFILE_TYPES.has(type));
-        results = results.filter((r: any) => {
+        // QA 2026-09-18 BUG-24: with `includeOutOfScope=1` the palette wants
+        // every record findable by name — people already are — so rows that
+        // fail the scope are KEPT and flagged `_outOfScope` for the client to
+        // label and rank last, instead of vanishing ("Dana's Birthday" was
+        // unfindable while Dana herself was listed beside the results).
+        const keepOutOfScope = String(req.query.includeOutOfScope ?? "") === "1";
+        const inScope = (r: any): boolean => {
           if (r._type === "profile") {
             // People are what the scope switcher and the Info pages are
             // made of: a person you are not currently scoped to must still
@@ -9251,7 +9261,10 @@ Rules:
             return false;
           }
           return passesProfileFilter(r.linkedProfiles, { selectedIds: ids, allProfiles: allProfiles as any[], assetPartyLinks: assetLinks, liabilityProfileLinks: liabLinks });
-        });
+        };
+        results = keepOutOfScope
+          ? results.map((r: any) => (inScope(r) ? r : { ...r, _outOfScope: true }))
+          : results.filter(inScope);
       }
       res.json(results);
     } catch (err: any) {

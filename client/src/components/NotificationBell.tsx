@@ -112,7 +112,11 @@ async function loadDismissedIds(): Promise<string[]> {
         const list = JSON.parse(json.value);
         return Array.isArray(list) ? list : [];
       },
-      staleTime: 60_000,
+      // staleTime 0: a concurrent fetch under this key (the briefing's) is
+      // joined, which is the double-request the dashboard load paid for; a
+      // completed one is re-read so a dismissal made elsewhere is not hidden
+      // behind a minute-old list.
+      staleTime: 0,
     });
     return Array.isArray(parsed) ? parsed : [];
   } catch {

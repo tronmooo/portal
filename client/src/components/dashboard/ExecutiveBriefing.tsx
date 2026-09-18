@@ -341,7 +341,7 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
         <p className="text-[13px] font-semibold leading-tight flex items-center gap-1.5 min-w-0">
           <span className="truncate min-w-0">{titleMain}</span>
           {titleSuffix && (
-            <span className="shrink-0 rounded px-1 py-px text-[10px] font-bold uppercase tracking-wide"
+            <span className="shrink-0 rounded px-1 py-px micro-label"
               style={{ background: `hsl(${hsl} / 0.14)`, color: `hsl(${hsl})` }}
               data-testid={`exec-item-kind-${item.key}`}>
               {titleSuffix}
@@ -1202,7 +1202,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                             <div className="flex items-center gap-1.5 min-w-0">
                               <p className="text-[13px] font-semibold leading-tight truncate">{r.title}</p>
                               {r.priority && (
-                                <span className={`shrink-0 rounded-full px-1.5 py-px text-[10px] font-bold uppercase tracking-wide ${
+                                <span className={`shrink-0 rounded-full px-1.5 py-px micro-label ${
                                   r.priority === "high" ? "bg-red-500/15 text-red-600 dark:text-red-400"
                                   : r.priority === "medium" ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
                                   : "bg-muted text-muted-foreground"}`}>

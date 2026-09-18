@@ -56,6 +56,11 @@ export interface DynamicProfileFormProps {
   values: Record<string, any>;
   onChange: (values: Record<string, any>) => void;
   disabled?: boolean;
+  /**
+   * QA 2026-09-18 BUG-12: keys of required fields the last submit found
+   * empty. Those rows are outlined and say "Required" under the input.
+   */
+  invalidKeys?: ReadonlyArray<string>;
 }
 
 // ─────────────────────────────────────────────
@@ -81,9 +86,10 @@ interface FieldProps {
   value: any;
   onChange: (key: string, val: any) => void;
   disabled?: boolean;
+  invalid?: boolean;
 }
 
-function FieldInput({ field, value, onChange, disabled }: FieldProps) {
+function FieldInput({ field, value, onChange, disabled, invalid }: FieldProps) {
   const val = value ?? field.default ?? "";
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -259,14 +265,28 @@ function FieldInput({ field, value, onChange, disabled }: FieldProps) {
 // FieldRow — label + input
 // ─────────────────────────────────────────────
 
-function FieldRow({ field, value, onChange, disabled }: FieldProps) {
+function FieldRow({ field, value, onChange, disabled, invalid }: FieldProps) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={field.type === "boolean" ? undefined : field.key} className="text-sm font-medium">
+    <div
+      className={cn(
+        "flex flex-col gap-1.5",
+        // BUG-12: a required field left empty is outlined on every input
+        // inside the row (plain, currency and percentage inputs alike).
+        invalid && "[&_input]:border-destructive [&_input]:ring-1 [&_input]:ring-destructive [&_button]:border-destructive",
+      )}
+      data-invalid={invalid ? "true" : undefined}
+      data-testid={`registry-field-${field.key}`}
+    >
+      <Label htmlFor={field.type === "boolean" ? undefined : field.key} className={cn("text-sm font-medium", invalid && "text-destructive")}>
         {field.label}
-        {field.required && <span className="ml-0.5 text-destructive">*</span>}
+        {field.required && <span className="ml-0.5 text-destructive" aria-hidden>*</span>}
       </Label>
-      <FieldInput field={field} value={value} onChange={onChange} disabled={disabled} />
+      <FieldInput field={field} value={value} onChange={onChange} disabled={disabled} invalid={invalid} />
+      {invalid && (
+        <p className="text-xs text-destructive" role="alert" data-testid={`registry-field-error-${field.key}`}>
+          {field.label} is required
+        </p>
+      )}
     </div>
   );
 }
@@ -280,8 +300,10 @@ export default function DynamicProfileForm({
   values,
   onChange,
   disabled = false,
+  invalidKeys,
 }: DynamicProfileFormProps) {
   const grouped = useMemo(() => groupFields(fieldSchema), [fieldSchema]);
+  const invalidSet = useMemo(() => new Set(invalidKeys || []), [invalidKeys]);
 
   const handleFieldChange = (key: string, val: any) => {
     onChange({ ...values, [key]: val });
@@ -318,6 +340,7 @@ export default function DynamicProfileForm({
                   value={values[field.key]}
                   onChange={handleFieldChange}
                   disabled={disabled}
+                  invalid={invalidSet.has(field.key)}
                 />
               </div>
             ))}

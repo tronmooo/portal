@@ -52,6 +52,29 @@ import {
   Landmark,
   Search,
   HelpCircle,
+  // QA 2026-09-18 (asset type picker): Motorcycle, Boat, RV, Aircraft,
+  // Electronics, Fine Art, HSA, 529 and Savings Account all fell through
+  // to the generic "?" — their registry icon names were not in this map.
+  Bike,
+  Ship,
+  Sailboat,
+  Plane,
+  Caravan,
+  Laptop,
+  Cpu,
+  Smartphone,
+  Tablet,
+  Camera,
+  Watch,
+  Sofa,
+  GraduationCap,
+  HeartPulse,
+  Coins,
+  Banknote,
+  Truck,
+  TrendingUp,
+  BarChart3,
+  Building,
 } from "lucide-react";
 import type { FieldDef } from "./DynamicProfileForm";
 
@@ -118,16 +141,74 @@ const ICON_MAP: Record<string, React.ElementType> = {
   Package,
   Key,
   Landmark,
+  Bike,
+  Ship,
+  Sailboat,
+  Plane,
+  Caravan,
+  Laptop,
+  Cpu,
+  Smartphone,
+  Tablet,
+  Camera,
+  Watch,
+  Sofa,
+  GraduationCap,
+  HeartPulse,
+  Coins,
+  Banknote,
+  Truck,
+  TrendingUp,
+  BarChart3,
+  Building,
 };
 
-function resolveIcon(iconName: string): React.ElementType {
-  if (!iconName) return HelpCircle;
-  // Try exact match first
-  if (ICON_MAP[iconName]) return ICON_MAP[iconName];
-  // Try case-insensitive match
-  const lower = iconName.toLowerCase();
-  const found = Object.keys(ICON_MAP).find((k) => k.toLowerCase() === lower);
-  if (found) return ICON_MAP[found];
+// Registry icon names arrive in several spellings ("PiggyBank",
+// "piggy-bank", "piggy_bank"); compare on letters only.
+const iconKeyOf = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+const ICON_BY_KEY: Record<string, React.ElementType> = Object.fromEntries(
+  Object.entries(ICON_MAP).map(([k, v]) => [iconKeyOf(k), v]),
+);
+
+// When the registry names no icon we know, pick one from what the TYPE is
+// (its key and label), so a new type never shows the "?" placeholder.
+const TYPE_ICON_RULES: Array<[RegExp, React.ElementType]> = [
+  [/motorcycle|motorbike|scooter|bicycle|\bbike\b/i, Bike],
+  [/\brv\b|camper|caravan|motorhome|trailer/i, Caravan],
+  [/aircraft|airplane|plane|jet|helicopter/i, Plane],
+  [/sailboat|yacht/i, Sailboat],
+  [/\bboat|vessel|watercraft|jet\s*ski/i, Ship],
+  [/electronic|computer|laptop|gadget|device/i, Laptop],
+  [/phone|mobile/i, Smartphone],
+  [/tablet|ipad/i, Tablet],
+  [/camera|photo/i, Camera],
+  [/watch|jewel|jewellery|jewelry/i, Gem],
+  [/fine\s*art|artwork|painting|sculpture|collectible/i, Palette],
+  [/furniture|sofa|couch/i, Sofa],
+  [/\bhsa\b|health\s*savings|fsa|medical\s*savings/i, HeartPulse],
+  [/529|college|education|tuition/i, GraduationCap],
+  [/savings|checking|bank\s*account|cash/i, PiggyBank],
+  [/401|ira\b|retirement|pension|brokerage|invest|stock|fund|portfolio/i, TrendingUp],
+  [/crypto|bitcoin/i, Bitcoin],
+  [/truck|van\b/i, Truck],
+  [/car\b|vehicle|auto/i, Car],
+  [/house|home|condo|apartment|property|real\s*estate|land\b/i, Home],
+  [/loan|mortgage|debt|credit/i, CreditCard],
+  [/insurance|policy|warranty/i, Shield],
+  [/business|company|llc/i, Briefcase],
+  [/pet|dog|cat/i, PawPrint],
+  [/person|people|family|contact/i, User],
+];
+
+function resolveIcon(iconName: string, typeKey?: string, label?: string): React.ElementType {
+  if (iconName) {
+    // Exact, then case-insensitive, then spelling-insensitive.
+    if (ICON_MAP[iconName]) return ICON_MAP[iconName];
+    const byKey = ICON_BY_KEY[iconKeyOf(iconName)];
+    if (byKey) return byKey;
+  }
+  const hint = `${typeKey || ""} ${label || ""}`.replace(/_/g, " ");
+  for (const [re, icon] of TYPE_ICON_RULES) if (re.test(hint)) return icon;
   return HelpCircle;
 }
 
@@ -185,7 +266,7 @@ interface TypeCardProps {
 }
 
 function TypeCard({ typeDef, selected, onSelect }: TypeCardProps) {
-  const Icon = resolveIcon(typeDef.icon);
+  const Icon = resolveIcon(typeDef.icon, typeDef.type_key, typeDef.label);
 
   return (
     <button

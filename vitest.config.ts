@@ -348,6 +348,10 @@ export default defineConfig({
       'tests/qa-2026-09-18-dashboard-cluster.test.ts',
       // QA 2026-09-18 BUG-10/28: hub KPI strip task source + overflow affordance.
       'tests/qa-2026-09-18-hub-strip.dom.test.tsx',
+      // QA 2026-09-18 documents/artifacts/assets cluster: required registry fields, internal tags, file presence.
+      'tests/qa-2026-09-18-documents-cluster.test.ts',
+      // QA 2026-09-18 BUG-23: Escape closes a DropdownMenu even under a toast layer.
+      'tests/qa-2026-09-18-dropdown-escape.dom.test.tsx',
       'tests/test-suite-discovery.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],

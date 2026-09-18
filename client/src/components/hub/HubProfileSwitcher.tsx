@@ -97,7 +97,7 @@ export function HubProfileSwitcher() {
       <DropdownMenuContent align="end" className="w-56" onEscapeKeyDown={() => setOpen(false)}>
         {/* One model for both pickers (QA 2026-09-18 BUG-01b): a name shows
             just that person; the box adds or removes them from a combined view. */}
-        <p className="px-2 pt-1 pb-1.5 text-[10px] leading-tight text-muted-foreground" data-testid="hub-switch-hint">
+        <p className="px-2 pt-1 pb-1.5 text-[11px] leading-tight text-muted-foreground" data-testid="hub-switch-hint">
           Click a name to view just that person · tick boxes to combine
         </p>
         <DropdownMenuItem

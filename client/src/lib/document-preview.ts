@@ -252,11 +252,10 @@ export interface DocumentBlobState {
  * download has to know there is nothing behind it — an empty viewer and a
  * download that 404s are worse than saying plainly that the file wasn't kept.
  */
-export const DISCARDED_FILE_TAG = "image-discarded";
-
-export function wasFileDiscarded(doc: { tags?: string[] | null } | null | undefined): boolean {
-  return Array.isArray(doc?.tags) && doc!.tags!.includes(DISCARDED_FILE_TAG);
-}
+// QA 2026-09-18 BUG-31: the predicate now lives in shared/document-file.ts so
+// the list's "Format" and the viewer's "no file attached" card read the same
+// answer; re-exported here for the existing call sites.
+export { DISCARDED_FILE_TAG, wasFileDiscarded, documentHasFile, documentFormatLabel } from "@shared/document-file";
 
 export function useDocumentBlobUrl(
   id: string,
