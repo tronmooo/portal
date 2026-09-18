@@ -10,6 +10,7 @@ import { RecurringDatesPage } from "@/components/recurring/RecurringDatesPage";
 import { SeriesDialogHost } from "@/components/recurring/RecurringDatesManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import type { ProfileSelection } from "@shared/profile-selection";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 import { rollupOccurrences } from "@shared/dated-items";
 import type { CalendarOccurrence, OccurrenceKind } from "@shared/calendar-occurrences";
@@ -18,8 +19,14 @@ import { Link } from "wouter";
 
 export default function CalendarPage() {
   useEffect(() => { document.title = "Calendar — Portol"; }, []);
-  // Single source of truth: active scope read reactively.
-  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
+  // The calendar's person filter is LOCAL (QA 2026-09-18 F-03). It starts from
+  // the active scope and follows it until the user touches the picker here;
+  // from then on it is this page's own selection and never writes the global
+  // store — adding Dana on the calendar used to re-scope the whole dashboard.
+  const globalScope = useProfileScope();
+  const [localScope, setLocalScope] = useState<ProfileSelection | null>(null);
+  const filterMode = (localScope ?? globalScope).mode;
+  const filterIds = (localScope ?? globalScope).selectedIds;
   // Calendar | Recurring tab. ?tab=recurring deep-links to the manager.
   const [tab, setTab] = useState<"calendar" | "recurring">(() => {
     try { return new URL(window.location.href).searchParams.get("tab") === "recurring" ? "recurring" : "calendar"; } catch { return "calendar"; }
@@ -91,7 +98,8 @@ export default function CalendarPage() {
           <span>Dashboard</span>
         </Link>
         <MultiProfileFilter
-          onChange={() => {}}
+          value={localScope ?? { mode: globalScope.mode, selectedIds: globalScope.selectedIds, selectedNames: globalScope.selectedNames }}
+          onChange={(next) => setLocalScope({ mode: next.mode, selectedIds: [...next.selectedIds], selectedNames: [...next.selectedNames] })}
           compact
         />
       </div>

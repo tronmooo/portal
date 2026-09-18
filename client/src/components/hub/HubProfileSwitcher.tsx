@@ -23,6 +23,7 @@ import {
 } from "@/lib/profileFilter";
 import { prefetchScopeBootstrap } from "@/lib/scope-prefetch";
 import { modalJustClosed } from "@/lib/modal-history";
+import { isOfferablePerson } from "@shared/entity-classify";
 
 interface LiteProfile { id: string; type: string; name: string; avatar?: string }
 
@@ -38,14 +39,18 @@ export function HubProfileSwitcher() {
     initialData: fullProfilesCache as LiteProfile[] | undefined,
     staleTime: 30_000,
   });
-  const people = (profiles || []).filter(p => ["self", "person", "pet"].includes(p.type));
+  // Real people only — a possession mistyped `person` is never a dashboard
+  // (QA 2026-09-18 F-04: "tires for my Dodge ram" in this menu).
+  const people = (profiles || []).filter(isOfferablePerson);
 
   // Heal a persisted scope pointing at deleted/recreated profile ids (the
-  // "header says Mike, every tile says 0" state). /api/profiles/lite returns
-  // ALL live profiles, so a loaded non-empty list is authoritative;
-  // reconcileProfileFilter no-ops when every selected id still resolves.
+  // "header says Mike, every tile says 0" state). The list here may be the
+  // full ["/api/profiles"] cache (initialData) rather than a fresh lite
+  // fetch, so an absent id is verified with GET /api/profiles/:id before
+  // anything switches (QA 2026-09-18 F-01: a partial list flipped the whole
+  // dashboard to another person). No-op when every selected id resolves.
   useEffect(() => {
-    if (profiles && profiles.length > 0) reconcileProfileFilter(profiles);
+    if (profiles && profiles.length > 0) void reconcileProfileFilter(profiles);
   }, [profiles]);
 
   const label = (() => {

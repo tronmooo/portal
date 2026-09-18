@@ -56,6 +56,7 @@ import type {
 } from "@shared/schema";
 import { EVENT_CATEGORY_COLORS } from "@shared/schema";
 import { isInScope, selfIdsFrom, withAncestorOwnerIds } from "@shared/scope";
+import { isOfferablePerson } from "@shared/entity-classify";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
@@ -564,12 +565,14 @@ function EventFormDialog({
             </div>
           )}
 
-          {/* Link Profiles */}
+          {/* Link Profiles — people first, then things. A possession mistyped
+              `person` ("tires for my Dodge ram") is listed among the things,
+              never as a person (QA 2026-09-18 F-04). */}
           {profiles.length > 0 && (
             <div className="space-y-1.5">
               <Label>Link to Profiles</Label>
               <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-                {profiles.map(p => {
+                {[...profiles.filter(isOfferablePerson), ...profiles.filter(p => !isOfferablePerson(p))].map(p => {
                   const linked = form.linkedProfiles.includes(p.id);
                   return (
                     <button
@@ -1184,7 +1187,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
-  const primaryProfiles = filterProfiles.filter(p => ["self", "person", "pet"].includes(p.type));
+  const primaryProfiles = filterProfiles.filter(isOfferablePerson);
   const selfProfile = filterProfiles.find(p => p.type === "self");
   const resolvedProfileId = profileFilter === "me" ? selfProfile?.id : profileFilter === "all" ? null : profileFilter;
 

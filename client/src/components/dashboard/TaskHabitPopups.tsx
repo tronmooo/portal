@@ -909,8 +909,10 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           <span className="text-[11px] text-muted-foreground tabular-nums">{doneToday}/{todayTotal} done today</span>
         </div>
 
-        {/* Tabs — Today / One-time / Recurring / Upcoming + sort */}
-        <div className="flex items-center gap-1 py-1 overflow-x-auto scrollbar-hide -mx-1 px-1">
+        {/* Tabs — Today / One-time / Recurring / Upcoming + sort. The strip
+            WRAPS: a hidden horizontal scroll clipped the last tab to "Upco…"
+            on phone widths with no affordance (QA 2026-09-18 F-05). */}
+        <div className="flex flex-wrap items-center gap-1 py-1 -mx-1 px-1">
           {([
             { key: "today", label: "Today", icon: Flame },
             { key: "onetime", label: "One-time", icon: ListTodo },

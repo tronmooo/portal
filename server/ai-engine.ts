@@ -103,7 +103,7 @@ import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollo
 import { detectFactQuestion, lookupStoredFact, type FactSources } from "@shared/fact-lookup";
 import { startTrace } from "./latency";
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
-import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution } from "@shared/entity-classify";
+import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution, coerceProfileType } from "@shared/entity-classify";
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange, PROFILE_TYPES } from "@shared/profile-rename";
 import { readProfileFieldValue } from "@shared/profile-field-identity";
@@ -6905,8 +6905,17 @@ export function validateToolInput(toolName: string, input: Record<string, any>):
       }
       const validTypes = ["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "investment", "property", "account", "insurance", "medical"];
       if (normalized.type && !validTypes.includes(normalized.type)) {
-        warnings.push(`Type "${normalized.type}" is not standard — defaulting to "person"`);
-        normalized.type = "person";
+        // A thing, never a person (QA 2026-09-18 F-04: "my MacBook Pro m4"
+        // and "tires for my Dodge ram" were filed as people).
+        warnings.push(`Type "${normalized.type}" is not standard — defaulting to "asset"`);
+        normalized.type = "asset";
+      }
+      if (normalized.name && normalized.type) {
+        const coerced = coerceProfileType(normalized.name, normalized.type);
+        if (coerced !== normalized.type) {
+          warnings.push(`"${normalized.name}" is a thing, not a person — filing it as "${coerced}"`);
+          normalized.type = coerced;
+        }
       }
       break;
     }
@@ -7656,9 +7665,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // created here). A second copy of this list is how the guard and the
       // assistant came to disagree about whether "liability" is a type (D291).
       const ALLOWED_PROFILE_TYPES: string[] = [...PROFILE_TYPES, "self"];
-      const resolvedProfileType = ALLOWED_PROFILE_TYPES.includes(input.type) ? input.type : "asset";
+      // …and a person type only for a name a person can have: "tires for my
+      // Dodge ram" typed person is a vehicle (QA 2026-09-18 F-04).
+      const resolvedProfileType = coerceProfileType(input.name, ALLOWED_PROFILE_TYPES.includes(input.type) ? input.type : "asset");
       if (resolvedProfileType !== input.type) {
-        logger.warn("ai", `create_profile got type=${JSON.stringify(input.type)} for "${input.name}" — defaulting to "asset" (never "person")`);
+        logger.warn("ai", `create_profile got type=${JSON.stringify(input.type)} for "${input.name}" — filing as "${resolvedProfileType}" (never a person for a thing)`);
       }
       const profilePayload = validateAiPayload(insertProfileSchema, {
         type: resolvedProfileType,

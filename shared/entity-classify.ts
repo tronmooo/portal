@@ -425,3 +425,56 @@ export function categoryNeedsResolution(v: unknown): boolean {
   const norm = normalizeCategory(v);
   return norm === null || norm === "custom";
 }
+
+// ─── Profile type guard: things are not people ────────────────────────────────
+//
+// QA 2026-09-18 (F-04): "tires for my Dodge ram" and "my MacBook Pro m4" were
+// filed as `person` profiles, so they showed up in the profile switcher, the
+// "+ Add owner…" dropdown and the event "Link to Profiles" chips. A human is
+// never named "my …", "… for my …" or after a product line. The guard below is
+// deliberately conservative: it only fires on shapes no person's name has.
+
+const VEHICLE_WORDS = /\b(?:car|truck|suv|van|sedan|pickup|motorcycle|moped|scooter|bike|bicycle|boat|jet ?ski|trailer|rv|camper|tires?|wheels?|dodge|dodge ram|ram (?:1500|2500|3500)|ford|chevy|chevrolet|gmc|toyota|honda|nissan|subaru|mazda|hyundai|kia|jeep|tesla|bmw|audi|mercedes|lexus|volvo|volkswagen|vw|porsche|f-?\d{3}|silverado|tacoma|tundra|civic|accord|camry|corolla|mustang|wrangler|4runner|model [3sxy])\b/i;
+const THING_WORDS = /\b(?:macbook|imac|ipad|iphone|ipod|airpods|laptop|computer|pc|desktop|monitor|tv|television|phone|tablet|watch|camera|lens|console|playstation|xbox|nintendo|switch|kindle|printer|router|drone|guitar|piano|keyboard|couch|sofa|mattress|fridge|refrigerator|washer|dryer|dishwasher|oven|grill|mower|lawnmower|generator|tools?|ring|necklace|bracelet|purse|handbag|jacket|shoes|sneakers|boots|house|home|condo|apartment|cabin|land|lot|garage|shed)\b/i;
+
+/** True for names that are obviously a possession, never a person. */
+export function looksLikeAssetName(raw: string | null | undefined): boolean {
+  const name = String(raw || "").trim();
+  if (!name) return false;
+  const lc = name.toLowerCase();
+  // Possessive / descriptor phrasing: "my MacBook", "our house", "tires for my Dodge ram",
+  // "new tires", "the Honda Civic".
+  if (/^(?:my|our|the|a|an|new|old|used)\s+/i.test(lc)) return true;
+  if (/\b(?:for|of)\s+(?:my|our|the)\b/i.test(lc)) return true;
+  if (VEHICLE_WORDS.test(lc) || THING_WORDS.test(lc)) return true;
+  // A model/spec token ("m4", "2022", "15 pro") alongside a word — not a name.
+  if (/\b(?:m\d|[a-z]\d{1,2}|\d{4}|\d+\s?(?:gb|tb|inch|in|hp|cc|kw))\b/i.test(lc) && /\s/.test(lc)) return true;
+  return false;
+}
+
+/**
+ * The profile type a create call should actually use. A requested person
+ * type (person/self/pet) survives only when the name can be a person's; an
+ * asset-shaped name becomes a vehicle or a generic asset. Any explicit
+ * non-person type is kept verbatim, and an unknown/absent type is a THING,
+ * never a person (2026-08-09: a laptop filed as a human being).
+ */
+export function coerceProfileType(name: string | null | undefined, requested: string | null | undefined): string {
+  const type = String(requested || "").trim().toLowerCase();
+  const isPersonish = type === "person" || type === "self" || type === "pet";
+  if (type && !isPersonish) return type;
+  if (isPersonish && !looksLikeAssetName(name)) return type;
+  return VEHICLE_WORDS.test(String(name || "")) ? "vehicle" : "asset";
+}
+
+/**
+ * Defensive people-picker filter: a real person/pet record, and not a
+ * mistyped possession. Every "who" picker (profile switcher, owner dropdown,
+ * assignee chips) filters with this so a bad row cannot be offered as a person.
+ */
+export function isOfferablePerson(p: { type?: string | null; name?: string | null } | null | undefined): boolean {
+  if (!p) return false;
+  const type = String(p.type || "").trim().toLowerCase();
+  if (type !== "self" && type !== "person" && type !== "pet") return false;
+  return !looksLikeAssetName(p.name);
+}
