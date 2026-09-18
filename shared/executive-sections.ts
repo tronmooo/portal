@@ -208,6 +208,46 @@ export interface ExecSectionInputs extends AttentionInputs {
   recommendations?: any[];
 }
 
+/** One row of AI advice as the Executive tab renders it. */
+export interface AiSuggestion {
+  title: string;
+  body?: string;
+  action?: string;
+  priority?: "high" | "medium" | "low";
+}
+
+/**
+ * The advice rows in a /api/dashboard/ai-suggestions response.
+ *
+ * The route answers `{ suggestions, generatedAt, source, fingerprint }`, and on
+ * failure `{ error, suggestions: [] }`. The client used to read exactly one of
+ * those spellings and treat anything else as "nothing to suggest", so a payload
+ * that arrived as a bare array (or under `items`) was dropped on the floor with
+ * no error (QA 2026-09-18 F-44). ONE reader for every spelling, and only rows
+ * that carry a title survive — a row without one cannot be rendered.
+ */
+export function normalizeAiSuggestions(payload: unknown): AiSuggestion[] {
+  const p: any = payload;
+  const rows: unknown[] = Array.isArray(p) ? p
+    : Array.isArray(p?.suggestions) ? p.suggestions
+    : Array.isArray(p?.items) ? p.items
+    : [];
+  const out: AiSuggestion[] = [];
+  for (const r of rows) {
+    if (!r || typeof r !== "object") continue;
+    const title = String((r as any).title ?? "").trim();
+    if (!title) continue;
+    const priority = (r as any).priority;
+    out.push({
+      title,
+      body: String((r as any).body ?? "").trim() || undefined,
+      action: String((r as any).action ?? "").trim() || undefined,
+      priority: priority === "high" || priority === "medium" || priority === "low" ? priority : undefined,
+    });
+  }
+  return out;
+}
+
 /** How far back a vitals reading still counts as "current". */
 const VITALS_FRESH_DAYS = 14;
 /** Entries scanned per tracker when looking for the latest reading. */
