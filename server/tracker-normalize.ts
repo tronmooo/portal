@@ -278,6 +278,34 @@ function isSleepTracker(tracker: Pick<Tracker, "fields" | "category" | "name">):
 //  - _notes:     passed through untouched
 //
 // Returns a NEW object; never mutates input.
+/** Words a person uses to say HOW they slept. Without one of these in the
+ *  message, a `quality` on a Sleep log was not stated by them. */
+const SLEEP_QUALITY_WORDS =
+  /\b(poor|poorly|fair|good|well|great|excellent|bad|badly|terribl\w*|awful|rough|restless|deep|deeply|light|lightly|solid|sound|soundly|quality|rested|refresh\w*|tossed|woke up (?:a lot|often|several))\b/i;
+
+/**
+ * The model was told to pass `quality:'fair'` whenever it computed sleep hours
+ * from a bedtime/wake time, so "slept 11 to 5:30" was stored — and read back —
+ * as "quality fair" the person never said (QA 2026-09-18 F-43). A value the
+ * user did not state is not data: when the message carries no word about how
+ * they slept, `quality` is dropped before the entry is written.
+ */
+export function stripUnstatedSleepQuality(
+  trackerName: string | null | undefined,
+  values: Record<string, any> | null | undefined,
+  userMessage: string | null | undefined,
+): Record<string, any> {
+  const out = { ...(values || {}) };
+  if (!/sleep|nap/i.test(String(trackerName || ""))) return out;
+  const qualityKey = Object.keys(out).find((k) => /^(sleep_?)?quality$/i.test(k));
+  if (!qualityKey) return out;
+  const msg = String(userMessage || "");
+  if (!msg.trim()) return out;
+  if (SLEEP_QUALITY_WORDS.test(msg)) return out;
+  delete out[qualityKey];
+  return out;
+}
+
 export function normalizeTrackerEntry(
   tracker: Pick<Tracker, "fields" | "category" | "name" | "unit">,
   rawValues: Record<string, any>

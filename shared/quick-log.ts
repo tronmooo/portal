@@ -140,33 +140,46 @@ function humanEstimate(note: string | undefined): string {
   return note.replace(/^derived\/estimated[^:]*:\s*/i, "").trim();
 }
 
-/** One line per operation; a single successful log reads as one sentence. */
+/** Tools whose recap line is the record itself ("Weight 181.2 lbs"), not a verb. */
+const TRACKER_TOOLS = new Set(["log_tracker_entry", "log_medication_dose"]);
+
+/**
+ * One line per operation; a single successful log reads as one sentence.
+ *
+ * Several operations render as a header and a Markdown bullet list — the
+ * chat renders replies as Markdown, where a bare newline is a space, so
+ * "Logged 3 of 3: ✅Logged: Weight — weight 181.2 ✅Logged: Sleep …" was
+ * one run-on line (QA 2026-09-18 F-43). A tracker entry reads as its record
+ * with the unit ("Weight 181.2 lbs" — see summarizeOpDetail), with no
+ * "Logged:" prefix repeated on every line.
+ */
 export function buildTurnRecap(ops: RecapOp[]): string {
   const ok = ops.filter((o) => o.status === "ok");
   const deduped = ops.filter((o) => o.status === "deduped");
   const failed = ops.filter((o) => o.status === "failed" || o.status === "skipped");
   const created = ops.map((o) => o.createdTrackerName).filter((n): n is string => !!n);
 
-  const line = (o: RecapOp) => {
-    const verb = TOOL_VERB[o.tool] || "Done";
+  const record = (o: RecapOp) => {
     const est = humanEstimate(o.estimateNote);
+    if (TRACKER_TOOLS.has(o.tool)) {
+      return `${o.label}${o.detail ? ` ${o.detail}` : ""}${est ? ` (${est})` : ""}`;
+    }
+    const verb = TOOL_VERB[o.tool] || "Done";
     const detail = o.detail ? ` — ${o.detail}` : "";
     return `${verb}: ${o.label}${detail}${est ? ` (${est})` : ""}`;
   };
 
-  const lines: string[] = [];
+  const blocks: string[] = [];
   if (ok.length === 1 && ops.length === 1) {
-    lines.push(line(ok[0]));
-  } else {
-    if (ok.length > 0) {
-      lines.push(`Logged ${ok.length} of ${ops.length}:`);
-      for (const o of ok) lines.push(`✅ ${line(o)}`);
-    }
+    const o = ok[0];
+    blocks.push(TRACKER_TOOLS.has(o.tool) ? `Logged ${record(o)}` : record(o));
+  } else if (ok.length > 0) {
+    blocks.push([`Logged ${ok.length} of ${ops.length}:`, ...ok.map((o) => `- ${record(o)}`)].join("\n"));
   }
-  for (const o of deduped) lines.push(`↩️ ${o.label} — already logged just now, kept the existing entry`);
+  for (const o of deduped) blocks.push(`↩️ ${o.label} — already logged just now, kept the existing entry`);
   if (created.length > 0) {
-    lines.push(`Created ${created.length === 1 ? "a new tracker" : `${created.length} new trackers`}: ${Array.from(new Set(created)).join(", ")}.`);
+    blocks.push(`Created ${created.length === 1 ? "a new tracker" : `${created.length} new trackers`}: ${Array.from(new Set(created)).join(", ")}.`);
   }
-  for (const o of failed) lines.push(`⚠️ ${o.label} — ${o.error || "didn't save"}`);
-  return lines.join("\n");
+  for (const o of failed) blocks.push(`⚠️ ${o.label} — ${o.error || "didn't save"}`);
+  return blocks.join("\n\n");
 }

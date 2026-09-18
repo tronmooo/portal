@@ -4,6 +4,7 @@
 // circular dependencies; the executor lives in server/ai-engine.ts
 // (runBulkLogPath) because it needs the engine's private tool plumbing.
 import type Anthropic from "@anthropic-ai/sdk";
+import { formatLoggedValues } from "@shared/tracker-units";
 
 /** Write tools the extractor may emit. Anything else is dropped. */
 export const BULK_ACTION_TOOLS = [
@@ -48,16 +49,13 @@ export interface OperationOutcome {
   sourceMessageId?: string;
 }
 
-/** Compact "duration 60, method blunt, at 8:15 AM" summary of an operation's
- * input — proves in the reply that no stated detail was dropped. */
+/** Compact "60 min, blunt, at 8:15 AM" summary of an operation's input —
+ * proves in the reply that no stated detail was dropped. Values are spoken
+ * with their UNIT (shared/tracker-units formatLoggedValues), never with the
+ * field name in the unit's place ("weight 181.2" → "181.2 lbs"). */
 export function summarizeOpDetail(input: Record<string, any>): string {
-  const parts: string[] = [];
   const values = (input?.values && typeof input.values === "object") ? input.values : {};
-  for (const [k, v] of Object.entries(values)) {
-    if (k === "_notes" || v == null || typeof v === "object") continue;
-    parts.push(`${k} ${v}`);
-    if (parts.length >= 4) break;
-  }
+  const parts = formatLoggedValues(values, String(input?.trackerName || ""), { max: 4 });
   if (input?.amount != null) parts.push(`$${input.amount}`);
   if (input?.at) parts.push(`at ${input.at}`);
   return parts.join(", ");
@@ -164,6 +162,15 @@ function opLabel(op: OperationOutcome): string {
   return op.detail ? `${name} — ${op.detail}` : name;
 }
 
+/**
+ * Chat replies render as Markdown, where a lone newline is a space: "Logged 3
+ * of 3: ✅ Weight … ✅ Sleep …" came out as one run-on line (QA 2026-09-18
+ * F-43). A header plus a bullet list is one item per line in any renderer.
+ */
+export function recapBlock(header: string, items: string[]): string {
+  return [header, ...items.map((i) => `- ${i}`)].join("\n");
+}
+
 /** Deterministic reply enumerating every operation — never claims more or
  * less than what actually happened. */
 export function buildBulkReply(ops: OperationOutcome[], createdTrackers: Array<{ id: string; name: string }>): string {
@@ -172,24 +179,24 @@ export function buildBulkReply(ops: OperationOutcome[], createdTrackers: Array<{
   const failed = ops.filter((o) => o.status === "failed");
   const skipped = ops.filter((o) => o.status === "skipped");
 
-  const lines: string[] = [];
+  // Paragraph blocks, joined with a blank line so a list never swallows the
+  // sentence after it.
+  const blocks: string[] = [];
   if (ok.length > 0) {
-    lines.push(`Logged ${ok.length} of ${ops.length} actions:`);
-    for (const o of ok) lines.push(`✅ ${opLabel(o)}`);
+    blocks.push(recapBlock(`Logged ${ok.length} of ${ops.length} actions:`, ok.map(opLabel)));
   }
   if (deduped.length > 0) {
-    for (const o of deduped) lines.push(`↩️ ${opLabel(o)} — already logged just now, kept the existing entry`);
+    for (const o of deduped) blocks.push(`↩️ ${opLabel(o)} — already logged just now, kept the existing entry`);
   }
   if (createdTrackers.length > 0) {
-    lines.push(`Created ${createdTrackers.length} new tracker${createdTrackers.length > 1 ? "s" : ""}: ${createdTrackers.map((t) => t.name).join(", ")}.`);
+    blocks.push(`Created ${createdTrackers.length} new tracker${createdTrackers.length > 1 ? "s" : ""}: ${createdTrackers.map((t) => t.name).join(", ")}.`);
   }
   if (failed.length > 0) {
-    lines.push(`⚠️ ${failed.length} failed:`);
-    for (const o of failed) lines.push(`✗ ${opLabel(o)} — ${o.error || "failed"}`);
+    blocks.push(recapBlock(`⚠️ ${failed.length} failed:`, failed.map((o) => `${opLabel(o)} — ${o.error || "failed"}`)));
   }
   if (skipped.length > 0) {
-    lines.push(`⏸ ${skipped.length} not run (time limit): ${skipped.map(opLabel).join(", ")}. Send them again and I'll log them.`);
+    blocks.push(`⏸ ${skipped.length} not run (time limit): ${skipped.map(opLabel).join(", ")}. Send them again and I'll log them.`);
   }
-  if (lines.length === 0) return "I couldn't extract any actions from that — try rephrasing?";
-  return lines.join("\n");
+  if (blocks.length === 0) return "I couldn't extract any actions from that — try rephrasing?";
+  return blocks.join("\n\n");
 }

@@ -35,7 +35,7 @@ import {
   insertIncomeSchema,
   insertMemorySchema,
 } from "@shared/schema";
-import { normalizeTrackerEntry } from "./tracker-normalize";
+import { normalizeTrackerEntry, stripUnstatedSleepQuality } from "./tracker-normalize";
 import { buildNotifications, DISMISSED_NOTIFICATIONS_PREF, mergeDismissedNotifications } from "./notification-service";
 import { upcomingEventOccurrences } from "@shared/event-upcoming";
 import { rankByName } from "@shared/entity-resolution";
@@ -3777,7 +3777,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport. Strength/workout logs use the EXERCISE's exact name ('Weighted Pull-Ups', 'Bench Press', 'Face Pulls') — each exercise is its own tracker. NEVER 'Weight': that tracker holds body-weight weigh-ins ONLY, and a name merely CONTAINING 'weight' ('Weighted Pull-Ups') is an exercise, not a weigh-in." },
-        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM', quality:'fair'. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
+        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM'. Pass quality ONLY when the user said how they slept — never infer or default it. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
         at: { type: "string", description: "Optional date/time the entry actually happened (ISO date, natural language like 'June 3 2025', or a bare clock time like '8:15 AM' which is treated as today at that time). ALWAYS set this when the user attaches a time to the action ('at 8:15 AM', 'this morning at 7', 'yesterday'). Omit for 'now'." },
@@ -8472,6 +8472,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     }
 
     case "log_tracker_entry": {
+      // A sleep `quality` the user never described is the model's invention,
+      // not a measurement — drop it (server/tracker-normalize, QA 2026-09-18).
+      if ((input as any).__userMessage && input.values && typeof input.values === "object") {
+        input.values = stripUnstatedSleepQuality(input.trackerName, input.values, String((input as any).__userMessage));
+      }
       // Heart rate (BPM) and Blood Pressure (systolic/diastolic) are different
       // metrics. If a heart-rate value rode in on a BP-routed log, peel it into
       // its own "Heart Rate" entry so it isn't crammed into a tracker with no

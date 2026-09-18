@@ -1328,6 +1328,7 @@ import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCach
 import { ChatSuggestions, ChatFollowUps } from "@/components/chat/ChatSuggestions";
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
 import { scopedKey } from "@shared/query-keys";
+import { formatLoggedValues } from "@shared/tracker-units";
 
 // ─────────────────────────────────────────────
 // Confirmation card with inline Edit + Undo
@@ -2065,15 +2066,19 @@ const MessageRow = memo(function MessageRow({
                     .map(([k, pv]) => `≈${(pv as any)?.value} ${k} (est.)`)
                     .slice(0, 3)
                 : [];
+              // Values speak with their UNIT ("181.2 lbs"), never the field
+              // name in its place ("181.2 weight") — shared/tracker-units.
               const entryValues = isTrackerEntry && action.data?.values
                 ? [
-                    ...Object.entries(action.data.values as Record<string,any>)
-                      // Estimated fields are applied into values for storage,
-                      // but render ONLY via the ≈ (est.) parts below — never
-                      // as plain values that look user-stated.
-                      .filter(([k, v]) => !k.startsWith('_') && k !== 'item' && !estimatedKeys.has(k) && typeof v !== 'object')
-                      .map(([k, v]) => `${v} ${k}`)
-                      .slice(0, 4),
+                    ...formatLoggedValues(
+                      Object.fromEntries(Object.entries(action.data.values as Record<string,any>)
+                        // Estimated fields are applied into values for storage,
+                        // but render ONLY via the ≈ (est.) parts below — never
+                        // as plain values that look user-stated.
+                        .filter(([k, v]) => !k.startsWith('_') && k !== 'item' && !estimatedKeys.has(k) && typeof v !== 'object')),
+                      String(action.data?.trackerName || ''),
+                      { max: 4 },
+                    ),
                     ...estimatedParts,
                   ].join(' · ')
                 : '';
@@ -2129,7 +2134,11 @@ const MessageRow = memo(function MessageRow({
                         }`}>
                           {whoFor.toUpperCase()}
                         </span>
-                        {isTrackerEntry && trackerName && (
+                        {/* "via WEIGHT" under a card already titled WEIGHT said
+                            nothing; the tracker is named only when the title
+                            is the item logged into it ("Chicken Sandwich via
+                            NUTRITION"). */}
+                        {isTrackerEntry && trackerName && entryItem && (
                           <span className="text-[11px] text-muted-foreground/60 font-medium">
                             via {trackerName}
                           </span>

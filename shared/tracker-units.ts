@@ -163,6 +163,65 @@ export function resolveTrackerUnit(t: UnitTrackerLike, fieldName?: string): stri
   return "";
 }
 
+// ─── Logged values, spoken with their unit ────────────────────────────────────
+//
+// "Weight: 181.2 weight", "181.2 weight", "hours 6.5" — the chat recap, the
+// action card and Recent Activity all printed the FIELD NAME where the unit
+// belongs (QA 2026-09-18 F-41/F-43). One formatter, resolving the unit through
+// resolveTrackerUnit like every other view, so a logged value reads "181.2 lbs"
+// everywhere and a field name never leaks as if it were a unit.
+
+/** Keys whose string value is the thing itself — "Chicken Sandwich", "blunt". */
+const LABEL_KEY = /^(item|meal|food|exercise|activity|activity_?type|type|method|name|title|drug|drug_?name|container_?type)$/i;
+/** Reserved / metadata keys that are never a logged value. */
+const META_KEY = /^_|^(notes?|timestamp|source)$/i;
+
+function humanKey(key: string): string {
+  return String(key)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function fmtValue(n: number): string {
+  if (Math.abs(n) >= 1000 && Number.isInteger(n)) return n.toLocaleString("en-US");
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+}
+
+/**
+ * Each logged value as a short phrase: numbers carry their unit ("181.2 lbs",
+ * "6.5 hr", "40 oz"), a number with no known unit keeps a human field name
+ * ("1 count"), a labelling string stands alone ("Chicken Sandwich"), and any
+ * other string keeps its field name for context ("quality fair").
+ *
+ * `tracker` may be the full tracker (declared field units win) or just
+ * `{ name }` when only the tracker's name is known (the chat recap).
+ */
+export function formatLoggedValues(
+  values: Record<string, any> | null | undefined,
+  tracker: UnitTrackerLike | string | null | undefined,
+  opts: { max?: number } = {},
+): string[] {
+  const t: UnitTrackerLike = typeof tracker === "string" ? { name: tracker } : (tracker || {});
+  const max = opts.max ?? 4;
+  const out: string[] = [];
+  for (const [key, raw] of Object.entries(values || {})) {
+    if (out.length >= max) break;
+    if (META_KEY.test(key) || raw == null || raw === "" || typeof raw === "object") continue;
+    if (typeof raw === "boolean") { if (raw) out.push(humanKey(key)); continue; }
+    const n = typeof raw === "number" ? raw : (typeof raw === "string" && raw.trim() !== "" && !isNaN(Number(raw)) ? Number(raw) : null);
+    if (n != null && Number.isFinite(n)) {
+      const unit = resolveTrackerUnit(t, key);
+      out.push(unit ? `${fmtValue(n)} ${unit}` : `${fmtValue(n)} ${humanKey(key)}`);
+      continue;
+    }
+    const s = String(raw).trim();
+    out.push(LABEL_KEY.test(key) ? s : `${humanKey(key)} ${s}`);
+  }
+  return out;
+}
+
 // ─── Dimensions: may two units describe the same metric? ─────────────────────
 //
 // Tracker matching has always compared NAMES. That is right as the primary

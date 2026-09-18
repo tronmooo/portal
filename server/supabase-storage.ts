@@ -97,6 +97,7 @@ import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurre
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
+import { formatLoggedValues } from "../shared/tracker-units";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
@@ -7581,9 +7582,11 @@ export class SupabaseStorage implements IStorage {
               const parts = [cal != null ? `${cal} cal` : null, protein != null ? `${protein}g protein` : null, carbs != null ? `${carbs}g carbs` : null, fat != null ? `${fat}g fat` : null].filter(Boolean);
               return `${t.name}: ${parts.join(', ')}`;
             }
-            if (nums.length === 1) return `${t.name}: ${nums[0][1]} ${nums[0][0]}`;
-            const summary = nums.slice(0, 2).map(([k, v]) => `${v} ${k}`).join(', ');
-            return `${t.name}: ${summary}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
+            // Values speak with their UNIT ("Weight: 181.2 lbs"), never the
+            // field name in its place ("181.2 weight") — shared/tracker-units.
+            const parts = formatLoggedValues(Object.fromEntries(nums.slice(0, 2)), t as any, { max: 2 });
+            if (parts.length === 0) return `Logged ${t.name}`;
+            return `${t.name}: ${parts.join(', ')}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
           })(),
           timestamp: e.timestamp,
         }))),
