@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { dayLabel } from "@shared/now-rank";
 import { categoryLabel } from "@shared/category-canon";
-import { UPCOMING_BILL_WINDOW_DAYS } from "@shared/obligation-windows";
+import { UPCOMING_BILL_WINDOW_DAYS, UPCOMING_BILLS_EMPTY_COPY, selectUpcomingBills } from "@shared/obligation-windows";
 import { Medallion } from "@/components/dashboard/visuals";
 import { SectionHeading } from "@/components/ui/section-heading";
 
@@ -192,7 +192,7 @@ export function MoneyOverview(props: {
 }) {
   const {
     netWorth, assets, liabilities, momPct, nwSeries, cashIn, cashOut, spendMtd,
-    spendTrendPct, incomeMtd = 0, incomeParts, budgets, bills, spendByCategory = {}, alerts = [],
+    spendTrendPct, incomeMtd = 0, incomeParts, budgets, spendByCategory = {}, alerts = [],
     assetBreakdown, liabilityBreakdown, monthLabel,
     cashTrend = [], spendSeries, incomeSeries, billsSeries,
     onPayBill, payingId,
@@ -213,6 +213,9 @@ export function MoneyOverview(props: {
       trendTone: (flat ? "neutral" : momPct > 0 ? "pos" : "neg") as "pos" | "neg" | "neutral",
     };
   })();
+  // THE upcoming-bills list (shared/obligation-windows): the tile, the card
+  // and the dashboard MONEY card all render this selection (F-54).
+  const bills = selectUpcomingBills(props.bills);
   const billsTotal = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0);
   // Sorted category breakdown with % of total spend.
   const catTotal = Object.values(spendByCategory).reduce((s, v) => s + (Number(v) || 0), 0) || 1;
@@ -244,7 +247,7 @@ export function MoneyOverview(props: {
           series={incomeSeries} chartKind="bars"
           onClick={() => (onOpenIncome ?? onOpenCashFlow)?.()} testId="money-income" />
         <KpiCard label="Bills Due" icon={Receipt} value={String(bills.length)} tone={bills.some(b => b.status === "overdue") ? "neg" : "warn"}
-          sub={`${money(billsTotal)} upcoming`} series={billsSeries} chartKind="bars"
+          sub={bills.length === 0 ? UPCOMING_BILLS_EMPTY_COPY : `${money(billsTotal)} upcoming`} series={billsSeries} chartKind="bars"
           onClick={() => (onOpenBills ?? onOpenCashFlow)?.()} testId="money-bills-kpi" />
         <KpiCard label="Savings Rate" icon={PiggyBank} value={savingsRate != null ? `${savingsRate}%` : "—"}
           tone={savingsRate != null && savingsRate >= 15 ? "pos" : savingsRate != null && savingsRate < 0 ? "neg" : "neutral"}
@@ -371,7 +374,7 @@ export function MoneyOverview(props: {
           <SectionHeading title={`Bills · next ${UPCOMING_BILL_WINDOW_DAYS}d`} icon={Receipt} accent="25 90% 58%" count={bills.length} />
           {bills.length === 0 ? (
             <EmptyState tone="good" icon={Receipt} label={`You're clear for ${UPCOMING_BILL_WINDOW_DAYS} days`}
-              hint="Nothing due between now and then." />
+              hint={`${UPCOMING_BILLS_EMPTY_COPY}.`} />
           ) : (
             <div className="space-y-1.5">
               {bills.map(b => (

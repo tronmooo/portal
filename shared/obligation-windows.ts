@@ -17,6 +17,27 @@ import { getUserCurrentMonth } from "./timezone";
 export const UPCOMING_BILL_WINDOW_DAYS = 30;
 export const MS_PER_DAY = 86_400_000;
 
+/**
+ * The one empty-state sentence for an upcoming-bills surface. QA 2026-09-18
+ * (F-54): the dashboard MONEY card said "Nothing due in 3 weeks" (its own
+ * 21-day filter) while the Finance BILLS DUE tile said "1 · $186 upcoming"
+ * and the Upcoming card listed a bill due in 27 days. Every surface renders
+ * `selectUpcomingBills(snapshot.upcomingBills)` and says this only when THAT
+ * list is empty.
+ */
+export const UPCOMING_BILLS_EMPTY_COPY = `Nothing due in the next ${UPCOMING_BILL_WINDOW_DAYS} days`;
+
+/**
+ * The bills a surface shows as "due soon": everything the server's
+ * UPCOMING_BILL_WINDOW_DAYS list holds — overdue ones first (still owed) —
+ * soonest first. No surface re-filters this with a window of its own.
+ */
+export function selectUpcomingBills<T extends { daysUntil?: number | null }>(bills: readonly T[] | null | undefined): T[] {
+  return (bills || [])
+    .filter((b) => b && typeof b.daysUntil === "number" && Number.isFinite(b.daysUntil) && b.daysUntil <= UPCOMING_BILL_WINDOW_DAYS)
+    .sort((a, b) => (a.daysUntil as number) - (b.daysUntil as number));
+}
+
 export interface UpcomingBillCheckInput {
   nextDueDate?: string | Date | null;
   status?: string | null;

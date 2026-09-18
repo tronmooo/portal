@@ -2548,7 +2548,11 @@ export async function registerRoutes(
                     try {
                       const paid = await payBillOccurrence(scoped, bill.id, {
                         occurrenceDate: dueKey,
-                        paymentDate: todayISO,
+                        // An autopay debits on the due day. A catch-up run on
+                        // an occurrence that already passed is dated to that
+                        // day, so its expense lands in the month it belongs
+                        // to; a future occurrence paid ahead is today's money.
+                        paymentDate: due && due < todayISO ? due : todayISO,
                         notes: "Autopay",
                         source: "autopay",
                       });

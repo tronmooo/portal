@@ -335,6 +335,8 @@ export default defineConfig({
       'tests/artifact-panel-failures.dom.test.tsx',
       'tests/editor-mobile-controls.test.ts',
       'tests/finance-tab-qa-2026-09-16.test.ts',
+      // QA 2026-09-18 — money: bill pay date, loan next-due/amortization, pairing, grace, debt category, upcoming bills.
+      'tests/qa-2026-09-18-money.test.ts',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       'tests/test-suite-discovery.test.ts',

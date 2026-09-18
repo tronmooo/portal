@@ -55,6 +55,8 @@ export interface CalendarOccurrencesResult {
   allSeries: CalendarSeries[];
   /** seriesId → the ids collapsed into it, for honest disclosure in the UI. */
   duplicatesBySeries: Map<string, string[]>;
+  /** seriesId → the titles of the records collapsed into it (plain-English notes). */
+  duplicateLabelsBySeries: Map<string, string[]>;
   /** Every occurrence of one series, ascending. */
   occurrencesForSeries: (seriesId: string) => CalendarOccurrence[];
   /** The raw event row behind an event-sourced series (for tag mutations). */
@@ -180,6 +182,18 @@ export function useCalendarOccurrences(
     for (const d of deduped) if (d.duplicateIds.length) m.set(d.series.id, d.duplicateIds);
     return m;
   }, [deduped]);
+  // The absorbed records' own titles, so a note can say WHAT was merged
+  // ("Dodge Ram 2025 Auto Loan payment") rather than "1 duplicate" (F-15).
+  const duplicateLabelsBySeries = useMemo(() => {
+    const titleById = new Map<string, string>();
+    for (const s of scopedSeries) titleById.set(s.id, s.title);
+    const m = new Map<string, string[]>();
+    for (const [id, dupes] of duplicatesBySeries) {
+      const labels = Array.from(new Set(dupes.map((d) => titleById.get(d) || "").filter(Boolean)));
+      if (labels.length) m.set(id, labels);
+    }
+    return m;
+  }, [duplicatesBySeries, scopedSeries]);
 
   /** Every deduplicated series in scope — one-off dates included. */
   const survivingSeries = useMemo(() => deduped.map((d) => d.series), [deduped]);
@@ -279,6 +293,7 @@ export function useCalendarOccurrences(
     series: ruleSeries,
     allSeries: survivingSeries,
     duplicatesBySeries,
+    duplicateLabelsBySeries,
     occurrencesForSeries,
     getEventRow,
     profileName,

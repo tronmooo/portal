@@ -48,7 +48,8 @@ import { cn } from "@/lib/utils";
 import { Link } from "wouter";
 import { isNetWorthLiabilityProfile, resolveLiabilityBalance } from "@shared/asset-value";
 import { isAmortizable } from "@shared/liability-types";
-import { resolveAnnualRate, computeAmortizedPayment } from "@shared/liability-calc";
+import { resolveAnnualRate } from "@shared/liability-calc";
+import { loanPayoff, loanStoredTermMonths } from "@shared/loan-facts";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { netWorthChange } from "@shared/net-worth-change";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
@@ -1005,8 +1006,12 @@ export default function FinancePage() {
         const f = p.fields || {};
         const balance = resolveLiabilityBalance(f);
         const rate = resolveAnnualRate(f);
-        const months = Math.max(0, Math.floor(Number(f.remainingTermMonths ?? f.termMonths ?? 0) || 0));
-        const payment = Number(f.monthlyPayment) || (balance > 0 && months > 0 ? computeAmortizedPayment(balance, rate, months) : 0);
+        // ONE payoff (shared/loan-facts): the same amortization the loan's
+        // own page shows. Reading the stored contract term here said "67 mo
+        // left" against the page's "64 mo" for the same loan (F-12).
+        const payoff = loanPayoff(f, localTodayISO());
+        const months = payoff.monthlyPayment > 0 && !payoff.neverAmortizes ? payoff.remainingMonths : loanStoredTermMonths(f);
+        const payment = payoff.monthlyPayment;
         return { id: p.id, name: p.name as string, balance, rate, months, payment };
       })
       .filter((l: { balance: number }) => l.balance > 0)

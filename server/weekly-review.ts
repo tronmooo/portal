@@ -10,6 +10,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_TIMEZONE, getUserToday, zonedTimeToUTC, addDays as tzAddDays } from "@shared/timezone";
+import { withEffectiveCategories, debtPaymentLiabilityIds } from "@shared/expense-effective-category";
 import { getAnthropicClient } from "./anthropic-client";
 import {
   computeBaseline,
@@ -70,11 +71,16 @@ export async function detectAnomalies(storage: any, profileIds?: string[]): Prom
   const thirtyDayAgo = new Date(now - 30 * 86400000);
 
   const fp = profileIds && profileIds.length > 0 ? profileIds : undefined;
-  const [expenses, trackers, budgets] = await Promise.all([
+  const [rawExpenses, trackers, budgets, profilesForDebt] = await Promise.all([
     storage.getExpenses(fp).catch(() => []),
     storage.getTrackers(120, fp).catch(() => []),
     storage.getBudgets().catch(() => []),
+    Promise.resolve().then(() => storage.getProfiles?.()).catch(() => []),
   ]);
+  // A payment against a loan (or the bill that pays one) is "debt" spending,
+  // whatever category the row was stored with — two $912 car payments stored
+  // as "general" used to raise "general spending up 543%" (F-17).
+  const expenses = withEffectiveCategories(rawExpenses as any[], debtPaymentLiabilityIds((profilesForDebt || []) as any[]));
 
   // ── Spending category anomalies ──
   // Weekly avg per category over last 90 days vs last 7 days, via the

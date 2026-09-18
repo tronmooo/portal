@@ -113,7 +113,8 @@ import {
   type AmortizationRow,
 } from "@shared/liability-calc";
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
-import { liabilityBillStatus, BILL_STATUS_META } from "@shared/liability-status";
+import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
+import { nextLoanDueDate } from "@shared/loan-facts";
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
 
 interface LiabilityProfileLike {
@@ -844,8 +845,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   // later) — a passed due date rolls to the next cycle instead of turning the
   // whole bill "Overdue". Genuinely missed occurrences surface separately in the
   // Schedule section (and via missedCount), keeping date and status distinct.
+  // …except an unpaid occurrence still inside the overdue grace window
+  // (shared/liability-status): that IS the next due date, and it reads
+  // "Overdue" here exactly as it does on the bills list and the calendar,
+  // instead of rolling forward silently (F-16).
   const nextFutureOcc = scheduleOccs.find(
-    (o) => o.effectiveDate >= todayISO && o.status !== "paid" && o.status !== "skipped",
+    (o) => (o.effectiveDate >= todayISO || isWithinOverdueGrace(o.effectiveDate, todayISO)) && o.status !== "paid" && o.status !== "skipped",
   );
   const billNextDueEff = nextFutureOcc?.effectiveDate
     || schedule?.nextDue?.effectiveDate
@@ -886,7 +891,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const billReminderLead: number | null = schedule?.reminderLeadDays ?? null;
   const billFrequencyLabel: string = schedule?.frequency || String(f2.frequency || "monthly");
 
-  // Summary + amortization
+  // Summary + amortization. The schedule of TODAY's balance starts at the
+  // NEXT payment (shared/loan-facts nextLoanDueDate) — never at the loan's
+  // origin. Seeded with today's balance but dated from the first payment 18
+  // months back, row 1 read "Mar 31 2025 · 536d overdue" and every payoff
+  // figure was shifted by the months already paid (F-08, F-09).
+  const scheduleStart = useMemo(
+    () => nextLoanDueDate(f2, todayISO) ?? terms.firstPaymentDate,
+    [f2, todayISO, terms.firstPaymentDate],
+  );
   const summary = useMemo(
     () =>
       summarizeLiability({
@@ -895,9 +908,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         monthlyPayment: terms.monthlyPayment || undefined,
         annualRate: terms.annualRate,
         remainingTermMonths: terms.remainingTermMonths,
-        firstPaymentDate: terms.firstPaymentDate,
+        firstPaymentDate: scheduleStart,
       }),
-    [terms],
+    [terms, scheduleStart],
   );
 
   const amortization = useMemo(
@@ -907,9 +920,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         annualInterestRate: terms.annualRate,
         monthlyPayment: terms.monthlyPayment || undefined,
         remainingTermMonths: terms.remainingTermMonths,
-        firstPaymentDate: terms.firstPaymentDate,
+        firstPaymentDate: scheduleStart,
       }),
-    [terms],
+    [terms, scheduleStart],
   );
 
   // Quick payment dialog

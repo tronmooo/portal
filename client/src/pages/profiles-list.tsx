@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Search, Users } from "lucide-react";
+import { isPaymentBillOfListedDebt } from "@shared/liability-types";
 import { PageContainer, PageHeader } from "@/components/ui/page-shell";
 import { BubbleSkeletonGrid } from "@/components/ui/skeleton";
 
@@ -52,7 +53,12 @@ export default function ProfilesListPage() {
 
   const groups = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const matches = (profiles || []).filter(p => !q || p.name?.toLowerCase().includes(q));
+    // A loan and its "<loan> payment" bill are one debt: the bill is reached
+    // from the loan's page, so listing both showed the same liability twice
+    // (F-15). The record is kept; only the index row is folded.
+    const matches = (profiles || [])
+      .filter(p => !isPaymentBillOfListedDebt(p, profiles || []))
+      .filter(p => !q || p.name?.toLowerCase().includes(q));
     const byGroup = new Map<string, LiteProfile[]>();
     for (const p of matches) {
       const key = TYPE_OF_GROUP.get(p.type) ?? "other";

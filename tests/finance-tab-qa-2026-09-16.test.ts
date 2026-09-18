@@ -375,12 +375,13 @@ describe("#4 paying the loan bill moves the loan", () => {
   });
 });
 
-describe("#6 one date rule: the payment is dated the day the money moved, the expense the period it pays for", () => {
-  it("a late catch-up: cash today, expense in the bill's own month", async () => {
-    // Internet Bill due Sep 12, settled later. Two earlier rules disagreed —
-    // the overdue case was back-dated, the early case was dated today — and
-    // dating the expense by payment day put "Rent — Jul 1" (paid by the
-    // autopay catch-up on Sep 6) into September's spend.
+describe("#6 one date rule: the payment AND its expense are dated the day the money moved", () => {
+  // Superseded 2026-09-18 (F-07, tests/qa-2026-09-18-money.test.ts): dating
+  // the expense to the occurrence filed a payment made today as NEXT month's
+  // spend, so Spend MTD and cash flow never moved. The expense is dated the
+  // payment date; a catch-up that belongs to an earlier month is dated by its
+  // caller (the autopay cron passes the due day).
+  it("a late catch-up paid today: cash today, expense today", async () => {
     const internet = {
       id: "bill-net", name: "Internet Bill", type: "liability", type_key: "internet",
       parentProfileId: "person-1",
@@ -391,10 +392,11 @@ describe("#6 one date rule: the payment is dated the day the money moved, the ex
     const today = new Date().toISOString().slice(0, 10);
     expect(out.occurrenceDate).toBe("2026-09-12");
     expect(out.payment.paymentDate).toBe(today);           // the cash date
-    expect(storage.expenses[0].date).toBe("2026-09-12");   // the period it pays for
+    expect(storage.expenses[0].date).toBe(today);          // the same date
+    expect(storage.expenses[0].description).toContain("2026-09-12"); // the period it settled
   });
 
-  it("paying next month's bill early is next month's spend, not this month's", async () => {
+  it("paying next month's bill early is money that left today", async () => {
     const netflix = {
       id: "bill-nf", name: "Netflix", type: "liability", type_key: "streaming",
       parentProfileId: "person-1",
@@ -402,8 +404,9 @@ describe("#6 one date rule: the payment is dated the day the money moved, the ex
     };
     const storage = fakeStorage([netflix]);
     const out = await payBillOccurrence(storage, "bill-nf", { source: "route" }, "UTC");
-    expect(out.payment.paymentDate).toBe(new Date().toISOString().slice(0, 10));
-    expect(storage.expenses[0].date).toBe("2099-01-22");
+    const today = new Date().toISOString().slice(0, 10);
+    expect(out.payment.paymentDate).toBe(today);
+    expect(storage.expenses[0].date).toBe(today);
   });
 });
 

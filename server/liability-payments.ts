@@ -991,15 +991,14 @@ export async function payBillOccurrence(
   // A paid bill is money actually spent; without this row budgets and monthly
   // spend never see bill payments at all.
   //
-  // The expense is dated to the PERIOD the bill pays for (its occurrence), not
-  // the day the money moved. The payment row keeps the cash date. Dated by
-  // payment day, the autopay cron's catch-up — one occurrence per run — put
-  // "Rent — Jul 1" on Sep 6 and "Rent — Aug 1" on Sep 7, so three months of
-  // rent were September spend; paying October's Internet bill early made it
-  // September's second Internet bill. Month-of-occurrence is also the only
-  // rule consistent with the cash-flow model (spend this month + bills still
-  // owed this month): paying an occurrence moves it from "owed" to "spent"
-  // in the SAME month and the total stays put, whenever it is paid.
+  // The expense is dated the day the MONEY MOVED — the payment date — and its
+  // description names the occurrence it settled. QA 2026-09-18 (F-07): dated
+  // to the occurrence instead, "Pay" on a bill whose next cycle was Oct 15
+  // filed a Sep 18 payment as an October expense, so Spend MTD and cash flow
+  // did not move while Recent Activity said "$92 — just now" and the anomaly
+  // engine counted it. A catch-up on an old occurrence is dated by its caller
+  // (the autopay cron passes the due day the debit would have posted on);
+  // an explicit "Mark paid" today is today's spend, whichever cycle it pays.
   //
   // A bill that services a debt logs under "debt", never "general": the
   // obligation's "loan" category had no expense bucket and a $912 car payment
@@ -1020,7 +1019,7 @@ export async function payBillOccurrence(
         amount,
         category: ledger.servicedDebtId ? "debt" : String(f.category || "bills"),
         description: `${liability.name} — ${occurrenceDate}`,
-        date: occurrenceDate,
+        date: paymentDate,
         linkedProfiles: owners,
         // The payment:<id> tag is the join key unpayBillOccurrence uses to
         // retract this exact expense. Not display metadata — an inverse's key.
