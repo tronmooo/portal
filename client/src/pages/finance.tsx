@@ -15,6 +15,7 @@ import { matchesExpenseSearch, sortExpenses, findDuplicateExpense, type ExpenseS
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { formatMoney, formatListDate } from "@/lib/format";
+import { parseHighlight, stripHighlight, HIGHLIGHT_MS } from "@shared/record-highlight";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount, sumMonthIncomeNow, canonicalIncomeFrequency } from "@shared/obligation-windows";
@@ -102,15 +103,24 @@ function sortProfilesForSelect(a: { type?: string; name?: string }, b: { type?: 
  * page component doesn't need to track per-row toggles.
  */
 function ExpandableRow({
-  summary, detail, testId,
+  summary, detail, testId, highlighted = false,
 }: {
   summary: React.ReactNode;
   detail: React.ReactNode;
   testId?: string;
+  /** Landed on from a search result: scroll here and flash the row (F-52). */
+  highlighted?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!highlighted) return;
+    try { rowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); } catch { /* jsdom */ }
+  }, [highlighted]);
   return (
-    <div data-testid={testId}>
+    <div data-testid={testId} ref={rowRef}
+      data-highlighted={highlighted ? "true" : undefined}
+      className={cn("rounded-md transition-colors duration-700", highlighted && "bg-primary/10 ring-2 ring-primary/40")}>
       <div
         role="button"
         tabIndex={0}
@@ -207,6 +217,28 @@ export default function FinancePage() {
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
     }
   }, []);
+  // A search result arrives with `?highlight=expense:<id>` (shared/record-
+  // highlight): widen whatever filter hides that row, page it into view, and
+  // flash it — landing at the top of the tab told the user nothing (F-52).
+  const [highlightId, setHighlightId] = useState<string | null>(() => {
+    try {
+      const h = parseHighlight(window.location.hash || "");
+      return h && h.type === "expense" ? h.id : null;
+    } catch { return null; }
+  });
+  useEffect(() => {
+    if (!highlightId) return;
+    try {
+      const hash = window.location.hash || "";
+      const cleaned = stripHighlight(hash);
+      if (cleaned !== hash) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+    } catch { /* ignore */ }
+    setFilterCategory("all");
+    setDateRange("all");
+    setSearchQuery("");
+    const t = setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
+    return () => clearTimeout(t);
+  }, [highlightId]);
   // Round-6 fix (BUG-016): Add Expense dialog previously had no Date field and
   // always silently used today's date. Edit Expense had a Date field, so the two
   // were inconsistent. Initialise the form's date to today in the user's timezone
@@ -931,6 +963,12 @@ export default function FinancePage() {
   const [visibleCount, setVisibleCount] = useState(EXPENSE_PAGE);
   useEffect(() => { setVisibleCount(EXPENSE_PAGE); }, [filterCategory, searchQuery, rangeStart, sortBy, filterMode, filterIds.join(",")]);
   const visibleExpenses = useMemo(() => sortedExpenses.slice(0, visibleCount), [sortedExpenses, visibleCount]);
+  // A highlighted row beyond the first page is paged in, never left unseen.
+  useEffect(() => {
+    if (!highlightId) return;
+    const idx = sortedExpenses.findIndex((e) => e.id === highlightId);
+    if (idx >= visibleCount) setVisibleCount(idx + 1);
+  }, [highlightId, sortedExpenses, visibleCount]);
   const total = useMemo(() => filtered.reduce((s, e) => s + e.amount, 0), [filtered]);
 
   // Group by category
@@ -1581,6 +1619,7 @@ export default function FinancePage() {
                 <ExpandableRow
                   key={expense.id}
                   testId={`expense-${expense.id}`}
+                  highlighted={highlightId === expense.id}
                   summary={
                     <>
                       <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">

@@ -9,6 +9,7 @@ import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate,
 // One writer at a time per (user, month) within this process; see mutateBudgets.
 const budgetWriteLocks = new Map<string, Promise<void>>();
 import { assertEventSpan } from "@shared/event-span";
+import { searchCorpus } from "@shared/search-match";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 // ---- Shared Supabase client (PERF) ----
 // One client per (url, key) pair per warm container. The Supabase SDK keeps
@@ -8139,12 +8140,6 @@ export class SupabaseStorage implements IStorage {
   // SEARCH
   // ============================================================
   async search(query: string): Promise<any[]> {
-    const q = query.toLowerCase();
-    const results: any[] = [];
-    // Helper: safe lowercase includes check (handles null/undefined fields)
-    const has = (val: any) => val && typeof val === 'string' && val.toLowerCase().includes(q);
-    const tagsMatch = (tags: any) => Array.isArray(tags) && tags.some(t => has(t));
-
     // PERF: Fetch all top-level tables in parallel instead of 9 sequential awaits.
     // Previously this was ~9 round trips taking ~90–300ms each before any
     // filtering even started.
@@ -8158,51 +8153,16 @@ export class SupabaseStorage implements IStorage {
       this.getArtifacts(),
       this.getJournalEntries(),
       this.getMemories(),
-      // Events and documents were never searched at all: the command palette
-      // has had "Events" and "Documents" groups all along, and the API simply
-      // never produced a row for them. A user searching "dentist" found the
-      // task and not the appointment.
       this.getEvents().catch(() => [] as any[]),
       this.getDocuments().catch(() => [] as any[]),
     ]);
 
-    for (const p of profiles) {
-      if (has(p.name) || has(p.type) || tagsMatch(p.tags)) results.push({ ...p, _type: "profile" });
-    }
-    for (const t of trackers) {
-      if (has(t.name) || has(t.category)) results.push({ ...t, _type: "tracker" });
-    }
-    for (const t of tasks) {
-      if (has(t.title) || tagsMatch(t.tags)) results.push({ ...t, _type: "task" });
-    }
-    for (const e of expenses) {
-      if (has(e.description) || has(e.category) || has(e.vendor)) results.push({ ...e, _type: "expense" });
-    }
-    for (const h of habits) {
-      if (has(h.name)) results.push({ ...h, _type: "habit" });
-    }
-    for (const o of obligations) {
-      if (has(o.name) || has(o.category)) results.push({ ...o, _type: "obligation" });
-    }
-    for (const a of artifacts) {
-      if (has(a.title) || has(a.content) || tagsMatch(a.tags)) results.push({ ...a, _type: "artifact" });
-    }
-    for (const j of journal) {
-      if (has(j.content) || tagsMatch(j.tags)) results.push({ ...j, _type: "journal" });
-    }
-    for (const m of memories) {
-      if (has(m.key) || has(m.value)) results.push({ ...m, _type: "memory" });
-    }
-    for (const ev of events as any[]) {
-      if (has(ev.title) || has(ev.description) || has(ev.location) || has(ev.category)) results.push({ ...ev, _type: "event" });
-    }
-    for (const d of documents as any[]) {
-      // Never match on file contents/base64 — name, category, type and tags only.
-      if (has(d.name) || has(d.title) || has(d.category) || has(d.type) || tagsMatch(d.tags)) {
-        const { content, fileData, data, ...rest } = d;
-        results.push({ ...rest, _type: "document" });
-      }
-    }
+    // Which fields match is decided ONCE, in shared/search-match (the same
+    // matcher MemStorage runs), including the dates a profile carries.
+    const results: any[] = searchCorpus(
+      { profiles, trackers, tasks, expenses, habits, obligations, artifacts, journal, memories, events, documents },
+      query,
+    );
 
     // Enhance with entity links — limit to first 10 results to avoid N+1 explosion.
     // Pre-build lookup maps from the already-fetched tables so we don't

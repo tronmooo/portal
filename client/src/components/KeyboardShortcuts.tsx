@@ -16,8 +16,13 @@ export function KeyboardShortcuts() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Don't trigger when typing in inputs/textareas (unless it's the specific combo)
-      const target = e.target as HTMLElement;
-      const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+      const target = e.target as HTMLElement | null;
+      const isInput = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      // Typing is typing: a key pressed inside a field, or while any dialog
+      // (the ⌘K palette included) is open, belongs to that field or dialog —
+      // never to a page-level jump (F-49). `isInput` was computed and ignored.
+      const dialogOpen = typeof document !== "undefined" && !!document.querySelector('[role="dialog"]');
+      if (isInput || dialogOpen) return;
 
       if (!(e.metaKey || e.ctrlKey)) return;
 

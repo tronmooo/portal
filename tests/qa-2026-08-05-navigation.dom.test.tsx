@@ -92,8 +92,11 @@ describe("global search results go somewhere", () => {
 
   it("sends the rest to their own page", () => {
     expect(targetFor("task")).toBe('"/dashboard/tasks"');
-    expect(targetFor("expense")).toBe('"/dashboard/finance"');
-    expect(targetFor("event")).toBe('"/calendar"');
+    // QA 2026-09-18 F-52/F-48: an expense lands on its own ROW (Finance +
+    // `?highlight=expense:<id>`), and a profile-derived date opens the profile
+    // that carries it; both go through a named target helper.
+    expect(targetFor("expense")).toBe("expenseTarget(e)");
+    expect(targetFor("event")).toBe("eventTarget(e)");
     expect(targetFor("habit")).toBe('"/dashboard/habits"');
     expect(targetFor("journal")).toBe('"/dashboard/journal"');
     expect(targetFor("obligation")).toBe('"/dashboard/obligations"');
