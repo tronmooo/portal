@@ -13,8 +13,9 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
-import { countTasksByDay } from "@shared/task-counts";
+import { taskSummaryTiles } from "@shared/task-counts";
 import { isRecurring, humanSummary, parseRecurrence, userTags } from "@shared/recurrence";
+import { isMigrationTag, isRetiredMigratedReminderTask } from "@shared/legacy-reminder-tasks";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { withFullLimit } from "@/lib/list-limit";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
@@ -67,6 +68,13 @@ const PRIORITY_COLORS: Record<string, string> = {
   medium: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
   high: "bg-red-500/10 text-red-600 dark:text-red-400",
 };
+
+const PRIORITY_CYCLE = ["low", "medium", "high"];
+/** The priority a tap on the row's badge moves to: low → medium → high → low. */
+export function nextPriority(current: string | null | undefined): string {
+  const i = PRIORITY_CYCLE.indexOf(String(current || "medium"));
+  return PRIORITY_CYCLE[(i + 1) % PRIORITY_CYCLE.length];
+}
 
 // Cache bus: the "tasks" domain ripples to every linked surface (task lists,
 // dashboard KPIs, stats, activity feed, calendar timeline, insights) in one
@@ -319,10 +327,36 @@ function TaskItem({
 }) {
   const { toast } = useToast();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [dateEditing, setDateEditing] = useState(false);
 
   // Optimistic rows carry a synthetic "tmp-"/"temp-" id until the create
   // settles; PATCH/DELETE against one 404s ("red error but it worked" class).
   const isTempTask = /^te?mp-/.test(String(task.id));
+
+  // One optimistic PATCH for the row's inline fields (due date, priority).
+  const patchMutation = useMutation<any, Error, { dueDate?: string | null; priority?: string }, { prevQueries: [readonly unknown[], Task[] | undefined][] }>({
+    mutationFn: async (patch) => {
+      if (isTempTask) throw new Error("STILL_SAVING");
+      const res = await apiRequest("PATCH", `/api/tasks/${task.id}`, patch);
+      return res.json();
+    },
+    onMutate: async (patch) => {
+      await queryClient.cancelQueries({ queryKey: ["/api/tasks"] });
+      const prevQueries = queryClient.getQueriesData<Task[]>({ queryKey: ["/api/tasks"] });
+      queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
+        old?.map(t => t.id === task.id ? { ...t, ...patch } as Task : t)
+      );
+      return { prevQueries };
+    },
+    onSuccess: () => { invalidateTaskQueries(); },
+    onError: (err: Error, _vars, context) => {
+      if (context?.prevQueries) {
+        for (const [key, data] of context.prevQueries) queryClient.setQueryData(key, data);
+      }
+      if (err.message === "STILL_SAVING") { stillSaving(); return; }
+      toast({ title: `Failed to update "${task.title}"`, description: formatApiError(err), variant: "destructive" });
+    },
+  });
   const stillSaving = () => toast({ title: "Still saving…", description: "This task is a moment from being created — try again in a second." });
 
   const toggleMutation = useMutation<any,Error,void>({
@@ -462,17 +496,55 @@ function TaskItem({
               <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{task.description}</p>
             )}
             <div className="flex items-center gap-2 mt-2 flex-wrap min-w-0">
-              <Badge variant="secondary" className={`text-xs ${PRIORITY_COLORS[task.priority]}`}>
-                {task.priority === "high" && <AlertCircle className="h-3 w-3 mr-1" />}
-                {task.priority}
-              </Badge>
-              {task.dueDate && (
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
+              {/* Inline edits on the row itself (QA 2026-09-18 F-30): the
+                  title already edits in place; priority cycles on a tap and
+                  the date opens a picker. Both go through the same PATCH the
+                  dialog uses, optimistic, with the row still clickable to
+                  open the full editor for notes and tags. */}
+              <button
+                type="button"
+                onClick={stopProp(() => patchMutation.mutate({ priority: nextPriority(task.priority) }))}
+                disabled={patchMutation.isPending}
+                aria-label={`Priority ${task.priority} — change`}
+                title="Change priority"
+                data-testid={`btn-task-priority-${task.id}`}
+              >
+                <Badge variant="secondary" className={`text-xs ${PRIORITY_COLORS[task.priority]}`}>
+                  {task.priority === "high" && <AlertCircle className="h-3 w-3 mr-1" />}
+                  {task.priority}
+                </Badge>
+              </button>
+              {dateEditing ? (
+                <input
+                  type="date"
+                  autoFocus
+                  defaultValue={task.dueDate?.slice(0, 10) ?? ""}
+                  className="text-xs bg-transparent border border-border rounded px-1 py-0.5"
+                  onClick={e => e.stopPropagation()}
+                  onChange={e => {
+                    const next = e.target.value;
+                    if (next === (task.dueDate?.slice(0, 10) ?? "")) return;
+                    setDateEditing(false);
+                    patchMutation.mutate({ dueDate: next || null });
+                  }}
+                  onBlur={() => setDateEditing(false)}
+                  onKeyDown={e => { if (e.key === "Escape") setDateEditing(false); }}
+                  aria-label="Due date"
+                  data-testid={`input-task-due-inline-${task.id}`}
+                />
+              ) : (task.dueDate || task.status !== "done") && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground flex items-center gap-1 hover:text-foreground"
+                  onClick={stopProp(() => setDateEditing(true))}
+                  aria-label={task.dueDate ? "Change due date" : "Add due date"}
+                  data-testid={`btn-task-due-${task.id}`}
+                >
                   <Calendar className="h-3 w-3" />
                   {/* One formatter, shared with every other due-date surface:
                       never shifts a day, always shows a non-current year. */}
-                  {formatStoredDate(task.dueDate) || task.dueDate}
-                </span>
+                  {task.dueDate ? (formatStoredDate(task.dueDate) || task.dueDate) : "Add date"}
+                </button>
               )}
               {/* The recurrence grammar (recur:weekly, rdone:1, ranchor:31 …) lives
                   in tags but is not a label; it reads as one summary pill. */}
@@ -482,8 +554,9 @@ function TaskItem({
                   {humanSummary(parseRecurrence(task.tags || []), task.dueDate || undefined)}
                 </Badge>
               )}
-              {/* BUG-TSK-002: tags must wrap and never truncate */}
-              {userTags(task.tags).map(tag => (
+              {/* BUG-TSK-002: tags must wrap and never truncate. A migration's
+                  bookkeeping tag (migrated:reminder) is not a label (F-29). */}
+              {userTags(task.tags).filter(tag => !isMigrationTag(tag)).map(tag => (
                 <Badge
                   key={tag}
                   variant="outline"
@@ -634,12 +707,21 @@ export default function TasksPage() {
   // (shared/profile-filter.ts) instead of an inline `linked.some(...)` so
   // orphan tasks (no linkedProfiles) still show when the selection includes a
   // self profile — matching finance/journal/server semantics.
-  const profileFilteredTasks = useMemo(() => {
-    if (filterMode === "everyone" || filterIds.length === 0) return tasks || [];
-    return (tasks || []).filter(t => passesProfileFilter(t.linkedProfiles, scopeCtx));
-  }, [tasks, filterMode, filterIds, scopeCtx]);
-  const activeTasks = useMemo(() => profileFilteredTasks.filter(t => t.status !== "done"), [profileFilteredTasks]);
-  const completedTasks = useMemo(() => profileFilteredTasks.filter(t => t.status === "done"), [profileFilteredTasks]);
+  // `undefined` until the list has arrived — the summary band reads it as
+  // "no number yet", never as zero (QA 2026-09-18 F-25).
+  const todayStr = getUserToday(BROWSER_TIMEZONE);
+  const profileFilteredTasks = useMemo<Task[] | undefined>(() => {
+    if (!tasks) return undefined;
+    // A migrated reminder whose series has already ended is a closed chapter
+    // ("Take medication · until Aug 11", four times over); it is folded out
+    // of every list and count here (shared/legacy-reminder-tasks, F-29).
+    const live = tasks.filter(t => !isRetiredMigratedReminderTask(t, todayStr));
+    if (filterMode === "everyone" || filterIds.length === 0) return live;
+    return live.filter(t => passesProfileFilter(t.linkedProfiles, scopeCtx));
+  }, [tasks, filterMode, filterIds, scopeCtx, todayStr]);
+  const visibleTasks = useMemo(() => profileFilteredTasks ?? [], [profileFilteredTasks]);
+  const activeTasks = useMemo(() => visibleTasks.filter(t => t.status !== "done"), [visibleTasks]);
+  const completedTasks = useMemo(() => visibleTasks.filter(t => t.status === "done"), [visibleTasks]);
   // Render the lists in pages: every card is a swipeable tree with several
   // icons (120 tasks = ~4,600 DOM nodes and a 150ms long task on open). The
   // counts above still read the full lists; only the cards on screen are paged.
@@ -653,11 +735,13 @@ export default function TasksPage() {
   // The buckets are the shared rule (shared/task-counts) so this band, the
   // Tasks popup and the Executive tab agree: "Done" here used to be every
   // completed task ever (14) while the Executive tab said "5 completed today".
-  const taskSummary = useMemo(() => {
-    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
-    const c = countTasksByDay(profileFilteredTasks, todayStr, BROWSER_TIMEZONE);
-    return { overdue: c.overdue, dueToday: c.dueToday, upcoming: c.upcoming, done: c.doneToday };
-  }, [profileFilteredTasks]);
+  // The tiles are cut from the SAME list the rows below render from, and are
+  // null (rendered "—") until that list exists — never a real-looking zero
+  // above a page of overdue rows (QA 2026-09-18 F-25).
+  const taskSummary = useMemo(
+    () => taskSummaryTiles(profileFilteredTasks, todayStr, BROWSER_TIMEZONE),
+    [profileFilteredTasks, todayStr],
+  );
 
   if (isLoading) {
     return (
@@ -705,9 +789,12 @@ export default function TasksPage() {
           { label: "Overdue", value: taskSummary.overdue, accent: "0 72% 55%", icon: AlertTriangle },
           { label: "Today", value: taskSummary.dueToday, accent: "43 85% 52%", icon: Flame },
           { label: "Upcoming", value: taskSummary.upcoming, accent: "200 80% 55%", icon: CalendarDays },
-          { label: "Done today", value: taskSummary.done, accent: "155 60% 48%", icon: CheckCircle2 },
+          { label: "Done today", value: taskSummary.doneToday, accent: "155 60% 48%", icon: CheckCircle2 },
         ].map((s, i) => (
-          <MetricCard key={s.label} label={s.label} countTo={s.value} accent={s.accent}
+          // Rendered as a plain value, not a count-up: the animation started
+          // every tile at "0" and sat there for seconds while the long list
+          // below was still being laid out, reading as a real zero (F-25).
+          <MetricCard key={s.label} label={s.label} value={s.value == null ? "—" : s.value} accent={s.accent}
             icon={s.icon} testId={`tasks-summary-${s.label.toLowerCase()}`}
             className="bubble-enter" style={{ ["--i" as any]: i }} />
         ))}
@@ -726,14 +813,14 @@ export default function TasksPage() {
             }`}
             data-testid={`tab-${tab}`}
           >
-            {tab === "all" ? `All (${profileFilteredTasks.length})`
+            {tab === "all" ? `All (${visibleTasks.length})`
               : tab === "open" ? `Open (${activeTasks.length})`
               : `Completed (${completedTasks.length})`}
           </button>
         ))}
       </div>
 
-      {profileFilteredTasks.length === 0 ? (
+      {visibleTasks.length === 0 ? (
         <EmptyState
           icon={ListTodo}
           accent={TASKS_ACCENT}
