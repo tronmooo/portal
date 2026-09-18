@@ -354,5 +354,7 @@ export async function getSyncRuns(
 
 /** PostgREST `ilike` treats % and _ as wildcards — neutralize user input. */
 function escapeLike(input: string): string {
-  return input.replace(/[%_\\]/g, (m) => `\\${m}`).slice(0, 100);
+  // `,` `(` `)` are PostgREST filter syntax: inside an `.or(...)` string they
+  // would let a search term append its own filter clauses. Drop them.
+  return input.replace(/[,()]/g, " ").replace(/[%_\\]/g, (m) => `\\${m}`).slice(0, 100);
 }

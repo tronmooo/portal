@@ -188,6 +188,11 @@ export async function setOwners(
       // answer 404 like every other "no such profile", not a 500.
       const missing = /references profile ([0-9a-f-]+) which does not exist/i.exec(updErr.message || "");
       if (missing) throw Object.assign(new Error(`Profile ${missing[1]} not found`), { statusCode: 404 });
+      // A profile that exists but belongs to another user must look exactly
+      // like one that doesn't exist, or the error text confirms other
+      // tenants' profile ids.
+      const foreign = /profile ([0-9a-f-]+) belongs to another user/i.exec(updErr.message || "");
+      if (foreign) throw Object.assign(new Error(`Profile ${foreign[1]} not found`), { statusCode: 404 });
       throw new Error(`setOwners update ${spec.entityTable} failed: ${updErr.message}`);
     }
   }

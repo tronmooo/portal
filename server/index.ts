@@ -11,6 +11,14 @@ import { authMiddleware, registerAuthRoutes } from "./auth";
 const app = express();
 const httpServer = createServer(app);
 
+// Exactly one trusted proxy hop (Vercel's edge, or a local reverse proxy) sits
+// in front of the app, so req.ip is the address that hop saw — not whatever a
+// client wrote into X-Forwarded-For. The per-IP rate limits in auth.ts and
+// routes.ts depend on this; without it every user shared one bucket.
+app.set("trust proxy", 1);
+// Don't advertise the framework.
+app.disable("x-powered-by");
+
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
