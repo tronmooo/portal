@@ -108,7 +108,9 @@ describe("AI tool registry", () => {
   it("create_profile never falls back to type 'person'", () => {
     // The allow-list moved to the shared PROFILE_TYPES (D291); the rule this
     // test guards — the fallback is "asset", never "person" — did not.
-    const fallback = SRC.match(/const resolvedProfileType\s*=\s*ALLOWED_PROFILE_TYPES\.includes\(input\.type\)\s*\?\s*input\.type\s*:\s*"(\w+)"/);
+    // QA 2026-09-18 F-04: the resolved type is additionally coerced away from
+    // "person" for asset-shaped names (coerceProfileType); the fallback stays.
+    const fallback = SRC.match(/const resolvedProfileType\s*=\s*coerceProfileType\(input\.name,\s*ALLOWED_PROFILE_TYPES\.includes\(input\.type\)\s*\?\s*input\.type\s*:\s*"(\w+)"\)/);
     expect(fallback, "create_profile type fallback line not found — did it move?").toBeTruthy();
     expect(fallback![1]).not.toBe("person");
     expect(fallback![1]).toBe("asset");
