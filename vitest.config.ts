@@ -335,6 +335,11 @@ export default defineConfig({
       'tests/artifact-panel-failures.dom.test.tsx',
       'tests/editor-mobile-controls.test.ts',
       'tests/finance-tab-qa-2026-09-16.test.ts',
+      // QA 2026-09-18: AI advice dropped on the floor, a chat draft that
+      // survived its own send, silent 26s turns, search that missed tasks and
+      // birthdays, and a bell that could not scroll.
+      'tests/qa-2026-09-18-ai-chat-search.test.ts',
+      'tests/qa-2026-09-18-ai-chat-search.dom.test.tsx',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       'tests/test-suite-discovery.test.ts',
