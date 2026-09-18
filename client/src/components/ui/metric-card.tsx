@@ -149,21 +149,26 @@ export function MetricCard({
         {headerRight && <span className="shrink-0">{headerRight}</span>}
       </div>
 
-      <div className="mt-2 flex items-end justify-between gap-2">
-        <div className="min-w-0">
+      {/* The text column owns the width (flex-1 min-w-0) and its captions
+          wrap under the number instead of running into the aside — "+$3,000
+          on Aug 11, 2026" used to wrap onto the trend arrow and "−$70 from
+          previous estimate" overflowed the tile (F-67). */}
+      <div className="mt-2 flex items-end justify-between gap-2 min-w-0">
+        <div className="flex-1 min-w-0">
           <div
             className="metric-value leading-none truncate"
             style={{ color, fontSize: valueSize ? `${valueSize}px` : "26px" }}
+            title={typeof value === "string" ? value : undefined}
           >
             {countTo != null
               ? <>{valuePrefix}<CountUp value={countTo} /></>
               : value}
             {unit && <span className="text-[11px] text-muted-foreground ml-1 font-normal">{unit}</span>}
           </div>
-          {trend && <div className={cn("text-[11px] font-semibold mt-1", TREND_TONE[trendTone])}>{trend}</div>}
-          {sub && <div className="text-[11px] text-muted-foreground mt-1 truncate">{sub}</div>}
+          {trend && <div className={cn("text-[11px] font-semibold mt-1 break-words leading-snug", TREND_TONE[trendTone])}>{trend}</div>}
+          {sub && <div className="text-[11px] text-muted-foreground mt-1 break-words leading-snug line-clamp-2">{sub}</div>}
         </div>
-        {aside && <div className="shrink-0">{aside}</div>}
+        {aside && <div className="shrink-0 self-start">{aside}</div>}
       </div>
 
       {chart && <div className="mt-2">{chart}</div>}

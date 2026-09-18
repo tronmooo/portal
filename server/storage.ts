@@ -8,6 +8,7 @@ import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { analyzeFitnessEntry, calorieContextForOwner, caloriesForStoredEntry, type CalorieContext } from "@shared/fitness-metrics";
 import { addMonthsClamped, addYearsClamped } from "@shared/date-math";
+import { formatMoneyMajor } from "@shared/money";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy } from "@shared/budget-ledger";
 import { assertEventSpan } from "@shared/event-span";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
@@ -2413,7 +2414,7 @@ export class MemStorage implements IStorage {
           })),
         ...expenses.slice(-3).map(e => ({
           type: 'expense',
-          description: `$${e.amount} — ${e.description}`,
+          description: `${formatMoneyMajor(e.amount)} — ${e.description}`,
           timestamp: e.date || e.createdAt,
         })),
       ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),

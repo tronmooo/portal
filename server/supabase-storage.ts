@@ -5,6 +5,7 @@ import {
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID, createHash } from "crypto";
 
+import { formatMoneyMajor } from "@shared/money";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy, spendByCategory, spendByCategory as spendByCategoryOf, type BudgetEntry } from "@shared/budget-ledger";
 // One writer at a time per (user, month) within this process; see mutateBudgets.
 const budgetWriteLocks = new Map<string, Promise<void>>();
@@ -7563,7 +7564,7 @@ export class SupabaseStorage implements IStorage {
           const liability = allProfiles.find((x) => x.id === p.liabilityProfileId);
           return {
             type: 'liability_payment',
-            description: `Paid $${p.amount} — ${liability?.name || 'liability'}`,
+            description: `Paid ${formatMoneyMajor(p.amount)} — ${liability?.name || 'liability'}`,
             timestamp: p.createdAt || p.paymentDate,
           };
         }),
@@ -7602,7 +7603,7 @@ export class SupabaseStorage implements IStorage {
         // Expenses are ordered date DESC — take the head, not the tail.
         ...expenses.slice(0, 3).map(e => ({
           type: 'expense',
-          description: `$${e.amount} — ${e.description}`,
+          description: `${formatMoneyMajor(e.amount)} — ${e.description}`,
           timestamp: e.date || e.createdAt,
         })),
       ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),

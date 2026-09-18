@@ -99,7 +99,16 @@ export const EntityCard = React.forwardRef<HTMLDivElement, EntityCardProps>(func
       <div className="mt-2 flex items-baseline gap-1.5 min-w-0">
         {value != null ? (
           <>
-            <span className="metric-value text-[21px] leading-none text-foreground truncate min-w-0">{value}</span>
+            {/* A long figure shrinks rather than truncates: "$48,629.10" at
+                21px in a two-column phone grid read "$48,629. …" — an
+                ellipsis inside a number is worse than a smaller number (F-65). */}
+            <span
+              className={cn(
+                "metric-value leading-none text-foreground min-w-0 whitespace-nowrap overflow-hidden",
+                typeof value === "string" && value.length > 12 ? "text-[15px]" : typeof value === "string" && value.length > 9 ? "text-[17px]" : "text-[21px]",
+              )}
+              title={typeof value === "string" ? value : undefined}
+            >{value}</span>
             {valueUnit && <span className="text-[11px] text-muted-foreground shrink-0">{valueUnit}</span>}
           </>
         ) : (
@@ -114,8 +123,10 @@ export const EntityCard = React.forwardRef<HTMLDivElement, EntityCardProps>(func
       <div className="mt-2 flex-1 min-h-0 overflow-hidden space-y-1">
         {meta.map((m) => (
           <div key={m.label} className="flex items-baseline justify-between gap-2">
-            <span className="micro-label text-muted-foreground shrink-0">{m.label}</span>
-            <span className="text-[11px] font-medium text-foreground text-right truncate min-w-0">
+            <span className="micro-label text-muted-foreground shrink truncate">{m.label}</span>
+            {/* The value gets the room: "CREDITOR Capital A…" was the label
+                refusing to shrink while the value carried all the ellipsis. */}
+            <span className="text-[11px] font-medium text-foreground text-right truncate min-w-0 flex-1" title={typeof m.value === "string" ? m.value : undefined}>
               {m.value}
             </span>
           </div>

@@ -81,6 +81,11 @@ const SelectContent = React.forwardRef<
         className
       )}
       position={position}
+      // Keep the list inside the viewport with a margin, and never taller than
+      // the room Radix measured below/above the trigger — inside a dialog the
+      // category list used to run past the modal's bottom edge (F-23).
+      collisionPadding={12}
+      style={{ maxHeight: "min(50vh, var(--radix-select-content-available-height))" }}
       {...props}
     >
       <SelectScrollUpButton />

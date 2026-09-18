@@ -12,6 +12,7 @@ import { EXPENSE_CATEGORIES, categoryLabel, canonicalExpenseCategory } from "@sh
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isInScope, ownerCandidatesForProfile } from "@shared/scope";
 import { matchesExpenseSearch, sortExpenses, findDuplicateExpense, type ExpenseSort } from "@shared/expense-view";
+import { guessExpenseCategory } from "@shared/expense-category-guess";
 import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { formatMoney, formatListDate } from "@/lib/format";
@@ -213,6 +214,9 @@ export default function FinancePage() {
   // and let the user override it.
   const todayLocalISO = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
   const [newExpense, setNewExpense] = useState({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+  // True once the user chose a category by hand — the description-driven
+  // suggestion (F-23) never overrides an explicit pick.
+  const [categoryPicked, setCategoryPicked] = useState(false);
   // BUG-023: track whether the user has attempted to submit so we can show
   // red borders on empty required fields instead of just a quiet inline hint.
   const [addAttempt, setAddAttempt] = useState(false);
@@ -1076,7 +1080,7 @@ export default function FinancePage() {
                 dialog stays here (it is a portal, and `addOpen` is also driven
                 by the ?new=expense deep link), but its trigger now sits in the
                 Recent Expenses header, where expenses are actually browsed. */}
-            <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setAddAttempt(false); } }}>
+            <Dialog open={addOpen} onOpenChange={(open) => { setAddOpen(open); if (!open) { setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setCategoryPicked(false); setAddAttempt(false); } }}>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Add Expense</DialogTitle>
@@ -1086,7 +1090,9 @@ export default function FinancePage() {
                     <Input
                       placeholder="What was it for?"
                       value={newExpense.description}
-                      onChange={e => setNewExpense(p => ({ ...p, description: e.target.value }))}
+                      // Suggest the category from the words (the same classifier
+                      // chat uses) until the user picks one themselves (F-23).
+                      onChange={e => setNewExpense(p => ({ ...p, description: e.target.value, ...(categoryPicked ? {} : { category: guessExpenseCategory(e.target.value, p.vendor) || "general" }) }))}
                       data-testid="input-expense-description"
                       aria-invalid={addAttempt && !newExpense.description.trim() ? true : undefined}
                       className={addAttempt && !newExpense.description.trim() ? "border-destructive focus-visible:ring-destructive" : ""}
@@ -1104,7 +1110,7 @@ export default function FinancePage() {
                         className={addAttempt && (!newExpense.amount || parseFloat(newExpense.amount) <= 0) ? "border-destructive focus-visible:ring-destructive" : ""}
                       /></div>
                     <div><Label className="text-xs">Category</Label>
-                      <Select value={newExpense.category} onValueChange={v => setNewExpense(p => ({ ...p, category: v }))}>
+                      <Select value={newExpense.category} onValueChange={v => { setCategoryPicked(true); setNewExpense(p => ({ ...p, category: v })); }}>
                         <SelectTrigger data-testid="select-expense-category"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {EXPENSE_CATEGORY_OPTIONS.map(c => (<SelectItem key={c} value={c}>{categoryLabel(c)}</SelectItem>))}
@@ -1206,7 +1212,7 @@ export default function FinancePage() {
                       addExpenseMutation.mutate(payload);
                       // Close immediately — optimistic insert already populated the list.
                       setAddOpen(false);
-                      setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+                      setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setCategoryPicked(false);
                       setExpenseAccountId("");
                       setAddAttempt(false);
                     }}
@@ -1795,7 +1801,7 @@ export default function FinancePage() {
                 if (duplicateExpense) {
                   addExpenseMutation.mutate(duplicateExpense.payload);
                   setAddOpen(false);
-                  setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO });
+                  setNewExpense({ description: "", amount: "", category: "general", vendor: "", date: todayLocalISO }); setCategoryPicked(false);
                   setExpenseAccountId("");
                 }
                 setDuplicateExpense(null);

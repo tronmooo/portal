@@ -4,9 +4,10 @@
 // 14d with Pay, Balance Sheet, and compact Assets / Liabilities summaries.
 // Pure presentation over data finance.tsx already fetches — all values come in
 // as props so this stays testable and finance.tsx owns the queries/mutations.
+import { useState } from "react";
 import { Link } from "wouter";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatMoneyRound } from "@/lib/format";
+import { formatMoneyRound, formatMoney } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -200,6 +201,18 @@ export function MoneyOverview(props: {
     onOpenSpend, onOpenIncome, onOpenBills, onOpenSavings, onOpenOverview,
   } = props;
   const cashFlow = cashIn - cashOut;
+  // The Assets / Liabilities cards list every row once asked: "Assets 14"
+  // over eight rows and no way to the other six (F-18). Short lists (≤ 12)
+  // never collapse.
+  const ROW_PREVIEW = 8;
+  const [showAllAssets, setShowAllAssets] = useState(false);
+  const [showAllLiabilities, setShowAllLiabilities] = useState(false);
+  const visibleAssets = showAllAssets || assetBreakdown.length <= ROW_PREVIEW + 4 ? assetBreakdown : assetBreakdown.slice(0, ROW_PREVIEW);
+  const visibleLiabilities = showAllLiabilities || liabilityBreakdown.length <= ROW_PREVIEW + 4 ? liabilityBreakdown : liabilityBreakdown.slice(0, ROW_PREVIEW);
+  // Rows and the totals above them share ONE formatter (cents when the value
+  // has them) so a column visually sums — $39.75 + $66.68 rounded per row
+  // read $40 + $67 under a total a dollar higher (F-21).
+  const rowMoney = formatMoney;
   const worstBudget = budgets.slice().sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1)))[0];
   const worstPct = worstBudget ? Math.round((worstBudget.spent / (worstBudget.limit || 1)) * 100) : 0;
   const savingsRate = incomeMtd > 0 ? Math.round(((incomeMtd - spendMtd) / incomeMtd) * 100) : null;
@@ -402,15 +415,15 @@ export function MoneyOverview(props: {
             return (
               <div className="space-y-3">
                 <div>
-                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Assets</span><span className="tabular-nums font-semibold text-emerald-500">{money(assets)}</span></div>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Assets</span><span className="tabular-nums font-semibold text-emerald-500">{rowMoney(assets)}</span></div>
                   <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${(assets / scale) * 100}%` }} /></div>
                 </div>
                 <div>
-                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums font-semibold text-red-500">{money(liabilities)}</span></div>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums font-semibold text-red-500">{rowMoney(liabilities)}</span></div>
                   <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-red-500" style={{ width: `${(liabilities / scale) * 100}%` }} /></div>
                 </div>
                 <div className="border-t border-border pt-2 flex justify-between text-sm font-bold">
-                  <span>Net worth</span><span className={`tabular-nums ${netWorth < 0 ? "text-red-500" : "text-emerald-500"}`}>{money(netWorth)}</span>
+                  <span>Net worth</span><span className={`tabular-nums ${netWorth < 0 ? "text-red-500" : "text-emerald-500"}`}>{rowMoney(netWorth)}</span>
                 </div>
               </div>
             );
@@ -423,34 +436,44 @@ export function MoneyOverview(props: {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {assetBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-assets">
-              <SectionHeading title="Assets" icon={Landmark} accent="155 65% 45%" count={assetBreakdown.length} meta={money(assets)} />
+              <SectionHeading title="Assets" icon={Landmark} accent="155 65% 45%" count={assetBreakdown.length} meta={rowMoney(assets)} />
               <div className="divide-y divide-border/60">
-                {assetBreakdown.slice(0, 8).map(a => (
+                {visibleAssets.map(a => (
                   <Link key={a.id} href={`/profiles/${a.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-asset-${a.id}`}>
                       <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 shrink-0">{a.type}</span>
                       <span className="flex-1 text-sm truncate">{a.name}</span>
-                      <span className="text-sm font-semibold tabular-nums">{money(a.value)}</span>
+                      <span className="text-sm font-semibold tabular-nums">{rowMoney(a.value)}</span>
                     </div>
                   </Link>
                 ))}
               </div>
+              {visibleAssets.length < assetBreakdown.length && (
+                <Button variant="ghost" size="sm" className="w-full mt-1 h-7 text-xs" onClick={() => setShowAllAssets(true)} data-testid="money-assets-show-all">
+                  Show all {assetBreakdown.length}
+                </Button>
+              )}
             </Card>
           )}
           {liabilityBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-liabilities">
-              <SectionHeading title="Liabilities" icon={TrendingDown} accent="0 72% 58%" count={liabilityBreakdown.length} meta={money(liabilities)} />
+              <SectionHeading title="Liabilities" icon={TrendingDown} accent="0 72% 58%" count={liabilityBreakdown.length} meta={rowMoney(liabilities)} />
               <div className="divide-y divide-border/60">
-                {liabilityBreakdown.slice(0, 8).map(l => (
+                {visibleLiabilities.map(l => (
                   <Link key={l.id} href={`/profiles/${l.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-liability-${l.id}`}>
                       <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 shrink-0">{l.type}</span>
                       <span className="flex-1 text-sm truncate">{l.name}</span>
-                      <span className="text-sm font-semibold tabular-nums text-red-500">{money(l.value)}</span>
+                      <span className="text-sm font-semibold tabular-nums text-red-500">{rowMoney(l.value)}</span>
                     </div>
                   </Link>
                 ))}
               </div>
+              {visibleLiabilities.length < liabilityBreakdown.length && (
+                <Button variant="ghost" size="sm" className="w-full mt-1 h-7 text-xs" onClick={() => setShowAllLiabilities(true)} data-testid="money-liabilities-show-all">
+                  Show all {liabilityBreakdown.length}
+                </Button>
+              )}
             </Card>
           )}
         </div>

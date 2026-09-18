@@ -17,6 +17,103 @@ import { seriesFromIncomes } from "@shared/calendar-adapters";
 import {
   sumMonthlyIncomeForMonth, sumMonthIncome, latePaychecks, paycheckStatus, findDuplicatePaycheck, isSatisfiedExpectedPaycheck,
 } from "@shared/obligation-windows";
+import { detectOperation, parseTurnIntents } from "@shared/ai-intent";
+import { checkToolAgainstIntent } from "@shared/ai-tool-routing";
+import { formatMoneyMajor } from "@shared/money";
+import { sortExpenses } from "@shared/expense-view";
+import { guessExpenseCategory } from "@shared/expense-category-guess";
+import { profileValueFingerprint, summaryIsStale } from "@shared/profile-summary-fingerprint";
+import fs from "fs";
+import path from "path";
+
+describe("F-20 a correction updates the expense, it does not create a second one", () => {
+  const msg = "wait that gas was actually $72.50";
+  it("reads as an update of the record named last turn", () => {
+    expect(detectOperation(msg)).toBe("update");
+    expect(detectOperation("wait that gas was actually 72.50")).toBe("update");
+    expect(detectOperation("oops, I meant $45 not $38")).toBe("update");
+    expect(checkToolAgainstIntent("update_expense", parseTurnIntents(msg))).toBeNull();
+  });
+  it("refuses a create_expense for the same words", () => {
+    const v = checkToolAgainstIntent("create_expense", parseTurnIntents(msg));
+    expect(v?.mismatchType).toBe("update_upgraded_to_create");
+    expect(v?.modelDirective).toMatch(/update_expense/);
+  });
+  it("still lets a genuine new expense through", () => {
+    expect(detectOperation("I paid $62.50 for gas yesterday")).not.toBe("update");
+    expect(checkToolAgainstIntent("create_expense", parseTurnIntents("I paid $62.50 for gas yesterday"))).toBeNull();
+  });
+});
+
+describe("F-21 one money formatter, never one decimal", () => {
+  it("prints cents when the value has them and none when it does not", () => {
+    expect(formatMoneyMajor(184.1)).toBe("$184.10");
+    expect(formatMoneyMajor(184)).toBe("$184");
+    expect(formatMoneyMajor(49829.1)).toBe("$49,829.10");
+    expect(formatMoneyMajor(-12.5)).toBe("-$12.50");
+    expect(formatMoneyMajor("39.75")).toBe("$39.75");
+    expect(formatMoneyMajor(null)).toBe("$0");
+  });
+});
+
+describe("F-22 newest-first orders same-day rows by when they were entered", () => {
+  const rows = [
+    { id: "a", description: "Lunch", amount: 12, date: "2026-09-18", createdAt: "2026-09-18T10:00:00Z" },
+    { id: "b", description: "Coffee", amount: 4, date: "2026-09-18", createdAt: "2026-09-18T15:30:00Z" },
+    { id: "c", description: "Gas", amount: 60, date: "2026-09-17", createdAt: "2026-09-17T09:00:00Z" },
+  ];
+  it("puts the just-created expense first among today's rows", () => {
+    expect(sortExpenses(rows, "date-desc").map((r) => r.id)).toEqual(["b", "a", "c"]);
+    expect(sortExpenses(rows, "date-asc").map((r) => r.id)).toEqual(["c", "a", "b"]);
+  });
+  it("amount sorts stay stable on equal amounts", () => {
+    const tie = [{ id: "x", amount: 10, date: "2026-09-01" }, { id: "y", amount: 10, date: "2026-09-02" }];
+    expect(sortExpenses(tie, "amount-desc").map((r) => r.id)).toEqual(["y", "x"]);
+  });
+});
+
+describe("F-23 the form suggests the category chat would pick", () => {
+  it("classifies from the same keyword table", () => {
+    expect(guessExpenseCategory("Dinner at Olive Garden")).toBe("food");
+    expect(guessExpenseCategory("Gas", "Shell")).toBe("transport");
+    expect(guessExpenseCategory("Netflix")).toBe("subscription");
+    expect(guessExpenseCategory("Vet visit")).toBe("pet");
+    expect(guessExpenseCategory("Misc")).toBeNull();
+    expect(guessExpenseCategory("")).toBeNull();
+  });
+});
+
+describe("F-56 the AI summary follows the asset's value", () => {
+  const macbook = { id: "m", type: "asset", fields: { currentValue: 1330, currentValueAsOf: "2026-09-01" } };
+  it("changes its fingerprint when the value changes, in either direction", () => {
+    const before = profileValueFingerprint(macbook);
+    const after = profileValueFingerprint({ ...macbook, fields: { ...macbook.fields, currentValue: 1150 } });
+    expect(after).not.toBe(before);
+    expect(profileValueFingerprint({ ...macbook, fields: { ...macbook.fields, currentValue: 1330 } })).toBe(before);
+    expect(summaryIsStale({ fingerprint: before }, { ...macbook, fields: { ...macbook.fields, currentValue: 1150 } })).toBe(true);
+    expect(summaryIsStale({ fingerprint: before }, macbook)).toBe(false);
+    // An older cached entry without a fingerprint is not flagged client-side.
+    expect(summaryIsStale({}, macbook)).toBe(false);
+  });
+  it("the route keys its cache on the fingerprint", () => {
+    const src = fs.readFileSync(path.join(__dirname, "../server/routes.ts"), "utf8");
+    expect(src).toMatch(/parsed\.fingerprint === fingerprint/);
+  });
+});
+
+describe("F-65 / F-67 card figures shrink instead of truncating mid-number", () => {
+  it("EntityCard steps the headline size down for long figures and gives the meta value the room", () => {
+    const src = fs.readFileSync(path.join(__dirname, "../client/src/components/ui/entity-card.tsx"), "utf8");
+    expect(src).toMatch(/value\.length > 12 \? "text-\[15px\]"/);
+    expect(src).toMatch(/text-right truncate min-w-0 flex-1/);
+  });
+  it("MetricCard captions wrap under the number inside a min-w-0 column", () => {
+    const src = fs.readFileSync(path.join(__dirname, "../client/src/components/ui/metric-card.tsx"), "utf8");
+    expect(src).toMatch(/<div className="flex-1 min-w-0">/);
+    expect(src).toMatch(/font-semibold mt-1 break-words leading-snug/);
+    expect(src).toMatch(/mt-1 break-words leading-snug line-clamp-2/);
+  });
+});
 
 describe("F-11 one amount per income source", () => {
   const owner = "p-self";

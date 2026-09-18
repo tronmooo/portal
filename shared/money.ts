@@ -178,3 +178,20 @@ export function formatMinor(
 export function withinTolerance(a: Minor, b: Minor, toleranceMinor: number): boolean {
   return absMinor(toMinor(a) - toMinor(b)) <= Math.abs(toleranceMinor);
 }
+
+// ─── Major-unit display ───────────────────────────────────────────────────────
+// ONE rule for a hand-entered dollar figure, shared with the client's
+// formatMoney (client/src/lib/format.ts): thousands separators, no ".00" on a
+// whole amount, two decimals otherwise — never one. The server's Recent
+// Activity text used `$${e.amount}`, which printed "$184.1" (QA 2026-09-18
+// F-21); a total built from unrounded rows and shown through this same rule
+// visually sums with them.
+export function formatMoneyMajor(n: number | string | null | undefined): string {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v);
+  const whole = Math.abs(abs - Math.round(abs)) < 0.005;
+  const body = whole
+    ? Math.round(abs).toLocaleString("en-US")
+    : abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${v < 0 ? "-$" : "$"}${body}`;
+}

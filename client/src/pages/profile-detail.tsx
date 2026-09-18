@@ -551,6 +551,7 @@ function getMaintenanceCost(fields: any): number {
 // there was an inline copy here that could drift from the shared version —
 // removed 2026-05-27.
 import { computeAssetRollup as sharedComputeAssetRollup } from "@shared/asset-rollup";
+import { profileValueFingerprint } from "@shared/profile-summary-fingerprint";
 import { resolveAssetValue, resolveLiabilityBalance, isAssetTabProfile, isLiabilityTabProfile } from "@shared/asset-value";
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
 import { isRecurringBill } from "@shared/liability-types";
@@ -1917,9 +1918,11 @@ interface AISummaryData {
     trend?: "up" | "down" | "stable";
   }>;
   generatedAt: string;
+  /** The value figures the summary was written from (shared/profile-summary-fingerprint). */
+  fingerprint?: string;
 }
 
-function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId: string; profileType: string; profileUpdatedAt?: string }) {
+function AISummaryCard({ profileId, profileType, profileUpdatedAt, valueFingerprint }: { profileId: string; profileType: string; profileUpdatedAt?: string; valueFingerprint?: string }) {
   // When set, the next fetch appends ?force=true so the server regenerates
   // instead of serving its 2h cache. Kept as a ref so the single useQuery
   // queryFn stays the only fetch path (see handleRefresh).
@@ -1959,6 +1962,17 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
     forceRef.current = true;
     refetch();
   }, [refetch]);
+
+  // The one edit that DOES regenerate: the value the summary quotes changed
+  // ($1,330 → $1,150 moved net worth while the paragraph and its tiles kept
+  // the old figure, F-56). The server compares the same fingerprint, so a
+  // plain refetch is enough; the stale text stays visible, flagged, until
+  // the new one lands.
+  const valueStale = !!aiSummary?.fingerprint && !!valueFingerprint && aiSummary.fingerprint !== valueFingerprint;
+  useEffect(() => {
+    if (valueStale && !isFetching) refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [valueStale]);
 
   // Wave 9: Look up current market value via web search + AI.
   // Only shown for asset-like profile types (asset/vehicle/property/investment).
@@ -2174,7 +2188,12 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt }: { profileId
       </CardHeader>
       <CardContent className="space-y-3">
         {/* Summary text */}
-        <p className="text-sm text-muted-foreground leading-relaxed" data-testid="text-ai-summary">
+        {valueStale && (
+          <p className="text-[11px] text-amber-500 flex items-center gap-1" data-testid="ai-summary-stale">
+            <RefreshCw className="h-3 w-3 animate-spin" /> Value changed — updating the summary…
+          </p>
+        )}
+        <p className={`text-sm text-muted-foreground leading-relaxed${valueStale ? " opacity-60" : ""}`} data-testid="text-ai-summary">
           {aiSummary.summary}
         </p>
 
@@ -13459,7 +13478,7 @@ export default function ProfileDetailPage() {
           compact inline error instead of blanking the whole profile page. */}
       <div className="px-4 md:px-6 pt-4">
         <SectionErrorBoundary name="profile-ai-summary" inline>
-          <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} />
+          <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} />
         </SectionErrorBoundary>
       </div>
 
