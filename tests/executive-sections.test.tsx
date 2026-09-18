@@ -306,9 +306,30 @@ describe("ExecutiveBriefing", () => {
     expect(screen.queryByTestId("exec-card-recommendations")).toBeNull();
 
     fireEvent.click(screen.getByTestId("exec-recommendations-generate"));
-    const recs = await screen.findByTestId("exec-card-recommendations");
+    // QA 2026-09-18 BUG-06: the advice renders INSIDE the Needs Attention
+    // card (where the button is), not in a tenth card below the fold.
+    const recs = await screen.findByTestId("exec-recommendations");
+    expect(screen.getByTestId("exec-card-attention").contains(recs)).toBe(true);
     expect(recs.textContent).toContain("Link 3 documents");
+    expect(recs.textContent).toContain("They have no profile.");
+    expect(recs.textContent.toLowerCase()).toContain("high");
     expect(asked()).toBe(1);
+
+    // Each row dismisses on its own; the header Dismiss clears the panel.
+    fireEvent.click(screen.getByTestId("exec-recommendation-dismiss-0"));
+    expect(screen.queryByTestId("exec-recommendation-0")).toBeNull();
+    fireEvent.click(screen.getByTestId("exec-recommendations-dismiss-all"));
+    expect(screen.queryByTestId("exec-recommendations")).toBeNull();
+  });
+
+  it("BUG-06: a bare array or {items} response still renders the advice", async () => {
+    stubRoutes({
+      "/api/dashboard/ai-suggestions": [{ title: "Resolve four overdue tasks", priority: "medium", body: "They are piling up." }],
+    });
+    await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+    fireEvent.click(screen.getByTestId("exec-recommendations-generate"));
+    const recs = await screen.findByTestId("exec-recommendations");
+    expect(recs.textContent).toContain("Resolve four overdue tasks");
   });
 
   it("surfaces recent activity in the bottom card", async () => {

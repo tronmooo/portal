@@ -58,6 +58,30 @@ export function HubShell() {
 
   const [tabsRef, tabsClipped] = useOverflowX<HTMLDivElement>([]);
 
+  // QA 2026-09-18 BUG-25: switching tabs kept the previous tab's scroll
+  // offset, so a short tab opened past its own end as a blank viewport. The
+  // shell is the one thing that survives a tab switch, so it resets every
+  // scroller under the main content area to the top when the route changes.
+  const lastLocation = useRef(location);
+  useEffect(() => {
+    if (lastLocation.current === location) return;
+    lastLocation.current = location;
+    const reset = () => {
+      const main = document.getElementById("main-content");
+      if (main && main.scrollTop > 0) main.scrollTop = 0;
+      const scrollers = main
+        ? Array.from(main.querySelectorAll<HTMLElement>("[data-testid^='page-'], .overflow-y-auto"))
+        : [];
+      for (const el of scrollers) if (el.scrollTop > 0) el.scrollTop = 0;
+      try { if (window.scrollY > 0) window.scrollTo(0, 0); } catch { /* jsdom */ }
+    };
+    reset();
+    // Again once the new page chunk has mounted.
+    const frame = typeof requestAnimationFrame === "function" ? requestAnimationFrame(reset) : 0;
+    const timer = setTimeout(reset, 120);
+    return () => { if (frame) cancelAnimationFrame(frame); clearTimeout(timer); };
+  }, [location]);
+
   return (
     // --tab-accent is published here and read by the tab chip, the KPI strip's
     // underline, and every SectionHeading on the page below. One variable, so a

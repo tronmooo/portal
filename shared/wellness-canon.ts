@@ -71,8 +71,12 @@ export interface CanonicalMetric {
    * stored history outside it is ignored on read.
    */
   plausible: [number, number];
-  /** Typical healthy range, used to flag a lab value as out of range. */
-  ref?: { low?: number; high?: number };
+  /**
+   * Typical healthy range, used to flag a lab value as out of range.
+   * `highFrom`: values above `high` but below this are "elevated" (borderline),
+   * not "high" — the AHA blood-pressure bands (QA 2026-09-18 BUG-09).
+   */
+  ref?: { low?: number; high?: number; highFrom?: number };
   direction: MetricDirection;
   /**
    * Alternative units this metric is commonly logged in, with the factor that
@@ -184,9 +188,12 @@ export const CANONICAL_METRICS: CanonicalMetric[] = [
     match: /magnesium/i },
 
   // ── Vitals ────────────────────────────────────────────────────────────────
-  { id: "bp_systolic", label: "Systolic", panel: "vitals", unit: "mmHg", plausible: [50, 300], ref: { low: 90, high: 120 }, direction: "band",
+  // AHA bands (QA 2026-09-18 BUG-09 — ONE table for the Trackers card and the
+  // Wellness tab): normal < 120/80, elevated 120–129 (systolic only), high
+  // from 130 / 80, crisis from 180 / 120 (see bloodPressureVerdict).
+  { id: "bp_systolic", label: "Systolic", panel: "vitals", unit: "mmHg", plausible: [50, 300], ref: { low: 90, high: 119, highFrom: 130 }, direction: "band",
     match: /systolic|\bsbp\b/i },
-  { id: "bp_diastolic", label: "Diastolic", panel: "vitals", unit: "mmHg", plausible: [20, 200], ref: { low: 60, high: 80 }, direction: "band",
+  { id: "bp_diastolic", label: "Diastolic", panel: "vitals", unit: "mmHg", plausible: [20, 200], ref: { low: 60, high: 79 }, direction: "band",
     match: /diastolic|\bdbp\b/i },
   { id: "resting_hr", label: "Resting heart rate", panel: "vitals", unit: "bpm", plausible: [25, 200], ref: { low: 40, high: 100 }, direction: "lower_better",
     match: /resting\s*(heart|hr|pulse)|\brhr\b/i },
@@ -311,15 +318,78 @@ function round(n: number): number {
   return Math.abs(n) >= 100 ? Math.round(n) : Math.round(n * 100) / 100;
 }
 
-export type RangeFlag = "low" | "high" | "normal" | "unknown";
+/** "elevated" = above the healthy band but under the threshold that counts as high. */
+export type RangeFlag = "low" | "elevated" | "high" | "normal" | "unknown";
 
 /** Where a value sits against the metric's reference range. */
 export function flagAgainstReference(metric: CanonicalMetric, canonicalValue: number): RangeFlag {
   const ref = metric.ref;
   if (!ref || !Number.isFinite(canonicalValue)) return "unknown";
   if (ref.low != null && canonicalValue < ref.low) return "low";
-  if (ref.high != null && canonicalValue > ref.high) return "high";
+  if (ref.high != null && canonicalValue > ref.high) {
+    if (ref.highFrom != null && canonicalValue < ref.highFrom) return "elevated";
+    return "high";
+  }
   return "normal";
+}
+
+/** Human word for a flag: "High", "Elevated", "Low" — "" when in range. */
+export function rangeFlagLabel(flag: RangeFlag): string {
+  return flag === "high" ? "High" : flag === "elevated" ? "Elevated" : flag === "low" ? "Low" : "";
+}
+
+// ── Blood pressure: one verdict for every screen ────────────────────────────
+// QA 2026-09-18 BUG-09: the Trackers card said "121/76 — within a normal
+// range" (in range, green) while the Wellness tab said "Systolic 121 — High".
+// Both now read THIS function, which reads the bp_systolic / bp_diastolic
+// reference bands above. Systolic 121 is "Elevated" on both.
+
+export type BloodPressureLabel = "Low" | "In range" | "Elevated" | "High" | "Crisis";
+
+export interface BloodPressureVerdict {
+  label: BloodPressureLabel;
+  /** The worse of the two component flags (crisis reads as "high"). */
+  flag: RangeFlag;
+  systolicFlag: RangeFlag;
+  diastolicFlag: RangeFlag;
+  /** A sentence for the card's insight line. */
+  summary: string;
+}
+
+const BP_CRISIS = { systolic: 180, diastolic: 120 };
+
+export function bloodPressureVerdict(
+  systolic: number | null | undefined,
+  diastolic: number | null | undefined,
+): BloodPressureVerdict | null {
+  const sys = typeof systolic === "number" && Number.isFinite(systolic) ? systolic : null;
+  const dia = typeof diastolic === "number" && Number.isFinite(diastolic) ? diastolic : null;
+  if (sys == null && dia == null) return null;
+  const sysM = getCanonicalMetric("bp_systolic")!;
+  const diaM = getCanonicalMetric("bp_diastolic")!;
+  const systolicFlag: RangeFlag = sys == null ? "unknown" : flagAgainstReference(sysM, sys);
+  const diastolicFlag: RangeFlag = dia == null ? "unknown" : flagAgainstReference(diaM, dia);
+  const reading = `${sys ?? "—"}/${dia ?? "—"}`;
+  const crisis = (sys != null && sys >= BP_CRISIS.systolic) || (dia != null && dia >= BP_CRISIS.diastolic);
+  if (crisis) {
+    return { label: "Crisis", flag: "high", systolicFlag, diastolicFlag,
+      summary: `${reading} is in the hypertensive-crisis range — seek medical care.` };
+  }
+  const flags = [systolicFlag, diastolicFlag];
+  if (flags.includes("high")) {
+    return { label: "High", flag: "high", systolicFlag, diastolicFlag,
+      summary: `${reading} is high (130+ or 80+) — consider talking to your doctor.` };
+  }
+  if (flags.includes("elevated")) {
+    return { label: "Elevated", flag: "elevated", systolicFlag, diastolicFlag,
+      summary: `${reading} is elevated (systolic 120–129). Worth keeping an eye on.` };
+  }
+  if (flags.includes("low")) {
+    return { label: "Low", flag: "low", systolicFlag, diastolicFlag,
+      summary: `${reading} is on the low side.` };
+  }
+  return { label: "In range", flag: "normal", systolicFlag, diastolicFlag,
+    summary: `Blood pressure is ${reading} — within a normal range.` };
 }
 
 /** "70–100 bpm", "< 100 mg/dL", "> 40 mg/dL" — or undefined when no range. */

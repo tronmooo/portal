@@ -176,11 +176,12 @@ function ScoreCard({ score }: { score: WellnessScore }) {
 
 function FlagPill({ flag }: { flag: LabRow["flag"] }) {
   if (flag === "normal" || flag === "unknown") return null;
-  const tone = flag === "high" ? T.orange : T.blue;
+  // QA 2026-09-18 BUG-09: "elevated" is borderline (amber), not "High".
+  const tone = flag === "high" ? T.orange : flag === "elevated" ? T.amber : T.blue;
   return (
     <span className="text-[11px] px-1.5 py-0.5 rounded-full font-medium"
       style={{ background: `hsl(${tone} / 0.15)`, color: `hsl(${tone})` }}>
-      {flag === "high" ? "High" : "Low"}
+      {flag === "high" ? "High" : flag === "elevated" ? "Elevated" : "Low"}
     </span>
   );
 }

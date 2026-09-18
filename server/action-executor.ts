@@ -33,6 +33,8 @@ import { storage } from "./storage";
 import { logger } from "./logger";
 import type { ProposedAction } from "@shared/extraction-actions";
 import { canonicalizeProfileFields } from "@shared/profile-field-canon";
+import { personFieldScope } from "@shared/extraction-destinations";
+import { entityFamily } from "@shared/entity-shape";
 import { mergeFieldWrite, fieldIdentity, fieldValuePersisted, cleanupStoredProfileFields } from "@shared/profile-field-identity";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { normalizeTrackerEntry } from "./tracker-normalize";
@@ -157,6 +159,9 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
             ok(action, `Saved ${res.wrote} field${res.wrote === 1 ? "" : "s"} to ${res.profileName}${action.payload.group ? ` (${action.payload.group})` : ""}`);
           } else if (res.alreadyApplied) {
             skipped(action, `${action.title} — already saved`);
+          } else if (res.keptOnDocument && res.keptOnDocument.length > 0) {
+            // QA 2026-09-18 BUG-19: a person is not a filing cabinet.
+            skipped(action, `${action.title} — kept on the document, not on ${res.profileName} (${res.keptOnDocument.join(", ")} describes the document)`);
           } else {
             failed(action, `fields did not persist to ${res.profileName}: ${res.unsaved.join(", ")}`);
             if (res.profileId) brokenTargets.add(res.profileId);
@@ -182,11 +187,20 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
           const parts: string[] = [];
           let didSomething = false;
 
+          // QA 2026-09-18 BUG-19: a date the PERSON's record did not take (a
+          // citation's due date, a document's expiry) is not lost — it becomes
+          // the standalone reminder the planner now proposes for it, linked to
+          // the person and deduped by the action key like any other.
+          let dateStaysOnDocument = false;
           if (action.payload?.fields && action.payload?.profileId) {
             const res = await writeFieldsToProfile(action, input.documentId);
             if (res.wrote > 0 || res.alreadyApplied) {
               touched.add(res.profileId);
               parts.push(`${action.title} — ${action.payload.date} on ${res.profileName}`);
+              didSomething = true;
+            } else if (res.keptOnDocument && res.keptOnDocument.length > 0) {
+              parts.push(`${action.title} — kept on the document, not on ${res.profileName}`);
+              dateStaysOnDocument = true;
               didSomething = true;
             } else {
               failed(action, `${action.title}: date did not persist to ${res.profileName}`);
@@ -195,6 +209,7 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
           }
 
           const wantsEvent = action.payload?.createEvent === true
+            || dateStaysOnDocument
             || !(action.payload?.fields && action.payload?.profileId);
           // IDEMPOTENT, like the profile-field write: the same document
           // re-confirmed (or re-extracted) used to add the same event again —
@@ -423,6 +438,8 @@ interface FieldWriteResult {
   wrote: number;
   unsaved: string[];
   alreadyApplied: boolean;
+  /** QA 2026-09-18 BUG-19: document-scoped keys a PERSON target did not take. */
+  keptOnDocument?: string[];
 }
 
 /**
@@ -448,8 +465,26 @@ async function writeFieldsToProfile(action: ProposedAction, documentId: string):
 
   const group = action.payload?.group ? String(action.payload.group) : undefined;
   const incomingFields: Record<string, any> = { ...(action.payload?.fields || {}) };
+  // QA 2026-09-18 BUG-19: a document's own dates, amounts and reference
+  // numbers never land on a PERSON (or pet) — the same rule the confirm route
+  // applies (shared/extraction-destinations personFieldScope). The planner no
+  // longer proposes them, but this is the write itself, so it holds the line
+  // for any older plan or replayed action too. Dropped keys count as applied:
+  // the date is already on the document, which is where it belongs.
+  const targetFamily = entityFamily((profile as any).type, (profile as any).type_key ?? (profile as any).typeKey);
+  const keptOnDocument: string[] = [];
+  if (targetFamily === "person" || targetFamily === "pet") {
+    for (const key of Object.keys(incomingFields)) {
+      if (key.startsWith("_")) continue;
+      if (personFieldScope({ key, value: incomingFields[key] }) === "document") {
+        logger.info(CAT, `kept "${key}" on the document rather than on ${profile.name} (person-scoped write)`);
+        keptOnDocument.push(key);
+        delete incomingFields[key];
+      }
+    }
+  }
   if (Object.keys(incomingFields).length === 0) {
-    return { profileId, profileName: profile.name, wrote: 0, unsaved: [], alreadyApplied: true };
+    return { profileId, profileName: profile.name, wrote: 0, unsaved: [], alreadyApplied: keptOnDocument.length === 0, keptOnDocument };
   }
 
   const existingFields: Record<string, any> = (profile as any).fields || {};

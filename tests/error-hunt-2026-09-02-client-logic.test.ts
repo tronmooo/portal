@@ -291,9 +291,13 @@ describe("D96: buildCashTrend", () => {
     const incomes = [{ amount: 1200, frequency: "monthly", date: "2026-08-28" }];
     const t = buildCashTrend(expenses, incomes, "2026-09-02", "America/Los_Angeles");
     expect(t.map(p => p.month)).toEqual(["Apr", "May", "Jun", "Jul", "Aug", "Sep"]);
-    expect(t.map(p => p.inflow)).toEqual([0, 0, 0, 0, 1200, 1200]);
+    // QA 2026-09-18 BUG-05: the CURRENT month plots income received to date,
+    // as the INCOME · MTD card does — on Sep 2 the 28th's paycheck has not
+    // arrived. Past months are complete, so August still shows its $1,200.
+    expect(t.map(p => p.inflow)).toEqual([0, 0, 0, 0, 1200, 0]);
     expect(t.map(p => p.outflow)).toEqual([0, 0, 7, 0, 40, 100]);
-    expect(t[5].net).toBe(1100);
+    expect(t[5].net).toBe(-100);
+    expect(buildCashTrend(expenses, incomes, "2026-09-28", "America/Los_Angeles")[5].inflow).toBe(1200);
   });
 });
 

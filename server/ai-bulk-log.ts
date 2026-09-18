@@ -174,7 +174,11 @@ export function buildBulkReply(ops: OperationOutcome[], createdTrackers: Array<{
 
   const lines: string[] = [];
   if (ok.length > 0) {
-    lines.push(`Logged ${ok.length} of ${ops.length} actions:`);
+    // QA 2026-09-18 BUG-33: natural phrasing when everything landed; the
+    // "N of M" ratio only when something did not.
+    lines.push(ok.length === ops.length
+      ? `Logged ${ok.length} action${ok.length === 1 ? "" : "s"}:`
+      : `Logged ${ok.length} of ${ops.length} actions:`);
     for (const o of ok) lines.push(`✅ ${opLabel(o)}`);
   }
   if (deduped.length > 0) {

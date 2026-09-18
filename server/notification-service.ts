@@ -14,6 +14,47 @@ import { habitDayProgress } from "@shared/habit-progress";
 import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords } from "@shared/date-rules";
 import { isActiveObligation } from "@shared/obligation-windows";
 import { BILL_REMINDER_TASK_PREFIX } from "./liability-payments";
+import { humanizeFieldName } from "@shared/field-label";
+
+// ── QA 2026-09-18 BUG-29 helpers ─────────────────────────────────────────────
+// The bell leaked a field name ("expirationDate expired 109 days ago
+// (2026-06-01)") and then printed "109 days ago" again under it, and every
+// overdue row — "Overdue: Pet my dog" included — sat under a red CRITICAL
+// heading. Messages now use the human label and name the date ONCE (the bell
+// adds the relative distance itself), and severity follows what the item is.
+
+/** "expirationDate" → "Expiration date". */
+export function fieldSentenceLabel(key: string): string {
+  const words = humanizeFieldName(String(key || "").split(".").pop() || "");
+  if (!words) return "Date";
+  return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
+}
+
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "2026-06-01" → "Jun 1, 2026"; anything else passes through. */
+export function prettyDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+  if (!m) return String(iso || "");
+  return `${MONTHS_SHORT[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`;
+}
+
+/** Documents whose lapse has legal or financial consequences: critical when expired. */
+const CRITICAL_DOC = /insurance|policy|passport|licen[cs]e|registration|visa|permit|lease|contract|deed|title\b|legal|tax|warranty|certificat|identification|\bid\b|green\s*card|residen/i;
+
+/**
+ * Severity of an EXPIRED date rule: critical for legal/insurance records,
+ * warning for everything else (a lapsed gym membership is not a crisis).
+ */
+export function expiredRuleSeverity(input: {
+  isDocument: boolean;
+  documentType?: string | null;
+  name?: string | null;
+  ruleSubtype?: string | null;
+  fieldKey?: string | null;
+}): "critical" | "warning" {
+  const hay = [input.documentType, input.name, input.ruleSubtype, input.fieldKey].filter(Boolean).join(" ");
+  return CRITICAL_DOC.test(hay) ? "critical" : "warning";
+}
 
 export interface AppNotification {
   id: string;
@@ -134,6 +175,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   //
   // What counts is `isAlertDateRule` (shared/date-rules) — the one answer the
   // dashboard's insight cards read too.
+  const docById = new Map<string, any>((documents as any[]).map((d: any) => [String(d.id), d]));
   for (const rule of rulesFromAll({ profiles, documents })) {
     if (!rule.active || !isAlertDateRule(rule)) continue;
     const isDoc = rule.sourceEntityType === "document";
@@ -145,6 +187,10 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     const key = rule.sourcePath || rule.sourceField;
     const name = rule.subtitle || rule.label;
     const [pastTitle, soonTitle, laterTitle, futureVerb, pastVerb] = words;
+    // Human label + the date once (BUG-29); the bell adds "109 days ago".
+    const label = fieldSentenceLabel(key);
+    const when = prettyDate(rule.date || rule.rawValue);
+    const sourceDoc = isDoc ? docById.get(rule.sourceEntityId) : undefined;
     const base = {
       // The DATE is part of the id (D244): a dismissal is of one fact — this
       // expiry, this due day — never of every later one. Correct the date, or
@@ -155,27 +201,34 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       entityType: isDoc ? "document" : "profile",
       dueDate: rule.rawValue || rule.date,
     };
-    const shown = rule.rawValue || rule.date;
     if (diff < 0) {
       notifications.push({
         ...base,
-        severity: "critical",
-        title: isDoc ? `${pastTitle}: ${name}` : `${pastTitle}: ${name} - ${key}`,
-        message: `${key} ${pastVerb} ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago (${shown})`,
+        severity: expiredRuleSeverity({
+          isDocument: isDoc,
+          documentType: (sourceDoc as any)?.type,
+          name: `${name} ${(sourceDoc as any)?.name || ""}`,
+          ruleSubtype: rule.ruleSubtype,
+          fieldKey: key,
+        }),
+        title: isDoc ? `${pastTitle}: ${name}` : `${pastTitle}: ${name} — ${label}`,
+        // The relative distance AND the date, each exactly once; the bell
+        // does not add its own "N days ago" line under a message that has one.
+        message: `${label} ${pastVerb} ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago (${when})`,
       });
     } else if (diff <= 7) {
       notifications.push({
         ...base,
         severity: "warning",
-        title: isDoc ? `${soonTitle}: ${name}` : `${soonTitle}: ${name} - ${key}`,
-        message: `${key} ${futureVerb} ${diff === 0 ? "today" : `in ${diff} day${diff !== 1 ? "s" : ""}`} (${shown})`,
+        title: isDoc ? `${soonTitle}: ${name}` : `${soonTitle}: ${name} — ${label}`,
+        message: `${label} ${futureVerb} ${diff === 0 ? "today" : `in ${diff} day${diff !== 1 ? "s" : ""}`} (${when})`,
       });
     } else {
       notifications.push({
         ...base,
         severity: "info",
-        title: isDoc ? `${laterTitle}: ${name}` : `${laterTitle}: ${name} - ${key}`,
-        message: `${key} ${futureVerb} in ${diff} days (${shown})`,
+        title: isDoc ? `${laterTitle}: ${name}` : `${laterTitle}: ${name} — ${label}`,
+        message: `${label} ${futureVerb} in ${diff} days (${when})`,
       });
     }
   }
@@ -204,7 +257,10 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       notifications.push({
         id: `task-overdue-${task.id}-${String(task.dueDate).slice(0, 10)}`,
         type: "task_overdue",
-        severity: "critical",
+        // BUG-29: an overdue personal task is worth attention, not a red
+        // CRITICAL heading — critical is for lapsed legal/insurance records
+        // and overdue bills. High priority still escalates a week late.
+        severity: task.priority === "high" && diff <= -7 ? "critical" : "warning",
         title: `Overdue: ${task.title}`,
         message: `Was due ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago${atTime(task)}`,
         entityId: task.id,

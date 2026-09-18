@@ -159,7 +159,13 @@ export function buildTurnRecap(ops: RecapOp[]): string {
     lines.push(line(ok[0]));
   } else {
     if (ok.length > 0) {
-      lines.push(`Logged ${ok.length} of ${ops.length}:`);
+      // QA 2026-09-18 BUG-33: "Logged 2 of 2:" read as a score, not a
+      // sentence. When everything landed, say how many things were logged;
+      // "N of M" is kept only for the partial case, where the ratio is the
+      // point.
+      lines.push(ok.length === ops.length
+        ? `Logged ${ok.length} item${ok.length === 1 ? "" : "s"}:`
+        : `Logged ${ok.length} of ${ops.length}:`);
       for (const o of ok) lines.push(`✅ ${line(o)}`);
     }
   }

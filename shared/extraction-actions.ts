@@ -51,7 +51,7 @@ import {
   recurrenceAmounts,
   CONFIDENCE_MEDIUM,
 } from "./semantic-document";
-import { type ExtractionDestination, type ExtractionItem } from "./extraction-destinations";
+import { type ExtractionDestination, type ExtractionItem, personFieldScope } from "./extraction-destinations";
 import { classifyDateField } from "./date-rules";
 import { normalizeDateString } from "./extraction-normalize";
 import { rankByName, sameEntityName } from "./entity-resolution";
@@ -1672,7 +1672,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
 
       const cls = classifyDateField(item.key, semantic.documentType);
       const ownerTarget = item.subjectRef ? landingFor(item.subjectRef).target : contextTarget;
-      const onRecord = Boolean(ownerTarget && ownerTarget.kind === "profile" && ownerTarget.id);
+      const onRecord = dateBelongsOnRecord(ownerTarget, item.key, iso);
       const ownerName = ownerTarget?.name;
 
       if (!cls.actionable) {
@@ -1918,6 +1918,27 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
 /** Rule types a record may hold exactly one of, however many spellings of it
  *  the document prints. */
 const SINGLETON_RULE_TYPES: ReadonlySet<string> = new Set(["birthday", "anniversary"]);
+
+/**
+ * QA 2026-09-18 BUG-19: may this DATE be written onto the target's record?
+ *
+ * A person is not a filing cabinet. A citation's `dueDate`, an invoice's
+ * `paymentDue`, a policy's `expirationDate` describe the DOCUMENT, and writing
+ * them onto the person put "DUE DATE 2026-09-25" on the user's own Info page.
+ * The confirm route already keeps such keys on the document
+ * (`personFieldScope`); the actions rail is the other door into the same
+ * profile, and it now applies the same rule, so the date stays on the
+ * document's extractedData (where shared/date-rules derives its calendar and
+ * Upcoming entries) and the action becomes a standalone reminder instead.
+ * Assets and other records keep every date — a car's registration expiry IS
+ * a fact about the car.
+ */
+function dateBelongsOnRecord(target: TargetRef | undefined, key: string, iso: string): boolean {
+  if (!target || target.kind !== "profile" || !target.id) return false;
+  const family = entityFamily(target.profileType, target.typeKey);
+  if (family !== "person" && family !== "pet") return true;
+  return personFieldScope({ key, value: iso }) === "profile";
+}
 
 const ACTION_ONLY_DESTINATIONS: ReadonlySet<ExtractionDestination> = new Set([
   "tracker", "profile_tracker", "calendar", "task", "expense", "income",
@@ -2401,7 +2422,7 @@ function dateActionFor(
     };
   }
 
-  const onRecord = Boolean(landing.target.id && landing.target.kind === "profile");
+  const onRecord = dateBelongsOnRecord(landing.target, key, iso);
   const recurring = cls.recurrence !== "none";
   const word = DATE_RULE_WORD[cls.ruleType] ?? "Date";
   // A recurring date needs an EVENT as well as the field, or it is not on the

@@ -337,6 +337,17 @@ export default defineConfig({
       'tests/finance-tab-qa-2026-09-16.test.ts',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
+      // QA 2026-09-18 BUG-01: the profile scope must never change without a gesture.
+      'tests/qa-2026-09-18-profile-scope.test.ts',
+      // QA 2026-09-18 money/finance cluster (income MTD, paychecks, categories, accounts, formatting).
+      'tests/finance-money-qa-2026-09-18.test.ts',
+      // QA 2026-09-18 chat-engine cluster (person-name guard, one birthday event, no fabricated appointments, recap wording, document dates off people).
+      'tests/chat-engine-qa-2026-09-18.test.ts',
+      // QA 2026-09-18 dashboard/hub cluster: relative time, activity units,
+      // BP verdict, quick-add due phrases, bell severity, task counts.
+      'tests/qa-2026-09-18-dashboard-cluster.test.ts',
+      // QA 2026-09-18 BUG-10/28: hub KPI strip task source + overflow affordance.
+      'tests/qa-2026-09-18-hub-strip.dom.test.tsx',
       'tests/test-suite-discovery.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],

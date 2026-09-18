@@ -3,6 +3,7 @@ import {
   appendValuationHistory, VALUATION_HISTORY_LIMIT, understandingKey, readUnderstanding,
 } from "./valuation/storage-codec";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { describeTrackerEntry, dedupeActivityRows } from "@shared/activity-description";
 import { randomUUID, createHash } from "crypto";
 
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy, spendByCategory, spendByCategory as spendByCategoryOf, type BudgetEntry } from "@shared/budget-ledger";
@@ -10,6 +11,7 @@ import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate,
 const budgetWriteLocks = new Map<string, Promise<void>>();
 import { assertEventSpan } from "@shared/event-span";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
+import { formatDollars } from "@shared/money";
 // ---- Shared Supabase client (PERF) ----
 // One client per (url, key) pair per warm container. The Supabase SDK keeps
 // internal Fetch/Auth/Realtime state that's safe to share across requests
@@ -86,7 +88,7 @@ import {
 } from "../shared/liability-billing";
 import {
   accountViews, accountKindMeta, applyBalanceAdjustment, balanceFieldsFor,
-  isAccountProfile, isDebtAccount, normalizeAccountKind,
+  isAccountProfile, isDebtAccount, normalizeAccountKind, accountKindOf,
   reconcileAccountBalanceFields,
 } from "../shared/finance-accounts";
 import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-ownership";
@@ -101,7 +103,7 @@ import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { isTestEntity } from "../shared/test-data";
-import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth } from "../shared/obligation-windows";
+import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "../shared/obligation-windows";
 
 // PostgREST `.or()` filters are built by string concatenation, so a value
 // containing `,` `(` `)` or `.` breaks out of its operand and appends
@@ -185,13 +187,16 @@ async function loadSharp(): Promise<any | null> {
 // omits file_data — base64 blobs can be 10MB+ each and must never ship in a
 // list. Binary is fetched on demand by getDocument(id)/:id/file only. Shared by
 // getDocuments and getDocumentsPage so the two list paths stay in lockstep.
+// storage_path is a short string and tells the list whether a file exists
+// behind the row (QA 2026-09-18 BUG-31: the list said "Image" for a document
+// whose photo was never kept; shared/document-file reads storagePath).
 const DOCUMENT_LIST_COLUMNS =
-  "id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at";
+  "id, user_id, name, type, mime_type, extracted_data, linked_profiles, tags, created_at, updated_at, storage_path";
 
-// Single-document metadata projection. Same as the list projection plus
-// storage_path — deliberately WITHOUT file_data so opening a document never
-// pulls its (multi-MB, base64) binary down just to render the details pane.
-const DOCUMENT_META_COLUMNS = `${DOCUMENT_LIST_COLUMNS}, storage_path`;
+// Single-document metadata projection. Same as the list projection —
+// deliberately WITHOUT file_data so opening a document never pulls its
+// (multi-MB, base64) binary down just to render the details pane.
+const DOCUMENT_META_COLUMNS = DOCUMENT_LIST_COLUMNS;
 
 /**
  * Merge an incoming JSONB-style patch into an existing object AND honor deletion
@@ -1639,11 +1644,11 @@ export class SupabaseStorage implements IStorage {
         timeline.push({ id: e.id, type: "tracker", title: `${t.name} logged`, description: Object.entries(e.values).map(([k, v]) => `${k}: ${v}`).join(", "), data: { ...e.values, computed: e.computed, trackerId: t.id }, timestamp: e.timestamp });
       }
     }
-    for (const e of relatedExpenses) timeline.push({ id: e.id, type: "expense", title: e.description, description: `$${e.amount} - ${e.category}`, timestamp: e.date });
+    for (const e of relatedExpenses) timeline.push({ id: e.id, type: "expense", title: e.description, description: `${formatDollars(e.amount)} - ${e.category}`, timestamp: e.date });
     for (const t of relatedTasks) timeline.push({ id: t.id, type: "task", title: t.title, description: `${t.status} - ${t.priority}`, timestamp: t.createdAt });
     for (const e of relatedEvents) timeline.push({ id: e.id, type: "event", title: e.title, description: e.description, timestamp: e.date });
     for (const d of relatedDocuments) timeline.push({ id: d.id, type: "document", title: d.name, description: d.type, timestamp: d.createdAt });
-    for (const o of relatedObligations) timeline.push({ id: o.id, type: "obligation", title: o.name, description: `$${o.amount}/${o.frequency}`, timestamp: o.createdAt });
+    for (const o of relatedObligations) timeline.push({ id: o.id, type: "obligation", title: o.name, description: `${formatDollars(o.amount)}/${o.frequency}`, timestamp: o.createdAt });
     for (const j of relatedJournal) timeline.push({ id: j.id, type: "journal", title: j.content?.slice(0, 80) || "Journal entry", description: j.mood ? `Mood: ${j.mood}` : undefined, timestamp: j.date || (j as any).createdAt });
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
@@ -4030,7 +4035,7 @@ export class SupabaseStorage implements IStorage {
         console.error(`[createExpense] setOwners failed for ${id.slice(0,8)}: ${e?.message || e}`);
       }
     }
-    this.logActivity("expense", `${data.description} - $${data.amount}`, "create", id);
+    this.logActivity("expense", `${data.description} - ${formatDollars(data.amount)}`, "create", id);
     return (await this.getExpense(id))!;
   }
 
@@ -7557,12 +7562,14 @@ export class SupabaseStorage implements IStorage {
       monthlySpend: monthlyExpenses.reduce((sum, e) => sum + e.amount, 0),
       weeklyEntries,
       streaks,
-      recentActivity: [
+      // QA 2026-09-18: a 2×/day habit mirrors two identical rows at one moment
+      // — the feed shows the line once (shared/activity-description).
+      recentActivity: dedupeActivityRows([
         ...recentLiabilityPayments.map((p: any) => {
           const liability = allProfiles.find((x) => x.id === p.liabilityProfileId);
           return {
             type: 'liability_payment',
-            description: `Paid $${p.amount} — ${liability?.name || 'liability'}`,
+            description: `Paid ${formatDollars(p.amount)} — ${liability?.name || 'liability'}`,
             timestamp: p.createdAt || p.paymentDate,
           };
         }),
@@ -7581,9 +7588,9 @@ export class SupabaseStorage implements IStorage {
               const parts = [cal != null ? `${cal} cal` : null, protein != null ? `${protein}g protein` : null, carbs != null ? `${carbs}g carbs` : null, fat != null ? `${fat}g fat` : null].filter(Boolean);
               return `${t.name}: ${parts.join(', ')}`;
             }
-            if (nums.length === 1) return `${t.name}: ${nums[0][1]} ${nums[0][0]}`;
-            const summary = nums.slice(0, 2).map(([k, v]) => `${v} ${k}`).join(', ');
-            return `${t.name}: ${summary}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
+            // QA 2026-09-18 BUG-16: real units ("181.2 lbs", "140 mg/dL"), never
+            // the field name or "value" in the unit slot (shared/activity-description).
+            return describeTrackerEntry(t as any, e.values);
           })(),
           timestamp: e.timestamp,
         }))),
@@ -7601,10 +7608,12 @@ export class SupabaseStorage implements IStorage {
         // Expenses are ordered date DESC — take the head, not the tail.
         ...expenses.slice(0, 3).map(e => ({
           type: 'expense',
-          description: `$${e.amount} — ${e.description}`,
-          timestamp: e.date || e.createdAt,
+          description: `${formatDollars(e.amount)} — ${e.description}`, // QA 2026-09-18 BUG-18: "$184.1" for 184.10
+          // QA 2026-09-18 BUG-15: the feed is about WHEN it was logged; the
+          // expense's calendar date read "14h ago" seconds after it was added.
+          timestamp: e.createdAt || e.date,
         })),
-      ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),
+      ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())).slice(0, 10),
       totalHabits: habits.length,
       habitCompletionRate,
       totalObligations: obligations.length,
@@ -7895,8 +7904,18 @@ export class SupabaseStorage implements IStorage {
     // paychecks that actually landed in it. Marking a paycheck received used
     // to move nothing at all (INCOME · MTD stayed $0, savings rate stayed "—").
     const receivedPaycheckIncome = sumReceivedPaychecksForMonth(allPaychecksEnh as any[], userYearMonth);
-    const recurringIncome = sumMonthlyIncomeForMonth(allIncomesEnh as any[], userYearMonth);
-    const monthlyIncome = recurringIncome + receivedPaycheckIncome;
+    // QA 2026-09-18 BUG-05: month-to-date income is money that has ARRIVED.
+    // The monthly equivalent of every stream counted a paycheck first dated
+    // the 30th in full on the 18th, so INCOME · MTD, Cash Flow and the
+    // savings rate ran ~$3,000 ahead of reality while spend is actuals only.
+    // `monthlyIncome` is now received-to-date (streams whose pay day has
+    // arrived, one-offs dated on or before today, received paychecks — a
+    // stream occurrence a received paycheck already covers counted once);
+    // `projectedIncome` keeps the full-month expectation for surfaces that
+    // want to say "expected this month".
+    const monthlyIncome = sumMonthIncomeToDate(allIncomesEnh as any[], allPaychecksEnh as any[], userYearMonth, today);
+    const recurringIncome = Math.max(0, monthlyIncome - receivedPaycheckIncome);
+    const projectedIncome = sumMonthlyIncomeForMonth(allIncomesEnh as any[], userYearMonth) + receivedPaycheckIncome;
 
     // Calendar days in the user's zone: `new Date("YYYY-MM-DD") < now` listed a
     // task due TODAY as overdue on the dashboard widget for the whole day.
@@ -7933,7 +7952,11 @@ export class SupabaseStorage implements IStorage {
       if (gross <= 0) continue;
       const share = shareForAsset(p);
       if (share <= 0) continue;
-      assetBreakdown.push({ id: p.id, name: p.name, type: p.type, grossValue: gross, share, value: gross * share / 100 });
+      // QA 2026-09-18 BUG-13: an account row says what KIND of account it is
+      // (savings / checking / investment) so the Balance Sheet badge does not
+      // read "INVESTMENT" for a savings account filed under that profile type.
+      const accountKind = isAccountProfile(p) ? accountKindOf(p) : undefined;
+      assetBreakdown.push({ id: p.id, name: p.name, type: p.type, ...(accountKind ? { accountKind } : {}), grossValue: gross, share, value: gross * share / 100 });
     }
     assetBreakdown.sort((a, b) => b.value - a.value);
     const liabilityBreakdown: Array<{ id: string; name: string; type: string; typeKey: string | null; grossValue: number; share: number; value: number }> = [];
@@ -7973,6 +7996,7 @@ export class SupabaseStorage implements IStorage {
         monthlyIncome,
         recurringIncome,
         receivedPaycheckIncome,
+        projectedIncome,
         totalAssetValue: (() => {
           // Asset profiles: vehicles, real estate, investments, accounts, generic assets, even loans
           // (a loan profile may carry the asset's market value separately from its remaining balance).

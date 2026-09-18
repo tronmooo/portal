@@ -1,5 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
-import { sumMonthIncomeNow } from "@shared/obligation-windows";
+import { sumMonthIncomeToDateNow } from "@shared/obligation-windows";
 import { localTodayISO } from "@/lib/dates";
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
@@ -116,35 +116,16 @@ import { CashFlowView } from "@/components/finance/CashFlowView";
 import { QuickAddDialog, type QuickAddKind } from "@/components/dashboard/quick-add/QuickAddDialog";
 import { TasksPopup, HabitsPopup } from "@/components/dashboard/TaskHabitPopups";
 import { ExecutiveBriefing } from "@/components/dashboard/ExecutiveBriefing";
+import { relativeTimeShort } from "@shared/relative-time";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function timeAgo(ts: string): string {
-  // Round-6 fix (BUG-009): previous logic computed elapsed hours and said
-  // "Yesterday" whenever 24-48 hours had passed. A 25-hour-old expense created
-  // last night could therefore display "Yesterday" even though today's calendar
-  // date matches the expense's calendar date. Compare CALENDAR days in the
-  // user's timezone instead so "Today" actually means today.
-  const entry = new Date(ts);
-  if (isNaN(entry.getTime())) return "";
-  const diff = Date.now() - entry.getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  // Compare YYYY-MM-DD strings rendered in the user's local timezone so a
-  // 25-hour-old event whose calendar date equals today still says "Today".
-  const entryDay = entry.toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
-  const todayDay = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
-  if (entryDay === todayDay) return "Today";
-  // Yesterday in the user's timezone: subtract one day from today's local date.
-  const yest = new Date();
-  yest.setDate(yest.getDate() - 1);
-  const yesterdayDay = yest.toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE });
-  if (entryDay === yesterdayDay) return "Yesterday";
-  const days = Math.floor(hrs / 24);
-  return `${days}d ago`;
+  // QA 2026-09-18 BUG-15: shared/relative-time. A bare "2026-09-18" (an
+  // expense's date) is a calendar day — it read "14h ago" seconds after
+  // being added because `new Date("2026-09-18")` is UTC midnight. A future
+  // date now reads "in 3 weeks", never "0m"/"just now".
+  return relativeTimeShort(ts);
 }
 
 // `parseISODate` (shared/date-math) reads YYYY-MM-DD at LOCAL midnight.
@@ -776,7 +757,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // received moved nothing on any tile.
   const monthlyIncome = enhanced?.financeSnapshot?.monthlyIncome != null
     ? Number(enhanced.financeSnapshot.monthlyIncome) || 0
-    : sumMonthIncomeNow(incomes, null, BROWSER_TIMEZONE);
+    : sumMonthIncomeToDateNow(incomes, null, BROWSER_TIMEZONE);
   // BUG (user report: tile "Out $0" while the Cash Flow popup said "Out $1,020"):
   // the tile only counted logged expenses; the popup counts recurring bills too.
   // Out = month expenses + the bill money STILL OWED this month. It used to add
@@ -3824,7 +3805,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
   // Falls back to stats?.monthlySpend for the brief window before enhanced data arrives.
   const monthlySpend = data?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
   const monthlyIncome = useMemo(
-    () => (data?.monthlyIncome != null ? Number(data.monthlyIncome) || 0 : sumMonthIncomeNow(incomes || [], null, BROWSER_TIMEZONE)),
+    () => (data?.monthlyIncome != null ? Number(data.monthlyIncome) || 0 : sumMonthIncomeToDateNow(incomes || [], null, BROWSER_TIMEZONE)),
     [incomes, data?.monthlyIncome],
   );
   // Same definition as the hero tile + Cash Flow popup: Out includes the bills
@@ -5504,18 +5485,14 @@ export default function DashboardPage() {
   // filterIds passed through directly.
   const resolvedFilterId = filterMode === "everyone" ? undefined : (filterIds.length === 1 ? filterIds[0] : undefined);
 
-  // Sync profile filter to module-level state for backward compat with sub-pages.
-  // Only mirror a SINGLE selected profile. We must NOT write "everyone" here:
-  //   (a) on first load it would persist "everyone" before initDefaultProfileFilter
-  //       can seed the Self profile (defeating the personal-by-default rule), and
-  //   (b) it would reset a 2+ profile multi-selection back to everyone.
-  // "Everyone" is only ever set by an explicit toolbar choice (which persists it).
-  useEffect(() => {
-    if (!resolvedFilterId) return;
-    // P2.5: inlined from the deleted legacy setDashboardProfileFilter() —
-    // with a truthy id it was exactly setFilterSelected([id], [name]).
-    setFilterSelected([resolvedFilterId], [allProfiles.find((p: any) => p.id === resolvedFilterId)?.name || ""]);
-  }, [resolvedFilterId, allProfiles]);
+  // QA 2026-09-18 BUG-01: the "mirror the single selected profile back into
+  // the store" effect that used to live here is gone. It re-ran on every
+  // /api/profiles refetch (after any write) and wrote THIS page's React copy
+  // of the scope into the store — so whenever the copy lagged the store (a
+  // switch made from the hub switcher or another page a moment earlier), the
+  // stale value won and the app silently flipped to the previous person,
+  // taking the record being saved with it. The store (lib/profileFilter.ts)
+  // is the only source of truth; this page only reads it.
 
   // PERF (2026-05-28): single-shot bootstrap. /api/dashboard-bootstrap returns
   // stats + enhanced + profiles + incomes + budget-summary in ONE round-trip.

@@ -14,6 +14,7 @@ import type { IStorage } from "./storage";
 import { getEntityList, getEntityName, BULK_ENTITY_TYPES } from "./ai-envelope";
 import { bustAllUserCaches } from "./cache-bus";
 import { normalizePersonName, PERSON_PROFILE_TYPES } from "../shared/profile-dedup";
+import { looksLikeObjectPhrase } from "../shared/entity-naming";
 
 const norm = (s: any) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -99,7 +100,10 @@ function scanMisclassified(profiles: any[]): MisclassifiedProfile[] {
     // Only person/pet rows can be this bug, and never the self profile.
     if (!MISFILED_AS.has(type)) continue;
     const name = String(p.name || "");
-    if (!DETERMINER_PREFIX.test(name)) continue;
+    // QA 2026-09-18 BUG-02: not only "my …" twins — any object phrase filed
+    // as a person ("tires for my Dodge ram") is the same bug and the same
+    // repair. The shared guard is what the create path now refuses on.
+    if (!DETERMINER_PREFIX.test(name) && !looksLikeObjectPhrase(name)) continue;
 
     // Safety brake: a row carrying real human fields is a person the user
     // named oddly, not an object. Leave it alone.

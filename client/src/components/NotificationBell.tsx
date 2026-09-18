@@ -17,9 +17,9 @@ import {
   BellOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
-import { daysFromToday } from "@/lib/dates";
+import { relativeTime } from "@shared/relative-time";
 
 interface Notification {
   id: string;
@@ -37,13 +37,8 @@ interface Notification {
 // day there. `new Date("2026-09-02")` is UTC midnight, which is the evening of
 // Sep 1 for every US user, so a task due today read "yesterday" in the bell.
 export function getRelativeTime(dueDate?: string): string {
-  const days = daysFromToday(dueDate);
-  if (days === null) return "";
-  if (days === 0) return "today";
-  if (days === 1) return "tomorrow";
-  if (days === -1) return "yesterday";
-  if (days > 0) return `in ${days} days`;
-  return `${Math.abs(days)} days ago`;
+  // QA 2026-09-18 BUG-15/29: the one relative-time rule (shared/relative-time).
+  return relativeTime(dueDate);
 }
 
 function getIcon(type: Notification["type"]) {
@@ -104,10 +99,21 @@ async function loadDismissedIds(): Promise<string[]> {
     // so the request went unauthenticated, returned 401, and dismissed IDs
     // were never restored on reload — making 'Dismiss all' look broken.
     // apiRequest() runs through the auth interceptor with the bearer token.
-    const res = await apiRequest("GET", `/api/preferences/${DISMISSED_PREF_KEY}`);
-    const json = await res.json().catch(() => null);
-    if (!json?.value) return [];
-    const parsed = JSON.parse(json.value);
+    //
+    // QA 2026-09-18 (perf nit): the Executive briefing reads the same
+    // preference through react-query under this exact key, so both surfaces
+    // now share one cache slot — the dashboard used to fetch it twice per load.
+    const parsed = await queryClient.fetchQuery<string[]>({
+      queryKey: [`/api/preferences/${DISMISSED_PREF_KEY}`],
+      queryFn: async () => {
+        const res = await apiRequest("GET", `/api/preferences/${DISMISSED_PREF_KEY}`);
+        const json = await res.json().catch(() => null);
+        if (!json?.value) return [];
+        const list = JSON.parse(json.value);
+        return Array.isArray(list) ? list : [];
+      },
+      staleTime: 60_000,
+    });
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
@@ -397,7 +403,11 @@ function NotificationItem({
 }) {
   const styles = getSeverityStyles(notification.severity);
   const Icon = getIcon(notification.type);
-  const relativeTime = getRelativeTime(notification.dueDate);
+  // BUG-29: the message already says "expired 109 days ago (Jun 1, 2026)" —
+  // a second "109 days ago" line under it repeated the date.
+  const relativeTime = /\b(ago|in \d+ (day|days|week|weeks|month|months)|today|tomorrow|yesterday)\b/i.test(notification.message || "")
+    ? ""
+    : getRelativeTime(notification.dueDate);
 
   return (
     <div
@@ -412,11 +422,12 @@ function NotificationItem({
       <div className={cn("mt-0.5 shrink-0", styles.iconColor)}>
         <Icon className="h-4 w-4" />
       </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium leading-tight truncate" data-testid={`notification-title-${notification.id}`}>
+      {/* pr-1 keeps a long title clear of the dismiss button (BUG-29). */}
+      <div className="flex-1 min-w-0 pr-1">
+        <p className="text-sm font-medium leading-tight truncate" title={notification.title} data-testid={`notification-title-${notification.id}`}>
           {notification.title}
         </p>
-        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2 break-words">
           {notification.message}
         </p>
         {relativeTime && (

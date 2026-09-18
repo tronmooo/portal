@@ -2054,6 +2054,12 @@ const MessageRow = memo(function MessageRow({
                 : action.data?.forProfile
                   ? String(action.data.forProfile).charAt(0).toUpperCase() + String(action.data.forProfile).slice(1)
                   : 'You';
+              // QA 2026-09-18 BUG-33: the owner chip. A bare "YOU" on every
+              // card explained nothing; the chip now only appears when the
+              // write landed on SOMEONE ELSE's record, named, with a tooltip
+              // saying so. The user's own writes carry no chip — the default
+              // needs no label.
+              const ownerIsSelf = whoFor === 'You' || (action.data as any)?._ownerIsSelf === true;
               // Format values: "250 cal, 31g carbs, 4g protein".
               // Underscore keys are reserved metadata (_notes,
               // _enrichment); estimated values render with a ≈ so
@@ -2123,12 +2129,16 @@ const MessageRow = memo(function MessageRow({
                         }`}>
                           {entityTitle || actionLabel(action.type, action.data).toUpperCase()}
                         </p>
-                        {/* WHO badge — always show */}
-                        <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
-                          whoFor === 'You' ? 'bg-primary/15 text-primary' : 'bg-amber-500/15 text-amber-600'
-                        }`}>
-                          {whoFor.toUpperCase()}
-                        </span>
+                        {/* WHO badge — only when the record belongs to someone else */}
+                        {!ownerIsSelf && (
+                          <span
+                            className="text-[11px] font-bold px-1.5 py-0.5 rounded-full shrink-0 bg-amber-500/15 text-amber-600"
+                            title={`Saved to ${whoFor}'s profile`}
+                            data-testid={`action-card-owner-${i}`}
+                          >
+                            {whoFor.toUpperCase()}
+                          </span>
+                        )}
                         {isTrackerEntry && trackerName && (
                           <span className="text-[11px] text-muted-foreground/60 font-medium">
                             via {trackerName}
@@ -2439,9 +2449,11 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
 
-        {/* Timestamp */}
+        {/* Timestamp. QA 2026-09-18 BUG-33: on the user's primary-coloured
+            bubble the muted foreground was dark-on-green and unreadable; the
+            user bubble uses its own foreground at reduced opacity instead. */}
         <div className="mt-1.5 flex justify-end">
-          <span className="text-xs text-muted-foreground/60">
+          <span className={`text-xs ${msg.role === "user" ? "text-primary-foreground/70" : "text-muted-foreground/60"}`}>
             {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>
