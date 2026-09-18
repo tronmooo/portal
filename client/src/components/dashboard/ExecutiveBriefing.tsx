@@ -762,7 +762,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // window the Finance BILLS DUE tile and the Upcoming card show, overdue
   // first. A private 21-day filter here said "Nothing due in 3 weeks" while
   // the Finance tab counted one bill due in 27 days (F-54).
-  const billsDueSoon = selectUpcomingBills(allBills as any[]);
+  // Overdue bills already sit under Needs Attention on this same page, so
+  // the Money card shows the not-yet-due part of the list (never twice).
+  const billsDueSoon = selectUpcomingBills(allBills as any[]).filter((b: any) => b.daysUntil >= 0);
 
   // Documents
   // Grouped to ONE CARD PER RECORD PER DAY so this card, its count and the
