@@ -96,7 +96,7 @@ describe("Today's three signals", () => {
 
   it("fills sleep, activity and recovery from whatever is connected", () => {
     const s = todaySignals(collectMetrics(trackers, { now: NOW }));
-    expect(s.map((x) => x.key)).toEqual(["sleep", "activity", "recovery"]);
+    expect(s.map((x) => x.key)).toEqual(["sleep", "activity", "recovery", "hydration"]);
     expect(s[0].value).toBe(6.6);
     expect(s[0].avg30).toBeCloseTo(7.5, 5); // the baseline the tile compares against
     expect(s[1].value).toBe(9100);
@@ -243,7 +243,7 @@ describe("source state drives the one honest nudge", () => {
       tracker({ name: "Sleep", entries: [entry({ value: 7 }, daysAgo(1))] }),
       tracker({ name: "HDL", entries: [entry({ value: 58 }, daysAgo(1))] }),
     ], { now: NOW }));
-    expect(s).toEqual({ sleep: true, activity: false, recovery: false, labs: true, body: false });
+    expect(s).toEqual({ sleep: true, activity: false, recovery: false, labs: true, body: false, hydration: false });
   });
 });
 

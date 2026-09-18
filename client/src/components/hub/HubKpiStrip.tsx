@@ -23,6 +23,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useOverflowX } from "@/hooks/useOverflowX";
 import { collectMetrics, wellnessScore, resolveWellnessSubject, belongsToSubject } from "@shared/wellness-readout";
+import { bestHabitStreak } from "@shared/habit-progress";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
 import { groupDocumentDates } from "@shared/document-dates";
 import type { DashboardStats, Tracker } from "@shared/schema";
@@ -194,9 +195,24 @@ export function HubKpiStrip() {
   }, [trackers, profilesLite, mode, ids.join(",")]);
   const healthValue = health != null ? String(health) : trackersPending ? "…" : "—";
 
-  const streak = stats
-    ? Math.max(0, ...(stats.streaks || []).map(s => s.days || 0), stats.journalStreak || 0)
-    : null;
+  // STREAK — the best HABIT streak, the same number the Habits popup this
+  // chip opens shows (shared/habit-progress bestHabitStreak). It used to be
+  // the longest of every tracker's logging run + journal streak, so the chip
+  // read 2D over a popup saying "1 Day Streak" (QA 2026-09-18 F-42). The
+  // habits list is the dashboard's own cache entry; the stats-derived number
+  // only stands in until it lands.
+  const { data: habitsRaw } = useQuery<any[]>({
+    queryKey: ["/api/habits", mode, ...ids],
+    queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
+    staleTime: 30_000,
+    placeholderData: undefined,
+  });
+  const habitsList: any[] | null = Array.isArray(habitsRaw) ? habitsRaw : Array.isArray((habitsRaw as any)?.items) ? (habitsRaw as any).items : null;
+  const streak = habitsList
+    ? bestHabitStreak(habitsList)
+    : stats
+      ? Math.max(0, ...(stats.streaks || []).map(s => s.days || 0), stats.journalStreak || 0)
+      : null;
 
   const tasksDue = stats?.activeTasks;
   const tasksLate: number = (enhanced?.overdueTasks || []).length;

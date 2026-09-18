@@ -107,10 +107,10 @@ describe("buildExtractionSystemPrompt", () => {
 });
 
 describe("summarizeOpDetail", () => {
-  it("keeps every stated quantity, method, and timestamp", () => {
-    expect(summarizeOpDetail({ trackerName: "Soccer", values: { duration: 60 } })).toBe("duration 60");
-    expect(summarizeOpDetail({ trackerName: "Cannabis", values: { count: 1, method: "blunt" } })).toBe("count 1, method blunt");
-    expect(summarizeOpDetail({ trackerName: "Bathroom Visits", values: { count: 1 }, at: "8:15 AM" })).toBe("count 1, at 8:15 AM");
+  it("keeps every stated quantity, method, and timestamp — spoken with units, not field names", () => {
+    expect(summarizeOpDetail({ trackerName: "Soccer", values: { duration: 60 } })).toBe("60 min");
+    expect(summarizeOpDetail({ trackerName: "Cannabis", values: { count: 1, method: "blunt" } })).toBe("1 count, blunt");
+    expect(summarizeOpDetail({ trackerName: "Bathroom Visits", values: { count: 1 }, at: "8:15 AM" })).toBe("1 count, at 8:15 AM");
     expect(summarizeOpDetail({ description: "electric bill", amount: 120 })).toBe("$120");
   });
 });

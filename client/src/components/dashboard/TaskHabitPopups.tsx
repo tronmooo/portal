@@ -8,7 +8,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
-import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
+import { habitDayProgress, habitsDayRollup, bestHabitStreak } from "@shared/habit-progress";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import { normalizeFilter } from "@/lib/filter-utils";
@@ -1464,7 +1464,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   const overallPct = possible > 0 ? Math.round((completedInWindow / possible) * 100) : 0;
   const todayRollup = habitsDayRollup(active, today);
   const completedToday = todayRollup.completed;
-  const bestStreak = active.reduce((m: number, h: any) => Math.max(m, h.currentStreak || 0), 0);
+  const bestStreak = bestHabitStreak(active);
   // Check-ins IN THE SELECTED PERIOD. This chip sits in a row the period
   // tabs scope, but it used to sum every check-in row the API returned (the
   // last 400 days) — "25 check-ins" under the Today tab on a day with 6.
@@ -1473,8 +1473,12 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     s + (h.checkins || []).filter((c: any) => windowSet.has(String(c?.date || '').slice(0, 10))).length, 0);
   const completedStat = period === 'today' ? completedToday : completedInWindow;
 
+  // Today's chip counts HABITS complete over habits scheduled — the same
+  // ratio the dashboard Habits card shows ("2 / 7"), from the same rollup. It
+  // used to count occurrences ("0/11" for the same day), so the two never
+  // matched (QA 2026-09-18 F-42). The ring above still fills by occurrence.
   const STAT_CHIPS = [
-    { Icon: CheckCircle2, color: '155 60% 48%', value: period === 'today' ? `${completedToday}/${todayRollup.required}` : completedStat, label: 'Completed' },
+    { Icon: CheckCircle2, color: '155 60% 48%', value: period === 'today' ? `${todayRollup.habitsComplete}/${todayRollup.habitsScheduled}` : completedStat, label: 'Completed' },
     { Icon: Flame, color: '28 90% 55%', value: bestStreak, label: 'Day Streak' },
     { Icon: Target, color: '262 70% 62%', value: totalActive, label: 'Habits' },
     { Icon: ListChecks, color: '205 90% 58%', value: checkinsInWindow, label: period === 'today' ? 'Check-ins today' : 'Check-ins' },

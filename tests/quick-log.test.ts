@@ -84,17 +84,19 @@ describe("buildTurnRecap", () => {
       status: "ok", tool: "log_tracker_entry", label: "Running", detail: "distance 2",
       estimateNote: "Derived/estimated (tell the user estimates are estimates): ≈3,137 steps, ≈20 min (estimated)",
     }]);
-    expect(text).toBe("Logged: Running — distance 2 (≈3,137 steps, ≈20 min (estimated))");
+    expect(text).toBe("Logged Running distance 2 (≈3,137 steps, ≈20 min (estimated))");
   });
 
   it("enumerates several operations and names created trackers and failures", () => {
     const text = buildTurnRecap([
-      { status: "ok", tool: "log_tracker_entry", label: "Nutrition", detail: "item Chicken Sandwich, calories 430" },
-      { status: "ok", tool: "log_tracker_entry", label: "Soccer", detail: "duration 30", createdTrackerName: "Soccer" },
+      { status: "ok", tool: "log_tracker_entry", label: "Nutrition", detail: "Chicken Sandwich, 430 kcal" },
+      { status: "ok", tool: "log_tracker_entry", label: "Soccer", detail: "30 min", createdTrackerName: "Soccer" },
       { status: "failed", tool: "create_expense", label: "Coffee", error: "amount missing" },
     ]);
     expect(text).toContain("Logged 2 of 3:");
-    expect(text).toContain("✅ Logged: Nutrition — item Chicken Sandwich, calories 430");
+    // One record per line, as a Markdown list (a bare newline renders as a
+    // space in chat), with no "Logged:" repeated on every line.
+    expect(text).toContain("\n- Nutrition Chicken Sandwich, 430 kcal\n- Soccer 30 min");
     expect(text).toContain("Created a new tracker: Soccer.");
     expect(text).toContain("⚠️ Coffee — amount missing");
   });

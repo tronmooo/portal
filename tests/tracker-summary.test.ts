@@ -355,7 +355,8 @@ describe("the medication suite never gates logging on a taken-today flag", () =>
     // is priced with Sarah's weight, not the viewer's).
     expect(SRC).toContain("calorieContextForOwner(ownerProfile)");
     expect(SRC).not.toContain("useBodyWeightKg");
-    expect(SRC).toContain("bodyWeightKg: fitnessCtx.bodyWeightKg");
+    // The tally line is priced with the SAME owner context as the calorie pill.
+    expect(SRC).toContain("calorieContext: fitnessCtx");
   });
 
   it("headlines an occurrence tracker with TODAY'S COUNT, not the last row", () => {

@@ -74,7 +74,7 @@ import { dayLabel } from "@shared/now-rank";
 import { groupDocumentDates } from "@shared/document-dates";
 import { buildExecutiveSections, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
-import { habitDayProgress } from "@shared/habit-progress";
+import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
@@ -755,8 +755,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       String(a.createdAt || "").localeCompare(String(b.createdAt || "")) ||
       String(a.id || "").localeCompare(String(b.id || "")));
   const habitsNotScheduled = (habits || []).length - habitsDueToday.length;
-  const habitsDoneCount = habitsDueToday.filter((h: any) => isHabitDoneOn(h, todayStr)).length;
-  const habitPct = habitsDueToday.length > 0 ? Math.round((habitsDoneCount / habitsDueToday.length) * 100) : 0;
+  // "N / M complete today" = habits complete over habits scheduled, from the
+  // ONE rollup the Habits modal reads (shared/habit-progress habitsDayRollup).
+  const habitsRollup = habitsDayRollup(habitsDueToday, todayStr);
+  const habitsDoneCount = habitsRollup.habitsComplete;
+  const habitPct = habitsRollup.habitsScheduled > 0 ? Math.round((habitsDoneCount / habitsRollup.habitsScheduled) * 100) : 0;
 
   // Money — bills within 3 weeks, soonest first.
   const billsDueSoon = allBills
@@ -792,6 +795,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     : "—";
   const hasWellness = [vitals.steps.value, vitals.sleep.value, vitals.calories.value, vitals.hydration.value]
     .some(v => v != null) || activity.sessions > 0;
+  // "No wellness data logged yet" is only true before the first log ever;
+  // with history and no entry TODAY the honest line is "Nothing logged today"
+  // (QA 2026-09-18 F-32). Logging happens in chat or on Trackers — the
+  // Wellness tab is a readout with nothing to log on it.
+  const hasWellnessHistory = [vitals.steps, vitals.sleep, vitals.calories, vitals.hydration]
+    .some((m) => m.lastValue != null) || activity.trackerCount > 0;
+  const wellnessEmptyCopy = hasWellnessHistory
+    ? "Nothing logged today — log steps, sleep or water in chat or on Trackers."
+    : "No wellness data yet — log steps, sleep or water in chat to start.";
   // Feeds the Wellness tab's OWN popups (no second wellness UI is built here).
   // Series come from the same trackers the tiles read, so the popup's chart and
   // the tile's number can never disagree.
@@ -1282,7 +1294,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                               <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">{hp.completed}/{hp.required}</span>
                             </>
                           ) : done ? (
-                            <CheckCircle2 className="h-4 w-4 shrink-0" style={{ color: `hsl(${CARD_ACCENTS.habits})` }} aria-label="Done" />
+                            // A finished habit keeps its count beside the tick:
+                            // an icon-only row read as "no count" next to the
+                            // "0/1" of its siblings (QA 2026-09-18 F-42).
+                            <span className="flex items-center gap-1 shrink-0">
+                              <span className="text-[11px] tabular-nums text-muted-foreground">{hp.completed}/{hp.required || 1}</span>
+                              <CheckCircle2 className="h-4 w-4" style={{ color: `hsl(${CARD_ACCENTS.habits})` }} aria-label="Done" />
+                            </span>
                           ) : (
                             <span className="text-[11px] tabular-nums text-muted-foreground shrink-0">0/1</span>
                           )}
@@ -1429,7 +1447,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               headerRight={<ViewLink label="View wellness" accent={CARD_ACCENTS.wellness} onClick={() => setPopup("wellness:score")} testId="exec-view-wellness" />}
             >
               {!hasWellness ? (
-                <CardEmpty>No wellness data logged yet — log steps, sleep or water on the Wellness tab.</CardEmpty>
+                <CardEmpty>{wellnessEmptyCopy}</CardEmpty>
               ) : (
                 <>
                   <div className="grid grid-cols-3 gap-2">

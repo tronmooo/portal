@@ -97,8 +97,10 @@ describe("Wellness overview — the readout", () => {
     render(<WellnessOverview {...base} />);
     expect(screen.getByTestId("wellness-score-value").textContent).toBe("78");
     const breakdown = screen.getByTestId("wellness-score-breakdown").textContent || "";
-    expect(breakdown).toMatch(/Sleep\s*57%/);
-    expect(breakdown).toMatch(/Activity\s*43%/);
+    // The component's own score first, then its share of the total — "Sleep
+    // 100%" used to be the share, read as the score (QA 2026-09-18 F-39).
+    expect(breakdown).toMatch(/Sleep\s*82\/100.*57% of score/);
+    expect(breakdown).toMatch(/Activity\s*71\/100.*43% of score/);
     expect(breakdown).toMatch(/Recovery not counted — no recovery source connected/);
   });
 
@@ -170,6 +172,7 @@ describe("Wellness overview — the readout", () => {
       brief={[]} panels={[]} body={[]} workouts={[]} medications={[]} appointments={[]}
       documents={[]} allergies={[]} conditions={[]}
       score={{ value: null, components: base.score.components.map((c) => ({ ...c, score: null, weight: 0 })) }}
+      sources={{ sleep: false, activity: false, recovery: false, labs: false, body: false }}
     />);
     expect(screen.getByTestId("wellness-labs").textContent).toMatch(/Photograph a lab report/);
     expect(screen.getByTestId("wellness-body").textContent).toMatch(/No body measurements yet/);

@@ -256,6 +256,29 @@ export function habitsDayRollup(habits: readonly HabitProgressShape[], dateISO: 
 }
 
 /**
+ * The best CURRENT streak across a person's habits — the one number the
+ * header STREAK chip, the Habits modal and the dashboard card all show.
+ *
+ * The chip used to take the longest of every TRACKER's logging run, every
+ * habit's run and the journal streak, while the modal it opens showed the
+ * best habit streak, so the header said 2D over a modal saying 1 day (QA
+ * 2026-09-18 F-42). `currentStreak` is the server's live figure (recomputed
+ * from check-ins on every read through shared/streak.ts). Archived habits
+ * are not part of anyone's day.
+ */
+export function bestHabitStreak(
+  habits: ReadonlyArray<{ currentStreak?: number | null; archivedAt?: string | null }> | null | undefined,
+): number {
+  let best = 0;
+  for (const h of habits || []) {
+    if (!h || h.archivedAt) continue;
+    const n = Number(h.currentStreak ?? 0);
+    if (Number.isFinite(n) && n > best) best = n;
+  }
+  return best;
+}
+
+/**
  * How many completions the whole series asks for, when it has an end.
  *
  * This is what makes "2× per day for 7 days" a fourteen-occurrence commitment
