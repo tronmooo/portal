@@ -20,7 +20,7 @@ import { mergeFieldWrite } from "../shared/profile-field-identity";
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
 import { generateSeriesOccurrences } from "@shared/calendar-occurrences";
-import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
+import { taskOccurrenceDates, taskOccurrenceLabel, taskRepeats } from "@shared/task-occurrences";
 import { rollForwardRecurringTask } from "@shared/recurrence";
 import { isLegacyReminderTask } from "@shared/legacy-reminder-tasks";
 import { passesProfileFilter } from "@shared/profile-filter";
@@ -1452,7 +1452,7 @@ export class MemStorage implements IStorage {
     if (!t) return undefined;
     const updated = { ...t, ...data, updatedAt: new Date().toISOString() };
     this.tasks.set(id, updated);
-    if (data.status === "done") this.logActivity("task", `Completed: ${t.title}`);
+    if (data.status === "done") this.logActivity("task", `Completed: ${taskOccurrenceLabel(t)}`);
     return updated;
   }
   async deleteTask(id: string) { return this.tasks.delete(id); }
@@ -2406,7 +2406,7 @@ export class MemStorage implements IStorage {
           .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
           .slice(0, 3).map(t => ({
             type: 'task_completed',
-            description: `Completed: ${t.title}`,
+            description: `Completed: ${taskOccurrenceLabel(t)}`,
             timestamp: t.updatedAt || t.createdAt,
           })),
         ...expenses.slice(-3).map(e => ({

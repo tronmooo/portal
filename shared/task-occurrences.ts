@@ -155,6 +155,31 @@ export function taskOccurrenceDates(
  * Does this task repeat? Cheap enough to call per row; used to decide whether
  * a calendar item should be labelled as one of a series.
  */
+/**
+ * The name of ONE occurrence of a task, for any surface that reports on a
+ * single row of a series: "Put out the trash (Sep 16)".
+ *
+ * A completed recurring task and its rolled-forward next occurrence are two
+ * rows with the same title, so Recent Activity said "Completed: Put out the
+ * trash" while the bell said "Overdue: Put out the trash" — both true, of
+ * different dates, and unreadable side by side (QA 2026-09-18 F-27). A
+ * one-time task is its own occurrence and keeps its bare title.
+ */
+export function taskOccurrenceLabel(
+  task: { title?: string | null; dueDate?: string | null; tags?: readonly unknown[] | null },
+  now: Date = new Date(),
+): string {
+  const title = String(task?.title || "").trim();
+  const tags = Array.isArray(task?.tags) ? task.tags.map(String) : [];
+  const due = String(task?.dueDate || "").slice(0, 10);
+  if (!taskRepeats({ tags }) || !DATE_RE.test(due)) return title;
+  const d = parseLocal(due);
+  if (Number.isNaN(d.getTime())) return title;
+  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return `${title} (${d.toLocaleDateString("en-US", opts)})`;
+}
+
 export function taskRepeats(task: TaskLike): boolean {
   return !!parseRecurrence(Array.isArray(task?.tags) ? task.tags.map(String) : []).freq;
 }

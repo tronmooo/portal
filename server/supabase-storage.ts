@@ -95,7 +95,7 @@ import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
 import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, resolveOccurrenceKey, isEndedBillFields } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
-import { taskOccurrenceDates, taskRepeats } from "../shared/task-occurrences";
+import { taskOccurrenceDates, taskOccurrenceLabel, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { normalizeTrackerEntry } from "./tracker-normalize";
@@ -7595,7 +7595,10 @@ export class SupabaseStorage implements IStorage {
           .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
           .slice(0, 3).map(t => ({
             type: 'task_completed',
-            description: `Completed: ${t.title}`,
+            // The OCCURRENCE that was completed ("Put out the trash (Sep 16)"):
+            // the series' next row carries the same title and may itself be
+            // overdue, and the two read as one task otherwise.
+            description: `Completed: ${taskOccurrenceLabel(t)}`,
             timestamp: t.updatedAt || t.createdAt,
           })),
         // Expenses are ordered date DESC — take the head, not the tail.
