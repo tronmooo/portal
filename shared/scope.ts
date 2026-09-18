@@ -116,7 +116,7 @@ export function isInScope(
  */
 export function withAncestorOwnerIds(
   ids: Iterable<string>,
-  allProfiles: ReadonlyArray<{ id: string; parentProfileId?: string | null }> | null | undefined,
+  allProfiles: ReadonlyArray<{ id: string; parentProfileId?: string | null; type?: string | null }> | null | undefined,
 ): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -125,16 +125,49 @@ export function withAncestorOwnerIds(
     return out;
   }
   const parentOf = new Map<string, string | null | undefined>();
-  for (const p of allProfiles) if (p && typeof p.id === "string") parentOf.set(p.id, p.parentProfileId);
+  const typeOf = new Map<string, string | null | undefined>();
+  for (const p of allProfiles) if (p && typeof p.id === "string") { parentOf.set(p.id, p.parentProfileId); typeOf.set(p.id, p.type); }
   for (const start of ids) {
     let cur: string | null | undefined = start;
     while (typeof cur === "string" && cur && !seen.has(cur)) {
       seen.add(cur);
       out.push(cur);
+      // A person is nobody's possession: the walk stops at the first PERSON
+      // (QA 2026-09-18 F-02 — Sarah nested under Poop made Sarah's citation
+      // and birthday Poop's). Sarah's car still climbs to Sarah; Sarah does
+      // not climb to Poop. A pet is its owner's, so the walk passes through it.
+      if (isPersonType(typeOf.get(cur))) break;
       cur = parentOf.get(cur);
     }
   }
   return out;
+}
+
+/** Profile types that are a human: they own things and are owned by nobody. */
+export const PERSON_TYPES: ReadonlySet<string> = new Set(["self", "person"]);
+/** People AND pets — what a "who" picker (switcher, owner, assignee) offers. */
+export const PERSON_LIKE_TYPES: ReadonlySet<string> = new Set(["self", "person", "pet"]);
+
+export function isPersonType(type: string | null | undefined): boolean {
+  return typeof type === "string" && PERSON_TYPES.has(type.trim().toLowerCase());
+}
+
+export function isPersonLikeType(type: string | null | undefined): boolean {
+  return typeof type === "string" && PERSON_LIKE_TYPES.has(type.trim().toLowerCase());
+}
+
+/**
+ * A profile's own id plus its owner (direct parent) — the candidate list the
+ * server scopes PROFILE rows by ("the profile AND its parent"). For a
+ * person the parent is not an owner, so only the id is returned.
+ */
+export function profileAndOwnerIds(
+  p: { id: string; parentProfileId?: string | null; type?: string | null } | null | undefined,
+): string[] {
+  if (!p || typeof p.id !== "string" || !p.id) return [];
+  const parent = p.parentProfileId;
+  if (isPersonType(p.type) || typeof parent !== "string" || !parent || parent === p.id) return [p.id];
+  return [p.id, parent];
 }
 
 export function ownerCandidatesForProfile(
@@ -198,8 +231,8 @@ export function selfIdsFrom(allProfiles: Array<{ id: string; type?: string | nul
  * Pure and cycle-safe.
  */
 export function ownerChainForProfile(
-  profile: { id?: string | null; parentProfileId?: string | null } | null | undefined,
-  allProfiles: ReadonlyArray<{ id: string; parentProfileId?: string | null }>,
+  profile: { id?: string | null; parentProfileId?: string | null; type?: string | null } | null | undefined,
+  allProfiles: ReadonlyArray<{ id: string; parentProfileId?: string | null; type?: string | null }>,
   assetLinks?: ReadonlyArray<{ assetProfileId?: string | null; partyProfileId?: string | null }> | null,
   liabilityLinks?: ReadonlyArray<{ liabilityProfileId?: string | null; partyProfileId?: string | null }> | null,
 ): string[] {
@@ -207,13 +240,17 @@ export function ownerChainForProfile(
   if (!profile || typeof profile.id !== "string" || !profile.id) return [];
   const byId = new Map((allProfiles || []).map((p) => [p.id, p] as const));
   const seen = new Set<string>();
-  type Node = { id?: string | null; parentProfileId?: string | null };
+  type Node = { id?: string | null; parentProfileId?: string | null; type?: string | null };
   let cur: Node | undefined = profile;
   while (cur && typeof cur.id === "string" && !seen.has(cur.id)) {
     seen.add(cur.id);
-    for (const id of ownerCandidatesForProfile(cur, assetLinks, liabilityLinks)) {
+    // A person contributes its co-owner links but not its parent — a person
+    // nested under another person is not owned by them (F-02).
+    const person = isPersonType(byId.get(cur.id)?.type ?? cur.type);
+    for (const id of ownerCandidatesForProfile(person ? { id: cur.id } : cur, assetLinks, liabilityLinks)) {
       if (id !== profile.id) out.add(id);
     }
+    if (person) break;
     const nextId: string | null | undefined = cur.parentProfileId;
     cur = typeof nextId === "string" && nextId ? (byId.get(nextId) as Node | undefined) : undefined;
   }

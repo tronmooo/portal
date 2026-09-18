@@ -59,6 +59,7 @@ import type {
 } from "@shared/schema";
 import { EVENT_CATEGORY_COLORS } from "@shared/schema";
 import { isInScope, selfIdsFrom, withAncestorOwnerIds } from "@shared/scope";
+import { isOfferablePerson } from "@shared/entity-classify";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
@@ -1230,7 +1231,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     queryKey: ["/api/profiles"],
     queryFn: () => apiRequest("GET", "/api/profiles").then(r => r.json()),
   });
-  const primaryProfiles = filterProfiles.filter(p => ["self", "person", "pet"].includes(p.type));
+  const primaryProfiles = filterProfiles.filter(isOfferablePerson);
   const selfProfile = filterProfiles.find(p => p.type === "self");
   const resolvedProfileId = profileFilter === "me" ? selfProfile?.id : profileFilter === "all" ? null : profileFilter;
 

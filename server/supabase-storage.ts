@@ -66,7 +66,7 @@ import { deleteProfileFields, mergeFieldWrite } from "../shared/profile-field-id
 import { generateSeriesOccurrences } from "../shared/calendar-occurrences";
 import { passesProfileFilter, effectiveSelection, pushdownSelection } from "../shared/profile-filter";
 import { buildRecallTerms, recallMatchScore } from "../shared/recall-match";
-import { selfIdsFrom, isInScope, withAncestorOwnerIds } from "../shared/scope";
+import { selfIdsFrom, isInScope, withAncestorOwnerIds, profileAndOwnerIds } from "../shared/scope";
 import { calculateStreak as sharedCalculateStreak } from "../shared/streak";
 import { isHabitDueOn, type HabitScheduleShape } from "../shared/habit-schedule";
 import {
@@ -4314,8 +4314,10 @@ export class SupabaseStorage implements IStorage {
     // this replaced did. A subscription, vehicle or asset nested under a person
     // belongs to that person, so filtering by them must keep its renewal,
     // service and warranty dates — matching on the child id alone dropped them.
+    // A PERSON nested under a person is not their possession, so a person's
+    // own dates stay theirs (shared/scope profileAndOwnerIds; QA 2026-09-18 F-02).
     const scopedProfiles = profiles.filter(p =>
-      !filterActive || matchesProfile([p.id, ...(p.parentProfileId ? [p.parentProfileId] : [])]));
+      !filterActive || matchesProfile(profileAndOwnerIds(p)));
     // Every profile- and document-carried date, from the ONE Date Rule engine
     // (shared/date-rules) the Recurring & Important Dates screen and the
     // Upcoming feed also read. This block used to cover birthdays and
@@ -7749,7 +7751,7 @@ export class SupabaseStorage implements IStorage {
       // Matching the child id alone dropped a nested vehicle's or property's
       // expiration from this tile while the calendar still showed it.
       const scopedProfilesForExp = allProfiles.filter(p =>
-        matchesProfileEnhanced([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
+        matchesProfileEnhanced(profileAndOwnerIds(p as any)));
       for (const rule of rulesFromAll({ profiles: scopedProfilesForExp, documents: filteredDocs })) {
         // Things that EXPIRE anywhere, plus what a DOCUMENT says is DUE.
         //

@@ -60,6 +60,7 @@
 import { normalizeDateString } from "./extraction-normalize";
 import type { CalendarSeries, OccurrenceKind } from "./calendar-occurrences";
 import { sourceHref } from "./calendar-occurrences";
+import { profileAndOwnerIds } from "./scope";
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
 
@@ -1119,7 +1120,11 @@ export function rulesFromProfiles(profiles: readonly any[]): DateRule[] {
       namePrefix: name,
       contextKey: `${p.type ?? ""} ${p.type_key ?? p.typeKey ?? ""}`,
       profileId: p.id,
-      ownerIds: uniq([p.id, p.parentProfileId, ...(Array.isArray(p.linkedProfiles) ? p.linkedProfiles : [])]),
+      // A person's own dates (birthday, licence) are owned by that person
+      // alone — a person nested under another person is not their possession
+      // (QA 2026-09-18 F-02: Sarah's birthday listed under Poop). Things
+      // (a car, a policy) still belong to the person they hang off.
+      ownerIds: uniq([...profileAndOwnerIds(p), ...(Array.isArray(p.linkedProfiles) ? p.linkedProfiles : [])]),
       href: sourceHref("profile", p.id, p.id),
     }, { calendarOptOut: calendarOptOutSet(p.fields) });
     out.push(...(isScheduled

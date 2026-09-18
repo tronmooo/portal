@@ -7,6 +7,8 @@
 // label the group, sort inside it, and keep only real people — self, person,
 // pet — under "People", which is also the set a record can be FOR.
 
+import { isOfferablePerson } from "./entity-classify";
+
 export interface LinkableProfile {
   id: string;
   name: string;
@@ -36,8 +38,10 @@ const byName = <T extends LinkableProfile>(a: T, b: T) =>
 const selfFirst = <T extends LinkableProfile>(a: T, b: T) =>
   Number(b.type === "self") - Number(a.type === "self") || byName(a, b);
 
-export function isPersonLikeProfile(p: { type?: string | null } | null | undefined): boolean {
-  return PEOPLE_TYPES.has(String(p?.type || ""));
+/** A real person: a people type AND not a possession mistyped as one
+ *  ("tires for my Dodge ram" — QA 2026-09-18 F-04). */
+export function isPersonLikeProfile(p: { type?: string | null; name?: string | null } | null | undefined): boolean {
+  return PEOPLE_TYPES.has(String(p?.type || "")) && isOfferablePerson(p);
 }
 
 /** Only the profiles a record can be FOR — self first, then people and pets by name. */
@@ -55,7 +59,8 @@ export function groupProfilesForLinking<T extends LinkableProfile>(profiles: rea
   const other: T[] = [];
   for (const p of profiles || []) {
     const t = String(p?.type || "");
-    const g = GROUPS.find((x) => x.types.includes(t));
+    // A mistyped possession never sits under People — it lands with the things.
+    const g = PEOPLE_TYPES.has(t) && !isOfferablePerson(p) ? undefined : GROUPS.find((x) => x.types.includes(t));
     if (!g) { other.push(p); continue; }
     const list = buckets.get(g.id) || [];
     list.push(p);

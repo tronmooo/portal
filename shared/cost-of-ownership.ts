@@ -1,3 +1,4 @@
+import { isPersonType } from "./scope";
 // Cost of ownership — surface an ASSET's expenses on its OWNER's profile
 // WITHOUT duplicating the record.
 //
@@ -122,6 +123,10 @@ export function ownedAssetIds(
       seen.add(cur.id);
       if (persons.has(cur.parentProfileId)) { out.add(p.id); break; }
       cur = byId.get(cur.parentProfileId);
+      // An unselected PERSON in the chain owns everything below them: Sarah's
+      // car is not Poop's just because Sarah is nested under Poop
+      // (QA 2026-09-18 F-02). The walk stops there.
+      if (cur && isPersonType(cur.type)) break;
     }
   }
 

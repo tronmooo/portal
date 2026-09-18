@@ -26,7 +26,7 @@ import {
 } from "@shared/recurrence";
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
-import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
+import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, refreshFilterNames, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
 import { groupDocumentDates, ruleIdsOf, summarizeDocumentUrgency } from "@shared/document-dates";
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
@@ -5481,8 +5481,9 @@ export default function DashboardPage() {
     initDefaultProfileFilter(allProfiles);
     // Heal a persisted scope whose profile ids were hard-deleted/recreated —
     // otherwise every widget queries a dead id and renders 0 while the
-    // switcher still shows the remembered name.
-    reconcileProfileFilter(allProfiles);
+    // switcher still shows the remembered name. An id merely absent from
+    // this list is verified against the server first (QA 2026-09-18 F-01).
+    void reconcileProfileFilter(allProfiles);
   }, [allProfiles]);
 
   // Compute stats profile param for API calls.
@@ -5499,17 +5500,15 @@ export default function DashboardPage() {
   // filterIds passed through directly.
   const resolvedFilterId = filterMode === "everyone" ? undefined : (filterIds.length === 1 ? filterIds[0] : undefined);
 
-  // Sync profile filter to module-level state for backward compat with sub-pages.
-  // Only mirror a SINGLE selected profile. We must NOT write "everyone" here:
-  //   (a) on first load it would persist "everyone" before initDefaultProfileFilter
-  //       can seed the Self profile (defeating the personal-by-default rule), and
-  //   (b) it would reset a 2+ profile multi-selection back to everyone.
-  // "Everyone" is only ever set by an explicit toolbar choice (which persists it).
+  // Keep the selection's DISPLAY NAME current after a rename. This used to
+  // re-write the whole selection as `setFilterSelected([id], [name || ""])`
+  // on every profiles change — an echo of the store into itself that stored
+  // an EMPTY name whenever the list happened to lack the id, and an id with
+  // no name was exactly what the old reconcile dropped (QA 2026-09-18 F-01).
+  // refreshFilterNames never touches ids and never writes an empty name.
   useEffect(() => {
     if (!resolvedFilterId) return;
-    // P2.5: inlined from the deleted legacy setDashboardProfileFilter() —
-    // with a truthy id it was exactly setFilterSelected([id], [name]).
-    setFilterSelected([resolvedFilterId], [allProfiles.find((p: any) => p.id === resolvedFilterId)?.name || ""]);
+    refreshFilterNames(allProfiles);
   }, [resolvedFilterId, allProfiles]);
 
   // PERF (2026-05-28): single-shot bootstrap. /api/dashboard-bootstrap returns

@@ -19,7 +19,7 @@
 // comes from the same primitive that `shared/net-worth.ts` uses, so the two
 // scope checks can no longer drift apart on the core question.
 
-import { isInScope, selfIdsFrom, withAncestorOwnerIds } from "./scope";
+import { isInScope, isPersonType, selfIdsFrom, withAncestorOwnerIds } from "./scope";
 import { ownedAssetIds, type AssetPartyLinkLike } from "./cost-of-ownership";
 
 export interface ProfileLike {
@@ -95,6 +95,10 @@ export function pushdownSelection(ctx: ProfileFilterContext): string[] {
   const children = new Map<string, string[]>();
   for (const p of ctx.allProfiles || []) {
     if (!p || typeof p.id !== "string" || !p.parentProfileId) continue;
+    // Mirror of the ancestor walk's person boundary (shared/scope): a person
+    // nested under a selected person is not one of their possessions, so the
+    // closure never descends into them (QA 2026-09-18 F-02).
+    if (isPersonType(p.type)) continue;
     const arr = children.get(p.parentProfileId);
     if (arr) arr.push(p.id); else children.set(p.parentProfileId, [p.id]);
   }

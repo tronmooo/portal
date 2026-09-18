@@ -797,12 +797,26 @@ export function seriesFromAll(input: CalendarInputs): CalendarSeries[] {
 export function filterSeriesByProfiles(
   list: readonly CalendarSeries[],
   selectedIds: readonly string[] | null | undefined,
-  opts: { selfIds?: ReadonlySet<string> } = {},
+  opts: {
+    selfIds?: ReadonlySet<string>;
+    /**
+     * Ids of PERSON profiles (self/person). A person's own record (their
+     * birthday, licence) is owned by that person and nobody else: it is never
+     * an "unowned" record that the soft-orphan rule hands to the primary
+     * person. Without this, every person's birthday listed under "My
+     * dashboard" (QA 2026-09-18 F-02: Bob's, John's, Sarah's under Poop).
+     */
+    personIds?: ReadonlySet<string>;
+  } = {},
 ): CalendarSeries[] {
   if (!selectedIds || selectedIds.length === 0) return [...list];
   const allow = new Set(selectedIds);
   const selfIds = opts.selfIds ?? new Set<string>();
+  const personIds = opts.personIds ?? new Set<string>();
   return list.filter((s) => {
+    if (s.source.system === "profile" && s.source.id && personIds.has(s.source.id)) {
+      return ownerCandidates(s).some((id) => allow.has(id));
+    }
     // A record that lists only ITSELF as an owner is unowned. A liability
     // profile is its own source id, so `ownerCandidates` always returned at
     // least that one entry and the soft-orphan rule below could never fire —

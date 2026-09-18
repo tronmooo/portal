@@ -212,10 +212,12 @@ export function hasStoredFilter(): boolean {
  * Idempotent: once a value is stored (here or via a user action) this is a
  * no-op, so a user who deliberately picks "Everyone" is never overridden.
  */
-export function initDefaultProfileFilter(profiles: Array<{ id: string; name?: string; type?: string }> | null | undefined): void {
+export function initDefaultProfileFilter(profiles: Array<{ id: string; name?: string; type?: string; createdAt?: string | null }> | null | undefined): void {
   if (hasStoredFilter()) return;
   if (!profiles || profiles.length === 0) return;
-  const self = profiles.find(p => p?.type === "self");
+  // Several `self` rows (fixtures, re-imports): the account's original one,
+  // never whichever the database listed first — see pickSelfProfile.
+  const self = pickSelfProfile(profiles);
   if (!self) return; // no primary user → keep Everyone (Household) default
   setFilterSelected([self.id], [self.name || "Me"]);
 }
@@ -230,30 +232,119 @@ export function initDefaultProfileFilter(profiles: Array<{ id: string; name?: st
  * still shows the remembered name — the dashboard reads "Mike" yet every
  * tile is 0 even though Mike's data exists under a new id.
  *
- * Given a SUCCESSFULLY loaded, non-empty profile list (callers must not pass
- * transient/errored results — an empty list is ignored here as a guard):
- *   1. keep ids that still resolve,
- *   2. re-map dead ids to a live profile with the same stored name
+ * QA 2026-09-18 (F-01, critical): "absent from a list" is NOT "deleted".
+ * The lists callers pass here are whatever the `["/api/profiles"]` cache
+ * holds at that moment — a bootstrap seed, a 24h-old persisted snapshot, a
+ * lite projection, a list another tab wrote — and with several `self`
+ * profiles on the account (the smoke fixture seeds a second one), one
+ * transient list without the selected id flipped the whole dashboard to a
+ * different person: Poop → Bob Robertson, later → "tires for my Dodge ram".
+ * The selection was never wrong; the evidence was.
+ *
+ * So a selected id that is missing from the list is first VERIFIED with a
+ * direct GET /api/profiles/:id, and only a confirmed 404 counts as dead. A
+ * network error, a 5xx, an auth blip, a timeout — all "unknown" — leave the
+ * selection exactly as it is. This store changes the selected profile on an
+ * explicit user action or a confirmed deletion, and on nothing else.
+ *
+ * Given a non-empty profile list (an empty list is ignored as a guard):
+ *   1. keep ids that still resolve, and ids that are merely absent,
+ *   2. re-map CONFIRMED-dead ids to a live profile with the same stored name
  *      (people/pets/self preferred),
- *   3. drop ids that can't be re-mapped,
- *   4. if nothing survives, fall back to the Self profile (or Everyone).
+ *   3. drop confirmed-dead ids that can't be re-mapped,
+ *   4. if nothing survives, fall back to THE Self profile — the one whose
+ *      name matches the stored selection, else the account's original (oldest)
+ *      Self; never an arbitrary first `self` row. Never "Everyone".
  * No-op when every id already resolves, so it's safe to call on every load.
+ * Resolves once the (possibly async) verification has settled.
  */
-export function reconcileProfileFilter(
-  profiles: Array<{ id: string; name?: string; type?: string }> | null | undefined
-): void {
+export type ProfileLiveness = "alive" | "dead" | "unknown";
+export interface ReconcileOptions {
+  /** Injectable for tests. Defaults to GET /api/profiles/:id (404 ⇒ dead). */
+  verify?: (id: string) => Promise<ProfileLiveness>;
+}
+
+type ProfileLite = { id: string; name?: string; type?: string; createdAt?: string | null };
+
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+/**
+ * The one Self profile a fallback may land on. An account can carry more
+ * than one `self` row (test fixtures, re-imports), and `find(type === "self")`
+ * picked whichever the database returned first — an arbitrary person. Prefer
+ * a name the stored selection already used; otherwise the account's original
+ * Self (oldest createdAt). With several undated selfs there is no honest
+ * answer, so return null and let the caller leave things alone.
+ */
+export function pickSelfProfile(
+  profiles: ReadonlyArray<ProfileLite> | null | undefined,
+  preferredNames: ReadonlyArray<string> = [],
+): ProfileLite | null {
+  const selfs = (profiles || []).filter(p => p?.type === "self");
+  if (selfs.length === 0) return null;
+  if (selfs.length === 1) return selfs[0];
+  const wanted = new Set(preferredNames.map(n => (n || "").trim().toLowerCase()).filter(Boolean));
+  const byName = selfs.find(p => wanted.has((p.name || "").trim().toLowerCase()));
+  if (byName) return byName;
+  const dated = selfs.filter(p => typeof p.createdAt === "string" && p.createdAt);
+  if (dated.length !== selfs.length) return null;
+  return [...dated].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))[0];
+}
+
+// One verification per id at a time, remembered for 30s: every profiles
+// change re-runs reconcile from three components, and a partial list would
+// otherwise turn into a GET storm for the same id.
+const _liveness = new Map<string, Promise<ProfileLiveness>>();
+function verifyProfileLiveness(id: string): Promise<ProfileLiveness> {
+  const inflight = _liveness.get(id);
+  if (inflight) return inflight;
+  const p = (async (): Promise<ProfileLiveness> => {
+    try {
+      const { apiRequest } = await import("./queryClient");
+      await apiRequest("GET", `/api/profiles/${encodeURIComponent(id)}`);
+      return "alive";
+    } catch (err: any) {
+      // apiRequest throws `${status}: ${message}`; only a 404 is evidence.
+      return /^404\b/.test(String(err?.message || "")) ? "dead" : "unknown";
+    }
+  })();
+  _liveness.set(id, p);
+  p.then(() => { setTimeout(() => { if (_liveness.get(id) === p) _liveness.delete(id); }, 30_000); }, () => _liveness.delete(id));
+  return p;
+}
+
+export async function reconcileProfileFilter(
+  profiles: Array<{ id: string; name?: string; type?: string; createdAt?: string | null }> | null | undefined,
+  opts: ReconcileOptions = {},
+): Promise<void> {
   if (!profiles || profiles.length === 0) return;
   if (_state.mode !== "selected" || _state.selectedIds.length === 0) return;
   const live = (id: string) => profiles.some(p => p.id === id);
-  if (_state.selectedIds.every(live)) return;
+  const before = [..._state.selectedIds];
+  const missing = before.filter(id => !live(id));
+  if (missing.length === 0) return;
+
+  const verify = opts.verify ?? verifyProfileLiveness;
+  const dead = new Set<string>();
+  await Promise.all(missing.map(async (id) => {
+    let status: ProfileLiveness = "unknown";
+    try { status = await verify(id); } catch { status = "unknown"; }
+    if (status === "dead") dead.add(id);
+  }));
+  if (dead.size === 0) return;
+  // A user action while we were asking wins over a stale verdict.
+  if (_state.mode !== "selected" || !sameIds(_state.selectedIds, before)) return;
 
   const ids: string[] = [];
   const names: string[] = [];
   _state.selectedIds.forEach((id, i) => {
-    const match = profiles.find(p => p.id === id);
-    if (match) {
+    if (!dead.has(id)) {
+      // Resolves, or is merely absent from this list: keep it as it is.
+      const match = profiles.find(p => p.id === id);
       ids.push(id);
-      names.push(match.name || _state.selectedNames[i] || "");
+      names.push(match?.name || _state.selectedNames[i] || "");
       return;
     }
     const wanted = (_state.selectedNames[i] || "").trim().toLowerCase();
@@ -277,10 +368,38 @@ export function reconcileProfileFilter(
     // is far more likely a partial/scoped fetch than a mass deletion, so in
     // that case leave the stored selection alone and let a later, complete
     // list heal it.
-    const self = profiles.find(p => p?.type === "self");
+    const self = pickSelfProfile(profiles, _state.selectedNames);
     if (!self) return;
     _state = { mode: "selected", selectedIds: [self.id], selectedNames: [self.name || "Me"] };
   }
+  saveToStorage();
+}
+
+/**
+ * Refresh the DISPLAY NAMES of the current selection from a loaded profile
+ * list — after a rename, so the chip says the new name. Never touches ids,
+ * never writes an empty name (a list that lacks the profile simply leaves
+ * its stored name alone), and saves only when something actually changed.
+ * The dashboard used to re-write the selection with
+ * `allProfiles.find(id)?.name || ""` on every profiles change, which stored
+ * "" as the name whenever the list was missing the id — and an id with no
+ * name is exactly what the old reconcile then dropped.
+ */
+export function refreshFilterNames(
+  profiles: Array<{ id: string; name?: string }> | null | undefined,
+): void {
+  if (!profiles || profiles.length === 0) return;
+  if (_state.mode !== "selected" || _state.selectedIds.length === 0) return;
+  let changed = false;
+  const names = _state.selectedIds.map((id, i) => {
+    const current = _state.selectedNames[i] || "";
+    const fresh = (profiles.find(p => p.id === id)?.name || "").trim();
+    if (!fresh || fresh === current) return current;
+    changed = true;
+    return fresh;
+  });
+  if (!changed) return;
+  _state = { mode: "selected", selectedIds: [..._state.selectedIds], selectedNames: names };
   saveToStorage();
 }
 

@@ -345,6 +345,9 @@ export default defineConfig({
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       'tests/test-suite-discovery.test.ts',
+      // QA pass 2026-09-18 (profiles & navigation): the scope store never
+      // switches people on its own; ownership stops at people; local calendar filter.
+      'tests/qa-2026-09-18-profiles.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

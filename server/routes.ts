@@ -24,7 +24,7 @@ import { isRecurringBill, isRecurringBillProfile } from "@shared/liability-types
 import { advanceLiabilityDueDate, readDueDate, isSettledOccurrence, effectiveDueDate, isPausedBillFields, isEndedBillFields } from "@shared/liability-recurrence";
 import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
 import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
-import { selfIdsFrom } from "@shared/scope";
+import { selfIdsFrom, profileAndOwnerIds } from "@shared/scope";
 import { validateFinanceImport } from "@shared/finance-import-schema";
 import { findBlockingDuplicateProfile } from "@shared/profile-dedup";
 import { buildImportPrompt, planImport, applyImport, undoImport } from "./finance-import";
@@ -4721,8 +4721,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // unfiltered, so under Linda's scope the insight cards still carried
       // every other profile's expiring warranty and lapsed policy while the
       // documents beside them were scoped.
-      const profiles = allProfiles.filter(p =>
-        mp([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
+      const profiles = allProfiles.filter(p => mp(profileAndOwnerIds(p as any)));
       const trackers = allTrackers.filter(t => mp(t.linkedProfiles));
       const tasks = allTasks.filter(t => mp(t.linkedProfiles));
       const expenses = allExpenses.filter(e => mp(e.linkedProfiles));

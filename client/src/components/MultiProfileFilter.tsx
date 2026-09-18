@@ -17,6 +17,8 @@ import {
   type FilterMode,
 } from "@/lib/profileFilter";
 import { Filter, Users, User, Dog, Car, CreditCard, Package, Stethoscope, Building, Landmark, ChevronDown, X } from "lucide-react";
+import { toggleScopeSelection, EVERYONE_SELECTION, type ProfileSelection } from "@shared/profile-selection";
+import { isOfferablePerson } from "@shared/entity-classify";
 
 const TYPE_ICONS: Record<string, any> = {
   person: User,
@@ -34,7 +36,15 @@ const TYPE_ICONS: Record<string, any> = {
 
 interface Props {
   /** Called whenever the filter changes so the parent can re-render */
-  onChange: (filter: { mode: FilterMode; selectedIds: string[] }) => void;
+  onChange: (filter: { mode: FilterMode; selectedIds: string[]; selectedNames: string[] }) => void;
+  /**
+   * LOCAL mode (QA 2026-09-18 F-03): when given, the picker renders and
+   * toggles THIS selection and reports every change through `onChange`
+   * without ever writing the global scope store. The calendar's person filter
+   * used to be bound to the store, so adding Dana there re-scoped the whole
+   * dashboard ("Poop +1", Tasks Due 9 → 10). Omit it for the store-bound chip.
+   */
+  value?: ProfileSelection;
   /** Only show these profile types in the filter (default: all) */
   profileTypes?: string[];
   /** Compact mode for inline placement */
@@ -45,7 +55,8 @@ interface Props {
   hideEveryone?: boolean;
 }
 
-export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryone }: Props) {
+export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryone, value }: Props) {
+  const controlled = value !== undefined;
   // PERF (2026-05-29): use the slim /api/profiles/lite endpoint — the chip
   // only renders id/type/name/avatar, so we drop the heavy jsonb columns
   // (fields, documents, linked_*) the full endpoint returns. Falls back to
@@ -67,11 +78,13 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
   // mount on desktop and block ALL page clicks, making tabs unresponsive.
   const [desktopOpen, setDesktopOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [filter, setFilter] = useState(getProfileFilter);
+  const [storeFilter, setFilter] = useState(getProfileFilter);
+  const filter: ProfileSelection = controlled ? value : storeFilter;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
   useEffect(() => {
+    if (controlled) return; // local mode: the parent owns the selection
     // Sync initial state
     setFilter(getProfileFilter());
     // BUG-006/025: subscribe so the label/checks stay in sync when ANOTHER
@@ -80,30 +93,40 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
     // render, which is non-reactive and could go stale.
     const unsub = subscribeProfileFilter((next) => {
       setFilter({ ...next });
-      onChangeRef.current({ mode: next.mode, selectedIds: next.selectedIds });
+      onChangeRef.current({ mode: next.mode, selectedIds: next.selectedIds, selectedNames: next.selectedNames });
     });
     return unsub;
-  }, []);
+  }, [controlled]);
 
   const notify = useCallback(() => {
     const f = getProfileFilter();
     setFilter(f);
-    onChangeRef.current({ mode: f.mode, selectedIds: f.selectedIds });
+    onChangeRef.current({ mode: f.mode, selectedIds: f.selectedIds, selectedNames: f.selectedNames });
   }, []);
 
   const handleEveryone = useCallback(() => {
-    setFilterEveryone();
-    notify();
+    if (controlled) {
+      onChangeRef.current({ ...EVERYONE_SELECTION, selectedIds: [], selectedNames: [] });
+    } else {
+      setFilterEveryone();
+      notify();
+    }
     // "Everyone" is a terminal choice (clears all selection) so close the popup
     // afterwards. Multi-select toggles below intentionally keep the popup open.
     setDesktopOpen(false);
     setMobileOpen(false);
-  }, [notify]);
+  }, [notify, controlled]);
 
   const handleToggle = useCallback((id: string, name: string) => {
+    if (controlled) {
+      // Same toggle rule as the store (shared/profile-selection), applied to
+      // the parent's value only — the global scope is never written.
+      onChangeRef.current(toggleScopeSelection(value, id, name));
+      return;
+    }
     toggleFilterProfile(id, name);
     notify();
-  }, [notify]);
+  }, [notify, controlled, value]);
 
   // PROFILE-SWITCH PREFETCH (2026-07-16, user report "switching between
   // profiles is very slow"): warm the dashboard-bootstrap cache for a profile
@@ -139,6 +162,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
   // empty/incomplete profiles list (that's how we lost Jane Doe from the filter
   // selection while keeping her in the label).
   useEffect(() => {
+    if (controlled) return; // local mode never writes the store
     if (!profiles || profiles.length === 0) return;
     const current = getProfileFilter();
     if (current.mode !== "selected" || current.selectedIds.length === 0) return;
@@ -165,7 +189,8 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
         return profileTypes.some(t => normalizeFilter(t) === normalizeFilter(p.type));
       }
       // Only show primary profile types — not assets, vehicles, subscriptions, etc.
-      return ["person", "self", "pet"].some(t => normalizeFilter(t) === normalizeFilter(p.type));
+      // isOfferablePerson also drops a possession mistyped `person` (F-04).
+      return ["person", "self", "pet"].some(t => normalizeFilter(t) === normalizeFilter(p.type)) && isOfferablePerson(p);
     });
 
     // Deduplicate by name+type — keep the one with the most linked data

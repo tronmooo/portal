@@ -1142,7 +1142,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             <ExecCard
               id="tasks" icon={CheckSquare} title="Tasks"
               accent={CARD_ACCENTS.tasks} index={2}
-              headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => setPopup("tasks")} testId="exec-view-tasks" />}
+              headerRight={<ViewLink label="View all tasks" accent={CARD_ACCENTS.tasks} onClick={() => go("/dashboard/tasks")} testId="exec-view-tasks" />}
             >
               <div className="grid grid-cols-3 gap-2 mb-3 text-center">
                 <div>

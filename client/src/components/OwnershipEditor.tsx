@@ -28,6 +28,7 @@ import {
   roundPct,
   type OwnershipLink,
 } from "@shared/ownership-model";
+import { isOfferablePerson } from "@shared/entity-classify";
 
 interface Row {
   partyProfileId: string;
@@ -64,7 +65,8 @@ export function OwnershipEditor({
   const candidates = useMemo(
     () =>
       allProfiles
-        .filter((p) => PERSON_TYPES.has(p.type || "") && p.id !== profile.id && !(p.fields as any)?.deleted)
+        // isOfferablePerson: a possession mistyped `person` is not an owner (F-04).
+        .filter((p) => PERSON_TYPES.has(p.type || "") && isOfferablePerson(p) && p.id !== profile.id && !(p.fields as any)?.deleted)
         .sort((a, b) => (a.name || "").localeCompare(b.name || "")),
     [allProfiles, profile.id],
   );
