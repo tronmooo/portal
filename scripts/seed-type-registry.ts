@@ -5,9 +5,7 @@
  * Run with: npx tsx scripts/seed-type-registry.ts
  */
 
-const SUPABASE_URL = "https://uvaniovwrezzzlzmizyg.supabase.co";
-const SUPABASE_SERVICE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDA0MDkyOCwiZXhwIjoyMDg5NjE2OTI4fQ.WO2hjB0q18xHfZ4OYfxsPmN1V-K4526G7rBMCRVy8vI";
+import { SUPABASE_URL, SUPABASE_SERVICE_KEY } from "./supabase-credentials";
 
 // ─── Type Helpers ───────────────────────────────────────────────────────────
 

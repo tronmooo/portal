@@ -3,8 +3,10 @@
  * Fixes: test data, bad profile links, garbage values, duplicate profiles
  */
 
-const SB_URL = "https://uvaniovwrezzzlzmizyg.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDA0MDkyOCwiZXhwIjoyMDg5NjE2OTI4fQ.WO2hjB0q18xHfZ4OYfxsPmN1V-K4526G7rBMCRVy8vI";
+import { SUPABASE_URL, SUPABASE_SERVICE_KEY } from "./supabase-credentials";
+
+const SB_URL = SUPABASE_URL;
+const SB_KEY = SUPABASE_SERVICE_KEY;
 const USER_ID = "6f63cf74-ad8b-42f4-a8de-850f42219c06";
 
 const headers = {
