@@ -6,7 +6,7 @@
 // as props so this stays testable and finance.tsx owns the queries/mutations.
 import { Link } from "wouter";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatMoneyRound } from "@/lib/format";
+import { formatMoney, formatMoneyRound } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +32,11 @@ export interface Breakdown { id: string; name: string; type: string; value: numb
 // Both of these were whole-dollar formatters spelled two different ways.
 const money = formatMoneyRound;
 const money2 = formatMoneyRound;
+// QA 2026-09-18 BUG-17: line items and the totals they add up to use the
+// SAME formatter as the Assets tab — cents when the value has cents. Rounding
+// each row ($39.75 → $40, $66.68 → $67) while summing the exact values meant
+// the printed rows never added to the printed total.
+const moneyExact = formatMoney;
 
 function Sparkline({ series }: { series: number[] }) {
   if (!series || series.length < 2) return null;
@@ -89,7 +94,10 @@ function KpiCard({ label, value, icon, trend, tone, trendTone, series, chartKind
   const hasChart = series && series.length >= 2;
   return (
     <button onClick={onClick} data-testid={testId}
-      className="text-left bubble bubble-interactive pressable p-3 min-w-[8.5rem] flex-1 flex flex-col"
+      // QA 2026-09-18 BUG-26: `min-w-0` + `overflow-hidden` so a seven-figure
+      // value shrinks (clamped font) instead of clipping on the card's rounded
+      // edge, and the subtitle wraps with a tooltip instead of "one-t…".
+      className="text-left bubble bubble-interactive pressable p-3 min-w-0 basis-[8.5rem] flex-1 flex flex-col overflow-hidden"
       style={{ ["--accent-hsl" as any]: color }}>
       {/* Icon on a tinted circle — the Executive tab's card head, so a KPI here
           reads as the same species of thing it does there. */}
@@ -97,9 +105,9 @@ function KpiCard({ label, value, icon, trend, tone, trendTone, series, chartKind
         <Medallion icon={icon} accent={color} size="sm" />
         <span className="micro-label text-muted-foreground leading-tight">{label}</span>
       </div>
-      <div className="metric-value text-[26px] leading-none mt-2" style={{ color: `hsl(${color})` }}>{value}</div>
+      <div className="metric-value text-[length:clamp(17px,1.6vw+6px,26px)] leading-none mt-2 tabular-nums whitespace-nowrap min-w-0" title={value} style={{ color: `hsl(${color})` }}>{value}</div>
       {trend && <div className="text-[11px] font-semibold mt-1" style={{ color: `hsl(${trendColor})` }}>{trend}</div>}
-      {sub && <div className="text-[11px] text-muted-foreground mt-1 truncate">{sub}</div>}
+      {sub && <div className="text-[11px] text-muted-foreground mt-1 break-words line-clamp-2" title={sub}>{sub}</div>}
       {hasChart && (chartKind === "bars"
         ? <MiniBars series={series!} color={color} />
         : <div className="mt-2"><Sparkline series={series!} /></div>)}
@@ -402,15 +410,15 @@ export function MoneyOverview(props: {
             return (
               <div className="space-y-3">
                 <div>
-                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Assets</span><span className="tabular-nums font-semibold text-emerald-500">{money(assets)}</span></div>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Assets</span><span className="tabular-nums font-semibold text-emerald-500">{moneyExact(assets)}</span></div>
                   <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${(assets / scale) * 100}%` }} /></div>
                 </div>
                 <div>
-                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums font-semibold text-red-500">{money(liabilities)}</span></div>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums font-semibold text-red-500">{moneyExact(liabilities)}</span></div>
                   <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-red-500" style={{ width: `${(liabilities / scale) * 100}%` }} /></div>
                 </div>
                 <div className="border-t border-border pt-2 flex justify-between text-sm font-bold">
-                  <span>Net worth</span><span className={`tabular-nums ${netWorth < 0 ? "text-red-500" : "text-emerald-500"}`}>{money(netWorth)}</span>
+                  <span>Net worth</span><span className={`tabular-nums ${netWorth < 0 ? "text-red-500" : "text-emerald-500"}`}>{moneyExact(netWorth)}</span>
                 </div>
               </div>
             );
@@ -423,14 +431,14 @@ export function MoneyOverview(props: {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {assetBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-assets">
-              <SectionHeading title="Assets" icon={Landmark} accent="155 65% 45%" count={assetBreakdown.length} meta={money(assets)} />
+              <SectionHeading title="Assets" icon={Landmark} accent="155 65% 45%" count={assetBreakdown.length} meta={moneyExact(assets)} />
               <div className="divide-y divide-border/60">
                 {assetBreakdown.slice(0, 8).map(a => (
                   <Link key={a.id} href={`/profiles/${a.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-asset-${a.id}`}>
                       <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 shrink-0">{a.type}</span>
                       <span className="flex-1 text-sm truncate">{a.name}</span>
-                      <span className="text-sm font-semibold tabular-nums">{money(a.value)}</span>
+                      <span className="text-sm font-semibold tabular-nums">{moneyExact(a.value)}</span>
                     </div>
                   </Link>
                 ))}
@@ -439,14 +447,14 @@ export function MoneyOverview(props: {
           )}
           {liabilityBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-liabilities">
-              <SectionHeading title="Liabilities" icon={TrendingDown} accent="0 72% 58%" count={liabilityBreakdown.length} meta={money(liabilities)} />
+              <SectionHeading title="Liabilities" icon={TrendingDown} accent="0 72% 58%" count={liabilityBreakdown.length} meta={moneyExact(liabilities)} />
               <div className="divide-y divide-border/60">
                 {liabilityBreakdown.slice(0, 8).map(l => (
                   <Link key={l.id} href={`/profiles/${l.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-liability-${l.id}`}>
                       <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 shrink-0">{l.type}</span>
                       <span className="flex-1 text-sm truncate">{l.name}</span>
-                      <span className="text-sm font-semibold tabular-nums text-red-500">{money(l.value)}</span>
+                      <span className="text-sm font-semibold tabular-nums text-red-500">{moneyExact(l.value)}</span>
                     </div>
                   </Link>
                 ))}

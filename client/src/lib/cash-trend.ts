@@ -8,7 +8,7 @@
 // the income that existed in that month (shared/obligation-windows), not
 // today's income painted across all six.
 import { localDayOf } from "@shared/timezone";
-import { sumMonthIncome, type ReceivedPaycheckInput } from "@shared/obligation-windows";
+import { sumMonthIncome, sumMonthIncomeToDate, type ReceivedPaycheckInput } from "@shared/obligation-windows";
 
 export interface CashTrendPoint { month: string; inflow: number; outflow: number; net: number }
 
@@ -56,7 +56,12 @@ export function buildCashTrend(
   for (let i = months - 1; i >= 0; i--) {
     const key = monthKeyBack(todayISO, i);
     const label = new Date(Date.UTC(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, 15)).toLocaleDateString("en-US", { month: "short", timeZone: "UTC" });
-    const inflow = Math.round(sumMonthIncome(incomes, opts.paychecks, key));
+    // The current month's bar is income received TO DATE, the same figure the
+    // INCOME · MTD card shows (QA 2026-09-18 BUG-05); earlier months are
+    // complete, so their projection and their actuals are the same thing.
+    const inflow = Math.round(key === thisMonthKey
+      ? sumMonthIncomeToDate(incomes, opts.paychecks, key, todayISO)
+      : sumMonthIncome(incomes, opts.paychecks, key));
     const pending = key === thisMonthKey ? Number(opts.pendingOutflowThisMonth) || 0 : 0;
     const outflow = Math.round((outByMonth[key] || 0) + pending);
     out.push({ month: label, inflow, outflow, net: inflow - outflow });

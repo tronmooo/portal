@@ -35,9 +35,23 @@ export interface NetWorthChange {
   /** True when the baseline is ≥ 30 days old — the figure is a real month-over-month. */
   monthly: boolean;
   up: boolean;
+  /**
+   * What the change is measured over, for the caption: "this month" on a real
+   * monthly baseline, else "since <first snapshot date>". A history that
+   * started the day the assets were entered is not a month of growth
+   * (QA 2026-09-18: "↑ $1,488,433 this month" on a $1.6M net worth).
+   */
+  label: string;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** "Sep 3" for a YYYY-MM-DD — a calendar day, never an instant. */
+function sinceLabel(day: string): string {
+  const m = Number(day.slice(5, 7)), d = Number(day.slice(8, 10));
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return MONTHS[m - 1] ? `${MONTHS[m - 1]} ${d}` : day;
+}
 
 export function netWorthChange(
   history: ReadonlyArray<Partial<NetWorthHistoryRow> & Record<string, any>> | null | undefined,
@@ -56,9 +70,15 @@ export function netWorthChange(
   const monthly = baseline != null;
   const ref = baseline ?? rows[0];
   const now = Number(current);
+  // A history whose only rows are from today has no earlier point to measure
+  // from: the "change" would be today's entries against themselves.
+  if (!monthly && DAY_RE.test(todayISO) && ref.snapshotDate >= todayISO) {
+    return { pct: null, delta: null, baselineDate: ref.snapshotDate, monthly: false, up: true, label: "since first entry" };
+  }
   const delta = now - ref.netWorth;
   const baselineTooSmall = Math.abs(ref.netWorth) < 1;
   const signFlipped = (ref.netWorth < 0) !== (now < 0);
   const pct = monthly && !baselineTooSmall && !signFlipped ? (delta / Math.abs(ref.netWorth)) * 100 : null;
-  return { pct, delta, baselineDate: ref.snapshotDate, monthly, up: delta >= 0 };
+  const label = monthly ? "this month" : `since ${sinceLabel(ref.snapshotDate)}`;
+  return { pct, delta, baselineDate: ref.snapshotDate, monthly, up: delta >= 0, label };
 }

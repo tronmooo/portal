@@ -175,6 +175,21 @@ export function formatMinor(
  * Are two amounts equal within a tolerance? Used by transfer matching, where a
  * wire fee can make the two legs differ by a few cents.
  */
+/**
+ * Major-unit dollars for prose and activity rows (QA 2026-09-18 BUG-18):
+ * thousands separators, two decimals whenever there is a fractional part,
+ * none on a whole amount. `$${n}` printed "$184.1 — Costco run" for 184.10.
+ * Mirrors client/src/lib/format.ts formatMoney so every surface agrees.
+ */
+export function formatDollars(value: unknown): string {
+  const v = Number(value);
+  if (!Number.isFinite(v)) return "$0";
+  const abs = Math.round(Math.abs(v) * 100) / 100;
+  const whole = abs % 1 === 0;
+  const body = abs.toLocaleString("en-US", { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 });
+  return `${v < 0 ? "-$" : "$"}${body}`;
+}
+
 export function withinTolerance(a: Minor, b: Minor, toleranceMinor: number): boolean {
   return absMinor(toMinor(a) - toMinor(b)) <= Math.abs(toleranceMinor);
 }

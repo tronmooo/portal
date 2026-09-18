@@ -185,6 +185,35 @@ export function canonicalObligationCategory(raw: unknown): CanonicalObligationCa
   return resolve(raw, OBLIGATION_CATEGORIES, "general") as CanonicalObligationCategory;
 }
 
+/**
+ * The expense bucket a BILL PAYMENT logs under (QA 2026-09-18 BUG-11).
+ *
+ * A "Dodge Ram 2025 Auto Loan payment" bill with no category and no linked
+ * loan folded to "general" and was 62.6% of the month's General slice while
+ * the picker's "Debt payments" bucket sat empty. The rule, in order:
+ *   1. a bill that services a debt (a linked loan / card) is a debt payment;
+ *   2. an explicit bill category that folds to a real expense bucket wins;
+ *   3. a bill whose name or subtype says loan / mortgage / financing / card
+ *      payment is a debt payment;
+ *   4. otherwise "general".
+ */
+const DEBT_PAYMENT_NAME = /\b(loan|mortgage|financ(?:e|ing)|car payment|auto payment|credit card|heloc|line of credit|installment)\b/i;
+export function billPaymentExpenseCategory(bill: {
+  name?: string | null;
+  category?: string | null;
+  type_key?: string | null;
+  typeKey?: string | null;
+  servicesDebt?: boolean | null;
+} | null | undefined): CanonicalExpenseCategory {
+  if (bill?.servicesDebt) return "debt";
+  const explicit = foldExpenseCategory(bill?.category);
+  if (explicit && explicit !== "general") return explicit;
+  const typeKey = String(bill?.type_key ?? bill?.typeKey ?? "");
+  if (foldExpenseCategory(typeKey) === "debt" || DEBT_PAYMENT_NAME.test(typeKey.replace(/_/g, " "))) return "debt";
+  if (DEBT_PAYMENT_NAME.test(String(bill?.name ?? ""))) return "debt";
+  return explicit ?? "general";
+}
+
 /** True when `raw` is already canonical for expenses (no folding needed). */
 export function isCanonicalExpenseCategory(raw: unknown): boolean {
   return typeof raw === "string" && (EXPENSE_CATEGORIES as readonly string[]).includes(raw);

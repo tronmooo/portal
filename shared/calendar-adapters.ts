@@ -736,7 +736,9 @@ export function seriesFromIncomes(incomes: readonly any[]): CalendarSeries[] {
       },
       baseDate: clip(i.date),
       recurrence: frequencyToRecurrence(i.frequency),
-      amount: typeof i.amount === "number" ? i.amount : undefined,
+      // A numeric string (an import, a DB numeric column) is still an amount;
+      // dropping it left the calendar detail for a $105,000/yr salary blank.
+      amount: i.amount !== null && i.amount !== "" && Number.isFinite(Number(i.amount)) ? Number(i.amount) : undefined,
     });
   }
   return out;
