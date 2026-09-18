@@ -7,6 +7,7 @@ import { toCents as centsOf } from "./schema";
 
 import { isRecurringBill } from "./liability-types";
 import { advanceLiabilityDueDate } from "./liability-recurrence";
+import { isWithinOverdueGrace } from "./liability-status";
 
 export interface RegistryFieldDef { key: string; type?: string }
 
@@ -89,7 +90,11 @@ export function canonicalizeRegistryFields<T extends Record<string, any>>(fields
   if (ctx?.typeKey && ctx.todayISO && isRecurringBill(ctx.typeKey) && ISO_DAY.test(startDate) && !hasDueDate(out)) {
     const anchored = { ...out, firstPaymentDate: startDate, dueDate: startDate };
     const next = advanceLiabilityDueDate(anchored, ctx.todayISO);
-    const due = startDate >= ctx.todayISO ? startDate : next;
+    // A start date that has just passed is an occurrence still to pay: it stays
+    // the due date (overdue) rather than rolling forward silently (F-16). Only a
+    // start date older than the grace window is history and rolls to the
+    // first occurrence on or after today.
+    const due = startDate >= ctx.todayISO || isWithinOverdueGrace(startDate, ctx.todayISO) ? startDate : next;
     out.firstPaymentDate = startDate;
     out.dueDate = due;
     out.nextDueDate = due;

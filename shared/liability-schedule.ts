@@ -14,6 +14,7 @@
 
 import { advance, type RecurrenceRule } from "./recurrence";
 import { billRecurrenceRule } from "./liability-recurrence";
+import { nextLoanDueDate } from "./loan-facts";
 import { normalizeDateString } from "./extraction-normalize";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
 import { liabilityFamily } from "./liability-types";
@@ -170,7 +171,13 @@ export function deriveScheduleFields(
   // it is a spelling the profile writer produces, and without it this falls
   // through to `todayISO` — putting a payment on the wrong day rather than
   // none at all, which is worse.
-  let due = clip(resolveLiabilityDueDate(f) ?? "");
+  // A loan or card is due on its PAYMENT DAY, counted from today (shared/
+  // loan-facts) — never on the origin date. Anchoring on `firstPaymentDate`
+  // put the Dodge loan's schedule at Mar 31 2025: "536d overdue", two
+  // "missed" months that were history, and a next-due the list contradicted.
+  let due = fam === "one_time"
+    ? clip(resolveLiabilityDueDate(f) ?? "")
+    : (nextLoanDueDate(f, todayISO) ?? "");
   if (!ISO_RE.test(due)) {
     const day = parseInt(String(f.dueDay ?? ""), 10);
     if (day >= 1 && day <= 31) {
@@ -211,7 +218,9 @@ export function deriveScheduleFields(
     monthlyAmount: amount, amount,
     ...(hasDue ? {
       dueDate: due, nextDueDate: due,
-      firstPaymentDate: ISO_RE.test(clip(f.firstPaymentDate)) ? clip(f.firstPaymentDate) : due,
+      // The series the schedule walks starts at the NEXT payment. A loan's
+      // stored firstPaymentDate is its origin (history, not a due date).
+      firstPaymentDate: fam === "one_time" && ISO_RE.test(clip(f.firstPaymentDate)) ? clip(f.firstPaymentDate) : due,
     } : {}),
     ...(count != null ? { count } : {}),
   };

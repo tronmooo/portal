@@ -342,6 +342,8 @@ export default defineConfig({
       'tests/qa-2026-09-18-tasks-calendar.test.ts',
       // 2026-09-18 QA: copy & labels, layout & visual (F-55, F-57..F-64, F-66)
       'tests/qa-2026-09-18-copy-layout.test.ts',
+      // QA 2026-09-18 — money: bill pay date, loan next-due/amortization, pairing, grace, debt category, upcoming bills.
+      'tests/qa-2026-09-18-money.test.ts',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       'tests/test-suite-discovery.test.ts',

@@ -79,7 +79,8 @@ import {
   isLiabilityProfile,
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
-import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName } from "../shared/liability-types";
+import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName, billsServicingDebt } from "../shared/liability-types";
+import { withEffectiveCategories, debtPaymentLiabilityIds } from "../shared/expense-effective-category";
 import {
   addCharge, removeCharge, setEstimate, setActual, normalizeBillingModel,
   resolveBillingModel, resolveOccurrenceAmount, billingModelMeta,
@@ -6017,9 +6018,11 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
 
   private async _liabilityPayments(id: string): Promise<Array<{ id?: string; paymentDate?: string }>> {
+    // A debt's history includes the rows of the bills that pay it (F-08).
+    const ids = await this._liabilityPaymentSourceIds(id);
     const { data } = await this.supabase
       .from("liability_payments").select("id,payment_date")
-      .eq("user_id", this.userId).eq("liability_profile_id", id)
+      .eq("user_id", this.userId).in("liability_profile_id", ids)
       .order("payment_date", { ascending: true });
     return (data || []).map((r: any) => ({ id: r.id, paymentDate: r.payment_date }));
   }
@@ -6044,11 +6047,10 @@ export class SupabaseStorage implements IStorage {
     const billingModel = resolveBillingModel(p as any);
     const occurrences = generateSchedule({ id: p.id, fields: f }, payments, { todayISO, windowStart: fromISO, windowEnd: toISO, billingModel });
     const next = nextDueOccurrence({ id: p.id, fields: f }, payments, todayISO, billingModel);
-    const paidPayRows = await this.supabase
-      .from("liability_payments").select("*")
-      .eq("user_id", this.userId).eq("liability_profile_id", id)
-      .order("payment_date", { ascending: false });
-    const history = (paidPayRows.data || []).map((r: any) => this.paymentRowToObligationPayment(r));
+    // Same merged source as GET /api/liabilities/:id/payments, so "Last paid",
+    // "Payments made" and the Payments tab count the same rows (F-08).
+    const history = (await this.getLiabilityPayments(id))
+      .map((r: any) => ({ id: r.id, amount: Number(r.amount) || 0, date: r.paymentDate, method: r.sourceAccount || undefined }));
     const amount = liabilityAmount({ id: p.id, fields: f });
     const counts = scheduleCounts({ id: p.id, fields: f }, payments, todayISO);
     return {
@@ -7849,7 +7851,10 @@ export class SupabaseStorage implements IStorage {
     const monthlyExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === userYearMonth);
     // Keyed like the budget caps (budgetCategoryKey): the finance page reads a
     // cap's spending straight out of this map by the cap's category.
-    const spendByCategory = spendByCategoryOf(monthlyExpenses);
+    // A payment logged against a loan, or against the bill that pays one,
+    // counts as "debt" whatever category the row was stored with (F-17:
+    // two $912 car payments stored as "general" were 63% of the chart).
+    const spendByCategory = spendByCategoryOf(withEffectiveCategories(monthlyExpenses, debtPaymentLiabilityIds(allProfiles as any[])));
     const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
 
     // Previous month YYYY-MM, computed in the user's timezone
@@ -9101,11 +9106,29 @@ export class SupabaseStorage implements IStorage {
   }
 
   async getLiabilityPayments(liabilityProfileId: string): Promise<LiabilityPayment[]> {
+    // A loan's payments are recorded on the bill that pays it ("Dodge Ram 2025
+    // Auto Loan payment") — the loan's own rows were empty, so its page said
+    // "LAST PAID Sep 17" beside "0 payments on record" and "Total payments
+    // made $0.00" (F-08). The history of a debt is its own rows plus the rows
+    // of every bill servicing it (shared/liability-types billsServicingDebt).
+    const ids = await this._liabilityPaymentSourceIds(liabilityProfileId);
     const { data, error } = await this.supabase.from("liability_payments")
-      .select("*").eq("user_id", this.userId).eq("liability_profile_id", liabilityProfileId)
+      .select("*").eq("user_id", this.userId).in("liability_profile_id", ids)
       .order("payment_date", { ascending: false });
     if (error) throw error;
     return (data || []).map(r => this.rowToLiabilityPayment(r));
+  }
+
+  /** The liability ids whose payment rows make up `liabilityProfileId`'s history. */
+  private async _liabilityPaymentSourceIds(liabilityProfileId: string): Promise<string[]> {
+    try {
+      const p: any = await this.getProfile(liabilityProfileId);
+      if (!p || isRecurringBillProfile(p)) return [liabilityProfileId];
+      const bills = billsServicingDebt(await this.getProfiles(), p);
+      return [liabilityProfileId, ...bills.map((b: any) => String(b.id))];
+    } catch {
+      return [liabilityProfileId];
+    }
   }
 
   async getLiabilityPayment(id: string): Promise<LiabilityPayment | undefined> {

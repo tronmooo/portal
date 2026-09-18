@@ -100,3 +100,49 @@ export function isRecurringBillProfile(p: { type?: string | null; type_key?: str
 export function normalizeLiabilityName(n: string): string {
   return String(n || "").toLowerCase().replace(/\s+(bill\s+)?payments?$/i, "").replace(/\s+/g, " ").trim();
 }
+
+/** True for a name spelled as a debt's payment bill ("… payment", "… bill payment"). */
+export function isPaymentBillName(n: string): boolean {
+  return /\s+(bill\s+)?payments?$/i.test(String(n || ""));
+}
+
+type Pairable = { id?: string; name?: string | null; type?: string | null; type_key?: string | null; typeKey?: string | null; parentProfileId?: string | null; fields?: any };
+
+/**
+ * True when `bill` is the payment bill OF `debt`: a recurring bill that
+ * records the loan/card in `fields.linkedLiabilityId`, or — for the bills the
+ * older doors wrote with no link — one named "<debt name> payment". The same
+ * two signals the pay path resolves the serviced debt from (server/
+ * liability-payments resolveServicedDebt), so a bill and a loan are paired
+ * the same way whether money is moving or a list is being drawn.
+ */
+export function isPaymentBillOf(bill: Pairable | null | undefined, debt: Pairable | null | undefined): boolean {
+  if (!bill || !debt || !bill.id || !debt.id || bill.id === debt.id) return false;
+  const billType = String(bill.type || "").toLowerCase();
+  if (billType !== "liability" && billType !== "loan" && billType !== "subscription") return false;
+  // A record that names its subtype must be a recurring bill; a lite row
+  // (id/name/type only, as the profiles index lists) is judged by name.
+  const billKey = (bill as any).type_key ?? (bill as any).typeKey;
+  if (billKey && !isRecurringBill(billKey)) return false;
+  if (debt.type !== "liability" && debt.type !== "loan") return false;
+  if (isRecurringBillProfile(debt)) return false;
+  const linked = bill.fields?.linkedLiabilityId;
+  if (typeof linked === "string" && linked) return linked === debt.id;
+  if (!isPaymentBillName(String(bill.name || ""))) return false;
+  const target = normalizeLiabilityName(String(bill.name || ""));
+  return !!target && normalizeLiabilityName(String(debt.name || "")) === target;
+}
+
+/** The recurring bills that pay `debt` — its payment history lives on them. */
+export function billsServicingDebt<T extends Pairable>(profiles: readonly T[] | null | undefined, debt: Pairable | null | undefined): T[] {
+  return (profiles || []).filter((p) => isPaymentBillOf(p, debt));
+}
+
+/**
+ * True when `bill` is the payment bill of a debt that is itself in `profiles`
+ * — the case where a list of liabilities would show the same loan twice.
+ */
+export function isPaymentBillOfListedDebt(bill: Pairable | null | undefined, profiles: readonly Pairable[] | null | undefined): boolean {
+  if (!bill) return false;
+  return (profiles || []).some((p) => isPaymentBillOf(bill, p));
+}

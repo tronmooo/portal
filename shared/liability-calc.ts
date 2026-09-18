@@ -121,6 +121,17 @@ export function buildAmortization(terms: LiabilityTerms): AmortizationResult {
     let principal = payment - interest;
     let extraApplied = extra;
 
+    // A residual smaller than half a payment is folded into this payment —
+    // the way a lender closes a loan — instead of standing as a "month" of
+    // its own. $48,629.10 at 6.49% with $912.40/mo pays off in 63 payments;
+    // counting the ~$45 that would be left after the 63rd as a 64th month put
+    // "64 mo" on the detail page against 63 everywhere it was worked by hand.
+    const residual = remaining - (principal + extraApplied);
+    if (residual > 0 && residual < payment / 2) {
+      principal = remaining - extraApplied;
+      if (principal < 0) { principal = remaining; extraApplied = 0; }
+    }
+
     // Prevent over-paying on final period
     if (principal + extraApplied > remaining) {
       const needed = remaining - principal;

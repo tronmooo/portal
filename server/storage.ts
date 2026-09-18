@@ -29,6 +29,7 @@ import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 import { formatLoggedValues } from "@shared/tracker-units";
 import { bloodPressureCategory } from "@shared/blood-pressure";
 import { generateSchedule } from "@shared/liability-schedule";
+import { withEffectiveCategories, debtPaymentLiabilityIds } from "@shared/expense-effective-category";
 import { addCharge, removeCharge } from "@shared/liability-billing";
 import { applyBalanceAdjustment, isAccountProfile } from "@shared/finance-accounts";
 
@@ -2542,7 +2543,10 @@ export class MemStorage implements IStorage {
       return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
     });
     const spendByCategory: Record<string, number> = {};
-    for (const e of monthlyExpenses) {
+    // Same rule as production: a payment against a debt (or its payment bill)
+    // counts as "debt" whatever category the row was stored with (F-17).
+    const debtIdsForSpend = debtPaymentLiabilityIds(Array.from(this.profiles.values()) as any[]);
+    for (const e of withEffectiveCategories(monthlyExpenses, debtIdsForSpend)) {
       spendByCategory[e.category] = (spendByCategory[e.category] || 0) + e.amount;
     }
     const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);

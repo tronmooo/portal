@@ -21,7 +21,7 @@
 // in, Pay arms then commits (money moves on the SECOND tap), medications get
 // "Taken", managed recurring dates get "Done". Popups are the same components
 // the dashboard KPI tiles use.
-import { sumMonthIncomeNow } from "@shared/obligation-windows";
+import { sumMonthIncomeNow, selectUpcomingBills, UPCOMING_BILLS_EMPTY_COPY } from "@shared/obligation-windows";
 import { isDoneToday } from "@shared/task-counts";
 import { netWorthChange } from "@shared/net-worth-change";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
@@ -761,10 +761,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const habitsDoneCount = habitsRollup.habitsComplete;
   const habitPct = habitsRollup.habitsScheduled > 0 ? Math.round((habitsDoneCount / habitsRollup.habitsScheduled) * 100) : 0;
 
-  // Money — bills within 3 weeks, soonest first.
-  const billsDueSoon = allBills
-    .filter((b: any) => typeof b.daysUntil === "number" && b.daysUntil >= 0 && b.daysUntil <= 21)
-    .sort((a: any, b: any) => (a.daysUntil ?? 1e9) - (b.daysUntil ?? 1e9));
+  // Money — THE upcoming-bills list (shared/obligation-windows): the same
+  // window the Finance BILLS DUE tile and the Upcoming card show, overdue
+  // first. A private 21-day filter here said "Nothing due in 3 weeks" while
+  // the Finance tab counted one bill due in 27 days (F-54).
+  const billsDueSoon = selectUpcomingBills(allBills as any[]);
 
   // Documents
   // Grouped to ONE CARD PER RECORD PER DAY so this card, its count and the
@@ -1359,7 +1360,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <div>
                   <p className="micro-label text-muted-foreground mb-1.5">Bills Due Soon</p>
                   {billsDueSoon.length === 0 ? (
-                    <p className="text-[12px] text-muted-foreground">Nothing due in 3 weeks.</p>
+                    <p className="text-[12px] text-muted-foreground">{UPCOMING_BILLS_EMPTY_COPY}.</p>
                   ) : (
                     <div className="space-y-1.5 text-[13px]">
                       {billsDueSoon.slice(0, 3).map((b: any) => (

@@ -263,9 +263,13 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
 
     const dupes = cal.duplicatesBySeries.get(series.id);
     if (!dupes?.length) return undefined;
-    return dupes.length === 1
-      ? "Merged 1 duplicate of this date"
-      : `Merged ${dupes.length} duplicates of this date`;
+    // Say WHAT was merged, in plain English. "Merged 1 duplicate of this
+    // date" named nothing and offered nothing to act on (F-15): a loan and
+    // its "<loan> payment" bill are one payment, shown once here.
+    const labels = (cal.duplicateLabelsBySeries.get(series.id) || []).filter((l) => l !== series.title);
+    if (labels.length === 0) return "Recorded twice — shown once here";
+    const named = labels.map((l) => `“${l}”`).join(" and ");
+    return `Also recorded as ${named} — the same payment, shown once here`;
   };
 
   return (
