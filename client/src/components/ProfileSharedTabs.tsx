@@ -9,6 +9,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Clock, RefreshCw, Share2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
@@ -265,7 +266,7 @@ export function ConnectionsTab({ profileId }: { profileId: string }) {
 export function HistoryTab({ profileId }: { profileId: string }) {
   const { toast } = useToast();
 
-  const { data: entries = [], refetch } = useQuery<any[]>({
+  const { data: entries = [], refetch, isPending: historyPending } = useQuery<any[]>({
     queryKey: ["/api/ownership-history", profileId],
     queryFn: () =>
       apiRequest(
@@ -292,6 +293,18 @@ export function HistoryTab({ profileId }: { profileId: string }) {
         variant: "destructive",
       }),
   });
+
+  // A placeholder while the list is in flight — the tab body was blank until
+  // the history landed, then jumped to content (QA 2026-09-18, F-63).
+  if (historyPending) {
+    return (
+      <div className="space-y-2" data-testid="history-tab-loading" aria-label="Loading history">
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-12 w-full" />
+      </div>
+    );
+  }
 
   if (entries.length === 0) {
     return (

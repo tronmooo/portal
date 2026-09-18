@@ -373,11 +373,14 @@ const DOW = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "
 
 export function humanRecurrenceLabel(recurrence: string, baseDate?: string): string {
   const d = baseDate && DATE_RE.test(baseDate.slice(0, 10)) ? parseLocal(baseDate) : null;
-  // "weekly:1,3,5" → "Weekly on Mon, Wed, Fri". Handled ahead of the switch so
-  // the named patterns keep their existing hand-written labels.
+  // "weekly:1,3,5" → "Weekly on Monday, Wednesday, Friday". Handled ahead of
+  // the switch so the named patterns keep their existing hand-written labels.
+  // Full day names, like the plain "weekly" case below: the Recurring &
+  // Important list mixed "Weekly on Tuesday" with "Weekly on Tue" (QA
+  // 2026-09-18, F-58).
   if (WEEKDAY_SET_RE.test(String(recurrence))) {
     const days = Array.from(weekdaySetFor(recurrence)!).sort((a, b) => a - b);
-    return `Weekly on ${days.map(n => DOW[n].slice(0, 3)).join(", ")}`;
+    return `Weekly on ${days.map(n => DOW[n]).join(", ")}`;
   }
   switch (recurrence) {
     case "daily": return "Every day";

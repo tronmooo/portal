@@ -2,6 +2,7 @@ import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField, previewUnrenderable } from "@/lib/field-display";
+import { enumOptionsForField, humanizeEnumValue, isDateFieldKey, toDateInputValue } from "@shared/field-label";
 import { formatMoney, formatFullDate, parseLocalDate } from "@/lib/format";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
@@ -3639,9 +3640,9 @@ function StaticInfoTab({
               )}
             </div>
             <div className="mt-2 space-y-0.5">
-              {f.valuationMethod && <p className="text-xs-loose text-muted-foreground">Method: {f.valuationMethod}</p>}
+              {f.valuationMethod && <p className="text-xs-loose text-muted-foreground">Method: {humanizeEnumValue(f.valuationMethod)}</p>}
               {f.valuationRange && <p className="text-xs-loose text-muted-foreground">Range: {f.valuationRange}</p>}
-              {f.valuationDate && <p className="text-xs-loose text-muted-foreground">Valued: {f.valuationDate}</p>}
+              {f.valuationDate && <p className="text-xs-loose text-muted-foreground">Valued: {formatFullDate(f.valuationDate)}</p>}
             </div>
           </Card>
         );
@@ -8417,16 +8418,39 @@ function EditProfileDialog({
           </div>
           {allFieldKeys.filter(k => !isReservedFieldKey(k)).map(key => {
             const sg = suggested.find(s => s.key === key);
+            // Machine tokens never reach a text box (QA 2026-09-18, F-55):
+            // an enum key ("assetSubtype": high_value_item) is a Select of
+            // human labels, and a date key holding the valuation engine's ISO
+            // instant is a date input showing the day.
+            const enumOptions = enumOptionsForField(key, fields[key]);
+            const isDate = !enumOptions && isDateFieldKey(key);
             return (
               <div key={key}>
                 <label className="text-xs font-medium text-muted-foreground">{sg?.label || formatKey(key)}</label>
-                <Input
-                  className="mt-1"
-                  value={fields[key] ?? ""}
-                  placeholder={sg?.placeholder || ""}
-                  onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
-                  data-testid={`input-field-${key}`}
-                />
+                {enumOptions ? (
+                  <Select
+                    value={String(fields[key] ?? "")}
+                    onValueChange={v => setFields(prev => ({ ...prev, [key]: v }))}
+                  >
+                    <SelectTrigger className="mt-1" data-testid={`input-field-${key}`}>
+                      <SelectValue placeholder="Choose…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {enumOptions.map(o => (
+                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    className="mt-1"
+                    type={isDate ? "date" : undefined}
+                    value={isDate ? toDateInputValue(fields[key]) : (fields[key] ?? "")}
+                    placeholder={sg?.placeholder || ""}
+                    onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
+                    data-testid={`input-field-${key}`}
+                  />
+                )}
               </div>
             );
           })}

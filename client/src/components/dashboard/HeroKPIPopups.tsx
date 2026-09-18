@@ -580,7 +580,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
             <div className="relative shrink-0" style={{ width: 116, height: 116 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={donutData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={38} outerRadius={56} paddingAngle={2} stroke="none">
+                  <Pie data={donutData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={38} outerRadius={56} paddingAngle={2} stroke="none" isAnimationActive={false}>
                     {donutData.map((d, i) => <Cell key={i} fill={d.color} />)}
                   </Pie>
                 </PieChart>

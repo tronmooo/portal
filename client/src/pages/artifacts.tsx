@@ -5,6 +5,7 @@ import { invalidateDomains } from "@/lib/cache-bus";
 import { formatListDate } from "@/lib/format";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { formatFieldKey, stringifyField } from "@/lib/field-display";
+import { userVisibleTags } from "@shared/system-tags";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -852,7 +853,8 @@ export default function ArtifactsPage() {
           profileName: resolveProfile(d.linkedProfiles),
           source: d,
           pinned: false,
-          tags: Array.isArray((d as any).tags) ? ((d as any).tags as string[]) : [],
+          // Never the dedupe hash or the extract-only marker (F-55).
+          tags: userVisibleTags((d as any).tags),
           isArtifact: false,
         })),
       ...artifacts.map(a => ({
@@ -874,7 +876,7 @@ export default function ArtifactsPage() {
         profileName: resolveProfile(a.linkedProfiles),
         source: a,
         pinned: !!a.pinned,
-        tags: Array.isArray(a.tags) ? a.tags : [],
+        tags: userVisibleTags(a.tags),
         isArtifact: true,
       })),
     ];
@@ -1010,7 +1012,7 @@ export default function ArtifactsPage() {
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-semibold leading-tight">Artifacts</h1>
           <p className="text-xs text-muted-foreground truncate">
-            {profileFiltered.length} items · Documents, notes &amp; AI reports in one place
+            {profileFiltered.length} artifact{profileFiltered.length === 1 ? "" : "s"} · Documents, notes &amp; AI reports in one place
           </p>
         </div>
         <div className="shrink-0 flex items-center gap-2">
@@ -1033,8 +1035,12 @@ export default function ArtifactsPage() {
           words. */}
       <div className="grid grid-cols-3 gap-2" data-testid="artifacts-summary">
         {[
+          // The page is titled "Artifacts" and its header counts every item
+          // as one, so the in-app tile cannot also be called "Artifacts" —
+          // "3 artifacts" over "0 ARTIFACTS" read as a contradiction (QA
+          // 2026-09-18, F-59). Name it by what it holds.
           { label: "Files", value: filtered.filter(i => !i.isArtifact).length, color: "205 90% 58%", testId: "artifacts-stat-files" },
-          { label: "Artifacts", value: filtered.filter(i => i.isArtifact).length, color: "262 70% 62%", testId: "artifacts-stat-artifacts" },
+          { label: "Notes & reports", value: filtered.filter(i => i.isArtifact).length, color: "262 70% 62%", testId: "artifacts-stat-artifacts" },
           { label: "Showing", value: filtered.length, color: "155 60% 48%", testId: "artifacts-stat-showing" },
         ].map(s => (
           <div key={s.label} className=" bubble  p-2.5 text-center card-lift transition-all"

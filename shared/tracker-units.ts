@@ -1,4 +1,5 @@
 // shared/tracker-units.ts
+import { describeCount } from "./field-label";
 // =============================================================================
 // THE single source of truth for "what unit does this tracker/field display in?"
 // =============================================================================
@@ -213,7 +214,8 @@ export function formatLoggedValues(
     const n = typeof raw === "number" ? raw : (typeof raw === "string" && raw.trim() !== "" && !isNaN(Number(raw)) ? Number(raw) : null);
     if (n != null && Number.isFinite(n)) {
       const unit = resolveTrackerUnit(t, key);
-      out.push(unit ? `${fmtValue(n)} ${unit}` : `${fmtValue(n)} ${humanKey(key)}`);
+      // No unit: the noun agrees with the count ("1 completion", "2 completions").
+      out.push(unit ? `${fmtValue(n)} ${unit}` : describeCount(n, key));
       continue;
     }
     const s = String(raw).trim();

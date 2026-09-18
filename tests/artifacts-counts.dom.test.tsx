@@ -49,7 +49,9 @@ const DOCUMENTS = [
   {
     id: "s-dl", name: "Florida Driver License", title: "Florida Driver License",
     type: "identification", mimeType: "image/jpeg", createdAt: iso("2026-03-28"),
-    linkedProfiles: ["p1"], extractedData: { sex: "M" }, tags: ["drivers_license"],
+    linkedProfiles: ["p1"], extractedData: { sex: "M" },
+    // Two app-written tags ride along with the real one (F-59/F-55).
+    tags: ["drivers_license", "sha256:deadbeef", "image-discarded"],
   },
 ];
 const ARTIFACTS = [
@@ -213,6 +215,27 @@ describe("Artifacts counts match the rendered data", () => {
     // Type chips re-count under the search too.
     expect(chipCount("all")).toBe(1);
     expect(chipCount("ai_reports")).toBe(0);
+  });
+
+  it("the header counts everything as artifacts and no tile borrows that word", async () => {
+    // QA 2026-09-18 (F-59): "3 items" over "3 FILES · 0 ARTIFACTS · 3 SHOWING"
+    // on a page titled Artifacts read as a contradiction. The header uses the
+    // page's word for the whole set; the in-app tile is named by what it holds.
+    mount();
+    await ready();
+    expect(screen.getByText(/^10 artifacts/)).toBeTruthy();
+    const band = screen.getByTestId("artifacts-summary");
+    expect(within(band).queryByText(/^artifacts$/i)).toBeNull();
+    expect(within(band).getByText(/notes & reports/i)).toBeTruthy();
+  });
+
+  it("system tags (dedupe hash, extract-only marker) are never chips", async () => {
+    mount();
+    await ready();
+    expect(screen.queryByTestId("tag-filter-sha256:deadbeef")).toBeNull();
+    expect(screen.queryByTestId("tag-filter-image-discarded")).toBeNull();
+    expect(screen.queryByText(/#sha256/)).toBeNull();
+    expect(screen.getByTestId("tag-filter-drivers_license")).toBeTruthy();
   });
 
   it("the Files + Artifacts split always adds up to Showing", async () => {

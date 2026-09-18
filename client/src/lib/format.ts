@@ -134,3 +134,41 @@ export function formatListDate(input: string | Date | null | undefined): string 
   if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
   return dateFormat(opts).format(d);
 }
+
+/**
+ * Compact "how long ago": "just now", "5m ago", "3h ago", "2d ago", then the
+ * date. The unit is glued to the number — every other surface (list rows,
+ * the wellness tab, finance connections) writes "2d ago", and the valuation
+ * card's "2 d ago" stood out as a typo (QA 2026-09-18, F-58).
+ */
+export function formatTimeAgo(
+  input: string | Date | null | undefined,
+  now: Date = new Date(),
+): string {
+  if (!input) return "";
+  const t = (typeof input === "string" ? new Date(input) : input).getTime();
+  if (!Number.isFinite(t)) return "";
+  const mins = Math.round((now.getTime() - t) / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 60) return `${days}d ago`;
+  return formatFullDate(new Date(t));
+}
+
+/**
+ * Font size (px) for a KPI number so it FITS its tile instead of running
+ * across the border into the neighbour ("$1,608,307" at 26px in a 140px
+ * tile — QA 2026-09-18, F-60). Steps down with the string length; a number is
+ * never clipped mid-digit because the size shrinks before the box does.
+ */
+export function metricValueSize(value: string | number | null | undefined, base = 26, min = 15): number {
+  const len = String(value ?? "").length;
+  if (len <= 7) return base;
+  if (len <= 9) return Math.max(min, Math.round(base * 0.85));
+  if (len <= 11) return Math.max(min, Math.round(base * 0.72));
+  if (len <= 13) return Math.max(min, Math.round(base * 0.62));
+  return min;
+}

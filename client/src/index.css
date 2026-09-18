@@ -501,11 +501,14 @@ h1, h2, h3, .text-xl, .text-2xl {
 
 /* Stronger skeleton shimmer */
 .skeleton-shimmer {
+  /* Foreground-relative stops: on the light theme --muted (92%) inside a card
+     (97%) was nearly invisible, so a loading grid read as blank white space
+     (QA 2026-09-18, F-63). */
   background: linear-gradient(
     90deg,
-    hsl(var(--muted)) 25%,
-    hsl(var(--muted-foreground) / 0.06) 50%,
-    hsl(var(--muted)) 75%
+    hsl(var(--muted-foreground) / 0.12) 25%,
+    hsl(var(--muted-foreground) / 0.22) 50%,
+    hsl(var(--muted-foreground) / 0.12) 75%
   );
   background-size: 200% 100%;
   /* --i staggers the wave across a grid so a dozen placeholders don't pulse in

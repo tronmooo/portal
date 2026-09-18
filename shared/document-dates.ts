@@ -138,6 +138,47 @@ export function countDocumentDateRecords(
   return seen.size;
 }
 
+// ── Expired vs expiring ─────────────────────────────────────────────────────
+// "2 expiring soon" over "Homeowners Insurance — Expired 109d ago" (QA
+// 2026-09-18, F-57): a count that lumps the lapsed in with the still-valid
+// promises the wrong thing. Every surface that captions a document count —
+// the dashboard Documents card, the Executive card, the DOCS EXP chip — reads
+// this one split, so their numbers and their words agree.
+
+/** Documents within this many days count as "expiring soon". */
+export const DOCUMENT_SOON_DAYS = 30;
+
+export interface DocumentUrgency {
+  /** daysUntil < 0 — already lapsed. */
+  expired: number;
+  /** 0 ≤ daysUntil ≤ soonDays — still valid, but not for long. */
+  expiringSoon: number;
+  /** Later than soonDays. */
+  later: number;
+  total: number;
+  /** "1 expired · 1 expiring soon" — empty string when there is nothing. */
+  label: string;
+}
+
+export function summarizeDocumentUrgency(
+  rows: readonly { daysUntil?: number | null }[] | undefined | null,
+  soonDays: number = DOCUMENT_SOON_DAYS,
+): DocumentUrgency {
+  let expired = 0, expiringSoon = 0, later = 0;
+  for (const row of rows || []) {
+    const d = row?.daysUntil;
+    if (typeof d !== "number" || !Number.isFinite(d)) { later++; continue; }
+    if (d < 0) expired++;
+    else if (d <= soonDays) expiringSoon++;
+    else later++;
+  }
+  const parts: string[] = [];
+  if (expired > 0) parts.push(`${expired} expired`);
+  if (expiringSoon > 0) parts.push(`${expiringSoon} expiring soon`);
+  if (later > 0) parts.push(`${later} upcoming`);
+  return { expired, expiringSoon, later, total: expired + expiringSoon + later, label: parts.join(" · ") };
+}
+
 /** Every rule id a grouped row stands for — what a dismiss must cover. */
 export function ruleIdsOf(row: GroupedDocumentDate | DocumentDateRow): string[] {
   const grouped = (row as GroupedDocumentDate).ruleIds;

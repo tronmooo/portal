@@ -25,7 +25,7 @@ import { useOverflowX } from "@/hooks/useOverflowX";
 import { collectMetrics, wellnessScore, resolveWellnessSubject, belongsToSubject } from "@shared/wellness-readout";
 import { bestHabitStreak } from "@shared/habit-progress";
 import { loadDocSnoozeMap } from "@/lib/docSnooze";
-import { groupDocumentDates } from "@shared/document-dates";
+import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-dates";
 import type { DashboardStats, Tracker } from "@shared/schema";
 import { MetricCard } from "@/components/ui/metric-card";
 import { formatMoneyRound } from "@/lib/format";
@@ -102,7 +102,10 @@ function StatChip({ label, value, icon, accent, tone, sub, subTone, onClick, tes
       // on a desktop instead of huddling at the left with a third of the row
       // empty — but never shrink below the number they exist to show, so on a
       // phone they keep their natural size and the row scrolls as before.
-      className="grow basis-0 min-w-fit"
+      // snap-start: on a phone the row scrolls and each chip is a snap stop.
+      // sm:basis-[30%]: when the row wraps (sm..xl) it breaks into rows of
+      // three; at xl the six share one row again.
+      className="grow basis-0 min-w-fit snap-start sm:basis-[30%] xl:basis-0"
       headerRight={sub ? (
         <span className={`text-[11px] font-bold whitespace-nowrap ${
           subTone === "pos" ? "text-emerald-500" : subTone === "neg" ? "text-red-500" : "text-amber-500"
@@ -239,9 +242,12 @@ export function HubKpiStrip() {
   // The chip's count is every expiring document; its caption used to be
   // driven by the single soonest one, so one overdue plus one due in 8 days
   // read "2 · overdue". Count the two states separately.
-  const overdueDocs = expDocs.filter((d: any) => typeof d.daysUntil === "number" && d.daysUntil < 0).length;
+  // The split is the shared one every document caption uses (F-57), so the
+  // chip, the dashboard card and the Executive card never disagree.
+  const docsUrgency = summarizeDocumentUrgency(expDocs);
+  const overdueDocs = docsUrgency.expired;
   const docsSub = expDocs.length === 0 ? undefined
-    : overdueDocs > 0 ? `${overdueDocs} overdue${expDocs.length > overdueDocs ? ` · ${expDocs.length - overdueDocs} soon` : ""}`
+    : overdueDocs > 0 ? `${overdueDocs} expired${docsUrgency.expiringSoon > 0 ? ` · ${docsUrgency.expiringSoon} soon` : ""}`
     : minDocDays != null && isFinite(minDocDays) ? `≤${minDocDays}d` : undefined;
 
   // Each chip wears the colour of the tab it belongs to, from the one place
@@ -259,9 +265,14 @@ export function HubKpiStrip() {
     // the right" instead of a broken layout at narrow widths — but only when
     // something is genuinely cut off. On a desktop the six chips fit and share
     // the full width, and fading the last one there just looked like a bug.
+    // Phone (<sm): one scrolling row, snapping chip to chip, with the fade as
+    // the "more this way" cue. sm and up: the row WRAPS instead — six chips at
+    // 915px sliced "TASKS DUE" mid-word and hid "DOCS EXP" entirely behind a
+    // hidden scrollbar with nothing to say so (QA 2026-09-18, F-61). Every
+    // chip keeps min-w-fit, so no label is ever cut.
     <div
       ref={stripRef}
-      className={`flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar ${
+      className={`flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar snap-x snap-mandatory sm:flex-wrap sm:overflow-x-visible sm:snap-none ${
         clipped ? "[mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]" : ""
       }`}
       data-testid="hub-kpi-strip"

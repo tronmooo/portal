@@ -6,7 +6,8 @@
 // as props so this stays testable and finance.tsx owns the queries/mutations.
 import { Link } from "wouter";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatMoneyRound } from "@/lib/format";
+import { formatMoneyRound, metricValueSize } from "@/lib/format";
+import { useMemo } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -89,7 +90,7 @@ function KpiCard({ label, value, icon, trend, tone, trendTone, series, chartKind
   const hasChart = series && series.length >= 2;
   return (
     <button onClick={onClick} data-testid={testId}
-      className="text-left bubble bubble-interactive pressable p-3 min-w-[8.5rem] flex-1 flex flex-col"
+      className="text-left bubble bubble-interactive pressable p-3 min-w-[8.5rem] flex-1 flex flex-col min-w-0 overflow-hidden"
       style={{ ["--accent-hsl" as any]: color }}>
       {/* Icon on a tinted circle — the Executive tab's card head, so a KPI here
           reads as the same species of thing it does there. */}
@@ -97,7 +98,10 @@ function KpiCard({ label, value, icon, trend, tone, trendTone, series, chartKind
         <Medallion icon={icon} accent={color} size="sm" />
         <span className="micro-label text-muted-foreground leading-tight">{label}</span>
       </div>
-      <div className="metric-value text-[26px] leading-none mt-2" style={{ color: `hsl(${color})` }}>{value}</div>
+      {/* The number shrinks to fit rather than running over the border into
+          the next tile ("$1,608,307" at 915px — QA 2026-09-18, F-60). */}
+      <div className="metric-value leading-none mt-2 whitespace-nowrap tabular-nums"
+        style={{ color: `hsl(${color})`, fontSize: `${metricValueSize(value)}px` }}>{value}</div>
       {trend && <div className="text-[11px] font-semibold mt-1" style={{ color: `hsl(${trendColor})` }}>{trend}</div>}
       {sub && <div className="text-[11px] text-muted-foreground mt-1 truncate">{sub}</div>}
       {hasChart && (chartKind === "bars"
@@ -200,6 +204,12 @@ export function MoneyOverview(props: {
     onOpenSpend, onOpenIncome, onOpenBills, onOpenSavings, onOpenOverview,
   } = props;
   const cashFlow = cashIn - cashOut;
+  // finance.tsx rebuilds the trend array on every render; the same months
+  // and amounts get one stable reference here so Recharts does not treat
+  // every scroll-triggered re-render as new data (QA 2026-09-18, F-64).
+  const trendKey = cashTrend.map(c => `${c.month}:${c.inflow}:${c.outflow}:${c.net}`).join("|");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const trendData = useMemo(() => cashTrend, [trendKey]);
   const worstBudget = budgets.slice().sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1)))[0];
   const worstPct = worstBudget ? Math.round((worstBudget.spent / (worstBudget.limit || 1)) * 100) : 0;
   const savingsRate = incomeMtd > 0 ? Math.round(((incomeMtd - spendMtd) / incomeMtd) * 100) : null;
@@ -309,16 +319,18 @@ export function MoneyOverview(props: {
           />
           <div className="h-48 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={cashTrend} margin={{ top: 6, right: 4, left: -18, bottom: 0 }}>
+              <ComposedChart data={trendData} margin={{ top: 6, right: 4, left: -18, bottom: 0 }}>
                 <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} stroke="hsl(var(--muted-foreground))" />
                 <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} stroke="hsl(var(--muted-foreground))"
                   tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v))} />
                 <RTooltip
                   contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
                   formatter={(v: number, n: string) => [money(Number(v)), n]} />
-                <Bar dataKey="inflow" name="In" fill="hsl(155 60% 45%)" radius={[2, 2, 0, 0]} maxBarSize={22} />
-                <Bar dataKey="outflow" name="Out" fill="hsl(0 72% 58%)" radius={[2, 2, 0, 0]} maxBarSize={22} />
-                <Line dataKey="net" name="Net" type="monotone" stroke="hsl(199 89% 60%)" strokeWidth={2} dot={{ r: 2 }} />
+                {/* No entrance animation: a re-render on scroll replayed the
+                    bars growing from zero, so the chart flickered (F-64). */}
+                <Bar dataKey="inflow" name="In" fill="hsl(155 60% 45%)" radius={[2, 2, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+                <Bar dataKey="outflow" name="Out" fill="hsl(0 72% 58%)" radius={[2, 2, 0, 0]} maxBarSize={22} isAnimationActive={false} />
+                <Line dataKey="net" name="Net" type="monotone" stroke="hsl(199 89% 60%)" strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>

@@ -12,7 +12,7 @@ import { ChevronDown, ChevronUp, RefreshCw, Sparkles, History as HistoryIcon, Al
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatMoneyCompact } from "@/lib/format";
+import { formatMoneyCompact, formatTimeAgo } from "@/lib/format";
 import { formatLocalDate } from "@/lib/dates";
 import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
 import { isEstimatorOwnedValue } from "@shared/valuation/context";
@@ -20,19 +20,8 @@ import { METHOD_LABEL } from "@shared/valuation/engine";
 import { parseMoney } from "@shared/asset-value";
 import type { ValuationRecord } from "@shared/valuation/types";
 
-function relative(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "";
-  const mins = Math.round((Date.now() - t) / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins} min ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 48) return `${hours} h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 60) return `${days} d ago`;
-  return formatLocalDate(iso, { month: "short", day: "numeric", year: "numeric" });
-}
+// "2d ago", not "2 d ago" — the app-wide relative formatter (F-58).
+const relative = (iso: string | null | undefined) => formatTimeAgo(iso);
 
 function confidenceClass(label: ValuationRecord["confidenceLabel"]): string {
   switch (label) {

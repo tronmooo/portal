@@ -787,9 +787,10 @@ export function CashFlowOverviewPopup({
                   <RTooltip
                     contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 10, fontSize: 12 }}
                     formatter={(v: number, n: string) => [`$${fmt(Number(v))}`, n]} />
-                  <Bar dataKey="inflow" name="In" fill="hsl(155 65% 45% / 0.75)" radius={[3, 3, 0, 0]} maxBarSize={14} />
-                  <Bar dataKey="outflow" name="Out" fill="hsl(0 72% 58% / 0.75)" radius={[3, 3, 0, 0]} maxBarSize={14} />
-                  <Area dataKey="net" name="Net" type="monotone" stroke="hsl(234 85% 68%)" strokeWidth={2.5} fill="url(#cfov-net-fill)" dot={{ r: 2.5 }} />
+                  {/* No entrance animation — re-renders replayed it (F-64). */}
+                  <Bar dataKey="inflow" name="In" fill="hsl(155 65% 45% / 0.75)" radius={[3, 3, 0, 0]} maxBarSize={14} isAnimationActive={false} />
+                  <Bar dataKey="outflow" name="Out" fill="hsl(0 72% 58% / 0.75)" radius={[3, 3, 0, 0]} maxBarSize={14} isAnimationActive={false} />
+                  <Area dataKey="net" name="Net" type="monotone" stroke="hsl(234 85% 68%)" strokeWidth={2.5} fill="url(#cfov-net-fill)" dot={{ r: 2.5 }} isAnimationActive={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
