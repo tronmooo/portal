@@ -99,6 +99,8 @@ import { checkClaims, honestFailureReply, groundedSummary, describeMismatch, str
 import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/recurrence";
+import { resolveTaskActor } from "@shared/task-actor";
+import { annualLabelEvent } from "@shared/birthday-event";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { detectFactQuestion, lookupStoredFact, type FactSources } from "@shared/fact-lookup";
 import { startTrace } from "./latency";
@@ -3610,7 +3612,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
         recurrence: { type: "string", enum: ["daily", "weekdays", "weekly", "biweekly", "monthly", "yearly"], description: "Set ONLY when THIS task itself repeats on a schedule (e.g. 'water plants weekly', 'mow the lawn every Tuesday'→weekly, 'take vitamins every morning'→daily, 'change batteries every year'→yearly). For odd intervals like 'every 3 days' put it in the title and the parser will encode it. LEAVE UNSET for one-time tasks — the default. A task that is done once and finished ('call the dentist', 'renew passport', 'obtain quotes from contractors', every step of a project plan) is one-time even when the same message asks for some OTHER thing to repeat, and even when it has a due date. Never copy a cadence from a sibling task in the same request." },
         recurrenceEnd: { type: "string", description: "OPTIONAL, only with recurrence: the date the series stops (YYYY-MM-DD). Resolve a spoken duration to it — 'for the next year' from Aug 11 2026 → '2027-08-11', 'until Christmas' → that date. Omit for an open-ended schedule; a recurring task repeats indefinitely unless this or occurrences says otherwise." },
         occurrences: { type: "number", description: "OPTIONAL, only with recurrence: stop after this many times ('take it 10 times', 'four sessions'). Use recurrenceEnd instead when the user gives a duration or an end date." },
-        forProfile: { type: "string", description: "Name of an EXISTING profile to link this task to (e.g. 'Max', 'Mom', 'Tesla'). Only set this if the person/entity already exists as a profile. If the user just mentions someone by name in the task (e.g. 'return book to Sarah'), put the name in the title instead — do NOT create a profile for them." },
+        forProfile: { type: "string", description: "Name of an EXISTING profile whose task this is — the person (or pet/thing) that has to DO it, e.g. 'Max', 'Mom', 'Tesla'. Only set this if the person/entity already exists as a profile. A task the USER says THEY will do stays theirs even when it names someone else: 'I need to call Dana about Thanksgiving' → title 'Call Dana about Thanksgiving', NO forProfile (Dana is the subject, not the owner). Set forProfile only when the sentence says that person must do it ('Dana needs to book the dentist', 'remind Dana to…', 'a task for Max to get groomed'). If the user just mentions someone by name in the task (e.g. 'return book to Sarah'), put the name in the title instead — do NOT create a profile for them." },
       },
       required: ["title"],
     },
@@ -8184,7 +8186,26 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (taskForProfile) {
         const profiles = await storage.getProfiles();
         const target = matchProfileByName(profiles, taskForProfile);
-        if (target) taskLinkedProfiles.push(target.id);
+        if (target) {
+          taskLinkedProfiles.push(target.id);
+          // WHO DOES IT? "I need to call her about Thanksgiving" named Dana,
+          // so the task was filed under Dana and vanished from the speaker's
+          // own list (QA 2026-09-18 F-24). A task the speaker says THEY will
+          // do is the speaker's; the named person is its subject and stays
+          // linked. Only a sentence that says the other person must do it
+          // ("Dana needs to…", "remind Dana to…") keeps them as the owner.
+          if (target.type !== "self") {
+            const actor = resolveTaskActor({
+              title: input.title || "",
+              userMessage: String((input as any).__userMessage || ""),
+              personName: target.name,
+            });
+            if (actor === "self") {
+              const self = profiles.find(p => p.type === "self");
+              if (self && self.id !== target.id) taskLinkedProfiles = [self.id, target.id];
+            }
+          }
+        }
       }
 
       // Dedup: skip if a very similar active task exists FOR THE SAME PROFILE.
@@ -10807,6 +10828,17 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // on a Sunday would show one stray Sunday occurrence forever.
       let evtRecurrence = String(input.recurrence || "none").trim().toLowerCase();
       let evtDate = input.date;
+      let evtTags: string[] = [];
+      // A bare "<Name>'s Birthday" / "Anniversary" that could NOT go on a
+      // profile (no birth year — the date above was an occurrence) is still
+      // a yearly date: it repeats and carries the Recurring Dates kind, so it
+      // lists beside the profile-derived birthdays instead of landing as a
+      // one-off on next year's date (QA 2026-09-18 F-28).
+      const annual = annualLabelEvent(input.title);
+      if (annual) {
+        evtRecurrence = annual.recurrence;
+        evtTags = annual.tags;
+      }
       const evtDaySet = weekdaySetFor(evtRecurrence);
       if (evtDaySet) {
         evtRecurrence = weekdaySetToRecurrence(Array.from(evtDaySet));
@@ -10831,7 +10863,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         source: "chat",
         linkedProfiles: eventLinkedProfiles,
         linkedDocuments: [],
-        tags: [],
+        tags: evtTags,
       }, "event");
       if (!eventPayload.ok) return { error: eventPayload.error };
       const newEvent = await storage.createEvent(eventPayload.data);

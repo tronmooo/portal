@@ -338,6 +338,8 @@ export default defineConfig({
       // QA 2026-09-18 — health, wellness & trackers (F-32…F-43): shared rules + rendered copy.
       'tests/qa-2026-09-18-health.test.ts',
       'tests/qa-2026-09-18-health.dom.test.tsx',
+      // QA 2026-09-18: tasks & calendar (task owner, tiles, agenda reveal, occurrence labels, birthdays, legacy reminders, event owner).
+      'tests/qa-2026-09-18-tasks-calendar.test.ts',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       'tests/test-suite-discovery.test.ts',

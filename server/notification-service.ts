@@ -14,6 +14,7 @@ import { habitDayProgress } from "@shared/habit-progress";
 import { rulesFromAll, daysBetweenISO, isAlertDateRule, dateRuleAlertWords } from "@shared/date-rules";
 import { isActiveObligation } from "@shared/obligation-windows";
 import { BILL_REMINDER_TASK_PREFIX } from "./liability-payments";
+import { taskOccurrenceLabel } from "@shared/task-occurrences";
 
 export interface AppNotification {
   id: string;
@@ -200,12 +201,18 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     const due = parseDate(task.dueDate);
     if (!due) continue;
     const diff = daysDiff(due, today);
+    // A repeating task is judged by THIS row's own due date — the series'
+    // next occurrence, rolled forward by the server — and named as that
+    // occurrence ("Put out the trash (Sep 17)"), so the bell and Recent
+    // Activity ("Completed: Put out the trash (Sep 10)") cannot read as one
+    // task that is both done and overdue.
+    const occurrence = taskOccurrenceLabel(task, today);
     if (diff < 0) {
       notifications.push({
         id: `task-overdue-${task.id}-${String(task.dueDate).slice(0, 10)}`,
         type: "task_overdue",
         severity: "critical",
-        title: `Overdue: ${task.title}`,
+        title: `Overdue: ${occurrence}`,
         message: `Was due ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago${atTime(task)}`,
         entityId: task.id,
         entityType: "task",

@@ -2,7 +2,10 @@ import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { revealAgendaPanel } from "@/components/calendar/reveal-agenda";
+import { groupProfilesForLinking, ownerCandidates } from "@shared/profile-link-groups";
+import { useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { useLocation } from "wouter";
 import { useQuery, useMutation, keepPreviousData } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -229,6 +232,23 @@ function EventFormDialog({
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
   });
+
+  // WHO the event is for (QA 2026-09-18 F-31). The owner is linkedProfiles[0]
+  // — the same slot every server reader treats as the owner — and defaults,
+  // for a NEW event, to the profile active in the global scope, exactly as
+  // the task dialog does. Extra "link to" chips fill the rest of the list.
+  const activeCreateProfileId = useActiveCreateProfileId(profiles);
+  useEffect(() => {
+    if (isEdit || !activeCreateProfileId) return;
+    setForm(f => (f.linkedProfiles.length === 0 ? { ...f, linkedProfiles: [activeCreateProfileId] } : f));
+  }, [activeCreateProfileId, isEdit]);
+  const ownerId = form.linkedProfiles[0] ?? "";
+  const owners = ownerCandidates(profiles);
+  const setOwner = (id: string) => setForm(f => ({
+    ...f,
+    linkedProfiles: [id, ...f.linkedProfiles.filter(p => p !== id && p !== f.linkedProfiles[0])],
+  }));
+  const linkGroups = groupProfilesForLinking(profiles.filter(p => p.id !== ownerId));
 
   const mutation = useMutation<any, Error, void, { prevEvents: [readonly unknown[], unknown][]; prevTimeline: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async () => {
@@ -564,30 +584,54 @@ function EventFormDialog({
             </div>
           )}
 
-          {/* Link Profiles */}
-          {profiles.length > 0 && (
+          {/* Owner — whose calendar this lands on */}
+          {owners.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="ev-owner">For</Label>
+              <Select value={ownerId} onValueChange={setOwner}>
+                <SelectTrigger id="ev-owner" data-testid="select-event-owner"><SelectValue placeholder="Who is this for?" /></SelectTrigger>
+                <SelectContent>
+                  {owners.map(p => (
+                    <SelectItem key={p.id} value={p.id} data-testid={`event-owner-option-${p.id}`}>
+                      {p.type === "self" ? "Me" : p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Link Profiles — grouped and labelled by what each profile is */}
+          {linkGroups.length > 0 && (
             <div className="space-y-1.5">
               <Label>Link to Profiles</Label>
-              <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-                {profiles.map(p => {
-                  const linked = form.linkedProfiles.includes(p.id);
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className={`px-2 py-0.5 rounded-md text-xs border transition-all ${
-                        linked
-                          ? "bg-primary/10 border-primary text-primary"
-                          : "border-border text-muted-foreground hover:border-foreground/30"
-                      }`}
-                      onClick={() => toggleProfile(p.id)}
-                      data-testid={`btn-link-profile-${p.id}`}
-                    >
-                      {linked ? <CheckSquare className="h-3 w-3 inline mr-1" /> : null}
-                      {p.name}
-                    </button>
-                  );
-                })}
+              <div className="space-y-1.5 max-h-36 overflow-y-auto" data-testid="event-link-groups">
+                {linkGroups.map(g => (
+                  <div key={g.id} data-testid={`event-link-group-${g.id}`}>
+                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">{g.label}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {g.items.map(p => {
+                        const linked = form.linkedProfiles.includes(p.id);
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            className={`px-2 py-0.5 rounded-md text-xs border transition-all ${
+                              linked
+                                ? "bg-primary/10 border-primary text-primary"
+                                : "border-border text-muted-foreground hover:border-foreground/30"
+                            }`}
+                            onClick={() => toggleProfile(p.id)}
+                            data-testid={`btn-link-profile-${p.id}`}
+                          >
+                            {linked ? <CheckSquare className="h-3 w-3 inline mr-1" /> : null}
+                            {p.type === "self" ? "Me" : p.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -1148,6 +1192,8 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const [viewYear, setViewYear] = useState(today.getFullYear());
   const [viewDate, setViewDate] = useState(today); // for week/day navigation
   const [selectedDate, setSelectedDate] = useState(todayStr);
+  // The month view's agenda panel, so "+N more" can scroll it into view.
+  const agendaRef = useRef<HTMLElement>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [detailItem, setDetailItem] = useState<CalendarTimelineItem | null>(null);
   const [editEvent, setEditEvent] = useState<CalendarEvent | null>(null);
@@ -1623,7 +1669,10 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
                         {dayItems.length > 2 && (
                           <button
                             className="w-full text-left text-xs font-medium text-primary hover:underline px-1 py-0.5"
-                            onClick={stopProp(() => setSelectedDate(day.date))}
+                            // Select the day AND bring its agenda panel into
+                            // view: below the lg breakpoint the panel sits
+                            // under the whole grid, off screen (F-26).
+                            onClick={stopProp(() => { setSelectedDate(day.date); revealAgendaPanel(agendaRef.current); })}
                             data-testid={`btn-more-${day.date}`}
                           >
                             +{dayItems.length - 2} more
@@ -1695,7 +1744,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
       )}
       </div>{/* /left column */}
       {/* Right column: agenda for the selected day */}
-      <aside className="mt-2 lg:mt-0 lg:col-span-1 lg:sticky lg:top-2" data-testid="calendar-agenda-panel">
+      <aside ref={agendaRef} tabIndex={-1} className="mt-2 lg:mt-0 lg:col-span-1 lg:sticky lg:top-2 outline-none" data-testid="calendar-agenda-panel">
         {agendaPanel}
       </aside>
       </div>

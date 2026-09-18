@@ -47,6 +47,31 @@ export function isDoneToday(t: CountableTask, todayISO: string, timezone?: strin
   return localDayOf(stamp, timezone) === todayISO;
 }
 
+export interface TaskSummaryTiles {
+  overdue: number | null;
+  dueToday: number | null;
+  upcoming: number | null;
+  doneToday: number | null;
+}
+
+/**
+ * The Tasks page summary band, from the SAME list the rows render from.
+ *
+ * `null` in every tile while the list has not arrived: the band used to read
+ * "OVERDUE 0 · TODAY 0 · UPCOMING 0" as real values above a list full of
+ * overdue rows (QA 2026-09-18 F-25). A tile is a number only once there is a
+ * list to count, and it is the same number the rows below are cut from.
+ */
+export function taskSummaryTiles(
+  tasks: readonly CountableTask[] | null | undefined,
+  todayISO: string,
+  timezone?: string,
+): TaskSummaryTiles {
+  if (!Array.isArray(tasks)) return { overdue: null, dueToday: null, upcoming: null, doneToday: null };
+  const c = countTasksByDay(tasks, todayISO, timezone);
+  return { overdue: c.overdue, dueToday: c.dueToday, upcoming: c.upcoming, doneToday: c.doneToday };
+}
+
 export function countTasksByDay(tasks: readonly CountableTask[] | null | undefined, todayISO: string, timezone?: string): TaskDayCounts {
   const counts: TaskDayCounts = { overdue: 0, dueToday: 0, upcoming: 0, undated: 0, doneToday: 0, doneAll: 0 };
   for (const t of tasks || []) {
