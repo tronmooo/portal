@@ -26,6 +26,16 @@ else
   fi
 fi
 
+# (0.2/2) Secret gate — a Supabase service-role key bypasses every RLS policy
+# and this repository is PUBLIC. Deliberately NOT bypassable: there is no
+# legitimate reason to push one. [Added 2026-09-18 after seven scripts were
+# found carrying the production service-role key in tracked files.]
+echo "[pre-push] (0.2/2) Scanning tracked files for service-role keys..."
+if ! node scripts/scan-secrets.mjs; then
+  echo "[pre-push] FAILED: secret detected — push BLOCKED."
+  exit 1
+fi
+
 if [ "${SKIP_TSC:-0}" = "1" ]; then
   echo "[pre-push] SKIP_TSC=1 set — skipping tsc --noEmit"
 else
