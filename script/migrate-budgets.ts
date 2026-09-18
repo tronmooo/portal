@@ -1,9 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  "https://uvaniovwrezzzlzmizyg.supabase.co",
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDA0MDkyOCwiZXhwIjoyMDg5NjE2OTI4fQ.WO2hjB0q18xHfZ4OYfxsPmN1V-K4526G7rBMCRVy8vI"
-);
+// Credentials come from the environment only. Never commit the service-role key:
+// it bypasses row-level security for every user in the project.
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "https://uvaniovwrezzzlzmizyg.supabase.co";
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+if (!SUPABASE_SERVICE_KEY) {
+  console.error("SUPABASE_SERVICE_ROLE_KEY is not set. Export the Supabase service-role key in the environment before running this script.");
+  process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 async function migrate() {
   // Try to select from budgets — if it works, table exists
@@ -23,11 +29,11 @@ async function migrate() {
       console.log("RPC doesn't exist either. Creating via management API...");
       
       // Use the Supabase SQL query API
-      const resp = await fetch(`https://uvaniovwrezzzlzmizyg.supabase.co/pg/query`, {
+      const resp = await fetch(`${SUPABASE_URL}/pg/query`, {
         method: "POST",
         headers: {
-          "apikey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDA0MDkyOCwiZXhwIjoyMDg5NjE2OTI4fQ.WO2hjB0q18xHfZ4OYfxsPmN1V-K4526G7rBMCRVy8vI",
-          "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDA0MDkyOCwiZXhwIjoyMDg5NjE2OTI4fQ.WO2hjB0q18xHfZ4OYfxsPmN1V-K4526G7rBMCRVy8vI",
+          "apikey": SUPABASE_SERVICE_KEY,
+          "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({

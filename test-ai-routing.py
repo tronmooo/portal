@@ -3,11 +3,11 @@
 AI Chat Stress Test — Tests that the AI engine routes tracker entries,
 expenses, and tasks to the correct profiles.
 """
-import json, subprocess, time, sys
+import json, os, subprocess, time, sys
 
 SB_URL = "https://uvaniovwrezzzlzmizyg.supabase.co"
 API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwNDA5MjgsImV4cCI6MjA4OTYxNjkyOH0.0tn5gFfpWN-k5jRUiFehB1cD0BO-DAWP7LQO_IGI1AQ"
-SRK = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDA0MDkyOCwiZXhwIjoyMDg5NjE2OTI4fQ.WO2hjB0q18xHfZ4OYfxsPmN1V-K4526G7rBMCRVy8vI"
+SRK = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")  # never commit the service-role key
 BASE = "https://portol.me"
 
 # Google OAuth user's profiles

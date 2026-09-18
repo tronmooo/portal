@@ -3,8 +3,15 @@
  * Fixes: test data, bad profile links, garbage values, duplicate profiles
  */
 
-const SB_URL = "https://uvaniovwrezzzlzmizyg.supabase.co";
-const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDA0MDkyOCwiZXhwIjoyMDg5NjE2OTI4fQ.WO2hjB0q18xHfZ4OYfxsPmN1V-K4526G7rBMCRVy8vI";
+// Credentials come from the environment only. Never commit the service-role key:
+// it bypasses row-level security for every user in the project.
+const SB_URL = process.env.VITE_SUPABASE_URL || "https://uvaniovwrezzzlzmizyg.supabase.co";
+const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+if (!SB_KEY) {
+  console.error("SB_KEY is not set. Export the Supabase service-role key in the environment before running this script.");
+  process.exit(1);
+}
 const USER_ID = "6f63cf74-ad8b-42f4-a8de-850f42219c06";
 
 const headers = {

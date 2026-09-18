@@ -50,9 +50,14 @@
 import { writeFileSync } from "fs";
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "https://uvaniovwrezzzlzmizyg.supabase.co";
-const SUPABASE_SERVICE_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDA0MDkyOCwiZXhwIjoyMDg5NjE2OTI4fQ.WO2hjB0q18xHfZ4OYfxsPmN1V-K4526G7rBMCRVy8vI";
+// Never commit the service-role key: it bypasses row-level security for every
+// user in the project. It must come from the environment.
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+
+if (!SUPABASE_SERVICE_KEY) {
+  console.error("SUPABASE_SERVICE_KEY is not set. Export the Supabase service-role key in the environment before running this script.");
+  process.exit(1);
+}
 
 const args = new Set(process.argv.slice(2));
 const APPLY = args.has("--apply");
