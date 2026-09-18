@@ -187,14 +187,18 @@ export default function FinancePage() {
     queryKey: ["/api/expenses", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
   });
-  // Expenses page controls — persisted in localStorage so the toolbar survives
-  // reloads (search + category + sort + date range).
+  // Expenses page controls — category + date range are persisted in
+  // localStorage so the toolbar survives reloads; sort always resets to newest
+  // first (see below).
   const [filterCategory, setFilterCategory] = useState<string>(() => { try { return localStorage.getItem("portol_exp_cat") || "all"; } catch { return "all"; } });
   const [searchQuery, setSearchQuery] = useState<string>("");
-  const [sortBy, setSortBy] = useState<ExpenseSort>(() => { try { return (localStorage.getItem("portol_exp_sort") as ExpenseSort) || "date-desc"; } catch { return "date-desc"; } });
+  // Sort is deliberately NOT restored from localStorage: the list must always
+  // open on the newest expenses (date-desc) so a one-off "Amount: high -> low"
+  // pick doesn't silently become the permanent view on every later visit.
+  const [sortBy, setSortBy] = useState<ExpenseSort>("date-desc");
   const [dateRange, setDateRange] = useState<"all" | "month" | "30d" | "year">(() => { try { return (localStorage.getItem("portol_exp_range") as any) || "all"; } catch { return "all"; } });
   useEffect(() => { try { localStorage.setItem("portol_exp_cat", filterCategory); } catch {} }, [filterCategory]);
-  useEffect(() => { try { localStorage.setItem("portol_exp_sort", sortBy); } catch {} }, [sortBy]);
+  useEffect(() => { try { localStorage.removeItem("portol_exp_sort"); } catch {} }, []);
   useEffect(() => { try { localStorage.setItem("portol_exp_range", dateRange); } catch {} }, [dateRange]);
   const [addOpen, setAddOpen] = useState(false);
   // QA Bug 7: open Add Expense dialog when arriving via command palette with ?new=expense

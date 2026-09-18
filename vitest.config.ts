@@ -32,6 +32,7 @@ export default defineConfig({
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
       'tests/expense-view.test.ts',
+      'tests/expense-sort-default.test.ts',
       'tests/test-data-filter.test.ts',
       'tests/quick-add.test.ts',
       'tests/mutate-reset-race.test.ts',
