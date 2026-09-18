@@ -12,6 +12,7 @@ import { useMemo, useState, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { seriesFromAll, filterSeriesByProfiles } from "@shared/calendar-adapters";
+import { isPersonType } from "@shared/scope";
 import { scopedKey } from "@shared/query-keys";
 import { withFullLimit } from "@/lib/list-limit";
 import { onlyRulesAndImportantDates } from "@shared/calendar-occurrences";
@@ -164,13 +165,19 @@ export function useCalendarOccurrences(
     () => new Set(profileList.filter((p: any) => p?.type === "self").map((p: any) => p.id)),
     [profileList],
   );
+  // A person's own dates are theirs alone — never an orphan handed to Self
+  // (QA 2026-09-18 F-02).
+  const personIds = useMemo(
+    () => new Set(profileList.filter((p: any) => isPersonType(p?.type)).map((p: any) => p.id)),
+    [profileList],
+  );
 
   // Scope once. `recurringOnly` narrows only the RULES list — the occurrence
   // stream always covers every date so the Upcoming view and the calendar grid
   // show the same thing ("it should be connected to the Calendar view").
   const scopedSeries = useMemo(
-    () => (scoped ? filterSeriesByProfiles(allSeries, filterIds, { selfIds }) : allSeries),
-    [allSeries, scoped, filterIds.join(","), selfIds],
+    () => (scoped ? filterSeriesByProfiles(allSeries, filterIds, { selfIds, personIds }) : allSeries),
+    [allSeries, scoped, filterIds.join(","), selfIds, personIds],
   );
 
   const deduped = useMemo(() => dedupeSeries(scopedSeries), [scopedSeries]);

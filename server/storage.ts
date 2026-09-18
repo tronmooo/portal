@@ -24,6 +24,7 @@ import { taskOccurrenceDates, taskRepeats } from "@shared/task-occurrences";
 import { rollForwardRecurringTask } from "@shared/recurrence";
 import { isLegacyReminderTask } from "@shared/legacy-reminder-tasks";
 import { passesProfileFilter } from "@shared/profile-filter";
+import { profileAndOwnerIds } from "@shared/scope";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
 import { generateSchedule } from "@shared/liability-schedule";
 import { addCharge, removeCharge } from "@shared/liability-billing";
@@ -2463,7 +2464,7 @@ export class MemStorage implements IStorage {
       // Profile AND parent, as the calendar block scopes — see the twin in
       // supabase-storage.
       const profilesForExp = Array.from(this.profiles.values()).filter(p =>
-        matchesFilter([p.id, ...((p as any).parentProfileId ? [(p as any).parentProfileId] : [])]));
+        matchesFilter(profileAndOwnerIds(p as any)));
       for (const rule of rulesFromAll({ profiles: profilesForExp, documents })) {
         // Things that EXPIRE anywhere, plus what a DOCUMENT says is DUE.
         //
