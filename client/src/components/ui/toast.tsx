@@ -18,7 +18,10 @@ const ToastViewport = React.forwardRef<
       // ("\"Chicken Sandwich\" expects a number…") no longer get cut off after
       // ~40 chars. Cap at a sensible width but allow wrapping over multiple
       // lines so the user can read the full reason without opening devtools.
-      "fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[560px]",
+      // QA 2026-09-18 (F-62): pin the viewport to BOTH edges below sm and to
+      // the right edge above it, and never let it exceed the screen — a toast
+      // whose Undo sat past the right border was one you could not undo.
+      "fixed top-0 left-0 right-0 z-[100] flex max-h-screen w-full max-w-[100vw] flex-col-reverse p-4 sm:bottom-0 sm:left-auto sm:right-0 sm:top-auto sm:flex-col md:max-w-[560px]",
       className
     )}
     {...props}
@@ -29,7 +32,9 @@ ToastViewport.displayName = ToastPrimitives.Viewport.displayName
 const toastVariants = cva(
   // BUG-MISC02: switch items-center → items-start and drop overflow-hidden so
   // long descriptions wrap to multiple lines instead of being clipped to one.
-  "group pointer-events-auto relative flex w-full items-start justify-between space-x-4 rounded-md border p-6 pr-8 shadow-lg transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 data-[state=closed]:slide-out-to-right-full data-[state=open]:slide-in-from-top-full data-[state=open]:sm:slide-in-from-bottom-full",
+  // F-62: max-w keeps the toast inside the screen, min-w-0 lets the text
+  // column wrap so the action stays on-screen instead of being pushed out.
+  "group pointer-events-auto relative flex w-full max-w-[calc(100vw-2rem)] min-w-0 items-start justify-between gap-4 rounded-md border p-6 pr-8 shadow-lg transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 data-[state=closed]:slide-out-to-right-full data-[state=open]:slide-in-from-top-full data-[state=open]:sm:slide-in-from-bottom-full",
   {
     variants: {
       variant: {

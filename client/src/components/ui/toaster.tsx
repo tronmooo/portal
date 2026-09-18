@@ -16,7 +16,9 @@ export function Toaster() {
       {toasts.map(function ({ id, title, description, action, ...props }) {
         return (
           <Toast key={id} {...props}>
-            <div className="grid gap-1">
+            {/* min-w-0 + flex-1: the text wraps inside the toast, so the
+                Undo action never gets pushed off the right edge (F-62). */}
+            <div className="grid gap-1 min-w-0 flex-1">
               {title && <ToastTitle>{title}</ToastTitle>}
               {description && (
                 <ToastDescription>{description}</ToastDescription>

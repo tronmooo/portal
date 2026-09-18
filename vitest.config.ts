@@ -335,6 +335,8 @@ export default defineConfig({
       'tests/artifact-panel-failures.dom.test.tsx',
       'tests/editor-mobile-controls.test.ts',
       'tests/finance-tab-qa-2026-09-16.test.ts',
+      // 2026-09-18 QA: copy & labels, layout & visual (F-55, F-57..F-64, F-66)
+      'tests/qa-2026-09-18-copy-layout.test.ts',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       'tests/test-suite-discovery.test.ts',

@@ -1425,7 +1425,7 @@ export default function FinancePage() {
                       fontSize: "12px",
                     }}
                   />
-                  <Bar dataKey="amount" radius={[6, 6, 0, 0]}>
+                  <Bar dataKey="amount" radius={[6, 6, 0, 0]} isAnimationActive={false}>
                     {chartData.map((entry) => (
                       <Cell key={entry.name} fill={categoryColors[entry.name] || categoryColors.general} />
                     ))}

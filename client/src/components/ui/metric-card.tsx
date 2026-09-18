@@ -20,6 +20,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
 import { CountUp, Medallion } from "@/components/dashboard/visuals";
+import { metricValueSize } from "@/lib/format";
 
 export interface MetricCardProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "onClick"> {
   label: React.ReactNode;
@@ -151,9 +152,11 @@ export function MetricCard({
 
       <div className="mt-2 flex items-end justify-between gap-2">
         <div className="min-w-0">
+          {/* A long number steps its size down to fit (metricValueSize)
+              rather than truncating mid-digit (F-60). */}
           <div
-            className="metric-value leading-none truncate"
-            style={{ color, fontSize: valueSize ? `${valueSize}px` : "26px" }}
+            className="metric-value leading-none whitespace-nowrap tabular-nums overflow-hidden"
+            style={{ color, fontSize: `${valueSize ?? (countTo != null ? 26 : metricValueSize(typeof value === "string" || typeof value === "number" ? value : ""))}px` }}
           >
             {countTo != null
               ? <>{valuePrefix}<CountUp value={countTo} /></>
