@@ -31,6 +31,7 @@ export type MetricPanel =
   | "body"          // weight, BMI, body fat, waist, height
   | "sleep"
   | "activity"
+  | "hydration"     // water intake — a daily TOTAL, not a reading
   | "lipids"
   | "metabolic"
   | "cbc"
@@ -44,6 +45,7 @@ export const PANEL_LABELS: Record<MetricPanel, string> = {
   body: "Body",
   sleep: "Sleep",
   activity: "Activity",
+  hydration: "Hydration",
   lipids: "Lipids",
   metabolic: "Metabolic",
   cbc: "Complete Blood Count",
@@ -89,6 +91,12 @@ export interface CanonicalMetric {
   match: RegExp;
   /** Patterns that disqualify a match — "cholesterol ratio" is not cholesterol. */
   exclude?: RegExp;
+  /**
+   * What to call a value on one side of the reference range when the plain
+   * "Low"/"High" would mislead: a resting heart rate under 60 is "Athletic",
+   * not a problem.
+   */
+  flagLabels?: Partial<Record<"low" | "high", string>>;
 }
 
 // The registry. Ordered most-specific → most-general within each panel, and
@@ -184,15 +192,26 @@ export const CANONICAL_METRICS: CanonicalMetric[] = [
     match: /magnesium/i },
 
   // ── Vitals ────────────────────────────────────────────────────────────────
-  { id: "bp_systolic", label: "Systolic", panel: "vitals", unit: "mmHg", plausible: [50, 300], ref: { low: 90, high: 120 }, direction: "band",
+  // Blood pressure is a PAIR: the row flags come from shared/blood-pressure.ts
+  // (normal < 120/80, elevated 120–129, stage 1 130–139 / 80–89, …). The
+  // single-value refs here describe the "normal" band for each half only.
+  { id: "bp_systolic", label: "Systolic", panel: "vitals", unit: "mmHg", plausible: [50, 300], ref: { low: 90, high: 119 }, direction: "band",
     match: /systolic|\bsbp\b/i },
-  { id: "bp_diastolic", label: "Diastolic", panel: "vitals", unit: "mmHg", plausible: [20, 200], ref: { low: 60, high: 80 }, direction: "band",
+  { id: "bp_diastolic", label: "Diastolic", panel: "vitals", unit: "mmHg", plausible: [20, 200], ref: { low: 60, high: 79 }, direction: "band",
     match: /diastolic|\bdbp\b/i },
-  { id: "resting_hr", label: "Resting heart rate", panel: "vitals", unit: "bpm", plausible: [25, 200], ref: { low: 40, high: 100 }, direction: "lower_better",
+  // Resting heart rate: 60–100 bpm is the adult norm; under 60 is what a
+  // trained heart does, so it is labelled "Athletic", never "Low".
+  { id: "resting_hr", label: "Resting heart rate", panel: "vitals", unit: "bpm", plausible: [25, 200], ref: { low: 60, high: 100 }, direction: "lower_better",
+    flagLabels: { low: "Athletic" },
     match: /resting\s*(heart|hr|pulse)|\brhr\b/i },
   { id: "hrv", label: "HRV", panel: "vitals", unit: "ms", plausible: [1, 500], direction: "higher_better",
     match: /\bhrv\b|heart\s*rate\s*variability/i },
-  { id: "heart_rate", label: "Heart rate", panel: "vitals", unit: "bpm", plausible: [25, 250], ref: { low: 50, high: 110 }, direction: "band",
+  // A plain "Heart rate" tracker is read as RESTING heart rate: readings that
+  // carry an exercise context are left out (see isRestingHeartRateReading),
+  // so a 171 bpm peak logged mid-run never averages with a 58 bpm morning
+  // reading.
+  { id: "heart_rate", label: "Heart rate", panel: "vitals", unit: "bpm", plausible: [25, 250], ref: { low: 60, high: 100 }, direction: "band",
+    flagLabels: { low: "Athletic" },
     match: /heart\s*rate|\bpulse\b|\bbpm\b|\bhr\b/i, exclude: /variability|resting|\bhrv\b/i },
   { id: "spo2", label: "Blood oxygen", panel: "vitals", unit: "%", plausible: [50, 100], ref: { low: 95 }, direction: "higher_better",
     match: /spo2|blood\s*oxygen|oxygen\s*sat/i },
@@ -235,7 +254,38 @@ export const CANONICAL_METRICS: CanonicalMetric[] = [
   { id: "distance", label: "Distance", panel: "activity", unit: "mi", plausible: [0, 300], direction: "higher_better",
     altUnits: { km: 0.621371, kilometers: 0.621371, m: 0.000621371, meters: 0.000621371 },
     match: /\bdistance\b|\bmiles\b|\bmileage\b/i },
+
+  // ── Hydration ─────────────────────────────────────────────────────────────
+  // QA 2026-09-18 (F-38): "drank 40oz of water" reached the dashboard's Water
+  // tile but the Wellness tab had no hydration anywhere. Same tracker match
+  // as lib/wellness-metrics (name says hydration/water), summed per day.
+  { id: "hydration", label: "Water", panel: "hydration", unit: "oz", plausible: [0, 400], direction: "higher_better",
+    altUnits: { ml: 0.033814, milliliters: 0.033814, l: 33.814, liter: 33.814, liters: 33.814, cup: 8, cups: 8 },
+    match: /hydrat|\bwater\b/i,
+    exclude: /temp|pool|plant|bill|heater|filter|softener|weight/i },
 ];
+
+/**
+ * Was this heart-rate reading taken at rest?
+ *
+ * A "Heart Rate" tracker collects whatever the person logs: a 58 bpm morning
+ * reading and a 171 bpm peak during a run. Averaging the two ("Avg 114.5")
+ * describes nothing. When an entry says what it was — a context/kind/type
+ * field, or a note, that names a workout — it is not a resting reading and
+ * every resting-HR surface leaves it out. An entry with no context counts.
+ */
+const EXERCISE_CONTEXT =
+  /\b(run|running|ran|jog|workout|work\s?out|exercis|training|cardio|hiit|cycl|bike|biking|walk|hike|hiking|swim|sprint|during|peak|max(imum)?|active|post|after|recovery|zone)\b/i;
+const CONTEXT_KEY = /^(context|kind|type|activity|activity_?type|state|when|condition|measured_?during|situation|notes?|_notes)$/i;
+
+export function isRestingHeartRateReading(values: Record<string, any> | null | undefined): boolean {
+  for (const [key, raw] of Object.entries(values || {})) {
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    if (!CONTEXT_KEY.test(key)) continue;
+    if (EXERCISE_CONTEXT.test(raw)) return false;
+  }
+  return true;
+}
 
 const BY_ID = new Map(CANONICAL_METRICS.map((m) => [m.id, m]));
 
@@ -311,7 +361,8 @@ function round(n: number): number {
   return Math.abs(n) >= 100 ? Math.round(n) : Math.round(n * 100) / 100;
 }
 
-export type RangeFlag = "low" | "high" | "normal" | "unknown";
+/** "elevated" is the blood-pressure band between normal and stage 1. */
+export type RangeFlag = "low" | "high" | "elevated" | "normal" | "unknown";
 
 /** Where a value sits against the metric's reference range. */
 export function flagAgainstReference(metric: CanonicalMetric, canonicalValue: number): RangeFlag {
@@ -320,6 +371,22 @@ export function flagAgainstReference(metric: CanonicalMetric, canonicalValue: nu
   if (ref.low != null && canonicalValue < ref.low) return "low";
   if (ref.high != null && canonicalValue > ref.high) return "high";
   return "normal";
+}
+
+/** The pill text for a flag: "Low" / "High" / "Elevated", or the metric's own
+ *  word for that side ("Athletic" for a resting heart rate under 60). */
+export function flagLabelFor(metric: CanonicalMetric, flag: RangeFlag): string | null {
+  if (flag === "normal" || flag === "unknown") return null;
+  if (flag === "elevated") return "Elevated";
+  return metric.flagLabels?.[flag] ?? (flag === "high" ? "High" : "Low");
+}
+
+/** Is this flag a concern (as opposed to normal, unknown, or a good-side
+ *  label such as "Athletic")? */
+export function flagIsConcern(metric: CanonicalMetric, flag: RangeFlag): boolean {
+  if (flag === "normal" || flag === "unknown") return false;
+  if (flag === "elevated") return true;
+  return !metric.flagLabels?.[flag];
 }
 
 /** "70–100 bpm", "< 100 mg/dL", "> 40 mg/dL" — or undefined when no range. */

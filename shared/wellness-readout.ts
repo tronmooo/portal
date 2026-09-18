@@ -28,8 +28,10 @@ import { normalizeDateString } from "./extraction-normalize";
 import {
   resolveCanonicalMetric, validateCanonicalValue, flagAgainstReference,
   formatReference, getCanonicalMetric, LAB_PANELS, PANEL_LABELS,
+  flagLabelFor, flagIsConcern, isRestingHeartRateReading,
   type CanonicalMetric, type MetricPanel, type RangeFlag,
 } from "./wellness-canon";
+import { classifyBloodPressure, bloodPressureFlag, BLOOD_PRESSURE_REFERENCE } from "./blood-pressure";
 
 export interface Reading {
   /** Canonical-unit value. */
@@ -56,6 +58,10 @@ export interface MetricSeries {
   avg30: number | null;
   /** Trackers this series was merged from — the duplicates, made visible. */
   sources: Array<{ id: string; name: string }>;
+  /** The local calendar day (YYYY-MM-DD) the series was finalized against —
+   *  what "today" means for a daily total such as water intake. */
+  today: string;
+  timezone?: string;
 }
 
 const DAY = 86400000;
@@ -103,7 +109,7 @@ function seriesBuilder(byId: Map<string, MetricSeries>) {
   return (metric: CanonicalMetric, r: Reading) => {
     let s = byId.get(metric.id);
     if (!s) {
-      s = { metric, readings: [], latest: null, latestFresh: null, previous: null, avg30: null, sources: [] };
+      s = { metric, readings: [], latest: null, latestFresh: null, previous: null, avg30: null, sources: [], today: "" };
       byId.set(metric.id, s);
     }
     s.readings.push(r);
@@ -115,6 +121,8 @@ function seriesBuilder(byId: Map<string, MetricSeries>) {
 function finalizeSeries(byId: Map<string, MetricSeries>, now: number, timezone?: string): Map<string, MetricSeries> {
   const todayISO = localDayOf(new Date(now), timezone) || new Date(now).toISOString().slice(0, 10);
   for (const s of byId.values()) {
+    s.today = todayISO;
+    s.timezone = timezone;
     s.readings.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
     s.latest = s.readings[s.readings.length - 1] || null;
     const freshFrom = addDays(todayISO, -freshWindowDays(s.metric.id));
@@ -164,6 +172,9 @@ export function collectMetrics(
             ? byField
             : resolveCanonicalMetric(name, category, field);
         if (!metric) continue;
+        // A heart rate logged mid-workout is not a resting reading; it would
+        // only drag the average toward a number that describes nothing.
+        if ((metric.id === "heart_rate" || metric.id === "resting_hr") && !isRestingHeartRateReading(e.values)) continue;
         const check = validateCanonicalValue(metric, v, fieldUnit(t, field));
         if (!check.ok) continue; // impossible value — see module header
         push(metric, { value: check.canonical, at: at.toISOString(), trackerId: t.id, trackerName: name });
@@ -443,7 +454,7 @@ export function mergeMetrics(
 // failing to fill, because nothing here is something they have to log.
 
 export interface TodaySignal {
-  key: "sleep" | "activity" | "recovery";
+  key: "sleep" | "activity" | "recovery" | "hydration";
   label: string;
   /** Today's value (last night's for sleep), canonical unit. Null when nothing
    *  is connected yet OR nothing was recorded inside the window. */
@@ -505,7 +516,49 @@ export function todaySignals(metrics: Map<string, MetricSeries>): TodaySignal[] 
     signalFrom(sleep, "sleep", "Sleep", null, true),
     signalFrom(act, "activity", "Activity", act?.metric.label ?? null, true),
     signalFrom(rec, "recovery", "Recovery", rec?.metric.label ?? null, rec?.metric.id === "hrv"),
+    hydrationSignal(metrics.get("hydration")),
   ];
+}
+
+/** Sum of a series' readings per local day, oldest → newest. */
+function dailyTotals(s: MetricSeries): Array<{ day: string; total: number }> {
+  const byDay = new Map<string, number>();
+  for (const r of s.readings) {
+    const day = localDayOf(r.at, s.timezone) || r.at.slice(0, 10);
+    byDay.set(day, (byDay.get(day) || 0) + r.value);
+  }
+  return [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([day, total]) => ({ day, total }));
+}
+
+/**
+ * Water is a daily TOTAL, not a reading: "40 oz so far today" is every entry
+ * logged today added up, and the 30-day baseline is the mean of the days that
+ * have any — the same sum the dashboard's Water tile shows.
+ */
+function hydrationSignal(s: MetricSeries | undefined): TodaySignal {
+  const empty = signalFrom(undefined, "hydration", "Water", null, true);
+  if (!s || s.readings.length === 0) return { ...empty, unit: "oz" };
+  const days = dailyTotals(s);
+  const todayRow = days.find((d) => d.day === s.today) || null;
+  const baseline = days.filter((d) => d.day !== s.today && d.day >= addDays(s.today, -30));
+  const todaysReadings = s.readings.filter((r) => (localDayOf(r.at, s.timezone) || r.at.slice(0, 10)) === s.today);
+  return {
+    key: "hydration", label: "Water", caption: null,
+    value: todayRow ? Math.round(todayRow.total * 10) / 10 : null,
+    unit: s.metric.unit,
+    avg30: baseline.length > 0 ? baseline.reduce((a, d) => a + d.total, 0) / baseline.length : null,
+    series: days.slice(-30).map((d) => Math.round(d.total * 10) / 10),
+    at: todaysReadings.length > 0 ? todaysReadings[todaysReadings.length - 1].at : null,
+    lastAt: s.latest?.at ?? null,
+    higherBetter: true,
+    metricId: s.metric.id,
+    trackerId: (s.latest)?.trackerId ?? null,
+  };
+}
+
+/** One conversion for every "N min below your average" line: hours → whole minutes. */
+export function hoursToMinutes(hours: number): number {
+  return Math.round(hours * 60);
 }
 
 // ── Labs ─────────────────────────────────────────────────────────────────────
@@ -517,6 +570,8 @@ export interface LabRow {
   unit: string;
   at: string;
   flag: RangeFlag;
+  /** Pill text for the flag ("High", "Elevated", "Athletic"); null when nothing to show. */
+  flagLabel: string | null;
   reference?: string;
   /** Immediately previous report's value, for the "128 → 138" trend. */
   previous: number | null;
@@ -551,33 +606,48 @@ export function bodyVitals(metrics: Map<string, MetricSeries>): LabPanel[] {
 
 function panelsFor(metrics: Map<string, MetricSeries>, wanted: MetricPanel[]): LabPanel[] {
   const panels: LabPanel[] = [];
+  // Blood pressure is judged as a PAIR (shared/blood-pressure.ts): both rows
+  // carry the verdict for the latest systolic/diastolic together, so 121/76
+  // reads "Elevated" here exactly as it does on the tracker card.
+  const sys = metrics.get("bp_systolic")?.latest;
+  const dia = metrics.get("bp_diastolic")?.latest;
+  const bp = sys && dia ? classifyBloodPressure(sys.value, dia.value) : null;
   for (const panel of wanted) {
     const rows: LabRow[] = [];
     for (const s of metrics.values()) {
       if (s.metric.panel !== panel || !s.latest) continue;
+      const isBp = s.metric.id === "bp_systolic" || s.metric.id === "bp_diastolic";
+      const flag: RangeFlag = isBp && bp ? bloodPressureFlag(bp.category) : flagAgainstReference(s.metric, s.latest.value);
+      const flagLabel = isBp && bp
+        ? (bp.category === "normal" ? null : bp.label)
+        : flagLabelFor(s.metric, flag);
+      const reference = isBp
+        ? BLOOD_PRESSURE_REFERENCE[s.metric.id === "bp_systolic" ? "systolic" : "diastolic"]
+        : formatReference(s.metric);
       rows.push({
         metricId: s.metric.id,
         label: s.metric.label,
         value: s.latest.value,
         unit: s.metric.unit,
         at: s.latest.at,
-        flag: flagAgainstReference(s.metric, s.latest.value),
-        reference: formatReference(s.metric),
+        flag,
+        flagLabel,
+        reference,
         previous: s.previous?.value ?? null,
         trackerId: s.latest.trackerId,
         mergedFrom: s.sources.length,
       });
     }
     if (rows.length === 0) continue;
+    const concern = (r: LabRow) => {
+      const m = getCanonicalMetric(r.metricId);
+      return m ? flagIsConcern(m, r.flag) : r.flag === "low" || r.flag === "high";
+    };
     // Out-of-range first, then alphabetical — the reason you opened the panel.
-    rows.sort((a, b) => {
-      const oa = a.flag === "normal" || a.flag === "unknown" ? 1 : 0;
-      const ob = b.flag === "normal" || b.flag === "unknown" ? 1 : 0;
-      return oa - ob || a.label.localeCompare(b.label);
-    });
+    rows.sort((a, b) => (concern(a) ? 0 : 1) - (concern(b) ? 0 : 1) || a.label.localeCompare(b.label));
     panels.push({
       panel, label: PANEL_LABELS[panel], rows,
-      outOfRange: rows.filter((r) => r.flag === "low" || r.flag === "high").length,
+      outOfRange: rows.filter(concern).length,
     });
   }
   return panels;
@@ -642,18 +712,29 @@ export function activityHistory(
       sessions++;
       if (!lastAt || ts > new Date(lastAt).getTime()) lastAt = new Date(ts).toISOString();
       const computed: any = (e as any).computed || {};
+      // ONE duration and ONE distance per session. An entry carries the same
+      // number several ways — `duration` as logged, `durationMinutes` mirrored
+      // by the estimation engine, `computed.durationMinutes` — and adding
+      // every copy turned a 19-minute run into 57 ("13 sessions · 709 min"
+      // for runs logged at 2 mi in 19 min, QA 2026-09-18 F-37). A clock or
+      // pace string ("7:30", "9:30/mi") is not a duration either; parsed as a
+      // number it read as 730 minutes.
+      let entryMinutes: number | null = null, entryDistance: number | null = null;
       const cd = num(computed.durationMinutes);
-      if (Number.isFinite(cd) && cd > 0) { minutes += cd; sawMin = true; }
+      if (Number.isFinite(cd) && cd > 0) entryMinutes = cd;
       let entryReps: number | null = null, entrySets: number | null = null;
       for (const [field, raw] of Object.entries(e.values || {})) {
         if (META_KEY.test(field)) continue;
+        if (typeof raw === "string" && /\d:\d/.test(raw)) continue; // clock time / pace, never a quantity
         const v = num(raw);
         if (!Number.isFinite(v) || v <= 0) continue;
-        if (DURATION_FIELD.test(field)) { minutes += v; sawMin = true; continue; }
-        if (DISTANCE_FIELD.test(field)) { distance += v; sawDist = true; continue; }
+        if (DURATION_FIELD.test(field)) { if (entryMinutes == null) entryMinutes = v; continue; }
+        if (DISTANCE_FIELD.test(field)) { if (entryDistance == null) entryDistance = v; continue; }
         if (SETS_FIELD.test(field)) { entrySets = (entrySets ?? 0) + v; continue; }
         if (REPS_FIELD.test(field)) { entryReps = (entryReps ?? 0) + v; continue; }
       }
+      if (entryMinutes != null) { minutes += entryMinutes; sawMin = true; }
+      if (entryDistance != null) { distance += entryDistance; sawDist = true; }
       if (entryReps != null) { reps += entryReps * (entrySets ?? 1); sawReps = true; }
       if (entrySets != null) { sets += entrySets; sawSets = true; }
     }
@@ -693,6 +774,13 @@ export interface ScoreComponent {
 export interface WellnessScore {
   value: number | null;
   components: ScoreComponent[];
+  /**
+   * True when at least one scored source has EVER reported (any reading, of
+   * any age). Separates "nothing logged today" from "nothing connected":
+   * the empty score used to say "no connected source" beside a Sources block
+   * saying every source was receiving data (QA 2026-09-18 F-32).
+   */
+  connected?: boolean;
 }
 
 const BASE_WEIGHTS: Record<ScoreComponent["key"], number> = { sleep: 0.4, activity: 0.3, recovery: 0.3 };
@@ -757,9 +845,12 @@ export function wellnessScore(metrics: Map<string, MetricSeries>): WellnessScore
     key: p.key, label: p.label, score: p.score, detail: p.detail,
     weight: p.score == null || totalWeight === 0 ? 0 : BASE_WEIGHTS[p.key] / totalWeight,
   }));
+  // Weighted mean over the COUNTED components only: one component scored 100
+  // is a score of 100, never diluted by the ones that are not counted.
   const value = live.length === 0 ? null
     : Math.round(components.reduce((a, c) => a + (c.score ?? 0) * c.weight, 0));
-  return { value, components };
+  const connected = !!(sleepSeries?.latest || stepsSeries?.latest || minsSeries?.latest || hrv?.latest || rhr?.latest);
+  return { value, components, connected };
 }
 
 function round1(n: number): number { return Math.round(n * 10) / 10; }
@@ -791,7 +882,7 @@ export function weeklyBrief(input: BriefInput): string[] {
   const sleep = metrics.get("sleep_hours");
   const sleepWeek = weekMean("sleep_hours");
   if (sleep && sleepWeek != null && sleep.avg30 != null) {
-    const deltaMin = Math.round((sleepWeek - sleep.avg30) * 60);
+    const deltaMin = hoursToMinutes(sleepWeek - sleep.avg30);
     if (Math.abs(deltaMin) >= 15) {
       out.push(`Sleep is ${Math.abs(deltaMin)} min ${deltaMin < 0 ? "down" : "up"} this week vs. your 30-day average (${round1(sleepWeek)} h vs ${round1(sleep.avg30)} h).`);
     } else {
@@ -845,6 +936,7 @@ export interface SourceState {
   recovery: boolean;
   labs: boolean;
   body: boolean;
+  hydration?: boolean;
 }
 
 export function sourceState(metrics: Map<string, MetricSeries>): SourceState {
@@ -855,7 +947,14 @@ export function sourceState(metrics: Map<string, MetricSeries>): SourceState {
     recovery: has("hrv") || has("resting_hr"),
     labs: [...metrics.values()].some((s) => LAB_PANELS.includes(s.metric.panel) && !!s.latest),
     body: has("weight") || has("bmi") || has("body_fat"),
+    hydration: has("hydration"),
   };
+}
+
+/** Has any tracked health source ever reported? Drives the difference between
+ *  "nothing logged today" and "connect a source" on every empty state. */
+export function anySourceConnected(sources: SourceState): boolean {
+  return !!(sources.sleep || sources.activity || sources.recovery || sources.labs || sources.body || sources.hydration);
 }
 
 /** Every duplicate the canon collapsed: one entry per metric logged into more

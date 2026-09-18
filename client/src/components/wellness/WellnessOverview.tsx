@@ -30,11 +30,11 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Activity, Moon, HeartPulse, Sparkles, FlaskConical, Pill, CalendarClock,
-  FileText, AlertTriangle, Stethoscope, Dumbbell, Link2, TrendingUp, TrendingDown,
+  FileText, AlertTriangle, Stethoscope, Dumbbell, Link2, TrendingUp, TrendingDown, Droplets,
 } from "lucide-react";
 import { Medallion } from "@/components/dashboard/visuals";
 import { SectionHeading } from "@/components/ui/section-heading";
-import { documentIdOfSource, type TodaySignal, type LabPanel, type LabRow, type WorkoutGroup, type WellnessScore, type SourceState } from "@shared/wellness-readout";
+import { documentIdOfSource, hoursToMinutes, anySourceConnected, type TodaySignal, type LabPanel, type LabRow, type WorkoutGroup, type WellnessScore, type SourceState } from "@shared/wellness-readout";
 
 // Shapes the Care section renders. Kept here because pages/wellness.tsx maps
 // obligations/documents/profile fields into them.
@@ -87,11 +87,21 @@ function Section({ title, icon, tone, meta, children, testId }: {
 
 // ── 1. Today ─────────────────────────────────────────────────────────────────
 
-const SIGNAL_META: Record<TodaySignal["key"], { icon: any; tone: string; connect: string }> = {
-  sleep: { icon: Moon, tone: T.indigo, connect: "Connect Apple Health or Health Connect for sleep" },
-  activity: { icon: Activity, tone: T.green, connect: "Connect Apple Health or Health Connect for steps and workouts" },
-  recovery: { icon: HeartPulse, tone: T.pink, connect: "Connect a wearable for resting HR and HRV" },
+const SIGNAL_META: Record<TodaySignal["key"], { icon: any; tone: string; connect: string; nothingToday: string }> = {
+  sleep: { icon: Moon, tone: T.indigo, connect: "Connect Apple Health or Health Connect for sleep", nothingToday: "No sleep recorded last night" },
+  activity: { icon: Activity, tone: T.green, connect: "Connect Apple Health or Health Connect for steps and workouts", nothingToday: "No reading today" },
+  recovery: { icon: HeartPulse, tone: T.pink, connect: "Connect a wearable for resting HR and HRV", nothingToday: "No reading today" },
+  hydration: { icon: Droplets, tone: T.cyan, connect: "Log water in chat (\"drank 20 oz\") to see it here", nothingToday: "Nothing logged today" },
 };
+
+/** "0.3 h" is not how anyone thinks about lost sleep. ONE conversion —
+ *  shared/wellness-readout hoursToMinutes — so the tile and the weekly brief
+ *  can never say 15 min and 18 min about the same 0.3 h. */
+function deltaText(signal: TodaySignal, delta: number): string {
+  const dir = delta > 0 ? "above" : "below";
+  if (signal.key === "sleep") return `${Math.abs(hoursToMinutes(delta))} min ${dir} your 30-day average`;
+  return `${auto(Math.abs(delta))} ${signal.unit} ${dir} your 30-day average`;
+}
 
 function SignalTile({ signal }: { signal: TodaySignal }) {
   const meta = SIGNAL_META[signal.key];
@@ -109,7 +119,7 @@ function SignalTile({ signal }: { signal: TodaySignal }) {
       {signal.value == null ? (
         <p className="text-xs text-muted-foreground mt-3" data-testid={`wellness-signal-${signal.key}-empty`}>
           {signal.lastAt
-            ? `${signal.key === "sleep" ? "No sleep recorded last night" : "No reading today"} · last ${new Date(signal.lastAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+            ? `${meta.nothingToday} · last ${new Date(signal.lastAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
             : meta.connect}
         </p>
       ) : (
@@ -121,9 +131,7 @@ function SignalTile({ signal }: { signal: TodaySignal }) {
           {signal.caption && <div className="text-[11px] text-muted-foreground mt-1">{signal.caption}</div>}
           <div className="mt-2"><Spark series={signal.series} color={meta.tone} /></div>
           <div className="text-[11px] mt-1" style={{ color: good == null ? undefined : `hsl(${good ? T.green : T.amber})` }}>
-            {delta == null
-              ? "Building a 30-day baseline"
-              : `${auto(Math.abs(delta))} ${signal.unit} ${delta > 0 ? "above" : "below"} your 30-day average`}
+            {delta == null ? "Building a 30-day baseline" : deltaText(signal, delta)}
           </div>
         </>
       )}
@@ -136,7 +144,13 @@ function SignalTile({ signal }: { signal: TodaySignal }) {
 // parts, their weights, and counts only the sources that are actually
 // connected — so it can never be a number about data the app does not have.
 
-function ScoreCard({ score }: { score: WellnessScore }) {
+/** The one place the page asks for a log: when a source exists but has
+ *  nothing for today, the honest next step is to log, not to connect. */
+const LogLink = () => (
+  <a href="#/trackers" className="underline underline-offset-2 hover:text-foreground" data-testid="wellness-log-cta">Log it</a>
+);
+
+function ScoreCard({ score, connected }: { score: WellnessScore; connected: boolean }) {
   const live = score.components.filter((c) => c.score != null);
   return (
     <Card className="p-4" data-testid="wellness-score" style={{ ["--accent-hsl" as any]: T.teal }}>
@@ -150,15 +164,27 @@ function ScoreCard({ score }: { score: WellnessScore }) {
         </div>
       </div>
       {live.length === 0 ? (
-        <p className="text-xs text-muted-foreground mt-3">No connected source yet, so there is nothing to score.</p>
+        // "No connected source" was shown even when Sleep/Activity/Body were
+        // all receiving data and the only thing missing was TODAY's entry
+        // (QA 2026-09-18 F-32). Say which it is.
+        <p className="text-xs text-muted-foreground mt-3" data-testid="wellness-score-empty">
+          {connected
+            ? <>Nothing logged today — log sleep, steps or a resting heart rate and the score fills in. <LogLink /></>
+            : "No connected source yet, so there is nothing to score."}
+        </p>
       ) : (
         <div className="mt-3 space-y-1.5" data-testid="wellness-score-breakdown">
+          {/* Each row is the component's own 0–100 SCORE, then its share of
+              the total. "Sleep 100%" used to be the share, read as the score. */}
           {live.map((c) => (
             <div key={c.key} className="flex items-baseline justify-between gap-2 text-xs">
               <span className="text-muted-foreground">
-                {c.label} <span className="opacity-70">{Math.round(c.weight * 100)}%</span>
+                {c.label} <span className="tabular-nums text-foreground font-medium">{c.score}</span>
+                <span className="opacity-70">/100</span>
               </span>
-              <span className="tabular-nums">{c.score}<span className="text-muted-foreground"> · {c.detail}</span></span>
+              <span className="tabular-nums text-muted-foreground text-right">
+                {c.detail} · <span className="opacity-80">{Math.round(c.weight * 100)}% of score</span>
+              </span>
             </div>
           ))}
           {live.length < score.components.length && (
@@ -174,13 +200,14 @@ function ScoreCard({ score }: { score: WellnessScore }) {
 
 // ── 3. Labs ──────────────────────────────────────────────────────────────────
 
-function FlagPill({ flag }: { flag: LabRow["flag"] }) {
-  if (flag === "normal" || flag === "unknown") return null;
-  const tone = flag === "high" ? T.orange : T.blue;
+function FlagPill({ row }: { row: Pick<LabRow, "flag" | "flagLabel"> }) {
+  const label = row.flagLabel ?? (row.flag === "high" ? "High" : row.flag === "low" ? "Low" : row.flag === "elevated" ? "Elevated" : null);
+  if (!label || row.flag === "normal" || row.flag === "unknown") return null;
+  const tone = row.flag === "high" ? T.orange : row.flag === "elevated" ? T.amber : T.blue;
   return (
     <span className="text-[11px] px-1.5 py-0.5 rounded-full font-medium"
       style={{ background: `hsl(${tone} / 0.15)`, color: `hsl(${tone})` }}>
-      {flag === "high" ? "High" : "Low"}
+      {label}
     </span>
   );
 }
@@ -209,7 +236,7 @@ function LabRowView({ row }: { row: LabRow }) {
       <div className="min-w-0">
         <div className="text-xs font-medium flex items-center gap-1.5">
           <span className="truncate">{row.label}</span>
-          <FlagPill flag={row.flag} />
+          <FlagPill row={row} />
         </div>
         <div className="text-[11px] text-muted-foreground">
           {row.reference ? `Ref ${row.reference}` : ""}{row.reference && row.at ? " · " : ""}{row.at ? shortDay(row.at) : ""}
@@ -277,6 +304,7 @@ export interface WellnessOverviewProps {
 }
 
 export function WellnessOverview(p: WellnessOverviewProps) {
+  const connected = p.score.connected ?? anySourceConnected(p.sources);
   const labCount = p.panels.reduce((a, s) => a + s.rows.length, 0);
   const flagged = p.panels.reduce((a, s) => a + s.outOfRange, 0);
   const bodyCount = p.body.reduce((a, s) => a + s.rows.length, 0);
@@ -295,7 +323,7 @@ export function WellnessOverview(p: WellnessOverviewProps) {
         <h2 className="micro-label text-muted-foreground mb-2">Today</h2>
         <div className="flex flex-wrap gap-3">
           {p.signals.map((s) => <SignalTile key={s.key} signal={s} />)}
-          <div className="min-w-[10rem] flex-1"><ScoreCard score={p.score} /></div>
+          <div className="min-w-[10rem] flex-1"><ScoreCard score={p.score} connected={connected} /></div>
         </div>
       </div>
 
@@ -309,6 +337,10 @@ export function WellnessOverview(p: WellnessOverviewProps) {
               <li key={i} className="text-xs leading-relaxed" data-testid={`wellness-brief-line-${i}`}>{line}</li>
             ))}
           </ul>
+        ) : connected ? (
+          <p className="text-xs text-muted-foreground" data-testid="wellness-brief-empty">
+            Nothing logged in the last week — log sleep, a walk or a weigh-in and this fills in. <LogLink />
+          </p>
         ) : (
           <Empty text="Nothing to report yet — connect a health source and a week of data will fill this in." />
         )}
@@ -448,7 +480,8 @@ export function WellnessOverview(p: WellnessOverviewProps) {
         <div className="flex flex-wrap gap-2">
           {([
             ["Sleep", p.sources.sleep], ["Activity", p.sources.activity],
-            ["Recovery", p.sources.recovery], ["Labs", p.sources.labs], ["Body", p.sources.body],
+            ["Recovery", p.sources.recovery], ["Water", !!p.sources.hydration],
+            ["Labs", p.sources.labs], ["Body", p.sources.body],
           ] as Array<[string, boolean]>).map(([label, on]) => (
             <span key={label} className="text-[11px] px-2 py-1 rounded-full"
               data-testid={`wellness-source-${label.toLowerCase()}`}

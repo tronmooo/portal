@@ -25,6 +25,8 @@ import { rollForwardRecurringTask } from "@shared/recurrence";
 import { isLegacyReminderTask } from "@shared/legacy-reminder-tasks";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { isHabitDueOn, habitCheckinCount } from "@shared/habit-schedule";
+import { formatLoggedValues } from "@shared/tracker-units";
+import { bloodPressureCategory } from "@shared/blood-pressure";
 import { generateSchedule } from "@shared/liability-schedule";
 import { addCharge, removeCharge } from "@shared/liability-billing";
 import { applyBalanceAdjustment, isAccountProfile } from "@shared/finance-accounts";
@@ -598,11 +600,11 @@ export function computeSecondaryData(
     const sys = parseFloat(values.systolic) || 0;
     const dia = parseFloat(values.diastolic) || 0;
     if (sys > 0 && dia > 0) {
-      if (sys >= 180 || dia >= 120) computed.bloodPressureCategory = "crisis";
-      else if (sys >= 140 || dia >= 90) computed.bloodPressureCategory = "high_stage2";
-      else if ((sys >= 130 && sys <= 139) || (dia >= 80 && dia <= 89)) computed.bloodPressureCategory = "high_stage1";
-      else if (sys >= 120 && sys <= 129 && dia < 80) computed.bloodPressureCategory = "elevated";
-      else computed.bloodPressureCategory = "normal";
+      // ONE rule for the pair (shared/blood-pressure.ts) — the same one the
+      // tracker card and the Wellness tab render. "low" is not a stored
+      // category; it reads as normal here as it always did.
+      const cat = bloodPressureCategory(sys, dia);
+      computed.bloodPressureCategory = cat === "low" ? "normal" : cat;
     }
   }
 
@@ -2391,12 +2393,14 @@ export class MemStorage implements IStorage {
         ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
           type: 'tracker_entry',
           description: (() => {
+            // Values speak with their UNIT ("Weight: 181.2 lbs"), never the
+            // field name in its place ("181.2 weight") — shared/tracker-units.
             const nums = Object.entries(e.values).filter(([,v]) => typeof v === 'number') as [string, number][];
             const strs = Object.entries(e.values).filter(([,v]) => typeof v === 'string' && v) as [string, string][];
             if (nums.length === 0 && strs.length === 0) return `Logged ${t.name}`;
-            if (nums.length === 1) return `${t.name}: ${nums[0][1]} ${nums[0][0]}`;
-            const summary = nums.slice(0, 2).map(([k, v]) => `${v} ${k}`).join(', ');
-            return `${t.name}: ${summary}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
+            const parts = formatLoggedValues(Object.fromEntries(nums.slice(0, 2)), t as any, { max: 2 });
+            if (parts.length === 0) return `Logged ${t.name}`;
+            return `${t.name}: ${parts.join(', ')}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
           })(),
           timestamp: e.timestamp,
         }))),
