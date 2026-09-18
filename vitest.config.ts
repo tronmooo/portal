@@ -351,6 +351,21 @@ export default defineConfig({
       'tests/qa-2026-09-18-ai-chat-search.dom.test.tsx',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
+      // QA 2026-09-18 BUG-01: the profile scope must never change without a gesture.
+      'tests/qa-2026-09-18-profile-scope.test.ts',
+      // QA 2026-09-18 money/finance cluster (income MTD, paychecks, categories, accounts, formatting).
+      'tests/finance-money-qa-2026-09-18.test.ts',
+      // QA 2026-09-18 chat-engine cluster (person-name guard, one birthday event, no fabricated appointments, recap wording, document dates off people).
+      'tests/chat-engine-qa-2026-09-18.test.ts',
+      // QA 2026-09-18 dashboard/hub cluster: relative time, activity units,
+      // BP verdict, quick-add due phrases, bell severity, task counts.
+      'tests/qa-2026-09-18-dashboard-cluster.test.ts',
+      // QA 2026-09-18 BUG-10/28: hub KPI strip task source + overflow affordance.
+      'tests/qa-2026-09-18-hub-strip.dom.test.tsx',
+      // QA 2026-09-18 documents/artifacts/assets cluster: required registry fields, internal tags, file presence.
+      'tests/qa-2026-09-18-documents-cluster.test.ts',
+      // QA 2026-09-18 BUG-23: Escape closes a DropdownMenu even under a toast layer.
+      'tests/qa-2026-09-18-dropdown-escape.dom.test.tsx',
       'tests/test-suite-discovery.test.ts',
       // QA pass 2026-09-18 (profiles & navigation): the scope store never
       // switches people on its own; ownership stops at people; local calendar filter.

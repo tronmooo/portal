@@ -19,6 +19,7 @@ import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
 import { deriveScheduleFields, liabilityAmount } from "@shared/liability-schedule";
 import { isAccountProfile, isDebtAccount } from "@shared/finance-accounts";
+import { billPaymentExpenseCategory } from "@shared/category-canon";
 import { getUserToday, DEFAULT_TIMEZONE } from "@shared/timezone";
 import type { IStorage } from "./storage";
 import { randomUUID } from "crypto";
@@ -1017,7 +1018,12 @@ export async function payBillOccurrence(
       const owners = Array.from(new Set([(liability as any).parentProfileId || liabilityId, ...parties]));
       const expense = await storage.createExpense({
         amount,
-        category: ledger.servicedDebtId ? "debt" : String(f.category || "bills"),
+        // QA 2026-09-18 BUG-11: one rule for the bucket — a bill that services
+        // a debt, or is named / typed as a loan payment, is "debt", never
+        // "general" (shared/category-canon billPaymentExpenseCategory).
+        category: billPaymentExpenseCategory({
+          name: liability.name, category: f.category, type_key: typeKey, servicesDebt: !!ledger.servicedDebtId,
+        }),
         description: `${liability.name} — ${occurrenceDate}`,
         date: paymentDate,
         linkedProfiles: owners,

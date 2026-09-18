@@ -25,6 +25,9 @@
 // Pure, dependency-free and shared: server/tracker-entry-guard.ts (writes) and
 // client/src/lib/wellness-data.ts (reads) use the same table, so what the app
 // refuses to store and what it knows how to read can never drift apart.
+// (The one import is the pure blood-pressure table, which imports nothing.)
+
+import { classifyBloodPressure, bloodPressureFlag, type BloodPressureCategory } from "./blood-pressure";
 
 export type MetricPanel =
   | "vitals"        // blood pressure, heart rate, temperature, SpO2
@@ -73,8 +76,12 @@ export interface CanonicalMetric {
    * stored history outside it is ignored on read.
    */
   plausible: [number, number];
-  /** Typical healthy range, used to flag a lab value as out of range. */
-  ref?: { low?: number; high?: number };
+  /**
+   * Typical healthy range, used to flag a lab value as out of range.
+   * `highFrom`: values above `high` but below this are "elevated" (borderline),
+   * not "high" — the AHA blood-pressure bands (QA 2026-09-18 BUG-09).
+   */
+  ref?: { low?: number; high?: number; highFrom?: number };
   direction: MetricDirection;
   /**
    * Alternative units this metric is commonly logged in, with the factor that
@@ -192,10 +199,13 @@ export const CANONICAL_METRICS: CanonicalMetric[] = [
     match: /magnesium/i },
 
   // ── Vitals ────────────────────────────────────────────────────────────────
-  // Blood pressure is a PAIR: the row flags come from shared/blood-pressure.ts
-  // (normal < 120/80, elevated 120–129, stage 1 130–139 / 80–89, …). The
-  // single-value refs here describe the "normal" band for each half only.
-  { id: "bp_systolic", label: "Systolic", panel: "vitals", unit: "mmHg", plausible: [50, 300], ref: { low: 90, high: 119 }, direction: "band",
+  // Blood pressure is a PAIR: the verdict every screen shows comes from
+  // shared/blood-pressure.ts (classifyBloodPressure — normal < 120/80,
+  // elevated 120–129, stage 1 130–139 / 80–89, …; bloodPressureVerdict below
+  // wraps it). The single-value refs here describe the "normal" band for each
+  // half only; `highFrom: 130` keeps a lone systolic 121 reading "Elevated"
+  // rather than "High" (QA 2026-09-18 BUG-09 / F-33).
+  { id: "bp_systolic", label: "Systolic", panel: "vitals", unit: "mmHg", plausible: [50, 300], ref: { low: 90, high: 119, highFrom: 130 }, direction: "band",
     match: /systolic|\bsbp\b/i },
   { id: "bp_diastolic", label: "Diastolic", panel: "vitals", unit: "mmHg", plausible: [20, 200], ref: { low: 60, high: 79 }, direction: "band",
     match: /diastolic|\bdbp\b/i },
@@ -361,15 +371,19 @@ function round(n: number): number {
   return Math.abs(n) >= 100 ? Math.round(n) : Math.round(n * 100) / 100;
 }
 
-/** "elevated" is the blood-pressure band between normal and stage 1. */
-export type RangeFlag = "low" | "high" | "elevated" | "normal" | "unknown";
+/** "elevated" = above the healthy band but under the threshold that counts as
+ *  high (the blood-pressure band between normal and stage 1). */
+export type RangeFlag = "low" | "elevated" | "high" | "normal" | "unknown";
 
 /** Where a value sits against the metric's reference range. */
 export function flagAgainstReference(metric: CanonicalMetric, canonicalValue: number): RangeFlag {
   const ref = metric.ref;
   if (!ref || !Number.isFinite(canonicalValue)) return "unknown";
   if (ref.low != null && canonicalValue < ref.low) return "low";
-  if (ref.high != null && canonicalValue > ref.high) return "high";
+  if (ref.high != null && canonicalValue > ref.high) {
+    if (ref.highFrom != null && canonicalValue < ref.highFrom) return "elevated";
+    return "high";
+  }
   return "normal";
 }
 
@@ -387,6 +401,63 @@ export function flagIsConcern(metric: CanonicalMetric, flag: RangeFlag): boolean
   if (flag === "normal" || flag === "unknown") return false;
   if (flag === "elevated") return true;
   return !metric.flagLabels?.[flag];
+}
+
+/** Human word for a flag: "High", "Elevated", "Low" — "" when in range. */
+export function rangeFlagLabel(flag: RangeFlag): string {
+  return flag === "high" ? "High" : flag === "elevated" ? "Elevated" : flag === "low" ? "Low" : "";
+}
+
+// ── Blood pressure: one verdict for every screen ────────────────────────────
+// QA 2026-09-18 BUG-09 / F-33: the Trackers card said "121/76 — within a
+// normal range" (in range, green) while the Wellness tab said "Systolic 121 —
+// High". A blood pressure is a PAIR, so the category is decided on both
+// numbers together by shared/blood-pressure.ts (classifyBloodPressure); this
+// is the same verdict in the card's vocabulary ("In range" / "Elevated" /
+// "High" / "Crisis" / "Low"). Both halves carry the pair's flag, which is what
+// the Wellness rows (bodyVitals) show, so the two surfaces cannot disagree.
+
+export type BloodPressureLabel = "Low" | "In range" | "Elevated" | "High" | "Crisis";
+
+export interface BloodPressureVerdict {
+  label: BloodPressureLabel;
+  /** The pair's flag (crisis and both hypertension stages read as "high"). */
+  flag: RangeFlag;
+  /** The flag the Wellness "Systolic" row carries — the pair's verdict. */
+  systolicFlag: RangeFlag;
+  /** The flag the Wellness "Diastolic" row carries — the pair's verdict. */
+  diastolicFlag: RangeFlag;
+  /** The finer category from shared/blood-pressure.ts. */
+  category: BloodPressureCategory;
+  /** A sentence for the card's insight line. */
+  summary: string;
+}
+
+const BP_LABEL: Record<BloodPressureCategory, BloodPressureLabel> = {
+  low: "Low", normal: "In range", elevated: "Elevated", high_stage1: "High", high_stage2: "High", crisis: "Crisis",
+};
+
+export function bloodPressureVerdict(
+  systolic: number | null | undefined,
+  diastolic: number | null | undefined,
+): BloodPressureVerdict | null {
+  const sys = typeof systolic === "number" && Number.isFinite(systolic) ? systolic : null;
+  const dia = typeof diastolic === "number" && Number.isFinite(diastolic) ? diastolic : null;
+  if (sys == null && dia == null) return null;
+  // A lone half is judged against its own band (the other half is unknown).
+  if (sys == null || dia == null) {
+    const m = getCanonicalMetric(sys == null ? "bp_diastolic" : "bp_systolic")!;
+    const flag = flagAgainstReference(m, (sys ?? dia) as number);
+    const category: BloodPressureCategory =
+      flag === "low" ? "low" : flag === "elevated" ? "elevated" : flag === "high" ? "high_stage1" : "normal";
+    const reading = `${sys ?? "—"}/${dia ?? "—"}`;
+    const label = BP_LABEL[category];
+    const summary = label === "In range" ? `Blood pressure is ${reading} — within a normal range.` : `${reading} is ${label.toLowerCase()}.`;
+    return { label, flag, systolicFlag: sys == null ? "unknown" : flag, diastolicFlag: dia == null ? "unknown" : flag, category, summary };
+  }
+  const v = classifyBloodPressure(sys, dia);
+  const flag = bloodPressureFlag(v.category);
+  return { label: BP_LABEL[v.category], flag, systolicFlag: flag, diastolicFlag: flag, category: v.category, summary: v.sentence };
 }
 
 /** "70–100 bpm", "< 100 mg/dL", "> 40 mg/dL" — or undefined when no range. */

@@ -1,7 +1,8 @@
 import { logger } from "./logger";
+import { dedupeActivityRows } from "@shared/activity-description";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
-import { toMonthlyAmount, isUpcomingBill, sumBillsDueThroughMonth, sumMonthlyIncomeForMonth } from "@shared/obligation-windows";
+import { toMonthlyAmount, isUpcomingBill, sumBillsDueThroughMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "@shared/obligation-windows";
 import { isTestEntity } from "@shared/test-data";
 import { searchCorpus } from "@shared/search-match";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
@@ -2395,7 +2396,9 @@ export class MemStorage implements IStorage {
       monthlySpend: monthlyExpenses.reduce((sum, e) => sum + e.amount, 0),
       weeklyEntries,
       streaks,
-      recentActivity: [
+      // QA 2026-09-18: a 2×/day habit mirrors two identical rows at one moment
+      // — the feed shows the line once (shared/activity-description).
+      recentActivity: dedupeActivityRows([
         ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
           type: 'tracker_entry',
           description: (() => {
@@ -2404,6 +2407,8 @@ export class MemStorage implements IStorage {
             const nums = Object.entries(e.values).filter(([,v]) => typeof v === 'number') as [string, number][];
             const strs = Object.entries(e.values).filter(([,v]) => typeof v === 'string' && v) as [string, string][];
             if (nums.length === 0 && strs.length === 0) return `Logged ${t.name}`;
+            // QA 2026-09-18 BUG-16 / F-41: real units ("181.2 lbs", "140 mg/dL"),
+            // never the field name or "value" in the unit slot.
             const parts = formatLoggedValues(Object.fromEntries(nums.slice(0, 2)), t as any, { max: 2 });
             if (parts.length === 0) return `Logged ${t.name}`;
             return `${t.name}: ${parts.join(', ')}${nums.length > 2 ? ` (+${nums.length - 2} more)` : ''}`;
@@ -2422,9 +2427,11 @@ export class MemStorage implements IStorage {
         ...expenses.slice(-3).map(e => ({
           type: 'expense',
           description: `${formatMoneyMajor(e.amount)} — ${e.description}`,
-          timestamp: e.date || e.createdAt,
+          // QA 2026-09-18 BUG-15: the feed is about WHEN it was logged; the
+          // expense's calendar date read "14h ago" seconds after it was added.
+          timestamp: e.createdAt || e.date,
         })),
-      ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, 10),
+      ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())).slice(0, 10),
       totalHabits: habits.length,
       habitCompletionRate,
       totalObligations: obligations.length,
@@ -2579,7 +2586,10 @@ export class MemStorage implements IStorage {
 
     const userYearMonth = `${thisYear}-${String(thisMonth + 1).padStart(2, '0')}`;
     const incomesForMonth = Array.from(this.incomes.values()).filter(i => matchesFilter((i as any).linkedProfiles));
-    const recurringIncome = sumMonthlyIncomeForMonth(incomesForMonth as any[], userYearMonth, today);
+    // QA 2026-09-18 BUG-05 / F-13: received to date, not the month's
+    // projection — the same rule production's getDashboardEnhanced applies.
+    const recurringIncome = sumMonthIncomeToDate(incomesForMonth as any[], null, userYearMonth, today);
+    const projectedIncome = sumMonthlyIncomeForMonth(incomesForMonth as any[], userYearMonth);
     const receivedPaycheckIncome = 0; // the in-memory storage keeps no paycheck table
 
     // Exact 52/12 and 26/12 multipliers (shared/obligation-windows.ts), the
@@ -2625,6 +2635,7 @@ export class MemStorage implements IStorage {
         monthlyIncome: Math.round(recurringIncome + receivedPaycheckIncome),
         recurringIncome: Math.round(recurringIncome),
         receivedPaycheckIncome: Math.round(receivedPaycheckIncome),
+        projectedIncome: Math.round(projectedIncome + receivedPaycheckIncome),
       },
       overdueTasks,
       tasksDueToday,

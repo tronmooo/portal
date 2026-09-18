@@ -203,6 +203,7 @@ function ScoreCard({ score, connected }: { score: WellnessScore; connected: bool
 function FlagPill({ row }: { row: Pick<LabRow, "flag" | "flagLabel"> }) {
   const label = row.flagLabel ?? (row.flag === "high" ? "High" : row.flag === "low" ? "Low" : row.flag === "elevated" ? "Elevated" : null);
   if (!label || row.flag === "normal" || row.flag === "unknown") return null;
+  // QA 2026-09-18 BUG-09 / F-33: "elevated" is borderline (amber), not "High".
   const tone = row.flag === "high" ? T.orange : row.flag === "elevated" ? T.amber : T.blue;
   return (
     <span className="text-[11px] px-1.5 py-0.5 rounded-full font-medium"

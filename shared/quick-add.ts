@@ -205,6 +205,114 @@ export function buildTimedTaskPayload(input: TimedTaskInput, ownerProfileId?: st
   };
 }
 
+// ── Natural-language due date in a quick-add title ──────────────────────────
+//
+// QA 2026-09-18 BUG-21: "Renew passport before December" typed into the
+// Tasks "I want to…" box saved a task with NO due date, which the popup then
+// filed under Today's priorities. The trailing time phrase is now read:
+//
+//   "… before December"     → the day before Dec 1 (Nov 30) of the upcoming December
+//   "… by December"         → Dec 1
+//   "… before Dec 1"        → Nov 30
+//   "… by Dec 15" / "on Dec 15" / "due Dec 15" → Dec 15
+//   "… tomorrow" / "today" / "next Friday" / "on Friday" / "in 3 days" / "in 2 weeks"
+//
+// The phrase is stripped from the title ("Renew passport"). A month with no
+// year means the NEXT occurrence: on Sep 18, "December" is this December and
+// "March" is next March. Anything not recognised leaves the title untouched
+// and the task undated — an undated task is then shown as Unscheduled, never
+// as due today (see TaskHabitPopups).
+
+export interface ParsedQuickTask {
+  title: string;
+  /** YYYY-MM-DD when a due phrase was recognised. */
+  dueDate?: string;
+}
+
+const MONTHS: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4, may: 5,
+  jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+};
+const WEEKDAYS: Record<string, number> = {
+  sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2, tues: 2, wednesday: 3, wed: 3,
+  thursday: 4, thu: 4, thur: 4, thurs: 4, friday: 5, fri: 5, saturday: 6, sat: 6,
+};
+const MONTH_RE = Object.keys(MONTHS).sort((a, b) => b.length - a.length).join("|");
+const WEEKDAY_RE = Object.keys(WEEKDAYS).sort((a, b) => b.length - a.length).join("|");
+
+const isoOf = (y: number, m: number, d: number): string =>
+  `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+const shiftISO = (iso: string, days: number): string => {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + days, 12);
+  return isoOf(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+};
+const daysInMonth = (y: number, m: number): number => new Date(y, m, 0).getDate();
+
+function cleanTitle(raw: string, matchStart: number, fallback: string): string {
+  const t = raw.slice(0, matchStart).replace(/[\s,;:\-–—]+$/, "").trim();
+  return t || fallback;
+}
+
+export function parseQuickTaskText(text: string, todayISO: string): ParsedQuickTask {
+  const raw = String(text || "").trim();
+  if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(String(todayISO || ""))) return { title: raw };
+  const [ty, tm, td] = todayISO.split("-").map(Number);
+  const todayDow = new Date(ty, tm - 1, td, 12).getDay();
+
+  // 1. "<prep> <Month> [day][, year]" — the QA case.
+  const monthRe = new RegExp(
+    `\\b(before|by|until|till|due|on|for)\\s+(?:the\\s+)?(?:end\\s+of\\s+)?(${MONTH_RE})\\.?(?:\\s+(\\d{1,2})(?:st|nd|rd|th)?)?(?:,?\\s+(\\d{4}))?\\s*[.!]?\\s*$`, "i");
+  const mm = monthRe.exec(raw);
+  if (mm) {
+    const prep = mm[1].toLowerCase();
+    const month = MONTHS[mm[2].toLowerCase()];
+    const day = mm[3] ? Number(mm[3]) : null;
+    let year = mm[4] ? Number(mm[4]) : ty;
+    if (day != null && (day < 1 || day > 31)) return { title: raw };
+    // "end of December" → the month's last day; a bare month → its 1st.
+    const endOf = /end\s+of/i.test(mm[0]);
+    let dom = day ?? (endOf ? daysInMonth(year, month) : 1);
+    let iso = isoOf(year, month, Math.min(dom, daysInMonth(year, month)));
+    // No year given and the date has passed → the next occurrence.
+    if (!mm[4] && iso < todayISO) {
+      year += 1;
+      dom = day ?? (endOf ? daysInMonth(year, month) : 1);
+      iso = isoOf(year, month, Math.min(dom, daysInMonth(year, month)));
+    }
+    if (prep === "before") iso = shiftISO(iso, -1);
+    return { title: cleanTitle(raw, mm.index, raw), dueDate: iso };
+  }
+
+  // 2. "today" / "tomorrow" / "in N days|weeks" / "next week".
+  const relRe = /\b(?:(?:due|by|on|for)\s+)?(today|tonight|tomorrow|next\s+week|in\s+(\d+)\s+(day|days|week|weeks))\s*[.!]?\s*$/i;
+  const rm = relRe.exec(raw);
+  if (rm) {
+    const word = rm[1].toLowerCase();
+    let iso = todayISO;
+    if (word === "tomorrow") iso = shiftISO(todayISO, 1);
+    else if (word === "next week") iso = shiftISO(todayISO, 7);
+    else if (rm[2]) iso = shiftISO(todayISO, Number(rm[2]) * (/week/i.test(rm[3]) ? 7 : 1));
+    return { title: cleanTitle(raw, rm.index, raw), dueDate: iso };
+  }
+
+  // 3. "[next|this|on|by|before] <weekday>".
+  const dowRe = new RegExp(`\\b(?:(before|by|on|due|for|next|this)\\s+)?(${WEEKDAY_RE})\\s*[.!]?\\s*$`, "i");
+  const dm = dowRe.exec(raw);
+  if (dm) {
+    const prep = (dm[1] || "").toLowerCase();
+    const target = WEEKDAYS[dm[2].toLowerCase()];
+    let ahead = (target - todayDow + 7) % 7;
+    if (ahead === 0 && prep === "next") ahead = 7;
+    let iso = shiftISO(todayISO, ahead);
+    if (prep === "before") iso = shiftISO(iso, -1);
+    return { title: cleanTitle(raw, dm.index, raw), dueDate: iso };
+  }
+
+  return { title: raw };
+}
+
 /**
  * The money-carrying profile fields (asset values, balances, limits,
  * payments). A record's net worth, cash flow and payoff math read these as

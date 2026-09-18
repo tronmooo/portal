@@ -34,6 +34,7 @@ import {
   refreshFilterNames,
   initDefaultProfileFilter,
   pickSelfProfile,
+  clearProfileFilterForUser,
 } from "../client/src/lib/profileFilter";
 import { passesProfileFilter, pushdownSelection } from "../shared/profile-filter";
 import { withAncestorOwnerIds, ownerChainForProfile, profileAndOwnerIds } from "../shared/scope";
@@ -147,8 +148,10 @@ describe("F-01: a selected id missing from a partial list does not switch the pr
   });
 
   it("initDefaultProfileFilter seeds the original self, not the first self row", () => {
-    try { localStorage.clear(); } catch {}
-    setFilterEveryone();
+    // A fresh account with NO choice yet. (setFilterEveryone() would be a
+    // user's choice, which the seed must never override — QA 2026-09-18
+    // BUG-01, tests/qa-2026-09-18-profile-scope.test.ts.)
+    clearProfileFilterForUser();
     try { localStorage.clear(); } catch {}
     initDefaultProfileFilter([SMOKE_SELF, BOB, POOP]);
     expect(getProfileFilter()).toMatchObject({ mode: "selected", selectedIds: [POOP.id] });

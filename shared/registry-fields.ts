@@ -9,7 +9,34 @@ import { isRecurringBill } from "./liability-types";
 import { advanceLiabilityDueDate } from "./liability-recurrence";
 import { isWithinOverdueGrace } from "./liability-status";
 
-export interface RegistryFieldDef { key: string; type?: string }
+export interface RegistryFieldDef { key: string; type?: string; label?: string; required?: boolean }
+
+/**
+ * QA 2026-09-18 BUG-12: the registry form drew a red asterisk for every
+ * `required` field (Savings Account → "Bank / Institution *", "Current
+ * Balance *") and then saved with them blank. This is the one rule both the
+ * asterisk and the submit gate read: a required field is missing when its
+ * value is absent, an empty/whitespace string, or (for a numeric type) not a
+ * number. Returns the offending definitions in schema order.
+ */
+export function missingRequiredFields(
+  schema: ReadonlyArray<RegistryFieldDef> | null | undefined,
+  values: Record<string, unknown> | null | undefined,
+): RegistryFieldDef[] {
+  const out: RegistryFieldDef[] = [];
+  for (const f of schema || []) {
+    if (!f || !f.required || !f.key) continue;
+    const raw = values ? values[f.key] : undefined;
+    if (raw === undefined || raw === null) { out.push(f); continue; }
+    if (typeof raw === "string" && raw.trim() === "") { out.push(f); continue; }
+    if (f.type === "boolean") continue; // false is an answer
+    if (NUMERIC_TYPES.has(String(f.type))) {
+      const n = coerceRegistryFieldValue(f.type, raw);
+      if (typeof n !== "number" || !Number.isFinite(n)) out.push(f);
+    }
+  }
+  return out;
+}
 
 const NUMERIC_TYPES = new Set(["number", "currency", "percentage"]);
 

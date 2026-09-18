@@ -8,7 +8,7 @@
 // IMPORTANT: never writes the store on mount — initDefaultProfileFilter()
 // (dashboard.tsx) seeds the Self profile on first load and a mount-time write
 // here would race it.
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Check, ChevronDown, Gem, Users } from "lucide-react";
@@ -68,8 +68,21 @@ export function HubProfileSwitcher() {
 
   const isChecked = (id: string) => scope.mode === "selected" && scope.selectedIds.includes(id);
 
+  // QA 2026-09-18 BUG-23: Escape did not close this menu (the notifications
+  // panel closes on Escape, so the tester's next click — aimed at "View all
+  // tasks" — landed on a person row and switched the whole app). The menu is
+  // now controlled: Radix's own escape handling closes it, and a capture-phase
+  // listener closes it even if some other layer swallows the key first.
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline" size="sm"
@@ -86,7 +99,12 @@ export function HubProfileSwitcher() {
           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-56">
+      <DropdownMenuContent align="end" className="w-56" onEscapeKeyDown={() => setOpen(false)}>
+        {/* One model for both pickers (QA 2026-09-18 BUG-01b): a name shows
+            just that person; the box adds or removes them from a combined view. */}
+        <p className="px-2 pt-1 pb-1.5 text-[11px] leading-tight text-muted-foreground" data-testid="hub-switch-hint">
+          Click a name to view just that person · tick boxes to combine
+        </p>
         <DropdownMenuItem
           onClick={() => setFilterEveryone()}
           // Everyone is the heaviest scope (aggregates every profile) and is

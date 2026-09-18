@@ -203,6 +203,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Tracker, TrackerEntry, TrackerField, ComputedData, Profile, Document, Goal } from "@shared/schema";
 import { ShareButton, DocumentViewerDialog } from "@/components/DocumentViewer";
 import { prefetchDocument } from "@/lib/document-preview";
+import { documentFormatLabel } from "@shared/document-file";
 import {
   LineChart,
   Line,
@@ -2409,9 +2410,10 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
         trendPct: null, trendDir: "flat",
       };
     }
-    // ONE verdict for the pair (shared/blood-pressure.ts): 121/76 is
-    // "Elevated" here and on the Wellness tab, never "In range" on one and
-    // "High" on the other.
+    // ONE verdict for the pair (shared/blood-pressure.ts, which
+    // shared/wellness-canon bloodPressureVerdict and the Wellness tab also
+    // read — QA 2026-09-18 BUG-09 / F-33): 121/76 is "Elevated" here and on
+    // the Wellness tab, never "In range" on one and "High" on the other.
     const bp = classifyBloodPressure(sys, dia);
     const status = { label: bp.label, ...(bp.tone === "good" ? C.GREEN : bp.tone === "warn" ? C.YELLOW : C.RED) };
     const prev = entries[1];
@@ -3261,7 +3263,9 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       // The bubble owns the surface — radius, gradient wash, layered shadow —
       // driven by --accent-hsl. Setting background/border/shadow inline here is
       // what kept this card looking flat while the rest of the app moved.
-      className="bubble bubble-interactive overflow-hidden cursor-pointer flex flex-col relative pressable"
+      // QA 2026-09-18 BUG-27: h-full so every card fills its grid cell and a
+      // row's cards share one height (the wrapper cell below is h-full too).
+      className="bubble bubble-interactive overflow-hidden cursor-pointer flex flex-col relative pressable h-full"
       // minHeight, not height: a strength headline wraps to three lines on a
       // narrow two-column grid, and a hard height cropped the weekday bars and
       // ran the footer under them. The card keeps its floor so a row still
@@ -3420,7 +3424,12 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
             )}
           </div>
 
-          {/* Body: insight sentence + a lush full-bleed chart (or padded gauge) */}
+          {/* Body: insight sentence + a lush full-bleed chart (or padded gauge).
+              QA 2026-09-18 BUG-27: the chart wrapper clips to its own rounded
+              box (overflow-hidden + rounded-lg) inside the card's gutter, and
+              sits above the footer with its own bottom margin, so the area fill
+              never runs past the card's rounded border or under the footer
+              pills. */}
           <div className="flex-1 min-h-0 flex flex-col justify-end overflow-hidden">
             {importance !== "compact" && insight.hasData && (
               <p className="px-3 text-[11px] text-muted-foreground leading-snug line-clamp-1 mb-1">
@@ -3430,9 +3439,9 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
             {visual.type === "gauge" ? (
               <div className="px-3 pb-2"><LinearZoneGauge value={visual.value} min={visual.min} max={visual.max} zones={visual.zones} /></div>
             ) : visual.type === "areaZone" ? (
-              <div className="w-full"><TrendArea values={visual.values} color={ac} min={visual.min} max={visual.max} zones={visual.zones} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} /></div>
+              <div className="w-full min-w-0 overflow-hidden rounded-lg px-2 mb-1"><TrendArea values={visual.values} color={ac} min={visual.min} max={visual.max} zones={visual.zones} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} /></div>
             ) : visual.type === "spark" && insight.sparkValues.length >= 2 ? (
-              <div className="w-full">
+              <div className="w-full min-w-0 overflow-hidden rounded-lg px-2 mb-1">
                 {useZoneArea
                   ? <ZoneAreaChart values={insight.sparkValues} color={ac} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} />
                   : <TrendArea values={insight.sparkValues} color={ac} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} />}
@@ -6516,7 +6525,10 @@ export default function TrackersPage() {
       if (!inScope) return false;
       if (sectionFilter === "profiles" && assetTypeFilter !== "all" && assetTypeLabel(p.type) !== assetTypeFilter) return false;
       const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
-      if (nestingFilter === "all" || nestingFilter === "topLevel") {
+      // QA 2026-09-18 BUG-22: "all" includes nested assets — only the
+      // explicit "Top-level" chip hides them (the type chips and the balance
+      // sheet count them, so "All Types" must too).
+      if (nestingFilter === "topLevel") {
         if (parentIsAsset) return false;
       } else if (nestingFilter === "hasChildren") {
         const hasAssetChild = (profiles || []).some(x => x.id !== p.id && ASSET_TAB_TYPES.has(x.type) && (x.parentProfileId) === p.id);
@@ -6963,10 +6975,10 @@ export default function TrackersPage() {
             const pParent = p.parentProfileId;
             // Include co-owners via asset_party_links (Home shows for Jane).
             if (!isShowAll && !isAssetVisible(p.id, pParent)) return;
-            // Hide nested assets unless the user explicitly chose the
-            // "Nested" chip. "all" / "topLevel" both mean "top-level only".
+            // QA 2026-09-18 BUG-22: nested assets are listed under "all";
+            // only the explicit "Top-level" chip hides them.
             const nestingFilterList = sectionFilter === "profiles" ? assetNestingFilter : "all";
-            if (nestingFilterList === "all" || nestingFilterList === "topLevel") {
+            if (nestingFilterList === "topLevel") {
               if (hasAssetAncestor(p)) return;
             } else if (nestingFilterList === "nested") {
               if (!hasAssetAncestor(p)) return;
@@ -7324,7 +7336,12 @@ export default function TrackersPage() {
           // Asset nesting filter — applies on BOTH the "All" tab and the "Assets" tab.
           const parentIsAssetChain = _hasAssetAncestorCards(p);
           const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
-          if (nestingFilter === "all" || nestingFilter === "topLevel") {
+          // QA 2026-09-18 BUG-22: "All Types" showed 5 cards while the chips
+          // summed to 8 and the balance sheet said 8 — the three nested items
+          // (tires, a screen cover, a mouse) only appeared under "Nested".
+          // Nested assets now show in "all" (with a "part of <parent>" pill);
+          // only the explicit "Top-level" chip hides them.
+          if (nestingFilter === "topLevel") {
             if (parentIsAssetChain) return false;
           } else if (nestingFilter === "hasChildren") {
             const hasAssetChild = (profiles || []).some(x => x.id !== p.id && childTypeSet.has(x.type) && (x.parentProfileId) === p.id);
@@ -7479,6 +7496,9 @@ export default function TrackersPage() {
                                      : (purchaseVal != null && purchaseVal > 0) ? purchaseVal
                                      : null;
                   const valueLabel = (currentVal == null || currentVal === 0) && purchaseVal != null && purchaseVal > 0 ? 'purchase' : null;
+                  // BUG-22: a nested asset names the asset it belongs to.
+                  const nestedParent = child.parentProfileId ? (profiles || []).find(x => x.id === child.parentProfileId) : undefined;
+                  const nestedParentName = nestedParent && ASSET_TAB_TYPES.has(nestedParent.type) ? nestedParent.name : null;
 
                   return (
                     <Link key={child.id} href={`/profiles/${child.id}`} className="block h-full" onMouseEnter={() => warmProfileDetail(child.id)} onTouchStart={() => warmProfileDetail(child.id)}>
@@ -7497,7 +7517,9 @@ export default function TrackersPage() {
                         pills={
                           <>
                             <StatusPill accent={accentHsl} className="capitalize">{child.type}</StatusPill>
-                            {year && <StatusPill tone="neutral">{year}</StatusPill>}
+                            {nestedParentName
+                              ? <StatusPill tone="neutral" className="max-w-[9rem] truncate">↳ {nestedParentName}</StatusPill>
+                              : year && <StatusPill tone="neutral">{year}</StatusPill>}
                           </>
                         }
                         data-testid={`button-view-child-${child.id}`}
@@ -7887,7 +7909,10 @@ export default function TrackersPage() {
                         const linkedNames = (doc.linkedProfiles || []).map((pid: string) => (profiles || []).find(p => p.id === pid)?.name).filter(Boolean);
                         const createdDate = new Date(doc.createdAt);
                         const daysSince = Math.floor((Date.now() - createdDate.getTime()) / 86400000);
-                        const mimeShort = doc.mimeType?.includes('pdf') ? 'PDF' : doc.mimeType?.includes('image') ? 'Image' : doc.mimeType?.includes('word') || doc.mimeType?.includes('doc') ? 'Word' : 'File';
+                        // QA 2026-09-18 BUG-31: same predicate as the viewer's
+                        // "no file attached" card (shared/document-file), so a
+                        // discarded-photo receipt reads "No file", not "Image".
+                        const mimeShort = documentFormatLabel(doc);
                         const docMeta = [
                           { label: "Format", value: mimeShort },
                           { label: "Added", value: createdDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) },
@@ -8335,7 +8360,8 @@ export default function TrackersPage() {
                               // metrics they are. Compact trackers stay
                               // single-column. "col-span-1" is the default —
                               // we only need to override for large.
-                              const span = imp === 'large' ? 'sm:col-span-2 md:col-span-2' : '';
+                              // BUG-27: h-full so the card can stretch to the row's height.
+                              const span = imp === 'large' ? 'sm:col-span-2 md:col-span-2 h-full' : 'h-full';
                               return (
                                 <div key={tracker.id} className={span}>
                                   <TrackerCard tracker={tracker} hideProfilePrefix onDelete={(id) => setDeleteTargetId(id)} onOpenDetail={(id) => setSelectedTrackerId(id)} />

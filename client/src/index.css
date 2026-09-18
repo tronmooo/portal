@@ -53,10 +53,15 @@
   --elevate-2: rgba(0,0,0, .08);
   --background: 40 10% 96%;
   --foreground: 44 23% 14%;
-  --border: 36 8% 85%;
+  /* QA 2026-09-18 BUG-32: light mode read washed out — card borders were
+     near-invisible (L 85%/89% on a 96–97% surface) and the muted labels sat
+     just above the AA line. Borders darkened to L 76% / 80% so a card edge is
+     visible against the page without becoming a rule; muted text to L 36%
+     (≈5.8:1 on --background, ≈5.3:1 on --muted). Dark mode untouched. */
+  --border: 36 8% 76%;
   --card: 45 20% 97%;
   --card-foreground: 44 23% 14%;
-  --card-border: 36 8% 89%;
+  --card-border: 36 8% 80%;
   --sidebar: 40 12% 94%;
   --sidebar-foreground: 44 23% 14%;
   --sidebar-border: 36 8% 87%;
@@ -74,8 +79,10 @@
   --secondary-foreground: 44 23% 14%;
   --muted: 36 6% 92%;
   /* A11y: was 50 3% 47% — only 3.60:1 on --muted and 3.94:1 on --background.
-     L 47%→40% clears WCAG AA 4.5:1 for body text (4.69:1 / 5.13:1). */
-  --muted-foreground: 50 3% 40%;
+     L 47%→40% clears WCAG AA 4.5:1 for body text (4.69:1 / 5.13:1).
+     BUG-32 (2026-09-18): 40%→36% so the header date line, KPI labels and
+     the 11px micro-labels (which also carry opacity) clear AA comfortably. */
+  --muted-foreground: 50 3% 36%;
   --accent: 36 10% 90%;
   --accent-foreground: 44 23% 14%;
   --destructive: 0 84% 42%;

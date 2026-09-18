@@ -647,6 +647,7 @@ function panelsFor(metrics: Map<string, MetricSeries>, wanted: MetricPanel[]): L
     rows.sort((a, b) => (concern(a) ? 0 : 1) - (concern(b) ? 0 : 1) || a.label.localeCompare(b.label));
     panels.push({
       panel, label: PANEL_LABELS[panel], rows,
+      // "elevated" and "high"/"low" count; a good-side label ("Athletic") does not.
       outOfRange: rows.filter(concern).length,
     });
   }
@@ -906,10 +907,10 @@ export function weeklyBrief(input: BriefInput): string[] {
     out.push(`You trained ${sessions} time${sessions === 1 ? "" : "s"} this week — mostly ${types}.`);
   }
 
-  const flagged = labs.flatMap((p) => p.rows.filter((r) => r.flag === "low" || r.flag === "high"));
+  const flagged = labs.flatMap((p) => p.rows.filter((r) => r.flag === "low" || r.flag === "high" || r.flag === "elevated"));
   if (flagged.length > 0) {
     const first = flagged[0];
-    const dir = first.flag === "high" ? "above" : "below";
+    const dir = first.flag === "high" || first.flag === "elevated" ? "above" : "below";
     out.push(
       flagged.length === 1
         ? `One lab value is out of range: ${first.label} at ${round1(first.value)} ${first.unit}, ${dir} the reference range.`

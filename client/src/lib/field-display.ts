@@ -136,3 +136,47 @@ export function formatLineItem(item: any): string {
 export function formatLineItems(value: any[]): string {
   return value.map(formatLineItem).filter(Boolean).join(" · ");
 }
+
+// ── Money-typed extracted fields ─────────────────────────────────────────────
+// QA 2026-09-18: a receipt's line items read "Iced Latte — $4.75" while the
+// totals beside them read "TAX 1.66" and "SUBTOTAL 17.5" — bare numbers,
+// because `stringifyField` has no idea what a key means. The key tells us: a
+// field named tax / subtotal / total / amount / price / fee … holding a
+// number is money, and prints with the same two-decimal formatter the line
+// items use. Anything else is untouched.
+const MONEY_KEY_RE =
+  /(^|[_\s-])(total|subtotal|sub_total|tax|taxes|tip|gratuity|amount|amount_due|amount_paid|price|cost|fee|fees|balance|premium|deductible|copay|co_pay|payment|charge|charges|discount|due|paid|refund|credit|debit|shipping|surcharge|change)([_\s-]|$)/i;
+// "taxId", "payment_method", "due_date", "credit_score": the money word names
+// something ABOUT the money, not an amount.
+const NOT_AMOUNT_RE = /[_\s-](id|number|no|num|code|rate|pct|percent|year|date|day|status|type|method|name|term|terms|score|limit|account|label)([_\s-]|$)/i;
+
+export function isMoneyFieldKey(key: string): boolean {
+  if (!key) return false;
+  const k = key.replace(/([a-z0-9])([A-Z])/g, "$1_$2");
+  return MONEY_KEY_RE.test(k) && !NOT_AMOUNT_RE.test(k);
+}
+
+/** A number, or a numeric string with money punctuation ("$1,234.50"), as a number; else null. */
+function moneyNumber(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") {
+    const t = value.trim();
+    if (!/^-?\$?\s?-?[\d,]*\.?\d+$/.test(t)) return null;
+    const n = Number(t.replace(/[$,\s]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/**
+ * `stringifyField`, but a money-keyed numeric value prints as money
+ * ("SUBTOTAL 17.5" → "$17.50"). Use wherever a key is known.
+ */
+export function stringifyFieldFor(key: string, value: any): string {
+  if (isMoneyFieldKey(key)) {
+    const unwrapped = value && typeof value === "object" && !Array.isArray(value) && "value" in value ? (value as any).value : value;
+    const n = moneyNumber(unwrapped);
+    if (n !== null) return formatMoneyCents(n);
+  }
+  return stringifyField(value);
+}

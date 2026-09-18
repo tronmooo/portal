@@ -14,7 +14,7 @@
 // shared with the Trackers tab.
 import { sumMonthIncomeNow } from "@shared/obligation-windows";
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { useState, useMemo, lazy, Suspense } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect, lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 // hashNavigate handles query-carrying targets ("/linked?tab=documents") correctly
 // under hash routing (see HubShell.tsx note).
@@ -29,8 +29,11 @@ import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-d
 import type { DashboardStats, Tracker } from "@shared/schema";
 import { MetricCard } from "@/components/ui/metric-card";
 import { formatMoneyRound } from "@/lib/format";
+import { countTasksByDay } from "@shared/task-counts";
+import { isTestDataRow } from "@shared/test-data";
+import { useShowTestData } from "@/lib/showTestData";
 import { HUB_TABS } from "./hub-routes";
-import { Wallet, ArrowLeftRight, HeartPulse, Flame, CheckCircle2, FileText } from "lucide-react";
+import { Wallet, ArrowLeftRight, HeartPulse, Flame, CheckCircle2, FileText, ChevronLeft, ChevronRight } from "lucide-react";
 
 // Drill-down popups — the SAME components the dashboard uses (user rule:
 // every stat opens its existing popup; never duplicate one). Lazy-loaded:
@@ -141,6 +144,19 @@ export function HubKpiStrip() {
     staleTime: 60_000,
     placeholderData: undefined,
   });
+  // TASKS DUE — the SAME cache slot and the SAME counting rule as the
+  // Executive tab's Tasks card (QA 2026-09-18 BUG-10: the chip said "9 · 5
+  // late" while the card said "8 Remaining · 4 Overdue"; the chip read
+  // /api/stats + /api/dashboard-enhanced, two older snapshots, and stayed
+  // wrong through two reloads). Key shape ["/api/tasks", mode, ...ids] is
+  // what ExecutiveBriefing/TasksPopup use, so one invalidation refreshes all.
+  const { data: tasksRaw } = useQuery<any[]>({
+    queryKey: ["/api/tasks", mode, ...ids],
+    queryFn: () => apiRequest("GET", `/api/tasks${param}`).then(r => r.json()),
+    staleTime: 30_000,
+    placeholderData: undefined,
+  });
+  const showTestData = useShowTestData();
   const { data: trackers, isPending: trackersPending } = useQuery<Tracker[]>({
     queryKey: ["/api/trackers", mode, ...ids],
     queryFn: () => apiRequest("GET", `/api/trackers${param}`).then(r => r.json()),
@@ -217,8 +233,18 @@ export function HubKpiStrip() {
       ? Math.max(0, ...(stats.streaks || []).map(s => s.days || 0), stats.journalStreak || 0)
       : null;
 
-  const tasksDue = stats?.activeTasks;
-  const tasksLate: number = (enhanced?.overdueTasks || []).length;
+  const taskCounts = useMemo(() => {
+    if (!Array.isArray(tasksRaw)) return null;
+    // "Hide test data" (default) — the card hides the same rows.
+    const rows = showTestData ? tasksRaw : tasksRaw.filter((t: any) => !isTestDataRow(t?.title) && !isTestDataRow(t?.description));
+    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+    return countTasksByDay(rows, todayStr, BROWSER_TIMEZONE);
+  }, [tasksRaw, showTestData]);
+  // Remaining = every open task (dated or not), exactly the card's "Remaining".
+  const tasksDue = taskCounts
+    ? taskCounts.overdue + taskCounts.dueToday + taskCounts.upcoming + taskCounts.undated
+    : stats?.activeTasks;
+  const tasksLate: number = taskCounts ? taskCounts.overdue : (enhanced?.overdueTasks || []).length;
 
   // DOCS EXP — the rows the popup will list, counted the way it lists them.
   //
@@ -259,23 +285,42 @@ export function HubKpiStrip() {
   const [stripRef, clipped] = useOverflowX<HTMLDivElement>([
     netWorth, cashFlow, health, streak, tasksDue, tasksLate, expDocs.length, minDocDays,
   ]);
+  // QA 2026-09-18 BUG-28: at 1442px the strip ended mid-word ("5 lat") with
+  // the DOCS EXP chip off-screen and nothing saying so — it scrolled, but the
+  // mask fade was subtle and there were no controls. Now: a gradient on the
+  // overflowing edge(s) plus arrow buttons that page the strip.
+  const [atStart, setAtStart] = useState(true);
+  const [atEnd, setAtEnd] = useState(true);
+  const readEdges = useCallback(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    setAtStart(el.scrollLeft <= 1);
+    setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+  }, [stripRef]);
+  useEffect(() => { readEdges(); }, [clipped, readEdges]);
+  const page = (dir: 1 | -1) => {
+    const el = stripRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.max(120, Math.round(el.clientWidth * 0.6)), behavior: "smooth" });
+  };
+  const showLeft = clipped && !atStart;
+  const showRight = clipped && !atEnd;
 
   return (
-    // Horizontal scroll with an edge fade so cut-off chips read as "more to
-    // the right" instead of a broken layout at narrow widths — but only when
-    // something is genuinely cut off. On a desktop the six chips fit and share
-    // the full width, and fading the last one there just looked like a bug.
-    // Phone (<sm): one scrolling row, snapping chip to chip, with the fade as
-    // the "more this way" cue. sm and up: the row WRAPS instead — six chips at
-    // 915px sliced "TASKS DUE" mid-word and hid "DOCS EXP" entirely behind a
-    // hidden scrollbar with nothing to say so (QA 2026-09-18, F-61). Every
-    // chip keeps min-w-fit, so no label is ever cut.
+    <div className="relative" data-testid="hub-kpi-strip-wrap">
+    {/* Phone (<sm): one scrolling row, snapping chip to chip. The gradient +
+        arrow on an edge mean "more chips this way", and appear only when
+        something is genuinely cut off (QA 2026-09-18 BUG-28). sm and up: the
+        row WRAPS instead — six chips at 915px sliced "TASKS DUE" mid-word and
+        hid "DOCS EXP" entirely behind a hidden scrollbar with nothing to say
+        so (QA 2026-09-18 F-61). Every chip keeps min-w-fit, so no label is
+        ever cut. */}
     <div
       ref={stripRef}
-      className={`flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar snap-x snap-mandatory sm:flex-wrap sm:overflow-x-visible sm:snap-none ${
-        clipped ? "[mask-image:linear-gradient(to_right,black_calc(100%-20px),transparent)]" : ""
-      }`}
+      onScroll={readEdges}
+      className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar scroll-smooth snap-x snap-mandatory sm:flex-wrap sm:overflow-x-visible sm:snap-none"
       data-testid="hub-kpi-strip"
+      data-clipped={clipped ? "true" : "false"}
     >
       <StatChip
         icon={Wallet}
@@ -347,6 +392,27 @@ export function HubKpiStrip() {
             stands for. The chip's count above is derived the same way. */}
         {popup === "docs" && <DocsPopup open onClose={() => setPopup(null)} docs={rawExpDocs} />}
       </Suspense>
+    </div>
+    {showLeft && (
+      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center" data-testid="hub-kpi-fade-left">
+        <div className="absolute inset-y-0 left-0 w-12 bg-gradient-to-r from-background to-transparent" aria-hidden="true" />
+        <button type="button" onClick={() => page(-1)} aria-label="Scroll stats left"
+          className="pointer-events-auto relative ml-0.5 h-7 w-7 rounded-full border border-border bg-background/95 shadow-sm flex items-center justify-center text-muted-foreground hover:text-foreground"
+          data-testid="hub-kpi-scroll-left">
+          <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+    )}
+    {showRight && (
+      <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center justify-end" data-testid="hub-kpi-fade-right">
+        <div className="absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-background to-transparent" aria-hidden="true" />
+        <button type="button" onClick={() => page(1)} aria-label="Scroll stats right"
+          className="pointer-events-auto relative mr-0.5 h-7 w-7 rounded-full border border-border bg-background/95 shadow-sm flex items-center justify-center text-muted-foreground hover:text-foreground"
+          data-testid="hub-kpi-scroll-right">
+          <ChevronRight className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+    )}
     </div>
   );
 }

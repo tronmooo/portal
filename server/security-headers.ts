@@ -72,7 +72,17 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
+  // Mirrors the document-route header in vercel.json so API and SPA responses agree.
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Content-Security-Policy', contentSecurityPolicyFor(process.env.NODE_ENV));
+  // API responses are per-user and carry PII. Without an explicit directive a
+  // browser (or a shared cache in front of us) may heuristically cache a GET,
+  // so the next person at a shared machine could see the previous user's data
+  // via the back button. Handlers that want revalidation (the document bytes
+  // route sets its own ETag + `no-cache`) override this after the fact.
+  if (req.path.startsWith('/api/') || req.baseUrl === '/api') {
+    res.setHeader('Cache-Control', 'no-store');
+  }
   next();
 }
 

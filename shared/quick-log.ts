@@ -174,7 +174,14 @@ export function buildTurnRecap(ops: RecapOp[]): string {
     const o = ok[0];
     blocks.push(TRACKER_TOOLS.has(o.tool) ? `Logged ${record(o)}` : record(o));
   } else if (ok.length > 0) {
-    blocks.push([`Logged ${ok.length} of ${ops.length}:`, ...ok.map((o) => `- ${record(o)}`)].join("\n"));
+    // QA 2026-09-18 BUG-33: "Logged 2 of 2:" read as a score, not a
+    // sentence. When everything landed, say how many things were logged;
+    // "N of M" is kept only for the partial case, where the ratio is the
+    // point.
+    const header = ok.length === ops.length
+      ? `Logged ${ok.length} item${ok.length === 1 ? "" : "s"}:`
+      : `Logged ${ok.length} of ${ops.length}:`;
+    blocks.push([header, ...ok.map((o) => `- ${record(o)}`)].join("\n"));
   }
   for (const o of deduped) blocks.push(`↩️ ${o.label} — already logged just now, kept the existing entry`);
   if (created.length > 0) {

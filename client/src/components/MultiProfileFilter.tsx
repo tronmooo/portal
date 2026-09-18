@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/sheet";
 import {
   getProfileFilter, setFilterEveryone, setFilterSelected, toggleFilterProfile,
-  subscribeProfileFilter,
+  subscribeProfileFilter, refreshFilterNames,
   type FilterMode,
 } from "@/lib/profileFilter";
 import { Filter, Users, User, Dog, Car, CreditCard, Package, Stethoscope, Building, Landmark, ChevronDown, X } from "lucide-react";
@@ -178,10 +178,23 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
       return newName;
     });
     if (nameChanged) {
-      setFilterSelected([...current.selectedIds], refreshedNames);
+      // QA 2026-09-18 BUG-01: a label refresh is not a scope change. This used
+      // to call setFilterSelected — a full scope write (broadcast + re-warm)
+      // on every profiles refetch — which is exactly the kind of implicit
+      // writer that let the active profile drift without a click.
+      refreshFilterNames(profiles);
       notify();
     }
   }, [profiles]);
+
+  // Row click = "just this person" (replace); the checkbox = add/remove from a
+  // multi-selection. Same model as the hub's "My dashboard" switcher, so the
+  // two pickers that edit ONE scope no longer disagree about what a click
+  // means (QA 2026-09-18 BUG-01b: here a row used to ADD, there it REPLACED).
+  const handleSelectOnly = useCallback((id: string, name: string) => {
+    setFilterSelected([id], [name]);
+    notify();
+  }, [notify]);
 
   const sorted = useMemo(() => {
     const typeFiltered = (profiles || []).filter(p => {
@@ -281,16 +294,21 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
             className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left text-sm transition-all active:scale-[0.97] ${
               checked ? 'bg-primary/10 font-medium border border-primary/30' : 'hover:bg-accent active:bg-accent border border-transparent'
             }`}
-            onClick={() => handleToggle(p.id, p.name)}
+            onClick={() => handleSelectOnly(p.id, p.name)}
             onMouseEnter={() => prefetchProfileDashboard(p.id)}
             onTouchStart={() => prefetchProfileDashboard(p.id)}
             data-testid={`filter-profile-${p.id}`}
+            title={`Show only ${p.name} — use the checkbox to add or remove`}
             style={{ minHeight: '52px', WebkitTapHighlightColor: 'transparent' }}
           >
+            {/* The checkbox is the multi-select control: it toggles this
+                person in/out without touching the rest of the selection. */}
             <Checkbox
               checked={checked}
-              className="h-5 w-5 pointer-events-none shrink-0"
-              tabIndex={-1}
+              aria-label={`Include ${p.name}`}
+              className="h-5 w-5 shrink-0"
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleToggle(p.id, p.name); }}
+              data-testid={`filter-profile-toggle-${p.id}`}
             />
             <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
             <span className="flex-1 truncate">{p.name}</span>

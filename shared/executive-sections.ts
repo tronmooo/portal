@@ -24,6 +24,7 @@
 // display.
 
 import { computeAttention, BIRTHDAY_RE, type AttentionItem, type AttentionInputs, type AttentionConfig } from "./attention";
+import { relativeTimeShort } from "./relative-time";
 import { ruleClaimKey, dateRuleVerbs, DOC_UPCOMING_WINDOW_DAYS, type DateRuleType } from "./date-rules";
 import { dayLabel } from "./now-rank";
 import { isHabitDueOn, isHabitDoneOn } from "./habit-schedule";
@@ -280,16 +281,10 @@ function timeLabel(t: string | null | undefined): string {
   return `${hour}:${String(m).padStart(2, "0")}${suffix}`;
 }
 
+// QA 2026-09-18 BUG-15: shared/relative-time — a bare "2026-09-18" is today,
+// not "14h ago", and a future date reads "in 3 weeks", never "0m".
 function relTime(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const t = new Date(iso).getTime();
-  if (isNaN(t)) return "";
-  const mins = Math.round((Date.now() - t) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  return relativeTimeShort(iso);
 }
 
 // ── The router ───────────────────────────────────────────────────────────────

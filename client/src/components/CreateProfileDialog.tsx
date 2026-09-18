@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import ProfileTypeSelector from "@/components/registry/ProfileTypeSelector";
-import { coerceRegistryFields } from "@shared/registry-fields";
+import { coerceRegistryFields, missingRequiredFields } from "@shared/registry-fields";
 import type { TypeDefinition } from "@/components/registry/ProfileTypeSelector";
 import DynamicProfileForm from "@/components/registry/DynamicProfileForm";
 import { Button } from "@/components/ui/button";
@@ -102,6 +102,9 @@ export function CreateProfileDialog({
   const [tagsInput, setTagsInput] = useState("");
   const [notes, setNotes] = useState("");
   const [dupWarning, setDupWarning] = useState<{ name: string; type: string; payload: any } | null>(null);
+  // QA 2026-09-18 BUG-12: required registry fields the last submit found
+  // empty — outlined in the form until they are filled.
+  const [missingKeys, setMissingKeys] = useState<string[]>([]);
 
   const createMutation = useMutation({
     mutationFn: async (payload: InsertProfile & { type_key?: string; skipDupCheck?: boolean }) => {
@@ -144,6 +147,7 @@ export function CreateProfileDialog({
     setFields({});
     setTagsInput("");
     setNotes("");
+    setMissingKeys([]);
     onClose();
   };
 
@@ -178,6 +182,22 @@ export function CreateProfileDialog({
       toast({ title: "Profile type is required", variant: "destructive" });
       return;
     }
+    // QA 2026-09-18 BUG-12: the fields the form marks with a red asterisk
+    // are enforced by the same schema flag (shared/registry-fields). Block
+    // the save, outline the empty ones and say which they are.
+    const missing = missingRequiredFields(selectedTypeDef.field_schema as any, fields);
+    if (missing.length > 0) {
+      setMissingKeys(missing.map((f) => f.key));
+      toast({
+        title: "Fill in the required fields",
+        description: missing.map((f) => f.label || f.key).join(", "),
+        variant: "destructive",
+      });
+      const first = document.getElementById(missing[0].key);
+      if (first && typeof (first as HTMLElement).focus === "function") (first as HTMLElement).focus();
+      return;
+    }
+    setMissingKeys([]);
     const tags = tagsInput
       .split(",")
       .map((t) => t.trim())
@@ -268,8 +288,15 @@ export function CreateProfileDialog({
                   <DynamicProfileForm
                     fieldSchema={selectedTypeDef.field_schema}
                     values={fields}
-                    onChange={setFields}
+                    onChange={(next) => {
+                      setFields(next);
+                      // A field cleared of its error the moment it is filled.
+                      if (missingKeys.length > 0) {
+                        setMissingKeys(missingRequiredFields(selectedTypeDef.field_schema as any, next).map((f) => f.key).filter((k) => missingKeys.includes(k)));
+                      }
+                    }}
                     disabled={createMutation.isPending}
+                    invalidKeys={missingKeys}
                   />
                 </div>
               )}

@@ -325,16 +325,8 @@ export function isSatisfiedExpectedPaycheck(p: PaycheckIdentityInput, all: Reado
   return (all || []).some((other) => paycheckSatisfiedBy(p, other));
 }
 
-/** Expected paychecks past their day, not received and not covered by a received twin. */
-export function latePaychecks<T extends PaycheckIdentityInput>(paychecks: ReadonlyArray<T> | null | undefined, todayISO: string): T[] {
-  const all = paychecks || [];
-  return all.filter((p) => {
-    if (isReceivedPaycheck(p)) return false;
-    const day = expectedDay(p);
-    if (!day || day >= todayISO) return false;
-    return !isSatisfiedExpectedPaycheck(p, all);
-  });
-}
+// latePaychecks (past its day, unconfirmed, not covered by a confirmed twin)
+// lives below, on top of reconcileExpectedPaychecks — one pairing rule.
 
 /** What a paycheck row should say. */
 export function paycheckStatus(p: PaycheckIdentityInput, all: ReadonlyArray<PaycheckIdentityInput> | null | undefined, todayISO: string): "received" | "satisfied" | "upcoming" | "overdue" {
@@ -395,6 +387,262 @@ export function sumMonthIncomeNow(
   timezone: string,
 ): number {
   return sumMonthIncome(incomes, paychecks, getUserCurrentMonth(timezone), getUserToday(timezone));
+}
+
+// ─── Income received TO DATE (QA 2026-09-18 BUG-05) ──────────────────────────
+//
+// `sumMonthIncome` is the month's EXPECTED income: every stream's monthly
+// equivalent plus the paychecks that landed. INCOME · MTD, the Cash Flow IN
+// leg and the savings rate were reading that figure, so a "Monthly Paycheck"
+// whose first pay day is the 30th counted in full on the 18th, while spend is
+// actuals only — cash flow read ~$3,000 too optimistic and the alerts panel
+// congratulated the user on a 51% savings rate funded by money that had not
+// arrived. Month-to-date income is what has actually been received:
+//   • a received paycheck (confirmed) — in the month it landed;
+//   • a recurring stream's occurrences whose pay day is on or before today;
+//   • a one-time income dated on or before today.
+// The projection stays available as `sumMonthIncome` for a clearly labelled
+// "expected this month" figure.
+
+export interface IncomeStreamInput {
+  id?: string | null;
+  amount?: number | string | null;
+  frequency?: string | null;
+  /** First pay day (YYYY-MM-DD). */
+  date?: string | null;
+  description?: string | null;
+}
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}/;
+
+/** Whole days from `a` to `b` (both YYYY-MM-DD); negative when b is earlier. */
+function daysBetween(a: string, b: string): number {
+  const ms = Date.UTC(Number(b.slice(0, 4)), Number(b.slice(5, 7)) - 1, Number(b.slice(8, 10)))
+    - Date.UTC(Number(a.slice(0, 4)), Number(a.slice(5, 7)) - 1, Number(a.slice(8, 10)));
+  return Math.round(ms / MS_PER_DAY);
+}
+
+/** Period length for a day-based cadence, or null for a month-based one. */
+function periodDays(frequency?: string | null): number | null {
+  switch (canonicalIncomeFrequency(frequency) ?? "monthly") {
+    case "daily": return 1;
+    case "weekly": return 7;
+    case "biweekly": return 14;
+    case "semimonthly": return 15;
+    default: return null;
+  }
+}
+
+/** Period length in months for a month-based cadence (1 for unknown/custom). */
+function periodMonths(frequency?: string | null): number {
+  switch (canonicalIncomeFrequency(frequency) ?? "monthly") {
+    case "bimonthly": return 2;
+    case "quarterly": return 3;
+    case "semiannual": return 6;
+    case "yearly": return 12;
+    default: return 1;
+  }
+}
+
+/**
+ * The pay days of a recurring stream that fall inside `ym`, on or before
+ * `throughDay` when given. The anchor is the stream's first pay day; earlier
+ * months produce nothing. Jumps straight to the first occurrence on or after
+ * the month start instead of stepping day by day from a years-old anchor.
+ */
+export function incomeOccurrenceDaysInMonth(
+  income: IncomeStreamInput | null | undefined,
+  ym: string,
+  throughDay?: string | null,
+): string[] {
+  const anchorRaw = income?.date;
+  if (typeof anchorRaw !== "string" || !DAY_RE.test(anchorRaw)) return [];
+  const anchor = anchorRaw.slice(0, 10);
+  if (!/^\d{4}-\d{2}$/.test(ym)) return [];
+  const monthStart = `${ym}-01`;
+  const end = monthEndDay(ym);
+  const last = throughDay && DAY_RE.test(throughDay) && throughDay.slice(0, 10) < end ? throughDay.slice(0, 10) : end;
+  if (anchor > last) return [];
+  const freq = canonicalIncomeFrequency(income?.frequency) ?? "monthly";
+  if (freq === "once") return anchor >= monthStart && anchor <= last ? [anchor] : [];
+
+  let day: string | null;
+  const pd = periodDays(freq);
+  if (pd != null) {
+    const gap = daysBetween(anchor, monthStart);
+    const n = gap <= 0 ? 0 : Math.ceil(gap / pd);
+    // Jump n periods in one go rather than stepping from the anchor.
+    const t = new Date(Date.UTC(Number(anchor.slice(0, 4)), Number(anchor.slice(5, 7)) - 1, Number(anchor.slice(8, 10)) + n * pd));
+    day = t.toISOString().slice(0, 10);
+  } else {
+    const pm = periodMonths(freq);
+    const monthsGap = (Number(ym.slice(0, 4)) - Number(anchor.slice(0, 4))) * 12 + (Number(ym.slice(5, 7)) - Number(anchor.slice(5, 7)));
+    const n = monthsGap <= 0 ? 0 : Math.ceil(monthsGap / pm);
+    day = anchor;
+    for (let i = 0; i < n; i++) day = nextOccurrenceDay(day!, freq);
+    // A monthly stream anchored on the 31st clamps to short months and the
+    // clamp must not drift: re-derive from the anchor's own day-of-month.
+    if (day && n > 0) {
+      const target = new Date(Date.UTC(Number(anchor.slice(0, 4)), Number(anchor.slice(5, 7)) - 1 + n * pm, 1));
+      const len = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+      const dd = Math.min(Number(anchor.slice(8, 10)), len);
+      day = `${target.getUTCFullYear()}-${String(target.getUTCMonth() + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+    }
+  }
+  const out: string[] = [];
+  for (let i = 0; day && day <= last && i < MAX_OCCURRENCES_PER_MONTH; i++) {
+    if (day >= monthStart) out.push(day);
+    day = nextOccurrenceDay(day, freq);
+  }
+  return out;
+}
+
+/**
+ * Recurring-stream income that has actually been paid out in `ym` on or
+ * before `throughDay`: the face amount of every occurrence that has fallen
+ * due, plus one-time incomes dated on or before that day. A stream with no
+ * pay day on record cannot be placed inside the month, so it keeps its
+ * monthly equivalent (the pre-existing behaviour) rather than vanishing.
+ */
+export function sumMonthlyIncomeToDate(
+  incomes: ReadonlyArray<IncomeStreamInput> | null | undefined,
+  ym: string,
+  throughDay: string,
+): number {
+  let total = 0;
+  for (const i of incomes || []) {
+    const amount = Number(i?.amount) || 0;
+    if (!amount) continue;
+    const hasDay = typeof i?.date === "string" && DAY_RE.test(i.date);
+    if (!hasDay) {
+      const start = typeof i?.date === "string" && /^\d{4}-\d{2}/.test(i.date) ? i.date.slice(0, 7) : null;
+      if (canonicalIncomeFrequency(i?.frequency) === "once") {
+        if (start === ym && ym <= throughDay.slice(0, 7)) total += amount;
+        continue;
+      }
+      if (start && start > ym) continue;
+      total += toMonthlyAmount(amount, i?.frequency);
+      continue;
+    }
+    total += amount * incomeOccurrenceDaysInMonth(i, ym, throughDay).length;
+  }
+  return total;
+}
+
+/** Two amounts within a cent of each other are one amount. */
+const SAME_AMOUNT_TOLERANCE = 0.005;
+
+/**
+ * A recurring stream's occurrence that a received paycheck already covers:
+ * same pay day, same amount. Counting both would book one deposit twice
+ * (the "Monthly Income" stream's Sep 9 occurrence AND the received "Employer"
+ * paycheck for Sep 9, $2,000).
+ */
+function occurrenceCoveredByPaycheck(day: string, amount: number, received: ReadonlyArray<ReceivedPaycheckInput>): boolean {
+  return received.some((p) => paycheckReceivedDay(p) === day && Math.abs(paycheckAmount(p) - amount) <= SAME_AMOUNT_TOLERANCE);
+}
+
+/**
+ * THE month-to-date income figure: paychecks received in `ym` plus the
+ * recurring / one-time income whose pay day has arrived, with an occurrence a
+ * received paycheck already covers counted once. INCOME · MTD, Cash Flow IN
+ * and the savings rate read this; `sumMonthIncome` is the projection.
+ */
+export function sumMonthIncomeToDate(
+  incomes: ReadonlyArray<IncomeStreamInput> | null | undefined,
+  paychecks: ReadonlyArray<ReceivedPaycheckInput> | null | undefined,
+  ym: string,
+  throughDay: string,
+): number {
+  const received = (paychecks || []).filter((p) => isReceivedPaycheck(p) && (paycheckReceivedDay(p) || "").slice(0, 7) === ym);
+  let total = 0;
+  for (const p of received) total += paycheckAmount(p);
+  for (const i of incomes || []) {
+    const amount = Number(i?.amount) || 0;
+    if (!amount) continue;
+    if (!(typeof i?.date === "string" && DAY_RE.test(i.date))) {
+      total += sumMonthlyIncomeToDate([i], ym, throughDay);
+      continue;
+    }
+    for (const day of incomeOccurrenceDaysInMonth(i, ym, throughDay)) {
+      if (occurrenceCoveredByPaycheck(day, amount, received)) continue;
+      total += amount;
+    }
+  }
+  return total;
+}
+
+/** `sumMonthIncomeToDate` for the user's current month, through today. */
+export function sumMonthIncomeToDateNow(
+  incomes: ReadonlyArray<IncomeStreamInput> | null | undefined,
+  paychecks: ReadonlyArray<ReceivedPaycheckInput> | null | undefined,
+  timezone: string,
+): number {
+  return sumMonthIncomeToDate(incomes, paychecks, getUserCurrentMonth(timezone), getUserToday(timezone));
+}
+
+// ─── Expected-paycheck reconciliation (QA 2026-09-18 BUG-07) ─────────────────
+//
+// Two expected-paycheck rows for one deposit — "Employer · Sep 9 · $2,000 ·
+// Received" and "Monthly Income · Sep 9 · $2,000 · Overdue" — are one paycheck
+// logged twice (the AI's projection and the user's own row). The unreceived
+// twin sat in the list as Overdue and fed the "past its date and not marked
+// received" alert while the money was demonstrably in. A pending row whose
+// date and amount match a received one is treated as received (matched).
+
+export interface ExpectedPaycheckRow extends ReceivedPaycheckInput {
+  id?: string | null;
+  source?: string | null;
+}
+
+export interface ReconciledPaycheck<T extends ExpectedPaycheckRow = ExpectedPaycheckRow> {
+  paycheck: T;
+  /** True when the row is confirmed OR covered by a confirmed twin. */
+  received: boolean;
+  /** The confirmed row that covers this pending one, when matched. */
+  matchedTo: T | null;
+}
+
+/** The day a paycheck is (or was) expected: its expected date, else the received date. */
+function paycheckExpectedDay(p: ReceivedPaycheckInput | null | undefined): string | null {
+  const raw = p?.expected_date ?? p?.expectedDate ?? p?.received_date ?? p?.receivedDate;
+  return typeof raw === "string" && DAY_RE.test(raw) ? raw.slice(0, 10) : null;
+}
+
+/**
+ * Pair each pending expected paycheck with a confirmed one on the same
+ * expected day for the same amount. Each confirmed row covers at most one
+ * pending twin, so two genuinely separate deposits still need two receipts.
+ */
+export function reconcileExpectedPaychecks<T extends ExpectedPaycheckRow>(
+  paychecks: ReadonlyArray<T> | null | undefined,
+): ReconciledPaycheck<T>[] {
+  const rows = paychecks || [];
+  const confirmed = rows.filter((p) => isReceivedPaycheck(p));
+  const claimed = new Set<T>();
+  return rows.map((p) => {
+    if (isReceivedPaycheck(p)) return { paycheck: p, received: true, matchedTo: null };
+    const day = paycheckExpectedDay(p);
+    const amount = paycheckAmount(p);
+    const twin = day
+      ? confirmed.find((c) => !claimed.has(c) && paycheckExpectedDay(c) === day && Math.abs(paycheckAmount(c) - amount) <= SAME_AMOUNT_TOLERANCE)
+      : undefined;
+    if (twin) { claimed.add(twin); return { paycheck: p, received: true, matchedTo: twin }; }
+    return { paycheck: p, received: false, matchedTo: null };
+  });
+}
+
+/**
+ * Expected paychecks that are genuinely late: past their date, not marked
+ * received, and not covered by a received twin. Feeds the Finance alert.
+ */
+export function latePaychecks<T extends ExpectedPaycheckRow>(
+  paychecks: ReadonlyArray<T> | null | undefined,
+  todayISO: string,
+): T[] {
+  return reconcileExpectedPaychecks(paychecks)
+    .filter((r) => !r.received && (paycheckExpectedDay(r.paycheck) || "") < todayISO.slice(0, 10))
+    .map((r) => r.paycheck);
 }
 
 // ─── Bill money still owed this month ────────────────────────────────────────

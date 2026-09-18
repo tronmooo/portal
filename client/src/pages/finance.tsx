@@ -19,7 +19,7 @@ import { formatMoney, formatListDate } from "@/lib/format";
 import { parseHighlight, stripHighlight, HIGHLIGHT_MS } from "@shared/record-highlight";
 import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
-import { toMonthlyAmount, sumMonthIncomeNow, canonicalIncomeFrequency, latePaychecks as latePaychecksOf, paycheckStatus } from "@shared/obligation-windows";
+import { toMonthlyAmount, sumMonthIncomeToDateNow, canonicalIncomeFrequency, latePaychecks, reconcileExpectedPaychecks, paycheckStatus } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -1303,13 +1303,19 @@ export default function FinancePage() {
         // counted a paid bill twice (paying one writes an expense) and pulled
         // next month's bills into this month. The snapshot fields are the
         // authority; the client fallbacks only cover an older cached payload.
+        // QA 2026-09-18 BUG-05: month-to-date income is money that has
+        // ARRIVED (snapshot.monthlyIncome is received-to-date now). The
+        // full-month expectation is `projectedIncome`, shown as a labelled
+        // aside, never as the headline.
         const monthlyIncome = snap.monthlyIncome != null
           ? Number(snap.monthlyIncome) || 0
-          : sumMonthIncomeNow(incomes || [], paychecks || [], BROWSER_TIMEZONE);
+          : sumMonthIncomeToDateNow(incomes || [], paychecks || [], BROWSER_TIMEZONE);
+        const projectedIncome = snap.projectedIncome != null ? Number(snap.projectedIncome) || 0 : null;
         // The one-off part of this month's income, so the card can say what
         // the figure is made of (the snapshot's recurringIncome includes it).
+        // Dated on or before today — a bonus due next week has not arrived.
         const oneTimeIncomeNow = (incomes || []).reduce((sum: number, i: any) =>
-          canonicalIncomeFrequency(i?.frequency) === "once" && String(i?.date || "").slice(0, 7) === ymNowTop ? sum + (Number(i?.amount) || 0) : sum, 0);
+          canonicalIncomeFrequency(i?.frequency) === "once" && String(i?.date || "").slice(0, 7) === ymNowTop && String(i?.date || "").slice(0, 10) <= todayLocalISO ? sum + (Number(i?.amount) || 0) : sum, 0);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const billsStillOwed = Number(snap.unpaidBillsThisMonth ?? snap.monthlyObligationTotal ?? 0) || 0;
         const cashOut = spendMtd + billsStillOwed;
@@ -1343,11 +1349,11 @@ export default function FinancePage() {
         // An expected paycheck whose date has passed and that was never marked
         // received. Two of them sat overdue in the list while nothing above it
         // said a word. One that a received row for the same day and amount
-        // already covers is satisfied, not late (F-14).
-        const latePaychecks = latePaychecksOf(paychecks || [], todayLocalISO);
-        if (latePaychecks.length > 0) alerts.push({
+        // already covers is satisfied, not late (F-14 / BUG-07).
+        const lateRows = latePaychecks(paychecks || [], todayLocalISO);
+        if (lateRows.length > 0) alerts.push({
           id: "paychecks-late", tone: "warn",
-          text: `${latePaychecks.length} expected paycheck${latePaychecks.length > 1 ? "s are" : " is"} past its date and not marked received ($${latePaychecks.reduce((sum: number, pc: any) => sum + (Number(pc.actual_amount ?? pc.amount) || 0), 0).toLocaleString()}).`,
+          text: `${lateRows.length} expected paycheck${lateRows.length > 1 ? "s are" : " is"} past its date and not marked received (${formatMoney(lateRows.reduce((sum: number, pc: any) => sum + (Number(pc.actual_amount ?? pc.amount) || 0), 0))}).`,
           onClick: () => setShowMore(true),
         });
         const soonBill = upcomingBillsList.filter((b: any) => b.daysUntil >= 0 && b.daysUntil <= 7);
@@ -1375,7 +1381,8 @@ export default function FinancePage() {
             spendTrendPct={typeof snap.spendTrend === "number" ? snap.spendTrend : null}
             incomeMtd={monthlyIncome}
             incomeParts={snap.recurringIncome != null && snap.receivedPaycheckIncome != null
-              ? `recurring ${formatMoney(Number(snap.recurringIncome) - oneTimeIncomeNow)} · one-time ${formatMoney(oneTimeIncomeNow)} · paychecks ${formatMoney(Number(snap.receivedPaycheckIncome))}`
+              ? `recurring ${formatMoney(Math.max(0, Number(snap.recurringIncome) - oneTimeIncomeNow))} · one-time ${formatMoney(oneTimeIncomeNow)} · paychecks ${formatMoney(Number(snap.receivedPaycheckIncome))}`
+                + (projectedIncome != null && projectedIncome > monthlyIncome + 0.5 ? ` · ${formatMoney(projectedIncome)} expected by month end` : "")
               : undefined}
             budgets={budgetRows}
             bills={upcomingBillsList}
@@ -1385,7 +1392,7 @@ export default function FinancePage() {
             incomeSeries={incomeSeries}
             billsSeries={billsSeries}
             alerts={alerts}
-            assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
+            assetBreakdown={Array.isArray(snap.assetBreakdown) ? snap.assetBreakdown.map((a: any) => ({ id: a.id, name: a.name, type: a.accountKind || a.type, value: Number(a.value ?? a.grossValue ?? 0) })) : []}
             liabilityBreakdown={Array.isArray(snap.liabilityBreakdown) ? snap.liabilityBreakdown.map((l: any) => ({ id: l.id, name: l.name, type: l.type, value: Number(l.value ?? l.grossValue ?? 0) })) : []}
             monthLabel={monthLabel}
             onPayBill={(bill) => setBillToPay({ id: bill.id, name: bill.name, amount: bill.amount, dueDate: bill.dueDate })}
@@ -1413,7 +1420,7 @@ export default function FinancePage() {
         const snap = enhanced?.financeSnapshot || {};
         const monthlyIncome = snap.monthlyIncome != null
           ? Number(snap.monthlyIncome) || 0
-          : sumMonthIncomeNow(incomes || [], paychecks || [], BROWSER_TIMEZONE);
+          : sumMonthIncomeToDateNow(incomes || [], paychecks || [], BROWSER_TIMEZONE);
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         // The popups plot the same OUT the cards do — bills still owed, not the
         // monthly-equivalent of bills already paid (see the Money overview).
@@ -1680,7 +1687,10 @@ export default function FinancePage() {
 
       {/* Edit Expense Dialog */}
       <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setEditingExpense(null); setEditForm({ description: "", amount: "", category: "", vendor: "", date: "", profileId: "", accountId: "" }); setEditSaving(false); } }}>
-        <DialogContent className="max-w-sm">
+        {/* QA 2026-09-18: the form outgrew a 950px window and its title was
+            clipped at the top with no way to scroll — cap it to the viewport
+            and let the body scroll. */}
+        <DialogContent className="max-w-sm max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Expense</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>Description</Label><Input value={editForm.description} onChange={e => setEditForm(f => ({...f, description: e.target.value}))} /></div>
@@ -1916,7 +1926,13 @@ export default function FinancePage() {
           <div className="rounded-xl border border-border/40 divide-y divide-border/30 overflow-hidden">
             {/* Most recent expected date first (was alphabetical by source, which
                 buried recent paychecks under old stale ones the user flagged). */}
-            {paychecks.slice().sort((a: any, b: any) => new Date(b.expected_date || '').getTime() - new Date(a.expected_date || '').getTime() || (a.source || '').localeCompare(b.source || '')).map((pc: any) => {
+            {(() => {
+              // QA 2026-09-18 BUG-07: the pending twin of a received paycheck
+              // (same day, same amount) reads Received, not Overdue.
+              const matched = new Map<any, any>();
+              for (const r of reconcileExpectedPaychecks(paychecks as any[])) if (r.matchedTo) matched.set(r.paycheck, r.matchedTo);
+              return paychecks.slice().sort((a: any, b: any) => new Date(b.expected_date || '').getTime() - new Date(a.expected_date || '').getTime() || (a.source || '').localeCompare(b.source || '')).map((pc: any) => {
+              const matchedTo = matched.get(pc) as any | undefined;
               // Round-6 fix (BUG-024): user reported the "Received" badge appearing on
               // paychecks before their expected date. The server allowed confirm at any
               // time. Gate the Received button at the UI layer so a paycheck can only be
@@ -1942,8 +1958,8 @@ export default function FinancePage() {
                     <span className="text-xs font-bold tabular-nums">{formatMoney(pc.actual_amount || pc.amount)}</span>
                     {pc.confirmed ? (
                       <span className="text-[11px] font-semibold text-green-500 flex items-center gap-0.5 shrink-0"><Check className="h-3 w-3" /> Received</span>
-                    ) : status === "satisfied" ? (
-                      <span className="text-[11px] font-medium text-muted-foreground shrink-0" title="A received paycheck for the same day and amount already covers this one">Covered</span>
+                    ) : status === "satisfied" || matchedTo ? (
+                      <span className="text-[11px] font-medium text-muted-foreground shrink-0" title={matchedTo ? `Covered by the received "${matchedTo.source}" paycheck for the same day and amount` : "A received paycheck for the same day and amount already covers this one"}>Covered</span>
                     ) : isFuture ? (
                       <span className="text-[11px] font-medium text-muted-foreground shrink-0">Upcoming</span>
                     ) : (
@@ -1977,7 +1993,8 @@ export default function FinancePage() {
                 }
               />
               );
-            })}
+              });
+            })()}
           </div>
         )}
       </div>

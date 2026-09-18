@@ -1,4 +1,4 @@
-import { parseLocalDate, formatFullDate } from "@/lib/format";
+import { parseLocalDate, formatFullDate, formatMoney } from "@/lib/format";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { highlightHref } from "@shared/record-highlight";
@@ -41,7 +41,7 @@ import {
 import { apiRequest } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { getProfileFilter } from "@/lib/profileFilter";
-import { itemMatches } from "@/lib/search-index";
+import { itemMatches, rankResults, matchNote } from "@/lib/search-index";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -175,7 +175,7 @@ function groupRaw(raw: any[]): SearchResults {
 
 // ─── Quick Actions ─────────────────────────────────────────────────────────────
 
-const QUICK_ACTIONS = [
+export const QUICK_ACTIONS = [
   { label: "Go to Dashboard", icon: LayoutDashboard, path: "/dashboard", shortcut: "D" },
   { label: "Go to Chat",      icon: MessageSquare,   path: "/chat",     shortcut: "C" },
   { label: "Go to Trackers",  icon: BarChart2,       path: "/trackers", shortcut: "T" },
@@ -313,7 +313,7 @@ export function CommandSearch() {
       const exact = cacheRef.current.get(sig)?.get(norm);
       if (exact && Date.now() - exact.ts <= SEARCH_CACHE_TTL_MS) {
         requestIdRef.current++; // invalidate any pending stale response
-        setResults(groupRaw(exact.raw));
+        setResults(groupRaw(rankResults(exact.raw, norm)));
         setLoading(false);
         return;
       }
@@ -322,7 +322,7 @@ export function CommandSearch() {
       //    then revalidate against the server below.
       const prefixRaw = findFreshPrefixSuperset(sig, norm);
       if (prefixRaw) {
-        setResults(groupRaw(prefixRaw.filter((it) => itemMatches(it, norm))));
+        setResults(groupRaw(rankResults(prefixRaw.filter((it) => itemMatches(it, norm)), norm)));
         setLoading(false); // we already have results to show — no spinner
       } else {
         setLoading(true);
@@ -342,6 +342,13 @@ export function CommandSearch() {
           const params = new URLSearchParams({ q: trimmed });
           if (filter.mode === "selected" && filter.selectedIds.length > 0) {
             params.set("profileIds", filter.selectedIds.join(","));
+            // QA 2026-09-18 BUG-24: "birthday" found "Mom's Birthday" but not
+            // "Dana's Birthday" because Dana's event sat outside the selected
+            // scope, while the Profiles group beside it ignores scope. Ask the
+            // server to KEEP out-of-scope rows, flagged `_outOfScope`, so every
+            // record is findable by name; the renderer labels them and ranks
+            // them below in-scope rows (see lib/search-index rankResults).
+            params.set("includeOutOfScope", "1");
           }
           const res = await apiRequest("GET", `/api/search?${params.toString()}`);
           // Discard if a newer request was fired
@@ -356,7 +363,7 @@ export function CommandSearch() {
             const oldestKey = perFilter.keys().next().value;
             if (oldestKey !== undefined) perFilter.delete(oldestKey);
           }
-          setResults(groupRaw(raw));
+          setResults(groupRaw(rankResults(raw, norm)));
         } catch (err: any) {
           // Don't clear results on abort, or when we already showed a locally
           // narrowed set (keep the instant results rather than flashing empty).
@@ -377,8 +384,11 @@ export function CommandSearch() {
     [findFreshPrefixSuperset]
   );
 
-  // Reset on close AND on open: a keystroke that slipped in between (F-49)
-  // must not be the start of the next search.
+  // Reset on close AND on open: a keystroke that slipped in between — one
+  // that landed in the input while the dialog was animating shut — must not
+  // be the start of the next search; it used to survive into the next ⌘K,
+  // which then opened pre-filled with "na" (F-49 / QA 2026-09-18 BUG-24).
+  // The palette always starts empty.
   useEffect(() => {
     setQuery("");
     setResults(null);
@@ -421,10 +431,10 @@ export function CommandSearch() {
     t.priority ? `Priority: ${t.priority}${t.completed ? " · Done" : ""}` : t.completed ? "Completed" : "Task";
   // Three "Groceries" rows at $30 / $60 / $30 are only tellable apart by their
   // date, and — when the palette is showing everyone's records — by whose
-  // they are (F-52).
+  // they are (F-52). The amount goes through the shared money formatter.
   const expenseSubtitle = (e: Expense) => {
     const parts: string[] = [];
-    if (e.amount != null) parts.push(`$${e.amount}`);
+    if (e.amount != null) parts.push(formatMoney(Number(e.amount)));
     if (e.date) parts.push(formatFullDate(e.date));
     if (e.category) parts.push(e.category);
     if (filterSignature() === "all") {
@@ -444,8 +454,21 @@ export function CommandSearch() {
   const journalSubtitle = (j: JournalEntry) =>
     j.date ? (parseLocalDate(j.date)?.toLocaleDateString() ?? j.date) : j.mood ?? "Journal Entry";
   const obligationSubtitle = (o: Obligation) =>
-    o.amount != null ? `$${o.amount}${o.category ? ` · ${o.category}` : ""}` : o.category ?? "Obligation";
+    o.amount != null ? `${formatMoney(Number(o.amount))}${o.category ? ` · ${o.category}` : ""}` : o.category ?? "Obligation";
   const artifactSubtitle = (a: Artifact) => a.type ?? "Artifact";
+  // BUG-24: a row that matched on a secondary field, was link-related to a
+  // match, or sits outside the current scope says so, so a result never
+  // appears with no visible reason ("na" → Haircut, matched on category).
+  const withNote = (row: any, subtitle: string) => {
+    const note = matchNote(row);
+    return note ? `${subtitle} · ${note}` : subtitle;
+  };
+  // Groups render in rank order (lib/search-index) — a name hit before a
+  // category hit — rather than alphabetically.
+  // Server rows may carry a `_score` (BUG-24 ranking); typed rows like
+  // Obligation/Artifact don't declare it, so read it structurally.
+  const byRank = <T,>(rows: T[]): T[] =>
+    rows.slice().sort((a, b) => (Number((b as any)?._score) || 0) - (Number((a as any)?._score) || 0));
 
   // ── Determine if any results exist ────────────────────────────────────────
   const hasResults =
@@ -463,9 +486,14 @@ export function CommandSearch() {
       shouldFilter={false}
     >
       {/* Typing in the box only ever types. The old single-letter jumps
-          (I → Insights, F → Finance…) fired on the first character of every
-          search, so "insurance" navigated away on its "i" (F-49). The quick
-          actions below are still one arrow-key away when the box is empty. */}
+          (I → Insights, F → Finance, D → Dashboard, A → Artifacts…) fired on
+          the first character of every search, so "insurance" navigated away
+          on its "i" and "dana" went to the Dashboard on "d", then to
+          Artifacts on "a", and never saw a result (F-49 / QA 2026-09-18
+          BUG-24). A search box types; the letter shortcuts now live in
+          KeyboardShortcuts.tsx, where they fire only with the palette closed
+          and focus on the page itself (body/main). The quick actions below
+          are still one arrow-key away when the box is empty. */}
       <CommandInput
         placeholder="Search everything… (Esc to close)"
         value={query}
@@ -525,7 +553,7 @@ export function CommandSearch() {
           <>
             {results.profiles && results.profiles.length > 0 && (
               <CommandGroup heading="Profiles">
-                {results.profiles.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((p) => (
+                {byRank(results.profiles).map((p) => (
                   <CommandItem
                     key={`profile-${p.id}`}
                     value={`profile-${p.id}-${p.name}`}
@@ -536,7 +564,7 @@ export function CommandSearch() {
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{p.name}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {profileSubtitle(p)}
+                        {withNote(p, profileSubtitle(p))}
                       </span>
                     </div>
                   </CommandItem>
@@ -546,7 +574,7 @@ export function CommandSearch() {
 
             {results.trackers && results.trackers.length > 0 && (
               <CommandGroup heading="Trackers">
-                {results.trackers.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((t) => (
+                {byRank(results.trackers).map((t) => (
                   <CommandItem
                     key={`tracker-${t.id}`}
                     value={`tracker-${t.id}-${t.name}`}
@@ -557,7 +585,7 @@ export function CommandSearch() {
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{t.name}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {trackerSubtitle(t)}
+                        {withNote(t, trackerSubtitle(t))}
                       </span>
                     </div>
                   </CommandItem>
@@ -567,7 +595,7 @@ export function CommandSearch() {
 
             {results.tasks && results.tasks.length > 0 && (
               <CommandGroup heading="Tasks">
-                {results.tasks.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map((t) => (
+                {byRank(results.tasks).map((t) => (
                   <CommandItem
                     key={`task-${t.id}`}
                     value={`task-${t.id}-${t.title}`}
@@ -578,7 +606,7 @@ export function CommandSearch() {
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{t.title}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {taskSubtitle(t)}
+                        {withNote(t, taskSubtitle(t))}
                       </span>
                     </div>
                   </CommandItem>
@@ -588,7 +616,7 @@ export function CommandSearch() {
 
             {results.expenses && results.expenses.length > 0 && (
               <CommandGroup heading="Expenses">
-                {results.expenses.slice().sort((a, b) => (a.description || '').localeCompare(b.description || '')).map((e) => (
+                {byRank(results.expenses).map((e) => (
                   <CommandItem
                     key={`expense-${e.id}`}
                     value={`expense-${e.id}-${e.description}`}
@@ -599,7 +627,7 @@ export function CommandSearch() {
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{e.description}</span>
                       <span className="truncate text-xs text-muted-foreground" data-testid={`item-search-expense-${e.id}-meta`}>
-                        {expenseSubtitle(e)}
+                        {withNote(e, expenseSubtitle(e))}
                       </span>
                     </div>
                   </CommandItem>
@@ -609,7 +637,7 @@ export function CommandSearch() {
 
             {results.events && results.events.length > 0 && (
               <CommandGroup heading="Events">
-                {results.events.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map((e) => (
+                {byRank(results.events).map((e) => (
                   <CommandItem
                     key={`event-${e.id}`}
                     value={`event-${e.id}-${e.title}`}
@@ -620,7 +648,7 @@ export function CommandSearch() {
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{e.title}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {eventSubtitle(e)}
+                        {withNote(e, eventSubtitle(e))}
                       </span>
                     </div>
                   </CommandItem>
@@ -630,7 +658,7 @@ export function CommandSearch() {
 
             {results.documents && results.documents.length > 0 && (
               <CommandGroup heading="Documents">
-                {results.documents.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((d) => (
+                {byRank(results.documents).map((d) => (
                   <CommandItem
                     key={`doc-${d.id}`}
                     value={`doc-${d.id}-${d.name}`}
@@ -641,7 +669,7 @@ export function CommandSearch() {
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{d.name}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {documentSubtitle(d)}
+                        {withNote(d, documentSubtitle(d))}
                       </span>
                     </div>
                   </CommandItem>
@@ -651,7 +679,7 @@ export function CommandSearch() {
 
             {results.habits && results.habits.length > 0 && (
               <CommandGroup heading="Habits">
-                {results.habits.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((h) => (
+                {byRank(results.habits).map((h) => (
                   <CommandItem
                     key={`habit-${h.id}`}
                     value={`habit-${h.id}-${h.name}`}
@@ -662,7 +690,7 @@ export function CommandSearch() {
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{h.name}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {habitSubtitle(h)}
+                        {withNote(h, habitSubtitle(h))}
                       </span>
                     </div>
                   </CommandItem>
@@ -672,7 +700,7 @@ export function CommandSearch() {
 
             {results.journal && results.journal.length > 0 && (
               <CommandGroup heading="Journal">
-                {results.journal.slice().sort((a, b) => ((a.content || a.mood || '') as string).localeCompare((b.content || b.mood || '') as string)).map((j) => (
+                {byRank(results.journal).map((j) => (
                   <CommandItem
                     key={`journal-${j.id}`}
                     value={`journal-${j.id}-${j.content ?? j.mood ?? j.date ?? j.id}`}
@@ -685,7 +713,7 @@ export function CommandSearch() {
                         {j.content ? j.content.slice(0, 60) + (j.content.length > 60 ? "…" : "") : "Journal Entry"}
                       </span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {journalSubtitle(j)}
+                        {withNote(j, journalSubtitle(j))}
                       </span>
                     </div>
                   </CommandItem>
@@ -695,7 +723,7 @@ export function CommandSearch() {
 
             {results.obligations && results.obligations.length > 0 && (
               <CommandGroup heading="Bills">
-                {results.obligations.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map((o) => (
+                {byRank(results.obligations).map((o) => (
                   <CommandItem
                     key={`obligation-${o.id}`}
                     value={`obligation-${o.id}-${o.name}`}
@@ -706,7 +734,7 @@ export function CommandSearch() {
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{o.name}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {obligationSubtitle(o)}
+                        {withNote(o, obligationSubtitle(o))}
                       </span>
                     </div>
                   </CommandItem>
@@ -716,7 +744,7 @@ export function CommandSearch() {
 
             {results.artifacts && results.artifacts.length > 0 && (
               <CommandGroup heading="Artifacts">
-                {results.artifacts.slice().sort((a, b) => (a.title || '').localeCompare(b.title || '')).map((a) => (
+                {byRank(results.artifacts).map((a) => (
                   <CommandItem
                     key={`artifact-${a.id}`}
                     value={`artifact-${a.id}-${a.title}`}
@@ -727,7 +755,7 @@ export function CommandSearch() {
                     <div className="flex flex-col min-w-0">
                       <span className="truncate font-medium text-sm">{a.title}</span>
                       <span className="truncate text-xs text-muted-foreground">
-                        {artifactSubtitle(a)}
+                        {withNote(a, artifactSubtitle(a))}
                       </span>
                     </div>
                   </CommandItem>

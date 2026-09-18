@@ -34,7 +34,8 @@ const toastVariants = cva(
   // long descriptions wrap to multiple lines instead of being clipped to one.
   // F-62: max-w keeps the toast inside the screen, min-w-0 lets the text
   // column wrap so the action stays on-screen instead of being pushed out.
-  "group pointer-events-auto relative flex w-full max-w-[calc(100vw-2rem)] min-w-0 items-start justify-between gap-4 rounded-md border p-6 pr-8 shadow-lg transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 data-[state=closed]:slide-out-to-right-full data-[state=open]:slide-in-from-top-full data-[state=open]:sm:slide-in-from-bottom-full",
+  // p-4 (QA 2026-09-18 theme pass): a tighter card than the old p-6.
+  "group pointer-events-auto relative flex w-full max-w-[calc(100vw-2rem)] min-w-0 items-start justify-between gap-4 rounded-md border p-4 pr-8 shadow-lg transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 data-[state=closed]:slide-out-to-right-full data-[state=open]:slide-in-from-top-full data-[state=open]:sm:slide-in-from-bottom-full",
   {
     variants: {
       variant: {

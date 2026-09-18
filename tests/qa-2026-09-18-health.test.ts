@@ -364,7 +364,7 @@ describe("F-43 the chat recap is one line per item and invents nothing", () => {
       { trackerName: "Hydration", values: { ounces: 40 } },
     ];
     const text = buildTurnRecap(ops.map((o) => ({ status: "ok" as const, tool: "log_tracker_entry", label: o.trackerName, detail: summarizeOpDetail(o) })));
-    expect(text).toBe("Logged 3 of 3:\n- Weight 181.2 lbs\n- Sleep 6.5 hr\n- Hydration 40 oz");
+    expect(text).toBe("Logged 3 items:\n- Weight 181.2 lbs\n- Sleep 6.5 hr\n- Hydration 40 oz");
     expect(text).not.toMatch(/Logged:|via |weight 181|hours 6|ounces 40|quality/);
   });
 
@@ -373,7 +373,7 @@ describe("F-43 the chat recap is one line per item and invents nothing", () => {
       { index: 0, raw: "weighed 181.2", tool: "log_tracker_entry", status: "ok", trackerName: "Weight", detail: summarizeOpDetail({ trackerName: "Weight", values: { weight: 181.2 } }) },
       { index: 1, raw: "slept 6.5", tool: "log_tracker_entry", status: "ok", trackerName: "Sleep", detail: summarizeOpDetail({ trackerName: "Sleep", values: { hours: 6.5 } }) },
     ], []);
-    expect(reply).toBe("Logged 2 of 2 actions:\n- Weight — 181.2 lbs\n- Sleep — 6.5 hr");
+    expect(reply).toBe("Logged 2 actions:\n- Weight — 181.2 lbs\n- Sleep — 6.5 hr");
   });
 
   it("drops a sleep quality the user never described, and keeps one they did", () => {

@@ -21,6 +21,7 @@
 // Pure and clock-injectable so tests can pin every line.
 
 import type { Tracker, TrackerEntry } from "./schema";
+import { relativeTimeShort } from "./relative-time";
 import { parseFrequencyToDosesPerDay } from "./medication-refills";
 // Unit spelling is decided in ONE place (shared/tracker-units.ts) — see the
 // no-inline-unit-guessing contract. This module never invents a unit.
@@ -149,18 +150,10 @@ export function isOccurrenceTracker(tracker: Tracker): boolean {
 
 /** "4m", "2h", "3d" — the compact form the cards use. */
 export function shortAgo(timestamp: string | number | Date, now: number = Date.now()): string {
-  const ts = timestamp instanceof Date ? timestamp.getTime() : new Date(timestamp).getTime();
-  if (!isFinite(ts)) return "";
-  const secs = Math.max(0, Math.round((now - ts) / 1000));
-  if (secs < 60) return "just now";
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.round(days / 30);
-  return months < 12 ? `${months}mo ago` : `${Math.round(months / 12)}y ago`;
+  // QA 2026-09-18 BUG-15: one relative-time rule for the whole app
+  // (shared/relative-time) — calendar days, never UTC-midnight drift, and a
+  // future instant reads "in …" instead of "just now".
+  return relativeTimeShort(timestamp, now);
 }
 
 // ── The summary ──────────────────────────────────────────────────────────────

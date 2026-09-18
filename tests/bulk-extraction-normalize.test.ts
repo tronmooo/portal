@@ -121,7 +121,9 @@ describe("buildBulkReply", () => {
   it("enumerates every success and never claims more than what ran", () => {
     const ops = [ok(0, "Soccer"), ok(1, "Cannabis"), ok(2, "Shower"), ok(3, "Bathroom Visits")];
     const reply = buildBulkReply(ops, [{ id: "t1", name: "Cannabis" }]);
-    expect(reply).toContain("Logged 4 of 4 actions");
+    // QA 2026-09-18 BUG-33: a full success reads as a count, not a ratio.
+    expect(reply).toContain("Logged 4 actions");
+    expect(reply).not.toContain("4 of 4");
     expect(reply).toContain("Soccer");
     expect(reply).toContain("Cannabis");
     expect(reply).toContain("Shower");

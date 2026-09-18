@@ -5,7 +5,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef, ty
 import { apiRequest } from "./queryClient";
 import { queryClient, clearAllClientCaches, resetQueryCacheForUserSwitch } from "./queryClient";
 import { clearChatCache } from "@/lib/chat-cache";
-import { setActiveUserForFilter, clearProfileFilterForUser } from "@/lib/profileFilter";
+import { setActiveUserForFilter } from "@/lib/profileFilter";
 import { warmup } from "@/lib/warmup";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -243,9 +243,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } catch { /* localStorage unavailable — ignore */ }
       setActiveUserForFilter(user.id);
-    } else {
-      clearProfileFilterForUser();
     }
+    // QA 2026-09-18 BUG-01: a null user here is NOT always a sign-out — the
+    // fetch layer clears the session on a failed token refresh and the boot
+    // path can briefly have no user. Wiping the saved scope on those blips
+    // made the next dashboard mount re-seed a default and silently switch the
+    // active profile. The explicit signOut path (clearAllClientCaches) still
+    // clears it, and the filter is namespaced per user id, so a different
+    // account never inherits it.
   }, [user?.id]);
 
   // Background token refresh — renew 5 minutes before expiry to prevent silent 401s

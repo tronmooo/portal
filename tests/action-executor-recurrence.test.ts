@@ -188,19 +188,56 @@ describe("what the executor actually writes", () => {
   });
 
   it("a one-off derived date still creates no event — nothing to fall out of step", async () => {
+    // A record that OWNS its dates (a car's registration expiry) takes the
+    // field; the calendar derives the entry from it, so no event is written.
+    const CAR = "vehicle-1";
+    stubState.profiles.set(CAR, { id: CAR, name: "Honda CR-V", type: "vehicle", fields: {}, tags: [], notes: "" });
     await confirm([action({
       id: "a-expiry", destination: "calendar", operation: "UPDATE",
-      target: { kind: "profile", id: PERSON, name: "Jane Ortiz", profileType: "person" },
+      target: { kind: "profile", id: CAR, name: "Honda CR-V", profileType: "vehicle" },
       payload: {
         key: "expirationDate", date: "2027-01-31", ruleType: "expiration",
-        recurrence: "none", profileId: PERSON, derived: true,
+        recurrence: "none", profileId: CAR, derived: true,
         fields: { expirationDate: "2027-01-31" },
         createEvent: false,
         _source: { documentId: DOC },
       },
     })]);
-    expect(stubState.profiles.get(PERSON).fields.expirationDate).toBe("2027-01-31");
+    expect(stubState.profiles.get(CAR).fields.expirationDate).toBe("2027-01-31");
     expect(stubState.events).toHaveLength(0);
+  });
+
+  it("QA 2026-09-18 BUG-19: a document's own date never lands on a PERSON — it becomes a linked reminder instead", async () => {
+    await confirm([action({
+      id: "a-due", destination: "calendar", operation: "UPDATE",
+      target: { kind: "profile", id: PERSON, name: "Jane Ortiz", profileType: "person" },
+      payload: {
+        key: "dueDate", date: "2026-09-25", ruleType: "due",
+        recurrence: "none", profileId: PERSON, derived: true,
+        fields: { dueDate: "2026-09-25" },
+        createEvent: false,
+        title: "Due Date — Parking Citation",
+        _source: { documentId: DOC },
+      },
+    })]);
+    expect(stubState.profiles.get(PERSON).fields.dueDate).toBeUndefined();
+    expect(stubState.events).toHaveLength(1);
+    expect(stubState.events[0].date).toBe("2026-09-25");
+    expect(stubState.events[0].linkedProfiles).toEqual([PERSON]);
+    // Idempotent on re-confirm.
+    await confirm([action({
+      id: "a-due", destination: "calendar", operation: "UPDATE",
+      target: { kind: "profile", id: PERSON, name: "Jane Ortiz", profileType: "person" },
+      payload: {
+        key: "dueDate", date: "2026-09-25", ruleType: "due",
+        recurrence: "none", profileId: PERSON, derived: true,
+        fields: { dueDate: "2026-09-25" },
+        createEvent: false,
+        title: "Due Date — Parking Citation",
+        _source: { documentId: DOC },
+      },
+    })]);
+    expect(stubState.events).toHaveLength(1);
   });
 
   it("a standalone date gets an event carrying its rule type as a category", async () => {

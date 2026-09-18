@@ -842,7 +842,9 @@ export function EventsPopup({ open, onClose, items, todayStr, title = "Calendar 
                 </div>
                 <div className="flex items-center flex-wrap gap-1 mt-0.5 pl-16">
                   {i.type && i.type !== "event" && <Chip tone={urgent ? "neg" : "muted"}>{i.type}</Chip>}
-                  {i.category && i.category !== "general" && <Chip>{i.category}</Chip>}
+                  {/* QA 2026-09-18: a task's category is "task" too — one
+                      chip, not "task task". */}
+                  {i.category && i.category !== "general" && String(i.category).toLowerCase() !== String(i.type || "").toLowerCase() && <Chip>{i.category}</Chip>}
                   {i.location && <Chip><MapPin className="h-2.5 w-2.5" />{i.location}</Chip>}
                   {ownerNames && <Chip><User className="h-2.5 w-2.5" />{ownerNames}</Chip>}
                 </div>

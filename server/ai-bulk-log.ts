@@ -183,7 +183,12 @@ export function buildBulkReply(ops: OperationOutcome[], createdTrackers: Array<{
   // sentence after it.
   const blocks: string[] = [];
   if (ok.length > 0) {
-    blocks.push(recapBlock(`Logged ${ok.length} of ${ops.length} actions:`, ok.map(opLabel)));
+    // QA 2026-09-18 BUG-33: natural phrasing when everything landed; the
+    // "N of M" ratio only when something did not.
+    const header = ok.length === ops.length
+      ? `Logged ${ok.length} action${ok.length === 1 ? "" : "s"}:`
+      : `Logged ${ok.length} of ${ops.length} actions:`;
+    blocks.push(recapBlock(header, ok.map(opLabel)));
   }
   if (deduped.length > 0) {
     for (const o of deduped) blocks.push(`↩️ ${opLabel(o)} — already logged just now, kept the existing entry`);

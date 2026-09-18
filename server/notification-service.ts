@@ -12,10 +12,50 @@ import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress } from "@shared/habit-progress";
 import { rulesFromAll, daysBetweenISO, isAlertDateRule } from "@shared/date-rules";
-import { dateRuleNotice, overdueTaskSeverity } from "@shared/notification-rules";
+import { dateRuleNotice, overdueTaskSeverity, formatNoticeDate } from "@shared/notification-rules";
 import { isActiveObligation } from "@shared/obligation-windows";
 import { BILL_REMINDER_TASK_PREFIX } from "./liability-payments";
 import { taskOccurrenceLabel } from "@shared/task-occurrences";
+import { humanizeFieldName } from "@shared/field-label";
+
+// ── QA 2026-09-18 F-51 / F-53 / BUG-29 ───────────────────────────────────────
+// The bell leaked a field name ("expirationDate expired 109 days ago
+// (2026-06-01)") and then printed "109 days ago" again under it, and every
+// overdue row — "Overdue: Pet my dog" included — sat under a red CRITICAL
+// heading. The COPY of a dated notice comes from one shared rule
+// (shared/notification-rules: dateRuleNotice) — it names the record, or the
+// person's field by its human label, never the storage key, and the date
+// reads "Jun 1, 2026" exactly once. Severity follows what the item is.
+
+/** "expirationDate" → "Expiration date" (sentence case of the human label). */
+export function fieldSentenceLabel(key: string): string {
+  const words = humanizeFieldName(String(key || "").split(".").pop() || "");
+  if (!words) return "Date";
+  return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
+}
+
+/** "2026-06-01" → "Jun 1, 2026"; anything else passes through (shared formatter). */
+export function prettyDate(iso: string): string {
+  return formatNoticeDate(iso);
+}
+
+/** Documents whose lapse has legal or financial consequences: critical when expired. */
+const CRITICAL_DOC = /insurance|policy|passport|licen[cs]e|registration|visa|permit|lease|contract|deed|title\b|legal|tax|warranty|certificat|identification|\bid\b|green\s*card|residen/i;
+
+/**
+ * Severity of an EXPIRED date rule: critical for legal/insurance records,
+ * warning for everything else (a lapsed gym membership is not a crisis).
+ */
+export function expiredRuleSeverity(input: {
+  isDocument: boolean;
+  documentType?: string | null;
+  name?: string | null;
+  ruleSubtype?: string | null;
+  fieldKey?: string | null;
+}): "critical" | "warning" {
+  const hay = [input.documentType, input.name, input.ruleSubtype, input.fieldKey].filter(Boolean).join(" ");
+  return CRITICAL_DOC.test(hay) ? "critical" : "warning";
+}
 
 export interface AppNotification {
   id: string;
@@ -136,6 +176,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   //
   // What counts is `isAlertDateRule` (shared/date-rules) — the one answer the
   // dashboard's insight cards read too.
+  const docById = new Map<string, any>((documents as any[]).map((d: any) => [String(d.id), d]));
   for (const rule of rulesFromAll({ profiles, documents })) {
     if (!rule.active || !isAlertDateRule(rule)) continue;
     const isDoc = rule.sourceEntityType === "document";
@@ -145,13 +186,27 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
     // the key the old scan used, so existing dismissals still apply.
     const key = rule.sourcePath || rule.sourceField;
     const name = rule.subtitle || rule.label;
-    // Copy and loudness come from ONE shared rule (shared/notification-rules):
-    // the notice names the document, or the person's field by its human
-    // label, never the storage key, and the date reads "Jun 1, 2026" (F-51).
+    // Copy comes from ONE shared rule (shared/notification-rules): the notice
+    // names the document, or the person's field by its human label, never the
+    // storage key, and the date reads "Jun 1, 2026" — the relative distance
+    // and the date each exactly once (F-51 / BUG-29).
     const notice = dateRuleNotice({
       ruleType: rule.ruleType, isDocument: isDoc, entityName: name,
       fieldKey: isDoc ? undefined : key, diff, date: rule.rawValue || rule.date,
     });
+    // Loudness: an EXPIRED legal/insurance record is critical, any other lapse
+    // is a warning (a lapsed gym membership is not a crisis); upcoming dates
+    // keep the shared rule's warning/info (BUG-29).
+    const sourceDoc = isDoc ? docById.get(rule.sourceEntityId) : undefined;
+    const severity = diff < 0
+      ? expiredRuleSeverity({
+          isDocument: isDoc,
+          documentType: (sourceDoc as any)?.type,
+          name: `${name} ${(sourceDoc as any)?.name || ""}`,
+          ruleSubtype: rule.ruleSubtype,
+          fieldKey: key,
+        })
+      : notice.severity;
     notifications.push({
       // The DATE is part of the id (D244): a dismissal is of one fact — this
       // expiry, this due day — never of every later one. Correct the date, or
@@ -161,7 +216,7 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       entityId: rule.sourceEntityId,
       entityType: isDoc ? "document" : "profile",
       dueDate: rule.rawValue || rule.date,
-      severity: notice.severity,
+      severity,
       title: notice.title,
       message: notice.message,
     });
@@ -197,9 +252,11 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
       notifications.push({
         id: `task-overdue-${task.id}-${String(task.dueDate).slice(0, 10)}`,
         type: "task_overdue",
-        // A slipped errand is a warning; only an urgent task long past its day
-        // is critical (F-53). The bell groups by this, so every overdue task no
-        // longer sits under one red CRITICAL rail next to a lapsed policy.
+        // A slipped errand is a warning, not a red CRITICAL heading — critical
+        // is for lapsed legal/insurance records, overdue bills, and an urgent
+        // task long past its day (F-53 / BUG-29). The bell groups by this, so
+        // every overdue task no longer sits under one red rail next to a
+        // lapsed policy.
         severity: overdueTaskSeverity(Math.abs(diff), task.priority),
         title: `Overdue: ${occurrence}`,
         message: `Was due ${Math.abs(diff)} day${Math.abs(diff) !== 1 ? "s" : ""} ago${atTime(task)}`,

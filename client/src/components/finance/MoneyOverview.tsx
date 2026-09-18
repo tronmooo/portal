@@ -4,11 +4,10 @@
 // 14d with Pay, Balance Sheet, and compact Assets / Liabilities summaries.
 // Pure presentation over data finance.tsx already fetches — all values come in
 // as props so this stays testable and finance.tsx owns the queries/mutations.
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatMoneyRound, formatMoney, metricValueSize } from "@/lib/format";
-import { useMemo } from "react";
+import { formatMoney, formatMoneyRound, metricValueSize } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +33,12 @@ export interface Breakdown { id: string; name: string; type: string; value: numb
 // Both of these were whole-dollar formatters spelled two different ways.
 const money = formatMoneyRound;
 const money2 = formatMoneyRound;
+// QA 2026-09-18 BUG-17: line items and the totals they add up to use the
+// SAME formatter as the Assets tab — cents when the value has cents. Rounding
+// each row ($39.75 → $40, $66.68 → $67) while summing the exact values meant
+// the printed rows never added to the printed total (F-21: rows and the
+// totals above them share ONE formatter so a column visually sums).
+const moneyExact = formatMoney;
 
 function Sparkline({ series }: { series: number[] }) {
   if (!series || series.length < 2) return null;
@@ -91,7 +96,11 @@ function KpiCard({ label, value, icon, trend, tone, trendTone, series, chartKind
   const hasChart = series && series.length >= 2;
   return (
     <button onClick={onClick} data-testid={testId}
-      className="text-left bubble bubble-interactive pressable p-3 min-w-[8.5rem] flex-1 flex flex-col min-w-0 overflow-hidden"
+      // `min-w-0` + `overflow-hidden` so a seven-figure value shrinks (font
+      // stepped down by its length) instead of clipping on the card's rounded
+      // edge, and the subtitle wraps with a tooltip instead of "one-t…"
+      // (QA 2026-09-18 F-60 / BUG-26).
+      className="text-left bubble bubble-interactive pressable p-3 basis-[8.5rem] flex-1 flex flex-col min-w-0 overflow-hidden"
       style={{ ["--accent-hsl" as any]: color }}>
       {/* Icon on a tinted circle — the Executive tab's card head, so a KPI here
           reads as the same species of thing it does there. */}
@@ -101,10 +110,10 @@ function KpiCard({ label, value, icon, trend, tone, trendTone, series, chartKind
       </div>
       {/* The number shrinks to fit rather than running over the border into
           the next tile ("$1,608,307" at 915px — QA 2026-09-18, F-60). */}
-      <div className="metric-value leading-none mt-2 whitespace-nowrap tabular-nums"
+      <div className="metric-value leading-none mt-2 whitespace-nowrap tabular-nums min-w-0" title={value}
         style={{ color: `hsl(${color})`, fontSize: `${metricValueSize(value)}px` }}>{value}</div>
       {trend && <div className="text-[11px] font-semibold mt-1" style={{ color: `hsl(${trendColor})` }}>{trend}</div>}
-      {sub && <div className="text-[11px] text-muted-foreground mt-1 truncate">{sub}</div>}
+      {sub && <div className="text-[11px] text-muted-foreground mt-1 break-words line-clamp-2" title={sub}>{sub}</div>}
       {hasChart && (chartKind === "bars"
         ? <MiniBars series={series!} color={color} />
         : <div className="mt-2"><Sparkline series={series!} /></div>)}
@@ -219,10 +228,6 @@ export function MoneyOverview(props: {
   const [showAllLiabilities, setShowAllLiabilities] = useState(false);
   const visibleAssets = showAllAssets || assetBreakdown.length <= ROW_PREVIEW + 4 ? assetBreakdown : assetBreakdown.slice(0, ROW_PREVIEW);
   const visibleLiabilities = showAllLiabilities || liabilityBreakdown.length <= ROW_PREVIEW + 4 ? liabilityBreakdown : liabilityBreakdown.slice(0, ROW_PREVIEW);
-  // Rows and the totals above them share ONE formatter (cents when the value
-  // has them) so a column visually sums — $39.75 + $66.68 rounded per row
-  // read $40 + $67 under a total a dollar higher (F-21).
-  const rowMoney = formatMoney;
   const worstBudget = budgets.slice().sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1)))[0];
   const worstPct = worstBudget ? Math.round((worstBudget.spent / (worstBudget.limit || 1)) * 100) : 0;
   const savingsRate = incomeMtd > 0 ? Math.round(((incomeMtd - spendMtd) / incomeMtd) * 100) : null;
@@ -430,15 +435,15 @@ export function MoneyOverview(props: {
             return (
               <div className="space-y-3">
                 <div>
-                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Assets</span><span className="tabular-nums font-semibold text-emerald-500">{rowMoney(assets)}</span></div>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Assets</span><span className="tabular-nums font-semibold text-emerald-500">{moneyExact(assets)}</span></div>
                   <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${(assets / scale) * 100}%` }} /></div>
                 </div>
                 <div>
-                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums font-semibold text-red-500">{rowMoney(liabilities)}</span></div>
+                  <div className="flex justify-between text-sm mb-1"><span className="text-muted-foreground">Liabilities</span><span className="tabular-nums font-semibold text-red-500">{moneyExact(liabilities)}</span></div>
                   <div className="h-2.5 rounded-full bg-muted overflow-hidden"><div className="h-full bg-red-500" style={{ width: `${(liabilities / scale) * 100}%` }} /></div>
                 </div>
                 <div className="border-t border-border pt-2 flex justify-between text-sm font-bold">
-                  <span>Net worth</span><span className={`tabular-nums ${netWorth < 0 ? "text-red-500" : "text-emerald-500"}`}>{rowMoney(netWorth)}</span>
+                  <span>Net worth</span><span className={`tabular-nums ${netWorth < 0 ? "text-red-500" : "text-emerald-500"}`}>{moneyExact(netWorth)}</span>
                 </div>
               </div>
             );
@@ -451,14 +456,14 @@ export function MoneyOverview(props: {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {assetBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-assets">
-              <SectionHeading title="Assets" icon={Landmark} accent="155 65% 45%" count={assetBreakdown.length} meta={rowMoney(assets)} />
+              <SectionHeading title="Assets" icon={Landmark} accent="155 65% 45%" count={assetBreakdown.length} meta={moneyExact(assets)} />
               <div className="divide-y divide-border/60">
                 {visibleAssets.map(a => (
                   <Link key={a.id} href={`/profiles/${a.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-asset-${a.id}`}>
                       <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 shrink-0">{a.type}</span>
                       <span className="flex-1 text-sm truncate">{a.name}</span>
-                      <span className="text-sm font-semibold tabular-nums">{rowMoney(a.value)}</span>
+                      <span className="text-sm font-semibold tabular-nums">{moneyExact(a.value)}</span>
                     </div>
                   </Link>
                 ))}
@@ -472,14 +477,14 @@ export function MoneyOverview(props: {
           )}
           {liabilityBreakdown.length > 0 && (
             <Card className="p-4" data-testid="money-liabilities">
-              <SectionHeading title="Liabilities" icon={TrendingDown} accent="0 72% 58%" count={liabilityBreakdown.length} meta={rowMoney(liabilities)} />
+              <SectionHeading title="Liabilities" icon={TrendingDown} accent="0 72% 58%" count={liabilityBreakdown.length} meta={moneyExact(liabilities)} />
               <div className="divide-y divide-border/60">
                 {visibleLiabilities.map(l => (
                   <Link key={l.id} href={`/profiles/${l.id}`}>
                     <div className="flex items-center gap-2 py-2 cursor-pointer hover:bg-muted/40 rounded px-1" data-testid={`money-liability-${l.id}`}>
                       <span className="text-[11px] font-semibold uppercase px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 shrink-0">{l.type}</span>
                       <span className="flex-1 text-sm truncate">{l.name}</span>
-                      <span className="text-sm font-semibold tabular-nums text-red-500">{rowMoney(l.value)}</span>
+                      <span className="text-sm font-semibold tabular-nums text-red-500">{moneyExact(l.value)}</span>
                     </div>
                   </Link>
                 ))}

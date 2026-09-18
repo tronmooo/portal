@@ -59,6 +59,22 @@ export function normalizeAccountKind(input?: string | null): AccountKind {
   const s = String(input ?? "").trim().toLowerCase().replace(/[\s\-/]+/g, "_");
   if (!s) return "other";
   if (BY_KEY.has(s)) return s as AccountKind;
+  // QA 2026-09-18 BUG-13: the registry's "Savings Account" type
+  // (type_key "savings_account", account_type "High-Yield Savings (HYSA)" /
+  // "Money Market" / "Traditional Savings") matched none of the exact words
+  // below, fell to "other", and — because the type sits under `investment`
+  // in the registry — was then classified as a brokerage: a $12,500 savings
+  // balance read "CASH ON HAND $0 · INVESTMENTS $65,500". A phrase that
+  // contains a kind word is that kind.
+  const words = ` ${s.replace(/[^a-z0-9]+/g, " ")} `;
+  const has = (...ws: string[]) => ws.some((w) => words.includes(` ${w} `));
+  if (has("checking", "chequing", "current account", "debit")) return "checking";
+  if (has("savings", "saving", "hysa", "money market", "cd", "emergency fund")) return "savings";
+  if (has("credit card", "charge card", "visa", "mastercard", "amex")) return "credit_card";
+  if (has("heloc", "line of credit", "credit line")) return "line_of_credit";
+  if (has("mortgage", "loan")) return "loan";
+  if (has("brokerage", "investment", "investments", "retirement", "401k", "403b", "ira", "hsa", "crypto", "securities", "pension")) return "investment";
+  if (has("cash", "wallet")) return "cash";
   if (["chequing", "current", "debit", "bank", "bank_account", "depository"].includes(s)) return "checking";
   if (["saving", "hysa", "high_yield_savings", "money_market", "cd", "emergency_fund"].includes(s)) return "savings";
   if (["wallet", "petty_cash", "physical_cash", "cash_on_hand"].includes(s)) return "cash";
@@ -73,12 +89,22 @@ export function normalizeAccountKind(input?: string | null): AccountKind {
 export function accountKindOf(input: any): AccountKind {
   if (!input) return "other";
   const fields = (typeof input === "object" && "fields" in input && input.fields) ? input.fields : input;
-  const raw =
-    fields?.accountKind ?? fields?.account_kind ??
-    fields?.accountType ?? fields?.account_type ??
-    input?.type_key ?? input?.typeKey ??
-    fields?.subtype ?? fields?.kind;
-  const resolved = normalizeAccountKind(raw);
+  // The FIRST candidate that resolves to a known kind wins — not the first
+  // candidate that happens to be set. A registry savings account carries
+  // `account_type: "Traditional Savings"` AND `type_key: "savings_account"`;
+  // reading only the former (and stopping) is how it became an investment.
+  const candidates = [
+    fields?.accountKind, fields?.account_kind,
+    fields?.accountType, fields?.account_type,
+    input?.type_key, input?.typeKey,
+    fields?.subtype, fields?.kind,
+  ];
+  let resolved: AccountKind = "other";
+  for (const c of candidates) {
+    if (c == null || c === "") continue;
+    const k = normalizeAccountKind(String(c));
+    if (k !== "other") { resolved = k; break; }
+  }
   // A `type: "investment"` profile IS an investment account, whatever its
   // fields say. "Roth IRA" in accountType normalizes to "other" on its own —
   // the profile TYPE is the more reliable signal, so it wins over a miss.

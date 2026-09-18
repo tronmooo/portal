@@ -9,7 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { stopProp } from "@/lib/event-utils";
-import { stringifyField, previewUnrenderable, isLineItemArray, formatLineItem } from "@/lib/field-display";
+import { stringifyField, stringifyFieldFor, previewUnrenderable, isLineItemArray, formatLineItem } from "@/lib/field-display";
 import {
   FileText,
   ZoomIn,
@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils";
 import {
   useDocumentBlobUrl,
   wasFileDiscarded,
+  documentHasFile,
   DISCARDED_FILE_TAG,
   classifyDocument,
   DOCUMENT_UPLOAD_ACCEPT,
@@ -800,9 +801,11 @@ export function DocumentViewerDialog({
   // metadata query has answered. Waiting for that answer first is what made
   // opening a document feel slow — the viewer can start fetching bytes now and
   // fall back to the "no file attached" card in the rare case there are none.
-  const knownNoFile = !!meta && meta.hasFile === false && !displayData;
+  // QA 2026-09-18 BUG-31: the same predicate the Documents list prints its
+  // "Format" from (shared/document-file), so the two can't disagree.
+  const knownNoFile = !!meta && !documentHasFile(meta) && !displayData;
   const shouldShowPreview = !knownNoFile;
-  const hasFile = meta?.hasFile === true;
+  const hasFile = !!meta && documentHasFile(meta);
   const formatFieldKey = humanizeDocumentFieldKey;
 
   return (
@@ -916,7 +919,9 @@ export function DocumentViewerDialog({
                           </div>
                         );
                       }
-                      const display = stringifyField(val) || previewUnrenderable(val);
+                      // Money-keyed numbers (tax, subtotal, total…) print as money
+                      // like the line items beside them (QA 2026-09-18).
+                      const display = stringifyFieldFor(key, val) || previewUnrenderable(val);
                       if (!display || display === 'null' || display === 'undefined') return null;
                       return (
                         <div key={key} className="flex flex-col gap-0.5">
@@ -1155,7 +1160,7 @@ function ExtractedDataPanel({
                               ))}
                             </ul>
                           ) : (
-                            <span className="break-words">{stringifyField(val) || previewUnrenderable(val)}</span>
+                            <span className="break-words">{stringifyFieldFor(key, val) || previewUnrenderable(val)}</span>
                           )}
                         </div>
                       ) : (
@@ -1164,7 +1169,7 @@ function ExtractedDataPanel({
                           className="text-xs text-left w-full hover:text-foreground text-foreground/80 transition-colors"
                           data-testid={`value-field-${key}`}
                         >
-                          {stringifyField(val) || "—"}
+                          {stringifyFieldFor(key, val) || "—"}
                         </button>
                       )}
                     </div>

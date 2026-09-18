@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatApiError } from "@/lib/formatError";
 import { normalizeFilter } from "@/lib/filter-utils";
 import { isDoneToday } from "@shared/task-counts";
+import { parseQuickTaskText } from "@shared/quick-add";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import {
@@ -464,10 +465,13 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   const pendingAll = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) !== normalizeFilter('done')), [tasks]);
   const done = useMemo(() => tasks.filter((t: any) => normalizeFilter(t.status) === normalizeFilter('done')).slice(0, 8), [tasks]);
 
-  // Today tab = overdue + due-today (+ undated one-offs). Recurring chores flow
-  // in here too, by their next occurrence date.
+  // Today tab = overdue + due-today. Recurring chores flow in here too, by
+  // their next occurrence date. QA 2026-09-18 BUG-21: an UNDATED one-off is
+  // not due today — it used to be filed under Today's priorities and painted
+  // on today's cell. It now lists separately as Unscheduled, uncounted.
   const overdueTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && t.dueDate && t.dueDate < todayStr)), [pendingAll, todayStr, sortBy]);
-  const todayTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && (whenOf(t) === todayStr || (!t.dueDate && !isRecurringT(t))))), [pendingAll, todayStr, sortBy]);
+  const todayTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => datedVisible(t) && !!t.dueDate && whenOf(t) === todayStr || (isRecurringT(t) && datedVisible(t) && whenOf(t) === todayStr))), [pendingAll, todayStr, sortBy]);
+  const unscheduledTasks = useMemo(() => sortTasks(pendingAll.filter((t: any) => !t.dueDate && !isRecurringT(t))), [pendingAll, sortBy]);
   // Recurring tab = every series (incl. paused) for management. A DETECTED
   // schedule contributes ONE row — its earliest open occurrence — not one row
   // per generated task, or "the monthly refill" would read as three separate
@@ -532,7 +536,19 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     if (e.key !== 'Enter') return;
     const title = newTaskTitle.trim();
     if (!title) return;
-    createMutation.mutate({ title });
+    // QA 2026-09-18 BUG-01: name the owner explicitly — the person this popup
+    // is showing — instead of leaving it to the request header. The header
+    // reads the live store at send time, which is not necessarily the scope
+    // the user was looking at when they pressed Enter.
+    // QA 2026-09-18 BUG-21: "Renew passport before December" carries its
+    // due date in the sentence — read it (shared/quick-add) instead of saving
+    // an undated task that then sat under Today's priorities.
+    const parsed = parseQuickTaskText(title, todayStr);
+    createMutation.mutate({
+      title: parsed.title,
+      ...(parsed.dueDate ? { dueDate: parsed.dueDate } : {}),
+      ...(filterMode === "selected" && filterIds.length === 1 ? { linkedProfiles: [filterIds[0]] } : {}),
+    });
     setNewTaskTitle("");
     setAddingTo(null);
   };
@@ -1034,7 +1050,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
 
               {/* ── Lists — smart sections per tab ── */}
               {tab === "today" ? (
-                (overdueTasks.length + todayTasks.length) === 0 && !composer.open ? (
+                (overdueTasks.length + todayTasks.length + unscheduledTasks.length) === 0 && !composer.open ? (
                   <div className="text-center py-10 text-sm text-muted-foreground">Nothing for today 🎉</div>
                 ) : (
                   <div className="space-y-4">
@@ -1048,6 +1064,12 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                       <div data-testid="section-today">
                         {overdueTasks.length > 0 && <div className="micro-label px-1 mb-1.5 text-muted-foreground">Today</div>}
                         <div className="space-y-2">{todayTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                      </div>
+                    )}
+                    {unscheduledTasks.length > 0 && (
+                      <div data-testid="section-unscheduled">
+                        <div className="micro-label px-1 mb-1.5 text-muted-foreground">Unscheduled ({unscheduledTasks.length}) · no due date</div>
+                        <div className="space-y-2">{unscheduledTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                       </div>
                     )}
                   </div>

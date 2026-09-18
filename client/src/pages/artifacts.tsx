@@ -4,7 +4,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
 import { formatListDate } from "@/lib/format";
 import { hashNavigate } from "@/lib/hashNavigate";
-import { formatFieldKey, stringifyField } from "@/lib/field-display";
+import { formatFieldKey, stringifyFieldFor } from "@/lib/field-display";
 import { userVisibleTags } from "@shared/system-tags";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -47,6 +47,7 @@ import type { ChartSpec2 } from "@/components/ChatChartRenderer";
 import type { JournalEntry } from "@shared/schema";
 import type { Document } from "@shared/schema";
 import type { Profile } from "@shared/schema";
+import { documentHasFile } from "@shared/document-file";
 
 // ─── Unified artifact type ──────────────────────────────────
 interface UnifiedArtifact {
@@ -56,7 +57,15 @@ interface UnifiedArtifact {
   typeLabel: string;
   date: string;
   preview: string;
+  /** First owner's name — kept for search; the card renders `owners`. */
   profileName: string;
+  /**
+   * QA 2026-09-18 BUG-14: EVERY linked owner, in link order. A shared
+   * document (Sarah Miller + Poop) used to show one chip — the first id —
+   * so Artifacts said "Sarah Miller" while the Info tab and the calendar
+   * said it was Poop's too.
+   */
+  owners: string[];
   source: any;
   // Wave 8: pin + tag metadata. Only artifacts (not Documents) carry these;
   // for Document rows pinned is always false and tags is empty.
@@ -641,10 +650,20 @@ function ArtifactCard({ item, onSelect, onTogglePin, onDelete }: { item: Unified
           )}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0 ml-1">
-          {item.profileName && (
-            <Badge variant="outline" className="text-xs">
-              {item.profileName}
-            </Badge>
+          {/* BUG-14: every owner, not just the first. Two names fit on a
+              card; beyond that a "+N" chip carries the rest (full list in
+              the title tooltip). */}
+          {item.owners.length > 0 && (
+            <div className="flex flex-wrap justify-end gap-1 max-w-[11rem]" title={item.owners.join(", ")} data-testid={`artifact-owners-${item.id}`}>
+              {item.owners.slice(0, 2).map(name => (
+                <Badge key={name} variant="outline" className="text-xs max-w-[9rem] truncate">
+                  {name}
+                </Badge>
+              ))}
+              {item.owners.length > 2 && (
+                <Badge variant="outline" className="text-xs">+{item.owners.length - 2}</Badge>
+              )}
+            </div>
           )}
           {onTogglePin && (
             <button
@@ -820,11 +839,18 @@ export default function ArtifactsPage() {
     return map;
   }, [profiles]);
 
-  // Helper to resolve first linked profile name
-  const resolveProfile = (linkedProfiles?: string[]) => {
-    if (!linkedProfiles || linkedProfiles.length === 0) return "";
-    return profileMap[linkedProfiles[0]] || "";
+  // BUG-14: every linked owner's name, in link order (unknown ids skipped).
+  const resolveOwners = (linkedProfiles?: string[] | null): string[] => {
+    if (!Array.isArray(linkedProfiles)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const id of linkedProfiles) {
+      const name = profileMap[id];
+      if (name && !seen.has(name)) { seen.add(name); out.push(name); }
+    }
+    return out;
   };
+  const resolveProfile = (linkedProfiles?: string[] | null) => resolveOwners(linkedProfiles)[0] || "";
 
   // Merge all into unified list
   const allItems = useMemo(() => {
@@ -835,9 +861,13 @@ export default function ArtifactsPage() {
           id: d.id,
           title: d.title || d.name,
           type: (d.mimeType?.startsWith("image/") ? "scan" : "document") as UnifiedArtifact["type"],
-          typeLabel: d.mimeType?.startsWith("image/")
+          // QA 2026-09-18 BUG-31: a row whose photo was not kept (extract-only
+          // upload) says so here, with the same predicate the viewer's
+          // "no file attached" card uses, instead of advertising a "Scan".
+          typeLabel: (d.mimeType?.startsWith("image/")
             ? "Scan"
-            : (getDocGroup(d.type).label || "Document"),
+            : (getDocGroup(d.type).label || "Document"))
+            + (documentHasFile(d as any) ? "" : " · no file, extracted details only"),
           date: d.createdAt,
           // stringifyField, not `${v}` — extracted values include objects and
           // arrays (a receipt's line items), and template interpolation
@@ -845,15 +875,18 @@ export default function ArtifactsPage() {
           preview: d.extractedData
             ? Object.entries(d.extractedData)
                 .slice(0, 3)
-                .map(([k, v]) => `${formatFieldKey(k)}: ${stringifyField(v)}`)
+                .map(([k, v]) => `${formatFieldKey(k)}: ${stringifyFieldFor(k, v)}`)
                 .filter(pair => !pair.endsWith(": "))
                 .join(" · ")
                 .slice(0, 100)
             : "",
           profileName: resolveProfile(d.linkedProfiles),
+          owners: resolveOwners(d.linkedProfiles),
           source: d,
           pinned: false,
-          // Never the dedupe hash or the extract-only marker (F-55).
+          // Never the dedupe hash, the extract-only marker or any other
+          // internal tag (sha256:…, image-discarded, _…): they are not folders
+          // and never reach the card, the chips or the filter (F-55 / BUG-30).
           tags: userVisibleTags((d as any).tags),
           isArtifact: false,
         })),
@@ -874,6 +907,7 @@ export default function ArtifactsPage() {
             ? `${a.sheetData?.rows ?? 0} × ${a.sheetData?.cols ?? 0} grid`
             : (previewForContent(a.content) || (a.items?.length > 0 ? a.items.map(i => i.text).join(", ").slice(0, 100) : "")),
         profileName: resolveProfile(a.linkedProfiles),
+        owners: resolveOwners(a.linkedProfiles),
         source: a,
         pinned: !!a.pinned,
         tags: userVisibleTags(a.tags),
@@ -926,7 +960,7 @@ export default function ArtifactsPage() {
     return i.title.toLowerCase().includes(s)
       || i.typeLabel.toLowerCase().includes(s)
       || i.preview.toLowerCase().includes(s)
-      || i.profileName.toLowerCase().includes(s)
+      || i.owners.some(n => n.toLowerCase().includes(s))
       || (i.tags || []).some(t => t.toLowerCase().includes(s));
   };
 
@@ -1011,7 +1045,14 @@ export default function ArtifactsPage() {
         </span>
         <div className="flex-1 min-w-0">
           <h1 className="text-lg font-semibold leading-tight">Artifacts</h1>
-          <p className="text-xs text-muted-foreground truncate">
+          {/* QA 2026-09-18 F-59 / BUG-30: the header uses the PAGE's word,
+              "artifacts", for the whole set (no tile below borrows it), and
+              says "N of M" only when a filter narrows what is showing. It
+              used to say "3 items" over tiles reading "3 Files / 0
+              Artifacts", which read as a contradiction on a page called
+              Artifacts. */}
+          <p className="text-xs text-muted-foreground truncate" data-testid="artifacts-header-count">
+            {filtered.length !== profileFiltered.length ? `${filtered.length} of ` : ""}
             {profileFiltered.length} artifact{profileFiltered.length === 1 ? "" : "s"} · Documents, notes &amp; AI reports in one place
           </p>
         </div>
@@ -1033,6 +1074,10 @@ export default function ArtifactsPage() {
           to 0, same word, two meanings. Source (Files/Artifacts) and canonical
           type (the chips) are different cuts, so they now have different
           words. */}
+      {/* F-59 / BUG-30: "Files" and "Notes & reports" are the two SOURCES an
+          artifact can come from (uploads vs. authored in-app); they still add
+          up to "Showing". ("Artifacts" as a tile label read as the whole
+          page's count — "3 items" above "0 ARTIFACTS".) */}
       <div className="grid grid-cols-3 gap-2" data-testid="artifacts-summary">
         {[
           // The page is titled "Artifacts" and its header counts every item
@@ -1102,8 +1147,9 @@ export default function ArtifactsPage() {
       </div>
 
       {/* Wave 8: Tag filter chip strip (virtual folders) */}
+      {/* BUG-30: the strip wraps instead of running off the right edge. */}
       {allTags.length > 0 && (
-        <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-hide items-center">
+        <div className="flex flex-wrap gap-1.5 pb-1 -mx-1 px-1 items-center" data-testid="artifacts-tag-strip">
           <Tag className="h-3 w-3 text-muted-foreground shrink-0" />
           <button
             onClick={() => setActiveTag(null)}
@@ -1245,8 +1291,8 @@ export default function ArtifactsPage() {
                 <div className="mt-2">
                   <div className="flex items-center gap-2 mb-4">
                     <Badge variant="outline" className="text-xs">{liveSelected.source.type}</Badge>
-                    {liveSelected.profileName && (
-                      <Badge variant="secondary" className="text-xs">{liveSelected.profileName}</Badge>
+                    {liveSelected.owners.length > 0 && (
+                      <Badge variant="secondary" className="text-xs">{liveSelected.owners.join(", ")}</Badge>
                     )}
                     <span className="text-xs text-muted-foreground">{formatDate(liveSelected.date)}</span>
                   </div>

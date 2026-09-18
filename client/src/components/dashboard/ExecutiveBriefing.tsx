@@ -23,6 +23,7 @@
 // the dashboard KPI tiles use.
 import { sumMonthIncomeNow, selectUpcomingBills, UPCOMING_BILLS_EMPTY_COPY } from "@shared/obligation-windows";
 import { isDoneToday } from "@shared/task-counts";
+import { relativeTimeShort, elapsedDays } from "@shared/relative-time";
 import { netWorthChange } from "@shared/net-worth-change";
 import { useState, useEffect, useMemo, type ReactNode } from "react";
 import { useLocation } from "wouter";
@@ -78,7 +79,7 @@ import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
-import { extractVitals } from "@/lib/wellness-metrics";
+import { extractVitals, countWellnessTrackers } from "@/lib/wellness-metrics";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 
 /** Every drill-down this tab can open, each mapping to ONE canonical component.
@@ -130,16 +131,9 @@ function timeLabel12h(t: string | null | undefined): string {
   return `${hour}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
+// QA 2026-09-18 BUG-15: one relative-time rule (shared/relative-time).
 function relTime(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const t = new Date(iso).getTime();
-  if (isNaN(t)) return "";
-  const mins = Math.round((Date.now() - t) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  return relativeTimeShort(iso);
 }
 
 /** "6.87" hours → "6h 52m". */
@@ -295,6 +289,17 @@ function ActionButton({ item, busy, armed, onAction }: {
 
 /** A record row: tinted icon square, title + reason, right-aligned amount/date,
  *  and the item's action when it has a real one. */
+/** "Policy — Expiration" → { main: "Policy", suffix: "Expiration" }. Exported
+ *  for the regression test; the suffix is the last " — " segment. */
+export function splitKindSuffix(title: string): { main: string; suffix: string | null } {
+  const parts = String(title || "").split(" — ");
+  if (parts.length < 2) return { main: String(title || ""), suffix: null };
+  const suffix = parts[parts.length - 1].trim();
+  // Only a short kind word is a suffix; a long tail is part of the name.
+  if (!suffix || suffix.length > 24) return { main: String(title || ""), suffix: null };
+  return { main: parts.slice(0, -1).join(" — "), suffix };
+}
+
 function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
   item: AttentionItem;
   busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
@@ -309,6 +314,11 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
     : item.daysUntil != null && item.daysUntil > 0
       ? fmtShortDate(dateFromDays(item.daysUntil))
       : null;
+  // QA 2026-09-18 BUG-20: "Homeowners Insurance Policy Declaration — Expiration"
+  // and "… — Payment" both truncated to "Homeowners Insurance Policy De…". The
+  // kind suffix is what tells them apart, so it renders as its own badge that
+  // never truncates; only the record name ellipsises.
+  const { main: titleMain, suffix: titleSuffix } = splitKindSuffix(item.title);
   return (
     <div
       role="button"
@@ -318,6 +328,7 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
       className={`bubble-row w-full flex items-center gap-2.5 px-2.5 py-2 text-left cursor-pointer ${leavingKeys?.has(item.key) ? "row-leaving" : ""}`}
       style={{ ["--accent-hsl" as any]: hsl }}
       data-testid={`exec-item-${item.key}`}
+      title={item.title}
     >
       <span
         className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0"
@@ -327,7 +338,16 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
         <Icon className="h-4 w-4" strokeWidth={2.1} />
       </span>
       <div className="flex-1 min-w-0">
-        <p className="text-[13px] font-semibold leading-tight truncate">{item.title}</p>
+        <p className="text-[13px] font-semibold leading-tight flex items-center gap-1.5 min-w-0">
+          <span className="truncate min-w-0">{titleMain}</span>
+          {titleSuffix && (
+            <span className="shrink-0 rounded px-1 py-px micro-label"
+              style={{ background: `hsl(${hsl} / 0.14)`, color: `hsl(${hsl})` }}
+              data-testid={`exec-item-kind-${item.key}`}>
+              {titleSuffix}
+            </span>
+          )}
+        </p>
         {item.reason && <p className="text-[11px] text-muted-foreground truncate mt-0.5">{item.reason}</p>}
       </div>
       {right && (
@@ -635,7 +655,21 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const recommendations: AiSuggestion[] | null = advice.data ?? null;
   const adviceLoading = advice.isFetching;
   const adviceError = !adviceLoading && advice.isError;
-  const generateRecommendations = () => { void advice.refetch(); };
+  // Advice the user swiped away this session (index into `recommendations`),
+  // and the header Dismiss that clears the whole panel. Both reset on a fresh
+  // ask and on a scope switch (the query key changes too, so advice computed
+  // for other data never carries over).
+  const [dismissedAdvice, setDismissedAdvice] = useState<Set<number>>(new Set());
+  const [adviceHidden, setAdviceHidden] = useState(false);
+  useEffect(() => { setDismissedAdvice(new Set()); setAdviceHidden(false); }, [mode, ids.join(",")]);
+  const generateRecommendations = () => { setDismissedAdvice(new Set()); setAdviceHidden(false); void advice.refetch(); };
+  // QA 2026-09-18 F-44 / BUG-06: the advice used to be routed through the
+  // section router into a tenth card at the very bottom of the grid, below
+  // the fold — pressing ✨ on Needs Attention visibly did nothing. The rows now
+  // render directly under the Needs Attention list, where the button lives.
+  const adviceRows = useMemo(() => (recommendations || [])
+    .map((r, i) => ({ i, title: r.title, detail: r.body || "", action: r.action || "", priority: r.priority || "" }))
+    .filter(r => r.title && !dismissedAdvice.has(r.i)), [recommendations, dismissedAdvice]);
 
   // ── Route every record to exactly one feed slot ────────────────────────────
   const snoozedDocumentIds = useMemo(() => Object.keys(loadDocSnoozeMap()), [allExpiringDocs.length]);
@@ -647,8 +681,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     snoozedDocumentIds,
     recentActivity: stats?.recentActivity || [],
     obligations, trackers,
-    recommendations: recommendations || [],
-  }), [todayStr, tasks, allBills, allExpiringDocs, habits, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, obligations, trackers, recommendations]);
+    // BUG-06: advice renders inside the Needs Attention card (adviceRows), not
+    // as a routed section — nothing to claim here.
+    recommendations: [],
+  }), [todayStr, tasks, allBills, allExpiringDocs, habits, timeline, goals, notifications, dismissedIds, snoozedDocumentIds, stats, obligations, trackers]);
 
   const sections = useMemo(
     () => buildExecutiveSections(sectionInput, prefs),
@@ -689,9 +725,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const activityItems = useMemo(() => secItems("activity"),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sections]);
-  const recommendationItems = useMemo(() => secItems("recommendations"),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sections]);
 
   // ── Overview derivations ───────────────────────────────────────────────────
   // Net worth: the server's filtered finance snapshot is the single source of
@@ -703,7 +736,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // longer disagree (1201.1% vs 1241.7% on the same account).
   const nwTrend = useMemo(() => {
     const c = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, todayStr, snap?.netWorthBaseline ?? null);
-    return c ? { pct: c.pct, delta: c.delta ?? 0, up: c.up, monthly: c.monthly, baselineDate: c.baselineDate } : null;
+    return c ? { pct: c.pct, delta: c.delta, up: c.up, monthly: c.monthly, baselineDate: c.baselineDate, label: c.label } : null;
   }, [nwHistory, netWorth, todayStr, snap?.netWorthBaseline]);
 
   // Cash flow — mirrors HubKpiStrip/HeroKPISection exactly: monthly income
@@ -785,8 +818,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       .filter((d: any) => !snoozedDocumentIds.includes(d.ruleId) && !snoozedDocumentIds.includes(d.documentId))
       .filter((d: any) => typeof d.daysUntil === "number"),
   ).sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
-  // Expired and expiring are different states (F-57): the ring counts the
-  // still-valid ones running out, and the caption says both numbers.
+  // Expired and expiring are different states (F-57): a policy that lapsed
+  // 109 days ago is not "expiring soon". The ring counts the still-valid ones
+  // running out, and the caption says both numbers.
   const docsUrgency = summarizeDocumentUrgency(visibleDocs);
   const docsSoonCount = docsUrgency.expiringSoon;
 
@@ -805,6 +839,37 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     : "—";
   const hasWellness = [vitals.steps.value, vitals.sleep.value, vitals.calories.value, vitals.hydration.value]
     .some(v => v != null) || activity.sessions > 0;
+  // QA 2026-09-18 BUG-08: the card said "No wellness data logged yet" while
+  // the Wellness tab showed four measurements — it only looked at today's
+  // steps/sleep/water. Whatever readings exist (weight, blood pressure, heart
+  // rate, glucose, BMI, …) are summarised here, and the copy only says
+  // "nothing logged today" when that is what is true.
+  const latestVitals = useMemo(() => {
+    const rows: Array<{ key: string; label: string; value: string; at: string | null }> = [];
+    const fmt = (n: number) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 10) / 10));
+    const push = (key: string, label: string, m: { value: number | null; lastValue: number | null; unit: string; loggedAt: string | null }, unitOverride?: string) => {
+      const v = m.value ?? m.lastValue;
+      if (v == null) return;
+      const unit = (unitOverride ?? m.unit ?? "").trim();
+      rows.push({ key, label, value: unit ? `${fmt(v)} ${unit}` : fmt(v), at: m.loggedAt });
+    };
+    const sys = vitals.bloodPressureSys.value ?? vitals.bloodPressureSys.lastValue;
+    const dia = vitals.bloodPressureDia.value ?? vitals.bloodPressureDia.lastValue;
+    if (sys != null && dia != null) {
+      rows.push({ key: "bp", label: "Blood pressure", value: `${fmt(sys)}/${fmt(dia)} mmHg`, at: vitals.bloodPressureSys.loggedAt });
+    } else if (sys != null) push("sys", "Systolic", vitals.bloodPressureSys, "mmHg");
+    push("weight", "Weight", vitals.weight, vitals.weight.unit || vitals.weightUnit);
+    push("hr", "Heart rate", vitals.heartRate);
+    push("rhr", "Resting HR", vitals.restingHeartRate);
+    push("glucose", "Glucose", vitals.glucose);
+    push("bmi", "BMI", vitals.bmi, "");
+    push("chol", "Cholesterol", vitals.cholesterol);
+    push("temp", "Temperature", vitals.bodyTemp);
+    push("mood", "Mood", vitals.mood);
+    // Newest first, so the row the user just logged leads.
+    return rows.sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
+  }, [vitals]);
+  const wellnessTrackerCount = countWellnessTrackers(trackers as any);
   // "No wellness data logged yet" is only true before the first log ever;
   // with history and no entry TODAY the honest line is "Nothing logged today"
   // (QA 2026-09-18 F-32). Logging happens in chat or on Trackers — the
@@ -813,7 +878,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     .some((m) => m.lastValue != null) || activity.trackerCount > 0;
   const wellnessEmptyCopy = hasWellnessHistory
     ? "Nothing logged today — log steps, sleep or water in chat or on Trackers."
-    : "No wellness data yet — log steps, sleep or water in chat to start.";
+    : wellnessTrackerCount > 0
+      ? `No readings logged yet — ${wellnessTrackerCount} wellness tracker${wellnessTrackerCount === 1 ? "" : "s"} set up, nothing recorded. Log steps, sleep or water in chat or on Trackers.`
+      : "No wellness data yet — log steps, sleep or water in chat to start.";
   // Feeds the Wellness tab's OWN popups (no second wellness UI is built here).
   // Series come from the same trackers the tiles read, so the popup's chart and
   // the tile's number can never disagree.
@@ -1013,7 +1080,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // A delta measured from a snapshot younger than 30 days is not "this
   // month" — it is labelled by the day it is measured from (F-10).
   const nwSub = nwTrend
-    ? `${nwTrend.up ? "↑" : "↓"} ${nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : fmtUSD(Math.abs(nwTrend.delta))} ${nwTrend.monthly ? "this month" : `since ${nwTrend.baselineDate || "first snapshot"}`}`
+    // QA 2026-09-18: a history that began this month is not a month of growth
+    // — the shared rule labels it "since Sep 3" / "since first entry".
+    ? (nwTrend.pct == null && nwTrend.delta == null
+      ? "no change yet"
+      : `${nwTrend.up ? "↑" : "↓"} ${nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : fmtUSD(Math.abs(nwTrend.delta ?? 0))} ${nwTrend.label}`)
     : "this month";
   const cfValue = cashFlow == null ? loadingDots : `${cashFlow >= 0 ? "+" : "-"}${fmtUSD(Math.abs(cashFlow))}`;
   const nextDate = nextImportant?.daysUntil != null ? dateFromDays(nextImportant.daysUntil) : null;
@@ -1128,16 +1199,27 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               {filtersOpen && <div className="mb-2"><AttentionFilters prefs={prefs} onChange={setPrefs} /></div>}
               {/* AI advice renders HERE, next to the button that asked for it —
                   not in a separate card at the foot of the grid, where a user
-                  watching this card never saw it arrive (F-44). */}
-              {(adviceLoading || adviceError || recommendations) && (
+                  watching this card never saw it arrive (F-44 / BUG-06). */}
+              {(adviceLoading || adviceError || (recommendations && !adviceHidden)) && (
                 <div className="mb-2 rounded-lg border border-border/60 px-2.5 py-2"
                   style={{ ["--accent-hsl" as any]: CARD_ACCENTS.recommendations }}
                   data-testid="exec-card-recommendations" aria-live="polite">
-                  <div className="flex items-center gap-1.5 mb-1">
-                    <Sparkles className="h-3 w-3" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }} aria-hidden="true" />
-                    <span className="text-[11px] font-extrabold tracking-[0.14em] uppercase" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }}>
-                      AI advice
-                    </span>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles className="h-3 w-3" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }} aria-hidden="true" />
+                      <span className="text-[11px] font-extrabold tracking-[0.14em] uppercase" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }}>
+                        AI advice
+                      </span>
+                    </div>
+                    {!adviceLoading && !adviceError && recommendations && (
+                      <button type="button"
+                        onClick={() => setAdviceHidden(true)}
+                        className="text-[11px] text-muted-foreground hover:text-foreground"
+                        data-testid="exec-recommendations-dismiss-all"
+                        aria-label="Dismiss AI advice">
+                        Dismiss
+                      </button>
+                    )}
                   </div>
                   {adviceLoading ? (
                     <p className="text-[12px] text-muted-foreground flex items-center gap-2" data-testid="exec-recommendations-loading">
@@ -1149,16 +1231,39 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       <span>Couldn't generate advice.</span>
                       <button type="button" onClick={generateRecommendations} className="underline font-medium">Retry</button>
                     </p>
-                  ) : recommendationItems.length === 0 ? (
+                  ) : adviceRows.length === 0 ? (
                     <p className="text-[12px] text-muted-foreground" data-testid="exec-recommendations-empty">
-                      Nothing to suggest yet — add a little more data and try again.
+                      {recommendations && recommendations.length > 0
+                        ? "Every suggestion dismissed."
+                        : "Nothing to suggest yet — add a little more data and try again."}
                     </p>
                   ) : (
-                    <div className="space-y-1.5">
-                      {recommendationItems.map((i) => (
-                        <div key={i.key} className="bubble-row px-2.5 py-2" data-testid={`exec-recommendation-${i.key}`}>
-                          <p className="text-[13px] font-semibold leading-tight">{i.title}</p>
-                          {i.reason && <p className="text-[11px] text-muted-foreground mt-0.5">{i.reason}</p>}
+                    <div className="space-y-1.5" data-testid="exec-recommendations">
+                      {adviceRows.map((r) => (
+                        <div key={r.i} className="bubble-row px-2.5 py-2 flex items-start gap-2"
+                          data-testid={`exec-recommendation-${r.i}`}>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <p className="text-[13px] font-semibold leading-tight truncate">{r.title}</p>
+                              {r.priority && (
+                                <span className={`shrink-0 rounded-full px-1.5 py-px micro-label ${
+                                  r.priority === "high" ? "bg-red-500/15 text-red-600 dark:text-red-400"
+                                  : r.priority === "medium" ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                                  : "bg-muted text-muted-foreground"}`}>
+                                  {r.priority}
+                                </span>
+                              )}
+                            </div>
+                            {r.detail && <p className="text-[11px] text-muted-foreground mt-0.5">{r.detail}</p>}
+                            {r.action && <p className="text-[11px] mt-0.5" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }}>{r.action}</p>}
+                          </div>
+                          <button type="button"
+                            onClick={() => setDismissedAdvice(prev => new Set(prev).add(r.i))}
+                            className="shrink-0 rounded-md p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted"
+                            aria-label={`Dismiss suggestion: ${r.title}`}
+                            data-testid={`exec-recommendation-dismiss-${r.i}`}>
+                            <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -1504,10 +1609,32 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               accent={CARD_ACCENTS.wellness} index={7}
               headerRight={<ViewLink label="View wellness" accent={CARD_ACCENTS.wellness} onClick={() => setPopup("wellness:score")} testId="exec-view-wellness" />}
             >
-              {!hasWellness ? (
+              {!hasWellness && latestVitals.length === 0 ? (
                 <CardEmpty>{wellnessEmptyCopy}</CardEmpty>
               ) : (
                 <>
+                  {!hasWellness && (
+                    <p className="text-[12px] text-muted-foreground mb-2" data-testid="exec-wellness-nothing-today">
+                      Nothing logged today — latest readings:
+                    </p>
+                  )}
+                  {latestVitals.length > 0 && (
+                    <div className={`space-y-1 ${hasWellness ? "mb-2" : ""}`} data-testid="exec-wellness-vitals">
+                      {latestVitals.slice(0, 4).map((r) => (
+                        <button key={r.key} type="button"
+                          onClick={() => setPopup("wellness:score")}
+                          className="w-full flex items-center justify-between gap-2 rounded-md px-1 py-0.5 text-[12px] hover:bg-muted/30 transition-colors text-left"
+                          data-testid={`exec-wellness-vital-${r.key}`}>
+                          <span className="text-muted-foreground truncate">{r.label}</span>
+                          <span className="shrink-0 font-semibold tabular-nums">
+                            {r.value}
+                            {r.at && <span className="ml-1.5 font-normal text-muted-foreground">{relTime(r.at)}</span>}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {hasWellness && (
                   <div className="grid grid-cols-3 gap-2">
                     <WellTile icon={Footprints} accent={CARD_ACCENTS.wellness} label="Steps"
                       value={vitals.steps.value != null ? Math.round(vitals.steps.value).toLocaleString() : "—"}
@@ -1519,6 +1646,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       value={exerciseLabel}
                       onClick={() => setPopup("wellness:activity")} testId="exec-well-exercise" />
                   </div>
+                  )}
+                  {hasWellness && (
                   <div className="grid grid-cols-2 gap-2 mt-2">
                     <WellTile icon={Flame} accent="25 95% 58%" label="Calories"
                       value={vitals.calories.value != null ? `${Math.round(vitals.calories.value).toLocaleString()} kcal` : "—"}
@@ -1527,6 +1656,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       value={vitals.hydration.value != null ? `${Math.round(vitals.hydration.value)} ${vitals.hydration.unit || "oz"}` : "—"}
                       onClick={() => setPopup("wellness:hydration")} testId="exec-well-water" />
                   </div>
+                  )}
                 </>
               )}
             </ExecCard>
