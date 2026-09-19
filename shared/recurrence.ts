@@ -179,6 +179,28 @@ export function advance(dateStr: string, rule: RecurrenceRule): string {
   return toLocalISO(d);
 }
 
+/**
+ * Step a date BACK by exactly one cycle of the rule — the mirror of `advance`.
+ *
+ * A series only ever stores its next occurrence, so answering "which cycle was
+ * this date rolled forward from?" needs the same clamped, anchored arithmetic
+ * running the other way: Mar 31 − 1 month is Feb 28 with the anchor intact, so
+ * a further step returns to Jan 31 rather than drifting onto the 28th.
+ */
+export function retreat(dateStr: string, rule: RecurrenceRule): string {
+  const d = new Date(dateStr + "T00:00:00");
+  if (rule.unit === "day") d.setDate(d.getDate() - rule.interval);
+  else if (rule.unit === "week") d.setDate(d.getDate() - 7 * rule.interval);
+  else if (rule.unit === "month") return toLocalISO(addMonthsClamped(d, -rule.interval, rule.anchorDay));
+  else if (rule.unit === "year") return toLocalISO(addYearsClamped(d, -rule.interval, rule.anchorDay));
+  else if (rule.unit === "weekday") {
+    do {
+      d.setDate(d.getDate() - 1);
+    } while (d.getDay() === 0 || d.getDay() === 6);
+  } else d.setDate(d.getDate() - 1);
+  return toLocalISO(d);
+}
+
 // The next occurrence after the current due date (or today if undated).
 export function nextOccurrence(dueDate: string | undefined, rule: RecurrenceRule): string | null {
   if (!rule.freq) return null;

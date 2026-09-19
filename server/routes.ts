@@ -21,7 +21,7 @@ import { ASSET_PROFILE_TYPES, LIABILITY_PROFILE_TYPES, resolveLiabilityBalance }
 import { summarizeAccounts, isAccountProfile } from "@shared/finance-accounts";
 import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
-import { advanceLiabilityDueDate, readDueDate, isSettledOccurrence, effectiveDueDate, isPausedBillFields, isEndedBillFields } from "@shared/liability-recurrence";
+import { advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, isPausedBillFields, isEndedBillFields, currentBillDueDate } from "@shared/liability-recurrence";
 import { generateSchedule, liabilityAmount, liabilityFrequency } from "@shared/liability-schedule";
 import { isRecurringBill as isRecurringBillType } from "@shared/liability-types";
 import { selfIdsFrom, profileAndOwnerIds } from "@shared/scope";
@@ -2565,7 +2565,10 @@ export async function registerRoutes(
                   const f: any = bill.fields || {};
                   // `dueKey` addresses the occurrence (its anchor day); `due`
                   // is the day it actually falls on after a reschedule (D221).
-                  const dueKey = readDueDate(f);
+                  // The shared rule corrects a stored date that was rolled
+                  // forward over an unpaid cycle, so the reminder and the
+                  // autopay name the occurrence still owed (F-16).
+                  const dueKey = currentBillDueDate(f, todayISO);
                   const due = dueKey ? effectiveDueDate(f, dueKey) : dueKey;
                   // A reminder whose occurrence was paid or skipped, or that the
                   // schedule has already rolled past, is finished. Closing it

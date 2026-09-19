@@ -478,3 +478,167 @@ export function isOfferablePerson(p: { type?: string | null; name?: string | nul
   if (type !== "self" && type !== "person" && type !== "pet") return false;
   return !looksLikeAssetName(p.name);
 }
+
+// ── Repairing rows that were ALREADY stored as people (QA 2026-09-19) ─────────
+//
+// `coerceProfileType` fixes the create path; it cannot fix the rows that are
+// already in the table typed `person`. Retyping those is a data repair, and a
+// wrong one is expensive: a real person filed as an `asset` loses their people
+// pickers, and ownership starts walking through them as if they were a
+// possession. `looksLikeAssetName` on its own is NOT a safe repair rule — it is
+// deliberately aggressive because at create time it only breaks a tie the model
+// already leaned on, so it fires on "My Mom" (the `my …` rule) and on
+// "Sarah 1990" (the 4-digit rule).
+//
+// The repair therefore needs an asset-shaped name AND positive evidence the row
+// is not a human: no human-shaped field on the record, and no human-only record
+// attributed to it. `isSafeToRetypeAsThing` is that one rule — the repair
+// script (scripts/repair-mistyped-person-profiles.ts) and any future caller
+// share it. Pinned by tests/qa-2026-09-19-profile-retype.test.ts.
+
+import { fieldIdentity, normalizeKey, PROFILE_FIELD_GROUPS } from "./profile-field-identity";
+
+/** The only two types a mistyped person row may be repaired into. */
+export type ThingProfileType = "vehicle" | "asset";
+
+export interface RetypeCandidateProfile {
+  type?: string | null;
+  name?: string | null;
+  /** The jsonb `fields` blob exactly as stored (nested groups included). */
+  fields?: Record<string, any> | null;
+}
+
+/**
+ * Counts of HUMAN-ONLY records attributed to the profile. Every count must be
+ * supplied as 0 (or omitted, meaning "none found") for a retype to be allowed —
+ * an unknown count is expressed by passing a positive number, never by omission.
+ *
+ * Deliberately excluded: tasks, events, expenses and ordinary documents. A car
+ * has a registration task, an insurance renewal event, a fuel expense and a
+ * title document, so those say nothing about being a person.
+ */
+export interface HumanRecordEvidence {
+  /** Trackers linked to the profile (a log surface belongs to whoever it tracks). */
+  trackers?: number;
+  /** Entries under those trackers. */
+  trackerEntries?: number;
+  habits?: number;
+  journalEntries?: number;
+  /** Medication trackers / medication records attributed to the profile. */
+  medications?: number;
+  /** Linked documents that `isHealthDocument` accepts. */
+  healthDocuments?: number;
+}
+
+/**
+ * Field identities that only a person (or a pet) carries. Built from the field
+ * vocabulary that actually exists in this app — the Info-page identity fields
+ * (client/src/lib/profile-fields.ts PERSON_INFO_FIELDS / PET_INFO_FIELDS), the
+ * registry `person` and `pet` schemas (scripts/seed-type-registry.ts), and the
+ * alias table in shared/profile-field-identity.ts — not from guesses. Compared
+ * through `fieldIdentity`, so `date_of_birth`, `dob`, `birthDate` and
+ * `Date Of Birth` all collapse onto `birthday`.
+ */
+const PERSON_FIELD_KEYS = [
+  // identity
+  "birthday", "dateOfBirth", "dob", "age", "sex", "gender", "pronouns",
+  "maidenName", "maritalStatus", "nationality",
+  // contact / relationship
+  "email", "phone", "mobile", "address", "relationship", "emergencyContact",
+  "emergencyPhone", "spouse",
+  // work / school
+  "occupation", "employer", "jobTitle", "school", "grade", "student",
+  // human health
+  "bloodType", "allergies", "height", "weight", "medications", "physician",
+  "primaryCare", "insuranceMemberId",
+  // pet identity (a `pet` row is never retyped, but a person row carrying
+  // these is an animal someone mistyped, not a possession)
+  "species", "breed", "microchipId", "vet", "vetName", "vetPhone",
+];
+const PERSON_FIELD_IDENTITIES = new Set(PERSON_FIELD_KEYS.map(fieldIdentity));
+
+/**
+ * Longer, unambiguous fragments for spellings the list above cannot enumerate
+ * ("birthPlace", "workEmail", "cellPhoneNumber", "relationshipToMe"). Short
+ * fragments are NOT used here: "age" would match `mileage`, `garage` and
+ * `coverage`, so those keys stay in the exact list above.
+ */
+const PERSON_FIELD_PATTERN =
+  /(?:birth|email|phone|mobilenumber|relationship|occupation|employer|jobtitle|pronoun|gender|maritalstatus|spouse|allerg|bloodtype|emergency|socialsecurity|ssn|medication|prescription|diagnos|physician|doctor|pediatric|nickname)/;
+
+const hasValue = (v: unknown) =>
+  v !== undefined && v !== null && !(typeof v === "string" && v.trim() === "") &&
+  !(Array.isArray(v) && v.length === 0);
+
+/**
+ * Every human-shaped field key the profile actually carries a value for, top
+ * level and inside the nested display groups (`personal`, `identity`, `health`,
+ * `contact`, …) that `fields` is allowed to use. Empty strings and empty arrays
+ * are not evidence — the AI seeds blank keys.
+ *
+ * Exported so the repair can print WHY it left a row alone; the decision itself
+ * lives in `isSafeToRetypeAsThing`.
+ */
+export function personFieldEvidence(fields: Record<string, any> | null | undefined): string[] {
+  const found: string[] = [];
+  const scan = (obj: Record<string, any>, prefix: string) => {
+    for (const [key, value] of Object.entries(obj)) {
+      if (key.startsWith("_")) continue; // reserved metadata
+      const norm = normalizeKey(key);
+      if (PERSON_FIELD_IDENTITIES.has(fieldIdentity(key)) || PERSON_FIELD_PATTERN.test(norm)) {
+        if (hasValue(value)) found.push(prefix + key);
+        continue;
+      }
+      if (
+        (PROFILE_FIELD_GROUPS as readonly string[]).includes(key) &&
+        value && typeof value === "object" && !Array.isArray(value)
+      ) {
+        scan(value as Record<string, any>, `${key}.`);
+      }
+    }
+  };
+  if (fields && typeof fields === "object" && !Array.isArray(fields)) scan(fields, "");
+  return found;
+}
+
+/**
+ * The type a stored profile should be repaired to, or null to leave it alone.
+ *
+ * Returns "vehicle" / "asset" ONLY when every one of these holds:
+ *   1. the row is typed exactly `person` — `self` and `pet` are never touched,
+ *      and a row already typed vehicle/asset returns null, which is what makes
+ *      the repair idempotent;
+ *   2. the shared classifier says the name is asset-shaped (same call the
+ *      create path makes, so one heuristic serves both);
+ *   3. the row carries no human-shaped field with a value (`personFieldEvidence`);
+ *   4. no human-only record is attributed to it (`HumanRecordEvidence`).
+ *
+ * Any doubt returns null: leaving a mistyped thing as a person is a cosmetic
+ * bug that the people-picker filters already hide, while retyping a real person
+ * is a silent corruption of ownership.
+ */
+export function isSafeToRetypeAsThing(
+  profile: RetypeCandidateProfile | null | undefined,
+  evidence: HumanRecordEvidence = {},
+): ThingProfileType | null {
+  if (!profile) return null;
+  // 1. Only a plain `person` row. `self` is the account owner and `pet` is a
+  //    living being; neither is ever a possession, whatever it is called.
+  if (String(profile.type || "").trim().toLowerCase() !== "person") return null;
+
+  // 2. Asset-shaped name — resolved through the SAME rule the create path uses.
+  const target = coerceProfileType(profile.name, "person");
+  if (target !== "vehicle" && target !== "asset") return null;
+
+  // 3. No human-shaped field.
+  if (personFieldEvidence(profile.fields).length > 0) return null;
+
+  // 4. No human-only record.
+  const counts = [
+    evidence.trackers, evidence.trackerEntries, evidence.habits,
+    evidence.journalEntries, evidence.medications, evidence.healthDocuments,
+  ];
+  if (counts.some((n) => typeof n === "number" && n > 0)) return null;
+
+  return target;
+}

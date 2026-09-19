@@ -7,10 +7,12 @@
 // one cycle. This mirrors how tasks recur (shared/recurrence.ts) but reads the
 // cadence off the liability profile's own fields rather than tag strings.
 //
-// Pure + dependency-free (only imports the shared recurrence primitives), so
-// client, server, and tests share one definition.
+// Pure + dependency-free (only imports the shared recurrence primitives and
+// the bill-status grace window), so client, server, and tests share one
+// definition.
 
-import { freqToUnit, advance, type RecurrenceRule } from "./recurrence";
+import { freqToUnit, advance, retreat, type RecurrenceRule } from "./recurrence";
+import { isWithinOverdueGrace } from "./liability-status";
 
 /** Normalize a user/registry frequency label to a recurrence freq token. */
 export function normalizeBillFrequency(input?: string | null): string {
@@ -272,4 +274,73 @@ export function isPausedBillFields(fields: any): boolean {
   if (f.paused === true) return true;
   const status = String(f.status || "").toLowerCase();
   return status === "paused" || status === "cancelled";
+}
+
+/**
+ * The day a recurring bill is ACTUALLY due right now — the stored `dueDate`
+ * treated as a cache the series rule corrects.
+ *
+ * QA 2026-09-18 (F-16): a bill whose Sep 15 cycle was never paid had already
+ * been rolled forward to Oct 15 in the database, so every list said "due
+ * Oct 15" while the calendar — which projects occurrences from the series
+ * anchor — still drew Sep 15 as due, and nothing anywhere said a cycle had
+ * been missed. The create path no longer rolls a just-passed start date
+ * forward (shared/registry-fields.ts), but rows written by the old path are
+ * already stored rolled-forward and migrations here are applied by hand. So
+ * the repair lives in the READ path: every surface that asks "when is this
+ * bill due / is it overdue" asks THIS, and a stored date that skipped over an
+ * unpaid cycle answers with the cycle still owed.
+ *
+ * Walks BACK from the stored date one cycle at a time (the mirror of
+ * `advanceLiabilityDueDate`, same rule and anchor day) and returns the
+ * EARLIEST occurrence that is strictly before today, unsettled, and still
+ * inside the overdue grace window (shared/liability-status). It stops at — and
+ * never walks past — a settled occurrence (a paid September means October
+ * genuinely is next), the series origin, and the edge of the grace window (an
+ * older miss is history, not a bill still owed). One-time, paused and ended
+ * bills are returned unchanged.
+ *
+ * Pure, read-only and idempotent: feeding the answer back in returns it again.
+ * Stored data is never touched — paying still advances from the settled
+ * occurrence via `advanceLiabilityDueDate`.
+ *
+ * The result is the OCCURRENCE (anchor) key, exactly like `readDueDate`, so
+ * callers keep applying `effectiveDueDate` for a rescheduled occurrence.
+ */
+export function currentBillDueDate(fields: any, todayISO: string): string {
+  const f = fields || {};
+  const stored = readDueDate(f);
+  const today = String(todayISO || "").slice(0, 10);
+  if (!DAY_RE.test(stored) || !DAY_RE.test(today)) return stored;
+  // Already in the past: this IS the occurrence still owed, nothing to correct.
+  if (stored < today) return stored;
+  const frequency = f.frequency ?? f.billingFrequency;
+  // Nothing rolled forward for a bill that happens once, and a paused or ended
+  // bill has no occurrence to owe.
+  if (isOneTimeFrequency(frequency)) return stored;
+  if (isPausedBillFields(f) || isEndedBillFields(f, stored)) return stored;
+  const rule = billRecurrenceRule(frequency);
+  if (!rule.unit) return stored;
+  rule.anchorDay = liabilityAnchorDay(f, stored);
+  // The series never started before its own origin, so a walk that would step
+  // past it has run out of real occurrences.
+  const origin = String(f.firstPaymentDate ?? f.first_payment_date ?? f.startDate ?? f.start_date ?? "").slice(0, 10);
+  const hasOrigin = DAY_RE.test(origin);
+  let cur = stored;
+  let owed = "";
+  // Bounded like `advanceLiabilityDueDate`: the grace window ends the walk long
+  // before this on every real cadence.
+  for (let guard = 0; guard < 240; guard++) {
+    const prev = retreat(cur, rule);
+    if (!DAY_RE.test(prev) || prev >= cur) break; // non-retreating rule
+    if (hasOrigin && prev < origin) break;
+    // Out of the grace window (or not actually past): older misses are history.
+    if (!isWithinOverdueGrace(prev, today)) break;
+    // A paid or skipped cycle closes the walk: the cycle after it is genuinely
+    // the next one due.
+    if (isSettledOccurrence(f, prev)) break;
+    owed = prev;
+    cur = prev;
+  }
+  return owed || stored;
 }

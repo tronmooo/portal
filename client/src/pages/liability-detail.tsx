@@ -114,6 +114,7 @@ import {
 } from "@shared/liability-calc";
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
+import { currentBillDueDate } from "@shared/liability-recurrence";
 import { nextLoanDueDate } from "@shared/loan-facts";
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
 
@@ -799,8 +800,13 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const recurringBill = isRecurringBill(subtypeRaw);
   const f2 = (profile.fields || {}) as any;
   const billMonthly = Number(f2.monthlyAmount ?? f2.monthly_amount ?? f2.amount ?? f2.balance ?? f2.cost ?? 0) || 0;
-  const billDueRaw = String(f2.dueDate ?? f2.due_date ?? f2.nextDueDate ?? f2.renewalDate ?? "").slice(0, 10);
   const todayISO = new Date().toLocaleDateString("en-CA");
+  // The stored date is a cache: when it was rolled forward over a cycle that
+  // was never paid, the shared rule hands back the occurrence still owed, so
+  // this header names the same day as the bills list and the calendar (F-16).
+  const billDueRaw = recurringBill
+    ? currentBillDueDate(f2, todayISO)
+    : String(f2.dueDate ?? f2.due_date ?? f2.nextDueDate ?? f2.renewalDate ?? "").slice(0, 10);
   const billStatus = liabilityBillStatus(billDueRaw, todayISO, false);
   const creditLimit = Number(f2.creditLimit ?? f2.credit_limit ?? 0) || 0;
   const utilizationPct = creditLimit > 0 ? Math.min(999, Math.round((Number(f2.balance ?? f2.currentBalance ?? 0) / creditLimit) * 100)) : 0;

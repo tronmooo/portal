@@ -349,6 +349,11 @@ export default defineConfig({
       // birthdays, and a bell that could not scroll.
       'tests/qa-2026-09-18-ai-chat-search.test.ts',
       'tests/qa-2026-09-18-ai-chat-search.dom.test.tsx',
+      // QA 2026-09-19 data-level repairs: a bill whose missed cycle was rolled
+      // forward still names the unpaid day; a possession stored as a person is
+      // only ever retyped when nothing about the row says human.
+      'tests/qa-2026-09-19-bill-cycle.test.ts',
+      'tests/qa-2026-09-19-profile-retype.test.ts',
       // Meta-guard: every *.test.ts(x) must belong to this local suite, a
       // named live/contract suite, or the explicit legacy manual-runner list.
       // QA 2026-09-18 BUG-01: the profile scope must never change without a gesture.

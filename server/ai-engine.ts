@@ -141,7 +141,7 @@ import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitiz
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill as sharedIsRecurringBill } from "@shared/liability-types";
-import { readDueDate as sharedReadDueDate } from "@shared/liability-recurrence";
+import { readDueDate as sharedReadDueDate, currentBillDueDate as sharedCurrentBillDue } from "@shared/liability-recurrence";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
@@ -16304,7 +16304,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         // BY DESIGN — it has a due date. Labelling it "PAID-OFF" for bal 0 made
         // the model tell the user an OVERDUE internet bill was paid off.
         const recurringBill = sharedIsRecurringBill(l.type_key ?? l.typeKey);
-        const billDue = recurringBill ? sharedReadDueDate(f) : "";
+        // The stored date is a cache the shared rule corrects: a cycle rolled
+        // forward but never paid is still what is owed (F-16), so the model
+        // names the same day as the bills list and the calendar.
+        const billDue = recurringBill ? sharedCurrentBillDue(f, getUserToday(aiUserTimezone())) : "";
         const status = recurringBill
           ? sharedBillStatus(billDue || null, getUserToday(aiUserTimezone()))
           : (bal === 0 ? "PAID-OFF" : "active");

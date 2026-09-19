@@ -99,7 +99,7 @@ import { collectOwnedAssetExpenses, ownedAssetIds } from "../shared/cost-of-owne
 import { generateSchedule, nextDueOccurrence, liabilityAmount, liabilityFrequency, periodsPerYear, scheduleCounts, deriveScheduleFields, type ScheduleOccurrence } from "../shared/liability-schedule";
 import { liabilityFamily } from "../shared/liability-types";
 import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "../shared/entity-naming";
-import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, resolveOccurrenceKey, isEndedBillFields } from "../shared/liability-recurrence";
+import { advanceLiabilityDueDatePatch, advanceLiabilityDueDate, isSettledOccurrence, effectiveDueDate, resolveOccurrenceKey, isEndedBillFields, currentBillDueDate, readDueDate } from "../shared/liability-recurrence";
 import { parseRecurringMeta, eventOccursOn } from "../shared/recurring-dates";
 import { taskOccurrenceDates, taskOccurrenceLabel, taskRepeats } from "../shared/task-occurrences";
 import { habitDayProgress, habitsDayRollup } from "../shared/habit-progress";
@@ -5687,6 +5687,16 @@ export class SupabaseStorage implements IStorage {
       // takes — so the bills list, the attention row and the cron agree
       // instead of offering to pay a day that is already paid.
       nextDueDate = advanceLiabilityDueDate(f, nextDueDate);
+    }
+    // A stored date that was rolled forward OVER an unpaid cycle answers with
+    // the cycle still owed (F-16): one shared rule, so the bills list, the
+    // Bills Due counter, the detail header, the bell and the calendar all name
+    // the same day. Read-only — the stored date is never written back.
+    if (nextDueDate) {
+      nextDueDate = currentBillDueDate(
+        nextDueDate === readDueDate(f) ? f : { ...f, dueDate: nextDueDate },
+        getUserToday(this._timezone),
+      );
     }
     // A rescheduled occurrence is due on the day it was moved to (D221).
     if (nextDueDate) nextDueDate = effectiveDueDate(f, nextDueDate);

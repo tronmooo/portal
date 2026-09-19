@@ -1,6 +1,7 @@
 // Regression coverage for the money / finance cluster of the QA pass of
 // 2026-09-18 (portol.me). Bug ids match the report.
 import { describe, it, expect } from "vitest";
+import { getUserToday } from "@shared/timezone";
 import {
   incomeOccurrenceDaysInMonth, sumMonthlyIncomeToDate, sumMonthIncomeToDate, sumMonthIncome,
   reconcileExpectedPaychecks, latePaychecks,
@@ -166,8 +167,11 @@ describe("BUG-11 a loan payment lands in Debt payments, dated to the day it was 
     expect(out.ok).toBe(true);
     expect(storage.expenses).toHaveLength(1);
     expect(storage.expenses[0].category).toBe("debt");
-    // Paid on Sep 18, the expense carries the payment day (F-07), not the due day.
-    expect(storage.expenses[0].date).toBe("2026-09-18");
+    // The expense carries the day it was PAID (F-07), not the bill's due day.
+    // Read the day from the same clock the payment path uses, so this pins the
+    // rule rather than the date the test happened to be written on.
+    expect(storage.expenses[0].date).toBe(getUserToday("UTC"));
+    expect(storage.expenses[0].date).not.toBe("2026-09-30");
   });
 
   it("an October bill paid in September is September's spend (F-07: money left today)", async () => {
@@ -178,7 +182,8 @@ describe("BUG-11 a loan payment lands in Debt payments, dated to the day it was 
     };
     const storage = fakeStorage([internet]);
     await payBillOccurrence(storage, "bill-net", { source: "route" }, "UTC");
-    expect(storage.expenses[0].date).toBe("2026-09-18");
+    expect(storage.expenses[0].date).toBe(getUserToday("UTC"));
+    expect(storage.expenses[0].date).not.toBe("2026-10-12");
     expect(storage.expenses[0].category).toBe("utilities");
   });
 });
