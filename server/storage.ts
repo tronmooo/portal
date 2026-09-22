@@ -1130,7 +1130,8 @@ export class MemStorage implements IStorage {
     if (!parentProfileId && childTypes.has(String(data.type))) {
       parentProfileId = this.resolveOwnersAndValidate("profile", { linkedProfiles: [] })[0];
     } else if (parentProfileId) {
-      this.resolveOwnersAndValidate("profile", { parentProfileId, linkedProfiles: [parentProfileId] });
+      const known = Array.from(this.profiles.values());
+      assertWriteCandidate("profile", { parentProfileId }, { validProfileIds: known.length > 0 ? new Set(known.map(p => p.id)) : null });
     }
     const profile: Profile = { id: randomUUID(), ...data, ...(parentProfileId ? { parentProfileId } : {}), fields: data.fields || {}, tags: data.tags || [], notes: data.notes || "", documents: [], linkedTrackers: [], linkedExpenses: [], linkedTasks: [], linkedEvents: [], createdAt: now, updatedAt: now };
     this.profiles.set(profile.id, profile);

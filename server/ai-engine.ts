@@ -7,6 +7,9 @@ import { deleteDocumentEverywhere } from "./document-deletion";
 import { nameLooselyMatches } from "@shared/name-match";
 import { propagateDocumentFieldChange } from "./document-provenance";
 import { storage } from "./storage";
+import { getActiveProfileId } from "./active-scope-context";
+import { OWNER_UNKNOWN_MESSAGE } from "@shared/owner-resolution";
+import { findPossibleDuplicates, duplicateQuestion } from "@shared/duplicate-guard";
 import {
   createNote, updateNote, deleteNote, listNotes,
   upsertJournalEntry, syncDateRulesForEntity,
@@ -141,9 +144,11 @@ import { expenseAttributionName } from "@shared/expense-attribution";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
+import { readMonthlyPayment as sharedReadMonthlyPayment } from "@shared/liability-fields";
 import { isRecurringBill as sharedIsRecurringBill } from "@shared/liability-types";
-import { readDueDate as sharedReadDueDate, currentBillDueDate as sharedCurrentBillDue } from "@shared/liability-recurrence";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
+import { getRecordTemporalStatus as sharedTemporalStatus } from "@shared/temporal-status";
+import { deriveLiabilityMetrics as sharedDeriveLiabilityMetrics } from "@shared/liability-derived";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
 import { parseQuickRun, parseQuickSleep, parseQuickWeight, buildTurnRecap, type RecapOp } from "@shared/quick-log";
@@ -216,6 +221,43 @@ function aiUserTimezone(): string {
   // Only a real zone name counts: a storage double that answers every
   // property with a function must not become the "timezone".
   try { const tz = (storage as any)._timezone; return typeof tz === "string" && tz.trim() ? tz.trim() : DEFAULT_TIMEZONE; } catch { return DEFAULT_TIMEZONE; }
+}
+
+/**
+ * Rule 6 — the profile a create defaults to when the user names nobody.
+ *
+ * The ACTIVE profile (the scope chip the user can see, carried by
+ * server/active-scope-context: the auth middleware sets it from
+ * X-Active-Profile-Ids, the chat route may set it with runWithActiveScope)
+ * wins over self. Only an empty scope ("Everyone") falls back to self, because
+ * the speaker is the user. Never first / last-used / cached — those are how a
+ * record lands on the wrong person.
+ */
+function aiDefaultOwner<T extends { id: string; type?: string | null }>(profiles: ReadonlyArray<T>): T | undefined {
+  try {
+    const activeId = getActiveProfileId();
+    if (activeId) {
+      const active = profiles.find(p => p.id === activeId);
+      if (active) return active;
+    }
+  } catch { /* outside a request: no active scope */ }
+  return profiles.find(p => p.type === "self");
+}
+
+/**
+ * Rule 6, the other half: a create that NAMES a person who does not resolve
+ * must stop and ask — never write to self. "Me"/"myself"/"I" are the speaker
+ * and resolve to the self profile.
+ */
+function aiOwnerNotFound<T extends { id: string; type?: string | null }>(
+  name: unknown,
+  profiles: ReadonlyArray<T>,
+): { self: T } | { error: string; needsOwner: true } {
+  if (/^(me|myself|i|self|mine|my)$/i.test(String(name ?? "").trim())) {
+    const self = profiles.find(p => p.type === "self");
+    if (self) return { self };
+  }
+  return { error: OWNER_UNKNOWN_MESSAGE(String(name ?? "")), needsOwner: true };
 }
 
 /**
@@ -715,6 +757,8 @@ export interface ClassifyCaptureContext {
   profiles?: Array<{ id: string; name: string; type?: string }>;
   /** The "Self" profile id — used as the default owner when unclear. */
   selfProfileId?: string | null;
+  /** The single ACTIVE profile id (Rule 6): the default owner before self. */
+  activeProfileId?: string | null;
   /** Recent capture/chat snippets for disambiguation (optional). */
   recentContext?: string;
 }
@@ -734,7 +778,8 @@ function heuristicClassify(rawInput: string, ctx?: ClassifyCaptureContext): Capt
   else if (/\bnote\b|\bthought\b|\bidea\b/.test(lower)) type = "note";
 
   // Owner heuristic: scan first 80 chars for a profile name (other than self).
-  let ownerProfileId: string | null = ctx?.selfProfileId ?? null;
+  // Rule 6: the active profile, else self — never anything else.
+  let ownerProfileId: string | null = ctx?.activeProfileId ?? ctx?.selfProfileId ?? null;
   let ownerName: string | null = null;
   if (ctx?.profiles?.length) {
     const head = text.slice(0, 80).toLowerCase();
@@ -774,10 +819,13 @@ export async function classifyCapture(
   ctx?: ClassifyCaptureContext
 ): Promise<CaptureClassification> {
   const text = (rawInput || "").trim();
+  // Rule 6: the caller's active profile (from the request context when the
+  // caller did not pass one) is the default owner; self only under "Everyone".
+  ctx = { ...(ctx || {}), activeProfileId: ctx?.activeProfileId ?? getActiveProfileId() };
   if (!text) {
     return {
       type: "unknown",
-      ownerProfileId: ctx?.selfProfileId ?? null,
+      ownerProfileId: ctx?.activeProfileId ?? ctx?.selfProfileId ?? null,
       ownerName: null,
       title: "",
       structuredData: {},
@@ -800,7 +848,7 @@ USER INPUT:
 ${text}
 """
 
-${profileList ? `KNOWN PROFILES (people, pets, vehicles, assets, etc.):\n${profileList}\n` : ""}${ctx?.selfProfileId ? `SELF PROFILE ID: ${ctx.selfProfileId}\n` : ""}${ctx?.recentContext ? `\nRECENT CONTEXT:\n${ctx.recentContext}\n` : ""}
+${profileList ? `KNOWN PROFILES (people, pets, vehicles, assets, etc.):\n${profileList}\n` : ""}${ctx?.selfProfileId ? `SELF PROFILE ID: ${ctx.selfProfileId}\n` : ""}${ctx?.activeProfileId ? `ACTIVE PROFILE ID (the default owner when the text names nobody): ${ctx.activeProfileId}\n` : ""}${ctx?.recentContext ? `\nRECENT CONTEXT:\n${ctx.recentContext}\n` : ""}
 Return ONLY a JSON object with this shape (no markdown, no commentary):
 {
   "type": "<short snake_case label describing what this is — e.g. expense, tracker_entry, task, event, note, recipe, workout, trip, medical_record, idea — pick whatever fits best, NOT limited to a fixed list>",
@@ -841,9 +889,9 @@ RULES (CRITICAL):
     let ownerProfileId: string | null = null;
     if (typeof parsed.ownerProfileId === "string" && parsed.ownerProfileId.trim() && parsed.ownerProfileId !== "null") {
       ownerProfileId = parsed.ownerProfileId.trim();
-    } else if (ctx?.selfProfileId) {
-      // Default to Self when unclear (per user's design decision).
-      ownerProfileId = ctx.selfProfileId;
+    } else if (ctx?.activeProfileId || ctx?.selfProfileId) {
+      // Rule 6: the active profile when one is selected, else Self.
+      ownerProfileId = ctx.activeProfileId || ctx.selfProfileId || null;
     }
     const ownerName = typeof parsed.ownerName === "string" ? parsed.ownerName : null;
     const title = typeof parsed.title === "string" && parsed.title.trim()
@@ -8309,7 +8357,14 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const taskForProfile = await resolveForProfile(input.forProfile, input.title || "");
       if (taskForProfile) {
         const profiles = await storage.getProfiles();
-        const target = matchProfileByName(profiles, taskForProfile);
+        let target = matchProfileByName(profiles, taskForProfile);
+        // Rule 6: a person the user NAMED who does not resolve is a question,
+        // never a task filed under self.
+        if (!target && input.forProfile) {
+          const miss = aiOwnerNotFound(input.forProfile, profiles);
+          if ("error" in miss) return miss;
+          target = miss.self;
+        }
         if (target) {
           taskLinkedProfiles.push(target.id);
           // WHO DOES IT? "I need to call her about Thanksgiving" named Dana,
@@ -8379,6 +8434,18 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // Return the existing task instead of creating a duplicate — and SAY so,
       // otherwise the model replies "created" for a task that already existed.
       if (dupTask) return { ...dupTask, deduped: true, message: `A very similar task already exists ("${dupTask.title}") — I didn't create a duplicate.` };
+      // Rule 35 (shared/duplicate-guard): the same title for the same owner
+      // created moments ago on ANOTHER day is a question, not a silent twin.
+      if (input.confirmDuplicate !== true) {
+        const taskProfiles = await storage.getProfiles();
+        const taskOwner = taskLinkedProfiles[0] || aiDefaultOwner(taskProfiles)?.id;
+        const verdict = findPossibleDuplicates(
+          { entityType: "task", ownerIds: taskOwner ? [taskOwner] : [], date: input.dueDate || null, name: input.title || "", selfProfileId: taskProfiles.find(p => p.type === "self")?.id ?? null },
+          existingTasks.filter(t => t.status !== "done"),
+        );
+        const near = verdict.tier === "medium" ? existingTasks.find(t => t.id === verdict.matches[0]?.id) : undefined;
+        if (near) return { needsConfirmation: true, possibleDuplicate: { id: near.id, title: near.title, dueDate: near.dueDate }, error: duplicateQuestion(near) };
+      }
 
       // In-memory dedup lock (includes profile for cross-profile dedup safety)
       // Use the normalized title so trivial punctuation/casing differences
@@ -8451,7 +8518,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         linkedProfiles: taskLinkedProfiles,
       }, "task");
       if (!taskPayload.ok) return { error: taskPayload.error };
-      const newTask = await storage.createTask(taskPayload.data);
+      const newTask = await storage.createTask(input.confirmDuplicate === true ? { ...taskPayload.data, __allowDuplicate: true } as any : taskPayload.data);
       markCreation(dedupUser, taskDedupKey);
       // Ensure junction table is set
       for (const pid of taskLinkedProfiles) {
@@ -8729,11 +8796,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           return { error: `I couldn't find a tracker named '${input.trackerName}' for any profile. Which tracker did you mean? Available: ${available}.` };
         }
       }
-      // If no forProfile specified, default to self
-      if (!targetProfileId) {
-        const selfProfile = profiles.find(p => p.type === "self");
-        if (selfProfile) targetProfileId = selfProfile.id;
-      }
+      // No forProfile: the ACTIVE profile, else self (Rule 6).
+      if (!targetProfileId) targetProfileId = aiDefaultOwner(profiles)?.id;
 
       // ── ESTIMATION / NORMALIZATION LAYER (2026-07-15) ──
       // The model passes only what the user stated; deterministic code
@@ -9355,11 +9419,15 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if ("error" in ctPick && /^Several profiles match/.test(ctPick.error)) return { error: ctPick.error };
         const match = "profile" in ctPick ? ctPick.profile : undefined;
         if (match) ctTargetId = match.id;
+        else {
+          // Rule 6: a NAMED owner that does not resolve is a question.
+          const miss = aiOwnerNotFound(input.forProfile, ctProfiles);
+          if ("error" in miss) return miss;
+          ctTargetId = miss.self.id;
+        }
       }
-      if (!ctTargetId) {
-        const selfP = ctProfiles.find(p => p.type === "self");
-        if (selfP) ctTargetId = selfP.id;
-      }
+      // Rule 6: nobody named → the active profile, else self.
+      if (!ctTargetId) ctTargetId = aiDefaultOwner(ctProfiles)?.id;
       // Only match duplicates within the same profile — different profiles can have same tracker names.
       // Match by canonical IDENTITY (not exact string) so "Multivitamin" already
       // existing blocks a duplicate "Supplement Multivitamin"/"Daily Multivitamin".
@@ -9670,10 +9738,14 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           || profiles.find((p: any) => nameLooselyMatches(p.name, fp));
         if (parent) parentProfileId = parent.id;
       }
-      if (!parentProfileId) {
-        const selfP = profiles.find((p: any) => p.type === "self");
-        if (selfP) parentProfileId = selfP.id;
+      if (!parentProfileId && forProfileProvided) {
+        // Rule 6: a NAMED owner that does not resolve is a question.
+        const miss = aiOwnerNotFound(input.forProfile, profiles as any[]);
+        if ("error" in miss) return miss;
+        parentProfileId = (miss.self as any).id;
       }
+      // Rule 6: nobody named → the active profile, else self.
+      if (!parentProfileId) parentProfileId = aiDefaultOwner(profiles as any[])?.id;
       // Dedup by name + same parent
       const nameLC = String(input.name || "").toLowerCase().trim();
       const existing = profiles.find((p: any) =>
@@ -10469,26 +10541,20 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const liabilities = profiles.filter((p: any) => p.type === "liability" || p.type === "loan");
       const summarize = async (lp: any) => {
         const f = lp.fields || {};
-        // Canonical resolvers (ARCHITECTURE §3.1): the profile page writes
-        // `balance` and `interestRate` (a percent), which the inline reads
-        // missed — the chat then reported the debt as $0 / paid off.
-        const currentBalance = sharedLiabilityBalance(lp);
-        const monthlyPayment = Number(f.monthlyPayment) || 0;
-        const annualRate = sharedAnnualRate(f);
+        // Rule 12: ONE derivation (shared/liability-derived) — the same
+        // balance, payment, rate, months-left, percent-paid, payoff date and
+        // next due the detail page and the loan tab show. The closed-form
+        // months-left that used to live here disagreed with the page's
+        // amortization for any loan with a rate.
+        const lm = sharedDeriveLiabilityMetrics(f, getUserToday(aiUserTimezone()), { row: lp, typeKey: lp.type_key ?? lp.typeKey });
+        const currentBalance = lm.balance;
+        const monthlyPayment = lm.monthlyPayment;
+        const annualRate = lm.interestRatePct / 100;
         let payments: any[] = [];
         try { payments = await storage.getLiabilityPayments(lp.id); } catch { /* noop */ }
         const totalPaidPrincipal = payments.reduce((s: number, p: any) => s + signedPrincipal(p), 0);
         const totalPaidInterest = payments.reduce((s: number, p: any) => s + (Number(p.interestPortion) || 0), 0);
-        // Project payoff using current monthly payment
-        let monthsLeft: number | null = null;
-        if (monthlyPayment > 0 && currentBalance > 0) {
-          const r = annualRate / 12;
-          if (r > 0 && monthlyPayment > currentBalance * r) {
-            monthsLeft = Math.ceil(Math.log(monthlyPayment / (monthlyPayment - currentBalance * r)) / Math.log(1 + r));
-          } else if (r === 0) {
-            monthsLeft = Math.ceil(currentBalance / monthlyPayment);
-          }
-        }
+        const monthsLeft: number | null = lm.monthsRemaining;
         let assetLinks: any[] = []; let partyLinks: any[] = [];
         try { assetLinks = await storage.getLiabilityAssetLinks(lp.id); } catch { /* noop */ }
         try { partyLinks = await storage.getLiabilityProfileLinks(lp.id); } catch { /* noop */ }
@@ -10497,6 +10563,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           currentBalance, monthlyPayment, annualRate, lender: f.lender,
           totalPaidPrincipal, totalPaidInterest, paymentCount: payments.length,
           projectedMonthsRemaining: monthsLeft,
+          percentPaid: lm.percentPaid, payoffDate: lm.payoffDate,
+          nextDueDate: lm.nextDue.nextOccurrence, nextDueStatus: lm.nextDue.status,
           linkedAssets: assetLinks.length, linkedParties: partyLinks.length,
           recentPayments: payments.slice(0, 5),
         };
@@ -10601,6 +10669,13 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if ("error" in pick && /^Several profiles match/.test(pick.error)) return { error: pick.error };
         const target = "profile" in pick ? pick.profile : profiles.find(p => wordRe.test(p.name.toLowerCase()));
         if (target) expenseLinkedProfiles.push(target.id);
+        else {
+          // Rule 6: a NAMED owner that does not resolve is a question — the
+          // expense is never quietly filed under self.
+          const miss = aiOwnerNotFound(input.forProfile, profiles);
+          if ("error" in miss) return miss;
+          expenseLinkedProfiles.push(miss.self.id);
+        }
       }
       // ATTRIBUTION SAFETY NET (2026-07, user report: "grocery expense for
       // Robert" landed on self). In a dense multi-action message the model
@@ -10633,23 +10708,27 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // behavior if for some reason the header was missing.
       const userTz = aiUserTimezone();
       const expenseDate = String(input.date || new Date().toLocaleDateString('en-CA', { timeZone: userTz })).slice(0, 10);
-      // Dedup: the SAME expense created in the last 2 minutes — same amount,
-      // similar description, same owner and same date. Owner and date used to
-      // be ignored, so the second of two people's identical lunches, or
-      // yesterday's $20 lunch followed by today's, was "already logged".
-      const allExpenses = await storage.getExpenses();
-      const twoMinAgoExp = Date.now() - 120000;
-      const wantedOwner = expenseLinkedProfiles[0] || "";
-      const dupExpense = allExpenses.find(e => {
-        if (new Date(e.createdAt).getTime() < twoMinAgoExp) return false;
-        if (e.amount !== parsedAmount) return false;
-        if (!e.description.toLowerCase().includes((input.description || "").toLowerCase().slice(0, 20))) return false;
-        if (String(e.date || "").slice(0, 10) !== expenseDate) return false;
-        return ((e.linkedProfiles || [])[0] || "") === wantedOwner;
-      });
-      if (dupExpense) {
-        logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
-        return { ...dupExpense, deduped: true, message: `An identical expense from the last few minutes already exists ($${dupExpense.amount} ${dupExpense.description}) — I didn't log it twice.` };
+      // Rule 35 — the universal duplicate guard (shared/duplicate-guard)
+      // replaces the old 2-minute window here. The owner the row WILL get is
+      // the named one, else the active profile, else self — the same rule the
+      // storage layer applies — so two people's identical lunches stay two
+      // expenses. high → the existing row (say so); medium → ask; low → log.
+      if (input.confirmDuplicate !== true) {
+        const allExpenses = await storage.getExpenses();
+        const expProfiles = await storage.getProfiles();
+        const expOwner = expenseLinkedProfiles[0] || aiDefaultOwner(expProfiles)?.id;
+        const verdict = findPossibleDuplicates(
+          { entityType: "expense", ownerIds: expOwner ? [expOwner] : [], date: expenseDate, amount: parsedAmount, description: input.description || "", selfProfileId: expProfiles.find(p => p.type === "self")?.id ?? null },
+          allExpenses,
+        );
+        const dupExpense = verdict.tier === "low" ? undefined : allExpenses.find(e => e.id === verdict.matches[0]?.id);
+        if (dupExpense && verdict.tier === "high") {
+          logger.info("ai", `Skipped duplicate expense: $${dupExpense.amount} ${dupExpense.description}`);
+          return { ...dupExpense, deduped: true, message: `An identical expense already exists ($${dupExpense.amount} ${dupExpense.description} on ${String(dupExpense.date || "").slice(0, 10)}) — I didn't log it twice. If the user really means a second one, call create_expense again with confirmDuplicate: true.` };
+        }
+        if (dupExpense) {
+          return { needsConfirmation: true, possibleDuplicate: { id: dupExpense.id, description: dupExpense.description, amount: dupExpense.amount, date: dupExpense.date }, error: duplicateQuestion(dupExpense) };
+        }
       }
       // P0.3a: validate with the shared insert schema before writing.
       const expensePayload = validateAiPayload(insertExpenseSchema, {
@@ -10662,7 +10741,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         linkedProfiles: expenseLinkedProfiles,
       }, "expense");
       if (!expensePayload.ok) return { error: expensePayload.error };
-      const newExpense = await storage.createExpense(expensePayload.data);
+      const newExpense = await storage.createExpense(input.confirmDuplicate === true ? { ...expensePayload.data, __allowDuplicate: true } as any : expensePayload.data);
       markCreation(dedupUser, expDedupKey);
       // If we already linked above, just ensure junction table is set. Otherwise auto-link.
       if (expenseLinkedProfiles.length > 0) {
@@ -10970,6 +11049,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         const profiles = await storage.getProfiles();
         const target = matchProfileByName(profiles, input.forProfile);
         if (target) eventLinkedProfiles.push(target.id);
+        else {
+          // Rule 6: a NAMED attendee that does not resolve is a question.
+          const miss = aiOwnerNotFound(input.forProfile, profiles);
+          if ("error" in miss) return miss;
+          eventLinkedProfiles.push(miss.self.id);
+        }
       }
       // Dedup: skip if the SAME event exists — same title, date, owner and
       // clock time. Sarah's 9 am dentist is not the user's 3 pm one.
@@ -10985,6 +11070,19 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (dupEvent) {
         logger.info("ai", `Skipped duplicate event: "${dupEvent.title}" on ${dupEvent.date}`);
         return { ...dupEvent, deduped: true, message: `"${dupEvent.title}" on ${dupEvent.date} already exists — I didn't add it twice.` };
+      }
+      // Rule 35 (shared/duplicate-guard): the same title for the same owner
+      // on the same day at another time, or moments ago on another day, is a
+      // question — not a silent second event.
+      if (input.confirmDuplicate !== true) {
+        const evtProfiles = await storage.getProfiles();
+        const evtOwner = eventLinkedProfiles[0] || aiDefaultOwner(evtProfiles)?.id;
+        const verdict = findPossibleDuplicates(
+          { entityType: "event", ownerIds: evtOwner ? [evtOwner] : [], date: input.date, name: input.title, time: wantedTime || null, selfProfileId: evtProfiles.find(p => p.type === "self")?.id ?? null },
+          allEvents,
+        );
+        const near = verdict.tier === "medium" ? allEvents.find(e => e.id === verdict.matches[0]?.id) : undefined;
+        if (near) return { needsConfirmation: true, possibleDuplicate: { id: near.id, title: near.title, date: near.date, time: (near as any).time }, error: duplicateQuestion(near) };
       }
       // Bug #42: when AI omits forProfile for a medical-looking event, try to
       // pull the doctor/dentist/therapist name out of the title/description and
@@ -11069,7 +11167,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         tags: evtTags,
       }, "event");
       if (!eventPayload.ok) return { error: eventPayload.error };
-      const newEvent = await storage.createEvent(eventPayload.data);
+      const newEvent = await storage.createEvent(input.confirmDuplicate === true ? { ...eventPayload.data, __allowDuplicate: true } as any : eventPayload.data);
       markCreation(dedupUser, evtDedupKey);
       // Only auto-link if we didn't already resolve a profile pre-creation
       if (eventLinkedProfiles.length > 0) {
@@ -11110,6 +11208,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         const allProfiles = await storage.getProfiles();
         const targetP = matchProfileByName(allProfiles, input.forProfile);
         if (targetP) targetProfileId = targetP.id;
+        else {
+          // Rule 6: a NAMED owner that does not resolve is a question.
+          const miss = aiOwnerNotFound(input.forProfile, allProfiles);
+          if ("error" in miss) return miss;
+          targetProfileId = miss.self.id;
+        }
       }
       const dupHabit = existingHabits.find(h => {
         if (h.name.toLowerCase() !== (input.name || "").toLowerCase()) return false;
@@ -11135,8 +11239,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (input.forProfile) {
           suffix = ` - ${input.forProfile}`;
         } else {
-          const selfProf = (await storage.getProfiles()).find(p => p.type === "self");
-          suffix = selfProf ? ` - ${selfProf.name}` : " (2)";
+          const ownerProf = aiDefaultOwner(await storage.getProfiles());
+          suffix = ownerProf ? ` - ${(ownerProf as any).name}` : " (2)";
         }
         habitName = `${input.name}${suffix}`;
         // If even the suffixed name is taken, append numeric counter.
@@ -11239,7 +11343,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       let linkedTrackerNote: { id: string; name: string; created: boolean } | null = null;
       try {
         const allProfs = await storage.getProfiles();
-        const ownerId = targetProfileId || allProfs.find(p => p.type === "self")?.id;
+        const ownerId = targetProfileId || aiDefaultOwner(allProfs)?.id;
         // Same resolver the completion pipeline uses (server/habit-completion.ts)
         // — one answer to "which tracker does this habit belong to?".
         // fallbackToHabitName stays FALSE here: a habit that measures nothing
@@ -11511,6 +11615,13 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         const allProfiles = await storage.getProfiles();
         const matched = matchProfileByName(allProfiles, oblForProfile);
         if (matched) preResolvedTargetProfileId = matched.id;
+        else if (input.forProfile) {
+          // Rule 6: a NAMED payer that does not resolve is a question. (A name
+          // the scan above merely inferred from the bill's title is not.)
+          const miss = aiOwnerNotFound(input.forProfile, allProfiles);
+          if ("error" in miss) return miss;
+          preResolvedTargetProfileId = miss.self.id;
+        }
       }
       // P0.3c: verify the pre-resolved profile still exists and belongs to this
       // user (storage.getProfile is user-scoped) before seeding linkedProfiles
@@ -11519,9 +11630,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (preResolvedTargetProfileId) {
         const verifiedTarget = await storage.getProfile(preResolvedTargetProfileId).catch(() => null);
         if (!verifiedTarget) {
-          logger.warn("ai", `create_obligation: pre-resolved profile ${preResolvedTargetProfileId} no longer exists — falling back to self`);
-          const selfFallback = (await storage.getProfiles()).find(p => p.type === "self");
-          preResolvedTargetProfileId = selfFallback?.id;
+          logger.warn("ai", `create_obligation: pre-resolved profile ${preResolvedTargetProfileId} no longer exists — falling back to the active profile / self`);
+          preResolvedTargetProfileId = aiDefaultOwner(await storage.getProfiles())?.id;
         }
       }
 
@@ -13608,8 +13718,15 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // invisible on their Finance screen and inflates the account owner's.
       let incomeProfileId: string | undefined;
       if (input.forProfile) {
-        const targetP = matchProfileByName(await storage.getProfiles(), input.forProfile);
+        const incomeProfiles = await storage.getProfiles();
+        const targetP = matchProfileByName(incomeProfiles, input.forProfile);
         if (targetP) incomeProfileId = targetP.id;
+        else {
+          // Rule 6: a NAMED earner that does not resolve is a question.
+          const miss = aiOwnerNotFound(input.forProfile, incomeProfiles);
+          if ("error" in miss) return miss;
+          incomeProfileId = miss.self.id;
+        }
       }
       // P0.3a: validate with the shared insert schema before writing.
       const incomePayload = validateAiPayload(insertIncomeSchema, {
@@ -13621,7 +13738,26 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         ...(incomeProfileId ? { linkedProfiles: [incomeProfileId] } : {}),
       }, "income");
       if (!incomePayload.ok) return { error: incomePayload.error };
-      const created = await storage.createIncome(incomePayload.data);
+      // Rule 35: log_income had no duplicate guard at all — the same paycheck
+      // said twice was logged twice. Shared guard: high → the existing row,
+      // medium → ask, low → log.
+      if (input.confirmDuplicate !== true) {
+        const incomes = await storage.getIncomes();
+        const incProfiles = await storage.getProfiles();
+        const incOwner = incomeProfileId || aiDefaultOwner(incProfiles)?.id;
+        const verdict = findPossibleDuplicates(
+          { entityType: "income", ownerIds: incOwner ? [incOwner] : [], date: incomePayload.data.date || null, amount: incomePayload.data.amount, description: incomePayload.data.description, selfProfileId: incProfiles.find(p => p.type === "self")?.id ?? null },
+          incomes,
+        );
+        const dupIncome = verdict.tier === "low" ? undefined : incomes.find(i => i.id === verdict.matches[0]?.id);
+        if (dupIncome && verdict.tier === "high") {
+          return { ...dupIncome, income: dupIncome, deduped: true, message: `This income is already logged ($${dupIncome.amount} ${dupIncome.description}${dupIncome.date ? ` on ${String(dupIncome.date).slice(0, 10)}` : ""}) — I didn't log it twice. If the user really means a second payment, call log_income again with confirmDuplicate: true.` };
+        }
+        if (dupIncome) {
+          return { needsConfirmation: true, possibleDuplicate: { id: dupIncome.id, description: dupIncome.description, amount: dupIncome.amount, date: dupIncome.date }, error: duplicateQuestion(dupIncome) };
+        }
+      }
+      const created = await storage.createIncome(input.confirmDuplicate === true ? { ...incomePayload.data, __allowDuplicate: true } as any : incomePayload.data);
       if (incomeProfileId) {
         await storage.linkProfileTo(incomeProfileId, "income", created.id).catch(() => { /* non-fatal */ });
       }
@@ -16140,6 +16276,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
         const profileNameById = new Map(factProfiles.map((p: any) => [String(p.id), String(p.name || "")]));
         const factSources: FactSources = {
+          // Rule 13: the Tier-1 due-date answer runs through the temporal engine on the user's day.
+          todayISO: getUserToday(aiUserTimezone()),
           profiles: (scopeIds.length === 0 ? factProfiles : factProfiles.filter((p: any) => scopeIds.includes(String(p.id)))) as any[],
           documents: factDocuments.filter(inScope).map((d: any) => ({
             id: d.id,
@@ -16409,10 +16547,14 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         // BY DESIGN — it has a due date. Labelling it "PAID-OFF" for bal 0 made
         // the model tell the user an OVERDUE internet bill was paid off.
         const recurringBill = sharedIsRecurringBill(l.type_key ?? l.typeKey);
-        // The stored date is a cache the shared rule corrects: a cycle rolled
-        // forward but never paid is still what is owed (F-16), so the model
-        // names the same day as the bills list and the calendar.
-        const billDue = recurringBill ? sharedCurrentBillDue(f, getUserToday(aiUserTimezone())) : "";
+        // Rule 13: THE temporal engine (shared/temporal-status) names the next
+        // due for bills AND loans — the same day the bills list, the calendar
+        // and the loan detail page show. Reading the raw stored `dueDate` here
+        // told the user a loan already paid this cycle was due "Sept 25" while
+        // its page said Oct 25.
+        const temporal = sharedTemporalStatus({ kind: "liability", fields: f, row: l }, getUserToday(aiUserTimezone()));
+        const billDue = recurringBill ? (temporal.nextOccurrence || "") : "";
+        const loanDue = !recurringBill ? temporal.nextOccurrence : null;
         const status = recurringBill
           ? sharedBillStatus(billDue || null, getUserToday(aiUserTimezone()))
           : (bal === 0 ? "PAID-OFF" : "active");
@@ -16427,11 +16569,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         const details = [
           recurringBill ? null : `bal: $${bal.toFixed(2)}`,
           apr > 0 ? `apr: ${(apr * 100).toFixed(2)}%` : null,
-          f.monthlyPayment ? `mo: $${f.monthlyPayment}` : null,
-          recurringBill && (f.amount ?? f.monthlyAmount ?? f.monthlyCost) != null ? `amount: $${f.amount ?? f.monthlyAmount ?? f.monthlyCost}/${f.frequency || "month"}` : null,
+          !recurringBill && sharedReadMonthlyPayment(f) > 0 ? `mo: $${sharedReadMonthlyPayment(f)}` : null,
+          recurringBill && sharedReadMonthlyPayment(f) > 0 ? `amount: $${sharedReadMonthlyPayment(f)}/${f.frequency || "month"}` : null,
           // The next due date, stated explicitly — with only "mo: $2,200" the
           // model guessed "due today" for a mortgage that has no due date set.
-          recurringBill ? `due: ${billDue || "not set"}` : (f.dueDay ? `due day: ${f.dueDay}` : (sharedReadDueDate(f) ? `due: ${sharedReadDueDate(f)}` : "due: NONE RECORDED — never present a due date or 'due today' for this one")),
+          recurringBill
+            ? `due: ${billDue || "not set"}`
+            : (loanDue
+              ? `due: ${loanDue} (${temporal.displayLabel})${f.dueDay ? `, due day: ${f.dueDay}` : ""}`
+              : "due: NONE RECORDED — never present a due date or 'due today' for this one"),
         ].filter(Boolean).join(', ');
         // Ownership: "Self 50%, Tom 50%" — always state percentages explicitly.
         const partyLinks = allPartyLinks[idx] || [];

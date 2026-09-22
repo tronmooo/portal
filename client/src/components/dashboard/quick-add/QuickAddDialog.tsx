@@ -4,6 +4,7 @@
 // pattern (apiRequest POST → toast → broad invalidate → close) and routes the
 // body through the pure builders in shared/quick-add.ts.
 import { useEffect, useMemo, useState } from "react";
+import { offerablePeople } from "@shared/entity-classify";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -103,7 +104,9 @@ export function QuickAddDialog({
     enabled: open && showProfile && deferredReady,
   });
   const profileOptions = useMemo(
-    () => (profiles || []).filter((p: any) => ["self", "person", "pet", "business"].includes(p.type)).sort(sortProfilesForSelect),
+    // Rule 28: the canonical people list (pets and businesses can own an
+    // expense or a bill on this surface).
+    () => offerablePeople(profiles || [], { includePets: true, includeBusiness: true }).sort(sortProfilesForSelect),
     [profiles],
   );
 

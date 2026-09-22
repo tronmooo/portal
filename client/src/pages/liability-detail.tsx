@@ -109,13 +109,12 @@ import {
   buildAmortization,
   summarizeLiability,
   allocatePayment,
-  normalizeAnnualRate,
   type AmortizationRow,
 } from "@shared/liability-calc";
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
-import { currentBillDueDate } from "@shared/liability-recurrence";
-import { nextLoanDueDate } from "@shared/loan-facts";
+import { readAnnualRate, readBalance, readMonthlyPayment } from "@shared/liability-fields";
+import { getRecordTemporalStatus } from "@shared/temporal-status";
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
 
 interface LiabilityProfileLike {
@@ -217,17 +216,9 @@ function readTerms(profile: LiabilityProfileLike) {
     }
     return 0;
   };
-  const currentBalance =
-    pick(
-      f.currentBalance, f.current_balance,
-      f.remainingBalance, f.remaining_balance,
-      f.loanBalance, f.loan_balance,
-      f.balance,
-      finance.currentBalance, finance.current_balance,
-      finance.remainingBalance, finance.remaining_balance, finance.balance,
-      loan.currentBalance, loan.current_balance,
-      loan.remainingBalance, loan.remaining_balance, loan.balance,
-    ) || 0;
+  // Rule 11: the canonical readers (shared/liability-fields) — the same
+  // balance, rate and payment every other surface reads, in the same order.
+  const currentBalance = readBalance(f) || 0;
   const originalBalance =
     pick(
       f.originalBalance, f.original_balance,
@@ -238,27 +229,8 @@ function readTerms(profile: LiabilityProfileLike) {
       loan.originalBalance, loan.original_balance,
       loan.originalAmount, loan.original_amount,
     ) || 0;
-  const annualRate = normalizeAnnualRate(
-    f.annualInterestRate ??
-    f.annual_interest_rate ??
-    f.interestRate ??
-    f.interest_rate ??
-    f.rate ??
-    f.apr ??
-    finance.interestRate ??
-    finance.interest_rate ??
-    finance.apr ??
-    loan.interestRate ??
-    loan.interest_rate ??
-    0,
-  );
-  const monthlyPayment =
-    pick(
-      f.monthlyPayment, f.monthly_payment,
-      f.minimumPayment, f.minimum_payment, f.min_payment,
-      finance.monthlyPayment, finance.monthly_payment,
-      loan.monthlyPayment, loan.monthly_payment,
-    ) || 0;
+  const annualRate = readAnnualRate(f);
+  const monthlyPayment = readMonthlyPayment(f) || 0;
   // term may be stored as a number, or as "60 months" string
   const parseTermNumber = (raw: any): number => {
     if (raw == null) return 0;
@@ -799,17 +771,18 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const amortize = isAmortizable(subtypeRaw);
   const recurringBill = isRecurringBill(subtypeRaw);
   const f2 = (profile.fields || {}) as any;
-  const billMonthly = Number(f2.monthlyAmount ?? f2.monthly_amount ?? f2.amount ?? f2.balance ?? f2.cost ?? 0) || 0;
-  const todayISO = new Date().toLocaleDateString("en-CA");
-  // The stored date is a cache: when it was rolled forward over a cycle that
-  // was never paid, the shared rule hands back the occurrence still owed, so
-  // this header names the same day as the bills list and the calendar (F-16).
-  const billDueRaw = recurringBill
-    ? currentBillDueDate(f2, todayISO)
-    : String(f2.dueDate ?? f2.due_date ?? f2.nextDueDate ?? f2.renewalDate ?? "").slice(0, 10);
+  const billMonthly = readMonthlyPayment(f2) || Number(f2.balance ?? 0) || 0;
+  // The user's calendar day — the same helper the server uses (Rule 13).
+  const todayISO = getUserToday(BROWSER_TIMEZONE);
+  // THE next due (shared/temporal-status): a bill answers with the occurrence
+  // still owed (F-16) on the day it was moved to; a loan with its payment day
+  // counted from today. The header chip and the amortization start below read
+  // this ONE value, so they cannot disagree (Rule 13).
+  const temporal = getRecordTemporalStatus({ kind: "liability", fields: f2, row: profile as any, typeKey: subtypeRaw }, todayISO);
+  const billDueRaw = temporal.nextOccurrence ?? "";
   const billStatus = liabilityBillStatus(billDueRaw, todayISO, false);
   const creditLimit = Number(f2.creditLimit ?? f2.credit_limit ?? 0) || 0;
-  const utilizationPct = creditLimit > 0 ? Math.min(999, Math.round((Number(f2.balance ?? f2.currentBalance ?? 0) / creditLimit) * 100)) : 0;
+  const utilizationPct = creditLimit > 0 ? Math.min(999, Math.round((readBalance(f2) / creditLimit) * 100)) : 0;
 
   // Payments fetch
   const paymentsQuery = useQuery<LiabilityPayment[]>({
@@ -903,8 +876,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   // months back, row 1 read "Mar 31 2025 · 536d overdue" and every payoff
   // figure was shifted by the months already paid (F-08, F-09).
   const scheduleStart = useMemo(
-    () => nextLoanDueDate(f2, todayISO) ?? terms.firstPaymentDate,
-    [f2, todayISO, terms.firstPaymentDate],
+    () => (recurringBill ? null : temporal.nextOccurrence) ?? terms.firstPaymentDate,
+    [recurringBill, temporal.nextOccurrence, terms.firstPaymentDate],
   );
   const summary = useMemo(
     () =>
@@ -1203,6 +1176,17 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
           progress={heroProgress}
         />
       </div>
+      {/* Rule 33: the schedule payload carries the integrity check of the
+          stored record; a row still holding two spellings of one fact with
+          two values says so here instead of showing whichever won. */}
+      {Array.isArray(schedule?.integrity?.warnings) && schedule.integrity.warnings.length > 0 && (
+        <div className="px-4 md:px-6 pt-2" data-testid="liability-integrity-notice">
+          <p className="text-[12px] text-amber-600 dark:text-amber-400 flex items-start gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+            <span>These records conflict: {schedule.integrity.warnings.map((w: any) => w.message).join("; ")}. Showing the canonical value.</span>
+          </p>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="px-4 md:px-6 pt-4">

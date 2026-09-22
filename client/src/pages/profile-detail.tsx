@@ -292,6 +292,8 @@ import { isReservedFieldKey } from "@shared/profile-field-identity";
 import { systemFieldEntries } from "@shared/system-fields";
 import { devToolsEnabled } from "@/lib/dev-affordances";
 import { allocatePayment } from "@shared/liability-calc";
+import { deriveLiabilityMetrics, deriveLiabilityAmortization, simulateExtraPayment, payoffProgressPct } from "@shared/liability-derived";
+import { readBalance, readInterestRatePct, readMonthlyPayment } from "@shared/liability-fields";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -5088,63 +5090,33 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const topCategories = categoryBreakdown.slice(0, 5);
   const topCategoryMax = topCategories[0]?.total || 1;
 
-  // ── loan / amortization ────────────────────────────────────────
+  // ── loan / amortization — ONE engine (shared/liability-derived, Rule 12) ──
+  // The private amortization loop and closed-form term that used to live here
+  // disagreed with the liability detail page for the same loan. Every number
+  // below (payment, rows, total interest, payoff date, simulator) now comes
+  // from the same call the detail page, the chat and the composer make.
   type AmortRow = { month: number; payment: number; principal: number; interest: number; balance: number; cumPrincipal: number; cumInterest: number };
-
-  function calculateAmortization(principal: number, annualRate: number, termMonths: number): AmortRow[] {
-    if (!principal || !annualRate || !termMonths) return [];
-    const monthlyRate = annualRate / 100 / 12;
-    const payment = monthlyRate === 0
-      ? principal / termMonths
-      : principal * (monthlyRate * Math.pow(1 + monthlyRate, termMonths)) / (Math.pow(1 + monthlyRate, termMonths) - 1);
-    const rows: AmortRow[] = [];
-    let balance = principal;
+  const loanTodayISO = getUserToday(BROWSER_TIMEZONE);
+  const loanFields = { ...loanSub, ...(profile.fields as Record<string, any>) };
+  const loanTypeKey = (profile as any).type_key ?? (profile as any).typeKey ?? null;
+  const loanMetrics = isLoan ? deriveLiabilityMetrics(loanFields, loanTodayISO, { typeKey: loanTypeKey, row: profile as any }) : null;
+  const loanPrincipal = loanMetrics?.balance ?? 0;
+  const loanRate = loanMetrics?.interestRatePct ?? 0;
+  const loanMonthlyPayment = loanMetrics?.monthlyPayment ?? 0;
+  const loanAmortization = isLoan && loanPrincipal > 0 ? deriveLiabilityAmortization(loanFields, loanTodayISO, { typeKey: loanTypeKey, row: profile as any }) : null;
+  const amortRows: AmortRow[] = (() => {
     let cumPrincipal = 0;
-    let cumInterest = 0;
-    for (let month = 1; month <= termMonths && balance > 0.005; month++) {
-      const interest = balance * monthlyRate;
-      const principalPaid = Math.min(payment - interest, balance);
-      balance -= principalPaid;
-      cumPrincipal += principalPaid;
-      cumInterest += interest;
-      rows.push({
-        month,
-        payment,
-        principal: principalPaid,
-        interest,
-        balance: Math.max(0, balance),
-        cumPrincipal,
-        cumInterest,
-      });
-    }
-    return rows;
-  }
-
-  // Helper: parse "4.29%" or "60 months" or 4.29 into a number.
-  const num = (v: any): number => {
-    if (v == null) return 0;
-    if (typeof v === "number") return v;
-    const m = String(v).match(/-?\d+(?:\.\d+)?/);
-    return m ? Number(m[0]) : 0;
-  };
-  const loanPrincipal = num(profile.fields.originalAmount || profile.fields.loanBalance || profile.fields.remainingBalance || profile.fields.balance || loanSub.originalAmount || loanSub.loanBalance || loanSub.remainingBalance || loanSub.balance);
-  const loanRate = num(profile.fields.interestRate || profile.fields.rate || profile.fields.apr || loanSub.interestRate || loanSub.rate || loanSub.apr);
-  const loanTerm = num(profile.fields.termMonths || profile.fields.loanTerm || profile.fields.term || loanSub.termMonths || loanSub.loanTerm || loanSub.term);
-  const loanMonthlyPayment = num(profile.fields.monthlyPayment || loanSub.monthlyPayment);
-
-  // Derive term from monthly payment if not provided
-  const derivedTerm = loanTerm || (() => {
-    if (!loanPrincipal || !loanRate || !loanMonthlyPayment) return 0;
-    const r = loanRate / 100 / 12;
-    if (r === 0) return Math.round(loanPrincipal / loanMonthlyPayment);
-    return Math.round(-Math.log(1 - (loanPrincipal * r) / loanMonthlyPayment) / Math.log(1 + r));
+    return (loanAmortization?.rows || []).map((r) => {
+      const principal = r.principal + r.extraPrincipal;
+      cumPrincipal += principal;
+      return { month: r.paymentNumber, payment: r.payment, principal, interest: r.interest, balance: r.remainingBalance, cumPrincipal, cumInterest: r.cumulativeInterest };
+    });
   })();
-
-  const amortRows = isLoan ? calculateAmortization(loanPrincipal, loanRate, derivedTerm) : [];
-  const totalInterest = amortRows.reduce((s, r) => s + r.interest, 0);
-  const payoffDate = amortRows.length > 0
-    ? new Date(now.getFullYear(), now.getMonth() + amortRows.length, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" })
-    : null;
+  const derivedTerm = amortRows.length;
+  const totalInterest = loanAmortization?.totalInterest ?? 0;
+  const fmtPayoffMonth = (iso: string | null | undefined) =>
+    iso ? (parseLocalDate(iso) ?? new Date(iso)).toLocaleDateString(undefined, { month: "short", year: "numeric" }) : null;
+  const payoffDate = fmtPayoffMonth(loanMetrics?.payoffDate);
 
   // Amortization chart — sample every N months so chart is not too dense
   const amortChartSample = amortRows.filter((_, i) => {
@@ -5157,33 +5129,13 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     cumInterest: Math.round(r.cumInterest),
   }));
 
-  // ── payoff simulator ───────────────────────────────────────────
-  // Simple simulation: recalc with extra payment
-  function simulatePayoff(extra: number): { months: number; totalInterest: number } {
-    if (!loanPrincipal || !loanRate) return { months: 0, totalInterest: 0 };
-    const r = loanRate / 100 / 12;
-    const basePayment = amortRows.length > 0 ? amortRows[0].payment : loanMonthlyPayment;
-    const payment = basePayment + extra;
-    let balance = loanPrincipal;
-    let months = 0;
-    let totalInt = 0;
-    while (balance > 0.005 && months < 1200) {
-      const interest = balance * r;
-      const principalPaid = Math.min(payment - interest, balance);
-      balance -= principalPaid;
-      totalInt += interest;
-      months++;
-    }
-    return { months, totalInterest: totalInt };
-  }
-
-  const baseSim = simulatePayoff(0);
-  const extraSim = simulatePayoff(extraPayment);
-  const monthsSaved = Math.max(0, baseSim.months - extraSim.months);
-  const interestSaved = Math.max(0, baseSim.totalInterest - extraSim.totalInterest);
-  const newPayoffDate = extraSim.months > 0
-    ? new Date(now.getFullYear(), now.getMonth() + extraSim.months, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" })
-    : null;
+  // ── payoff simulator — the same engine (shared/liability-derived) ─────────
+  const extraSimShared = isLoan && loanPrincipal > 0 ? simulateExtraPayment(loanFields, loanTodayISO, extraPayment, { typeKey: loanTypeKey, row: profile as any }) : null;
+  const baseSim = { months: loanMetrics?.monthsRemaining ?? 0, totalInterest: loanMetrics?.totalRemainingInterest ?? 0 };
+  const extraSim = { months: extraSimShared?.months ?? 0, totalInterest: extraSimShared?.totalInterest ?? 0 };
+  const monthsSaved = extraSimShared?.monthsSaved ?? 0;
+  const interestSaved = extraSimShared?.interestSaved ?? 0;
+  const newPayoffDate = fmtPayoffMonth(extraSimShared?.payoffDate);
 
   // ── spending by category ───────────────────────────────────────
   const categoryTotals: Record<string, number> = {};
@@ -8799,14 +8751,10 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
     f.originalAmount, f.original_amount, fin.originalAmount, fin.original_amount,
     f.balance, fin.balance, ln.balance
   );
-  const interestRate = firstNum(
-    f.interestRate, f.interest_rate, f.rate, f.apr,
-    fin.interestRate, fin.interest_rate, fin.rate, fin.apr,
-    ln.interestRate, ln.interest_rate, ln.rate, ln.apr
-  );
-  const monthlyPayment = firstNum(
-    f.monthlyPayment, f.monthly_payment, fin.monthlyPayment, fin.monthly_payment, ln.monthlyPayment, ln.monthly_payment
-  );
+  // Rule 11: the canonical readers (shared/liability-fields) walk the
+  // top-level, `finance` and `loan` spellings in ONE order.
+  const interestRate = readInterestRatePct(f);
+  const monthlyPayment = readMonthlyPayment(f);
   const termMonths = firstNum(
     f.termMonths, f.term_months, f.loanTerm, f.loan_term, f.term,
     fin.termMonths, fin.term_months, fin.loanTerm, fin.loan_term, fin.term,
@@ -8878,35 +8826,26 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
     onError: (err: Error) => toast({ title: "Failed", description: formatApiError(err), variant: "destructive" }),
   });
 
-  // Derive term from monthly payment if not provided
-  const derivedTermLocal = termMonths || (() => {
-    if (!loanBalance || !interestRate || !monthlyPayment) return 0;
-    const r = interestRate / 100 / 12;
-    if (r === 0) return Math.round(loanBalance / monthlyPayment);
-    return Math.round(-Math.log(1 - (loanBalance * r) / monthlyPayment) / Math.log(1 + r));
-  })();
-
-  // Calculate amortization schedule
-  const schedule: { month: number; payment: number; principal: number; interest: number; balance: number }[] = [];
-  if (loanBalance > 0 && interestRate > 0 && derivedTermLocal > 0) {
-    const monthlyRate = interestRate / 100 / 12;
-    const calcPayment = monthlyRate === 0
-      ? loanBalance / derivedTermLocal
-      : loanBalance * (monthlyRate * Math.pow(1 + monthlyRate, derivedTermLocal)) / (Math.pow(1 + monthlyRate, derivedTermLocal) - 1);
-    let remaining = loanBalance;
-    for (let month = 1; month <= derivedTermLocal && remaining > 0.005; month++) {
-      const interestCharge = remaining * monthlyRate;
-      const principalPaid = Math.min(calcPayment - interestCharge, remaining);
-      remaining = Math.max(0, remaining - principalPaid);
-      schedule.push({
-        month,
-        payment: Math.round((principalPaid + interestCharge) * 100) / 100,
-        principal: Math.round(principalPaid * 100) / 100,
-        interest: Math.round(interestCharge * 100) / 100,
-        balance: Math.round(remaining * 100) / 100,
-      });
-    }
-  }
+  // Amortization schedule — ONE engine (shared/liability-derived, Rule 12):
+  // the same rows the liability detail page lists for this loan. The private
+  // closed-form term + loop that lived here disagreed with it.
+  const loanTabToday = getUserToday(BROWSER_TIMEZONE);
+  const loanTabTypeKey = (profile as any).type_key ?? (profile as any).typeKey ?? null;
+  const loanTabTerms: Record<string, any> = {
+    balance: loanBalance, interestRate, monthlyPayment: monthlyPayment || undefined, termMonths: termMonths || undefined,
+    dueDay: f.dueDay ?? fin.dueDay, dueDate: f.dueDate ?? fin.dueDate, nextPaymentDate: f.nextPaymentDate, lastPaidDate: f.lastPaidDate,
+  };
+  const loanTabAmort = loanBalance > 0 && interestRate > 0 && (monthlyPayment > 0 || termMonths > 0)
+    ? deriveLiabilityAmortization(loanTabTerms, loanTabToday, { typeKey: loanTabTypeKey, row: profile })
+    : null;
+  const schedule: { month: number; payment: number; principal: number; interest: number; balance: number }[] =
+    (loanTabAmort?.rows || []).map((r) => ({
+      month: r.paymentNumber,
+      payment: Math.round((r.principal + r.extraPrincipal + r.interest) * 100) / 100,
+      principal: Math.round((r.principal + r.extraPrincipal) * 100) / 100,
+      interest: Math.round(r.interest * 100) / 100,
+      balance: Math.round(r.remainingBalance * 100) / 100,
+    }));
 
   const totalInterest = schedule.reduce((s, r) => s + r.interest, 0);
   const totalCost = loanBalance + totalInterest;
@@ -8933,7 +8872,8 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
   const principalRemaining = remainingSlice.reduce((s, r) => s + r.principal, 0);
   const interestRemaining = remainingSlice.reduce((s, r) => s + r.interest, 0);
   const remainingBalanceComputed = remainingSlice.length > 0 ? remainingSlice[0].balance + remainingSlice[0].principal : loanBalance;
-  const percentPaid = loanBalance > 0 ? Math.min(100, (principalPaid / loanBalance) * 100) : 0;
+  // THE percent-paid formula (shared/liability-calc), over the schedule's opening balance.
+  const percentPaid = payoffProgressPct(loanBalance, Math.max(0, loanBalance - principalPaid));
 
   // Linked obligations (existing payments)
   const linkedObs = obligations.filter((o: any) =>
@@ -9414,16 +9354,10 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
 
             {/* Extra Payment Calculator */}
             {loanBalance > 0 && interestRate > 0 && (() => {
+              // The same simulator the asset page and the detail page run (shared/liability-derived).
               function simPayoff(extra: number) {
-                const r = interestRate / 100 / 12;
-                const base = schedule.length > 0 ? schedule[0].payment : monthlyPayment;
-                const pmt = base + extra;
-                let bal = loanBalance; let months = 0; let totInt = 0;
-                while (bal > 0.005 && months < 1200) {
-                  const intCharge = bal * r; const prin = Math.min(pmt - intCharge, bal);
-                  bal -= prin; totInt += intCharge; months++;
-                }
-                return { months, totInt };
+                const sim = simulateExtraPayment(loanTabTerms, loanTabToday, extra, { typeKey: loanTabTypeKey, row: profile });
+                return { months: sim.months, totInt: sim.totalInterest };
               }
               const base = simPayoff(0);
               const extra = simPayoff(extraPmt);
@@ -10089,7 +10023,7 @@ function LinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile: any;
   const userBalanceShare = liabilities.reduce((s, x) => {
     const f = x.profile.fields || {};
     const fin = f.finance || {};
-    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    const bal = readBalance(f);
     const pct = Number(x.link.ownershipPercentage ?? 100);
     return s + (bal * pct) / 100;
   }, 0);
@@ -10251,7 +10185,7 @@ function LiabilityRow({ link, liability, allProfiles, refetchAll, onUnlink, onOp
 
   const f = liability.fields || {};
   const fin = f.finance || {};
-  const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+  const bal = readBalance(f);
   const pct = Number(link.ownershipPercentage ?? 100);
   const monthly = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
   const userShare = (bal * pct) / 100;
@@ -10402,7 +10336,7 @@ function AssetLinkedLiabilitiesTab({ profile, profileId, onChanged }: { profile:
   const totalSecuredBalance = liabilities.reduce((s, x) => {
     const f = x.profile.fields || {};
     const fin = f.finance || {};
-    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    const bal = readBalance(f);
     const pct = Number(x.link.ownershipPercentage ?? 100);
     return s + (bal * pct) / 100;
   }, 0);
@@ -10566,7 +10500,7 @@ function AssetLiabilityRow({ link, liability, allProfiles: _allProfiles, refetch
 
   const f = liability.fields || {};
   const fin = f.finance || {};
-  const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+  const bal = readBalance(f);
   const pct = Number(link.ownershipPercentage ?? 100);
   const monthly = Number(f.monthlyPayment ?? fin.monthlyPayment ?? 0);
   const securedShare = (bal * pct) / 100;
@@ -10615,9 +10549,9 @@ function AssetLiabilityRow({ link, liability, allProfiles: _allProfiles, refetch
             <div>
               <p className="text-muted-foreground">APR</p>
               <p className="font-medium">{(() => {
-                const apr = Number(f.annualInterestRate ?? f.apr ?? fin.annualInterestRate ?? 0);
+                const apr = readInterestRatePct(f);
                 if (!apr) return '—';
-                return `${(apr < 1 ? apr * 100 : apr).toFixed(2)}%`;
+                return `${apr.toFixed(2)}%`;
               })()}</p>
             </div>
             <div>
@@ -11978,8 +11912,8 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
                       typeKey={(l.type_key || l.fields?.subtype || l.type || "loan").toString().replace(/_/g, " ")}
                       sharePct={liabPct(l)}
                       currentBalance={liabBalance(l)}
-                      apr={f.apr ?? f.interestRate ?? fin.apr ?? fin.interestRate ?? null}
-                      monthlyPayment={f.monthlyPayment ?? fin.monthlyPayment ?? null}
+                      apr={readInterestRatePct(f) || null}
+                      monthlyPayment={readMonthlyPayment(f) || null}
                     />
                   );
                 })}

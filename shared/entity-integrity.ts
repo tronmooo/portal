@@ -12,7 +12,7 @@
 //   alias_conflict     same identity, different values (`looselyEqual`)
 //   impossible_date    a dated field naming a day that does not exist (Feb 30)
 //   negative_money     a money field below zero
-//   schedule_conflict  `dueDate` / `nextDueDate` / `nextPaymentDate` disagree
+//   schedule_conflict  `dueDate` and its mirror `nextDueDate` disagree
 //
 // `resolveCanonicalFields(fields)` then CHOOSES: the canonical key keeps the
 // canonical value, the alternates are dropped from the visible fields and
@@ -68,8 +68,14 @@ const MONEY_IDENTITIES: ReadonlySet<string> = new Set(
   ["balance", "monthlyPayment", "currentValue", "purchasePrice", "originalBalance", "amount", "creditLimit", "minimumPayment", "monthlyCost", "cost"].map(fieldIdentity),
 );
 
-/** The due-date spellings whose disagreement is a schedule conflict. */
-const SCHEDULE_KEYS = ["nextPaymentDate", "next_payment_date", "nextPayment", "next_payment", "nextDueDate", "next_due_date", "dueDate", "due_date"] as const;
+/**
+ * The due-date spellings that are MIRRORS of one another (the pay path writes
+ * `dueDate` and `nextDueDate` together) and so must agree. `nextPaymentDate`
+ * is deliberately absent: it is the user's explicit "next due" override on a
+ * loan, which legitimately differs from the creation-time `dueDate` (shared/
+ * loan-facts reads it first) — a difference there is a schedule, not a conflict.
+ */
+const SCHEDULE_KEYS = ["nextDueDate", "next_due_date", "dueDate", "due_date"] as const;
 
 const moneyNumber = (v: unknown): number | null => {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;

@@ -21,6 +21,7 @@ import {
 import { dayLabel } from "@shared/now-rank";
 import { categoryLabel } from "@shared/category-canon";
 import { UPCOMING_BILL_WINDOW_DAYS, UPCOMING_BILLS_EMPTY_COPY, selectUpcomingBills } from "@shared/obligation-windows";
+import { savingsRatePct } from "@shared/expense-ledger";
 import { Medallion } from "@/components/dashboard/visuals";
 import { SectionHeading } from "@/components/ui/section-heading";
 
@@ -230,7 +231,9 @@ export function MoneyOverview(props: {
   const visibleLiabilities = showAllLiabilities || liabilityBreakdown.length <= ROW_PREVIEW + 4 ? liabilityBreakdown : liabilityBreakdown.slice(0, ROW_PREVIEW);
   const worstBudget = budgets.slice().sort((a, b) => (b.spent / (b.limit || 1)) - (a.spent / (a.limit || 1)))[0];
   const worstPct = worstBudget ? Math.round((worstBudget.spent / (worstBudget.limit || 1)) * 100) : 0;
-  const savingsRate = incomeMtd > 0 ? Math.round(((incomeMtd - spendMtd) / incomeMtd) * 100) : null;
+  // ONE savings-rate definition (shared/expense-ledger) — the Finance tab
+  // used the same formula with a different numerator; now both call this.
+  const savingsRate = savingsRatePct(incomeMtd, spendMtd);
   // A move that rounds to 0.0% is flat, not a fall: net worth off by four
   // cents used to draw a red ▼ beside "0.0% mo".
   const nwTrend = (() => {
@@ -267,7 +270,9 @@ export function MoneyOverview(props: {
         <KpiCard label="Spend · MTD" icon={ShoppingCart} value={money(spendMtd)} tone="warn"
           trend={spendTrendPct != null ? `${spendTrendPct > 0 ? "▲" : spendTrendPct < 0 ? "▼" : "—"} ${Math.abs(spendTrendPct).toFixed(0)}% mo` : undefined}
           trendTone={spendTrendPct == null ? undefined : spendTrendPct < 0 ? "pos" : spendTrendPct > 0 ? "neg" : "neutral"}
-          sub={worstBudget ? `${worstBudget.category} ${worstPct}%` : undefined}
+          // Rule 15: this is the MANUAL expenses ledger; the connected-account
+          // spend (ConnectedFinance) is a separate ledger and says so too.
+          sub={[worstBudget ? `${worstBudget.category} ${worstPct}%` : null, "manual ledger"].filter(Boolean).join(" · ")}
           series={spendSeries} chartKind="bars"
           onClick={() => (onOpenSpend ? onOpenSpend() : onCategoryClick?.("all"))} testId="money-spend" />
         <KpiCard label="Income · MTD" icon={TrendingUp} value={money(incomeMtd)} tone="pos"

@@ -15,6 +15,7 @@
 // detail page uses (["/api/profiles", id, "detail"]), so it's instant when
 // you've already visited the profile and edits here reflect there too.
 import { useState, useRef, useEffect } from "react";
+import { PERSON_LIKE_TYPES } from "@shared/scope";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRoute, useLocation, Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -198,7 +199,8 @@ function EveryoneInfo() {
   );
 }
 
-const PERSON_TYPES = new Set(["self", "person", "pet"]);
+// Rule 28: one definition of "who is a person here" — shared/scope.ts.
+const PERSON_TYPES = PERSON_LIKE_TYPES;
 
 // One person's row in the combined view: who they are, and the first couple of
 // identity details we already hold, so the list is a summary rather than an

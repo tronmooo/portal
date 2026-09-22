@@ -3199,15 +3199,15 @@ describe("D265 registry-dialog profiles fold into the model's keys", async () =>
   const { canonicalizeRegistryFields } = await import("../shared/registry-fields");
   it("a registry loan's fields become the loan model's fields, snake_case dropped", () => {
     expect(canonicalizeRegistryFields({ monthly_payment: 200, current_balance: 5000, original_balance: 8000, interest_rate: 6, loan_term_months: 36, due_date_day: 12, loan_number: "L-1" }))
-      .toEqual({ monthlyAmount: 200, balance: 5000, originalAmount: 8000, interestRate: 6, termMonths: 36, dueDay: 12, loan_number: "L-1" });
+      .toEqual({ monthlyPayment: 200, balance: 5000, originalBalance: 8000, interestRate: 6, termMonths: 36, dueDay: 12, loan_number: "L-1" });
   });
   it("the model key wins when both are present; blanks do not overwrite", () => {
     expect(canonicalizeRegistryFields({ current_balance: 5000, balance: 4200 })).toEqual({ balance: 4200 });
-    expect(canonicalizeRegistryFields({ current_value: "", value: 9000 })).toEqual({ value: 9000 });
+    expect(canonicalizeRegistryFields({ current_value: "", value: 9000 })).toEqual({ currentValue: 9000 });
     expect(canonicalizeRegistryFields({ current_value: "" })).toEqual({});
   });
   it("assets, subscriptions and people fold too", () => {
-    expect(canonicalizeRegistryFields({ current_value: 9000, purchase_price: 12000, purchase_date: "2019-05-01" })).toEqual({ value: 9000, purchasePrice: 12000, purchaseDate: "2019-05-01" });
+    expect(canonicalizeRegistryFields({ current_value: 9000, purchase_price: 12000, purchase_date: "2019-05-01" })).toEqual({ currentValue: 9000, purchasePrice: 12000, purchaseDate: "2019-05-01" });
     expect(canonicalizeRegistryFields({ next_billing_date: "2026-10-01" })).toEqual({ dueDate: "2026-10-01", nextDueDate: "2026-10-01" });
     expect(canonicalizeRegistryFields({ date_of_birth: "1990-01-02" })).toEqual({ birthday: "1990-01-02" });
   });
@@ -3220,11 +3220,11 @@ describe("D265 registry-dialog profiles fold into the model's keys", async () =>
     });
     const r = await h.api("POST", "/api/profiles", { type: "liability", type_key: "personal_loan", name: "Loan", fields: { monthly_payment: 200, current_balance: 5000, due_date_day: 12 } });
     expect([200, 201]).toContain(r.status);
-    expect(created[0].fields).toMatchObject({ monthlyAmount: 200, balance: 5000, dueDay: 12 });
+    expect(created[0].fields).toMatchObject({ monthlyPayment: 200, balance: 5000, dueDay: 12 });
     expect(created[0].fields.monthly_payment).toBeUndefined();
     const p = await h.api("PATCH", "/api/profiles/loan-1", { fields: { monthly_payment: 250 } });
     expect(p.status).toBe(200);
-    expect(patched[0][1].fields).toMatchObject({ monthlyAmount: 250 });
+    expect(patched[0][1].fields).toMatchObject({ monthlyPayment: 250 });
     expect(patched[0][1].fields.monthly_payment).toBeUndefined();
   });
 });
@@ -3254,7 +3254,7 @@ describe("D267 the storage layer folds registry fields for every door", async ()
   const { prepareProfileFields } = await import("../shared/registry-fields");
   it("prepareProfileFields folds aliases, anchors a recurring bill and stores the model's numbers as numbers", () => {
     expect(prepareProfileFields({ current_balance: "7000", monthly_payment: "310", interest_rate: 4.5, loan_term_months: "24", due_date_day: "20", lender: "CU" }, { typeKey: "auto_loan", todayISO: "2026-09-04" }))
-      .toEqual({ balance: 7000, monthlyAmount: 310, interestRate: 4.5, termMonths: 24, dueDay: 20, lender: "CU" });
+      .toEqual({ balance: 7000, monthlyPayment: 310, interestRate: 4.5, termMonths: 24, dueDay: 20, lender: "CU" });
     const util = prepareProfileFields({ amount: "60", frequency: "monthly", start_date: "2026-05-26", provider: "City" }, { typeKey: "utility", todayISO: "2026-09-04" });
     expect(util).toMatchObject({ amount: 60, firstPaymentDate: "2026-05-26", dueDate: "2026-09-26", nextDueDate: "2026-09-26" });
     expect(prepareProfileFields({ value: "abc", notes: "x" })).toEqual({ value: "abc", notes: "x" });
@@ -3262,10 +3262,10 @@ describe("D267 the storage layer folds registry fields for every door", async ()
   it("MemStorage create and update fold an old-backup shape", async () => {
     const s = new MemStorage();
     const loan = await s.createProfile({ type: "liability", type_key: "auto_loan", name: "Old loan", fields: { current_balance: "7000", monthly_payment: "310", due_date_day: 20 }, tags: [], notes: "" } as any);
-    expect(loan.fields).toMatchObject({ balance: 7000, monthlyAmount: 310, dueDay: 20 });
+    expect(loan.fields).toMatchObject({ balance: 7000, monthlyPayment: 310, dueDay: 20 });
     expect((loan.fields as any).current_balance).toBeUndefined();
     const upd = await s.updateProfile(loan.id, { fields: { monthly_payment: "325" } } as any);
-    expect((upd as any)?.fields?.monthlyAmount).toBe(325);
+    expect((upd as any)?.fields?.monthlyPayment).toBe(325);
     expect((upd as any)?.fields?.monthly_payment).toBeUndefined();
   });
   it("POST /api/import restores an old backup loan with its subtype and folded, numeric fields", async () => {

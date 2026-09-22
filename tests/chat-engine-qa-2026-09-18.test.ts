@@ -266,4 +266,35 @@ describe("Recent Activity: '1 completion', once", () => {
     ]);
     expect(rows).toHaveLength(2);
   });
+  // Rule 36: the feed dedupes on the canonical event id, not on the text.
+  it("keeps two distinct events whose text is identical", () => {
+    const rows = dedupeActivityRows([
+      { id: "e1", type: "expense", description: "$4.00 — Coffee", timestamp: "2026-09-18T10:00:00.000Z" },
+      { id: "e2", type: "expense", description: "$4.00 — Coffee", timestamp: "2026-09-18T10:00:00.000Z" },
+    ]);
+    expect(rows.map(r => r.id)).toEqual(["e1", "e2"]);
+  });
+  it("renders one event once, however many times it reaches the feed", () => {
+    const rows = dedupeActivityRows([
+      { id: "t1", type: "task_completed", description: "Completed: Trash", timestamp: "2026-09-18T10:00:00.000Z" },
+      { id: "t1", type: "task_completed", description: "Completed: Trash (Sep 18)", timestamp: "2026-09-18T10:00:05.000Z" },
+      // Same id under another type is another event (an expense and a task can share an id space only by accident).
+      { id: "t1", type: "expense", description: "$9.00 — Trash bags", timestamp: "2026-09-18T10:00:00.000Z" },
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].description).toBe("Completed: Trash");
+  });
+  it("both storages stamp the source entity's id on every Recent Activity row", () => {
+    const fs = require("fs"); const path = require("path");
+    for (const f of ["../server/supabase-storage.ts", "../server/storage.ts"]) {
+      const src = fs.readFileSync(path.resolve(__dirname, f), "utf8");
+      const start = src.indexOf("recentActivity: dedupeActivityRows([");
+      expect(start, f).toBeGreaterThan(-1);
+      const block = src.slice(start, src.indexOf("].sort(", start));
+      const types = [...block.matchAll(/type: '([a-z_]+)'/g)].map((m: any) => m[1]);
+      expect(types.length, f).toBeGreaterThan(0);
+      const ids = [...block.matchAll(/id: String\((\w+)\.id\)/g)].length;
+      expect(ids, `${f}: every row kind carries id: String(x.id)`).toBe(types.length);
+    }
+  });
 });

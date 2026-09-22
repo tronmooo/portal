@@ -20,6 +20,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { PERSON_LIKE_TYPES } from "@shared/scope";
 import { formatMoneyCompact } from "@/lib/format";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
@@ -96,7 +97,8 @@ type TreeNodeLite = {
 };
 
 const NESTED_ASSET_TYPES = ["vehicle", "property", "investment", "asset", "account"];
-const PERSON_TYPES = new Set(["person", "self", "pet"]);
+// Rule 28: one definition of "who can own things" — shared/scope.ts.
+const PERSON_TYPES = PERSON_LIKE_TYPES;
 
 // Was a local copy; formatMoneyCompact carries the identical thresholds.
 const formatCurrency = formatMoneyCompact;
@@ -652,7 +654,7 @@ export function FinancialsBreakdown({
     const lp = (allProfilesForLiab || []).find((p: any) => p.id === link.liabilityProfileId);
     if (!lp) return null;
     const f = lp.fields || {}; const fin = f.finance || {};
-    const bal = Number(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+    const bal = readBalance(f);
     const pct = Number(link.ownershipPercentage ?? 100);
     return { id: lp.id, name: lp.name || "Liability", secured: (bal * pct) / 100 };
   }).filter(Boolean) as Array<{ id: string; name: string; secured: number }>;

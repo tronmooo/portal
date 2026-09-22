@@ -18,7 +18,7 @@ import {
 } from "@/lib/profileFilter";
 import { Filter, Users, User, Dog, Car, CreditCard, Package, Stethoscope, Building, Landmark, ChevronDown, X } from "lucide-react";
 import { toggleScopeSelection, EVERYONE_SELECTION, type ProfileSelection } from "@shared/profile-selection";
-import { isOfferablePerson } from "@shared/entity-classify";
+import { offerablePeople } from "@shared/entity-classify";
 
 const TYPE_ICONS: Record<string, any> = {
   person: User,
@@ -201,24 +201,20 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
       if (profileTypes && profileTypes.length > 0) {
         return profileTypes.some(t => normalizeFilter(t) === normalizeFilter(p.type));
       }
-      // Only show primary profile types — not assets, vehicles, subscriptions, etc.
-      // isOfferablePerson also drops a possession mistyped `person` (F-04).
-      return ["person", "self", "pet"].some(t => normalizeFilter(t) === normalizeFilter(p.type)) && isOfferablePerson(p);
+      // Rule 28: the canonical people list (people, pets, Self) — not assets,
+      // vehicles, subscriptions. offerablePeople also drops a possession
+      // mistyped `pet` and soft-deleted rows.
+      return offerablePeople([p]).length === 1;
     });
 
-    // Deduplicate by name+type — keep the one with the most linked data
+    // Rule 28: dedupe by ID only. The old `type::name` key collapsed two
+    // DISTINCT people who share a name ("Max" the son and "Max" the dog are
+    // different types, but two "Alex" persons are not) so one of them could
+    // never be selected. A duplicated id can only come from a stale cache
+    // merge, and that is the only thing this removes.
     const deduped = new Map<string, any>();
     for (const p of typeFiltered) {
-      const key = `${p.type}::${p.name}`;
-      const existing = deduped.get(key);
-      if (!existing) {
-        deduped.set(key, p);
-      } else {
-        // Keep the profile with more linked data (documents, expenses, tasks, etc.)
-        const score = (prof: any) =>
-          (prof.documents?.length || 0) + (prof.expenses?.length || 0) + (prof.tasks?.length || 0);
-        if (score(p) > score(existing)) deduped.set(key, p);
-      }
+      if (!deduped.has(p.id)) deduped.set(p.id, p);
     }
     return Array.from(deduped.values()).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [profiles, profileTypes]);

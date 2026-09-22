@@ -2,6 +2,7 @@ import { changedFieldsOnly } from "@shared/field-patch";
 import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
 import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
 import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
+import { readBalance, readInterestRatePct } from "@shared/liability-fields";
 import { daysUntilISO } from "@shared/date-rules";
 import { isSystemFieldKey } from "@shared/system-fields";
 
@@ -7681,10 +7682,12 @@ export default function TrackersPage() {
                 const fields: any = liab.fields || {};
                 const fin = fields.finance || {};
                 const isSubscription = liab.type === "subscription";
-                const balance = toNumLiab(fields.currentBalance ?? fields.remainingBalance ?? fields.loanBalance ?? fields.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance);
+                // Rule 11: the canonical readers (shared/liability-fields); a
+                // stored zero balance still counts as "known" for the progress bar.
+                const balance = readBalance(fields) > 0 ? readBalance(fields) : toNumLiab(fields.balance);
                 const subFreq = String(fields.frequency || fields.billingFrequency || "monthly").toLowerCase();
                 const subCost = toNumLiab(fields.cost ?? fields.monthlyAmount ?? fields.amount);
-                const apr = toNumLiab(fields.annualInterestRate ?? fields.apr ?? fin.annualInterestRate);
+                const apr = readInterestRatePct(fields) || null;
                 const lender = fields.lender || fin.lender || fields.provider || fields.creditor || fin.creditor || '';
                 const subtype = liabilitySubcategoryOf(liab);
                 const original = toNumLiab(fields.originalBalance ?? fin.originalBalance ?? fields.originalLoanAmount ?? fin.originalLoanAmount ?? fields.creditLimit ?? fin.creditLimit);

@@ -941,6 +941,10 @@ function SpendingSection({
 
   return (
     <div className="space-y-3" data-testid="connected-spending-section">
+      {/* Rule 15: two ledgers, never merged — this one is linked accounts only. */}
+      <p className="text-[11px] text-muted-foreground" data-testid="connected-spending-ledger-note">
+        Connected ledger (linked accounts only). Expenses you logged by hand are counted on the Money overview, not here.
+      </p>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <StatCard label="Spending this month" totals={curSpend} tone="neg" testId="spend-current" />
         <StatCard label="Spending last month" totals={prevSpend} testId="spend-previous" />

@@ -13,6 +13,7 @@ import { isInScope as scopeIsInScope, selfIdsFrom, withAncestorOwnerIds } from "
 import { netWorthChange } from "@shared/net-worth-change";
 import { resolveAssetValue, resolveLiabilityBalance } from "@shared/asset-value";
 import { isRecurringBill } from "@shared/liability-types";
+import { sumExpenses, spendByCategory } from "@shared/expense-ledger";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
@@ -509,14 +510,9 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
       return s.slice(0, 4) === yearNow;
     };
     const periodExp = expenses.filter((e) => inP(e.date));
-    const byCat: Record<string, number> = {};
-    let total = 0;
-    for (const e of periodExp) {
-      const c = (e.category || "other");
-      const a = Number(e.amount) || 0;
-      byCat[c] = (byCat[c] || 0) + a;
-      total += a;
-    }
+    // Rule 15: the manual ledger through the ONE shared calc (shared/expense-ledger).
+    const byCat = spendByCategory(periodExp, { keyOf: (c) => c || "other" });
+    const total = sumExpenses(periodExp);
     const rows = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
     const txns = periodExp.length;
     let days: number;
@@ -527,7 +523,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
     // Trend vs the previous comparable period (only meaningful for the month view).
     let trendPct: number | null = null;
     if (period === "month") {
-      const lastTotal = expenses.filter((e) => String(e.date || "").slice(0, 7) === ymLast).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      const lastTotal = sumExpenses(expenses.filter((e) => String(e.date || "").slice(0, 7) === ymLast));
       if (lastTotal > 0) trendPct = Math.round(((total - lastTotal) / lastTotal) * 1000) / 10;
     }
     return { rows, total, txns, dailyAvg, trendPct, perDay: days > 0 ? txns / days : 0 };

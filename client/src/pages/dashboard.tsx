@@ -1,5 +1,6 @@
 import { changedFieldsOnly } from "@shared/field-patch";
 import { sumMonthIncomeToDateNow } from "@shared/obligation-windows";
+import { numOrUnknown } from "@shared/num-or-unknown";
 import { localTodayISO } from "@/lib/dates";
 import { useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from "react";
 import { formatApiError } from "@/lib/formatError";
@@ -434,10 +435,13 @@ function KPITaskCard({ count, onClick }: { count: number; onClick: () => void })
   );
 }
 
-function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; trend: "up"|"down"|"flat"; enhanced: any; onClick: () => void }) {
-  const animatedAmount = useCountUp(Math.round(amount));
+// Rule 30: `amount` is null when the figure is unknown (both sources in
+// error) and the card renders "—" — never "$0".
+function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number | null; trend: "up"|"down"|"flat"; enhanced: any; onClick: () => void }) {
+  const known = amount ?? 0;
+  const animatedAmount = useCountUp(Math.round(known));
   const finSnap = enhanced?.financeSnapshot;
-  const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? amount * 0.3 : Math.random() * amount * 0.15);
+  const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? known * 0.3 : Math.random() * known * 0.15);
   const maxBar = Math.max(...bars, 1);
   return (
     <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
@@ -454,7 +458,7 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number; tr
         </span>
       </div>
       <div className="mt-1 relative z-10">
-        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>${animatedAmount}</span>
+        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>{amount == null ? "—" : `$${animatedAmount}`}</span>
         {/* When nothing is logged yet this month, "$0" read as broken (user
             report on July 1). Show the recurring commitment so the number has
             context: expenses logged so far + bills/mo still coming. */}
@@ -583,7 +587,7 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
 // own row at the very top of the dashboard (under AI Summary). The smaller
 // KPISection below becomes a secondary chip row of habits/tasks/journal/docs.
 
-function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, refetching = false, hideBudget = false }: {
+function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, refetching = false, hideBudget = false, enhancedError = false, statsError = false, onRetry }: {
   enhanced: any;
   stats: DashboardStats | undefined;
   filterMode: string;
@@ -591,20 +595,25 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   allProfiles?: any[];
   refetching?: boolean;
   hideBudget?: boolean;
+  /** Rule 30: the feeding queries are in error — a missing number is "—", never $0. */
+  enhancedError?: boolean;
+  statsError?: boolean;
+  onRetry?: () => void;
 }) {
   const [, navigate] = useLocation();
   const [heroPopup, setHeroPopup] = useState<"networth" | "cashflow" | "budget" | null>(null);
-  // BUG (2026-06-26): the "Updating filter…" badge + 60% dim was wired straight
-  // to react-query's isFetching, so a slow/cold fetch (a minute+) left the whole
-  // hero greyed out and the badge spinning the entire time — it read as the UI
-  // breaking. Cap the indicator: show it only while actually fetching, but never
-  // for more than ~3.5s, so a long cold start quietly resolves instead of
-  // looking stuck. (The numbers under it stay visible; only the chrome dims.)
-  const [showRefetch, setShowRefetch] = useState(false);
+  // Rule 18: the revalidating marker stays for as long as the query is
+  // actually fetching. A cached number is not final until the refetch
+  // confirms it, and the old 3.5s cap dropped the marker mid-fetch so stale
+  // tiles read as settled ("Tasks: 2" that was about to become "Tasks: 0").
+  // After ~8s it ESCALATES to "Still updating…" — a long cold start reads as
+  // slow, not stuck — but it never silently disappears while data is in
+  // flight. The numbers under it stay visible; only the chrome dims.
+  const showRefetch = refetching;
+  const [stillUpdating, setStillUpdating] = useState(false);
   useEffect(() => {
-    if (!refetching) { setShowRefetch(false); return; }
-    setShowRefetch(true);
-    const t = setTimeout(() => setShowRefetch(false), 3500);
+    if (!refetching) { setStillUpdating(false); return; }
+    const t = setTimeout(() => setStillUpdating(true), 8_000);
     return () => clearTimeout(t);
   }, [refetching]);
   const currentMonth = new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
@@ -625,7 +634,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // from the prior Everyone/Self filter that was still cached. Setting
   // placeholderData: undefined here forces budgetSummary to show the loading
   // state during swap and snap to the correct $0 when the new query lands.
-  const { data: budgetSummary, isSuccess: budgetLoaded } = useQuery<{ totalBudget: number; totalSpent: number; remaining: number }>({
+  const { data: budgetSummary, isSuccess: budgetLoaded, isError: budgetError } = useQuery<{ totalBudget: number; totalSpent: number; remaining: number }>({
     queryKey: ["/api/budgets/summary", currentMonth, filterMode, ...filterIds, "hero"],
     queryFn: async () => {
       const [budgetRes, expensesRes] = await Promise.all([
@@ -647,7 +656,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // BUG-20260528-budget-keep-previous-leak: same fix as budgetSummary so the
   // Cash Flow "In $X" doesn't carry the previous filter's incomes when swapping
   // to a fresh profile.
-  const { data: incomesRaw, isSuccess: incomesLoaded } = useQuery<any[]>({
+  const { data: incomesRaw, isSuccess: incomesLoaded, isError: incomesError } = useQuery<any[]>({
     queryKey: ["/api/incomes", filterMode, ...filterIds, "hero"],
     queryFn: () => apiRequest("GET", `/api/incomes${leading}`).then(r => r.json()),
     staleTime: 60_000,
@@ -753,7 +762,9 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // passesProfileFilter-scoped expense set with the same user-TZ month
   // window (supabase-storage.ts getStats/getDashboardEnhanced), so the
   // value cannot flip as the two endpoints race.
-  const monthlySpend = enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
+  // Rule 30: when BOTH sources are in error the figure is unknown ("—"), not $0.
+  const monthlySpendKnown = numOrUnknown(enhanced?.financeSnapshot?.totalMonthlySpend ?? stats?.monthlySpend, enhancedError && statsError);
+  const monthlySpend = monthlySpendKnown ?? 0;
   // The snapshot owns the one income figure: recurring streams PLUS paychecks
   // actually received. Summing the streams alone meant marking a paycheck
   // received moved nothing on any tile.
@@ -776,8 +787,15 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // half-loaded sum with a dollar sign is indistinguishable from an answer.
   // Gate the tile on all three: until then it shows a skeleton, not a number.
   const cashFlowReady = incomesLoaded && enhanced?.financeSnapshot != null;
-  const totalBudget = budgetSummary?.totalBudget ?? 0;
-  const totalSpent = budgetSummary?.totalSpent ?? 0;
+  // Rule 30: an errored input is an explicit error state, not a skeleton
+  // forever and never a "$0" — the tile shows "—" with Couldn't load / Retry.
+  const cashFlowError = !cashFlowReady
+    ? ((enhancedError && enhanced?.financeSnapshot == null) || (incomesError && !incomesLoaded))
+    : monthlySpendKnown == null;
+  const totalBudgetKnown = numOrUnknown(budgetSummary?.totalBudget, budgetError);
+  const totalSpentKnown = numOrUnknown(budgetSummary?.totalSpent, budgetError);
+  const totalBudget = totalBudgetKnown ?? 0;
+  const totalSpent = totalSpentKnown ?? 0;
   const budgetPct = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
   const budgetBreached = budgetPct > 100;
   // PR R: if the (scoped) user has no budget defined, hide the BUDGET tile entirely.
@@ -792,7 +810,10 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
   // once we have a SUCCESSFUL response (budgetLoaded). Until then we reserve the
   // slot with a skeleton (budgetPending) so nothing disappears mid-scroll.
   const effectiveHideBudget = hideBudget || (budgetLoaded && totalBudget <= 0);
-  const budgetPending = !hideBudget && !budgetLoaded;
+  // Rule 30: a FAILED budget query is its own state (the tile renders "—"
+  // with Couldn't load), not a skeleton that never resolves.
+  const budgetFailed = !hideBudget && !budgetLoaded && budgetError;
+  const budgetPending = !hideBudget && !budgetLoaded && !budgetError;
 
   // BUG (2026-06-10, user report): Math.max(0, ...) clamped NEGATIVE net worth
   // to a permanent "$0" while the sub-label showed the real assets/liabilities.
@@ -816,7 +837,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
     : `/api/net-worth/history?lookbackDays=120`;
   const { data: nwHistory = [] } = useQuery<any[]>({
     queryKey: ["/api/net-worth/history", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", histUrl).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", histUrl).then(r => r.json()),
     staleTime: 60_000,
   });
   const nwSeries = useMemo(() => {
@@ -881,9 +902,10 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
         <div
           className="absolute top-1 right-1 z-10 flex items-center gap-1.5 rounded-full bg-background/90 px-2 py-0.5 text-[11px] font-medium text-muted-foreground shadow-sm border border-border/50 animate-pulse"
           data-testid="hero-kpi-refetching"
+          data-still-updating={stillUpdating || undefined}
         >
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/70" />
-          Updating…
+          {stillUpdating ? "Still updating…" : "Updating…"}
         </div>
       )}
       <div className={`mb-2 space-y-2.5 transition-opacity duration-200 ${showRefetch ? "opacity-60" : "opacity-100"}`}>
@@ -972,7 +994,19 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
           {/* A partially-loaded sum is not a smaller number — it is the WRONG
               number. Hold the skeleton until In and Out have both landed
               (see `cashFlowReady`) rather than publishing an intermediate. */}
-          {!cashFlowReady ? (
+          {cashFlowError ? (
+            <>
+              <div className="mt-2 text-2xl font-bold tabular-nums text-muted-foreground" data-testid="hero-cash-flow-error">—</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">
+                Couldn't load
+                {onRetry && (
+                  <> · <span role="button" tabIndex={0} className="text-primary underline" data-testid="hero-cash-flow-retry"
+                    onClick={(e) => { e.stopPropagation(); onRetry(); }}
+                    onKeyDown={onEnterOrSpace(() => onRetry())}>Retry</span></>
+                )}
+              </div>
+            </>
+          ) : !cashFlowReady ? (
             <>
               <div className="mt-2 h-8 w-32 rounded-md bg-muted/60 animate-pulse" data-testid="hero-cash-flow-loading" />
               <div className="mt-1 h-3 w-40 rounded bg-muted/40 animate-pulse" />
@@ -1024,6 +1058,7 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
         {!effectiveHideBudget && !budgetPending && (
         <button
           type="button"
+          data-error={budgetFailed || undefined}
           onClick={() => setHeroPopup("budget")}
           className="relative flex flex-col overflow-hidden rounded-2xl border border-border/50 p-4 text-left card-lift active:scale-[0.98] transition-all"
           style={{ background: 'linear-gradient(150deg, hsl(155 60% 44% / 0.10) 0%, transparent 55%)' }}
@@ -1038,8 +1073,8 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
           </div>
           <div className="mt-2 flex items-center gap-3">
             <div className="min-w-0">
-              <div className="text-2xl font-bold tabular-nums" style={{ color: budgetBreached ? 'hsl(0 72% 58%)' : 'hsl(155 65% 50%)' }}>{animatedBudget}%</div>
-              <p className="text-[11px] text-muted-foreground">of {money(totalBudget)}</p>
+              <div className="text-2xl font-bold tabular-nums" style={{ color: budgetBreached ? 'hsl(0 72% 58%)' : 'hsl(155 65% 50%)' }} data-testid="hero-kpi-budget-pct">{budgetFailed ? "—" : `${animatedBudget}%`}</div>
+              <p className="text-[11px] text-muted-foreground">{budgetFailed ? "Couldn't load" : `of ${money(totalBudget)}`}</p>
             </div>
             <svg width="72" height="72" className="ml-auto shrink-0 -rotate-90">
               <circle cx="36" cy="36" r="29" fill="none" stroke="hsl(var(--muted))" strokeWidth="7" />
@@ -1049,8 +1084,8 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
             </svg>
           </div>
           <div className="mt-2 flex items-center gap-5 text-[11px]">
-            <div><p className="text-muted-foreground">Remaining</p><p className="font-bold tabular-nums" style={{ color: 'hsl(155 65% 50%)' }}>{money(budgetRemaining)}</p></div>
-            <div><p className="text-muted-foreground">Spent</p><p className="font-bold tabular-nums">{money(totalSpent)}</p></div>
+            <div><p className="text-muted-foreground">Remaining</p><p className="font-bold tabular-nums" style={{ color: 'hsl(155 65% 50%)' }}>{budgetFailed ? "—" : money(budgetRemaining)}</p></div>
+            <div><p className="text-muted-foreground">Spent</p><p className="font-bold tabular-nums">{budgetFailed ? "—" : money(totalSpent)}</p></div>
           </div>
           <span className="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-primary">View Budget <ArrowRight className="h-3 w-3" /></span>
         </button>
@@ -1155,7 +1190,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
           <KPITaskCard count={safeStats.activeTasks} onClick={() => setPopup("tasks")} />
           {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
                over stats.monthlySpend (/api/stats) so the KPI card and popup show identical totals. */}
-          <KPISpendCard amount={enhanced?.financeSnapshot?.totalMonthlySpend ?? safeStats?.monthlySpend ?? 0} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
+          <KPISpendCard amount={numOrUnknown(enhanced?.financeSnapshot?.totalMonthlySpend ?? safeStats?.monthlySpend, false)} trend={spendTrend} enhanced={enhanced} onClick={() => setPopup("spending")} />
           <KPIHabitsCard completionPct={safeStats.habitCompletionRate} totalHabits={safeStats.totalHabits} onClick={() => setPopup("habits")} />
           <KPIJournalCard streak={safeStats.journalStreak} mood={safeStats.currentMood || null} onClick={() => navigate("/dashboard/journal")} />
           {/* Bug fix: derive bill count from the same enhanced.financeSnapshot.upcomingBills
@@ -1652,12 +1687,12 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
   // plus the server's per-metric 7-day trend.
   const { data: habitsRaw } = useQuery<any>({
     queryKey: ["/api/habits", filterMode, ...filterIds, "trends"],
-    queryFn: () => apiRequest("GET", withFullLimit(`/api/habits${leading}`)).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/habits${leading}`)).then(r => r.json()),
     staleTime: 60_000,
   });
   const { data: trackersRaw } = useQuery<any>({
     queryKey: ["/api/trackers", filterMode, ...filterIds, "trends"],
-    queryFn: () => apiRequest("GET", `/api/trackers${leading}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", `/api/trackers${leading}`).then(r => r.json()),
     staleTime: 60_000,
   });
   const habits: any[] = Array.isArray(habitsRaw) ? habitsRaw : (habitsRaw?.items || habitsRaw?.habits || []);
@@ -1778,7 +1813,7 @@ function TrendsSection({ enhanced, stats, filterIds = [], filterMode = "everyone
 // ─── Section: DOMAIN HUBS (Dashboard v2, Phase 4) ────────────────────────────
 // Compact navigation cards — one per life domain — each = a count + one CTA.
 // Replaces the large mixed-content sections (full lists) with drill-down links.
-function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filterMode = "everyone", events = [], goals = [] }: { enhanced: any; stats: DashboardStats | undefined; allProfiles: any[]; filterIds?: string[]; filterMode?: string; events?: any[]; goals?: any[] }) {
+function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filterMode = "everyone", events = [], goals = [], fetching = false, enhancedError = false, statsError = false }: { enhanced: any; stats: DashboardStats | undefined; allProfiles: any[]; filterIds?: string[]; filterMode?: string; events?: any[]; goals?: any[]; fetching?: boolean; enhancedError?: boolean; statsError?: boolean }) {
   const [, navigate] = useLocation();
   // P1 dedupe (QA scorecard): events + goals come from the page-level queries.
 
@@ -1791,19 +1826,22 @@ function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filte
   const expiringDocs = (enhanced?.expiringDocuments || []).length;
   const billCount = (enhanced?.financeSnapshot?.upcomingBills || []).length;
   const people = (allProfiles || []).filter((p: any) => p.type === "person" || p.type === "self").length;
-  const adherence = Math.round(Number(stats?.habitCompletionRate ?? 0));
+  // Rule 30: an errored source is "—", never "0% adherence" / "0 bills due".
+  const adherenceKnown = numOrUnknown(stats?.habitCompletionRate, statsError);
+  const adherence = adherenceKnown == null ? null : Math.round(adherenceKnown);
+  const enhancedKnown = !(enhancedError && enhanced == null);
 
   const hubs = [
-    { key: "finance", label: "Finance", Icon: DollarSign, accent: "43 85% 52%", value: `${billCount} bill${billCount === 1 ? "" : "s"} due`, href: "/dashboard/finance" },
-    { key: "health", label: "Health", Icon: HeartPulse, accent: "155 60% 48%", value: `${adherence}% adherence`, href: "/dashboard/health" },
+    { key: "finance", label: "Finance", Icon: DollarSign, accent: "43 85% 52%", value: enhancedKnown ? `${billCount} bill${billCount === 1 ? "" : "s"} due` : "— bills due", href: "/dashboard/finance" },
+    { key: "health", label: "Health", Icon: HeartPulse, accent: "155 60% 48%", value: adherence == null ? "— adherence" : `${adherence}% adherence`, href: "/dashboard/health" },
     { key: "calendar", label: "Calendar", Icon: CalendarDays, accent: "200 80% 55%", value: `${next7Events} this week`, href: "/calendar" },
-    { key: "documents", label: "Documents", Icon: FileText, accent: "205 90% 58%", value: expiringDocs > 0 ? `${expiringDocs} expiring` : "All current", href: "/dashboard/documents" },
+    { key: "documents", label: "Documents", Icon: FileText, accent: "205 90% 58%", value: !enhancedKnown ? "—" : expiringDocs > 0 ? `${expiringDocs} expiring` : "All current", href: "/dashboard/documents" },
     { key: "goals", label: "Goals", Icon: Target, accent: "262 70% 62%", value: `${activeGoals} active`, href: "/goals" },
     { key: "relationships", label: "People", Icon: Users, accent: "310 50% 58%", value: `${people} ${people === 1 ? "profile" : "profiles"}`, href: "/profiles" },
   ];
 
   return (
-    <CollapsibleSection accent="262 60% 58%" icon={BarChart3} label="Explore" testId="section-domain-hubs">
+    <CollapsibleSection accent="262 60% 58%" icon={BarChart3} label="Explore" testId="section-domain-hubs" headerRight={<RevalidatingBadge fetching={fetching} />}>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
         {hubs.map(({ key, label, Icon, accent, value, href }) => (
           <button key={key} type="button" onClick={() => navigate(href)}
@@ -1829,7 +1867,7 @@ function DomainHubsSection({ enhanced, stats, allProfiles, filterIds = [], filte
 // overdue/at-risk Goals into ONE ranked list via shared/now-rank. Every action
 // hits the SAME mutation endpoints the AI chat uses (complete task / pay bill),
 // so chat and dashboard stay interchangeable (Dashboard v2 invariant).
-function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyone", events = [], goals = [] }: { enhanced: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string; events?: any[]; goals?: any[] }) {
+function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyone", events = [], goals = [], fetching = false, error = false, onRetry }: { enhanced: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string; events?: any[]; goals?: any[]; fetching?: boolean; error?: boolean; onRetry?: () => void }) {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
@@ -1946,8 +1984,12 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
       sub={items.length > 0 ? `${items.length} need${items.length === 1 ? "s" : ""} attention${overdueCount > 0 ? ` · ${overdueCount} overdue` : ""}` : undefined}
       count={items.length || undefined}
       testId="section-now-queue"
+      headerRight={<RevalidatingBadge fetching={fetching} />}
     >
-      {items.length === 0 ? (
+      {error && enhanced == null ? (
+        // Rule 30: a failed snapshot is not "all caught up".
+        <SectionErrorState what="what needs attention" onRetry={onRetry} />
+      ) : items.length === 0 ? (
         <div className="py-6 text-center">
           <CheckCircle2 className="h-8 w-8 text-green-500/40 mx-auto mb-2" />
           <p className="text-xs text-muted-foreground">You're all caught up — nothing urgent right now.</p>
@@ -2415,23 +2457,23 @@ function KeyFindingsSection({
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: trackers = [] } = useQuery<any[]>({
     queryKey: ["/api/trackers", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/trackers${profileParam}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", `/api/trackers${profileParam}`).then(r => r.json()),
   });
   const { data: obligations = [] } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then(r => r.json()),
   });
   const { data: habits = [] } = useQuery<any[]>({
     queryKey: ["/api/habits", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", withFullLimit(`/api/habits${profileParam}`)).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/habits${profileParam}`)).then(r => r.json()),
   });
   const { data: enhancedData } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json()).catch(() => null),
+    queryFn: () => apiRequest("GET", `/api/dashboard-enhanced${profileParam}`).then(r => r.json()),
   });
   const { data: networthHistory = [] } = useQuery<any[]>({
     queryKey: ["/api/net-worth/history", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/net-worth/history?lookbackDays=120${profileParam ? `&profileIds=${filterIds.join(",")}` : ""}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", `/api/net-worth/history?lookbackDays=120${profileParam ? `&profileIds=${filterIds.join(",")}` : ""}`).then(r => r.json()),
   });
 
   // PR M — When scoped to specific profile(s), the cross-profile aggregates
@@ -3729,7 +3771,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
 
 // ─── Section: Finance Widget ─────────────────────────────────────────────────
 
-function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", allProfiles }: { data: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string; allProfiles?: any[] }) {
+function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", allProfiles, error = false }: { data: any; stats: DashboardStats | undefined; filterIds?: string[]; filterMode?: string; allProfiles?: any[]; error?: boolean }) {
   const [, navigate] = useLocation();
   const [drill, setDrill] = useState<"spending" | "income" | "cashflow" | "networth" | "budget" | null>(null);
   // In-place add from the legacy drill-downs (no longer read-only).
@@ -3801,7 +3843,9 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
   // Bug fix: prefer financeSnapshot.totalMonthlySpend (from /api/dashboard-enhanced, same
   // source the drilldown popup uses) so the card headline and the popup total always match.
   // Falls back to stats?.monthlySpend for the brief window before enhanced data arrives.
-  const monthlySpend = data?.totalMonthlySpend ?? stats?.monthlySpend ?? 0;
+  // Rule 30: with both sources in error the figure is unknown — "—", not $0.
+  const monthlySpendKnown = numOrUnknown(data?.totalMonthlySpend ?? stats?.monthlySpend, error);
+  const monthlySpend = monthlySpendKnown ?? 0;
   const monthlyIncome = useMemo(
     () => (data?.monthlyIncome != null ? Number(data.monthlyIncome) || 0 : sumMonthIncomeToDateNow(incomes || [], null, BROWSER_TIMEZONE)),
     [incomes, data?.monthlyIncome],
@@ -3921,7 +3965,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
             <p className="text-xs text-muted-foreground">Spending</p>
             {/* Color discipline: spending = amber, never red. Red is reserved for
                 overdue/breach states only. */}
-            <p className="text-sm font-bold tabular-nums text-amber-500">{formatMoneyRound(monthlySpend)}</p>
+            <p className="text-sm font-bold tabular-nums text-amber-500">{monthlySpendKnown == null ? "—" : formatMoneyRound(monthlySpend)}</p>
             <p className="text-xs-tight text-muted-foreground">{monthExpenses.length} this month</p>
           </button>
           <button data-testid="fw-drill-income" onClick={() => setDrill("income")} className="bubble p-2 text-center hover:bg-muted/50 active:scale-[0.97] transition-all cursor-pointer pressable">
@@ -3933,7 +3977,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
             <p className="text-xs text-muted-foreground">Cash Flow</p>
             {/* Negative cash flow uses amber (warning), not red (overdue). */}
             <p className={`text-sm font-bold tabular-nums ${cashFlow >= 0 ? "text-green-500" : "text-amber-500"}`}>
-              {cashFlow >= 0 ? "+" : ""}{formatMoneyRound(cashFlow)}
+              {monthlySpendKnown == null ? "—" : `${cashFlow >= 0 ? "+" : ""}${formatMoneyRound(cashFlow)}`}
             </p>
             <p className="text-xs-tight text-muted-foreground">income - spending</p>
           </button>
@@ -4475,7 +4519,37 @@ function AISummaryWidget({
 
 // ─── Section: Recent Activity ────────────────────────────────────────────────
 
-function ActivitySection({ activities }: { activities: DashboardStats["recentActivity"] }) {
+// ─── Rule 18 / Rule 30 section chrome ────────────────────────────────────────
+// Every section has four states: loading, loaded-empty, loaded-data, error —
+// and a fifth transient one, revalidating, when it is showing cached rows
+// while the query refetches. The badge makes that last state visible (a
+// cached list is not final until confirmed); the error state replaces the
+// empty state so a failed request never reads as "nothing here".
+function RevalidatingBadge({ fetching }: { fetching?: boolean }) {
+  if (!fetching) return null;
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground animate-pulse" data-testid="section-revalidating">
+      <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary/70" />Updating…
+    </span>
+  );
+}
+function SectionErrorState({ what, onRetry, compact = false }: { what: string; onRetry?: () => void; compact?: boolean }) {
+  return (
+    <div
+      className={compact
+        ? "mb-2 flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2"
+        : "text-center py-6"}
+      data-testid="section-error" role="alert"
+    >
+      <p className="text-xs text-muted-foreground">Couldn't load {what}.</p>
+      {onRetry && (
+        <button type="button" onClick={onRetry} className={`text-xs font-medium text-primary hover:underline ${compact ? "shrink-0" : "mt-1"}`} data-testid="section-error-retry">Retry</button>
+      )}
+    </div>
+  );
+}
+
+function ActivitySection({ activities, fetching = false, error = false, onRetry }: { activities: DashboardStats["recentActivity"]; fetching?: boolean; error?: boolean; onRetry?: () => void }) {
   const [, navigate] = useLocation();
   // Rule 24: an activity row opens the RECORD (tracker, task, expense) when
   // the row names it, else its list page — through the one route resolver.
@@ -4490,24 +4564,28 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
   }).slice(0, 8), [activities]);
 
   if (validActivities.length === 0) return (
-    <CollapsibleSection icon={Activity} label="Recent Activity" testId="section-activity">
-      <div className="text-center py-6">
-        <Activity className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-xs text-muted-foreground">No recent activity yet</p>
-        <p className="text-[11px] text-muted-foreground/60 mt-0.5">Log a tracker, complete a task, or add an expense</p>
-      </div>
+    <CollapsibleSection icon={Activity} label="Recent Activity" testId="section-activity" headerRight={<RevalidatingBadge fetching={fetching} />}>
+      {error ? (
+        <SectionErrorState what="recent activity" onRetry={onRetry} />
+      ) : (
+        <div className="text-center py-6">
+          <Activity className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
+          <p className="text-xs text-muted-foreground">No recent activity yet</p>
+          <p className="text-[11px] text-muted-foreground/60 mt-0.5">Log a tracker, complete a task, or add an expense</p>
+        </div>
+      )}
     </CollapsibleSection>
   );
 
   return (
-    <CollapsibleSection icon={Activity} label="Recent Activity" count={validActivities.length} defaultOpen={false} testId="section-activity">
+    <CollapsibleSection icon={Activity} label="Recent Activity" count={validActivities.length} defaultOpen={false} testId="section-activity" headerRight={<RevalidatingBadge fetching={fetching} />}>
       <div className="space-y-0.5">
         {validActivities.map((item, i) => {
           const Icon = ACTIVITY_ICONS[item.type] || Activity;
           const route = activityRoute(item);
           const hsl = ACTIVITY_COLORS[item.type] || "215 16% 47%";
           return (
-            <div key={i}
+            <div key={item.id ? `${item.type}|${item.id}` : `${item.type}|${i}`} // Rule 36: keyed on the canonical event id
               onClick={() => route && navigateToRoute(navigate, route)}
               role={route ? "button" : undefined}
               tabIndex={route ? 0 : undefined}
@@ -4645,17 +4723,17 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
   // P1 dedupe (QA scorecard): profiles / events / goals are fetched ONCE by the
   // page component (same query keys) and passed down as props.
   const profiles = allProfiles;
-  const { data: documents = [] } = useQuery<any[]>({
+  const { data: documents = [], isError: documentsError, isFetching: documentsFetching, refetch: refetchDocuments } = useQuery<any[]>({
     queryKey: ["/api/documents", filterMode, ...filterIds],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/documents${profileParam}`).then(r => r.json()),
   });
-  const { data: tasks = [] } = useQuery<any[]>({
+  const { data: tasks = [], isError: tasksError, isFetching: tasksFetching, refetch: refetchTasks } = useQuery<any[]>({
     queryKey: ["/api/tasks", filterMode, ...filterIds],
     enabled: ready,
     queryFn: () => apiRequest("GET", withFullLimit(`/api/tasks${profileParam}`)).then(r => r.json()),
   });
-  const { data: obligations = [] } = useQuery<any[]>({
+  const { data: obligations = [], isError: obligationsError, isFetching: obligationsFetching, refetch: refetchObligations } = useQuery<any[]>({
     queryKey: ["/api/obligations", filterMode, ...filterIds],
     enabled: ready,
     queryFn: () => apiRequest("GET", withFullLimit(`/api/obligations${profileParam}`)).then(r => r.json()),
@@ -4663,6 +4741,13 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
   // (Removed 2026-08-09: a /api/reminders query feeding this list. "Remind me
   // to take evening medication" is a TASK with a due time now, and `tasks`
   // above already carries it — a second source would list it twice.)
+
+  // Rules 18/30: a list built from three queries is revalidating while ANY of
+  // them refetches, and in error when any of them failed — a partial list is
+  // never presented as the whole picture.
+  const upcomingFetching = documentsFetching || tasksFetching || obligationsFetching;
+  const upcomingError = documentsError || tasksError || obligationsError;
+  const retryUpcoming = () => { void refetchDocuments(); void refetchTasks(); void refetchObligations(); };
 
   const [entityFilter, setEntityFilter] = useState<"all" | UpcomingEntityKind>("all");
   const [pins, setPins] = useState<Set<string>>(() => loadUpcomingPins());
@@ -4720,6 +4805,7 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
 
   const headerRight = (
     <div className="flex items-center gap-1.5">
+      <RevalidatingBadge fetching={upcomingFetching} />
       {actionSoonCount > 0 && (
         <span
           className="micro-label px-1.5 py-0.5 rounded"
@@ -4762,6 +4848,9 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
         testId="section-upcoming-dates"
         headerRight={headerRight}
       >
+        {upcomingError ? (
+          <SectionErrorState what="upcoming dates" onRetry={retryUpcoming} />
+        ) : (
         <div className="text-center py-6">
           <CalendarDays className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
           <p className="text-xs text-muted-foreground">No upcoming dates</p>
@@ -4769,6 +4858,7 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
             Birthdays, renewals, appointments, and deadlines surface here automatically
           </p>
         </div>
+        )}
       </CollapsibleSection>
     );
   }
@@ -4783,6 +4873,7 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
       headerRight={headerRight}
     >
       <div className="space-y-3">
+        {upcomingError && <SectionErrorState compact what="some upcoming dates" onRetry={retryUpcoming} />}
         {grouped.map(group => (
           <div key={group.timeframe}>
             <div className="flex items-center gap-1.5 mb-1 px-1.5">
@@ -4861,7 +4952,7 @@ export function NotificationsSection({ filterMode, filterIds }: { filterMode: st
   const param = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: notifications = [] } = useQuery<any[]>({
     queryKey: ["/api/notifications", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", `/api/notifications${param}`).then(r => r.json()),
     staleTime: 60_000,
   });
   const items = (Array.isArray(notifications) ? notifications : []).filter((n: any) => !n.dismissed).slice(0, 6);
@@ -5587,7 +5678,7 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bootstrapQuery.isFetched, switchablePeopleKey, filterMode, filterIds.join(",")]);
 
-  const { data: stats, isPending: statsLoading } = useQuery<DashboardStats>({
+  const { data: stats, isPending: statsLoading, isFetching: statsFetching, isError: statsError, refetch: refetchStats } = useQuery<DashboardStats>({
     queryKey: ["/api/stats", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/stats${statsProfileParam}`).then(r => r.json()),
     // PERF (2026-05-30 Phase 2): only fetch if bootstrap didn't pre-fill the
@@ -5641,7 +5732,7 @@ export default function DashboardPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/dashboard-enhanced"], refetchType: "active" });
   }, []);
 
-  const { data: enhanced, isFetching: enhancedFetching } = useQuery<any>({
+  const { data: enhanced, isFetching: enhancedFetching, isError: enhancedError, refetch: refetchEnhanced } = useQuery<any>({
     queryKey: ["/api/dashboard-enhanced", filterMode, ...filterIds],
     queryFn: async () => {
       // BUG-20260715-everyone-zeros: this used to swallow failures and return
@@ -5690,12 +5781,12 @@ export default function DashboardPage() {
   const sharedProfileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: sharedEvents = [] } = useQuery<any[]>({
     queryKey: ["/api/events", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", withFullLimit(`/api/events${sharedProfileParam}`)).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/events${sharedProfileParam}`)).then(r => r.json()),
     enabled: bootstrapSettled && filterMode !== "everyone",
   });
   const { data: sharedGoalsRaw } = useQuery<any>({
     queryKey: goalsQueryKey(filterIds), // BUG-20260528: share GoalsSection's cache slot
-    queryFn: () => apiRequest("GET", withFullLimit(`/api/goals${sharedProfileParam}`)).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/goals${sharedProfileParam}`)).then(r => r.json()),
     enabled: bootstrapSettled && filterMode !== "everyone",
   });
   const sharedGoals = useMemo(
@@ -5782,7 +5873,7 @@ export default function DashboardPage() {
     let content: React.ReactNode = null;
     switch (id) {
       case "hero-kpis":
-        content = <HeroKPISection enhanced={enhanced} stats={stats} filterMode={filterMode} filterIds={filterIds} allProfiles={allProfiles} refetching={enhancedFetching} />;
+        content = <HeroKPISection enhanced={enhanced} stats={stats} filterMode={filterMode} filterIds={filterIds} allProfiles={allProfiles} refetching={enhancedFetching || statsFetching} enhancedError={enhancedError} statsError={statsError} onRetry={() => { void refetchEnhanced(); void refetchStats(); }} />;
         break;
       case "kpis":
         content = (showDashSkeleton && !stats)
@@ -5793,13 +5884,13 @@ export default function DashboardPage() {
         content = <HeroBriefing enhanced={enhanced} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} events={sharedEvents} goals={sharedGoals} />;
         break;
       case "now-queue":
-        content = <NowQueueSection enhanced={enhanced} stats={stats} filterIds={filterIds} filterMode={filterMode} events={sharedEvents} goals={sharedGoals} />;
+        content = <NowQueueSection enhanced={enhanced} stats={stats} filterIds={filterIds} filterMode={filterMode} events={sharedEvents} goals={sharedGoals} fetching={enhancedFetching} error={enhancedError} onRetry={() => void refetchEnhanced()} />;
         break;
       case "trends":
         content = <TrendsSection enhanced={enhanced} stats={stats} filterIds={filterIds} filterMode={filterMode} />;
         break;
       case "domain-hubs":
-        content = <DomainHubsSection enhanced={enhanced} stats={stats} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} events={sharedEvents} goals={sharedGoals} />;
+        content = <DomainHubsSection enhanced={enhanced} stats={stats} allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} events={sharedEvents} goals={sharedGoals} fetching={enhancedFetching || statsFetching} enhancedError={enhancedError} statsError={statsError} />;
         break;
       case "health":
         content = <HealthSection data={enhanced?.healthSnapshot || []} />;
@@ -5823,7 +5914,7 @@ export default function DashboardPage() {
         content = (
           <div className="space-y-3">
             <ExpiringWarrantiesCard allProfiles={allProfiles} filterIds={filterIds} filterMode={filterMode} />
-            <FinanceWidget data={enhanced?.financeSnapshot} stats={stats} filterIds={filterIds} filterMode={filterMode} allProfiles={allProfiles} />
+            <FinanceWidget data={enhanced?.financeSnapshot} stats={stats} filterIds={filterIds} filterMode={filterMode} allProfiles={allProfiles} error={enhancedError && statsError} />
           </div>
         );
         break;
@@ -5836,7 +5927,8 @@ export default function DashboardPage() {
         })();
         break;
       case "activity":
-        content = stats ? <ActivitySection activities={stats.recentActivity} /> : null;
+        // Rule 30: a failed stats query renders the section's error state, not nothing.
+        content = (stats || statsError) ? <ActivitySection activities={stats?.recentActivity || []} fetching={statsFetching} error={statsError && !stats} onRetry={() => void refetchStats()} /> : null;
         break;
       case "upcoming-dates":
         content = <UpcomingSection filterIds={filterIds} filterMode={filterMode} ready={bootstrapSettled} allProfiles={allProfiles} events={sharedEvents} goals={sharedGoals} />;
@@ -5845,7 +5937,7 @@ export default function DashboardPage() {
         content = <QuickActionsSection filterMode={filterMode} filterIds={filterIds} allProfiles={allProfiles} />;
         break;
       case "exec-briefing":
-        content = <ExecutiveBriefing filterMode={filterMode} filterIds={filterIds} stats={stats} enhanced={enhanced} ready={bootstrapSettled} />;
+        content = <ExecutiveBriefing filterMode={filterMode} filterIds={filterIds} stats={stats} enhanced={enhanced} ready={bootstrapSettled} enhancedError={enhancedError} enhancedFetching={enhancedFetching} />;
         break;
       case "notifications":
         content = <NotificationsSection filterMode={filterMode} filterIds={filterIds} />;

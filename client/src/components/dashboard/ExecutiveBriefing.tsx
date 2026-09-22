@@ -420,12 +420,27 @@ function UpcomingPopup({ open, onClose, items, onAction, onOpenItem, busyKeys, a
 
 // ── Overview bar cell ────────────────────────────────────────────────────────
 
-function OverviewCell({ icon: Icon, accent, label, value, sub, subClass, onClick, testId }: {
+// Rules 18 / 29 / 30: a KPI cell has four states. `error` renders "—" with a
+// "Couldn't load" sublabel (never a 0 or $0 over a failed query);
+// `revalidating` dims the cell and shows a pulse while the backing query
+// refetches, so a cached number is visibly not-yet-confirmed.
+function OverviewCell({ icon: Icon, accent, label, value, sub, subClass, onClick, testId, revalidating = false, error = false }: {
   icon: LucideIcon; accent: string; label: string; value: string;
   sub?: string; subClass?: string; onClick: () => void; testId: string;
+  revalidating?: boolean; error?: boolean;
 }) {
+  const shownValue = error ? "—" : value;
+  const shownSub = error ? "Couldn't load" : sub;
+  const shownSubClass = error ? "text-red-500" : subClass;
   return (
-    <button onClick={onClick} data-testid={testId} className="flex items-center gap-3 min-w-0 text-left touch-hit">
+    <button
+      onClick={onClick}
+      data-testid={testId}
+      data-revalidating={revalidating || undefined}
+      data-error={error || undefined}
+      title={revalidating ? "Updating…" : undefined}
+      className={`flex items-center gap-3 min-w-0 text-left touch-hit transition-opacity duration-200 ${revalidating ? "opacity-70" : ""}`}
+    >
       <span
         className="h-10 w-10 rounded-xl flex items-center justify-center shrink-0"
         style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}
@@ -434,9 +449,12 @@ function OverviewCell({ icon: Icon, accent, label, value, sub, subClass, onClick
         <Icon className="h-5 w-5" strokeWidth={2.2} />
       </span>
       <span className="min-w-0">
-        <span className="block micro-label text-muted-foreground truncate">{label}</span>
-        <span className="block text-lg font-extrabold leading-tight truncate">{value}</span>
-        {sub && <span className={`block text-[11px] truncate ${subClass || "text-muted-foreground"}`}>{sub}</span>}
+        <span className="block micro-label text-muted-foreground truncate">
+          {label}
+          {revalidating && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-primary/70 animate-pulse align-middle" aria-label="Updating" />}
+        </span>
+        <span className="block text-lg font-extrabold leading-tight truncate">{shownValue}</span>
+        {shownSub && <span className={`block text-[11px] truncate ${shownSubClass || "text-muted-foreground"}`}>{shownSub}</span>}
       </span>
     </button>
   );
@@ -489,9 +507,13 @@ const HABIT_CARD_LIMIT = 6;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, ready = true }: {
+export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, ready = true, enhancedError = false, enhancedFetching = false }: {
   filterMode: string; filterIds: string[];
   stats: DashboardStats | undefined; enhanced: any;
+  /** Rules 18/30: the /api/dashboard-enhanced query's isError / isFetching,
+   * so the Net Worth and Cash Flow cells can show an error or revalidating
+   * state instead of dots forever or a stale number presented as final. */
+  enhancedError?: boolean; enhancedFetching?: boolean;
   /** Gate for this component's own queries (PERF 2026-07-16): the dashboard
    * passes bootstrapSettled so these resolve from the bootstrap-seeded cache
    * instead of firing network requests that race the bootstrap download on
@@ -521,13 +543,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // swallow errors into a cached-as-success empty value (`.catch(() => [])`).
   // A transient failure — e.g. the pre-auth boot window racing token restore —
   // then renders as "0 in every category" for the whole staleTime window.
-  const { data: tasksRaw = [], isPending: tasksPending } = useQuery<any[]>({
+  const { data: tasksRaw = [], isPending: tasksPending, isFetching: tasksFetching, isError: tasksError } = useQuery<any[]>({
     queryKey: ["/api/tasks", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/tasks${param}`).then(r => r.json()),
     staleTime: 30_000,
   });
-  const { data: habitsRaw = [], isPending: habitsPending } = useQuery<any[]>({
+  const { data: habitsRaw = [], isPending: habitsPending, isError: habitsError } = useQuery<any[]>({
     queryKey: ["/api/habits", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/habits${param}`).then(r => r.json()),
@@ -537,13 +559,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // same key the bootstrap seeds, the calendar page counts from and the month
   // grid renders — one cache slot instead of three cold fetches.
   const timelineWindow = useMemo(() => canonicalTimelineWindow(todayStr), [todayStr]);
-  const { data: timelineRaw = [], isPending: timelinePending } = useQuery<any[]>({
+  const { data: timelineRaw = [], isPending: timelinePending, isFetching: timelineFetching, isError: timelineError } = useQuery<any[]>({
     queryKey: timelineQueryKey(timelineWindow, mode, ids),
     enabled: ready,
     queryFn: () => apiRequest("GET", timelineUrl(timelineWindow, mode, ids)).then(r => r.json()),
     staleTime: 60_000,
   });
-  const { data: goalsRaw = [], isPending: goalsPending } = useQuery<any[]>({
+  const { data: goalsRaw = [], isPending: goalsPending, isError: goalsError } = useQuery<any[]>({
     queryKey: ["/api/goals", mode, ...ids],
     enabled: ready,
     queryFn: () => apiRequest("GET", `/api/goals${param}`).then(r => r.json()),
@@ -595,7 +617,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     queryFn: () => apiRequest("GET", param
       ? `/api/net-worth/history${param}&lookbackDays=35`
       : "/api/net-worth/history?lookbackDays=35",
-    ).then(r => r.json()).catch(() => []),
+    ).then(r => r.json()), // Rule 29: a failure stays an error, never a cached-as-success []
     staleTime: 5 * 60_000,
   });
 
@@ -626,7 +648,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
 
   // STUCK-LOADING DEADLINE (2026-07-16): if any feeding query is still
   // unresolved after 12s, show the Retry banner instead of loading forever.
-  const anyBriefPending = tasksPending || habitsPending || timelinePending || goalsPending || enhanced === undefined;
+  // A snapshot whose query FAILED is not "still loading" (Rule 30): the KPI
+  // cells show their error state instead of dots forever.
+  const anyBriefPending = tasksPending || habitsPending || timelinePending || goalsPending || (enhanced === undefined && !enhancedError);
   const [briefStuck, setBriefStuck] = useState(false);
   useEffect(() => {
     if (!anyBriefPending) { setBriefStuck(false); return; }
@@ -1176,6 +1200,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           subClass={nwTrend ? (nwTrend.up ? "text-emerald-500" : "text-red-500") : undefined}
           onClick={() => setPopup("networth")}
           testId="exec-kpi-networth"
+          error={enhancedError && snap == null}
+          revalidating={enhancedFetching && snap != null}
         />
         <OverviewCell
           icon={CircleDollarSign}
@@ -1185,16 +1211,20 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           sub={cashFlow == null ? undefined : "this month"}
           onClick={() => setPopup("cashflow")}
           testId="exec-kpi-cashflow"
+          error={enhancedError && snap == null}
+          revalidating={enhancedFetching && snap != null}
         />
         <OverviewCell
           icon={CheckSquare}
           accent={CARD_ACCENTS.tasks}
           label="Tasks Remaining"
-          value={tasksPending ? loadingDots : String(pending.length)}
+          value={tasksError ? "—" : tasksPending ? loadingDots : String(pending.length)}
           sub={tasksPending ? undefined : overdueTasks.length > 0 ? `${overdueTasks.length} overdue` : "none overdue"}
           subClass={overdueTasks.length > 0 ? "text-red-500" : undefined}
           onClick={() => setPopup("tasks")}
           testId="exec-kpi-tasks"
+          error={tasksError}
+          revalidating={tasksFetching && !tasksPending}
         />
         <OverviewCell
           icon={CalendarDays}
@@ -1208,6 +1238,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           // first row of Upcoming, so that list is where its record lives.
           onClick={() => setPopup("upcoming")}
           testId="exec-kpi-next"
+          error={timelineError && !nextImportant}
+          revalidating={timelineFetching && !timelinePending}
         />
       </div>
 

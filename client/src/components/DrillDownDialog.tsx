@@ -1,5 +1,6 @@
 import { BubbleModal } from "@/components/ui/bubble-modal";
 import { formatMoneyRound } from "@/lib/format";
+import { sumExpenses } from "@shared/expense-ledger";
 
 // Generic drill-down: informational blue, the app's "here are the records
 // behind that number" colour.
@@ -75,7 +76,8 @@ const PRIORITY_CLR: Record<string, string> = {
 };
 
 export function DrillDownDialog({ open, onClose, title, subtitle, total, items, expenses, tasks, obligations, emptyMessage, onAdd, addLabel }: DrillDownDialogProps) {
-  const expenseTotal = expenses?.reduce((s, e) => s + e.amount, 0) ?? 0;
+  // Rule 15: the manual ledger through the ONE shared calc (shared/expense-ledger).
+  const expenseTotal = sumExpenses(expenses);
   const hasRecords = (expenses?.length ?? 0) > 0 || (tasks?.length ?? 0) > 0 || (obligations?.length ?? 0) > 0;
 
   // Reconciliation: parse header total as number for comparison

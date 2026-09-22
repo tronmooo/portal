@@ -319,12 +319,17 @@ describe("F-04: obviously asset-shaped names never become people", () => {
     expect(coerceProfileType("Whatever", undefined)).toBe("asset");
   });
 
-  it("isOfferablePerson keeps real people/pets and rejects mistyped assets and non-people", () => {
+  it("isOfferablePerson keeps every explicit person/self row and real pets, and rejects non-people", () => {
     expect(isOfferablePerson(BOB)).toBe(true);
     expect(isOfferablePerson(POOP)).toBe(true);
     expect(isOfferablePerson({ id: "r", type: "pet", name: "Rex" })).toBe(true);
-    expect(isOfferablePerson(TIRES)).toBe(false);
-    expect(isOfferablePerson({ id: "m", type: "person", name: "my MacBook Pro m4" })).toBe(false);
+    // Rule 28: an explicit `person` row is a person for every picker, whatever
+    // its name looks like ("Mercedes", "My Mom"). Rows that really are things
+    // are retyped by the repair (retypeMisfiledPersonRows), not hidden here —
+    // hiding them made real people vanish from pickers.
+    expect(isOfferablePerson(TIRES)).toBe(true);
+    expect(isOfferablePerson({ id: "m", type: "person", name: "my MacBook Pro m4" })).toBe(true);
+    expect(isOfferablePerson({ id: "p", type: "pet", name: "my MacBook Pro m4" })).toBe(false);
     expect(isOfferablePerson({ id: "c", type: "vehicle", name: "Bob" })).toBe(false);
   });
 
@@ -337,7 +342,7 @@ describe("F-04: obviously asset-shaped names never become people", () => {
       "client/src/components/MultiProfileFilter.tsx",
       "client/src/components/OwnershipEditor.tsx",
       "client/src/components/CalendarView.tsx",
-    ]) expect(read(f), f).toMatch(/isOfferablePerson/);
+    ]) expect(read(f), f).toMatch(/isOfferablePerson|offerablePeople/); // Rule 28: offerablePeople wraps isOfferablePerson
   });
 });
 

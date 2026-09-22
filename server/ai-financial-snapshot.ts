@@ -8,6 +8,7 @@
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { getUserCurrentMonth } from "@shared/timezone";
+import { monthlySpend, LEDGER_MANUAL, type LedgerSource } from "@shared/expense-ledger";
 import { excludeTestData } from "@shared/test-data";
 
 export interface FinancialSnapshotInput {
@@ -38,14 +39,17 @@ export function financialSnapshot(input: FinancialSnapshotInput) {
     .filter((o: any) => o?.status !== "cancelled")
     .reduce((s: number, o: any) => s + toMonthlyAmount(Number(o.amount || 0), o.frequency), 0);
   const month = getUserCurrentMonth(input.timezone);
-  const thisMonthSpend = excludeTestData(input.expenses as any[], input.includeTestData)
-    .filter((e: any) => typeof e?.date === "string" && e.date.startsWith(month))
-    .reduce((s: number, e: any) => s + Number(e.amount || 0), 0);
-  return { netWorth: nw.netWorth, assets: nw.assets, liabilities: nw.liabilities, monthlySubs, thisMonthSpend, month };
+  // Rule 15: the MANUAL expenses ledger, summed by the one shared calc
+  // (shared/expense-ledger). The payload says which ledger it is so a
+  // connected-account spend figure (server/finance-routes buildSummary,
+  // `ledger: "connected"`) is never read as the same number.
+  const thisMonthSpend = monthlySpend(excludeTestData(input.expenses as any[], input.includeTestData), month);
+  const ledger: LedgerSource = LEDGER_MANUAL;
+  return { netWorth: nw.netWorth, assets: nw.assets, liabilities: nw.liabilities, monthlySubs, thisMonthSpend, month, ledger };
 }
 
 export function financialSnapshotLine(input: FinancialSnapshotInput): string {
   const s = financialSnapshot(input);
   const money = (n: number) => Math.round(n).toLocaleString();
-  return `Financial Snapshot: Net Worth ~$${money(s.netWorth)}, Assets $${money(s.assets)}, Liabilities $${money(s.liabilities)}, Monthly Obligations $${money(s.monthlySubs)}, This Month Spend (${s.month}) $${money(s.thisMonthSpend)}`;
+  return `Financial Snapshot: Net Worth ~$${money(s.netWorth)}, Assets $${money(s.assets)}, Liabilities $${money(s.liabilities)}, Monthly Obligations $${money(s.monthlySubs)}, This Month Spend (${s.month}, ${s.ledger} ledger) $${money(s.thisMonthSpend)}`;
 }

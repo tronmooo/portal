@@ -60,6 +60,10 @@ export function getSharedSupabaseClient(url: string, serviceKey: string): Supaba
 }
 import { getUserToday, getUserCurrentMonth, parseLocalDate, toLocalDateStr, localDayOf, addDays as tzAddDays, DEFAULT_TIMEZONE } from "../shared/timezone";
 import { prepareProfileFields } from "../shared/registry-fields";
+import { readMonthlyPayment } from "../shared/liability-fields";
+import { sumExpenses } from "../shared/expense-ledger";
+import { validateEntityIntegrity, resolveCanonicalFields } from "../shared/entity-integrity";
+import { logIntegrity } from "./integrity-log";
 import { nextRecurringTaskSpawn, rollForwardRecurringTask } from "../shared/recurrence";
 import { isLegacyReminderTask, LEGACY_REMINDER_TASK_SOURCE } from "../shared/legacy-reminder-tasks";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
@@ -484,7 +488,7 @@ function generateInsights(
   // (new Date("YYYY-MM-DD") is UTC midnight, so the 1st landed in the prior month).
   const thisMonthKey = getUserCurrentMonth(insightTz);
   const monthlyExpenses = expenses.filter(e => String(e.date || "").slice(0, 7) === thisMonthKey);
-  const monthTotal = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
+  const monthTotal = sumExpenses(monthlyExpenses);
   if (monthTotal > 0) {
     const topCat = Object.entries(spendByCategory(monthlyExpenses)).sort((a, b) => b[1] - a[1])[0];
     if (topCat) {
@@ -622,9 +626,9 @@ export function capProfileDetailLists(input: {
   // headline stats stay exact. The "owned" pair mirrors the Finance tab's
   // strict-ownership rule (linkedProfiles[0] === profileId).
   const relatedExpensesTotal = relatedExpenses.length;
-  const relatedExpensesSum = relatedExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const relatedExpensesSum = sumExpenses(relatedExpenses);
   const ownedRows = relatedExpenses.filter(e => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profileId);
-  const relatedExpensesOwnedSum = ownedRows.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const relatedExpensesOwnedSum = sumExpenses(ownedRows);
   const relatedExpensesOwnedCount = ownedRows.length;
   const cappedExpenses = relatedExpensesTotal <= C.expenses
     ? relatedExpenses
@@ -1927,7 +1931,7 @@ export class SupabaseStorage implements IStorage {
     // has a structural answer rather than an inventory of call sites.
     // See shared/date-rules.
     if (data.fields && typeof data.fields === "object") {
-      data = { ...data, fields: prepareProfileFields(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (data as any).typeKey, todayISO: getUserToday(this._timezone) }) };
+      data = { ...data, fields: this._prepareFieldsForWrite(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (data as any).typeKey, todayISO: getUserToday(this._timezone) }, { entityType: String(data.type ?? "profile") }) };
     }
     const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "liability", "investment", "property", "account", "insurance", "medical"]);
     if (data.type && !validProfileTypes.has(data.type)) data.type = "person";
@@ -1980,7 +1984,8 @@ export class SupabaseStorage implements IStorage {
     } else if (parentProfileId) {
       // Rule 34: a named parent must exist — a dangling parent drops the
       // asset out of every owner walk.
-      await this.resolveOwnersAndValidate("profile", { parentProfileId, linkedProfiles: [parentProfileId] });
+      const known = await this.getProfiles().catch(() => [] as Profile[]);
+      assertWriteCandidate("profile", { parentProfileId }, { validProfileIds: known.length > 0 ? new Set(known.map(p => p.id)) : null });
     }
     // Parent is stored ONLY in the `parent_profile_id` column. The legacy
     //   `fields._parentProfileId` JSON shadow is no longer written — it caused
@@ -2192,7 +2197,7 @@ export class SupabaseStorage implements IStorage {
     // Deletion intents (null / undefined values) are pulled out FIRST: those
     // keys are being removed, not written, and must not sweep their own twins.
     const normalizedIncoming = data.fields && typeof data.fields === "object"
-      ? prepareProfileFields(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? existing.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (existing as any).type_key ?? (existing as any).typeKey, todayISO: getUserToday(this._timezone) })
+      ? this._prepareFieldsForWrite(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? existing.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (existing as any).type_key ?? (existing as any).typeKey, todayISO: getUserToday(this._timezone) }, { entityType: String(data.type ?? existing.type ?? "profile"), entityId: id })
       : data.fields;
     const incomingFields: Record<string, any> = {};
     const deletionIntents: string[] = [];
@@ -4893,6 +4898,7 @@ export class SupabaseStorage implements IStorage {
           items.push({
             id: `loan-${row.id || row.loan_id}-${d}`,
             type: 'obligation',
+            sourceType: 'liability', // Rule 37: a loan payment, not a generic event
             title: `${name} — $${amt.toFixed(2)}`,
             date: d,
             allDay: true,
@@ -5866,11 +5872,11 @@ export class SupabaseStorage implements IStorage {
 
   private liabilityToObligation(p: Profile, payments: ObligationPayment[] = [], partyIds: string[] = []): Obligation {
     const f: any = p.fields || {};
-    const baseAmount = Number(f.monthlyAmount ?? f.monthly_amount ?? f.amount ?? f.cost ?? f.balance ?? 0) || 0;
+    // ONE reader for the amount (shared/liability-fields) and ONE for the bill
+    // series anchor (shared/liability-recurrence `readDueDate`) — Rule 11.
+    const baseAmount = readMonthlyPayment(f) || Number(f.balance ?? 0) || 0;
     const frequency = String(f.frequency ?? f.billingFrequency ?? "monthly");
-    let nextDueDate = String(
-      f.dueDate ?? f.due_date ?? f.nextDueDate ?? f.next_due_date ?? f.renewalDate ?? "",
-    ).slice(0, 10);
+    let nextDueDate = readDueDate(f);
     // A one-time bill has no next occurrence once its only one is paid or
     // skipped; the pay path advances a recurring bill's due date but a
     // "once" bill kept its date and stayed in "upcoming" after being paid.
@@ -6247,11 +6253,52 @@ export class SupabaseStorage implements IStorage {
   /** Rich payment schedule for ANY liability (recurring bill, loan, credit card,
    *  one-time debt): occurrences window + history + settings. Non-recurring
    *  families derive a monthly payment series from their terms. */
+  /**
+   * Rule 11 / Rule 33: every profile write takes its one stored form
+   * (shared/registry-fields `prepareProfileFields`, which folds every alias to
+   * its canonical key) and is then checked for conflicting canonical facts
+   * (shared/entity-integrity). A conflict is LOGGED (server/integrity-log),
+   * the canonical key keeps the canonical value and the loser is parked under
+   * `_integrity.stale` — never rejected, never silently dropped.
+   */
+  private _prepareFieldsForWrite<T extends Record<string, any>>(
+    fields: T,
+    ctx: { typeKey?: string | null; todayISO?: string },
+    meta: { entityType?: string; entityId?: string } = {},
+  ): T {
+    const prepared = prepareProfileFields(fields, ctx);
+    if (!prepared || typeof prepared !== "object") return prepared;
+    try {
+      const resolved = resolveCanonicalFields(prepared, { at: new Date().toISOString() });
+      for (const w of resolved.warnings) {
+        logIntegrity({
+          kind: w.code === "impossible_date" ? "impossible_date" : "conflicting_canonical_facts",
+          message: w.message,
+          entityType: meta.entityType,
+          entityId: meta.entityId,
+          detail: { code: w.code, canonicalKey: w.canonicalKey, canonicalValue: w.canonicalValue, conflicts: w.conflicts },
+        });
+      }
+      return (resolved.changed ? resolved.fields : prepared) as T;
+    } catch {
+      return prepared; // an integrity check must never fail the write it describes
+    }
+  }
+
   async getLiabilitySchedule(id: string, months = 12): Promise<any | null> {
     const p = await this.getProfile(id);
     const typeKey = (p as any)?.type_key ?? (p as any)?.typeKey ?? null;
     if (!p || (p.type !== "liability" && p.type !== "loan")) return null;
     const todayISO = getUserToday(this._timezone);
+    // Rule 33: a stored record whose aliases still disagree (a row written
+    // before the write-path fold) is reported to the client so the detail
+    // page can say "these records conflict", and logged once per read.
+    const integrity = validateEntityIntegrity({ id: p.id, type: p.type, fields: p.fields || {} });
+    if (!integrity.ok) {
+      for (const w of integrity.warnings) {
+        logIntegrity({ kind: w.code === "impossible_date" ? "impossible_date" : "conflicting_canonical_facts", message: w.message, entityType: p.type, entityId: p.id, detail: { code: w.code, canonicalKey: w.canonicalKey, conflicts: w.conflicts } });
+      }
+    }
     // Normalize every family into schedule-ready fields (bills pass through).
     const f: any = deriveScheduleFields(p.fields || {}, typeKey, todayISO);
     const isBill = isRecurringBillProfile(p);
@@ -6281,6 +6328,7 @@ export class SupabaseStorage implements IStorage {
       amount,
       frequency: liabilityFrequency({ id: p.id, fields: f }),
       firstPayment: String(f.firstPaymentDate ?? f.dueDate ?? f.nextDueDate ?? "").slice(0, 10) || null,
+      integrity: { ok: integrity.ok, warnings: integrity.warnings },
       nextDue: next ? {
         date: next.date, effectiveDate: next.effectiveDate, amount: next.amount,
         estimatedAmount: next.estimatedAmount, actualAmount: next.actualAmount,
@@ -7312,10 +7360,10 @@ export class SupabaseStorage implements IStorage {
         // the same way so "Groceries" meets the "food" spend (the goal stayed
         // at $0 forever when the spellings differed).
         const goalBucket = budgetCategoryKey(goal.category);
-        return expenses.filter(e =>
+        return sumExpenses(expenses.filter(e =>
           inThisMonth(e.date) &&
           budgetCategoryKey(e.category) === goalBucket,
-        ).reduce((sum, e) => sum + e.amount, 0);
+        ));
       }
       case "tracker_target": {
         if (!goal.trackerId) return goal.current;
@@ -7769,9 +7817,9 @@ export class SupabaseStorage implements IStorage {
       // Audit fix: case/whitespace-normalize so the KPI tile and the popup
       // (which uses normalizeFilter) agree on what counts as 'done'.
       activeTasks: tasks.filter(t => (t.status || "").trim().toLowerCase() !== "done").length,
-      totalExpenses: expenses.reduce((sum, e) => sum + e.amount, 0),
+      totalExpenses: sumExpenses(expenses),
       totalEvents: events.length,
-      monthlySpend: monthlyExpenses.reduce((sum, e) => sum + e.amount, 0),
+      monthlySpend: sumExpenses(monthlyExpenses),
       weeklyEntries,
       streaks,
       // QA 2026-09-18: a 2×/day habit mirrors two identical rows at one moment
@@ -8081,7 +8129,7 @@ export class SupabaseStorage implements IStorage {
     // counts as "debt" whatever category the row was stored with (F-17:
     // two $912 car payments stored as "general" were 63% of the chart).
     const spendByCategory = spendByCategoryOf(withEffectiveCategories(monthlyExpenses, debtPaymentLiabilityIds(allProfiles as any[])));
-    const totalMonthlySpend = monthlyExpenses.reduce((s, e) => s + e.amount, 0);
+    const totalMonthlySpend = sumExpenses(monthlyExpenses);
 
     // Previous month YYYY-MM, computed in the user's timezone
     const [yStr, mStr] = userYearMonth.split('-');

@@ -9,6 +9,7 @@
 // The 13k-line detail chunk stays lazy — we only pull it in for the non-person
 // branch, never for people.
 import { lazy, Suspense, useEffect } from "react";
+import { PERSON_LIKE_TYPES } from "@shared/scope";
 import { useRoute, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
@@ -16,7 +17,8 @@ import { apiRequest } from "@/lib/queryClient";
 
 const ProfileDetailPage = lazy(() => import("@/pages/profile-detail"));
 
-const PERSON_TYPES = new Set(["self", "person", "pet"]);
+// Rule 28: one definition of "who is a person here" — shared/scope.ts.
+const PERSON_TYPES = PERSON_LIKE_TYPES;
 
 function Loader() {
   return (

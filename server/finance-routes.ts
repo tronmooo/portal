@@ -790,6 +790,10 @@ export async function buildSummary(userId: string, scope: CalcScope, opts: { mon
   const freshness = dataFreshness(accounts);
 
   return {
+    // Rule 15: this summary is the CONNECTED ledger (financial_transactions).
+    // The manual `expenses` ledger reports itself as "manual"
+    // (server/ai-financial-snapshot, shared/expense-ledger); the two are never merged.
+    ledger: "connected" as const,
     scope: {
       startDate: effective.startDate,
       endDate: effective.endDate,

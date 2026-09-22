@@ -35,10 +35,13 @@ describe("resolveActiveCreateProfileId", () => {
     ).toBe("self-1");
   });
 
-  it("uses the first selected when several are selected and none is self", () => {
+  it("is UNRESOLVED (\"\") when several are selected and none is self — never the first selected (Rule 6)", () => {
+    // The old rule picked selected[0], a guess that put records on whoever
+    // was first in the chip. The dialog now shows its owner picker empty and
+    // the server answers 409 OWNER_REQUIRED: stop and ask.
     expect(
       resolveActiveCreateProfileId(ALL, { mode: "selected", selectedIds: ["jane-1", "pet-1"] }),
-    ).toBe("jane-1");
+    ).toBe("");
   });
 
   it("defaults to self in unfiltered (everyone) mode", () => {

@@ -125,7 +125,8 @@ describe("the schema-soup guard", () => {
 
   it("folds every way a balance is printed on a debt", () => {
     for (const spelling of ["Principal Balance", "Outstanding Balance", "Unpaid Balance", "balance"]) {
-      expect(canonicalFieldName("liability", spelling), spelling).toBe("currentBalance");
+      // Rule 11: the canonical spelling is `balance` (shared/profile-field-canon).
+      expect(canonicalFieldName("liability", spelling), spelling).toBe("balance");
     }
   });
 

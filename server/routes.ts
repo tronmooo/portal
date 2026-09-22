@@ -479,6 +479,8 @@ import { canonicalIncomeFrequency, findDuplicatePaycheck } from "@shared/obligat
 import { profileValueFingerprint } from "@shared/profile-summary-fingerprint";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds, resolveCreateOwnerIds } from "@shared/active-scope";
+import { resolveOwnerForNewRecord, isOwnerQuestion, OwnerRequiredError, OWNER_REASONS, OWNER_REQUIRED_MESSAGE } from "@shared/owner-resolution";
+import { findPossibleDuplicates, duplicateQuestion } from "@shared/duplicate-guard";
 import { generateSmartInsights } from "./insights-engine";
 import { requireAdmin, isAdminEmail, resolveUserFromRequest, isUniqueViolation } from "./auth";
 
@@ -1421,7 +1423,18 @@ function asyncHandler(fn: AsyncHandler): AsyncHandler {
           // A date or time the database could not read is a bad request.
           res.status(400).json({ error: "Invalid date or time value" });
         } else if (Number.isInteger(status) && status >= 400 && status < 500) {
-          res.status(status).json({ error: err?.message || "Request failed" });
+          // Writers that stop-and-ask carry a machine-readable code so the
+          // client can offer a picker or a confirm instead of a bare message:
+          // OWNER_REQUIRED (409, shared/owner-resolution), POSSIBLE_DUPLICATE
+          // (409, shared/duplicate-guard), WRITE_INVALID (400,
+          // shared/write-validation).
+          const code = typeof err?.code === "string" && /^[A-Z][A-Z_]+$/.test(err.code) ? err.code : undefined;
+          res.status(status).json({
+            error: err?.message || "Request failed",
+            ...(code ? { code } : {}),
+            ...(err?.match ? { match: err.match } : {}),
+            ...(Array.isArray(err?.errors) ? { errors: err.errors } : {}),
+          });
         } else {
           res.status(500).json({ error: "Internal server error" });
         }
@@ -5481,13 +5494,23 @@ ${JSON.stringify(ctx, null, 2)}`;
         return res.status(409).json({ error: `A person named "${dup.name}" already exists`, existingId: dup.id });
       }
     }
-    // Auto-assign child-type profiles to self profile if no parent specified
+    // Rule 6: a child-type profile (an asset, a vehicle, a loan) created while
+    // ONE profile is selected nests under — and so is owned by — THAT profile
+    // (the "new asset landed on the wrong person" regression); "Everyone"
+    // nests under self; two selected is a question (409 OWNER_REQUIRED).
+    // Never the first / last-used / cached profile. storage.createProfile
+    // applies the same rule for callers that skip this route.
     const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "investment", "account", "property"]);
     if (childTypes.has(req.body.type) && !req.body.parentProfileId) {
-      const selfProfile = existing.find(p => p.type === "self");
-      if (selfProfile) {
-        req.body.parentProfileId = selfProfile.id;
-      }
+      const owner = resolveOwnerForNewRecord({
+        explicitOwnerIds: [],
+        activeProfileIds: activeProfileIds(req),
+        selfProfileId: existing.find(p => p.type === "self")?.id ?? null,
+        ownerRequired: true,
+        validProfileIds: new Set(existing.map(p => p.id)),
+      });
+      if (isOwnerQuestion(owner)) return res.status(409).json({ error: OWNER_REQUIRED_MESSAGE, code: "OWNER_REQUIRED" });
+      if (owner.ownerIds[0]) req.body.parentProfileId = owner.ownerIds[0];
     }
     // Strip skipDupCheck flag before schema validation (it's a control flag, not stored data).
     const { skipDupCheck: _skip, ...profileBody } = req.body;
@@ -7064,7 +7087,10 @@ Rules:
     }
     const m = budgetMonthParam(month, req);
     if (!m) return res.status(400).json({ error: "month must be YYYY-MM" });
-    const budget = await storage.addBudget(m, category.trim(), toCents(parsedAmount), notes, profileId || undefined);
+    // Rule 6: a budget line created while one profile is selected is that
+    // profile's, unless the body already says whose it is.
+    const budgetProfileId = profileId || applyActiveProfileScope(req, { profileId }, "profileId").profileId || undefined;
+    const budget = await storage.addBudget(m, category.trim(), toCents(parsedAmount), notes, budgetProfileId);
     res.json(budget);
   }));
 
@@ -7125,11 +7151,18 @@ Rules:
       const owned = await storage.getProfile(requested).catch(() => null);
       if (owned) return owned.id;
     }
+    // Rule 6: the single ACTIVE profile, else self. Never profiles[0] — the
+    // first row of an unordered list is not an owner, it is a guess; and two
+    // selected is a question (409 OWNER_REQUIRED), not a guess either.
+    const active = activeProfileIds(req);
+    if (active.length === 1) {
+      const owned = await storage.getProfile(active[0]).catch(() => null);
+      if (owned) return owned.id;
+    }
+    if (active.length > 1) throw new OwnerRequiredError();
     const self = await storage.getSelfProfile?.();
     if (self) return self.id;
-    const all = await storage.getProfiles();
-    if (all.length > 0) return all[0].id;
-    throw new Error("No profile available to import into. Create a profile first.");
+    throw new OwnerRequiredError(OWNER_REASONS.none, "No profile available to import into. Create a profile first.");
   }
 
   // Generate the strict ChatGPT prompt seeded with the user's current finance state.
@@ -7329,12 +7362,30 @@ Rules:
     // single profile is in scope belongs to that profile, whether or not the
     // form remembered to say so.
     applyActiveProfileScope(req, req.body);
+    // Rule 35: `allowDuplicate` is the caller's answer to the duplicate
+    // question, not a stored field.
+    const allowDuplicateExpense = req.body.allowDuplicate === true;
+    delete req.body.allowDuplicate;
 
     const parsed = insertExpenseSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     // Only the payment pipeline may mark an expense as a bill payment (D282).
     if (Array.isArray((parsed.data as any).tags)) (parsed.data as any).tags = await stripDanglingPaymentTags(storage, (parsed.data as any).tags);
-    const newExpense = await storage.createExpense(parsed.data);
+    // Rule 35: a possible duplicate is a question (409 POSSIBLE_DUPLICATE)
+    // until the caller answers it with allowDuplicate. The owner the row will
+    // get (named, else self under "Everyone") is part of the identity.
+    if (!allowDuplicateExpense) {
+      const explicitOwners = Array.isArray(parsed.data.linkedProfiles) ? parsed.data.linkedProfiles.filter(Boolean) : [];
+      const selfProfileId = (await storage.getSelfProfile())?.id ?? null;
+      const existingExpenses = await storage.getExpenses();
+      const verdict = findPossibleDuplicates(
+        { entityType: "expense", ownerIds: explicitOwners, selfProfileId, date: parsed.data.date || getUserToday(getTimezone(req)), amount: parsed.data.amount, description: parsed.data.description },
+        existingExpenses,
+      );
+      const match = verdict.tier === "low" ? undefined : existingExpenses.find(e => e.id === verdict.matches[0]?.id);
+      if (match) return res.status(409).json({ error: duplicateQuestion(match), code: "POSSIBLE_DUPLICATE", tier: verdict.tier, match });
+    }
+    const newExpense = await storage.createExpense(allowDuplicateExpense ? { ...parsed.data, __allowDuplicate: true } as any : parsed.data);
     const uid_e1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`);
     // Tell the caller when their text was altered — never change it silently.
@@ -8910,6 +8961,9 @@ Rules:
     if (textError) return res.status(400).json({ error: textError });
     const moneyError = validateProfileMoneyFields(req.body);
     if (moneyError) return res.status(400).json({ error: moneyError });
+    // Rule 6: an account created while one profile is selected belongs to
+    // that profile unless the form named an owner.
+    applyActiveProfileScope(req, req.body, "ownerProfileId");
     const { name, accountKind, institution, balance, availableBalance, creditLimit,
       accountNumberLast4, balanceAsOf, currency, notes, ownerProfileId } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: "name is required" });
@@ -11093,11 +11147,27 @@ No emojis. No prose outside the JSON.`,
       req.body.frequency = normalizeIncomeFrequency(req.body.frequency);
     }
     applyActiveProfileScope(req, req.body);
+    const allowDuplicateIncome = req.body.allowDuplicate === true;
+    delete req.body.allowDuplicate;
     // The same gate expenses / tasks / events run. Without it a string `tags`,
     // a non-array linkedProfiles or a junk date reached storage and 500'd.
     const parsed = insertIncomeSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
-    const income = await storage.createIncome(parsed.data);
+    // Rule 35: POST /api/incomes had no duplicate guard at all. A possible
+    // duplicate is a question (409 POSSIBLE_DUPLICATE) until the caller
+    // answers it with allowDuplicate.
+    if (!allowDuplicateIncome) {
+      const explicitOwners = Array.isArray(parsed.data.linkedProfiles) ? parsed.data.linkedProfiles.filter(Boolean) : [];
+      const selfProfileId = (await storage.getSelfProfile())?.id ?? null;
+      const existingIncomes = await storage.getIncomes();
+      const verdict = findPossibleDuplicates(
+        { entityType: "income", ownerIds: explicitOwners, selfProfileId, date: parsed.data.date || null, amount: parsed.data.amount, description: parsed.data.description },
+        existingIncomes,
+      );
+      const match = verdict.tier === "low" ? undefined : existingIncomes.find(i => i.id === verdict.matches[0]?.id);
+      if (match) return res.status(409).json({ error: duplicateQuestion(match), code: "POSSIBLE_DUPLICATE", tier: verdict.tier, match });
+    }
+    const income = await storage.createIncome(allowDuplicateIncome ? { ...parsed.data, __allowDuplicate: true } as any : parsed.data);
     bustIncomeCaches(uid);
     res.status(201).json(income);
   }));

@@ -88,14 +88,19 @@ interface ProfileLite {
  * "me" (the long-standing bug where creating a task while "Jane" was selected
  * linked it to the self profile and it vanished from Jane's view).
  *
- * Rules, in order:
+ * Rules, in order (Rule 6 — the selected profile is a hard data boundary;
+ * the same table the server applies in shared/owner-resolution.ts):
  *   1. Exactly one profile selected -> that profile (the unambiguous case).
- *   2. Several selected, self among them -> self (the natural primary owner).
- *   3. Several selected, no self -> the first selected (keeps the record in the
- *      active view rather than dropping it into an out-of-scope profile).
+ *   2. Several selected, self among them -> self (the speaker is the user).
+ *   3. Several selected, no self -> "" (UNRESOLVED). There is no unambiguous
+ *      owner, and picking `selected[0]` — the old rule — was a guess that put
+ *      records on whoever happened to be first in the chip. The dialog shows
+ *      its owner picker empty and the server answers 409 OWNER_REQUIRED if
+ *      the record is submitted without one: stop and ask, never guess.
  *   4. Unfiltered ("everyone") -> the self profile (the household default).
  *
- * Returns "" when no suitable profile exists yet (profiles still loading).
+ * Returns "" when no suitable profile exists yet (profiles still loading) or
+ * when the owner is unresolved (rule 3).
  * Pure helper — takes the scope explicitly so it is unit-testable without React.
  */
 export function resolveActiveCreateProfileId(
@@ -108,8 +113,8 @@ export function resolveActiveCreateProfileId(
 
   if (selected.length === 1) return selected[0];
   if (selected.length > 1) {
-    const selfInSel = selfId && selected.includes(selfId) ? selfId : "";
-    return selfInSel || selected[0];
+    // Self among several is the speaker; anything else is unresolved.
+    return selfId && selected.includes(selfId) ? selfId : "";
   }
   return selfId;
 }

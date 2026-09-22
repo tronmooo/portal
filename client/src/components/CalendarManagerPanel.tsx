@@ -47,6 +47,7 @@ import {
   Receipt, CreditCard, Pill, Wrench, CalendarClock, Activity, CheckSquare, Bell,
 } from "lucide-react";
 import { OBLIGATION_KIND_META, type ObligationKind } from "@shared/schema";
+import { offerablePeople } from "@shared/entity-classify";
 import type { Obligation } from "@shared/schema";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -420,7 +421,10 @@ function ManualEventSection() {
               <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">— None —</SelectItem>
-                {profiles.filter((p: any) => p.entityType === "person").map((p: any) => (
+                {/* Rule 28: the canonical people list. The old filter read a
+                    `entityType` field that profiles never had, so this picker
+                    was always empty. Pets included — a vet visit is Rex's. */}
+                {offerablePeople(profiles).map((p: any) => (
                   <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
                 ))}
               </SelectContent>
@@ -534,9 +538,11 @@ function RecurringObligationSection() {
   const meta = OBLIGATION_KIND_META[kind];
   const Icon = KIND_ICON[kind];
 
-  const personProfiles = profiles.filter((p: any) => p.entityType === "person");
-  const assetProfiles = profiles.filter((p: any) => p.entityType === "asset");
-  const liabilityProfiles = profiles.filter((p: any) => p.entityType === "liability");
+  // Rule 28: profiles carry `type`, never `entityType` — these three lists
+  // were always empty. People come from the canonical picker source.
+  const personProfiles = offerablePeople(profiles);
+  const assetProfiles = profiles.filter((p: any) => ["asset", "vehicle", "property"].includes(String(p.type)));
+  const liabilityProfiles = profiles.filter((p: any) => ["liability", "loan"].includes(String(p.type)));
 
   return (
     <Card>
@@ -729,7 +735,8 @@ function BirthdaySection() {
             <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="none">— None —</SelectItem>
-              {profiles.filter((p: any) => p.entityType === "person").map((p: any) => (
+              {/* Rule 28: the canonical people list (see ManualEventSection). */}
+              {offerablePeople(profiles).map((p: any) => (
                 <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
               ))}
             </SelectContent>

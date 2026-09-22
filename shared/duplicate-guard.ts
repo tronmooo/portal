@@ -37,6 +37,13 @@ export interface DuplicateCandidate {
   operationId?: string | null;
   /** Clock time (HH:MM) for date-shaped rows such as events. */
   time?: string | null;
+  /**
+   * The self profile id. Every reader treats an UNOWNED row (no owners) as
+   * the primary user's, so when this is given an unowned row — and an
+   * unowned candidate — compare as self's. Surfaces that look at the whole
+   * ledger (AI tools, REST) pass it; the storage-level retry guard does not.
+   */
+  selfProfileId?: string | null;
 }
 
 export interface DuplicateMatch {
@@ -137,7 +144,9 @@ export function findPossibleDuplicates(
 ): DuplicateVerdict {
   const now = (opts.now ?? new Date()).getTime();
   const window = opts.recentWindowMs ?? DEFAULT_RECENT_WINDOW_MS;
-  const owners = (candidate.ownerIds || []).filter(Boolean);
+  const selfId = candidate.selfProfileId || null;
+  const explicitOwners = (candidate.ownerIds || []).filter(Boolean);
+  const owners = explicitOwners.length === 0 && selfId ? [selfId] : explicitOwners;
   const day = dayOf(candidate.date);
   const amount = moneyOf(candidate.amount);
   const label = candidateLabel(candidate);
@@ -158,7 +167,8 @@ export function findPossibleDuplicates(
       continue;
     }
 
-    const rowOwners = ownersOf(row);
+    const rawRowOwners = ownersOf(row);
+    const rowOwners = rawRowOwners.length === 0 && selfId ? [selfId] : rawRowOwners;
     const ownerOk = sameOwner(owners, rowOwners);
     if (!ownerOk) continue; // a different person's identical lunch is not a duplicate
 
@@ -181,12 +191,15 @@ export function findPossibleDuplicates(
 
     const dated = day !== "" || rowDay !== "";
     const moneyed = amount != null;
+    // Two EXPLICITLY different days are two records ("yesterday's $20 lunch
+    // is not a duplicate of today's", D63): recency never overrides that.
+    const differentDays = !!day && !!rowDay && day !== rowDay;
     let score = 0;
     if (moneyed && dated) {
       // Ledger-shaped (expense, income, bill instalment).
       if (sameDay && sameAmt && sameName) score = 0.95;
       else if (sameDay && sameAmt) score = 0.7;
-      else if (sameName && recent) score = 0.6;
+      else if (sameName && recent && !differentDays) score = 0.6;
     } else if (dated) {
       // Date-shaped without money (event, task with a due date). Two events
       // with the same title on the same day at DIFFERENT clock times are a
@@ -195,7 +208,7 @@ export function findPossibleDuplicates(
       const t2 = typeof row.time === "string" ? row.time.slice(0, 5) : "";
       const clockDiffers = !!t1 && !!t2 && t1 !== t2;
       if (sameDay && sameName) score = clockDiffers ? 0.7 : 0.95;
-      else if (sameName && recent) score = 0.6;
+      else if (sameName && recent && !differentDays) score = 0.6;
     } else {
       // Name-shaped (task without a date, tracker, habit, profile, document):
       // only a same-name create moments ago is suspicious.

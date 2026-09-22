@@ -476,7 +476,44 @@ export function isOfferablePerson(p: { type?: string | null; name?: string | nul
   if (!p) return false;
   const type = String(p.type || "").trim().toLowerCase();
   if (type !== "self" && type !== "person" && type !== "pet") return false;
-  return !looksLikeAssetName(p.name);
+  // Rule 28: an explicit `person` (or `self`) row is a person. Hiding one
+  // because its name LOOKS like a thing ("Mercedes", "Bentley", "My Mom")
+  // made real people vanish from every picker; the retype repair for rows
+  // that really are things lives in `retypeMisfiledPersonRows`, not here.
+  // Only a pet row keeps the name check — pets are named after things often
+  // enough that the create-time coercion is worth mirroring.
+  if (type === "pet") return !looksLikeAssetName(p.name);
+  return true;
+}
+
+/**
+ * Rule 28 — the ONE people-picker source. Every "who" picker (owner
+ * dropdown, assignee, link-person, scope switcher, quick-add) lists exactly
+ * these rows from the canonical profile collection, so a valid person like
+ * Morgan appears in every compatible picker. Options:
+ *   includePets      pets are people for pickers that can own things
+ *                    (default true; a "link person" picker passes false)
+ *   includeBusiness  a business is a party for finance pickers (default false)
+ *   exclude          ids to leave out (the record being edited)
+ * Soft-deleted rows (`fields.deleted`) never appear.
+ */
+export function offerablePeople<T extends { id: string; type?: string | null; name?: string | null; fields?: any }>(
+  profiles: ReadonlyArray<T> | null | undefined,
+  opts: { includePets?: boolean; includeBusiness?: boolean; exclude?: ReadonlyArray<string> } = {},
+): T[] {
+  const includePets = opts.includePets !== false;
+  const includeBusiness = opts.includeBusiness === true;
+  const excluded = new Set(opts.exclude || []);
+  const out: T[] = [];
+  for (const p of profiles || []) {
+    if (!p || excluded.has(p.id)) continue;
+    if (p.fields && typeof p.fields === "object" && (p.fields as any).deleted) continue;
+    const type = String(p.type || "").trim().toLowerCase();
+    if (type === "business") { if (includeBusiness) out.push(p); continue; }
+    if (type === "pet" && !includePets) continue;
+    if (isOfferablePerson(p)) out.push(p);
+  }
+  return out;
 }
 
 // ── Repairing rows that were ALREADY stored as people (QA 2026-09-19) ─────────

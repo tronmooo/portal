@@ -28,14 +28,13 @@ import {
   roundPct,
   type OwnershipLink,
 } from "@shared/ownership-model";
-import { isOfferablePerson } from "@shared/entity-classify";
+import { offerablePeople } from "@shared/entity-classify";
 
 interface Row {
   partyProfileId: string;
   pct: number;
 }
 
-const PERSON_TYPES = new Set(["self", "person", "pet"]);
 
 export function OwnershipEditor({
   profile,
@@ -64,9 +63,9 @@ export function OwnershipEditor({
   // Candidate owners: people/pets (and Self), never the asset itself.
   const candidates = useMemo(
     () =>
-      allProfiles
-        // isOfferablePerson: a possession mistyped `person` is not an owner (F-04).
-        .filter((p) => PERSON_TYPES.has(p.type || "") && isOfferablePerson(p) && p.id !== profile.id && !(p.fields as any)?.deleted)
+      // Rule 28: the canonical people list (people, pets and Self can own
+      // things), never the asset itself; soft-deleted rows are left out.
+      offerablePeople(allProfiles, { exclude: [profile.id] })
         .sort((a, b) => (a.name || "").localeCompare(b.name || "")),
     [allProfiles, profile.id],
   );

@@ -401,6 +401,18 @@ export default defineConfig({
       'tests/turn-scope.test.ts',
       'tests/read-only-turn-guard.test.ts',
       'tests/storage-proxy-read-only.test.ts',
+      // Rules 6/28/34/35: owner resolution, pickers, validation, duplicate guard
+      'tests/owner-resolution.test.ts',
+      'tests/duplicate-guard.test.ts',
+      'tests/write-validation.test.ts',
+      'tests/active-scope-create.test.ts',
+      'tests/profile-pickers-canonical.test.tsx',
+      // Rules 11-15/33: canonical fields, temporal status, derived metrics, integrity
+      'tests/temporal-status.test.ts',
+      'tests/liability-derived.test.ts',
+      'tests/expense-ledger.test.ts',
+      'tests/entity-integrity.test.ts',
+      'tests/no-inline-liability-field-chains.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

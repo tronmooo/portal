@@ -51,6 +51,7 @@ import { Link } from "wouter";
 import { isNetWorthLiabilityProfile, resolveLiabilityBalance } from "@shared/asset-value";
 import { isAmortizable } from "@shared/liability-types";
 import { resolveAnnualRate } from "@shared/liability-calc";
+import { sumExpenses, spendByCategory, savingsRatePct } from "@shared/expense-ledger";
 import { loanPayoff, loanStoredTermMonths } from "@shared/loan-facts";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { netWorthChange } from "@shared/net-worth-change";
@@ -992,16 +993,13 @@ export default function FinancePage() {
     const idx = sortedExpenses.findIndex((e) => e.id === highlightId);
     if (idx >= visibleCount) setVisibleCount(idx + 1);
   }, [highlightId, sortedExpenses, visibleCount]);
-  const total = useMemo(() => filtered.reduce((s, e) => s + e.amount, 0), [filtered]);
+  // Rule 15: the manual `expenses` ledger, summed by the ONE shared calc.
+  const total = useMemo(() => sumExpenses(filtered), [filtered]);
 
   // Group by category
   // Canonical keys, so a row saved as "automotive" and one saved as "vehicle"
   // are one bar rather than two.
-  const byCategory = useMemo(() => filtered.reduce((acc: Record<string, number>, e) => {
-    const k = canonicalExpenseCategory(e.category);
-    acc[k] = (acc[k] || 0) + e.amount;
-    return acc;
-  }, {}), [filtered]);
+  const byCategory = useMemo(() => spendByCategory(filtered, { keyOf: canonicalExpenseCategory }), [filtered]);
   const chartData = useMemo(() => Object.entries(byCategory).map(([name, amount]) => ({ name: categoryLabel(name), amount: Number(amount.toFixed(2)) })).sort((a, b) => a.name.localeCompare(b.name)), [byCategory]);
   // The filter offers the canonical buckets actually present in the data — so
   // every option it lists is one the Add and Edit forms can also produce.
@@ -1337,7 +1335,8 @@ export default function FinancePage() {
         const spendMtd = Number(snap.totalMonthlySpend || 0);
         const billsStillOwed = Number(snap.unpaidBillsThisMonth ?? snap.monthlyObligationTotal ?? 0) || 0;
         const cashOut = spendMtd + billsStillOwed;
-        const savingsRate = monthlyIncome > 0 ? Math.round(((monthlyIncome - spendMtd) / monthlyIncome) * 100) : null;
+        // ONE savings-rate definition (shared/expense-ledger): (income − spend) / income.
+        const savingsRate = savingsRatePct(monthlyIncome, spendMtd);
 
         // Budgets: limit from /api/budgets, spent from snapshot.spendByCategory.
         const spendByCat: Record<string, number> = snap.spendByCategory || {};
