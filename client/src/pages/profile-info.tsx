@@ -646,10 +646,10 @@ function SingleProfileInfo({ id }: { id: string }) {
             {systemRows.map(([k, v]) => (
               <div key={k} className="rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 min-w-0" data-testid={`info-system-field-${k}`}>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-mono text-muted-foreground truncate">{k}</span>
-                  <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 uppercase tracking-wide">system</Badge>
+                  <span className="text-[11px] font-mono text-muted-foreground truncate">{k}</span>
+                  <Badge variant="outline" className="micro-label px-1 py-0 h-4">system</Badge>
                 </div>
-                <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all mt-1 max-h-24 overflow-auto">
+                <pre className="text-[11px] font-mono text-foreground/80 whitespace-pre-wrap break-all mt-1 max-h-24 overflow-auto">
                   {typeof v === "object" && v !== null ? JSON.stringify(v, null, 1) : String(v)}
                 </pre>
               </div>

@@ -144,6 +144,17 @@ export function canonicalizeRegistryFields<T extends Record<string, any>>(fields
     if (isBlank(v)) continue;
     if (isBlank(out[canonical])) out[canonical] = v;
   }
+  // Rule 11: a camelCase alias the registry did not name (`value`,
+  // `monthlyAmount`, `currentBalance`) folds through the same canon table.
+  // A differing value on the canonical key is never overwritten or dropped —
+  // that disagreement is Rule 33's to report, not this fold's to hide.
+  for (const k of Object.keys(out)) {
+    const ck = canonicalFieldKey(k);
+    if (ck === k) continue;
+    const v = out[k];
+    if (isBlank(v)) { delete out[k]; continue; }
+    if (isBlank(out[ck])) { out[ck] = v; delete out[k]; }
+  }
   // A bill's due date is also its next due date when nothing else says so.
   if (!isBlank(out.dueDate) && isBlank(out.nextDueDate) && "next_billing_date" in fields) out.nextDueDate = out.dueDate;
   return out as T;

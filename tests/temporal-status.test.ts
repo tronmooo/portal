@@ -39,8 +39,9 @@ describe("getRecordTemporalStatus — the Sept 25 regression", () => {
     } as any;
     const out = lookupStoredFact("when is my Dodge Ram Loan due?", sources);
     expect(out.answer).toBeTruthy();
-    expect(String(out.answer)).toContain("2026-10-25");
-    expect(String(out.answer)).not.toContain("2026-09-25");
+    const answered = `${out.answer!.reply} ${String(out.answer!.candidate?.value ?? "")}`;
+    expect(answered).toContain("2026-10-25");
+    expect(answered).not.toContain("2026-09-25");
   });
 
   it("the schedule normalizer (detail page / calendar) starts at the same day", () => {

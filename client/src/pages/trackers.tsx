@@ -7613,8 +7613,7 @@ export default function TrackersPage() {
           // Subscriptions don't carry a payoff balance — only sum balances on
           // actual debt instruments so the header total stays meaningful.
           if (l.type === "subscription") return s;
-          const f: any = l.fields || {}; const fin = f.finance || {};
-          return s + (toNumLiab(f.currentBalance ?? f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance) || 0);
+          return s + (readBalance(l) || 0);
         }, 0);
         const totalMonthly = liabs.reduce((s, l) => {
           const f: any = l.fields || {}; const fin = f.finance || {};

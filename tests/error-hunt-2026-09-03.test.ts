@@ -3257,7 +3257,10 @@ describe("D267 the storage layer folds registry fields for every door", async ()
       .toEqual({ balance: 7000, monthlyPayment: 310, interestRate: 4.5, termMonths: 24, dueDay: 20, lender: "CU" });
     const util = prepareProfileFields({ amount: "60", frequency: "monthly", start_date: "2026-05-26", provider: "City" }, { typeKey: "utility", todayISO: "2026-09-04" });
     expect(util).toMatchObject({ amount: 60, firstPaymentDate: "2026-05-26", dueDate: "2026-09-26", nextDueDate: "2026-09-26" });
-    expect(prepareProfileFields({ value: "abc", notes: "x" })).toEqual({ value: "abc", notes: "x" });
+    // Rule 11 (2026-09-22): `value` folds to the one canonical spelling,
+    // `currentValue`, on every door — the registry fold and the AI fold now
+    // point the same way.
+    expect(prepareProfileFields({ value: "abc", notes: "x" })).toEqual({ currentValue: "abc", notes: "x" });
   });
   it("MemStorage create and update fold an old-backup shape", async () => {
     const s = new MemStorage();
@@ -3354,8 +3357,10 @@ describe("D269 stale identity twins", async () => {
     const p = await s.createProfile({ type: "liability", type_key: "auto_loan", name: "Loan", fields: { balance: 25000 }, tags: [], notes: "" } as any);
     const u = await s.updateProfile(p.id, { fields: { currentBalance: 24500 } } as any);
     const f = (u as any)?.fields || {};
-    expect(f.currentBalance).toBe(24500);
-    expect(f.balance == null).toBe(true);
+    // Rule 11 (2026-09-22): the ONE spelling is the canonical one — `balance`.
+    // A write under the alias lands on the canonical key; the alias is gone.
+    expect(f.balance).toBe(24500);
+    expect(f.currentBalance == null).toBe(true);
   });
 });
 
@@ -3823,7 +3828,9 @@ describe("D286 sub-cent amounts are refused; money fields on a profile are store
   it("prepareProfileFields rounds money keys to cents and leaves rates alone", () => {
     const out: any = prepareProfileFields({ balance: 1000.004, monthlyAmount: 33.335, interestRate: 6.125, termMonths: 36 }, { typeKey: "personal_loan", todayISO: "2026-09-03" });
     expect(out.balance).toBe(1000);
-    expect(out.monthlyAmount).toBe(33.34);
+    // Rule 11: `monthlyAmount` folds to the canonical `monthlyPayment`.
+    expect(out.monthlyPayment).toBe(33.34);
+    expect(out.monthlyAmount).toBeUndefined();
     expect((prepareProfileFields({ balance: 555.555 }, { typeKey: "personal_loan", todayISO: "2026-09-03" }) as any).balance).toBe(555.56);
     const routes = readFileSync(new URL("../server/routes.ts", import.meta.url), "utf8");
     // the budget routes parse their amount by hand: both refuse a third decimal

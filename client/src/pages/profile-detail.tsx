@@ -3819,7 +3819,7 @@ function StaticInfoTab({
           <CardHeader className="py-2.5 px-4">
             <CardTitle className="text-xs font-semibold flex items-center gap-2">
               System
-              <span className="text-[9px] px-1 py-0 rounded border border-border uppercase tracking-wide text-muted-foreground">developer mode</span>
+              <span className="micro-label px-1 py-0 rounded border border-border text-muted-foreground">developer mode</span>
               <span className="text-[11px] px-1.5 py-0 rounded-full bg-muted text-muted-foreground tabular-nums">{systemFields.length}</span>
             </CardTitle>
           </CardHeader>
@@ -3827,10 +3827,10 @@ function StaticInfoTab({
             {systemFields.map(([k, v]) => (
               <div key={k} className="rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 min-w-0" data-testid={`profile-system-field-${k}`}>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] font-mono text-muted-foreground truncate">{k}</span>
-                  <span className="text-[9px] px-1 py-0 rounded border border-border uppercase tracking-wide text-muted-foreground">system</span>
+                  <span className="text-[11px] font-mono text-muted-foreground truncate">{k}</span>
+                  <span className="micro-label px-1 py-0 rounded border border-border text-muted-foreground">system</span>
                 </div>
-                <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all mt-1 max-h-24 overflow-auto">
+                <pre className="text-[11px] font-mono text-foreground/80 whitespace-pre-wrap break-all mt-1 max-h-24 overflow-auto">
                   {typeof v === "object" && v !== null ? JSON.stringify(v, null, 1) : String(v)}
                 </pre>
               </div>
@@ -3880,8 +3880,7 @@ function StaticInfoTab({
         if (liabilities.length === 0) return null;
         const liabPct = (l: any) => typeof l._ownershipPercentage === "number" ? l._ownershipPercentage : 100;
         const totalBalance = liabilities.reduce((s: number, l: any) => {
-          const f = l.fields || {}; const fin = f.finance || {};
-          const v = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+          const v = readBalance(l);
           // Sum only THIS profile's share of each debt.
           return s + (Number.isFinite(v) ? v * liabPct(l) / 100 : 0);
         }, 0);
@@ -3898,13 +3897,15 @@ function StaticInfoTab({
             ) : null}
           >
               {liabilities.slice().sort((a: any, b: any) => (a.name || "").localeCompare(b.name || "")).map((l: any) => {
-                const f = l.fields || {}; const fin = f.finance || {};
-                const grossBal = Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
+                const grossBal = readBalance(l);
                 const pct = liabPct(l);
                 const bal = grossBal * pct / 100;
                 const isShared = pct < 100;
-                const apr = f.apr ?? f.interestRate ?? fin.apr ?? fin.interestRate;
-                const monthly = f.monthlyPayment ?? fin.monthlyPayment;
+                // Rule 11: one canonical reader per money field.
+                const aprPct = readInterestRatePct(l);
+                const apr = aprPct > 0 ? aprPct : undefined;
+                const monthlyRead = readMonthlyPayment(l);
+                const monthly = monthlyRead > 0 ? monthlyRead : undefined;
                 const subtypeRaw = (l.type_key || l.fields?.subtype || "").toString().replace(/_/g, " ");
                 return (
                   <Link key={l.id} href={`/profiles/${l.id}`}>
@@ -11809,10 +11810,7 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
   }, [profile.childProfiles]);
 
   const liabPct = (l: any) => typeof l._ownershipPercentage === "number" ? l._ownershipPercentage : 100;
-  const liabBalance = (l: any) => {
-    const f = l.fields || {}; const fin = f.finance || {};
-    return Number(f.remainingBalance ?? f.loanBalance ?? f.balance ?? fin.remainingBalance ?? fin.loanBalance ?? fin.balance ?? 0);
-  };
+  const liabBalance = (l: any) => readBalance(l);
   const liabTotal = useMemo(() => {
     return liabilities.reduce((s: number, l: any) => {
       const v = liabBalance(l);

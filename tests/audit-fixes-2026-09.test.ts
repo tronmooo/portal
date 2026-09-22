@@ -456,11 +456,17 @@ describe("deriveScheduleFields: no due date is no due date", () => {
     const explicit = deriveScheduleFields({ monthlyPayment: 500, dueDay: 10, nextPaymentDate: "2026-09-20" }, "auto_loan", TODAY);
     expect(explicit.dueDate).toBe("2026-09-20");
   });
-  it("with no date but a recorded last payment, the next due is one cycle after it", async () => {
+  it("with no date but a recorded last payment, nothing is scheduled — history is not a schedule (Rule 14)", async () => {
+    // Rule 14 (2026-09-22): payment_history and payment_schedule are separate
+    // concepts. A past payment date must never be the sole source of a next
+    // due date; the previous behaviour (lastPaid + one cycle) invented a
+    // schedule from history and is exactly what made a loan "due" on a day
+    // nobody agreed to.
     const { deriveScheduleFields } = await import("../shared/liability-schedule");
     const f = deriveScheduleFields({ monthlyPayment: 500, lastPaidDate: "2026-08-15" }, "auto_loan", TODAY);
-    expect(f.dueDate).toBe("2026-09-15");
-    expect(f.firstPaymentDate).toBe("2026-09-15");
+    expect(f.dueDate).toBeUndefined();
+    expect(f.nextDueDate).toBeUndefined();
+    expect(f.lastPaidDate).toBe("2026-08-15");
   });
 });
 

@@ -1196,7 +1196,11 @@ describe("D115: POST/PATCH /api/profiles validate money fields", () => {
     expect((await h.api("POST", "/api/profiles", { type: "vehicle", name: "Truck", fields: { estimatedValue: 1e12 } })).status).toBe(400);
     const ok = await h.api("POST", "/api/profiles", { type: "vehicle", name: "Truck", fields: { estimatedValue: "$14,500" } });
     expect(ok.status).toBe(201);
-    expect(h.db.profiles.find((p: any) => p.name === "Truck")?.fields?.estimatedValue).toBe(14500);
+    // Rule 11 (2026-09-22): `estimatedValue` is an alias; the row stores the
+    // one canonical spelling, `currentValue`, normalised to a number.
+    const truck = h.db.profiles.find((p: any) => p.name === "Truck");
+    expect(truck?.fields?.currentValue).toBe(14500);
+    expect(truck?.fields?.estimatedValue).toBeUndefined();
   });
 });
 

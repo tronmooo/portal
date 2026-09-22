@@ -66,41 +66,47 @@ describe("'View all (N)' reveals the rows it promises", () => {
 // ── #4 — search results open the record, not the dashboard ───────────────────
 describe("global search results go somewhere", () => {
   const src = read("client/src/components/CommandSearch.tsx");
-  // Each result group's onSelect sits directly above its data-testid.
+  // Each result group's onSelect sits directly above its data-testid. Since
+  // Rules 23/24 (2026-09-22) every group resolves its destination through ONE
+  // helper — the row's server-stamped `href`, else the entity route registry —
+  // so the assertion is that no group builds a path of its own any more.
   const targetFor = (kind: string): string => {
     const re = new RegExp(
-      `onSelect=\\{\\(\\) => handleSelect\\(([^,]+), query\\)\\}\\s*\\n\\s*data-testid=\\{\`item-search-${kind}-`,
+      `onSelect=\\{\\(\\) => handleSelect\\((target\\(\\w+, "\\w+"\\)|[^,]+), query\\)\\}\\s*\\n\\s*data-testid=\\{\`item-search-${kind}-`,
     );
     const m = src.match(re);
     expect(m, `no search group for ${kind}`).toBeTruthy();
     return m![1].trim();
   };
+  const ALL_KINDS = ["profile", "tracker", "task", "expense", "event", "document", "habit", "journal", "obligation", "artifact"];
 
   it("never dumps a result onto the generic dashboard", () => {
     // Nine of ten groups did exactly this, which is why clicking a bill "closed
     // the dialog and navigated nowhere" when you were already on the dashboard.
-    for (const kind of ["task", "expense", "event", "document", "habit", "journal", "obligation", "artifact", "tracker"]) {
+    for (const kind of ALL_KINDS) {
       expect(targetFor(kind), kind).not.toBe('"/dashboard"');
+      expect(targetFor(kind), kind).toMatch(new RegExp(`^target\\(\\w+, "${kind}"\\)$`));
     }
   });
 
-  it("deep-links the record itself wherever a record route exists", () => {
-    expect(targetFor("tracker")).toBe("`/trackers?tracker=${t.id}`");
-    expect(targetFor("document")).toBe("`/documents/${d.id}`");
-    expect(targetFor("profile")).toBe("`/profiles/${p.id}`");
+  it("resolves every group through the row's href or the entity route registry", () => {
+    expect(/const target = \(row: Routed & \{ id: unknown \}, type: string\): string =>/.test(src)).toBe(true);
+    expect(src.includes("routeForSearchRow({ ...row, _type: row._type || type })")).toBe(true);
+    expect(/handleSelect\("\/dashboard\/(tasks|habits|journal|obligations)", query\)/.test(src)).toBe(false);
   });
 
-  it("sends the rest to their own page", () => {
-    expect(targetFor("task")).toBe('"/dashboard/tasks"');
-    // QA 2026-09-18 F-52/F-48: an expense lands on its own ROW (Finance +
-    // `?highlight=expense:<id>`), and a profile-derived date opens the profile
-    // that carries it; both go through a named target helper.
-    expect(targetFor("expense")).toBe("expenseTarget(e)");
-    expect(targetFor("event")).toBe("eventTarget(e)");
-    expect(targetFor("habit")).toBe('"/dashboard/habits"');
-    expect(targetFor("journal")).toBe('"/dashboard/journal"');
-    expect(targetFor("obligation")).toBe('"/dashboard/obligations"');
-    expect(targetFor("artifact")).toBe('"/artifacts"');
+  it("deep-links the record itself wherever a record route exists", async () => {
+    const { routeForEntity } = await import("../shared/entity-routes");
+    expect(routeForEntity("tracker", "t1")).toBe("/trackers?tracker=t1");
+    expect(routeForEntity("document", "d1")).toBe("/documents/d1");
+    expect(routeForEntity("person", "p1")).toBe("/profiles/p1");
+    expect(routeForEntity("expense", "e1")).toBe("/dashboard/finance?highlight=expense%3Ae1");
+    // Rule 23: list-only types now land on their own row too.
+    expect(routeForEntity("task", "t1")).toBe("/dashboard/tasks?highlight=task%3At1");
+    expect(routeForEntity("habit", "h1")).toBe("/dashboard/habits?highlight=habit%3Ah1");
+    expect(routeForEntity("journal", "j1")).toBe("/dashboard/journal?highlight=journal%3Aj1");
+    expect(routeForEntity("obligation", "o1")).toBe("/dashboard/obligations?highlight=obligation%3Ao1");
+    expect(routeForEntity("artifact", "a1")).toBe("/editor/a1");
   });
 
   it("routes query-carrying targets through hashNavigate", () => {
@@ -119,8 +125,9 @@ describe("wellness metric cards open the tracker they show", () => {
     // each still deep-links the tracker whose reading it shows.
     // A lab row read from a DOCUMENT links the document instead (2026-09-17),
     // so the tracker deep link is one arm of a conditional now.
-    expect(/`#\/trackers\?tracker=\$\{row\.trackerId\}`/.test(src)).toBe(true);
-    expect(/href=\{`#\/trackers\?tracker=\$\{w\.trackerId\}`\}/.test(src)).toBe(true);
+    // Rule 24: the link is built by the entity route registry, not inline.
+    expect(/routeForEntity\("tracker", row\.trackerId, \{ hash: true \}\)/.test(src)).toBe(true);
+    expect(/href=\{routeForEntity\("tracker", w\.trackerId, \{ hash: true \}\)\}/.test(src)).toBe(true);
   });
 
   it("has no hardcoded /trackers link left", () => {
@@ -173,11 +180,17 @@ describe("liability back link", () => {
 
 // ── #3 — a bill notification opens the bills ─────────────────────────────────
 describe("notification rows", () => {
-  it("send a bill to the Bills page, not to expenses", () => {
+  it("send a bill to the Bills page, not to expenses", async () => {
+    // Rule 24: the bell no longer switches on notification type inline; one
+    // helper resolves the entity (or the type's list page) for every surface.
     const src = read("client/src/components/NotificationBell.tsx");
-    const m = src.match(/case "bill_due":\s*(?:\n\s*\/\/[^\n]*)*\s*\n\s*setLocation\("([^"]+)"\);/);
-    expect(m, "bill_due case not found").toBeTruthy();
-    expect(m![1]).toBe("/dashboard/obligations");
+    expect(src.includes("notificationRoute(")).toBe(true);
+    // No inline destination remains for the bill case (labels/icons may still switch on type).
+    expect(/case "bill_due":\s*(?:\n\s*\/\/[^\n]*)*\s*\n\s*setLocation\(/.test(src)).toBe(false);
+    const { notificationRoute } = await import("../client/src/lib/notification-route");
+    expect(notificationRoute({ type: "bill_due" })).toBe("/dashboard/obligations");
+    expect(notificationRoute({ type: "bill_due", entityType: "obligation", entityId: "o1" })).toBe("/dashboard/obligations?highlight=obligation%3Ao1");
+    expect(notificationRoute({ type: "task_overdue" })).toBe("/dashboard/tasks");
   });
 });
 

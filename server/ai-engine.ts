@@ -9298,10 +9298,13 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // The Linked page filters by linkedProfiles, so linking to multiple
       // profiles would show one card under each person — the user wants
       // one card per person, period.
-      const selfProfileId = profiles.find(p => p.type === "self")?.id;
+      // Rule 6: a tracker created while one profile is selected belongs to
+      // that profile unless the message named someone else; self only when
+      // the scope is Everyone.
+      const defaultTrackerOwnerId = aiDefaultOwner(profiles)?.id;
       const newTrackerLinkedProfiles = targetProfileId
         ? [targetProfileId]
-        : (selfProfileId ? [selfProfileId] : undefined);
+        : (defaultTrackerOwnerId ? [defaultTrackerOwnerId] : undefined);
 
       // P0.3a: validate the schema-covered part with the shared insert schema;
       // linkedProfiles isn't part of insertTrackerSchema, so it rides alongside

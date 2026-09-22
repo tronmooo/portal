@@ -86,6 +86,22 @@ const moneyNumber = (v: unknown): number | null => {
 
 const fmt = (v: unknown): string => (typeof v === "string" ? v : v == null ? "" : JSON.stringify(v));
 
+/** "6" vs "6%" vs 6, "$26,000" vs 26000: the same fact written differently. */
+const scalarNumber = (v: unknown): number | null => {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v !== "string" || !/\d/.test(v)) return null;
+  const n = Number(v.trim().replace(/^[$€£]/, "").replace(/[,\s]/g, "").replace(/%$/, ""));
+  return Number.isFinite(n) ? n : null;
+};
+
+/** Two alias values agree when the canon says so or when both parse to one number. */
+function valuesAgree(a: unknown, b: unknown): boolean {
+  if (looselyEqual(a, b)) return true;
+  const na = scalarNumber(a);
+  const nb = scalarNumber(b);
+  return na != null && nb != null && Math.abs(na - nb) < 1e-9;
+}
+
 /**
  * The key that should carry a cluster's value: the canonical spelling when
  * one of the keys IS it (or folds to it through profile-field-canon), else
@@ -134,7 +150,7 @@ export function validateEntityIntegrity(entity: IntegrityEntity | null | undefin
     const canonical = canonicalKeyFor(keys);
     const winner = canonicalValueFor(fields, canonical, keys);
     const conflicts = keys
-      .filter((k) => k !== winner.key && !isBlank(fields[k]) && !looselyEqual(fields[k], winner.value))
+      .filter((k) => k !== winner.key && !isBlank(fields[k]) && !valuesAgree(fields[k], winner.value))
       .map((k) => ({ key: k, value: fields[k] }));
     if (conflicts.length === 0) continue;
     warnings.push({

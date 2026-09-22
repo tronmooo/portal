@@ -1,8 +1,8 @@
 # Portol — Stabilization Architecture & Consistency Framework
 
 **Status:** Authoritative contract for all future changes
-**Companion docs:** `REGRESSION_TESTS.md`, `audit/stabilization-findings.md`
-**Last updated:** 2026-05-28
+**Companion docs:** `REGRESSION_TESTS.md`, `audit/stabilization-findings.md`, `docs/GLOBAL_RULES.md` (the 40 global rules: read‑only AI turns, idempotent operations, owner resolution, financial status, canonical fields, the date engine, the entity registry — rule by rule, with the module and test that enforce each)
+**Last updated:** 2026-09-22
 
 This document defines the canonical state model for Portol. Every page, component, server route, and mutation must obey these rules. The regression suite (`tests/smoke/contracts/`) enforces them. Violations are bugs.
 

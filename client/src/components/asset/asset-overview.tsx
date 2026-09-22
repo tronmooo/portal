@@ -21,6 +21,7 @@
 
 import { useMemo, useState } from "react";
 import { PERSON_LIKE_TYPES } from "@shared/scope";
+import { readBalance } from "@shared/liability-fields";
 import { formatMoneyCompact } from "@/lib/format";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
