@@ -422,22 +422,31 @@ function paymentName(title: unknown): string {
 /**
  * WHO a birthday/anniversary belongs to, as named by its own title.
  *
- *   "🎂 Dad's Birthday"  → "dad"
- *   "Joe's Birthday"     → "joe"
- *   "Sarah — Anniversary"→ "sarah"
- *   "Birthday" / "My Birthday" → ""   (names nobody)
+ *   "🎂 Dad's Birthday"       → "dad"
+ *   "Joe's Birthday"          → "joe"
+ *   "Sarah Miller — Anniversary" → "sarahmiller"
+ *   "Birthday" / "My Birthday"   → ""   (names nobody)
+ *   "Birthday — Apex Health Diagnostics …" → ""   (names nobody)
  *
- * Returning "" is deliberate: a title that names nobody must not invent a
- * distinction, so those rows keep the owner-only identity they always had.
+ * Only the exact "<Person>'s Birthday" / "<Person> — Anniversary" shape yields
+ * a name — the shape `ruleLabel` (shared/date-rules) writes and the shape a
+ * person types. Everything else returns "", and returning "" is the SAFE
+ * answer: those rows keep the owner-only identity they have always had, so a
+ * date-of-birth lifted out of a document ("Birthday — Apex Health Diagnostics
+ * – Comprehensive Biometric & Biochemical Profile", extracted onto Bob
+ * Robertson) still collapses into that person's birthday instead of standing
+ * beside it as a second one. A distinction is only ever ADDED here, never
+ * removed.
  */
 function singletonPersonName(title: unknown): string {
   const t = stripGeneratedSuffix(String(title ?? "")).replace(/\s+/g, " ").trim();
   // Trailing "…'s Birthday" / "… — Anniversary" is the LABEL; what precedes it
-  // is the person. A title that is nothing but the label leaves the name empty.
+  // is the person. A title that is nothing but the label names nobody.
   const m = t.match(/^(.*?)(?:['\u2019]s)?\s*(?:[—–-]\s*)?(birthday|b-?day|anniversary)$/i);
-  const name = slug(m ? m[1] : t);
-  // "40th Birthday", "Happy Birthday", "My Birthday" name no one — same list
-  // `parseBirthdayLabel` (shared/date-rules) rejects on the write path.
+  if (!m) return "";
+  const name = slug(m[1]);
+  // "40th Birthday", "Happy Birthday", "My Birthday" name no one — the same
+  // list `parseBirthdayLabel` (shared/date-rules) rejects on the write path.
   if (!name || /^(happy|my|the|a|an|his|her|their|our|your|\d+(st|nd|rd|th)?)$/.test(name)) return "";
   return name;
 }
@@ -805,9 +814,46 @@ export function mergeEquivalentPayments(groups: DedupedSeries[]): DedupedSeries[
 
 export function dedupeSeries(list: readonly CalendarSeries[]): DedupedSeries[] {
   const byIdentity = new Map<string, DedupedSeries>();
+  // Singleton kinds group by owner, then by the person the title names — and a
+  // title naming NOBODY is a wildcard that joins whoever is already in the
+  // owner's bucket.
+  //
+  // Both halves of the reported screen need this. "Mom's Birthday" and "Dad's
+  // Birthday", filed under one profile, name two people and must not merge.
+  // "Birthday — Apex Health Diagnostics – …", the date of birth extraction
+  // lifted onto Bob Robertson, names nobody and IS his birthday, so it must
+  // merge with "Bob Robertson's Birthday" — which a plain key comparison never
+  // would, the two titles having nothing in common.
+  //
+  // Adapters run profiles and their date rules FIRST (see `adaptAll`), so the
+  // bucket a wildcard joins is the person's own record, not a later event.
+  const singletonBuckets = new Map<string, { name: string; key: string }[]>();
+  const identityKeyFor = (s: CalendarSeries): string => {
+    const key = seriesIdentityKey(s);
+    const owner = s.source.profileId || "";
+    if (!SINGLETON_KINDS.has(s.kind) || !owner) return key;
+    let buckets = singletonBuckets.get(`${s.kind}:${owner}`);
+    if (!buckets) singletonBuckets.set(`${s.kind}:${owner}`, (buckets = []));
+    const name = singletonPersonName(s.title);
+    if (!name) {
+      if (buckets.length) return buckets[0].key;
+      buckets.push({ name: "", key });
+      return key;
+    }
+    const exact = buckets.find((b) => b.name === name);
+    if (exact) return exact.key;
+    // A wildcard got here first: it was this person's date all along.
+    const open = buckets.find((b) => b.name === "");
+    if (open) {
+      open.name = name;
+      return open.key;
+    }
+    buckets.push({ name, key });
+    return key;
+  };
   for (const s of list || []) {
     if (!s) continue;
-    const key = seriesIdentityKey(s);
+    const key = identityKeyFor(s);
     const held = byIdentity.get(key);
     if (!held) {
       byIdentity.set(key, { series: s, duplicateIds: [] });

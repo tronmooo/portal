@@ -86,6 +86,48 @@ describe("identity is date-free, so disagreeing sources still collapse", () => {
     };
     expect(seriesIdentityKey(bare)).toBe(`birthday:${JOE}`);
     expect(seriesIdentityKey({ ...bare, title: "My Birthday" })).toBe(`birthday:${JOE}`);
+    expect(seriesIdentityKey({ ...bare, title: "40th Birthday" })).toBe(`birthday:${JOE}`);
+  });
+
+  // The other half of the same screen: a date of birth lifted out of a lab
+  // report is titled after the DOCUMENT, not the person. It is still that
+  // person's one birthday, so naming the person must not un-merge it.
+  it("still collapses a document-derived date of birth into the person's", () => {
+    const fromProfile: CalendarSeries = {
+      id: "profile:bob:birthday", kind: "birthday", title: "Bob Robertson's Birthday",
+      source: { system: "profile", id: "bob", profileId: "bob", label: "Bob Robertson", href: "#" },
+      baseDate: "1979-04-12", recurrence: "yearly",
+    };
+    const fromDocument: CalendarSeries = {
+      ...fromProfile,
+      id: "document:lab-1:birthday",
+      title: "Birthday — Apex Health Diagnostics – Comprehensive Biometric & Biochemical Profile",
+      source: { system: "document", id: "lab-1", profileId: "bob", href: "#" },
+    };
+    // The typed-in event spells the person's name the way the profile does.
+    const fromEvent: CalendarSeries = {
+      ...fromProfile, id: "event:bob-bday", title: "🎂 Bob Robertson's Birthday",
+      source: { system: "event", id: "bob-bday", profileId: "bob", href: "#" },
+    };
+    expect(seriesIdentityKey(fromEvent)).toBe(seriesIdentityKey(fromProfile));
+    expect(dedupeSeries([fromProfile, fromDocument, fromEvent])).toHaveLength(1);
+    // …whichever order they are adapted in.
+    expect(dedupeSeries([fromDocument, fromProfile, fromEvent])).toHaveLength(1);
+    expect(dedupeSeries([fromDocument, fromProfile])[0].series.id).toBe("profile:bob:birthday");
+  });
+
+  // Both rules at once, which is the screen the report came from.
+  it("merges the unnamed date of birth without swallowing a second person", () => {
+    const base = {
+      kind: "birthday" as const, recurrence: "yearly", baseDate: "2027-03-14",
+      source: { system: "event" as const, id: "x", profileId: JOE, href: "#" },
+    };
+    const mom: CalendarSeries = { ...base, id: "event:mom", title: "🎂 Mom's Birthday", baseDate: "2026-05-12" };
+    const dad: CalendarSeries = { ...base, id: "event:dad", title: "🎂 Dad's Birthday" };
+    const dob: CalendarSeries = { ...base, id: "document:dob", title: "Birthday — Lab Report" };
+    const out = dedupeSeries([mom, dad, dob]);
+    expect(out).toHaveLength(2);
+    expect(out.map((g) => g.series.id).sort()).toEqual(["event:dad", "event:mom"]);
   });
 
   it("keeps different people's birthdays distinct", () => {
