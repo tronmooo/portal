@@ -123,6 +123,8 @@ import {
   enrichHydrationEntry,
   enrichSleepEntry,
   enrichStrengthEntry,
+  enrichFitnessEntry,
+  mergeEnrichments,
   applyEnrichmentToValues,
   derivePersonalMetrics,
   parseHeightToCm,
@@ -132,7 +134,7 @@ import {
 } from "@shared/estimation-engine";
 import { stripOwnerPossessivePrefix, stripLeadingDeterminer, extractOwnerPossessive, detectPossessiveOwner, looksLikeObjectPhrase, suggestObjectProfileType } from "@shared/entity-naming";
 import { resolveTrackerUnit } from "@shared/tracker-units";
-import { classifyFitnessActivity, isCalorieBearingActivity } from "@shared/fitness-metrics";
+import { classifyFitnessActivity, isCalorieBearingActivity, calorieContextForOwner } from "@shared/fitness-metrics";
 import { isInScope, ownerCandidatesForProfile, selfIdsFrom } from "@shared/scope";
 import { toMonthlyAmount, sumMonthlyIncomeNow, findDuplicatePaycheck } from "@shared/obligation-windows";
 import { guessExpenseCategory } from "@shared/expense-category-guess";
@@ -3913,7 +3915,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
       type: "object" as const,
       properties: {
         trackerName: { type: "string", description: "Name of the tracker — MUST be the specific activity: 'Basketball' for basketball, 'Tennis' for tennis, 'Running' for running, 'Soccer' for soccer, 'Swimming' for swimming, 'Yoga' for yoga. Never use 'Running' for a non-running sport. Strength/workout logs use the EXERCISE's exact name ('Weighted Pull-Ups', 'Bench Press', 'Face Pulls') — each exercise is its own tracker. NEVER 'Weight': that tracker holds body-weight weigh-ins ONLY, and a name merely CONTAINING 'weight' ('Weighted Pull-Ups') is an exercise, not a weigh-in." },
-        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: ALWAYS include all relevant derived fields. FITNESS (any sport): { activityType, duration, caloriesBurned, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM'. Pass quality ONLY when the user said how they slept — never infer or default it. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
+        values: { type: "object", description: "Key-value pairs to log. WALKING/RUNNING/STEPS/HYDRATION/SLEEP: pass ONLY the values the user explicitly stated (e.g. 'walked 1 mile' → { distance: 1 }; 'walked 2 km' → { distanceKm: 2 }; 'walked 2,100 steps' → { steps: 2100 }; 'drank 3 bottles of water' → { containerCount: 3, containerType: 'bottle' }) — the server's deterministic estimation engine converts units and derives/estimates steps, distance, duration, pace, and calories with confidence labels; do NOT compute or guess those yourself. The tool result's estimateNote lists what was estimated — echo estimates as estimates ('about 2,150 steps'), NEVER as exact user data. OTHER SPORTS/ACTIVITIES: pass what the user stated — FITNESS (any sport): { activityType, duration, intensity } + sport-specific fields (distance for running, sets for tennis, etc.). Do NOT compute or guess caloriesBurned for ANY physical activity: the server estimates it from the owner's body weight and the activity's MET, and pass caloriesBurned ONLY when the user stated a burn themselves. When the user mentions effort/heart rate, ALSO include heartRate (avg bpm) and intensity (e.g. 'light'|'moderate'|'intense' or a 1-3 zone) — these surface as effort chips on the card. Nutrition: { calories, protein, carbs, fat, item }. BP: { systolic, diastolic }. Weight: { weight }. Sleep: ALWAYS pass { hours } as a NUMBER (the duration), plus { quality, bedtime, wakeTime } when known. When the user gives a time range ('slept from 11 PM to 5:30 AM'), COMPUTE hours yourself (=6.5) and pass hours:6.5, bedtime:'11:00 PM', wakeTime:'5:30 AM'. Pass quality ONLY when the user said how they slept — never infer or default it. NEVER put a clock time like '5:30 AM' in the hours field. The activityType field is REQUIRED for any fitness/sport entry." },
         notes: { type: "string", description: "Optional context notes for this entry (e.g., 'morning reading', 'after workout', 'chicken sandwich from subway')" },
         forProfile: { type: "string", description: "Name of the profile this entry belongs to (e.g. 'Max', 'Mom', 'Tesla'). ALWAYS set this for any person, pet, vehicle, asset, or subscription mentioned." },
         at: { type: "string", description: "Optional date/time the entry actually happened (ISO date, natural language like 'June 3 2025', or a bare clock time like '8:15 AM' which is treated as today at that time). ALWAYS set this when the user attaches a time to the action ('at 8:15 AM', 'this morning at 7', 'yesterday'). Omit for 'now'." },
@@ -8827,25 +8829,49 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
             delete (input.values as any).calories;
           }
         }
+        // Owner context for every physical activity, not just cardio: the
+        // calorie math is body-weight-aware wherever it runs, and it is the
+        // TARGET profile's body — never the viewer's (Rule: Sarah's game is
+        // priced with Sarah's weight).
+        const targetProf: any = profiles.find(p => p.id === targetProfileId);
+        const pf = targetProf?.fields || {};
+        const heightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);
+        const weightKg = parseWeightToKg(pf.weight ?? pf.weightLbs ?? pf.weight_lbs ?? pf.weightKg);
+        const ownerCal = calorieContextForOwner(targetProf ?? null);
+        const bodyCtx = {
+          weightKg: weightKg ?? ownerCal.bodyWeightKg ?? null,
+          ageYears: ownerCal.ageYears ?? null,
+          sex: ownerCal.sex ?? null,
+          ownerLabel: ownerCal.ownerLabel ?? null,
+        };
         if (canonType === "walking" || canonType === "running" || canonType === "cycling") {
-          const targetProf: any = profiles.find(p => p.id === targetProfileId);
-          const pf = targetProf?.fields || {};
-          const heightCm = parseHeightToCm(pf.height ?? pf.heightCm ?? pf.height_cm ?? pf.heightInches);
-          const weightKg = parseWeightToKg(pf.weight ?? pf.weightLbs ?? pf.weight_lbs ?? pf.weightKg);
           const histTracker = trackers.find(t => trackerNamesMatch(t.name, input.trackerName));
           const histEntries = (histTracker?.entries || [])
             .filter((e: any) => !e.profileId || e.profileId === targetProfileId)
             .slice(0, 60);
           const personal = derivePersonalMetrics(histEntries);
-          entryEnrichment = enrichWalkRunEntry(canonType, input.values, { heightCm, weightKg, personal });
+          entryEnrichment = enrichWalkRunEntry(canonType, input.values, { ...bodyCtx, heightCm, personal });
         } else if (canonType === "hydration") {
           entryEnrichment = enrichHydrationEntry(input.values);
         } else if (canonType === "sleep") {
           entryEnrichment = enrichSleepEntry(input.values);
-        } else if (input.values.weight != null && input.values.reps != null) {
-          // Strength-shaped entry on any tracker (Bench Press, Squats, …):
-          // weight × reps × sets → total volume, calculated exactly.
-          entryEnrichment = enrichStrengthEntry(input.values);
+        } else {
+          // EVERY other physical activity — soccer, basketball, yoga, HIIT, a
+          // lifting session — gets the same body-weight-aware calorie estimate
+          // the cardio path gets. Before this, "played soccer for 30 minutes"
+          // was logged with no burn at all while a walk in the same message
+          // reported one, which read as the app simply not knowing about the
+          // sport (user screenshot, 2026-09-22).
+          const strength = (input.values.weight != null && input.values.reps != null)
+            ? enrichStrengthEntry(input.values)
+            : null;
+          const activityTracker = trackers.find(t => trackerNamesMatch(t.name, input.trackerName));
+          const fitness = enrichFitnessEntry(input.trackerName, input.values, {
+            ...bodyCtx,
+            category: activityTracker?.category ?? undefined,
+            fields: (activityTracker?.fields as any) ?? undefined,
+          });
+          entryEnrichment = strength ? mergeEnrichments(strength, fitness) : fitness;
         }
         if (entryEnrichment && (
           Object.keys(entryEnrichment.calculated).length ||

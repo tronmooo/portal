@@ -11,6 +11,7 @@ import { planSharedActivityFanout } from "@shared/shared-activity";
 import {
   calorieContextForOwner, classifyFitnessActivity, estimateCaloriesBurned,
 } from "@shared/fitness-metrics";
+import { entryValueProvenance } from "@shared/estimation-engine";
 
 process.env.ANTHROPIC_API_KEY = "test-key-not-used";
 
@@ -106,11 +107,9 @@ describe("the server fills in the participant the model forgot", () => {
     // for this sentence (it mentions no calories) is dropped on BOTH entries:
     // a number nobody stated must not masquerade as one the user did, because
     // an explicit value outranks the deterministic estimate everywhere.
-    // Each person's burn is then computed from THEIR OWN weight at write time
-    // by the one estimator in shared/fitness-metrics — Sarah is lighter, so
-    // hers is lower.
-    expect(hers!.values.caloriesBurned).toBeUndefined();
-    expect(mine!.values.caloriesBurned).toBeUndefined();
+    // Each person's burn is then estimated from THEIR OWN weight by the one
+    // estimator in shared/fitness-metrics — Sarah is lighter, so hers is lower
+    // — and carries provenance saying so, never passed off as user data.
     expect(hers!.values._notes).toBeUndefined();
     {
       const soccer = classifyFitnessActivity("Soccer", "fitness");
@@ -119,6 +118,12 @@ describe("the server fills in the participant the model forgot", () => {
       const mineCal = estimateCaloriesBurned(soccer, facts, calorieContextForOwner(SELF));
       expect(hersCal!.value).toBeLessThan(mineCal!.value);
       expect(hersCal!.method).toContain("Sarah Miller's weight");
+      // Not the model's 240, and not one weight used for both bodies.
+      expect(hers!.values.caloriesBurned).toBe(hersCal!.value);
+      expect(mine!.values.caloriesBurned).toBe(mineCal!.value);
+      expect(hers!.values.caloriesBurned).toBeLessThan(mine!.values.caloriesBurned);
+      expect(entryValueProvenance(hers!, "caloriesBurned")?.isEstimated).toBe(true);
+      expect(entryValueProvenance(mine!, "caloriesBurned")?.isEstimated).toBe(true);
     }
 
     // And the user is told about it: a card and a checklist row, not a silent write.

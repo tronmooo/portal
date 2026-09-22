@@ -19,7 +19,11 @@ import {
   KG_PER_LB,
   classifyFitnessActivity,
   estimateCaloriesBurned,
+  isCalorieBearingActivity,
+  readFitnessFacts,
+  type FitnessActivity,
   type FitnessFacts,
+  type FitnessField,
 } from "./fitness-metrics";
 
 // ─── Provenance ──────────────────────────────────────────────────────────────
@@ -318,6 +322,11 @@ export interface ActivityProfileContext {
   heightCm?: number | null;
   weightKg?: number | null;
   personal?: PersonalMetrics | null;
+  /** Owner age/sex — only used by the heart-rate equation, when HR was logged. */
+  ageYears?: number | null;
+  sex?: "male" | "female" | null;
+  /** Owner name, for the "…'s weight 82 kg" half of the method string. */
+  ownerLabel?: string | null;
 }
 
 function numeric(v: any): number | null {
@@ -463,10 +472,18 @@ export function enrichWalkRunEntry(
     };
     if (intensity === "intense" || intensity === "hard" || intensity === "vigorous") facts.intensity = "vigorous";
     else if (intensity === "light" || intensity === "easy") facts.intensity = "light";
+    if (numeric(explicit.heartRate ?? explicit.avgHeartRate ?? explicit.bpm) != null) {
+      facts.heartRate = numeric(explicit.heartRate ?? explicit.avgHeartRate ?? explicit.bpm)!;
+    }
     const est = estimateCaloriesBurned(
       classifyFitnessActivity(activity, "fitness"),
       facts,
-      { bodyWeightKg: ctx.weightKg ?? null },
+      {
+        bodyWeightKg: ctx.weightKg ?? null,
+        ageYears: ctx.ageYears ?? null,
+        sex: ctx.sex ?? null,
+        ownerLabel: ctx.ownerLabel ?? null,
+      },
     );
     if (est) {
       out.estimated.caloriesBurned = {
@@ -485,6 +502,93 @@ export function enrichWalkRunEntry(
   }
 
   return stampProvenance(out);
+}
+
+// ─── Every other calorie-bearing activity (sports, classes, strength, …) ────
+
+export interface FitnessEnrichContext extends ActivityProfileContext {
+  /** Tracker category, so "fitness" can classify an unrecognised tracker name. */
+  category?: string | null;
+  /** The tracker's declared fields, which carry units (a Plank's `duration` in seconds). */
+  fields?: FitnessField[] | null;
+}
+
+/**
+ * Enrich ANY calorie-bearing activity that is not walking/running/cycling —
+ * soccer, basketball, yoga, HIIT, a strength session, a generic workout.
+ *
+ * The cardio path above exists because distance/steps/pace need deriving
+ * before energy can be priced. A sport needs none of that: the duration IS the
+ * measurement, so the only thing to add is the burn. Without this, "played
+ * soccer for 30 minutes" was the one activity shape that reached the user with
+ * no calorie number attached, while a 2-mile walk in the same message got one
+ * (user screenshot, 2026-09-22).
+ *
+ * The math is NOT re-implemented here: it is the same canonical estimator, fed
+ * the same owner body weight (or the labelled population default when the
+ * profile has none), so a soccer game is priced identically in chat, on its
+ * card, and in the dashboard aggregate.
+ */
+export function enrichFitnessEntry(
+  trackerName: string | null | undefined,
+  explicit: Record<string, any>,
+  ctx: FitnessEnrichContext = {},
+): Enrichment {
+  const activity = resolveActivity(trackerName, explicit, ctx.category ?? null);
+  const out = emptyEnrichment(activity.id);
+  if (!isCalorieBearingActivity(activity)) return stampProvenance(out);
+
+  const facts = readFitnessFacts(explicit, activity, ctx.fields ?? null);
+  // Explicit (or already-mirrored) calories are never replaced by an estimate.
+  if (facts.caloriesLogged != null && facts.caloriesLogged > 0 && !facts.caloriesLoggedWasEstimated) {
+    return stampProvenance(out);
+  }
+  if (facts.duration != null && facts.duration > 0) out.canonical.durationSeconds = round(facts.duration * 60);
+  if (facts.distanceMiles != null && facts.distanceMiles > 0) out.canonical.distanceMeters = round(facts.distanceMiles * METERS_PER_MILE, 1);
+
+  const est = estimateCaloriesBurned(activity, facts, {
+    bodyWeightKg: ctx.weightKg ?? null,
+    ageYears: ctx.ageYears ?? null,
+    sex: ctx.sex ?? null,
+    ownerLabel: ctx.ownerLabel ?? null,
+  });
+  if (est && est.estimated && est.confidence >= MIN_SAVE_CONFIDENCE) {
+    out.estimated.caloriesBurned = {
+      value: est.value,
+      source: "estimated",
+      confidence: est.confidence,
+      method: est.method,
+    };
+    out.assumptions.push({
+      field: "caloriesBurned",
+      assumption: est.usedDefaultWeight ? "Used population default weight" : "Used profile weight",
+      valueUsed: est.usedDefaultWeight ? `${DEFAULT_WEIGHT_KG} kg` : `${round(ctx.weightKg!)} kg`,
+      confidence: est.confidence,
+    });
+  }
+  return stampProvenance(out);
+}
+
+/**
+ * The activity a logged entry is really about: the tracker names it ("Soccer"),
+ * but a generic "Workout" tracker leaves it to the entry's own
+ * `activityType`/`exercise` value.
+ */
+function resolveActivity(
+  trackerName: string | null | undefined,
+  explicit: Record<string, any>,
+  category: string | null,
+): FitnessActivity {
+  let activity = classifyFitnessActivity(trackerName, category);
+  if (activity.kind === "non_fitness" || activity.kind === "generic_workout") {
+    const stated = [explicit?.exercise, explicit?.activityType, explicit?.activity]
+      .find((v): v is string => typeof v === "string" && v.trim() !== "");
+    if (stated) {
+      const fromValue = classifyFitnessActivity(stated, category);
+      if (fromValue.kind !== "non_fitness") activity = fromValue;
+    }
+  }
+  return activity;
 }
 
 // ─── Hydration ───────────────────────────────────────────────────────────────
@@ -571,6 +675,21 @@ export function enrichStrengthEntry(explicit: Record<string, any>): Enrichment {
     };
   }
   return stampProvenance(out);
+}
+
+/**
+ * Combine two enrichments of the SAME entry (e.g. a lifting session's exact
+ * total volume plus its estimated burn). Earlier values win on a key clash, so
+ * a calculated value is never displaced by an estimate of the same field.
+ */
+export function mergeEnrichments(a: Enrichment, b: Enrichment): Enrichment {
+  return {
+    activityType: a.activityType ?? b.activityType,
+    canonical: { ...b.canonical, ...a.canonical },
+    calculated: { ...b.calculated, ...a.calculated },
+    estimated: { ...b.estimated, ...a.estimated },
+    assumptions: [...a.assumptions, ...b.assumptions],
+  };
 }
 
 // ─── Applying enrichment to the stored entry ─────────────────────────────────

@@ -8,6 +8,8 @@ import {
   enrichWalkRunEntry,
   enrichHydrationEntry,
   enrichSleepEntry,
+  enrichFitnessEntry,
+  mergeEnrichments,
   derivePersonalMetrics,
   parseHeightToCm,
   parseWeightToKg,
@@ -380,5 +382,73 @@ describe("Rule 26 — provenance flag and formatting", () => {
     expect(entryValueProvenance(entry, "distance")?.source).toBe("estimated");
     expect(entryValueProvenance({ values: { distance: 2 } }, "distance")).toBeNull();
     expect(entryValueProvenance(null, "distance")).toBeNull();
+  });
+  // ── Every physical activity gets a body-weight-aware burn ────────────────
+  // Regression: "I walked 2 miles ... and played soccer for 30 minutes" logged
+  // calories for the walk and nothing for the soccer, because only
+  // walking/running/cycling were enriched (user screenshot, 2026-09-22).
+  describe("enrichFitnessEntry — non-cardio activities", () => {
+    it("prices a sport from the OWNER's body weight and the activity MET", () => {
+      const heavy = enrichFitnessEntry("Soccer", { activityType: "soccer", duration: 30 }, { weightKg: 100 });
+      const light = enrichFitnessEntry("Soccer", { activityType: "soccer", duration: 30 }, { weightKg: 55 });
+      const hCal = heavy.estimated.caloriesBurned;
+      const lCal = light.estimated.caloriesBurned;
+      expect(hCal?.value).toBeGreaterThan(0);
+      expect(hCal!.value).toBeGreaterThan(lCal!.value); // heavier person burns more
+      expect(hCal!.isEstimated).toBe(true);
+      expect(hCal!.method).toContain("100 kg");
+      expect(heavy.assumptions.some(a => a.field === "caloriesBurned" && /profile weight/i.test(a.assumption))).toBe(true);
+    });
+
+    it("falls back to the labelled population default when the profile has no weight", () => {
+      const e = enrichFitnessEntry("Soccer", { activityType: "soccer", duration: 30 }, {});
+      const cal = e.estimated.caloriesBurned;
+      expect(cal?.value).toBeGreaterThan(0);
+      expect(cal!.method).toContain("population-average");
+      expect(e.assumptions[0].assumption).toMatch(/population default/i);
+    });
+
+    it("reads intensity: a vigorous game burns more than a light one", () => {
+      const hard = enrichFitnessEntry("Soccer", { activityType: "soccer", duration: 30, intensity: "intense" }, { weightKg: 80 });
+      const easy = enrichFitnessEntry("Soccer", { activityType: "soccer", duration: 30, intensity: "light" }, { weightKg: 80 });
+      expect(hard.estimated.caloriesBurned!.value).toBeGreaterThan(easy.estimated.caloriesBurned!.value);
+    });
+
+    it("never replaces calories the user stated", () => {
+      const e = enrichFitnessEntry("Soccer", { duration: 30, caloriesBurned: 500 }, { weightKg: 84 });
+      expect(e.estimated.caloriesBurned).toBeUndefined();
+    });
+
+    it("classifies from the entry's own activityType on a generic Workout tracker", () => {
+      const e = enrichFitnessEntry("Workout", { activityType: "swimming", duration: 40 }, { weightKg: 84 });
+      expect(e.estimated.caloriesBurned?.value).toBeGreaterThan(0);
+    });
+
+    it("makes no calorie claim about a non-activity tracker", () => {
+      const e = enrichFitnessEntry("Blood Pressure", { systolic: 120, diastolic: 80 }, { weightKg: 84 });
+      expect(e.estimated.caloriesBurned).toBeUndefined();
+      expect(Object.keys(e.estimated)).toHaveLength(0);
+    });
+
+    it("makes no claim when there is nothing to price the burn from", () => {
+      const e = enrichFitnessEntry("Soccer", { notes: "fun game" }, { weightKg: 84 });
+      expect(e.estimated.caloriesBurned).toBeUndefined();
+    });
+
+    it("applies the estimate into the entry's real fields", () => {
+      const e = enrichFitnessEntry("Soccer", { activityType: "soccer", duration: 30 }, { weightKg: 84 });
+      const values: Record<string, any> = { activityType: "soccer", duration: 30 };
+      expect(applyEnrichmentToValues(values, e)).toContain("caloriesBurned");
+      expect(values.caloriesBurned).toBe(e.estimated.caloriesBurned!.value);
+      expect(summarizeEnrichment(e)).toContain("cal (estimated)");
+    });
+
+    it("mergeEnrichments keeps an exact value over an estimate of the same field", () => {
+      const a = enrichStrengthEntry({ weight: 185, reps: 5, sets: 3 });
+      const b = enrichFitnessEntry("Bench Press", { weight: 185, reps: 5, sets: 3 }, { weightKg: 84 });
+      const merged = mergeEnrichments(a, b);
+      expect(merged.calculated.totalVolume.value).toBe(2775);
+      expect(merged.estimated.caloriesBurned?.value).toBeGreaterThan(0);
+    });
   });
 });

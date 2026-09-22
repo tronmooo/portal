@@ -381,6 +381,7 @@ export default defineConfig({
       // QA 2026-09-22: per-asset automatic value tracking (the switch) — absent
       // valuationMode always means auto; manual gathers nothing anywhere.
       'tests/qa-2026-09-22-valuation-mode.test.ts',
+      'tests/activity-calories-2026-09-22.test.ts',
       'tests/qa-2026-09-22-valuation-mode.dom.test.tsx',
       // Rules 3/4: financial status gate
       'tests/financial-status.test.ts',
