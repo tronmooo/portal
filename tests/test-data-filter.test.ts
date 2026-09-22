@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { isTestDataRow, isTestEntity } from "../shared/test-data";
+import { isTestDataRow, isTestEntity, excludeTestData } from "../shared/test-data";
+import { financialSnapshot } from "../server/ai-financial-snapshot";
 
 describe("isTestDataRow", () => {
   it("matches the synthetic patterns that polluted the real account", () => {
@@ -61,5 +62,47 @@ describe("isTestDataRow", () => {
     expect(isTestEntity({ description: "__qa_e2e__ x" })).toBe(true);
     expect(isTestEntity({ name: "Bob", description: "Groceries" })).toBe(false);
     expect(isTestEntity(null)).toBe(false);
+  });
+});
+
+// ─── Rule 27: test rows never enter a total unless the caller opted in ───────
+describe("excludeTestData", () => {
+  const rows = [
+    { id: "a", description: "Groceries", amount: 40 },
+    { id: "b", description: "QA_TEST_Coffee", amount: 5 },
+    { id: "c", name: "AUDIT4C9B25_Bob_exp", amount: 9 },
+  ];
+
+  it("drops test-patterned rows by default", () => {
+    expect(excludeTestData(rows).map((r) => r.id)).toEqual(["a"]);
+    expect(excludeTestData(rows, false).map((r) => r.id)).toEqual(["a"]);
+  });
+
+  it("keeps them only when includeTestData is on, and is safe on nothing", () => {
+    expect(excludeTestData(rows, true)).toBe(rows as any);
+    expect(excludeTestData(null)).toEqual([]);
+    expect(excludeTestData(undefined, true)).toEqual([]);
+  });
+
+  it("keeps the AI's financial snapshot free of test rows", () => {
+    const ym = new Date().toISOString().slice(0, 7);
+    const input = {
+      allProfiles: [{ id: "self", type: "self", name: "Me", fields: {} }],
+      obligations: [
+        { name: "Netflix", amount: 12, frequency: "monthly", status: "active" },
+        { name: "QA Test Subscription", amount: 100, frequency: "monthly", status: "active" },
+      ],
+      expenses: [
+        { description: "Groceries", amount: 40, date: `${ym}-02` },
+        { description: "__qa_e2e__ shared expense", amount: 500, date: `${ym}-03` },
+      ],
+      timezone: "UTC",
+    };
+    const clean = financialSnapshot(input);
+    expect(clean.monthlySubs).toBe(12);
+    expect(clean.thisMonthSpend).toBe(40);
+    const withTest = financialSnapshot({ ...input, includeTestData: true });
+    expect(withTest.monthlySubs).toBe(112);
+    expect(withTest.thisMonthSpend).toBe(540);
   });
 });

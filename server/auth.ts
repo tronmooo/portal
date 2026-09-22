@@ -2,6 +2,8 @@ import { logger } from "./logger";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import type { Request, Response, NextFunction, Express } from "express";
 import { storage, isSupabaseStorage, createScopedStorage, requestStorageContext } from "./storage";
+import { runWithActiveScope } from "./active-scope-context";
+import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds } from "@shared/active-scope";
 
 // Seed a brand-new user's starter data inside a storage instance scoped to
 // THAT user. We deliberately avoid mutating the global storage singleton's
@@ -279,9 +281,17 @@ export async function resolveUserFromRequest(
  * If Supabase is not configured, allows all requests (local dev mode).
  */
 export async function authMiddleware(req: Request, res: Response, next: NextFunction) {
+  // The caller's active profile selection (the scope chip they can see) rides
+  // on every request as X-Active-Profile-Ids. Parsed ONCE here and carried in
+  // an AsyncLocalStorage for the whole request — REST handlers, the chat
+  // route's AI tools and the storage layer all read it through
+  // getActiveProfileIds(), so a record created while one profile is selected
+  // defaults to THAT profile (Rule 6) without every writer re-reading headers.
+  const activeProfileIds = parseActiveProfileIds(req.headers[ACTIVE_PROFILE_HEADER] as string | string[] | undefined);
+
   // If not using Supabase, skip auth (local SQLite mode)
   if (!isSupabaseStorage()) {
-    return next();
+    return runWithActiveScope(activeProfileIds, () => next());
   }
 
   // Allow auth endpoints without auth
@@ -417,7 +427,8 @@ export async function authMiddleware(req: Request, res: Response, next: NextFunc
         })();
       }
 
-      next();
+      // Same scope for every authenticated request, /api/chat included.
+      runWithActiveScope(activeProfileIds, () => next());
     });
   } catch (err: any) {
     console.error("Auth middleware error:", err);

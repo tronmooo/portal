@@ -382,6 +382,25 @@ export default defineConfig({
       // valuationMode always means auto; manual gathers nothing anywhere.
       'tests/qa-2026-09-22-valuation-mode.test.ts',
       'tests/qa-2026-09-22-valuation-mode.dom.test.tsx',
+      // Rules 3/4: financial status gate
+      'tests/financial-status.test.ts',
+      'tests/action-executor-financial-gate.test.ts',
+      // Rules 25/26/27: system fields, provenance, test data
+      'tests/system-fields.test.ts',
+      // Rules 23/24/39: entity routes + registry
+      'tests/entity-routes.test.ts',
+      'tests/entity-registry.test.ts',
+      'tests/search-href.test.ts',
+      // Rules 16-20/29/30/36/37: toasts, cache domains, stale markers, rename cascade, activity ids, calendar labels
+      'tests/no-optimistic-success-toasts.test.ts',
+      'tests/cache-bus-expense-domains.test.ts',
+      'tests/habit-rename-cascade.test.ts',
+      'tests/calendar-source-type.test.ts',
+      'tests/dashboard-error-not-zero.dom.test.tsx',
+      // Rules 1/2/22/38: read-only turns, operation ids, durable chat runs, integrity log
+      'tests/turn-scope.test.ts',
+      'tests/read-only-turn-guard.test.ts',
+      'tests/storage-proxy-read-only.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

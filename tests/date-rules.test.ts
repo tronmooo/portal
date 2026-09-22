@@ -1298,9 +1298,10 @@ describe("a paycheck is read-only on the calendar", () => {
       expect(can(series, action), action).toBe(false);
       expect(reasonFor(series, action), action).toBeTruthy();
     }
-    // Opening it still works — it goes to Finance, where the record lives.
+    // Opening it still works — it goes to the income ROW on Finance, where
+    // the record lives (Rules 23/24; was the generic "#/finance").
     expect(can(series, "edit")).toBe(true);
-    expect(series.source.href).toBe("#/finance");
+    expect(series.source.href).toBe("#/dashboard/finance?highlight=income%3Ainc-1");
   });
 });
 

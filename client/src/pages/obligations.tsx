@@ -10,9 +10,13 @@ import { ArrowLeft, Receipt } from "lucide-react";
 import { Link } from "wouter";
 import { BillsView } from "@/components/dashboard/BriefingPopups";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { useRecordHighlight } from "@/hooks/useRecordHighlight";
 
 export default function ObligationsPage() {
   useEffect(() => { document.title = "Bills — Portol"; }, []);
+  // Rules 23/24: `?highlight=obligation:<id>` lands on that bill's card
+  // (BillsView stamps `data-record-id` on each row).
+  useRecordHighlight("obligation");
 
   return (
     <div className="h-full overflow-y-auto pb-24 px-3 py-3 md:px-6 md:py-4" data-testid="obligations-page">

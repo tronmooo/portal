@@ -27,6 +27,7 @@
 // metric registry. A section with no data says so in one line rather than
 // rendering an empty shell.
 import { Card } from "@/components/ui/card";
+import { routeForEntity } from "@shared/entity-routes";
 import { Button } from "@/components/ui/button";
 import {
   Activity, Moon, HeartPulse, Sparkles, FlaskConical, Pill, CalendarClock,
@@ -125,7 +126,7 @@ function SignalTile({ signal }: { signal: TodaySignal }) {
       ) : (
         <>
           <div className="flex items-baseline gap-1.5 mt-2">
-            <span className="metric-value text-[28px] leading-none" style={{ color: `hsl(${meta.tone})` }}>{auto(signal.value)}</span>
+            <span className="metric-value text-[28px] leading-none" style={{ color: `hsl(${meta.tone})` }}>{signal.isEstimated ? "≈" : ""}{auto(signal.value)}</span>
             {signal.unit && <span className="text-[11px] text-muted-foreground">{signal.unit}</span>}
           </div>
           {signal.caption && <div className="text-[11px] text-muted-foreground mt-1">{signal.caption}</div>}
@@ -230,7 +231,7 @@ function LabRowView({ row }: { row: LabRow }) {
   const docId = documentIdOfSource(row.trackerId);
   return (
     <a
-      href={docId ? `#/documents?doc=${docId}` : `#/trackers?tracker=${row.trackerId}`}
+      href={docId ? routeForEntity("document", docId, { hash: true }) : routeForEntity("tracker", row.trackerId, { hash: true })}
       className="flex items-center justify-between gap-3 py-1.5 border-b border-border/40 last:border-0 hover:bg-muted/40 rounded px-1 -mx-1"
       data-testid={`wellness-lab-${row.metricId}`}
     >
@@ -262,13 +263,15 @@ function LabRowView({ row }: { row: LabRow }) {
 function WorkoutRow({ w }: { w: WorkoutGroup }) {
   const bits = [
     `${w.sessions} session${w.sessions === 1 ? "" : "s"}`,
-    w.minutes != null ? `${fmt(w.minutes)} min` : null,
-    w.distance != null ? `${fmt(w.distance, 1)} mi` : null,
+    // `≈` marks a sum that includes an estimated session (Rule 26): an
+    // estimated distance used to lose its qualification here.
+    w.minutes != null ? `${w.minutesEstimated ? "≈" : ""}${fmt(w.minutes)} min` : null,
+    w.distance != null ? `${w.distanceEstimated ? "≈" : ""}${fmt(w.distance, 1)} mi` : null,
     w.reps != null ? `${fmt(w.reps)} reps` : null,
     w.sets != null ? `${fmt(w.sets)} sets` : null,
   ].filter(Boolean).join(" · ");
   return (
-    <a href={`#/trackers?tracker=${w.trackerId}`}
+    <a href={routeForEntity("tracker", w.trackerId, { hash: true })}
       className="flex items-center justify-between gap-3 py-1.5 border-b border-border/40 last:border-0 hover:bg-muted/40 rounded px-1 -mx-1"
       data-testid={`wellness-workout-${w.trackerId}`}>
       <span className="text-xs font-medium truncate">{w.type}</span>

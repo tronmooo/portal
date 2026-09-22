@@ -149,7 +149,9 @@ export type RoutingMismatch =
   | "update_upgraded_to_create"
   | "entity_mismatch"
   | "stale_turn_replay"
-  | "duplicate_create_in_turn";
+  | "duplicate_create_in_turn"
+  /** Rule 1: a write tool was called on a turn classified READ. */
+  | "read_only_turn";
 
 export interface RoutingViolation {
   mismatchType: RoutingMismatch;

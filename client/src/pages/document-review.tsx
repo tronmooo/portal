@@ -561,7 +561,12 @@ export function DocumentReviewScreen({
       items: hasItems ? unclaimedItems : undefined,
       calendarDates,
       trackerEntries: [],
-      createExpense: extraction.pendingFinancial?.expense,
+      // RULE 3: the proposal is only sent when the upload found evidence the
+      // money was paid (`create`). An unpaid invoice or an estimate stays on
+      // the document; the server refuses it again regardless.
+      createExpense: extraction.pendingFinancial?.expense?.create === false
+        ? undefined
+        : extraction.pendingFinancial?.expense,
       createObligation: extraction.pendingFinancial?.obligation,
     });
     setConfirming(false);

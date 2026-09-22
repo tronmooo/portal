@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { relativeTime } from "@shared/relative-time";
+import { notificationRoute, navigateToRoute } from "@/lib/notification-route";
 
 interface Notification {
   id: string;
@@ -211,50 +212,13 @@ export function NotificationBell() {
         return next;
       });
       void dismissOnServer([notification.id]).then((merged) => { if (merged) setDismissedIds(new Set(merged)); });
-      // Deep-link based on notification type/entity
-      switch (notification.type) {
-        case "task_overdue":
-        case "task_due_today":
-          setLocation("/dashboard/tasks");
-          break;
-        case "bill_due":
-          // Bills live on the Bills page. This pointed at Finance — the
-          // expenses screen — which does not list the bill you tapped, so an
-          // "Overdue bill: …" row appeared to go nowhere (QA 2026-08-05).
-          setLocation("/dashboard/obligations");
-          break;
-        case "reminder":
-          setLocation("/calendar");
-          break;
-        case "habit_at_risk":
-          setLocation("/dashboard/habits");
-          break;
-        case "streak_milestone":
-        case "goal_at_risk":
-        case "goal_completed":
-          setLocation("/dashboard");
-          setTimeout(() => {
-            const goalsSection = document.querySelector('[data-testid="section-goals"]');
-            if (goalsSection) goalsSection.scrollIntoView({ behavior: 'smooth' });
-          }, 300);
-          break;
-        case "document_expiring":
-          // Deep-link directly to the owning entity so the user can update or
-          // renew the expiry date in-place. Documents → /documents/:id, profile
-          // field expiries → /profiles/:id. Falls back to /linked if entity is
-          // missing.
-          if (notification.entityType === "document" && notification.entityId) {
-            setLocation(`/documents/${notification.entityId}`);
-          } else if (notification.entityType === "profile" && notification.entityId) {
-            setLocation(`/profiles/${notification.entityId}`);
-          } else {
-            setLocation("/linked");
-          }
-          break;
-        default:
-          setLocation("/dashboard");
-          break;
-      }
+      // Deep-link to the RECORD the notification names (Rule 24: one route
+      // resolver, shared/entity-routes, via lib/notification-route). A task
+      // lands on its card, a bill on its row, a document on its page; an
+      // alert with no entity lands on its type's list page. Bills used to
+      // point at Finance, which does not list the bill you tapped (QA
+      // 2026-08-05).
+      navigateToRoute(setLocation, notificationRoute(notification));
       setOpen(false);
     },
     [setLocation]

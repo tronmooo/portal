@@ -31,6 +31,7 @@ import {
   removeDocumentContributedFields,
 } from "@shared/profile-field-identity";
 import { looselyEqual } from "@shared/profile-field-canon";
+import { isSystemFieldKey } from "@shared/system-fields";
 
 type Logger = { info: (...a: any[]) => void; warn: (...a: any[]) => void; error: (...a: any[]) => void };
 
@@ -57,7 +58,7 @@ function writeByIdentity(
   const out: Record<string, any> = { ...fields };
   const written: string[] = [];
   for (const [storedKey, storedValue] of Object.entries(fields)) {
-    if (storedKey.startsWith("_")) continue;
+    if (isSystemFieldKey(storedKey)) continue;
     const isGroup =
       (PROFILE_FIELD_GROUPS as readonly string[]).includes(storedKey) &&
       storedValue && typeof storedValue === "object" && !Array.isArray(storedValue);
@@ -112,7 +113,7 @@ export async function propagateDocumentFieldChange(
     const removedHere: string[] = [];
 
     for (const [key, savedValue] of Object.entries(recorded as Record<string, any>)) {
-      if (key.startsWith("_")) continue;
+      if (isSystemFieldKey(key)) continue;
       const identity = fieldIdentity(key);
       const docBefore = readProfileFieldValue(prev, key);
       const docAfter = readProfileFieldValue(next, key);

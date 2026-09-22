@@ -22,6 +22,34 @@
 //  - Broken stream mid-flight: the promise rejects with a "network"-shaped
 //    error message so the existing failed/retry affordance in chat.tsx fires.
 import { BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { getProfileFilterSnapshot } from "@/lib/profileFilter";
+import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
+
+/**
+ * Rule 6: the UI's selected profile rides on every chat request, exactly as
+ * it does on every apiRequest, so a record the assistant creates defaults to
+ * the person on screen. Read from the store snapshot — the same value
+ * useProfileScope() renders.
+ */
+function activeProfileHeader(): Record<string, string> {
+  try {
+    const snap = getProfileFilterSnapshot();
+    if (snap.mode !== "selected" || snap.selectedIds.length === 0) return {};
+    return { [ACTIVE_PROFILE_HEADER]: snap.selectedIds.join(",") };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Rule 2: the client's message id is the request's idempotency key. A retry
+ * of the same message (timeout, dropped socket, reconnect) carries the same
+ * key, so the server returns the completed run instead of executing twice.
+ */
+function idempotencyHeader(body: unknown): Record<string, string> {
+  const id = (body as any)?.sourceMessageId;
+  return typeof id === "string" && /^[A-Za-z0-9._:\-]{8,128}$/.test(id) ? { "Idempotency-Key": id } : {};
+}
 
 // Same build-time placeholder trick as lib/queryClient.ts — the iOS Capacitor
 // build rewrites the literal to the real API origin; web builds get "".
@@ -100,6 +128,8 @@ export async function streamChat(body: unknown, callbacks: ChatStreamCallbacks =
         "Content-Type": "application/json",
         Accept: "text/event-stream",
         "X-Timezone": BROWSER_TIMEZONE,
+        ...activeProfileHeader(),
+        ...idempotencyHeader(body),
       },
       body: JSON.stringify(body),
       signal: controller.signal,

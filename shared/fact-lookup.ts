@@ -52,6 +52,9 @@ import {
   type DocFieldLookupResult,
 } from "./doc-field-lookup";
 import { resolveAssetValue, resolveLiabilityBalance } from "./asset-value";
+import { readMonthlyPayment, readStoredDueDate } from "./liability-fields";
+import { getRecordTemporalStatus } from "./temporal-status";
+import { isSystemFieldKey } from "./system-fields";
 
 // ── Shapes ──────────────────────────────────────────────────────────────────
 
@@ -148,6 +151,14 @@ export interface FactSources {
   profiles: FactProfile[];
   documents: DocForLookup[];
   trackers: FactTracker[];
+  /**
+   * The user's calendar day (shared/timezone `getUserToday(tz)`), so a
+   * "when is my X due" answer comes from the temporal engine
+   * (shared/temporal-status) — the same next-due the detail page shows —
+   * never from the raw stored date. Optional for callers without a clock;
+   * the due-date answer then falls back to the stored date, labelled as such.
+   */
+  todayISO?: string;
 }
 
 // ── Gate 1: is this a pure READ of a stored fact? ───────────────────────────
@@ -303,7 +314,7 @@ export function resolveFact(
   considered.push(...collectProfileFieldCandidates(question, sources.profiles));
 
   // ── 3. Typed record values ───────────────────────────────────────────────
-  considered.push(...collectTypedValueCandidates(question, sources.profiles));
+  considered.push(...collectTypedValueCandidates(question, sources.profiles, sources.todayISO));
 
   // ── 4. Latest tracker entry ──────────────────────────────────────────────
   considered.push(...collectTrackerCandidates(question, sources.trackers));
@@ -404,7 +415,7 @@ function collectProfileFieldCandidates(question: FactQuestion, profiles: FactPro
     if (question.subject.length > 0 && subjectBonus === 0 && namesAnyProfile(question.subject, profiles)) continue;
 
     for (const [key, raw] of Object.entries(fields)) {
-      if (key.startsWith("_")) continue;
+      if (isSystemFieldKey(key)) continue;
       const value = usableValue(raw);
       if (!value) continue;
       const score = recallMatchScore(question.terms, key, raw);
@@ -424,7 +435,7 @@ function collectProfileFieldCandidates(question: FactQuestion, profiles: FactPro
   return out;
 }
 
-function collectTypedValueCandidates(question: FactQuestion, profiles: FactProfile[]): FactCandidate[] {
+function collectTypedValueCandidates(question: FactQuestion, profiles: FactProfile[], todayISO?: string): FactCandidate[] {
   const k = question.kind;
   if (k !== "asset_value" && k !== "liability_balance" && k !== "liability_payment" && k !== "due_date") return [];
 
@@ -449,13 +460,18 @@ function collectTypedValueCandidates(question: FactQuestion, profiles: FactProfi
         out.push({ source: "liability_balance", entityName: name, entityId: String(p.id), fieldKey: "balance", value: formatMoney(n), score: 12 + subjectBonus });
       }
     } else if (k === "liability_payment") {
-      const v = usableValue(fields.monthlyPayment ?? fields.monthlyAmount ?? fields.amount ?? fields.monthlyCost);
-      if (v) {
-        const n = Number(String(v).replace(/[^0-9.\-]/g, ""));
-        out.push({ source: "liability_payment", entityName: name, entityId: String(p.id), fieldKey: "monthlyPayment", value: Number.isFinite(n) ? formatMoney(n) : v, score: 12 + subjectBonus });
+      const n = readMonthlyPayment(fields);
+      if (n > 0) {
+        out.push({ source: "liability_payment", entityName: name, entityId: String(p.id), fieldKey: "monthlyPayment", value: formatMoney(n), score: 12 + subjectBonus });
       }
     } else if (k === "due_date") {
-      const v = usableValue(fields.dueDate ?? fields.nextDueDate ?? fields.due_date ?? fields.dueDay);
+      // Rule 13: the NEXT occurrence from the temporal engine — the day the
+      // detail page and the bills list show — not the raw stored date. (The
+      // raw date said Sep 25 for a loan already paid this cycle whose page
+      // said Oct 25.) Without a clock, the stored date is the best available.
+      const temporal = todayISO ? getRecordTemporalStatus({ kind: "liability", fields, row: p }, todayISO) : null;
+      const v = temporal?.nextOccurrence
+        ?? usableValue(readStoredDueDate(fields) ?? (fields.dueDay != null ? `day ${fields.dueDay} of each month` : null));
       if (v) {
         out.push({ source: "liability_due", entityName: name, entityId: String(p.id), fieldKey: "dueDate", value: v, score: 12 + subjectBonus });
       }
@@ -481,7 +497,7 @@ function collectTrackerCandidates(question: FactQuestion, trackers: FactTracker[
     const last = entries[entries.length - 1];
     const values = last?.values || {};
     const parts = Object.entries(values)
-      .filter(([k, v]) => !k.startsWith("_") && usableValue(v))
+      .filter(([k, v]) => !isSystemFieldKey(k) && usableValue(v))
       .map(([k, v]) => `${k}: ${usableValue(v)}`);
     if (parts.length === 0) continue;
     out.push({

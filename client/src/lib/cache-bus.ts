@@ -193,6 +193,11 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/cashflow"],
     ["/api/insights"],
     ["/api/ai-digest"],
+    // Rule 17: a profile's detail payload embeds its expenses
+    // (relatedExpenses / relatedExpensesSum) and its activity timeline, so a
+    // logged expense left the person's Finance tab at the pre-write total
+    // until something unrelated refetched. Same fix the documents domain got.
+    ["/api/profiles"],
   ],
   incomes: [
     ["/api/dashboard-bootstrap"], // seeds this list on launch (persisted) — see assets
@@ -201,6 +206,7 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
     ["/api/stats"],
     ["/api/paychecks"],
     ["/api/cashflow"],
+    ["/api/profiles"], // profile detail embeds the person's income streams (Rule 17)
     // Recurring income is a calendar series now (a paycheck lands on a date).
     ["/api/calendar/timeline"],
     ["/api/date-rules"],
@@ -320,6 +326,14 @@ function predicateForDomain(domain: Domain): ((query: any) => boolean) | null {
       };
     case "tasks":
       return (q) => String(q.queryKey?.[0] || "").startsWith("/api/tasks");
+    case "expenses":
+    case "incomes":
+      // Rule 17: ["/api/profiles", id, "detail"] carries relatedExpenses and
+      // the income streams the profile pages total up.
+      return (q) => {
+        const k0 = String(q.queryKey?.[0] || "");
+        return k0.startsWith("/api/expenses") || k0.startsWith("/api/incomes") || k0.startsWith("/api/profiles");
+      };
     case "habits":
       // Nested keys too: a habit check-in mirrors into its linked tracker (the
       // Trackers page reads ["/api/trackers", id]) and shows up on the owner's
@@ -431,7 +445,28 @@ const AGGREGATE_KEYS = new Set([
   "/api/ai-digest",
 ]);
 
+// ─── Bust listeners ─────────────────────────────────────────────────
+// Rule 17: not every cache in the app is a React Query slot. CommandSearch
+// keeps its own per-query result map for /api/search (60s TTL) — a cache no
+// invalidateQueries() call can reach, so a renamed task kept its old title in
+// the palette for up to a minute after the write. Anything that caches API
+// data outside React Query registers here and is told about EVERY bust (local
+// or replayed from another tab) with the domains it named.
+type CacheBustListener = (domains: Domain[]) => void;
+const bustListeners = new Set<CacheBustListener>();
+/** Subscribe to every domain invalidation. Returns the unsubscribe function. */
+export function onCacheBust(listener: CacheBustListener): () => void {
+  bustListeners.add(listener);
+  return () => { bustListeners.delete(listener); };
+}
+function notifyBustListeners(domains: Domain[]): void {
+  for (const l of Array.from(bustListeners)) {
+    try { l(domains); } catch { /* one listener must not stop the others */ }
+  }
+}
+
 function invalidateDomainsInternal(domains: Domain[], remote: boolean): Promise<void> {
+  if (domains.length > 0) notifyBustListeners(domains);
   // Collect every top-level key prefix and nested predicate the domains name,
   // then invalidate ONCE with a single combined predicate. Issuing one
   // invalidateQueries per key and another per predicate made React Query

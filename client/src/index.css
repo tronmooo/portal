@@ -1089,3 +1089,12 @@ button, a, [role="button"], .card-lift {
     0 28px 70px -24px hsl(0 0% 0% / 0.8),
     inset 0 1px 0 hsl(0 0% 100% / 0.04);
 }
+
+/* Rules 23/24: the row a search result / receipt / notification landed on
+   (client/src/hooks/useRecordHighlight). Transient — removed after HIGHLIGHT_MS. */
+.record-highlight {
+  background-color: hsl(var(--primary) / 0.10) !important;
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.40) !important;
+  border-radius: 0.5rem;
+  transition: background-color 700ms ease, box-shadow 700ms ease;
+}

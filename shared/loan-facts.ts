@@ -8,7 +8,7 @@
 import { normalizeDateString } from "./extraction-normalize";
 import { addMonthsISO } from "./date-math";
 import { resolveAnnualRate, summarizeLiability, type LiabilitySummary } from "./liability-calc";
-import { resolveLiabilityBalance } from "./asset-value";
+import { readBalance, readMonthlyPayment, readOriginalBalance } from "./liability-fields";
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const clip = (v: unknown) => String(v ?? "").slice(0, 10);
@@ -52,6 +52,14 @@ function dayInMonth(ym: string, day: number): string {
  *     bill advances the same way, so the list and the page agree.
  *
  * Null when the loan names no payment day at all (nothing is invented).
+ *
+ * Rule 14 note — payment history is not a schedule. The `lastPaidDate` step
+ * above is a MODIFIER of a schedule the loan already names (its payment day):
+ * it only decides whether THIS cycle's occurrence is already settled and the
+ * next one is what is owed. It never manufactures a due date from a payment
+ * date: with no `dueDay` and no stored date, a loan with a `lastPaidDate` still
+ * returns null. (The old "last paid + 1 month" fallback in
+ * shared/liability-schedule was exactly that inference, and is gone.)
  */
 export function nextLoanDueDate(fields: Record<string, any> | null | undefined, todayISO: string): string | null {
   const f = fields || {};
@@ -73,19 +81,9 @@ export function nextLoanDueDate(fields: Record<string, any> | null | undefined, 
   return due;
 }
 
-/** The loan's scheduled payment, from any of the spellings the writers use. */
+/** The loan's scheduled payment — the ONE reader (shared/liability-fields). */
 export function loanMonthlyPayment(fields: Record<string, any> | null | undefined): number {
-  const f = fields || {};
-  const finance = f.finance || {};
-  const loan = f.loan || {};
-  for (const v of [
-    f.monthlyPayment, f.monthly_payment, f.minimumPayment, f.minimum_payment, f.min_payment,
-    finance.monthlyPayment, finance.monthly_payment, loan.monthlyPayment, loan.monthly_payment,
-  ]) {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 0;
+  return readMonthlyPayment(fields);
 }
 
 /** The contract term still stored on the loan (months), or 0. */
@@ -99,16 +97,21 @@ export function loanStoredTermMonths(fields: Record<string, any> | null | undefi
  * ONE payoff summary for a loan: the amortization of TODAY's balance starting
  * at the NEXT payment date. `remainingMonths` is what every "mo left" reads.
  */
-export function loanPayoff(fields: Record<string, any> | null | undefined, todayISO: string): LiabilitySummary {
+export function loanPayoff(
+  fields: Record<string, any> | null | undefined,
+  todayISO: string,
+  opts: { extraPerPeriod?: number; nextDueISO?: string | null } = {},
+): LiabilitySummary {
   const f = fields || {};
   const payment = loanMonthlyPayment(f);
   const term = loanStoredTermMonths(f);
   return summarizeLiability({
-    currentBalance: resolveLiabilityBalance(f),
-    originalBalance: Number(f.originalBalance ?? f.original_balance ?? f.originalAmount ?? f.original_amount ?? 0) || undefined,
+    currentBalance: readBalance(f),
+    originalBalance: readOriginalBalance(f) || undefined,
     monthlyPayment: payment || undefined,
     annualRate: resolveAnnualRate(f),
     remainingTermMonths: term || undefined,
-    firstPaymentDate: nextLoanDueDate(f, todayISO) ?? undefined,
+    extraPerPeriod: opts.extraPerPeriod || undefined,
+    firstPaymentDate: (opts.nextDueISO === undefined ? nextLoanDueDate(f, todayISO) : opts.nextDueISO) ?? undefined,
   });
 }

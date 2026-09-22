@@ -5,14 +5,29 @@
 // meant (QA 2026-09-18 F-52). A result now navigates with `?highlight=<type>:<id>`;
 // the target page reads it, scrolls that row into view and flashes it.
 
-export interface RecordHighlight { type: string; id: string }
+/**
+ * The record kinds a list page can land on. Rules 23/24 (2026-09-22): this is
+ * the single deep-link mechanism for every list-routed entity — the canonical
+ * route builder (shared/entity-routes) emits `?highlight=<type>:<id>` and the
+ * page's useRecordHighlight hook reads it. `?focus=`, `?open=` and `?event=`
+ * were emitted by three different modules and read by none.
+ */
+export type RecordHighlightType =
+  | "expense" | "income" | "budget"
+  | "task" | "habit" | "obligation" | "goal" | "journal" | "event" | "trackerEntry";
+
+export const RECORD_HIGHLIGHT_TYPES: readonly RecordHighlightType[] = [
+  "expense", "income", "budget", "task", "habit", "obligation", "goal", "journal", "event", "trackerEntry",
+];
+
+export interface RecordHighlight { type: RecordHighlightType | string; id: string }
 
 export const HIGHLIGHT_PARAM = "highlight";
 /** How long the landed-on row stays lit. */
 export const HIGHLIGHT_MS = 2500;
 
 /** `/dashboard/finance` + expense abc → `/dashboard/finance?highlight=expense:abc`. */
-export function highlightHref(basePath: string, type: string, id: string | number): string {
+export function highlightHref(basePath: string, type: RecordHighlightType | string, id: string | number): string {
   const sep = basePath.includes("?") ? "&" : "?";
   return `${basePath}${sep}${HIGHLIGHT_PARAM}=${encodeURIComponent(`${type}:${id}`)}`;
 }

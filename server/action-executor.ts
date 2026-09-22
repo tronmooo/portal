@@ -32,6 +32,7 @@
 import { storage } from "./storage";
 import { logger } from "./logger";
 import type { ProposedAction } from "@shared/extraction-actions";
+import { detectExpenseInstruction } from "@shared/financial-status";
 import { canonicalizeProfileFields } from "@shared/profile-field-canon";
 import { personFieldScope } from "@shared/extraction-destinations";
 import { entityFamily } from "@shared/entity-shape";
@@ -73,6 +74,12 @@ export interface ExecuteInput {
   actions: ProposedAction[];
   documentId: string;
   documentName?: string;
+  /**
+   * What the user said when they uploaded or confirmed. RULE 4: an explicit
+   * "do not create an expense" here vetoes every expense action, whatever the
+   * plan or the request body says.
+   */
+  userMessage?: string;
 }
 
 /**
@@ -96,12 +103,34 @@ export async function executeActions(input: ExecuteInput): Promise<ExecuteOutcom
   // `savable: true` on an action that would create a liability still writes
   // nothing. Cheap to check, and the thing it prevents is a phantom profile in
   // someone's net worth.
+  //
+  // ── RULE 3 / RULE 4, ENFORCED AGAIN AT THE WRITE ─────────────────────────
+  // An expense is a transaction that HAPPENED. An action whose payload does
+  // not say `financialStatus: "paid"` is a quote, an estimate, an invoice or
+  // an unknown — the planner already made it unsavable, and this is the gate
+  // an edited body cannot get past. And an explicit "do not create an
+  // expense" from the user (shared/financial-status.detectExpenseInstruction)
+  // vetoes every expense action, paid or not: the user's word outranks the
+  // engine's inference (Rule 4).
+  const expenseInstruction = detectExpenseInstruction(input.userMessage || "");
+  const isExpenseCreate = (a: ProposedAction) => a.destination === "expense" && a.operation === "CREATE";
+  const expenseVeto = (a: ProposedAction): string | null => {
+    if (!isExpenseCreate(a)) return null;
+    if (expenseInstruction === "forbid") return "you said not to record an expense for this";
+    if (a.payload?.financialStatus !== "paid") {
+      return a.unsupportedReason
+        || `no evidence this was paid (${a.payload?.financialStatus || "status unknown"}) — it stays on the document until you record the payment`;
+    }
+    return null;
+  };
   const refused = actions.filter((a) => a.savable === false
-    || (a.operation === "CREATE" && (a.target?.kind === "profile" || a.target?.kind === "obligation")));
+    || (a.operation === "CREATE" && (a.target?.kind === "profile" || a.target?.kind === "obligation"))
+    || expenseVeto(a) !== null);
   for (const a of refused) {
+    const veto = expenseVeto(a);
     out.results.push({
       actionId: a.id, status: "skipped",
-      message: `${a.title} — not saved: ${a.unsupportedReason || "document extraction never creates profiles, assets or liabilities"}`,
+      message: `${a.title} — not saved: ${veto || a.unsupportedReason || "document extraction never creates profiles, assets or liabilities"}`,
     });
   }
   const refusedIds = new Set(refused.map((a) => a.id));

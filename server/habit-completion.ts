@@ -227,6 +227,10 @@ export async function resolveTrackerForHabit(
   const created = await storage.createTracker({
     name, category, fields,
     ...(ownerId ? { linkedProfiles: [ownerId] } : {}),
+    // Rules 19/20: this tracker is the habit's MIRROR. Its name is a copy of
+    // habit.name (FIELD_ORIGIN["tracker.name[mirror]"]); the id is the
+    // relationship the rename cascade and the mirror test read.
+    linkedHabitId: habit.id,
   });
   return { id: created.id, name: created.name, created: true };
 }

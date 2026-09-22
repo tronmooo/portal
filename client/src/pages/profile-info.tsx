@@ -28,6 +28,7 @@ import { formatApiError } from "@/lib/formatError";
 import { DocumentViewerDialog } from "@/components/DocumentViewer";
 import { prefetchDocument } from "@/lib/document-preview";
 import { Card } from "@/components/ui/card";
+import { routeForEntity } from "@shared/entity-routes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -39,6 +40,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Plus, Check, X, Pencil, BookOpen, Activity as ActivityIcon, FileText, Brain, Layers, StickyNote, Tag, Trash2, Loader2 } from "lucide-react";
 import { deleteProfileFields, fieldIdentity, isReservedFieldKey } from "@shared/profile-field-identity";
+import { systemFieldEntries } from "@shared/system-fields";
+import { devToolsEnabled } from "@/lib/dev-affordances";
 import { checkProfileRename, MAX_PROFILE_NAME_LENGTH } from "@shared/profile-rename";
 import { checkProfileDelete, profileDeleteWarning } from "@shared/profile-delete";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
@@ -58,7 +61,7 @@ export function timelineRoute(item: { type?: string; id?: string; data?: any } |
     case "task": return "/tasks";
     case "event": return "/calendar";
     case "journal": return "/journal";
-    case "document": return item.id ? `/documents/${item.id}` : "/documents";
+    case "document": return routeForEntity("document", item.id);
     default: return null;
   }
 }
@@ -489,6 +492,10 @@ function SingleProfileInfo({ id }: { id: string }) {
     shownByIdentity.set(fieldIdentity(r.key), r.value);
   }
   const nestedGroups: Array<{ key: string; entries: Array<[string, any]> }> = [];
+  // Rule 25: system fields never render as editable fields. Developer Mode
+  // (dev-affordances) may REVEAL them — read-only, under a "system" badge —
+  // through the one gate in shared/system-fields; ordinary builds see nothing.
+  const systemRows: Array<[string, unknown]> = devToolsEnabled() ? systemFieldEntries(fields) : [];
   for (const [k, v] of Object.entries(fields)) {
     // Internal bookkeeping, never a field the user typed or wants to see:
     // `_extractionActions` (the marker a document write leaves so a re-run
@@ -627,6 +634,27 @@ function SingleProfileInfo({ id }: { id: string }) {
           <p className="col-span-full text-xs text-muted-foreground py-4 text-center">No details yet — tap “Add field”.</p>
         )}
       </div>
+
+      {/* Developer Mode only: internal metadata, read-only (Rule 25). */}
+      {systemRows.length > 0 && (
+        <Card className="p-4 border-dashed" data-testid="info-system-fields">
+          <SectionHeading title="System" icon={Layers} accent={INFO_TONE.group} count={systemRows.length} />
+          <p className="text-[11px] text-muted-foreground mt-1">Internal bookkeeping — visible in Developer Mode only, never editable.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+            {systemRows.map(([k, v]) => (
+              <div key={k} className="rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 min-w-0" data-testid={`info-system-field-${k}`}>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-mono text-muted-foreground truncate">{k}</span>
+                  <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 uppercase tracking-wide">system</Badge>
+                </div>
+                <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all mt-1 max-h-24 overflow-auto">
+                  {typeof v === "object" && v !== null ? JSON.stringify(v, null, 1) : String(v)}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Nested field groups (e.g. finance, health, credentials) */}
       {nestedGroups.map(g => (

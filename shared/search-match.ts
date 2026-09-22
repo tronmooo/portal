@@ -12,6 +12,7 @@
 // over their lists and get back the tagged result array the palette expects.
 
 import { rulesFromProfiles, type DateRule } from "./date-rules";
+import { routeForEntity, entityTypeFromSearchRow, listRouteForEntity } from "./entity-routes";
 
 export interface SearchCorpus {
   profiles?: readonly any[];
@@ -25,6 +26,9 @@ export interface SearchCorpus {
   memories?: readonly any[];
   events?: readonly any[];
   documents?: readonly any[];
+  // Rule 23 (2026-09-22): incomes and goals were not searchable at all.
+  incomes?: readonly any[];
+  goals?: readonly any[];
 }
 
 /** Fields (string or string[]) each entity is matched on. Never file bodies. */
@@ -40,6 +44,8 @@ export const SEARCH_FIELDS: Record<string, readonly string[]> = {
   memory: ["key", "value"],
   event: ["title", "description", "location", "category", "notes"],
   document: ["name", "title", "category", "type", "tags", "description", "notes"],
+  income: ["description", "category", "source", "notes", "tags"],
+  goal: ["title", "description", "category", "type", "unit", "notes"],
 };
 
 /** Keys that hold file bodies or base64 and must never leave the server. */
@@ -83,15 +89,33 @@ export function virtualDateRows(profiles: readonly any[]): any[] {
       recurrence: r.recurrence,
       profileId: r.profileId,
       linkedProfiles: r.ownerIds,
-      href: r.href,
+      // A profile-derived date opens the profile that carries it. Hash-free,
+      // like every other search href (Rule 23).
+      href: String(r.href || "").replace(/^#/, "") || routeForEntity("person", r.profileId),
       virtual: true,
       _type: "event",
     }));
 }
 
 /**
- * Every row in `corpus` that matches `query`, tagged with `_type` — the exact
- * array /api/search returns. Documents are stripped of their file bodies.
+ * The canonical destination for a `_type`-tagged row (Rule 23). Every row
+ * /api/search returns carries this, so the palette navigates to the RECORD —
+ * `/profiles/<loan-id>`, `/dashboard/tasks?highlight=task:<id>` — and never
+ * to a generic list page. Rows that already carry an href (profile-derived
+ * dates) keep it.
+ */
+export function searchRowHref(row: any): string {
+  const own = typeof row?.href === "string" ? row.href.replace(/^#/, "") : "";
+  if (own) return own;
+  const type = entityTypeFromSearchRow(row);
+  if (!type) return listRouteForEntity(String(row?._type || ""));
+  return routeForEntity(type, row?.id);
+}
+
+/**
+ * Every row in `corpus` that matches `query`, tagged with `_type` and its
+ * canonical `href` — the exact array /api/search returns. Documents are
+ * stripped of their file bodies.
  */
 export function searchCorpus(corpus: SearchCorpus, query: string): any[] {
   const q = String(query || "").toLowerCase().trim();
@@ -100,7 +124,8 @@ export function searchCorpus(corpus: SearchCorpus, query: string): any[] {
   const scan = (type: string, rows: readonly any[] | undefined, strip?: (row: any) => any) => {
     for (const row of rows || []) {
       if (!rowMatches(type, row, q)) continue;
-      results.push({ ...(strip ? strip(row) : row), _type: type });
+      const tagged = { ...(strip ? strip(row) : row), _type: type };
+      results.push({ ...tagged, href: searchRowHref(tagged) });
     }
   };
   scan("profile", corpus.profiles);
@@ -112,6 +137,8 @@ export function searchCorpus(corpus: SearchCorpus, query: string): any[] {
   scan("artifact", corpus.artifacts);
   scan("journal", corpus.journal);
   scan("memory", corpus.memories);
+  scan("income", corpus.incomes);
+  scan("goal", corpus.goals);
   scan("event", corpus.events);
   // Profile-derived dates sit next to the hand-entered events; the ids are
   // deterministic rule ids, so a re-run never yields a different row.

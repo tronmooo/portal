@@ -106,6 +106,8 @@ import { isTestEntity } from "@shared/test-data";
 import { formatMoney, formatListDate } from "@/lib/format";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
+import { routeForEntity, normalizeEntityType } from "@shared/entity-routes";
+import { notificationRoute, navigateToRoute } from "@/lib/notification-route";
 import { DEFAULT_SECTION_DEFS, LAYOUT_VERSION } from "@shared/dashboard-layout";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { stopProp } from "@/lib/event-utils";
@@ -3122,6 +3124,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
               const { g, pct, daysLeft, isOverdue, isAtRisk, isReadyToComplete } = d;
               return (
                 <div key={g.id}
+                  data-record-id={g.id}
                   className={`flex items-center gap-2 py-1.5 px-1.5 rounded-lg group transition-colors ${
                     isOverdue ? 'bg-red-500/5 border border-red-500/20' :
                     isAtRisk ? 'bg-amber-500/5 border border-amber-500/20' :
@@ -4474,10 +4477,11 @@ function AISummaryWidget({
 
 function ActivitySection({ activities }: { activities: DashboardStats["recentActivity"] }) {
   const [, navigate] = useLocation();
-  const ACTIVITY_ROUTES: Record<string, string> = {
-    tracker_entry: "/trackers",
-    task_completed: "/dashboard/tasks",
-    expense: "/dashboard/finance",
+  // Rule 24: an activity row opens the RECORD (tracker, task, expense) when
+  // the row names it, else its list page — through the one route resolver.
+  const activityRoute = (item: { type: string; entityType?: string; entityId?: string }): string | null => {
+    const t = normalizeEntityType(item.entityType) || normalizeEntityType(item.type);
+    return t ? routeForEntity(t, item.entityId) : null;
   };
 
   const validActivities = useMemo(() => (activities || []).filter(item => {
@@ -4500,14 +4504,14 @@ function ActivitySection({ activities }: { activities: DashboardStats["recentAct
       <div className="space-y-0.5">
         {validActivities.map((item, i) => {
           const Icon = ACTIVITY_ICONS[item.type] || Activity;
-          const route = ACTIVITY_ROUTES[item.type];
+          const route = activityRoute(item);
           const hsl = ACTIVITY_COLORS[item.type] || "215 16% 47%";
           return (
             <div key={i}
-              onClick={() => route && navigate(route)}
+              onClick={() => route && navigateToRoute(navigate, route)}
               role={route ? "button" : undefined}
               tabIndex={route ? 0 : undefined}
-              onKeyDown={route ? onEnterOrSpace(() => navigate(route)) : undefined}
+              onKeyDown={route ? onEnterOrSpace(() => navigateToRoute(navigate, route)) : undefined}
               className={`flex items-center gap-2.5 py-1.5 ${route ? "cursor-pointer hover:bg-muted/40 rounded-lg px-1.5 -mx-1.5 transition-colors" : ""}`}
               data-testid={`activity-item-${i}`}>
               <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})` }}>
@@ -4869,7 +4873,7 @@ export function NotificationsSection({ filterMode, filterIds }: { filterMode: st
         {items.map((n: any) => (
           <button
             key={n.id}
-            onClick={() => { if (n.entityType === "document") navigate(`/documents/${n.entityId}`); else if (n.entityType === "profile") navigate(`/profiles/${n.entityId}`); }}
+            onClick={() => navigateToRoute(navigate, notificationRoute(n))}
             className="w-full flex items-start gap-2.5 py-1.5 text-left hover:bg-muted/40 rounded px-1"
             data-testid={`notification-${n.id}`}
           >

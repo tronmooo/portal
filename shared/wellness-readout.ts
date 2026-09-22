@@ -25,6 +25,7 @@ import type { Tracker, TrackerEntry } from "./schema";
 import { localDayOf, addDays, zonedTimeToUTC } from "./timezone";
 import { isHealthDocument, type HealthDocLike } from "./health-documents";
 import { normalizeDateString } from "./extraction-normalize";
+import { entryValueProvenance } from "./estimation-engine";
 import {
   resolveCanonicalMetric, validateCanonicalValue, flagAgainstReference,
   formatReference, getCanonicalMetric, LAB_PANELS, PANEL_LABELS,
@@ -39,6 +40,13 @@ export interface Reading {
   at: string;
   trackerId: string;
   trackerName: string;
+  /**
+   * True when the stored value was an ESTIMATE (the estimation engine filled
+   * it from an assumption — shared/estimation-engine provenance), so a tile
+   * built from it shows `≈` instead of presenting a guess as a measurement
+   * (Rule 26). Absent means stated.
+   */
+  isEstimated?: boolean;
 }
 
 export interface MetricSeries {
@@ -177,7 +185,11 @@ export function collectMetrics(
         if ((metric.id === "heart_rate" || metric.id === "resting_hr") && !isRestingHeartRateReading(e.values)) continue;
         const check = validateCanonicalValue(metric, v, fieldUnit(t, field));
         if (!check.ok) continue; // impossible value — see module header
-        push(metric, { value: check.canonical, at: at.toISOString(), trackerId: t.id, trackerName: name });
+        const prov = entryValueProvenance(e as any, field);
+        push(metric, {
+          value: check.canonical, at: at.toISOString(), trackerId: t.id, trackerName: name,
+          ...(prov?.isEstimated ? { isEstimated: true } : {}),
+        });
       }
     }
   }
@@ -475,6 +487,8 @@ export interface TodaySignal {
   /** The metric id behind the value, so the UI can deep-link its tracker. */
   metricId: string | null;
   trackerId: string | null;
+  /** `value` rests on an estimated reading — the tile shows `≈` (Rule 26). */
+  isEstimated: boolean;
 }
 
 function signalFrom(
@@ -495,6 +509,7 @@ function signalFrom(
     higherBetter,
     metricId: m?.metric.id ?? null,
     trackerId: (m?.latestFresh ?? m?.latest)?.trackerId ?? null,
+    isEstimated: m?.latestFresh?.isEstimated === true,
   };
 }
 
@@ -553,6 +568,8 @@ function hydrationSignal(s: MetricSeries | undefined): TodaySignal {
     higherBetter: true,
     metricId: s.metric.id,
     trackerId: (s.latest)?.trackerId ?? null,
+    // A daily total is an estimate as soon as ONE of its parts is.
+    isEstimated: todaysReadings.some((r) => r.isEstimated === true),
   };
 }
 
@@ -680,6 +697,14 @@ export interface WorkoutGroup {
   sets: number | null;
   lastAt: string | null;
   trackerId: string;
+  /**
+   * True when ANY session's distance / minutes came from the estimation
+   * engine rather than the user — the sum is then an estimate and renders
+   * as `≈` (Rule 26). Regression: an estimated distance lost its `≈` once it
+   * was added into the Wellness activity history.
+   */
+  distanceEstimated: boolean;
+  minutesEstimated: boolean;
 }
 
 export function activityHistory(
@@ -706,6 +731,7 @@ export function activityHistory(
     if (resolveCanonicalMetric(t.name, (t as any).category)) continue;
     let sessions = 0, minutes = 0, distance = 0, reps = 0, sets = 0;
     let sawMin = false, sawDist = false, sawReps = false, sawSets = false;
+    let minEst = false, distEst = false;
     let lastAt: string | null = null;
     for (const e of t.entries || []) {
       const ts = e?.timestamp ? new Date(e.timestamp).getTime() : NaN;
@@ -721,21 +747,34 @@ export function activityHistory(
       // pace string ("7:30", "9:30/mi") is not a duration either; parsed as a
       // number it read as 730 minutes.
       let entryMinutes: number | null = null, entryDistance: number | null = null;
+      // Provenance travels with the number: a distance the estimation engine
+      // filled in from steps or pace is still an estimate once it is added
+      // into this group's total (Rule 26).
+      let entryMinEst = false, entryDistEst = false;
       const cd = num(computed.durationMinutes);
-      if (Number.isFinite(cd) && cd > 0) entryMinutes = cd;
+      if (Number.isFinite(cd) && cd > 0) {
+        entryMinutes = cd;
+        entryMinEst = entryValueProvenance(e as any, "duration")?.isEstimated === true;
+      }
       let entryReps: number | null = null, entrySets: number | null = null;
       for (const [field, raw] of Object.entries(e.values || {})) {
         if (META_KEY.test(field)) continue;
         if (typeof raw === "string" && /\d:\d/.test(raw)) continue; // clock time / pace, never a quantity
         const v = num(raw);
         if (!Number.isFinite(v) || v <= 0) continue;
-        if (DURATION_FIELD.test(field)) { if (entryMinutes == null) entryMinutes = v; continue; }
-        if (DISTANCE_FIELD.test(field)) { if (entryDistance == null) entryDistance = v; continue; }
+        if (DURATION_FIELD.test(field)) {
+          if (entryMinutes == null) { entryMinutes = v; entryMinEst = entryValueProvenance(e as any, field)?.isEstimated === true; }
+          continue;
+        }
+        if (DISTANCE_FIELD.test(field)) {
+          if (entryDistance == null) { entryDistance = v; entryDistEst = entryValueProvenance(e as any, field)?.isEstimated === true; }
+          continue;
+        }
         if (SETS_FIELD.test(field)) { entrySets = (entrySets ?? 0) + v; continue; }
         if (REPS_FIELD.test(field)) { entryReps = (entryReps ?? 0) + v; continue; }
       }
-      if (entryMinutes != null) { minutes += entryMinutes; sawMin = true; }
-      if (entryDistance != null) { distance += entryDistance; sawDist = true; }
+      if (entryMinutes != null) { minutes += entryMinutes; sawMin = true; if (entryMinEst) minEst = true; }
+      if (entryDistance != null) { distance += entryDistance; sawDist = true; if (entryDistEst) distEst = true; }
       if (entryReps != null) { reps += entryReps * (entrySets ?? 1); sawReps = true; }
       if (entrySets != null) { sets += entrySets; sawSets = true; }
     }
@@ -747,6 +786,8 @@ export function activityHistory(
       reps: sawReps ? reps : null,
       sets: sawSets ? sets : null,
       lastAt, trackerId: t.id,
+      distanceEstimated: sawDist && distEst,
+      minutesEstimated: sawMin && minEst,
     });
   }
   return groups.sort((a, b) => {

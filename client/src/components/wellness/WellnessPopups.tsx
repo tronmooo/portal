@@ -57,6 +57,9 @@ export interface WellnessPopupData {
   restingHr: number | null; restingHrSeries?: number[];
   hydrationOz: number | null; hydrationGoal: number;
   calories: number | null; caloriesGoal: number;
+  /** The steps / calories figure includes an estimated entry — rendered with a `≈` prefix (Rule 26). */
+  stepsEstimated?: boolean;
+  caloriesEstimated?: boolean;
   streak: number | null;
   /** YYYY-MM-DD strings the user checked in on — powers the streak heatmap. */
   checkinDates?: string[];
@@ -110,9 +113,11 @@ function StatStrip({ series, unit, accent, lowerIsBetter }: {
 }
 
 /** A metric popup: hero number, 7-day bars, latest/avg/best. */
-function MetricBody({ value, unit, series, accent, goal, lowerIsBetter, emptyText }: {
+function MetricBody({ value, unit, series, accent, goal, lowerIsBetter, emptyText, estimated }: {
   value: number | null; unit?: string; series?: number[]; accent: string;
   goal?: number; lowerIsBetter?: boolean; emptyText: string;
+  /** Show `≈` before the value: it includes an estimate (Rule 26). */
+  estimated?: boolean;
 }) {
   const s = (series || []).filter((n) => Number.isFinite(n));
   if (value == null && s.length === 0) {
@@ -127,6 +132,7 @@ function MetricBody({ value, unit, series, accent, goal, lowerIsBetter, emptyTex
         ) : null}
         <div className="min-w-0">
           <p className="metric-value text-3xl" style={{ color: `hsl(${accent})` }}>
+            {estimated ? <span title="Estimated" data-testid="metric-estimated">≈</span> : null}
             <CountUp value={Math.round(value ?? 0)} />
             {unit && <span className="text-sm font-semibold ml-1">{unit}</span>}
           </p>
@@ -293,13 +299,13 @@ function renderBody(kind: WellnessPopupKind, d: WellnessPopupData, a: string):
     case "sleep":
       return { body: <MetricBody value={d.sleepHours} unit="h" series={d.sleepSeries} accent={a} emptyText="No sleep logged yet" /> };
     case "activity":
-      return { body: <MetricBody value={d.steps} unit="steps" series={d.stepsSeries} accent={a} emptyText="No activity logged yet" /> };
+      return { body: <MetricBody value={d.steps} unit="steps" series={d.stepsSeries} accent={a} estimated={d.stepsEstimated} emptyText="No activity logged yet" /> };
     case "hr":
       return { body: <MetricBody value={d.restingHr} unit="bpm" series={d.restingHrSeries} accent={a} lowerIsBetter emptyText="No heart-rate readings yet" /> };
     case "hydration":
       return { body: <MetricBody value={d.hydrationOz} unit="oz" accent={a} goal={d.hydrationGoal} emptyText="No water logged today" /> };
     case "calories":
-      return { body: <MetricBody value={d.calories} unit="kcal" accent={a} goal={d.caloriesGoal} emptyText="Nothing logged today" /> };
+      return { body: <MetricBody value={d.calories} unit="kcal" accent={a} goal={d.caloriesGoal} estimated={d.caloriesEstimated} emptyText="Nothing logged today" /> };
 
     case "streak": {
       const dates = d.checkinDates || [];

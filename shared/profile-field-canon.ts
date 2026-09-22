@@ -11,17 +11,61 @@
 //
 // Safety rule: NEVER lose a differing value. An alias is only dropped when the
 // canonical key holds a loosely-equal value (numbers compared numerically,
-// "$26,000" == 26000) or the alias is empty. Differing values keep both keys.
+// "$26,000" == 26000) or the alias is empty. Differing values keep both keys
+// here; shared/entity-integrity `resolveCanonicalFields` is the step that
+// picks the canonical one, parks the other under `_integrity.stale` and
+// reports the conflict (Rule 33).
+//
+// ── Rule 11: ONE canonical spelling per money concept (decision 2026-09-22) ──
+//
+// Five alias tables used to disagree: this file and profile-field-identity
+// folded `monthly_amount` → `monthlyPayment` and `current_value` → `currentValue`
+// while shared/registry-fields folded the SAME registry keys the OPPOSITE way
+// (`monthly_payment` → `monthlyAmount`, `current_value` → `value`), so a loan
+// written by the AI and a loan written by the registry form carried different
+// keys for the same fact and every reader needed its own probe chain. The
+// canonical spellings, chosen for the largest existing reader base:
+//
+//   concept            canonical         folded aliases (normalized)
+//   ─────────────────  ────────────────  ─────────────────────────────────────
+//   annual rate (%)    interestRate      apr, annualInterestRate, annualRate,
+//                                        annual_interest_rate, loanRate,
+//                                        annualInterest, noteRate
+//   amount owed        balance           currentBalance, remainingBalance,
+//                                        loanBalance, outstandingBalance, …
+//   scheduled payment  monthlyPayment    monthlyAmount, paymentAmount,
+//                                        monthlyCost, regularPayment, …
+//   asset value        currentValue      value, marketValue, estimatedValue,
+//                                        appraisedValue, …
+//   original debt      originalBalance   originalAmount, originalPrincipal,
+//                                        loanAmount, originalLoanAmount
+//   stored due date    dueDate           (NOT alias-folded — see below)
+//
+// `interestRate` is stored as a PERCENT (6 = 6%); shared/liability-fields
+// `readInterestRatePct` is the one reader and shared/liability-calc
+// `normalizeAnnualRate` the one converter to a decimal.
+//
+// Due-date keys are deliberately NOT folded: `dueDate`/`nextDueDate` are the
+// bill series anchor the pay path advances, while `nextPaymentDate` is the
+// user's explicit "next due" edit on a loan that must win over the creation
+// date. They are distinct facts with one READER (shared/liability-fields
+// `readStoredDueDate`, and the temporal engine shared/temporal-status on top of
+// it), and a disagreement between them is a `schedule_conflict` integrity
+// warning rather than a silent fold.
+//
+// shared/registry-fields imports this table so the registry fold and the AI
+// fold can never point in different directions again.
 //
 // Pinned by tests/profile-field-canon.test.ts.
 
 /** canonical key → alias spellings (compared via normalized lowercase). */
-const CANONICAL_ALIASES: Record<string, string[]> = {
-  currentValue: ["value", "worth", "marketvalue", "estimatedvalue", "currentworth", "assetvalue", "presentvalue"],
+export const CANONICAL_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  currentValue: ["value", "worth", "marketvalue", "estimatedvalue", "currentworth", "assetvalue", "presentvalue", "appraisedvalue", "currentmarketvalue"],
   purchasePrice: ["pricepaid", "boughtfor", "purchaseamount", "originalprice", "purchasecost"],
-  balance: ["amountowed", "remainingbalance", "loanbalance", "balanceowed", "outstandingbalance", "currentbalance", "balanceremaining"],
-  interestRate: ["apr"],
-  monthlyPayment: ["paymentamount", "monthlycost", "monthlyamount"],
+  balance: ["amountowed", "remainingbalance", "loanbalance", "balanceowed", "outstandingbalance", "currentbalance", "balanceremaining", "principalbalance", "unpaidbalance", "payoffbalance"],
+  interestRate: ["apr", "annualinterestrate", "annualrate", "loanrate", "annualinterest", "noterate", "interestratepct", "interestratepercent"],
+  monthlyPayment: ["paymentamount", "monthlycost", "monthlyamount", "regularpayment", "scheduledpayment", "installmentamount"],
+  originalBalance: ["originalamount", "originalprincipal", "loanamount", "originalloanamount"],
   purchaseDate: ["datepurchased", "boughton", "acquisitiondate", "dateacquired"],
   accountNumber: ["accountno", "acctnumber", "acctno"],
   licensePlate: ["plate", "platenumber", "licenceplate", "licenseplatenumber"],

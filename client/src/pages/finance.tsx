@@ -228,6 +228,24 @@ export default function FinancePage() {
       return h && h.type === "expense" ? h.id : null;
     } catch { return null; }
   });
+  // Rules 23/24: an income source (or the paycheck series it belongs to)
+  // lands on its row in the Income section the same way.
+  const [highlightIncomeId, setHighlightIncomeId] = useState<string | null>(() => {
+    try {
+      const h = parseHighlight(window.location.hash || "");
+      return h && h.type === "income" ? h.id : null;
+    } catch { return null; }
+  });
+  useEffect(() => {
+    if (!highlightIncomeId) return;
+    try {
+      const hash = window.location.hash || "";
+      const cleaned = stripHighlight(hash);
+      if (cleaned !== hash) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${cleaned}`);
+    } catch { /* ignore */ }
+    const t = setTimeout(() => setHighlightIncomeId(null), HIGHLIGHT_MS);
+    return () => clearTimeout(t);
+  }, [highlightIncomeId]);
   useEffect(() => {
     if (!highlightId) return;
     try {
@@ -2056,6 +2074,7 @@ export default function FinancePage() {
               <ExpandableRow
                 key={inc.id}
                 testId={`income-${inc.id}`}
+                highlighted={highlightIncomeId === inc.id}
                 summary={
                   <>
                     <div className="flex-1 min-w-0">

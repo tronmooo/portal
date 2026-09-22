@@ -22,6 +22,7 @@ import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileSco
 import { formatStoredDate, farFutureWarning } from "@/lib/dates";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { useProfileFilterCtx } from "@/hooks/useProfileFilterCtx";
+import { useRecordHighlight } from "@/hooks/useRecordHighlight";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -374,14 +375,15 @@ function TaskItem({
       queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
         old?.map(t => t.id === task.id ? { ...t, status: newStatus } : t)
       );
-      // Confirm instantly — the row already flipped optimistically. Toasting
-      // in onSuccess bound the confirmation to the server roundtrip (8s+ on a
-      // cold serverless write), which read as "the notification comes 30
-      // seconds later". On failure the destructive toast below replaces this.
-      toast({ title: task.status === "done" ? `"${task.title}" reopened` : `"${task.title}" completed` });
-      return { prevQueries };
+      // Rule 16: the row flips optimistically; the confirmation waits for
+      // the commit (onSuccess). The label is decided HERE, from the pre-tap
+      // status, and carried in the context — by the time the server answers
+      // the optimistic cache has already changed `task.status`.
+      const doneTitle = task.status === "done" ? `"${task.title}" reopened` : `"${task.title}" completed`;
+      return { prevQueries, doneTitle };
     },
-    onSuccess: () => {
+    onSuccess: (_d, _v, ctx: any) => {
+      toast({ title: String(ctx?.doneTitle || `"${task.title}" updated`) });
       invalidateTaskQueries();
     },
     onError: (err: Error, _vars, context: any) => {
@@ -404,10 +406,10 @@ function TaskItem({
       queryClient.setQueriesData<Task[]>({ queryKey: ["/api/tasks"] }, (old) =>
         (old || []).map(t => t.id === task.id ? { ...t, status: "todo" as const } : t)
       );
-      // Instant confirmation (see toggleMutation note).
-      toast({ title: `"${task.title}" restored` });
+      // Rule 16: confirmation waits for the commit (onSuccess below).
       return { prevQueries };
     },
+    onSuccess: () => { toast({ title: `"${task.title}" restored` }); },
     onError: (err: Error, _v: unknown, ctx: any) => {
       if (ctx?.prevQueries) { for (const [key, data] of ctx.prevQueries) queryClient.setQueryData(key, data); }
       toast({ title: `Failed to restore "${task.title}"`, description: formatApiError(err), variant: "destructive" });
@@ -447,6 +449,7 @@ function TaskItem({
     <>
       <Card
         data-testid={`card-task-${task.id}`}
+        data-record-id={task.id}
         className={`transition-colors ${task.status === "done" ? "opacity-60" : ""}`}
       >
         <CardContent className="p-4 flex items-start gap-3">
@@ -660,6 +663,9 @@ export default function TasksPage() {
   useEffect(() => { document.title = "Tasks — Portol"; }, []);
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
+  // Rules 23/24: `?highlight=task:<id>` (a search result, a chat receipt, a
+  // calendar tap) scrolls to and flashes that task's card.
+  useRecordHighlight("task");
   // QA Bug 7: when the command palette sends us here with ?new=1, auto-open
   // the New Task dialog so the "New task" command actually creates instead of
   // just navigating. The query lives in the hash (#/tasks?new=1).

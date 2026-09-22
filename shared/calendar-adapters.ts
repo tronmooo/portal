@@ -21,6 +21,7 @@ import {
   type SourceSystem,
   sourceHref,
 } from "./calendar-occurrences";
+import { routeForEntity } from "./entity-routes";
 import { parseRecurringMeta, expandRecurrenceDates } from "./recurring-dates";
 import { addYearsISO, daysInMonth } from "./date-math";
 import { canonicalObligationCategory } from "./category-canon";
@@ -29,6 +30,7 @@ import { groupMaterializedSeries } from "./series-detect";
 import { rulesFromAll, seriesFromDateRules } from "./date-rules";
 import { normalizeDateString } from "./extraction-normalize";
 import { resolveLiabilityDueDate, resolveLiabilityEndDate } from "./liability-schedule";
+import { readMonthlyPayment } from "./liability-fields";
 
 const ISO_RE = /^\d{4}-\d{2}-\d{2}/;
 const clip = (v: unknown): string => String(v ?? "").slice(0, 10);
@@ -493,7 +495,7 @@ export function seriesFromLiabilityProfiles(profiles: readonly any[]): CalendarS
     // test and vanishing with nothing to explain it.
     const due = resolveLiabilityDueDate(f);
     if (!isISO(due)) continue;
-    const amount = Number(f.monthlyPayment ?? f.monthly_payment ?? f.amount);
+    const amount = readMonthlyPayment(f);
     const end = resolveLiabilityEndDate(f);
     const kind = kindForLiabilityProfile(p);
     // Per-occurrence state lives in `fields.occurrences`, keyed by canonical
@@ -732,7 +734,8 @@ export function seriesFromIncomes(incomes: readonly any[]): CalendarSeries[] {
         profileId,
         ownerIds: uniq(Array.isArray(i.linkedProfiles) ? i.linkedProfiles : []),
         label: i.description,
-        href: "#/finance",
+        // The income row itself (Rule 23), not the top of the Finance tab.
+        href: routeForEntity("income", i.id, { hash: true }),
       },
       baseDate: clip(i.date),
       recurrence: frequencyToRecurrence(i.frequency),

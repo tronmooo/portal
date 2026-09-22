@@ -32,6 +32,7 @@ import { habitDayProgress } from "./habit-progress";
 import { computeKeyFindings } from "./tracker-insights";
 import { isMedicationTracker, computeMissedDoses } from "./medication-doses";
 import { parseRecurringMeta, kindDef, type RecurringKind } from "./recurring-dates";
+import { routeForEntity, normalizeEntityType } from "./entity-routes";
 
 export type ExecSectionId =
   | "immediate" | "today" | "habits" | "bills" | "upcoming"
@@ -432,7 +433,7 @@ export function buildExecutiveSections(
       key: `vital:${t.id}`, sourceKey: `tracker:${t.id}`, kind: "alert",
       title, reason,
       tier: critical ? "immediate" : "soon",
-      daysUntil: 0, score: 0, href: `/trackers?open=${t.id}`,
+      daysUntil: 0, score: 0, href: routeForEntity("tracker", t.id),
       action: { kind: "open", label: "Open" },
     });
   }
@@ -465,7 +466,7 @@ export function buildExecutiveSections(
       key: `adherence:${t.id}`, sourceKey: `tracker:${t.id}`, kind: "alert",
       title: `${dose.medication}: ${dose.unlogged_gap} doses unlogged this week`,
       reason: `${dose.taken} of ${dose.expected} expected doses logged — a gap, not a confirmed miss`,
-      tier: "soon", daysUntil: 0, score: 0, href: `/trackers?open=${t.id}`,
+      tier: "soon", daysUntil: 0, score: 0, href: routeForEntity("tracker", t.id),
       action: { kind: "open", label: "Review" },
     });
   }
@@ -684,28 +685,23 @@ export function buildExecutiveSections(
     cand.activity.push({
       key: `done:${t.id}`, sourceKey: `task:${t.id}`, kind: "task",
       title: t.title || "Task", reason: `Completed ${relTime(when) || "today"}`,
-      tier: "upcoming", daysUntil: 0, score: 0, href: "/dashboard/tasks",
+      tier: "upcoming", daysUntil: 0, score: 0, href: routeForEntity("task", t.id),
     });
   }
-  // An activity row opens the surface the activity happened on. "/dashboard"
-  // was a dead end — the user is already there when they tap the row.
-  const ACTIVITY_HREF: Record<string, string> = {
-    expense: "/dashboard/finance", income: "/dashboard/finance",
-    task: "/dashboard/tasks", habit: "/dashboard/habits",
-    document: "/linked?tab=documents", event: "/calendar",
-    journal: "/dashboard/journal", tracker: "/trackers",
-    obligation: "/dashboard/obligations", bill: "/dashboard/obligations",
-    goal: "/goals", profile: "/profiles",
-  };
+  // An activity row opens the RECORD the activity happened on (Rules 23/24:
+  // the one route resolver, shared/entity-routes), or its list page when the
+  // row carries no entity id. "/dashboard" was a dead end — the user is
+  // already there when they tap the row.
   for (const a of input.recentActivity || []) {
     if (!a?.description) continue;
+    const entityType = normalizeEntityType(a.entityType) || normalizeEntityType(String(a.type || "").toLowerCase());
     cand.activity.push({
       key: `act:${a.id || a.timestamp || a.description}`,
       sourceKey: `activity:${a.id || a.timestamp || a.description}`,
       kind: "alert",
       title: a.description, reason: relTime(a.timestamp) || String(a.type || "activity"),
       tier: "upcoming", daysUntil: null, score: 0,
-      href: ACTIVITY_HREF[String(a.type || "").toLowerCase()] || "/dashboard",
+      href: entityType ? routeForEntity(entityType, a.entityId) : "/dashboard",
     });
   }
 

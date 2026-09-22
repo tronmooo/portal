@@ -41,6 +41,11 @@ import { applyBalanceAdjustment, isAccountProfile } from "@shared/finance-accoun
 // automatically gets the request-scoped storage instance.
 export const requestStorageContext = new AsyncLocalStorage<IStorage>();
 import { journalStorageCall, isJournaledStorageMethod } from "./write-journal";
+import { resolveOwnerForNewRecord, isOwnerQuestion, OwnerRequiredError } from "@shared/owner-resolution";
+import { findPossibleDuplicates, takeDuplicateControls, DEFAULT_RECENT_WINDOW_MS } from "@shared/duplicate-guard";
+import { assertWriteCandidate } from "@shared/write-validation";
+import { getActiveProfileIds } from "./active-scope-context";
+import { assertMutationAllowed } from "./mutation-scope";
 import {
   valuationKey, valuationHistoryKey, readValuationRecord, readValuationHistory,
   appendValuationHistory, VALUATION_HISTORY_LIMIT, understandingKey, readUnderstanding,
@@ -278,7 +283,7 @@ export interface IStorage {
   // bootstrap's seed reads + buildNotifications all read unfiltered). The
   // JS passesProfileFilter pass — always the correctness authority — still
   // runs, so results are identical; only the number of round trips changes.
-  getStats(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<DashboardStats>;
+  getStats(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<DashboardStats>;
   getDashboardEnhanced(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<Record<string, unknown>>;
 
   // Net-worth snapshots (W4-5)
@@ -337,6 +342,11 @@ export interface IStorage {
   createAiActionLog(entry: import("@shared/schema").InsertAiActionLog): Promise<import("@shared/schema").AiActionLog | undefined>;
   listAiActionLog(opts?: { limit?: number; entityType?: string; entityId?: string; includeUndone?: boolean }): Promise<import("@shared/schema").AiActionLog[]>;
   markActionUndone(id: string, undoneByLogId?: string): Promise<void>;
+  /** Rule 2: the ledger row a completed operation left, if any. */
+  findAiActionByOperationId(operationId: string): Promise<import("@shared/schema").AiActionLog | undefined>;
+  /** Rule 22: server-side execution state of one chat request. */
+  getAiChatRun(requestId: string): Promise<import("@shared/schema").AiChatRun | undefined>;
+  upsertAiChatRun(run: import("@shared/schema").UpsertAiChatRun): Promise<import("@shared/schema").AiChatRun | undefined>;
 
   // AI bulk plans (preview → confirm → execute)
   createAiBulkPlan(plan: { operation: string; criteria: any; planHash: string; preview: any; expiresAt: string }): Promise<{ id: string; operation: string; criteria: any; planHash: string; preview: any; status: string; expiresAt: string }>;
@@ -978,6 +988,58 @@ export class MemStorage implements IStorage {
     if (this.activity.length > 50) this.activity.pop();
   }
 
+  // ── Rules 6 / 34 / 35 — parity with SupabaseStorage.resolveOwnersAndValidate ──
+  // The owner of a new record: explicit → the single ACTIVE profile (from
+  // server/active-scope-context) → self. An ambiguous scope or an unknown
+  // owner throws OwnerRequiredError; a store with no profiles yet skips the
+  // existence checks (legacy tests seed rows before people).
+  private resolveOwnersAndValidate(entityType: string, data: Record<string, any>): string[] {
+    const profiles = Array.from(this.profiles.values());
+    const valid = profiles.length > 0 ? new Set(profiles.map(p => p.id)) : null;
+    const self = profiles.find(p => p.type === "self");
+    const raw = data?.linkedProfiles;
+    const explicit = Array.isArray(raw) ? raw : (typeof raw === "string" && raw ? [raw] : []);
+    const resolution = resolveOwnerForNewRecord({
+      explicitOwnerIds: explicit,
+      activeProfileIds: getActiveProfileIds(),
+      selfProfileId: self?.id ?? null,
+      ownerRequired: false,
+      validProfileIds: valid,
+    });
+    if (isOwnerQuestion(resolution)) throw new OwnerRequiredError(resolution.reason);
+    assertWriteCandidate(entityType, { ...data, linkedProfiles: resolution.ownerIds }, { validProfileIds: valid });
+    return resolution.ownerIds;
+  }
+
+  /** Rule 35 at the write path: a repeat of a row written moments ago (or the
+   * same request stamp) is that row. See SupabaseStorage.reuseRecentDuplicate. */
+  private reuseRecentDuplicate(
+    entityType: string,
+    candidate: Record<string, any>,
+    rows: ReadonlyArray<Record<string, any>>,
+    ctl: { requestId: string | null; operationId: string | null },
+  ): any | null {
+    const now = new Date();
+    const verdict = findPossibleDuplicates({
+      entityType,
+      ownerIds: candidate.linkedProfiles || [],
+      date: candidate.date ?? candidate.dueDate ?? null,
+      amount: candidate.amount ?? null,
+      name: candidate.title ?? candidate.name ?? null,
+      description: candidate.description ?? null,
+      time: candidate.time ?? null,
+      requestId: ctl.requestId,
+      operationId: ctl.operationId,
+    }, rows, { now });
+    if (verdict.tier !== "high") return null;
+    const top = verdict.matches[0];
+    const hit = rows.find(r => r.id === top.id);
+    if (!hit) return null;
+    const createdAt = new Date(hit.createdAt || 0).getTime();
+    const recent = Number.isFinite(createdAt) && now.getTime() - createdAt <= DEFAULT_RECENT_WINDOW_MS;
+    return top.reasons.includes("same_request") || recent ? hit : null;
+  }
+
   // ---- Profiles ----
   async getProfiles() {
     const all = Array.from(this.profiles.values());
@@ -1060,7 +1122,17 @@ export class MemStorage implements IStorage {
     if (data.fields && typeof data.fields === "object") {
       data = { ...data, fields: prepareProfileFields(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (data as any).typeKey, todayISO: getUserToday((this as any)._timezone) }) };
     }
-    const profile: Profile = { id: randomUUID(), ...data, fields: data.fields || {}, tags: data.tags || [], notes: data.notes || "", documents: [], linkedTrackers: [], linkedExpenses: [], linkedTasks: [], linkedEvents: [], createdAt: now, updatedAt: now };
+    // Parity with SupabaseStorage: a child-type profile with no parent nests
+    // under the single active profile, else self (Rule 6) — and a named parent
+    // must exist (Rule 34).
+    const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "liability", "investment", "account", "property"]);
+    let parentProfileId = data.parentProfileId;
+    if (!parentProfileId && childTypes.has(String(data.type))) {
+      parentProfileId = this.resolveOwnersAndValidate("profile", { linkedProfiles: [] })[0];
+    } else if (parentProfileId) {
+      this.resolveOwnersAndValidate("profile", { parentProfileId, linkedProfiles: [parentProfileId] });
+    }
+    const profile: Profile = { id: randomUUID(), ...data, ...(parentProfileId ? { parentProfileId } : {}), fields: data.fields || {}, tags: data.tags || [], notes: data.notes || "", documents: [], linkedTrackers: [], linkedExpenses: [], linkedTasks: [], linkedEvents: [], createdAt: now, updatedAt: now };
     this.profiles.set(profile.id, profile);
     this.logActivity("profile", `Created profile: ${profile.name}`);
     return profile;
@@ -1331,7 +1403,7 @@ export class MemStorage implements IStorage {
   async createTracker(data: InsertTracker): Promise<Tracker> {
     // Parity with SupabaseStorage: the owners the caller names are kept (a
     // shared tracker is one with two owners — see the D250 cascade rule).
-    const tracker: Tracker = { id: randomUUID(), ...data, fields: data.fields || [], entries: [], linkedProfiles: Array.isArray((data as any).linkedProfiles) ? [...(data as any).linkedProfiles] : [], createdAt: new Date().toISOString() };
+    const tracker: Tracker = { id: randomUUID(), ...data, fields: data.fields || [], entries: [], linkedProfiles: this.resolveOwnersAndValidate("tracker", data as any), createdAt: new Date().toISOString() };
     this.trackers.set(tracker.id, tracker);
     this.logActivity("tracker", `Created tracker: ${tracker.name}`);
     return tracker;
@@ -1451,7 +1523,13 @@ export class MemStorage implements IStorage {
   async getTasks() { return Array.from(this.tasks.values()); }
   async getTask(id: string) { return this.tasks.get(id); }
   async createTask(data: InsertTask): Promise<Task> {
-    const task: Task = { id: randomUUID(), ...data, status: "todo", priority: data.priority || "medium", linkedProfiles: [], tags: data.tags || [], createdAt: new Date().toISOString() };
+    const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
+    const linkedProfiles = this.resolveOwnersAndValidate("task", data as any);
+    if (!dupCtl.allowDuplicate) {
+      const twin = this.reuseRecentDuplicate("task", { ...data, linkedProfiles }, Array.from(this.tasks.values()).filter(t => t.status !== "done"), dupCtl);
+      if (twin) return twin as Task;
+    }
+    const task: Task = { id: randomUUID(), ...data, status: "todo", priority: data.priority || "medium", linkedProfiles, tags: data.tags || [], createdAt: new Date().toISOString() };
     this.tasks.set(task.id, task);
     this.logActivity("task", `Created task: ${task.title}`);
     return task;
@@ -1490,7 +1568,14 @@ export class MemStorage implements IStorage {
   async getExpenses() { return Array.from(this.expenses.values()); }
   async getExpense(id: string) { return this.expenses.get(id); }
   async createExpense(data: InsertExpense): Promise<Expense> {
-    const expense: Expense = { id: randomUUID(), ...data, category: canonicalExpenseCategory(data.category), linkedProfiles: data.linkedProfiles || [], tags: data.tags || [], date: data.date || new Date().toISOString(), createdAt: new Date().toISOString() };
+    const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
+    const linkedProfiles = this.resolveOwnersAndValidate("expense", data as any);
+    const date = data.date || new Date().toISOString();
+    if (!dupCtl.allowDuplicate) {
+      const twin = this.reuseRecentDuplicate("expense", { ...data, date, linkedProfiles }, Array.from(this.expenses.values()), dupCtl);
+      if (twin) return twin as Expense;
+    }
+    const expense: Expense = { id: randomUUID(), ...data, category: canonicalExpenseCategory(data.category), linkedProfiles, tags: data.tags || [], date, createdAt: new Date().toISOString() };
     this.expenses.set(expense.id, expense);
     this.logActivity("expense", `${data.description} - $${data.amount}${data.vendor ? ` at ${data.vendor}` : ""}`);
     return expense;
@@ -1510,6 +1595,12 @@ export class MemStorage implements IStorage {
   async getEvent(id: string) { return this.events.get(id); }
   async createEvent(data: InsertEvent): Promise<CalendarEvent> {
     assertEventSpan(data as any);
+    const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
+    const eventOwners = this.resolveOwnersAndValidate("event", data as any);
+    if (!dupCtl.allowDuplicate) {
+      const twin = this.reuseRecentDuplicate("event", { ...data, linkedProfiles: eventOwners }, Array.from(this.events.values()), dupCtl);
+      if (twin) return twin as CalendarEvent;
+    }
     const event: CalendarEvent = {
       id: randomUUID(),
       title: data.title,
@@ -1524,7 +1615,7 @@ export class MemStorage implements IStorage {
       color: data.color,
       recurrence: data.recurrence || "none",
       recurrenceEnd: data.recurrenceEnd,
-      linkedProfiles: data.linkedProfiles || [],
+      linkedProfiles: eventOwners,
       linkedDocuments: data.linkedDocuments || [],
       tags: data.tags || [],
       source: data.source || "manual",
@@ -1600,6 +1691,7 @@ export class MemStorage implements IStorage {
         items.push({
           id: `event-${ev.id}-${baseDate}`,
           type: "event",
+          sourceType: "event",
           title: ev.title,
           date: baseDate,
           time: ev.time,
@@ -1635,6 +1727,7 @@ export class MemStorage implements IStorage {
             items.push({
               id: `event-${ev.id}-${nextStr}`,
               type: "event",
+              sourceType: "event",
               title: ev.title,
               date: nextStr,
               time: ev.time,
@@ -1665,6 +1758,7 @@ export class MemStorage implements IStorage {
         items.push({
           id: isSeries ? `task-${task.id}-${d}` : `task-${task.id}`,
           type: "task",
+          sourceType: "task",
           title: task.title,
           date: d,
           time: task.dueTime || undefined,
@@ -1687,6 +1781,7 @@ export class MemStorage implements IStorage {
         items.push({
           id: `obligation-${ob.id}`,
           type: "obligation",
+          sourceType: "bill",
           title: `${ob.name} — $${ob.amount}`,
           date: d,
           allDay: true,
@@ -1717,6 +1812,7 @@ export class MemStorage implements IStorage {
           items.push({
             id: `habit-${habit.id}-${dateStr}`,
             type: "habit",
+            sourceType: "habit",
             title: habit.name + (target > 1 ? ` (${checkedToday}/${target})` : ""),
             date: dateStr,
             allDay: true,
@@ -1747,7 +1843,7 @@ export class MemStorage implements IStorage {
         })) {
           if (occ.date < startDate || occ.date > endDate) continue;
           items.push({
-            id: `${ser.id}-${occ.date}`, type: "event", title: ser.title, date: occ.date,
+            id: `${ser.id}-${occ.date}`, type: "event", sourceType: "income", title: ser.title, date: occ.date,
             allDay: true, color: "#4FA37A", category: "finance",
             linkedProfiles: ser.source.ownerIds || [], sourceId: ser.source.id,
             meta: { kind: "income", amount: occ.amount, recurrence: ser.recurrence, href: ser.source.href },
@@ -1776,6 +1872,7 @@ export class MemStorage implements IStorage {
           items.push({
             id: `${ser.id}-${occ.date}`,
             type: "event",
+            sourceType: ser.kind, // Rule 37
             title: ser.title,
             date: occ.date,
             allDay: true,
@@ -1862,7 +1959,7 @@ export class MemStorage implements IStorage {
       extractedData: data.extractedData && typeof data.extractedData === "object"
         ? normalizeEntityDateFields(data.extractedData as Record<string, any>, { contextKey: `${data.type ?? ""} ${data.name ?? ""}` }).fields
         : {},
-      linkedProfiles: data.linkedProfiles || [],
+      linkedProfiles: this.resolveOwnersAndValidate("document", data as any),
       tags: data.tags || [],
       createdAt: new Date().toISOString(),
     };
@@ -1936,7 +2033,7 @@ export class MemStorage implements IStorage {
   }
   async getHabit(id: string) { return this.habits.get(id); }
   async createHabit(data: InsertHabit): Promise<Habit> {
-    const habit: Habit = { id: randomUUID(), ...data, frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, startDate: data.startDate ?? undefined, endDate: data.endDate ?? undefined, timeOfDay: data.timeOfDay ?? undefined, scheduledTime: data.scheduledTime ?? undefined, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
+    const habit: Habit = { id: randomUUID(), ...data, linkedProfiles: this.resolveOwnersAndValidate("habit", data as any), frequency: data.frequency || "daily", targetPerDay: data.targetPerDay || 1, startDate: data.startDate ?? undefined, endDate: data.endDate ?? undefined, timeOfDay: data.timeOfDay ?? undefined, scheduledTime: data.scheduledTime ?? undefined, currentStreak: 0, longestStreak: 0, checkins: [], createdAt: new Date().toISOString() };
     this.habits.set(habit.id, habit);
     this.logActivity("habit", `Created habit: ${habit.name}`);
     return habit;
@@ -2023,7 +2120,7 @@ export class MemStorage implements IStorage {
       leadTimeDays: d.leadTimeDays ?? 3,
       autoLogExpense: d.autoLogExpense ?? false,
       currency: d.currency || "USD",
-      linkedProfiles: d.linkedProfiles || [],
+      linkedProfiles: this.resolveOwnersAndValidate("obligation", d),
       linkedAssetId: d.linkedAssetId || undefined,
       linkedLiabilityId: d.linkedLiabilityId || undefined,
       linkedDocumentId: d.linkedDocumentId || undefined,
@@ -2158,7 +2255,7 @@ export class MemStorage implements IStorage {
     }));
     const artifact: Artifact = {
       id: randomUUID(), ...data, items,
-      tags: data.tags || [], linkedProfiles: data.linkedProfiles || [],
+      tags: data.tags || [], linkedProfiles: this.resolveOwnersAndValidate("artifact", data as any),
       pinned: data.pinned ?? false,
       language: (data as any).language,
       dataBindings: (data as any).dataBindings,
@@ -2193,6 +2290,7 @@ export class MemStorage implements IStorage {
       id: randomUUID(), date: data.date || getUserToday(),
       mood: data.mood, content: data.content || "", tags: data.tags || [],
       energy: data.energy, gratitude: data.gratitude, highlights: data.highlights,
+      linkedProfiles: this.resolveOwnersAndValidate("journal", data as any),
       createdAt: new Date().toISOString(),
     };
     this.journal.set(entry.id, entry);
@@ -2247,7 +2345,7 @@ export class MemStorage implements IStorage {
     const goal: Goal = {
       id: randomUUID(), ...data, current: 0, status: "active",
       milestones: (data.milestones || []).map(m => ({ ...m, reached: false })),
-      linkedProfiles: (data as any).linkedProfiles || [],
+      linkedProfiles: this.resolveOwnersAndValidate("goal", data as any),
       createdAt: now, updatedAt: now,
     };
     this.goals.set(goal.id, goal);
@@ -2298,7 +2396,7 @@ export class MemStorage implements IStorage {
   }
 
   // ---- Dashboard ----
-  async getStats(filterProfileId?: string, filterProfileIds?: string[]): Promise<DashboardStats> {
+  async getStats(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<DashboardStats> {
     // Build the active filter ID list. Single id collapses to [id]; empty/none = no filter.
     const ids: string[] = filterProfileIds && filterProfileIds.length > 0
       ? filterProfileIds
@@ -2320,11 +2418,13 @@ export class MemStorage implements IStorage {
     const allHabits = Array.from(this.habits.values());
     const allObligations = Array.from(this.obligations.values());
     const allJournal = Array.from(this.journal.values());
-    const tasks = allTasks.filter(t => matchesFilter((t as any).linkedProfiles));
-    const expenses = allExpenses.filter(e => matchesFilter((e as any).linkedProfiles));
+    // Rule 27: test-patterned rows never enter a total unless opted in.
+    const keep = (row: any) => opts?.includeTestData || !isTestEntity(row);
+    const tasks = allTasks.filter(t => matchesFilter((t as any).linkedProfiles) && keep(t));
+    const expenses = allExpenses.filter(e => matchesFilter((e as any).linkedProfiles) && keep(e));
     const trackers = allTrackers.filter(t => matchesFilter((t as any).linkedProfiles));
     const habits = allHabits.filter(h => matchesFilter((h as any).linkedProfiles));
-    const obligations = allObligations.filter(o => matchesFilter((o as any).linkedProfiles));
+    const obligations = allObligations.filter(o => matchesFilter((o as any).linkedProfiles) && keep(o));
     const journalEntries = allJournal.filter(j => matchesFilter((j as any).linkedProfiles));
     const now = new Date();
     const thisMonth = now.getMonth();
@@ -2400,7 +2500,10 @@ export class MemStorage implements IStorage {
       // — the feed shows the line once (shared/activity-description).
       recentActivity: dedupeActivityRows([
         ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
+          id: String(e.id), // Rule 36: the entry's own id
           type: 'tracker_entry',
+          // Rule 24: the row names its record so the feed can open it.
+          entityType: 'tracker', entityId: t.id,
           description: (() => {
             // Values speak with their UNIT ("Weight: 181.2 lbs"), never the
             // field name in its place ("181.2 weight") — shared/tracker-units.
@@ -2420,12 +2523,16 @@ export class MemStorage implements IStorage {
         ...tasks.filter(t => t.status === 'done')
           .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
           .slice(0, 3).map(t => ({
+            id: String(t.id), // Rule 36
             type: 'task_completed',
+            entityType: 'task', entityId: t.id,
             description: `Completed: ${taskOccurrenceLabel(t)}`,
             timestamp: t.updatedAt || t.createdAt,
           })),
         ...expenses.slice(-3).map(e => ({
+          id: String(e.id), // Rule 36
           type: 'expense',
+          entityType: 'expense', entityId: e.id,
           description: `${formatMoneyMajor(e.amount)} — ${e.description}`,
           // QA 2026-09-18 BUG-15: the feed is about WHEN it was logged; the
           // expense's calendar date read "14h ago" seconds after it was added.
@@ -2743,6 +2850,9 @@ export class MemStorage implements IStorage {
       memories: Array.from(this.memories.values()),
       events: Array.from(this.events.values()),
       documents: Array.from(this.documents.values()),
+      // Rule 23: incomes and goals were not searchable at all.
+      incomes: Array.from(this.incomes.values()),
+      goals: Array.from(this.goals.values()),
     }, query);
   }
 
@@ -2811,7 +2921,13 @@ export class MemStorage implements IStorage {
   private incomes = new Map<string, Income>();
   async getIncomes(): Promise<Income[]> { return Array.from(this.incomes.values()); }
   async createIncome(data: InsertIncome): Promise<Income> {
-    const income: Income = { ...data, frequency: canonicalIncomeFrequency((data as any).frequency) ?? ((data as any).frequency || "monthly"), id: randomUUID(), createdAt: new Date().toISOString() } as Income;
+    const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
+    const linkedProfiles = this.resolveOwnersAndValidate("income", data as any);
+    if (!dupCtl.allowDuplicate) {
+      const twin = this.reuseRecentDuplicate("income", { ...data, linkedProfiles }, Array.from(this.incomes.values()), dupCtl);
+      if (twin) return twin as Income;
+    }
+    const income: Income = { ...data, linkedProfiles, frequency: canonicalIncomeFrequency((data as any).frequency) ?? ((data as any).frequency || "monthly"), id: randomUUID(), createdAt: new Date().toISOString() } as Income;
     this.incomes.set(income.id, income);
     return income;
   }
@@ -2843,9 +2959,41 @@ export class MemStorage implements IStorage {
       reversible: entry.reversible ?? false, reversePlan: entry.reversePlan ?? null,
       source: entry.source || "chat", createdAt: new Date().toISOString(),
       undoneAt: null, undoneByLogId: null,
+      turnId: entry.turnId ?? null, requestId: entry.requestId ?? null, operationId: entry.operationId ?? null,
     };
+    // Rule 2: one row per operation id — a replay returns the first row.
+    if (row.operationId) {
+      const existing = this.aiActionLogStore.find((x) => x.operationId === row.operationId);
+      if (existing) return existing;
+    }
     this.aiActionLogStore.unshift(row);
     if (this.aiActionLogStore.length > 200) this.aiActionLogStore.pop();
+    return row;
+  }
+  async findAiActionByOperationId(operationId: string): Promise<import("@shared/schema").AiActionLog | undefined> {
+    if (!operationId) return undefined;
+    return this.aiActionLogStore.find((x) => x.operationId === operationId);
+  }
+  // Rule 22: chat run state (in-memory twin of ai_chat_runs)
+  private aiChatRunStore = new Map<string, import("@shared/schema").AiChatRun>();
+  async getAiChatRun(requestId: string): Promise<import("@shared/schema").AiChatRun | undefined> {
+    return requestId ? this.aiChatRunStore.get(requestId) : undefined;
+  }
+  async upsertAiChatRun(run: import("@shared/schema").UpsertAiChatRun): Promise<import("@shared/schema").AiChatRun | undefined> {
+    const now = new Date().toISOString();
+    const prev = this.aiChatRunStore.get(run.requestId);
+    const row: import("@shared/schema").AiChatRun = {
+      id: prev?.id ?? crypto.randomUUID(),
+      requestId: run.requestId,
+      status: run.status,
+      turnId: run.turnId ?? prev?.turnId ?? null,
+      message: run.message !== undefined ? String(run.message).slice(0, 2000) : prev?.message ?? null,
+      result: run.result !== undefined ? run.result : prev?.result ?? null,
+      error: run.error !== undefined ? run.error : prev?.error ?? null,
+      createdAt: prev?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.aiChatRunStore.set(run.requestId, row);
     return row;
   }
   async listAiActionLog(opts: { limit?: number; entityType?: string; entityId?: string; includeUndone?: boolean } = {}): Promise<import("@shared/schema").AiActionLog[]> {
@@ -3134,6 +3282,10 @@ export const storage: IStorage = new Proxy({} as IStorage, {
       if (typeof prop !== "string" || !shouldJournal(prop)) return bound;
       const method = prop;
       return (...args: any[]) => {
+        // Rule 1: a READ turn is technically incapable of writing. Every
+        // journaled method is write-shaped, so this is the one check that
+        // covers the tool loop, the fast paths and the bulk executor alike.
+        assertMutationAllowed(method);
         const out = bound(...args);
         if (out && typeof out.then === "function") {
           return out.then((resolved: any) => {

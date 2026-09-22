@@ -121,15 +121,14 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], (old: any[]) =>
         [{ id: tempId, status: 'todo', priority: 'medium', tags: [], linkedProfiles: [], ...payload }, ...(old || [])]
       );
-      // Confirm INSTANTLY, matching the optimistic UI. The toast used to fire
-      // in onSettled, so on a cold serverless write it arrived seconds after
-      // the row appeared (user report: "notification comes 30 seconds later")
-      // — and onSettled also runs on FAILURE, so a failed create showed
-      // "Failed to create task" immediately followed by "Task added".
-      toast({ title: "Task added" });
+      // Rule 16: the row appears optimistically, but "Task added" is a claim
+      // that the write is committed and queryable — it fires in onSuccess,
+      // never here. (It used to fire from onSettled, which also runs on
+      // FAILURE; then from onMutate, which runs BEFORE the server answers.)
       return { prev, tempId };
     },
     onSuccess: (serverTask: any, _v, ctx: any) => {
+      toast({ title: "Task added" });
       // Swap the tmp row for the real row the moment the create resolves —
       // shrinks the window in which a tap on the new task targets a synthetic
       // id (the tmp-…-404 red-error class) from "until refetch" to ~0.
@@ -200,11 +199,13 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       if (wasDone !== isDone) {
         patchStatsTaskDelta(isDone ? -1 : +1);
       }
-      // Instant confirmation (see create-task note): the UI already flipped,
-      // so the toast must not wait for the server roundtrip — and must never
-      // fire from onSettled, which also runs when the request FAILED.
-      toast({ title: status === 'done' ? "Task completed" : "Task updated" });
+      // Rule 16: the row flips optimistically; the confirmation waits for the
+      // commit (onSuccess below). A success toast from here would have
+      // claimed a write that could still fail.
       return { prev, prevStats, prevDash };
+    },
+    onSuccess: (_d, { status }) => {
+      toast({ title: status === 'done' ? "Task completed" : "Task updated" });
     },
     onError: (e: any, _v, ctx: any) => {
       if (ctx?.prev !== undefined) queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx.prev);
@@ -259,10 +260,10 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       if (removed && String(removed.status || "").toLowerCase() !== "done") {
         patchStatsTaskDelta(-1);
       }
-      // Instant confirmation (see create-task note).
-      toast({ title: "Task deleted" });
+      // Rule 16: confirmation waits for the commit (onSuccess below).
       return { prev, prevStats, prevDash };
     },
+    onSuccess: () => { toast({ title: "Task deleted" }); },
     onError: (e: any, _v, ctx: any) => {
       if (ctx?.prev !== undefined) queryClient.setQueryData(["/api/tasks", filterMode, ...filterIds], ctx.prev);
       if (ctx?.prevStats !== undefined) queryClient.setQueryData(["/api/stats", filterMode, ...filterIds], ctx.prevStats);

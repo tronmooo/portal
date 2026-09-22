@@ -130,7 +130,12 @@ export function ExtractionConfirmation({
     return out;
   }, [actions, extraction.actionPlan]);
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(extraction.targetProfile?.id);
-  const [createExpense, setCreateExpense] = useState(!!extraction.pendingFinancial?.expense);
+  // RULE 3: unticked by default when the upload found no evidence the money
+  // was paid (`create: false` — a quote, an estimate, an unpaid invoice).
+  // The user can still tick it, and that tick is an explicit instruction.
+  const [createExpense, setCreateExpense] = useState(
+    !!extraction.pendingFinancial?.expense && extraction.pendingFinancial.expense.create !== false,
+  );
   const [createObligation, setCreateObligation] = useState(!!extraction.pendingFinancial?.obligation);
   // The proposed expense is a SUGGESTION — every part of it is editable before
   // saving. (Bug report: the AI proposed $84.97 while the receipt's Total
@@ -401,6 +406,10 @@ export function ExtractionConfirmation({
             category: expenseDraft.category || extraction.pendingFinancial.expense.category,
             date: expenseDraft.date || extraction.pendingFinancial.expense.date,
           } : {}),
+          // RULE 4: the proposal arrived unticked (no evidence of payment) and
+          // the user ticked it anyway — that is an explicit instruction, and
+          // the server's gate honours it. A default tick says nothing.
+          ...(extraction.pendingFinancial.expense.create === false ? { userConfirmed: true } : {}),
         }
       : undefined;
     if (!expensePayload && addManualExpense && moneyFieldCandidate) {

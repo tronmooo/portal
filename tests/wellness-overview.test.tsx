@@ -136,7 +136,9 @@ describe("Wellness overview — the readout", () => {
     render(<WellnessOverview {...base} panels={[{
       ...lipids, rows: [{ ...lipids.rows[0], metricId: "vitamin_d", label: "Vitamin D", trackerId: "doc:doc-vitd" }],
     }]} />);
-    expect(screen.getByTestId("wellness-lab-vitamin_d").getAttribute("href")).toBe("#/documents?doc=doc-vitd");
+    // Rules 23/24: the document's canonical route. `#/documents?doc=` was a
+    // dead link — there is no bare /documents route (App.tsx), so it 404'd.
+    expect(screen.getByTestId("wellness-lab-vitamin_d").getAttribute("href")).toBe("#/documents/doc-vitd");
     render(<WellnessOverview {...base} />);
     expect(screen.getByTestId("wellness-lab-ldl").getAttribute("href")).toBe("#/trackers?tracker=t-ldl");
   });
@@ -184,5 +186,24 @@ describe("Wellness overview — the readout", () => {
   it("names the person when the data is not the user's own", () => {
     render(<WellnessOverview {...base} subjectName="Linda" />);
     expect(screen.getByTestId("wellness-subject").textContent).toMatch(/Linda's health data/);
+  });
+
+  // Rule 26: an estimated distance keeps its qualification in Wellness.
+  it("marks an estimated workout distance with ≈ and leaves stated ones plain", () => {
+    render(<WellnessOverview {...base} workouts={[
+      { type: "Walking", sessions: 3, minutes: 90, distance: 4.5, reps: null, sets: null, lastAt: new Date().toISOString(), trackerId: "t-walk", distanceEstimated: true, minutesEstimated: false },
+      { type: "Running", sessions: 2, minutes: 54, distance: 6.2, reps: null, sets: null, lastAt: new Date().toISOString(), trackerId: "t-run", distanceEstimated: false, minutesEstimated: false },
+    ]} />);
+    expect(screen.getByTestId("wellness-workout-t-walk").textContent).toMatch(/≈4\.5 mi/);
+    expect(screen.getByTestId("wellness-workout-t-walk").textContent).toMatch(/\b90 min/);
+    expect(screen.getByTestId("wellness-workout-t-run").textContent).toMatch(/6\.2 mi/);
+    expect(screen.getByTestId("wellness-workout-t-run").textContent).not.toMatch(/≈/);
+  });
+
+  it("marks an estimated today signal with ≈", () => {
+    render(<WellnessOverview {...base} signals={[
+      signal({ key: "activity", label: "Activity", value: 4200, unit: "steps", metricId: "steps", isEstimated: true } as any),
+    ]} />);
+    expect(screen.getByTestId("wellness-signal-activity").textContent).toMatch(/≈4,200/);
   });
 });

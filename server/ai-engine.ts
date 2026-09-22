@@ -59,6 +59,7 @@ import {
 } from "@shared/finance-accounts";
 import { createHash, randomUUID } from "crypto";
 import { canonicalExpenseCategory } from "@shared/category-canon";
+import { assessExpenseFromDocument, isFinancialStatus, type FinancialStatus } from "@shared/financial-status";
 import { budgetCategoryKey, spendByCategory } from "@shared/budget-ledger";
 import { inferTrackerShape, effectiveTrackerFields, effectiveTrackerUnit } from "@shared/tracker-shapes";
 import { trackerNamesMatch, trackerNameContains, trackerIdentityKey } from "@shared/tracker-identity";
@@ -147,6 +148,10 @@ import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC,
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
 import { parseQuickRun, parseQuickSleep, parseQuickWeight, buildTurnRecap, type RecapOp } from "@shared/quick-log";
 import { shouldUseFrontDoor, runFrontDoorDiag } from "./chat-frontdoor";
+import { classifyTurnScope, type TurnScope } from "@shared/turn-scope";
+import { runWithMutationScope, isReadOnlyTurnError } from "./mutation-scope";
+import { logIntegrity } from "./integrity-log";
+import { operationIdFor, readOnlyTurnViolation } from "@shared/ai-operation-ids";
 import {
   EXTRACT_ACTIONS_TOOL,
   MAX_BULK_OPERATIONS,
@@ -2047,6 +2052,8 @@ interface ReviewPayloadInput {
   profileId?: string;
   userMessage?: string;
   domainHint?: string;
+  /** RULE 3: the payment state the upload decided (shared/financial-status). */
+  financialStatus?: FinancialStatus;
   /** The page itself, so the reasoner can see layout. */
   content?: any[];
   classification?: any;
@@ -2178,6 +2185,7 @@ async function buildReviewPayload(input: ReviewPayloadInput): Promise<any> {
     documentId: input.documentId,
     documentName: input.documentName,
     today: getUserToday(aiUserTimezone()),
+    financialStatus: input.financialStatus,
   });
 
   return {
@@ -2359,6 +2367,9 @@ export async function processFileUpload(
               extractedFields: dupFields,
               profileId,
               userMessage,
+              // The first upload already decided whether this money was paid.
+              financialStatus: isFinancialStatus((existingUpload as any)?.extractedData?.financialStatus)
+                ? (existingUpload as any).extractedData.financialStatus : undefined,
               content: classifierContentForReason(),
               imageDiscarded: discardImage && !dupHasStoredFile,
             })
@@ -2428,7 +2439,7 @@ CATEGORY GUIDE (broad bucket — pick the closest fit; "Other" is allowed but ra
 
 ROUTING RULES (use these to fill destinations — they are INTENT-based, not class-based, so they work for any document type you invent):
 - profileFacts: true if the doc carries stable facts about a person/entity (name, DOB, license #, blood type, member ID, VIN, hull ID, pet species, employer, etc.).
-- expense: true if the doc records a one-time charge or purchase already paid OR currently owed (receipt, invoice, restaurant check, parking, fuel, ticket, medical bill, one-off utility bill). NEVER true for ID docs, lab results, vaccination records, insurance cards, warranties, manuals, certificates, diplomas, deeds.
+- expense: true ONLY if the doc is evidence that money was ACTUALLY PAID for a one-time charge or purchase (a receipt, a payment confirmation, a restaurant check marked paid, parking, fuel, a ticket, an invoice or bill stamped PAID). An amount alone is not evidence of payment: a quote, an estimate, a proposal, an unpaid invoice, a bill with a balance due, or a statement is NOT an expense — say so in domainHint and set expense: false. NEVER true for ID docs, lab results, vaccination records, insurance cards, warranties, manuals, certificates, diplomas, deeds.
 - obligation: true ONLY for recurring/scheduled payments where a NEXT DUE DATE is visible (subscription invoice, utility bill with due date, rent/mortgage/loan statement, insurance premium notice, recurring membership).
 - calendarEvent: true if the doc carries a meaningful future date the user should be reminded of (insurance expiration, license expiration, vaccination booster due, lease end, warranty expiration, appointment, bill due date, registration renewal). false for pure history (a paid receipt with no future action).
 - trackerEntries: true ONLY for documents whose value is a measurement over time — lab results, medical readings (BP/glucose/A1C/cholesterol), fitness logs, vital signs, body composition, vehicle odometer/tire pressure/fuel-economy snapshots, nutrition macros. NEVER true for money documents (receipts/invoices/bills/tickets) — money is finance, not a tracker. NEVER true for ID documents, contracts, certificates, or letters.
@@ -2813,6 +2824,38 @@ Return ONLY the JSON object, nothing else.`;
     if (parsed.extractedData && typeof parsed.extractedData === "object") {
       parsed.extractedData = canonicalizeExtractedFieldKeys(parsed.extractedData, `${parsed.documentType || ""} ${docName}`);
     }
+
+    // ── RULE 3: what KIND of money document is this, and was it PAID? ────────
+    // Quote / estimate / invoice / receipt / bill / payment confirmation /
+    // statement / contract, and a financialStatus for the money on it. Decided
+    // ONCE here, before the document is persisted, so every consumer — the
+    // auto-expense below, pendingFinancial, the reviewed plan, and the confirm
+    // route later — reads the same answer off the stored record instead of
+    // re-guessing. RULE 4: the user's upload message is read first; "Nothing
+    // has been paid. Do not create an expense." is an instruction, not prose
+    // for the classifier.
+    const financial = assessExpenseFromDocument({
+      documentType: classification.documentClass && classification.documentClass !== "other"
+        ? classification.documentClass
+        : (parsed.documentType || ""),
+      extractedData: parsed.extractedData || {},
+      ocrText: [classification.label, parsed.label, parsed.documentType, classification.summary, parsed.summary]
+        .filter((s) => typeof s === "string" && s.trim()).join("\n"),
+      userMessage,
+    });
+    const moneyShaped = financial.docKind !== "unknown"
+      || classification.destinations.expense === true
+      || classification.destinations.obligation === true
+      || financial.instruction !== null;
+    if (moneyShaped && parsed.extractedData && typeof parsed.extractedData === "object") {
+      // User-visible on the document: "Financial Status: unpaid", "Document
+      // Kind: estimate". Structured data the confirm route trusts over its
+      // own inference, and the user can correct in place.
+      parsed.extractedData.financialStatus = financial.status.status;
+      parsed.extractedData.documentKind = financial.docKind;
+      parsed.extractedData.financialStatusSource = financial.status.source;
+    }
+    logger.info("financial-status", `"${fileName}": kind=${financial.docKind} status=${financial.status.status} (${financial.status.evidence}; ${financial.status.confidence}) instruction=${financial.instruction ?? "none"} createExpense=${financial.decision.create} via=${financial.decision.source}`);
     let document: any = null;
     const existingDocs = await storage.getDocuments();
     const existingDoc = existingDocs.find((d: any) => {
@@ -2909,7 +2952,19 @@ Return ONLY the JSON object, nothing else.`;
     const unwrapVal = (v: any) => (v && typeof v === 'object' && 'value' in v) ? v.value : v;
     const rawAmount = unwrapVal(parsed.extractedData?.totalAmount) || unwrapVal(parsed.extractedData?.totalAmountDue) || unwrapVal(parsed.extractedData?.totalDue) || unwrapVal(parsed.extractedData?.amountDue) || unwrapVal(parsed.extractedData?.amountPaid) || unwrapVal(parsed.extractedData?.balance) || unwrapVal(parsed.extractedData?.total_amount) || unwrapVal(parsed.extractedData?.amount_due) || unwrapVal(parsed.extractedData?.totalDispCD);
     const numAmount = typeof rawAmount === 'number' ? rawAmount : parseFloat(String(rawAmount));
-    if (numAmount && isFinite(numAmount) && numAmount > 0 && classification.destinations.expense !== true) {
+    //
+    // ── RULE 3 / RULE 4 GATE ─────────────────────────────────────────────
+    // This path has NO review step: whatever it creates is in the ledger
+    // before the user sees anything. It therefore needs the strongest
+    // evidence of all. An amount is not evidence of payment — the regression
+    // this closes was an unpaid $549.50 estimate becoming an expense here.
+    // The decision was made once above (`financial`): explicit instruction
+    // > structured data > deterministic rule, and the rule is "paid" only.
+    const autoExpenseWanted = Boolean(numAmount && isFinite(numAmount) && numAmount > 0 && classification.destinations.expense !== true);
+    if (autoExpenseWanted && !financial.decision.create) {
+      logger.info("financial-status", `auto-expense refused for "${fileName}": $${numAmount} status=${financial.status.status} via=${financial.decision.source} — ${financial.decision.reason}`);
+      savedItems.push(`$${numAmount} noted as ${financial.status.status} — no expense created`);
+    } else if (autoExpenseWanted) {
       try {
         const docType = (parsed.documentType || "receipt").toLowerCase();
         const category = canonicalExpenseCategory(["vehicle", "registration", "citation", "parking", "toll", "dmv"].some(t => docType.includes(t)) ? "vehicle"
@@ -3396,6 +3451,14 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
           category,
           vendor: vendor || undefined,
           date: fieldLookup['transactiondate'] || fieldLookup['statementdate'] || fieldLookup['billdate'] || fieldLookup['invoicedate'] || new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() }),
+          // RULE 3: the proposal carries its payment state, and `create` is
+          // the default for the review's tick — false unless the money was
+          // paid (or the user said to record it). The confirm route decides
+          // again from the stored document, so this is advice, not authority.
+          financialStatus: financial.status.status,
+          documentKind: financial.docKind,
+          create: financial.decision.create,
+          reason: financial.decision.reason,
         };
       }
 
@@ -3425,6 +3488,7 @@ Return ONLY JSON: {"keep": ["<id>", ...]} — the ids whose date is genuinely pr
       extractedFields,
       parsed,
       pendingFinancial,
+      financialStatus: financial.status.status,
       targetProfile: resolvedTargetProfile,
       profileId: existingProfileId,
       userMessage,
@@ -12530,6 +12594,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // Normalize a bare "night" alias the model may emit for bedtime.
       if (changes.timeOfDay === "night") changes.timeOfDay = "bedtime";
       const updated = await storage.updateHabit(uhMatch.id, changes);
+      // Rules 19/20: a rename carries into the mirror tracker by relationship
+      // (server/habit-rename-cascade.ts) — same as the PATCH route.
+      if (typeof changes.name === "string" && updated && updated.name !== uhMatch.name) {
+        const { cascadeHabitRename } = await import("./habit-rename-cascade");
+        await cascadeHabitRename(storage, uhMatch.id, uhMatch.name, updated.name);
+      }
       return { updated: true, habit: updated };
     }
 
@@ -15363,7 +15433,42 @@ function synthesizeMutations(actions: ParsedAction[]): ChatMutation[] | undefine
   return [{ op: "update", entityType: null, domains, tool: "action-types" }];
 }
 
-export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: { profileFilterIds?: string[]; debug?: boolean; onEvent?: (ev: ChatStreamEvent) => void; turnId?: string; sourceMessageId?: string }): Promise<{
+export interface ProcessMessageOptions {
+  profileFilterIds?: string[];
+  /** Rule 6: the profile(s) selected in the UI. Exactly one → the default
+   *  owner for anything this turn creates that names no one else. */
+  activeProfileIds?: string[];
+  debug?: boolean;
+  onEvent?: (ev: ChatStreamEvent) => void;
+  turnId?: string;
+  sourceMessageId?: string;
+  /** Rule 2: the client's stable id for this request (its message id or an
+   *  Idempotency-Key). Every write operation id is derived from it, so a retry
+   *  of the same request finds its own completed operations. */
+  requestId?: string;
+}
+
+/**
+ * Rule 1 — the whole turn runs inside a MUTATION SCOPE derived from the
+ * message alone. A READ turn gets a budget of "none": the tool loop refuses
+ * write tools before they run, and the storage proxy refuses write methods
+ * even if a fast path or helper reaches them. Previous actions are context,
+ * not authorization — nothing about the scope is read from history.
+ */
+export async function processMessage(userMessage: string, conversationHistory?: Array<{ role: "user" | "assistant"; content: string }>, userId?: string, options?: ProcessMessageOptions): ReturnType<typeof processMessageInner> {
+  const turnScope = classifyTurnScope(userMessage);
+  const turnId = options?.turnId || randomUUID();
+  const requestId = options?.requestId || options?.sourceMessageId;
+  if (turnScope.allowedMutations === "none") {
+    logger.info("ai", `[turn ${turnId.slice(0, 8)}] scope READ — mutations disabled (${turnScope.reason})`);
+  }
+  return runWithMutationScope(
+    { intent: turnScope.intent, allowedMutations: turnScope.allowedMutations, turnId, requestId, userId },
+    () => processMessageInner(userMessage, conversationHistory, userId, { ...options, turnId, requestId }, turnScope),
+  );
+}
+
+async function processMessageInner(userMessage: string, conversationHistory: Array<{ role: "user" | "assistant"; content: string }> | undefined, userId: string | undefined, options: ProcessMessageOptions | undefined, turnScope: TurnScope): Promise<{
   reply: string;
   actions: ParsedAction[];
   results: any[];
@@ -16802,6 +16907,15 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // AI_CHAT_SERIAL_TOOLS=1 restores strictly sequential execution.
       type RoundMeta = { operation?: OperationOutcome; result?: any; action?: ParsedAction };
       const roundMeta = new Map<number, RoundMeta>();
+      // Rule 2: the Nth identical (tool, input) call in this request gets
+      // ordinal N, so the ids are stable across a replay of the same request.
+      const operationOrdinals = new Map<string, number>();
+      const nextOperationOrdinal = (tool: string, input: unknown): number => {
+        const key = operationIdFor({ requestId: "", tool, input, ordinal: 0 });
+        const n = (operationOrdinals.get(key) ?? 0) + 1;
+        operationOrdinals.set(key, n);
+        return n;
+      };
       const roundIndexOf = new WeakMap<object, number>();
       const runOne = async (toolIdx: number, toolUse: Anthropic.Messages.ToolUseBlock): Promise<void> => {
         const meta: RoundMeta = {};
@@ -16849,6 +16963,21 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             if (READ_ONLY_TOOLS.has(toolUse.name)) return null;
             const input = (toolUse.input || {}) as Record<string, any>;
             const label = toolTargetLabel(input);
+            // ── RULE 1: A READ TURN CANNOT WRITE ─────────────────────────
+            // Not a guess about which tool the user meant — a fact about the
+            // message: it asked a question and requested no change. Whatever
+            // the model decided to do with earlier turns' context, nothing is
+            // written during this one. The storage proxy enforces the same
+            // budget underneath (server/mutation-scope.ts).
+            if (turnScope.allowedMutations === "none") {
+              logIntegrity({
+                kind: "ai_read_triggered_write",
+                message: `model called ${toolUse.name} on a READ turn — refused before execution`,
+                userId, turnId, requestId: options?.requestId,
+                detail: { tool: toolUse.name, label, reason: turnScope.reason },
+              });
+              return readOnlyTurnViolation(toolUse.name, label);
+            }
             // A replayed CREATE makes a duplicate record; a replayed delete or
             // pay does damage too. An UPDATE that names a record from an
             // earlier message is not replay, it is how every correction works
@@ -16959,8 +17088,36 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           const beforeRows = READ_ONLY_TOOLS.has(toolUse.name)
             ? null
             : await captureBeforeRows(toolUse.name, turnVerifyCtx);
+          // ── RULE 2: ONE OPERATION ID PER WRITE, IDEMPOTENT ON REPLAY ────
+          // The id is derived from the client's request id, the tool and its
+          // normalized input (plus an ordinal, so two identical calls in one
+          // request stay two operations). A retried request — lost response,
+          // reconnect, navigation — computes the same ids and finds the
+          // ledger rows the first run left, so nothing is written twice.
+          const operationId = READ_ONLY_TOOLS.has(toolUse.name)
+            ? undefined
+            : operationIdFor({ requestId: options?.requestId || turnId, tool: toolUse.name, input: validation.normalized, ordinal: nextOperationOrdinal(toolUse.name, validation.normalized) });
           const tExecStart = Date.now();
-          const rawResult = await executeTool(toolUse.name, inputWithCtx, userId);
+          let rawResult: any;
+          let replayedFromLedger = false;
+          if (operationId && options?.requestId) {
+            const prior = await Promise.resolve((storage as any).findAiActionByOperationId?.(operationId)).catch(() => undefined);
+            // Only a real ledger row for THIS operation counts — never an
+            // empty list or a stub from a partial storage implementation.
+            if (prior && typeof prior === "object" && !Array.isArray(prior) && prior.operationId === operationId && !prior.undoneAt) {
+              replayedFromLedger = true;
+              rawResult = { ...(prior.after || {}), ...(prior.entityId ? { id: prior.entityId } : {}), _replayed: true, _operationId: operationId };
+              logIntegrity({
+                kind: "idempotent_replay",
+                message: `${toolUse.name} already completed for request ${String(options.requestId).slice(0, 12)} — returning the existing result`,
+                userId, turnId, requestId: options.requestId, operationId,
+                entityType: prior.entityType || undefined, entityId: prior.entityId || undefined,
+              });
+            }
+          }
+          if (!replayedFromLedger) {
+            rawResult = await executeTool(toolUse.name, inputWithCtx, userId);
+          }
           const execMs = Date.now() - tExecStart;
 
           // Invalidate context cache after any write operation
@@ -16978,7 +17135,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // (entityId extraction, undo cards, chart/table plumbing) is
           // untouched. Read-only tools and {error} results pass through raw.
           const tVerifyStart = Date.now();
-          const result = (rawResult && !rawResult.error && !READ_ONLY_TOOLS.has(toolUse.name))
+          const result = (rawResult && !rawResult.error && !READ_ONLY_TOOLS.has(toolUse.name) && !replayedFromLedger)
             ? await finalizeToolResult(toolUse.name, actionType, inputWithCtx, rawResult, turnVerifyCtx)
             : rawResult;
           if (!READ_ONLY_TOOLS.has(toolUse.name)) {
@@ -17002,7 +17159,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           //   · a ledger row, because a create's reverse plan is DELETE, and
           //     undoing it would destroy the record the user already had.
           // The operation is reported with status "deduped" instead.
-          const wasDeduped = !!(result && !result.error && (result as any).deduped === true);
+          const wasDeduped = !!(result && !result.error && ((result as any).deduped === true || replayedFromLedger));
 
           // Persist the action to the durable ledger (undo/audit). Never
           // blocks or fails the tool; excluded for the ledger's own tools and
@@ -17013,7 +17170,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               && toolUse.name !== "preview_bulk_action"
               && toolUse.name !== "merge_profiles"
               && toolUse.name !== "execute_bulk_action") {
-            await recordActionLog(turnVerifyCtx, toolUse.name, actionType, inputWithCtx, result, beforeRows);
+            await recordActionLog(turnVerifyCtx, toolUse.name, actionType, inputWithCtx, result, beforeRows, "chat", {
+              turnId, requestId: options?.requestId, operationId,
+            });
           }
           const inp = toolUse.input as Record<string, any>;
           const entityId = result?.id || result?.task?.id || result?.expense?.id || result?.habit?.id || result?.obligation?.id;
@@ -17754,6 +17913,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         operations: executed,
         intentEntity: turnIntentActionable ? turnIntent.entity : undefined,
         intentOperation: turnIntentActionable ? turnIntent.operation : undefined,
+        readOnlyTurn: turnScope.allowedMutations === "none",
       });
       for (const v of claimCheck.violations) {
         recordChatFailure({

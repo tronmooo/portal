@@ -91,6 +91,32 @@ export function isRecurringBillProfile(p: { type?: string | null; type_key?: str
   return String(p.type || "").toLowerCase() === "subscription";
 }
 
+/** The subtype key of a liability record, from the column or the legacy field spellings. */
+export function liabilityTypeKeyOf(
+  record: { type_key?: string | null; typeKey?: string | null; subtype?: string | null; fields?: Record<string, any> | null } | null | undefined,
+): string | null {
+  if (!record) return null;
+  const f = record.fields || {};
+  const key = record.type_key ?? record.typeKey ?? record.subtype ?? f.type_key ?? f.typeKey ?? f.liabilityType ?? f.subtype ?? null;
+  return key ? String(key) : null;
+}
+
+/**
+ * THE "is this a recurring bill?" predicate for a record that may carry its
+ * subtype in the column, a legacy field, or (older subscription rows) only in
+ * `type`. The chat context, the detail page header and the temporal engine
+ * all ask this one question so a phone bill is never a loan on one surface
+ * and a bill on another.
+ */
+export function isRecurringBillRecord(
+  record: { type?: string | null; type_key?: string | null; typeKey?: string | null; subtype?: string | null; fields?: Record<string, any> | null } | null | undefined,
+): boolean {
+  if (!record) return false;
+  const key = liabilityTypeKeyOf(record);
+  if (key) return isRecurringBill(key);
+  return String(record.type || "").toLowerCase() === "subscription";
+}
+
 /**
  * The bill/loan pairing name rule: "Car Loan payment" and "Car Loan" are the
  * same debt under two records. Used by the storage upsert (so a bill created

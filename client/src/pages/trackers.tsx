@@ -3,6 +3,7 @@ import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
 import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
 import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
 import { daysUntilISO } from "@shared/date-rules";
+import { isSystemFieldKey } from "@shared/system-fields";
 
 // "Today" in the browser's zone. The UTC-date prefix test reset the Today
 // calories / hydration / dose tiles at 5-8 PM local for US users.
@@ -515,15 +516,21 @@ function ComputedBadges({ computed }: { computed?: ComputedData }) {
   if (!computed) return null;
   const badges: { label: string; color: string }[] = [];
 
-  if (computed.caloriesBurned) badges.push({ label: `${computed.caloriesBurned} cal`, color: "bg-orange-500/10 text-orange-600 dark:text-orange-400" });
-  if (computed.pace) badges.push({ label: computed.pace, color: "bg-blue-500/10 text-blue-600 dark:text-blue-400" });
+  // Numeric badges are DERIVED, not logged — they carry a `≈` so a computed
+  // burn or pace is never read as a measurement (Rule 26). Calories the user
+  // (or a device) stated keep their exact reading; classifications
+  // (heart-rate zone, intensity, sleep quality, BP category) are labels,
+  // not quantities, and take no marker.
+  const est = "≈";
+  if (computed.caloriesBurned) badges.push({ label: `${computed.caloriesBurnedSource === "logged" ? "" : est}${computed.caloriesBurned} cal`, color: "bg-orange-500/10 text-orange-600 dark:text-orange-400" });
+  if (computed.pace) badges.push({ label: `${est}${computed.pace}`, color: "bg-blue-500/10 text-blue-600 dark:text-blue-400" });
   if (computed.heartRateZone) badges.push({ label: computed.heartRateZone.replace("_", " "), color: "bg-red-500/10 text-red-600 dark:text-red-400" });
   if (computed.intensity) badges.push({ label: computed.intensity, color: "bg-purple-500/10 text-purple-600 dark:text-purple-400" });
-  if (computed.caloriesConsumed) badges.push({ label: `${computed.caloriesConsumed} kcal`, color: "bg-green-500/10 text-green-600 dark:text-green-400" });
-  if (computed.macros) badges.push({ label: `P:${computed.macros.protein}g C:${computed.macros.carbs}g F:${computed.macros.fat}g`, color: "bg-teal-500/10 text-teal-600 dark:text-teal-400" });
+  if (computed.caloriesConsumed) badges.push({ label: `${est}${computed.caloriesConsumed} kcal`, color: "bg-green-500/10 text-green-600 dark:text-green-400" });
+  if (computed.macros) badges.push({ label: `${est}P:${computed.macros.protein}g C:${computed.macros.carbs}g F:${computed.macros.fat}g`, color: "bg-teal-500/10 text-teal-600 dark:text-teal-400" });
   if (computed.sleepQuality) badges.push({ label: `${computed.sleepQuality} sleep`, color: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400" });
   if (computed.bloodPressureCategory) badges.push({ label: computed.bloodPressureCategory.replace(/_/g, " "), color: "bg-rose-500/10 text-rose-600 dark:text-rose-400" });
-  if (computed.bmi) badges.push({ label: `BMI ${computed.bmi}`, color: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400" });
+  if (computed.bmi) badges.push({ label: `${est}BMI ${computed.bmi}`, color: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400" });
 
   if (badges.length === 0) return null;
 
@@ -2108,7 +2115,7 @@ function findAnyNumericValue(
     "sbp", "dbp",
   ]);
   for (const [k, v] of Object.entries(values)) {
-    if (skip.has(k) || k.startsWith("_")) continue;
+    if (skip.has(k) || isSystemFieldKey(k)) continue;
     if (v == null || v === "" || typeof v === "object") continue;
     const n = typeof v === "number" ? v : Number(v);
     if (!isNaN(n) && isFinite(n)) return { key: k, num: n };
@@ -3207,7 +3214,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   // (e.g. Wellness → Mental / Activity), echoing the design references.
   const subMetrics = (visual.type === "radial" && lastEntry)
     ? Object.entries(lastEntry.values)
-        .filter(([k, v]) => typeof v === "number" && k !== primaryNum?.field && !String(k).startsWith("_"))
+        .filter(([k, v]) => typeof v === "number" && k !== primaryNum?.field && !isSystemFieldKey(k))
         .slice(0, 3)
         .map(([k, v]) => ({ label: k, value: v as number, pct: (v as number) <= 10 ? (v as number) * 10 : (v as number) <= 100 ? (v as number) : 100 }))
     : [];
@@ -5458,7 +5465,7 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
             // Reserved metadata keys and structured objects (e.g. the
             // estimation engine's provenance blob) never render as chips —
             // "_enrichment: [object Object]" was showing on history rows.
-            if (k.startsWith("_") || typeof v === "object") return false;
+            if (isSystemFieldKey(k) || typeof v === "object") return false;
             if (k === "notes" || k === "item") return false;
             if (k === effectivePrimKey) return false;
             if (k === "systolic" || k === "diastolic"

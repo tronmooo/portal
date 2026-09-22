@@ -5,12 +5,16 @@ import { MetricCard } from "@/components/ui/metric-card";
 import { useQuery } from "@tanstack/react-query";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { useRecordHighlight } from "@/hooks/useRecordHighlight";
 import { GoalsSection } from "@/pages/dashboard";
 import { goalsQueryKey } from "@shared/query-keys";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday, localDayOf, parseLocalDate } from "@shared/timezone";
 
 export default function GoalsPage() {
+  // Rules 23/24: `?highlight=goal:<id>` lands on that goal's row (GoalsSection
+  // stamps `data-record-id` on each).
+  useRecordHighlight("goal");
   // Single source of truth: read the active scope reactively instead of
   // mirroring it into local state via the chip's onChange.
   const { mode: filterMode, selectedIds: filterIds } = useProfileScope();

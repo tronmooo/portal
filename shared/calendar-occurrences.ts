@@ -37,6 +37,7 @@
 import { expandRecurrenceDates, addDaysISO } from "./recurring-dates";
 import { addYearsISO, weekdaySetFor, daysInMonth } from "./date-math";
 import { normalizeLiabilityName } from "./liability-types";
+import { routeForEntity, type RoutableEntityType } from "./entity-routes";
 
 // ─── Kinds ───────────────────────────────────────────────────────────────────
 
@@ -96,6 +97,34 @@ export const KIND_LABELS: Record<OccurrenceKind, string> = {
   event: "Event",
   custom: "Custom",
 };
+
+/**
+ * Rule 37: the label a calendar item renders, from its SOURCE kind. A paycheck
+ * reads "Income", a birthday "Birthday", a licence "Document Expiration" — never
+ * all "Event". Precedence: the item's stamped `sourceType`, then a legacy
+ * `meta.kind`, then the coarse `type` (task / habit / bill / event).
+ */
+export const COARSE_TYPE_LABELS: Record<string, string> = {
+  event: "Event",
+  task: "Task",
+  habit: "Habit",
+  obligation: "Bill Due",
+  reminder: "Reminder",
+  payment: "Payment",
+};
+
+export function calendarSourceKind(item: { type?: string; sourceType?: string | null; meta?: Record<string, any> | null }): string {
+  const src = item.sourceType || item.meta?.kind;
+  if (src && (src in KIND_LABELS || src in COARSE_TYPE_LABELS)) return String(src);
+  return String(item.type || "event");
+}
+
+export function calendarItemLabel(item: { type?: string; sourceType?: string | null; meta?: Record<string, any> | null }): string {
+  const kind = calendarSourceKind(item);
+  // An "expiration" that came from a document rule IS a document expiration.
+  if (kind === "expiration" && item.meta?.source === "document") return KIND_LABELS.document;
+  return (KIND_LABELS as Record<string, string>)[kind] ?? COARSE_TYPE_LABELS[kind] ?? COARSE_TYPE_LABELS[String(item.type || "event")] ?? "Event";
+}
 
 // ─── Horizons ────────────────────────────────────────────────────────────────
 //
@@ -1178,28 +1207,33 @@ export function sourceHref(
   recordId: string,
   profileId?: string,
 ): string {
-  // Systems that OWN their own record page always route to it, even when the
-  // date is also linked to a profile. User report 2026-07-25: "sometimes when
-  // I press the link, it brings me to somewhere else" — a document expiry
-  // opened the linked person instead of the document, because any profileId
-  // short-circuited the switch below. A document expiration belongs to the
-  // document; that is the record you edit to change the date.
-  if (system === "document" && recordId) return `#/documents/${recordId}`;
-  if (system === "task" && recordId) return `#/tasks?focus=${recordId}`;
-  if (profileId) return `#/profiles/${profileId}`;
-  switch (system) {
-    case "profile": return recordId ? `#/profiles/${recordId}` : "#/profiles";
-    case "liability": return recordId ? `#/profiles/${recordId}` : "#/liabilities";
-    case "obligation": return recordId ? `#/obligations?focus=${recordId}` : "#/obligations";
-    case "task": return recordId ? `#/tasks?focus=${recordId}` : "#/tasks";
-    case "document": return recordId ? `#/documents/${recordId}` : "#/documents";
-    case "goal": return recordId ? `#/goals?focus=${recordId}` : "#/goals";
-    case "habit": return recordId ? `#/habits?focus=${recordId}` : "#/habits";
-    case "income": return "#/finance";
-    case "event": return recordId ? `#/calendar?event=${recordId}` : "#/calendar";
-    default: return "#/calendar";
-  }
+  // Rules 23/24 (2026-09-22): a thin wrapper over the ONE route resolver
+  // (shared/entity-routes). The old switch here emitted `?focus=` and
+  // `?event=` links nothing read and a bare `#/documents` that 404'd.
+  //
+  // Systems that OWN their own record page (document, task) always route to
+  // it, even when the date is also linked to a profile. User report
+  // 2026-07-25: a document expiry opened the linked person instead of the
+  // document. Profile-anchored systems (a birthday event, a bill on a loan)
+  // route to the profile when one is given — that is the record you edit.
+  return routeForEntity(SOURCE_SYSTEM_ENTITY[system] || "event", recordId || undefined, {
+    profileId: profileId || undefined,
+    hash: true,
+  });
 }
+
+/** SourceSystem → the routable entity type it names. */
+export const SOURCE_SYSTEM_ENTITY: Record<SourceSystem, RoutableEntityType> = {
+  income: "income",
+  event: "event",
+  profile: "profile",
+  obligation: "obligation",
+  liability: "liability",
+  task: "task",
+  habit: "habit",
+  document: "document",
+  goal: "goal",
+};
 
 // ─── Labels ──────────────────────────────────────────────────────────────────
 

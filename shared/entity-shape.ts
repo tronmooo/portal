@@ -258,14 +258,16 @@ const CONCEPTS_BY_FAMILY: Record<EntityFamily, EntityConcept[]> = {
     { canonical: "registrationExpiration", aliases: ["regexpires", "tagexpiration", "registrationexpires"], group: "vehicle" },
   ],
   liability: [
-    { canonical: "currentBalance", aliases: ["principalbalance", "outstandingbalance", "unpaidbalance", "remainingbalance", "payoffbalance", "balance"], group: "loan" },
-    { canonical: "annualRate", aliases: ["interestrate", "apr", "rate", "noterate"], group: "loan" },
+    // Rule 11: the canonical spellings are the ones shared/profile-field-canon
+    // folds to (`balance`, `interestRate`); the old concept names stay aliases.
+    { canonical: "balance", aliases: ["principalbalance", "outstandingbalance", "unpaidbalance", "remainingbalance", "payoffbalance", "currentbalance"], group: "loan" },
+    { canonical: "interestRate", aliases: ["annualrate", "annualinterestrate", "apr", "rate", "noterate"], group: "loan" },
     { canonical: "monthlyPayment", aliases: ["paymentamount", "regularpayment", "scheduledpayment", "installmentamount"], group: "loan" },
     { canonical: "minimumPayment", aliases: ["minpayment", "minimumamountdue"], group: "loan" },
     { canonical: "lender", aliases: ["creditor", "servicer", "lienholder", "mortgagee", "financialinstitution"], group: "loan" },
     { canonical: "loanNumber", aliases: ["accountnumber", "loanaccountnumber", "loanid"], group: "loan", identifying: true },
     { canonical: "maturityDate", aliases: ["payoffdate", "finalpaymentdate", "loanenddate", "termenddate"], group: "loan" },
-    { canonical: "originalBalance", aliases: ["originalloanamount", "principalamount", "loanamount"], group: "loan" },
+    { canonical: "originalBalance", aliases: ["originalloanamount", "principalamount", "loanamount", "originalamount"], group: "loan" },
     { canonical: "escrowMonthly", aliases: ["escrowpayment", "escrowamount"], group: "loan" },
   ],
   financial_account: [

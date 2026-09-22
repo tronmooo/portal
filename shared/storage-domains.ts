@@ -91,6 +91,9 @@ export const STORAGE_INFRA_METHODS: ReadonlySet<string> = new Set([
   // Write-shaped names that only READ:
   "recallMemory",      // retrieves a memory, does not save one
   "wouldCreateCycle",  // a predicate on the ownership graph
+  // Rule 22 run bookkeeping: the execution state of a chat request, not user
+  // data — recording it must never bust a cache or count as a mutation.
+  "upsertAiChatRun",
 ]);
 
 /** `"createLiabilityPayment"` → `{ verb: "create", noun: "LiabilityPayment" }`. */

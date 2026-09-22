@@ -95,19 +95,38 @@ export function describeEntryValues(trackerName: string, values: Record<string, 
   return describeTrackerEntry({ name: trackerName }, values);
 }
 
-export interface ActivityRow { type: string; description: string; timestamp: string | Date | null | undefined }
+export interface ActivityRow {
+  /** Rule 36: the SOURCE entity's id (expense / task / payment / entry). */
+  id?: string;
+  type: string;
+  description: string;
+  timestamp: string | Date | null | undefined;
+}
 
 /**
- * Collapse rows that say the same thing at the same moment. A 2×/day habit
- * mirrors two entries with one timestamp; the feed should read "Brush Teeth:
- * 1 completion" once.
+ * The identity of an activity row. Rule 36: rows carry the canonical event
+ * id, so the feed dedupes on `${type}|${id}` — two different expenses that
+ * happen to read "$4.00 — Coffee" at the same minute are two rows, and one
+ * event reaching the feed twice (a re-sorted merge, a retried write) is one.
+ * The text key is only the fallback for a row with no id.
+ */
+export function activityRowKey(r: ActivityRow): string {
+  if (r.id != null && String(r.id) !== "") return `${r.type}|${String(r.id)}`;
+  const ts = r.timestamp instanceof Date ? r.timestamp.toISOString() : String(r.timestamp ?? "");
+  return `${r.type}|${r.description}|${ts}`;
+}
+
+/**
+ * Collapse rows that are the same EVENT (same type + source id), or — for
+ * rows with no id — that say the same thing at the same moment. A 2×/day
+ * habit mirrors two entries with one timestamp; when those entries are two
+ * records they are two rows, when one record is listed twice it is one.
  */
 export function dedupeActivityRows<T extends ActivityRow>(rows: readonly T[]): T[] {
   const seen = new Set<string>();
   const out: T[] = [];
   for (const r of rows) {
-    const ts = r.timestamp instanceof Date ? r.timestamp.toISOString() : String(r.timestamp ?? "");
-    const key = `${r.type}|${r.description}|${ts}`;
+    const key = activityRowKey(r);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);

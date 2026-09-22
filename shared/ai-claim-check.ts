@@ -145,6 +145,21 @@ export interface ClaimCheckInput {
   /** The turn's parsed intent, when one was confidently derived. */
   intentEntity?: IntentEntity;
   intentOperation?: IntentOperation;
+  /**
+   * Rule 1: the turn was classified READ and could not have written. A reply
+   * that DESCRIBES history ("your paycheck was saved under Income") answers
+   * the question and must pass; only a first-person claim of a fresh write
+   * ("I've logged it", "Done — added.") is a lie on such a turn.
+   */
+  readOnlyTurn?: boolean;
+}
+
+/** "I saved…", "I've logged…", "Done — added…": the assistant claiming its own write NOW. */
+const FIRST_PERSON_WRITE_CLAIM =
+  /(?:\bI(?:'ve|\s+have|\s+just|\s+also|\s+went\s+ahead\s+and)?\s+(?:created|added|made|set\s+up|scheduled|logged|saved|recorded|started|updated|changed|edited|modified|renamed|deleted|removed|cleared|marked|checked)\b)|(?:^\s*(?:done|all\s+set|got\s+it)\b[^.!\n]*\b(?:created|added|logged|saved|recorded|updated|deleted|removed|marked)\b)|(?:^\s*(?:created|added|logged|saved|recorded|updated|deleted|removed|marked)\b)/i;
+
+export function isFirstPersonWriteClaim(sentence: string): boolean {
+  return FIRST_PERSON_WRITE_CLAIM.test(String(sentence ?? ""));
 }
 
 export interface ClaimCheckResult {
@@ -166,7 +181,11 @@ export interface ClaimCheckResult {
 export function checkClaims(input: ClaimCheckInput): ClaimCheckResult {
   const { reply, operations } = input;
   const violations: ClaimViolation[] = [];
-  const claims = extractSuccessClaims(reply);
+  // On a READ turn nothing could have been written, so a sentence that merely
+  // describes an earlier save is the answer, not a claim about this turn.
+  const claims = input.readOnlyTurn
+    ? extractSuccessClaims(reply).filter((c) => isFirstPersonWriteClaim(c.claim))
+    : extractSuccessClaims(reply);
   // "deduped" landed in the database exactly as much as "ok" did — the tool
   // found the record already there and merged into it. The honesty question
   // here is "was anything saved", and for a dedup the answer is yes. Whether

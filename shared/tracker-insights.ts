@@ -17,6 +17,7 @@
 // =============================================================================
 
 import { isInScope } from "./scope";
+import { routeForEntity, listRouteForEntity } from "./entity-routes";
 
 export type FindingSeverity = "positive" | "negative" | "neutral" | "warning" | "milestone";
 export type FindingDirection = "improving" | "declining" | "stable";
@@ -151,7 +152,8 @@ function findingsFromTracker(tracker: any, now: number): KeyFinding[] {
   const name = tracker.name || "Tracker";
   const unit = tracker.unit || "";
   const favorable = trackerFavorableDirection(tracker);
-  const href = `#/trackers?open=${tracker.id}`;
+  // Rules 23/24: the trackers page reads `?tracker=`; `?open=` was read by nothing.
+  const href = routeForEntity("tracker", tracker.id, { hash: true });
   const last = numeric[numeric.length - 1];
   const lastAgeDays = Math.floor((now - last.ts) / 86400000);
 
@@ -293,7 +295,7 @@ function findingsFromFinance(financeSnapshot: any): KeyFinding[] {
         direction: up ? "declining" : "improving",
         title: `Spending ${up ? "increased" : "decreased"} ${Math.round(Math.abs(delta))}% this month`,
         detail: `$${fmtNum(last, 0)} → $${fmtNum(total, 0)} vs last month`,
-        href: "#/finance",
+        href: listRouteForEntity("expense", { hash: true }),
         importance: 78,
         icon: up ? "💸" : "💰",
       });
@@ -315,7 +317,7 @@ function findingsFromHabits(habits: any[]): KeyFinding[] {
         direction: "improving",
         title: `${h.name || "Habit"} hit a new ${streak}-day streak`,
         detail: `Previous best: ${longest} days`,
-        href: "#/habits",
+        href: routeForEntity("habit", h.id, { hash: true }),
         importance: 65,
         icon: "🔥",
       });
@@ -326,7 +328,7 @@ function findingsFromHabits(habits: any[]): KeyFinding[] {
         severity: "positive",
         direction: "improving",
         title: `${h.name || "Habit"} — ${streak}-day streak`,
-        href: "#/habits",
+        href: routeForEntity("habit", h.id, { hash: true }),
         importance: 50,
         icon: "🔥",
       });
@@ -352,7 +354,7 @@ function findingsFromHabits(habits: any[]): KeyFinding[] {
           severity: "positive",
           direction: "improving",
           title: `${h.name || "Habit"} completion improved ${before}% → ${after}%`,
-          href: "#/habits",
+          href: routeForEntity("habit", h.id, { hash: true }),
           importance: 60,
         });
       }
@@ -381,7 +383,8 @@ function findingsFromNetWorth(history: Array<{ snapshotDate: string; netWorth: n
       direction: up ? "improving" : "declining",
       title: `Net worth ${up ? "increased" : "decreased"} $${fmtNum(Math.abs(delta), 0)} this quarter`,
       detail: `$${fmtNum(qStart.netWorth, 0)} → $${fmtNum(latest.netWorth, 0)}`,
-      href: "#/assets",
+      // There is no /assets route; the assets list is the hub tab.
+      href: listRouteForEntity("asset", { hash: true }),
       importance: 85,
       icon: up ? "📈" : "📉",
     });
@@ -410,7 +413,7 @@ function findingsFromObligations(obligations: any[]): KeyFinding[] {
       direction: "stable",
       title: `${o.name || "Reminder"} due in ${days <= 0 ? "today" : `${days} day${days === 1 ? "" : "s"}`}`,
       detail: isMedication ? "Refill" : "Appointment",
-      href: "#/obligations",
+      href: routeForEntity("obligation", o.id, { hash: true }),
       importance: 80 - days,
       icon: isMedication ? "💊" : "🩺",
     });
@@ -427,7 +430,7 @@ function findingsFromObligations(obligations: any[]): KeyFinding[] {
         severity: "neutral",
         direction: "stable",
         title: `${subs.length} active subscriptions totaling $${fmtNum(total, 0)}/mo`,
-        href: "#/obligations",
+        href: listRouteForEntity("obligation", { hash: true }),
         importance: 45,
         icon: "🔁",
       });

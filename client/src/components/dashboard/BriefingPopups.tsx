@@ -34,6 +34,7 @@ import { useProfileScope } from "@/hooks/useProfileScope";
 import { useShowTestData } from "@/lib/showTestData";
 import { isTestDataRow } from "@shared/test-data";
 import { dateRuleVerbs } from "@shared/date-rules";
+import { routeForEntity } from "@shared/entity-routes";
 
 // ── Shared date/format helpers ───────────────────────────────────────────────
 function fmtDate(d?: string | null): string {
@@ -525,7 +526,7 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
               const rowOpen = expandedId === `${filter}:${b.id}`;
               const due = String(b.dueDate || obById.get(b.id)?.nextDueDate || "").slice(0, 10);
               return (
-                <div key={`${filter}:${b.id}`} data-testid={`bill-card-${b.id}`}>
+                <div key={`${filter}:${b.id}`} data-testid={`bill-card-${b.id}`} data-record-id={b.id}>
                   <button
                     onClick={() => setExpandedId(rowOpen ? null : `${filter}:${b.id}`)}
                     aria-expanded={rowOpen}
@@ -618,7 +619,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
 
   /** Where this expiration's record actually lives. */
   const recordHref = (row: any): string =>
-    String(row?.href || "").replace(/^#/, "") || `/documents/${row?.documentId}`;
+    String(row?.href || "").replace(/^#/, "") || routeForEntity("document", row?.documentId);
 
   /**
    * What a row IS, for per-row state.

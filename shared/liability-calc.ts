@@ -6,6 +6,11 @@
  */
 
 import { addMonthsISO } from "./date-math";
+import { normalizeAnnualRate, readAnnualRate } from "./liability-fields";
+
+// The one APR→decimal converter lives with the canonical field readers
+// (shared/liability-fields); re-exported so existing imports keep working.
+export { normalizeAnnualRate };
 
 export interface LiabilityTerms {
   /** Remaining principal balance today. Required. */
@@ -46,32 +51,25 @@ export interface AmortizationResult {
 
 const SAFETY_MAX_PERIODS = 600; // 50 years — prevent runaways
 
-/** Normalize an APR-ish input to a decimal rate (0.065). */
-export function normalizeAnnualRate(r: number | string | undefined | null): number {
-  if (r == null || r === "") return 0;
-  const n = typeof r === "string" ? parseFloat(r.replace("%", "").trim()) : Number(r);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  // If someone passed 6.5 instead of 0.065, assume percent and convert.
-  return n > 1 ? n / 100 : n;
+/**
+ * Resolve a liability's annual interest rate from its `fields` object as a
+ * decimal (0.065). ONE precedence, starting from the canonical `interestRate`
+ * key (shared/liability-fields `INTEREST_RATE_KEYS`), so the server, the
+ * detail page and the chat cannot read the same record differently (Rule 11).
+ */
+export function resolveAnnualRate(fields: any): number {
+  return readAnnualRate(fields);
 }
 
 /**
- * Resolve a liability's annual interest rate from its `fields` object.
- * Canonical resolver — mirrors the read order used by the liability detail
- * page so the server and client agree on the rate. Returns a decimal (0.065).
+ * Share of the original debt already paid, 0..100. THE percent-paid formula:
+ * the overview composer, the loan tab and the summary all call this one.
  */
-export function resolveAnnualRate(fields: any): number {
-  const f = fields || {};
-  const finance = f.finance || {};
-  const loan = f.loan || {};
-  return normalizeAnnualRate(
-    f.annualInterestRate ?? f.annual_interest_rate ??
-    f.interestRate ?? f.interest_rate ??
-    f.rate ?? f.apr ??
-    finance.interestRate ?? finance.interest_rate ?? finance.apr ??
-    loan.interestRate ?? loan.interest_rate ??
-    0,
-  );
+export function payoffProgressPct(originalBalance: number, currentBalance: number): number {
+  const orig = Number(originalBalance) || 0;
+  const cur = Number(currentBalance) || 0;
+  if (orig <= 0) return 0;
+  return Math.max(0, Math.min(100, (1 - cur / orig) * 100));
 }
 
 /** Minimum payment for a fully-amortizing loan. */
@@ -243,7 +241,7 @@ export function summarizeLiability(params: {
     firstPaymentDate: params.firstPaymentDate,
   });
   const orig = Number(params.originalBalance) || 0;
-  const progress = orig > 0 ? Math.max(0, Math.min(100, (1 - params.currentBalance / orig) * 100)) : 0;
+  const progress = payoffProgressPct(orig, params.currentBalance);
   return {
     currentBalance: params.currentBalance,
     originalBalance: orig,

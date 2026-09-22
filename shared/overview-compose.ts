@@ -12,6 +12,9 @@
 // Pinned by tests/overview-compose.test.ts.
 
 import { parseMoney } from "./asset-value";
+import { readInterestRatePct } from "./liability-fields";
+import { computeEquity, deriveLiabilityMetrics } from "./liability-derived";
+import { getUserToday } from "./timezone";
 import { toMonthlyAmount } from "./obligation-windows";
 import { canonicalFieldKey } from "./profile-field-canon";
 import { humanizeFieldName } from "./field-label";
@@ -279,9 +282,9 @@ export function computeDerivedMetrics(
     ));
   }
 
-  // Equity — value minus what is still owed against it.
+  // Equity — value minus what is still owed against it (shared/liability-derived).
   if (value && linkedDebt != null && linkedDebt > 0) {
-    metrics.push(derived("equity", "Estimated equity", value.value - linkedDebt, [value.key, "linkedLiability.balance"], {
+    metrics.push(derived("equity", "Estimated equity", computeEquity(value.value, [linkedDebt]), [value.key, "linkedLiability.balance"], {
       note: financing.length === 1 ? `after ${financing[0].name}` : `after ${financing.length} liabilities`,
     }));
     consumedKeys.add("__linkedDebt");
@@ -298,23 +301,25 @@ export function computeDerivedMetrics(
     }));
   }
 
-  // Payoff progress — a liability's most useful single number after balance.
-  if (isLiability && balance && originalDebt && originalDebt.value > 0) {
-    const paid = originalDebt.value - balance.value;
-    const pct = Math.max(0, Math.min(100, (paid / originalDebt.value) * 100));
-    metrics.push(derived("payoffProgress", "Paid off", pct, [balance.key, originalDebt.key], {
-      displayType: "percent",
-      tone: "positive",
-      note: `${fmtShortMoney(paid)} of ${fmtShortMoney(originalDebt.value)}`,
-    }));
-  }
-
-  // Remaining payments — from the two numbers that make it honest.
-  if (isLiability && balance && payment && payment.value > 0) {
-    const rate = Number(fields.interestRate ?? fields.apr ?? 0);
-    // With no rate we can still say how many payments of this size remain.
-    if (!rate) {
-      metrics.push(derived("remainingPayments", "Payments remaining", Math.ceil(balance.value / payment.value), [balance.key, payment.key], {
+  // Payoff progress and remaining payments — ONE derivation
+  // (shared/liability-derived `deriveLiabilityMetrics`): the same percent-paid
+  // and months-left the loan tab, the detail page and the chat summary show.
+  // The composer's own `balance ÷ payment` used to disagree with the detail
+  // page's amortization for any loan that carried a rate.
+  if (isLiability && balance) {
+    const todayISO = input.now ? input.now.toLocaleDateString("en-CA") : getUserToday();
+    const lm = deriveLiabilityMetrics(fields, todayISO, { row: input.entity as any });
+    if (originalDebt && originalDebt.value > 0 && lm.percentPaid != null) {
+      const paid = originalDebt.value - balance.value;
+      metrics.push(derived("payoffProgress", "Paid off", lm.percentPaid, [balance.key, originalDebt.key], {
+        displayType: "percent",
+        tone: "positive",
+        note: `${fmtShortMoney(paid)} of ${fmtShortMoney(originalDebt.value)}`,
+      }));
+    }
+    if (payment && payment.value > 0 && lm.paymentsRemaining != null && lm.paymentsRemaining > 0) {
+      const inputs = [balance.key, payment.key, ...(readInterestRatePct(fields) > 0 ? ["interestRate"] : [])];
+      metrics.push(derived("remainingPayments", "Payments remaining", lm.paymentsRemaining, inputs, {
         displayType: "number",
         importance: "secondary",
       }));

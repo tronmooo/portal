@@ -1,7 +1,7 @@
 import { parseLocalDate, formatFullDate, formatMoney } from "@/lib/format";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { highlightHref } from "@shared/record-highlight";
+import { routeForSearchRow } from "@shared/entity-routes";
 import { useLocation } from "wouter";
 import {
   Command,
@@ -41,27 +41,33 @@ import {
 import { apiRequest } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { getProfileFilter } from "@/lib/profileFilter";
+import { onCacheBust } from "@/lib/cache-bus";
 import { itemMatches, rankResults, matchNote } from "@/lib/search-index";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface Profile {
+/** Every /api/search row carries its canonical destination (Rule 23). */
+interface Routed {
+  href?: string;
+  _type?: string;
+}
+interface Profile extends Routed {
   id: number;
   name: string;
   type?: string;
 }
-interface Tracker {
+interface Tracker extends Routed {
   id: number;
   name: string;
   category?: string;
 }
-interface Task {
+interface Task extends Routed {
   id: number;
   title: string;
   priority?: string;
   completed?: boolean;
 }
-interface Expense {
+interface Expense extends Routed {
   id: number;
   description: string;
   amount?: number | string;
@@ -70,7 +76,7 @@ interface Expense {
   profileId?: string;
   linkedProfiles?: string[];
 }
-interface CalendarEvent {
+interface CalendarEvent extends Routed {
   id: number;
   title: string;
   startDate?: string;
@@ -79,34 +85,33 @@ interface CalendarEvent {
   category?: string;
   /** True for a date derived from a profile's fields (no event row of its own). */
   virtual?: boolean;
-  href?: string;
 }
-interface Document {
+interface Document extends Routed {
   id: number;
   name: string;
   type?: string;
   status?: string;
 }
-interface Habit {
+interface Habit extends Routed {
   id: number;
   name: string;
   frequency?: string;
   currentStreak?: number;
 }
-interface JournalEntry {
+interface JournalEntry extends Routed {
   id: number;
   content?: string;
   mood?: string;
   date?: string;
   tags?: string[];
 }
-interface Obligation {
+interface Obligation extends Routed {
   id: number;
   name: string;
   category?: string;
   amount?: number | string;
 }
-interface Artifact {
+interface Artifact extends Routed {
   id: number;
   title: string;
   type?: string;
@@ -273,6 +278,12 @@ export function CommandSearch() {
   const requestIdRef = useRef(0);
   // Authoritative server results, cached per filter signature then query.
   const cacheRef = useRef<SearchCache>(new Map());
+  // Rule 17: this map is a cache of API data that lives outside React Query,
+  // so no invalidateQueries() reaches it. Any domain bust (a write here, a
+  // chat action, another tab) drops the whole map — the next keystroke asks
+  // the server again instead of serving a renamed or deleted record for up
+  // to SEARCH_CACHE_TTL_MS.
+  useEffect(() => onCacheBust(() => { cacheRef.current = new Map(); }), []);
 
   // Find the longest fresh cached query (within the CURRENT filter) that the
   // current, longer query extends, so we can narrow its result set locally
@@ -418,11 +429,15 @@ export function CommandSearch() {
   );
 
   // ── Where a result lands ───────────────────────────────────────────────────
-  // An expense lands on its ROW: Finance reads the highlight, scrolls to it
-  // and flashes it (F-52). A profile-derived date (a birthday read from
-  // someone's fields) opens the profile that carries it.
-  const expenseTarget = (e: Expense) => highlightHref("/dashboard/finance", "expense", e.id);
-  const eventTarget = (e: CalendarEvent) => (e.virtual && e.href ? e.href : "/calendar");
+  // Every row lands on its RECORD (Rules 23/24): the server stamps each
+  // /api/search row with its canonical `href` (shared/entity-routes), so a
+  // loan opens /profiles/<id>, a task its card, an expense its row (F-52),
+  // and a profile-derived birthday the profile that carries it. The resolver
+  // is the fallback for a row from before the stamp.
+  const target = (row: Routed & { id: unknown }, type: string): string => {
+    const own = String(row.href || "").replace(/^#/, "");
+    return own || routeForSearchRow({ ...row, _type: row._type || type }) || "/dashboard";
+  };
 
   // ── Helpers for subtitle text ──────────────────────────────────────────────
   const profileSubtitle = (p: Profile) => p.type ? `Type: ${p.type}` : "Profile";
@@ -557,7 +572,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`profile-${p.id}`}
                     value={`profile-${p.id}-${p.name}`}
-                    onSelect={() => handleSelect(`/profiles/${p.id}`, query)}
+                    onSelect={() => handleSelect(target(p, "profile"), query)}
                     data-testid={`item-search-profile-${p.id}`}
                   >
                     <Users className="shrink-0 text-violet-500" />
@@ -578,7 +593,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`tracker-${t.id}`}
                     value={`tracker-${t.id}-${t.name}`}
-                    onSelect={() => handleSelect(`/trackers?tracker=${t.id}`, query)}
+                    onSelect={() => handleSelect(target(t, "tracker"), query)}
                     data-testid={`item-search-tracker-${t.id}`}
                   >
                     <Activity className="shrink-0 text-emerald-500" />
@@ -599,7 +614,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`task-${t.id}`}
                     value={`task-${t.id}-${t.title}`}
-                    onSelect={() => handleSelect("/dashboard/tasks", query)}
+                    onSelect={() => handleSelect(target(t, "task"), query)}
                     data-testid={`item-search-task-${t.id}`}
                   >
                     <ListTodo className="shrink-0 text-blue-500" />
@@ -620,7 +635,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`expense-${e.id}`}
                     value={`expense-${e.id}-${e.description}`}
-                    onSelect={() => handleSelect(expenseTarget(e), query)}
+                    onSelect={() => handleSelect(target(e, "expense"), query)}
                     data-testid={`item-search-expense-${e.id}`}
                   >
                     <DollarSign className="shrink-0 text-amber-500" />
@@ -641,7 +656,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`event-${e.id}`}
                     value={`event-${e.id}-${e.title}`}
-                    onSelect={() => handleSelect(eventTarget(e), query)}
+                    onSelect={() => handleSelect(target(e, "event"), query)}
                     data-testid={`item-search-event-${e.id}`}
                   >
                     <Calendar className="shrink-0 text-sky-500" />
@@ -662,7 +677,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`doc-${d.id}`}
                     value={`doc-${d.id}-${d.name}`}
-                    onSelect={() => handleSelect(`/documents/${d.id}`, query)}
+                    onSelect={() => handleSelect(target(d, "document"), query)}
                     data-testid={`item-search-document-${d.id}`}
                   >
                     <FileText className="shrink-0 text-slate-500" />
@@ -683,7 +698,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`habit-${h.id}`}
                     value={`habit-${h.id}-${h.name}`}
-                    onSelect={() => handleSelect("/dashboard/habits", query)}
+                    onSelect={() => handleSelect(target(h, "habit"), query)}
                     data-testid={`item-search-habit-${h.id}`}
                   >
                     <Flame className="shrink-0 text-orange-500" />
@@ -704,7 +719,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`journal-${j.id}`}
                     value={`journal-${j.id}-${j.content ?? j.mood ?? j.date ?? j.id}`}
-                    onSelect={() => handleSelect("/dashboard/journal", query)}
+                    onSelect={() => handleSelect(target(j, "journal"), query)}
                     data-testid={`item-search-journal-${j.id}`}
                   >
                     <BookHeart className="shrink-0 text-rose-400" />
@@ -727,7 +742,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`obligation-${o.id}`}
                     value={`obligation-${o.id}-${o.name}`}
-                    onSelect={() => handleSelect("/dashboard/obligations", query)}
+                    onSelect={() => handleSelect(target(o, "obligation"), query)}
                     data-testid={`item-search-obligation-${o.id}`}
                   >
                     <CreditCard className="shrink-0 text-indigo-500" />
@@ -748,7 +763,7 @@ export function CommandSearch() {
                   <CommandItem
                     key={`artifact-${a.id}`}
                     value={`artifact-${a.id}-${a.title}`}
-                    onSelect={() => handleSelect("/artifacts", query)}
+                    onSelect={() => handleSelect(target(a, "artifact"), query)}
                     data-testid={`item-search-artifact-${a.id}`}
                   >
                     <Package className="shrink-0 text-teal-500" />

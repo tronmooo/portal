@@ -480,3 +480,66 @@ describe("lab values read from a document", () => {
     expect(labPanels(m)[0].rows[0].mergedFrom).toBe(2);
   });
 });
+
+// ─── Rule 26: an estimated value stays an estimate once it is summed ─────────
+// Regression: a walk whose distance the estimation engine filled in from its
+// duration lost its "≈" when the Wellness activity history added it up.
+describe("Rule 26 — provenance survives aggregation", () => {
+  const estimatedDistance = (miles: number) => ({
+    canonical: {}, calculated: {}, assumptions: [],
+    estimated: { distance: { value: miles, source: "estimated", confidence: 0.5, method: "duration × default pace", isEstimated: true } },
+  });
+  const walkTracker = (entries: any[]) => tracker({
+    id: "t-walk", name: "Walking", category: "fitness",
+    fields: [{ name: "duration", type: "number", unit: "min" }, { name: "distance", type: "number", unit: "mi" }],
+    entries,
+  });
+
+  it("flags a workout group whose distance includes ONE estimated session", () => {
+    const groups = activityHistory([walkTracker([
+      { id: "w1", values: { duration: 30, distance: 1.5 }, timestamp: daysAgo(1), computed: { enrichment: estimatedDistance(1.5) } },
+      { id: "w2", values: { duration: 40, distance: 2 }, timestamp: daysAgo(2), computed: {} },
+    ])], { now: NOW });
+    expect(groups).toHaveLength(1);
+    expect(groups[0].distance).toBe(3.5);
+    expect(groups[0].distanceEstimated).toBe(true);
+    expect(groups[0].minutesEstimated).toBe(false);
+  });
+
+  it("reads the provenance from values._enrichment before storage moves it", () => {
+    const groups = activityHistory([walkTracker([
+      { id: "w1", values: { duration: 30, distance: 1.5, _enrichment: estimatedDistance(1.5) }, timestamp: daysAgo(1) },
+    ])], { now: NOW });
+    expect(groups[0].distanceEstimated).toBe(true);
+    // The provenance blob itself never becomes a quantity.
+    expect(groups[0].distance).toBe(1.5);
+  });
+
+  it("does not flag stated values", () => {
+    const groups = activityHistory([walkTracker([
+      { id: "w1", values: { duration: 30, distance: 1.5 }, timestamp: daysAgo(1), computed: {} },
+    ])], { now: NOW });
+    expect(groups[0].distanceEstimated).toBe(false);
+    expect(groups[0].minutesEstimated).toBe(false);
+  });
+
+  it("carries the flag onto readings and today's signal", () => {
+    const stepsEst = {
+      canonical: {}, calculated: {}, assumptions: [],
+      estimated: { steps: { value: 4200, source: "estimated", confidence: 0.6, method: "distance ÷ stride" } },
+    };
+    const m = collectMetrics([tracker({
+      name: "Steps", category: "fitness", fields: [{ name: "steps", type: "number" }],
+      entries: [
+        { id: "s1", values: { steps: 4200 }, timestamp: NOW.toISOString(), computed: { enrichment: stepsEst } },
+        { id: "s0", values: { steps: 6000 }, timestamp: daysAgo(1), computed: {} },
+      ],
+    })], { now: NOW });
+    const s = m.get("steps")!;
+    expect(s.readings.find((r) => r.value === 4200)?.isEstimated).toBe(true);
+    expect(s.readings.find((r) => r.value === 6000)?.isEstimated).toBeUndefined();
+    const activity = todaySignals(m).find((x) => x.key === "activity")!;
+    expect(activity.value).toBe(4200);
+    expect(activity.isEstimated).toBe(true);
+  });
+});

@@ -38,6 +38,78 @@ export interface ProvenancedValue {
   source: ValueSource;
   confidence: number; // 0..1
   method?: string;
+  /**
+   * True when the value rests on an assumption rather than on what the user
+   * (or a device/document) stated or exact arithmetic over stated values —
+   * derived from `source` (estimated / default / historical_pattern). The UI
+   * reads THIS flag, never the source string, and shows `≈` for it (Rule 26),
+   * so an estimate can never be passed off as measured data.
+   */
+  isEstimated: boolean;
+}
+
+/** Sources that make a value an estimate rather than a fact. */
+const ESTIMATED_SOURCES: ReadonlySet<ValueSource> = new Set<ValueSource>(["estimated", "default", "historical_pattern"]);
+
+/** Is this provenance an estimate? Reads the flag; falls back to the source for blobs stored before the flag existed. */
+export function isEstimatedValue(pv: Partial<ProvenancedValue> | null | undefined): boolean {
+  if (!pv) return false;
+  if (typeof pv.isEstimated === "boolean") return pv.isEstimated;
+  return pv.source != null && ESTIMATED_SOURCES.has(pv.source);
+}
+
+/**
+ * A number with its qualification: `≈1.3 mi` for an estimate (rounded to one
+ * decimal — false precision is its own lie), `1.25 mi` otherwise.
+ */
+export function formatProvenanced(pv: Partial<ProvenancedValue> & { value: number }, unit?: string): string {
+  const est = isEstimatedValue(pv);
+  const v = pv.value;
+  const n = !isFinite(v) ? "—" : est ? String(Math.round(v * 10) / 10) : String(v);
+  const u = unit ? ` ${unit}` : "";
+  return `${est ? "≈" : ""}${n}${u}`;
+}
+
+/** Construction-time shape: the flag is stamped by `stampProvenance` before an Enrichment leaves this module. */
+type ProvenancedValueDraft = Omit<ProvenancedValue, "isEstimated"> & { isEstimated?: boolean };
+
+interface EnrichmentDraft {
+  activityType?: string;
+  canonical: Record<string, number>;
+  calculated: Record<string, ProvenancedValueDraft>;
+  estimated: Record<string, ProvenancedValueDraft>;
+  assumptions: Assumption[];
+}
+
+/** Fill `isEstimated` on every provenanced value from its source. */
+function stampProvenance(draft: EnrichmentDraft): Enrichment {
+  const stamp = (rec: Record<string, ProvenancedValueDraft>): Record<string, ProvenancedValue> => {
+    const out: Record<string, ProvenancedValue> = {};
+    for (const [k, pv] of Object.entries(rec)) out[k] = { ...pv, isEstimated: isEstimatedValue(pv) };
+    return out;
+  };
+  return { ...draft, calculated: stamp(draft.calculated), estimated: stamp(draft.estimated) };
+}
+
+/**
+ * Was the value stored under `key` on this entry an estimate? Reads the
+ * provenance blob wherever the pipeline left it — `computed.enrichment` once
+ * the storage layer has moved it, `values._enrichment` before — and answers
+ * from the `estimated` record (a `calculated` value is exact, not an
+ * estimate). Null when the entry carries no provenance for that key, which a
+ * caller treats as "stated": the absence of an estimate is not an estimate.
+ */
+export function entryValueProvenance(
+  entry: { values?: Record<string, any> | null; computed?: Record<string, any> | null } | null | undefined,
+  key: string,
+): ProvenancedValue | null {
+  if (!entry) return null;
+  const e: Partial<Enrichment> | null | undefined =
+    (entry.computed as any)?.enrichment ?? (entry.values as any)?._enrichment ?? null;
+  if (!e || typeof e !== "object") return null;
+  const pv = e.estimated?.[key] ?? e.calculated?.[key] ?? null;
+  if (!pv || typeof pv.value !== "number") return null;
+  return { ...pv, isEstimated: isEstimatedValue(pv) };
 }
 
 export interface Assumption {
@@ -61,7 +133,7 @@ export interface Enrichment {
 /** Below this confidence an estimate is not saved as a metric at all. */
 export const MIN_SAVE_CONFIDENCE = 0.35;
 
-const emptyEnrichment = (activityType?: string): Enrichment => ({
+const emptyEnrichment = (activityType?: string): EnrichmentDraft => ({
   activityType,
   canonical: {},
   calculated: {},
@@ -412,7 +484,7 @@ export function enrichWalkRunEntry(
     }
   }
 
-  return out;
+  return stampProvenance(out);
 }
 
 // ─── Hydration ───────────────────────────────────────────────────────────────
@@ -431,11 +503,11 @@ export function enrichHydrationEntry(explicit: Record<string, any>): Enrichment 
   const out = emptyEnrichment("hydration");
   const ounces = numeric(explicit.ounces ?? explicit.oz);
   const mlExplicit = numeric(explicit.ml ?? explicit.milliliters);
-  if (ounces != null) { out.canonical.volumeMl = round(ounces * ML_PER_FLOZ); return out; }
+  if (ounces != null) { out.canonical.volumeMl = round(ounces * ML_PER_FLOZ); return stampProvenance(out); }
   if (mlExplicit != null) {
     out.canonical.volumeMl = round(mlExplicit);
     out.calculated.ounces = { value: round(mlExplicit / ML_PER_FLOZ, 1), source: "calculated", confidence: 1, method: "ml converted to oz" };
-    return out;
+    return stampProvenance(out);
   }
   const count = numeric(explicit.containerCount ?? explicit.count ?? explicit.bottles ?? explicit.glasses ?? explicit.cups);
   let type = String(explicit.containerType || "").toLowerCase();
@@ -451,7 +523,7 @@ export function enrichHydrationEntry(explicit: Record<string, any>): Enrichment 
     out.canonical.volumeMl = round(ml);
     out.assumptions.push({ field: "ounces", assumption: `Assumed standard ${type} size`, valueUsed: container.label, confidence: 0.55 });
   }
-  return out;
+  return stampProvenance(out);
 }
 
 // ─── Sleep ───────────────────────────────────────────────────────────────────
@@ -460,13 +532,13 @@ export function enrichHydrationEntry(explicit: Record<string, any>): Enrichment 
 export function enrichSleepEntry(explicit: Record<string, any>): Enrichment {
   const out = emptyEnrichment("sleep");
   const hours = numeric(explicit.hours);
-  if (hours != null) { out.canonical.durationSeconds = round(hours * 3600); return out; }
+  if (hours != null) { out.canonical.durationSeconds = round(hours * 3600); return stampProvenance(out); }
   // "slept 430 minutes" → 7.17 hours: an exact conversion, not an estimate.
   const minutes = numeric(explicit.minutes ?? explicit.durationMinutes ?? explicit.duration);
   if (minutes != null && minutes > 0) {
     out.calculated.hours = { value: round(minutes / 60, 2), source: "calculated", confidence: 1, method: "minutes converted to hours" };
     out.canonical.durationSeconds = round(minutes * 60);
-    return out;
+    return stampProvenance(out);
   }
   const bed = explicit.bedtime ? String(explicit.bedtime) : null;
   const wake = explicit.wakeTime ? String(explicit.wakeTime) : null;
@@ -477,7 +549,7 @@ export function enrichSleepEntry(explicit: Record<string, any>): Enrichment {
       out.canonical.durationSeconds = round(h * 3600);
     }
   }
-  return out;
+  return stampProvenance(out);
 }
 
 // ─── Strength (weight × reps × sets → total volume) ─────────────────────────
@@ -498,7 +570,7 @@ export function enrichStrengthEntry(explicit: Record<string, any>): Enrichment {
       method: `${weight} × ${reps} reps × ${sets} set${sets === 1 ? "" : "s"}`,
     };
   }
-  return out;
+  return stampProvenance(out);
 }
 
 // ─── Applying enrichment to the stored entry ─────────────────────────────────

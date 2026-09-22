@@ -264,6 +264,9 @@ describe("what the executor actually writes", () => {
       payload: {
         description: "Rent", amount: 2150, date: "2026-09-01",
         frequency: "monthly", isRecurring: true, category: "housing",
+        // Rules 3/4 (shared/financial-status): the executor writes an expense
+        // only for money that was PAID — see tests/action-executor-financial-gate.
+        financialStatus: "paid",
         _source: { documentId: DOC },
       },
     })]);

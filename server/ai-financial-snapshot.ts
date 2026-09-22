@@ -8,6 +8,7 @@
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
 import { toMonthlyAmount } from "@shared/obligation-windows";
 import { getUserCurrentMonth } from "@shared/timezone";
+import { excludeTestData } from "@shared/test-data";
 
 export interface FinancialSnapshotInput {
   /** EVERY profile — the net-worth model scopes by `selectedIds` itself. */
@@ -18,6 +19,12 @@ export interface FinancialSnapshotInput {
   obligations: readonly any[];
   expenses: readonly any[];
   timezone: string;
+  /**
+   * Rule 27: synthetic QA rows (shared/test-data name patterns) never enter
+   * a total unless the caller opted in — the same switch as
+   * `?includeTestData=1` on the dashboard. Default off.
+   */
+  includeTestData?: boolean;
 }
 
 export function financialSnapshot(input: FinancialSnapshotInput) {
@@ -27,11 +34,11 @@ export function financialSnapshot(input: FinancialSnapshotInput) {
     selectedIds,
     ownership: input.ownership,
   });
-  const monthlySubs = input.obligations
+  const monthlySubs = excludeTestData(input.obligations as any[], input.includeTestData)
     .filter((o: any) => o?.status !== "cancelled")
     .reduce((s: number, o: any) => s + toMonthlyAmount(Number(o.amount || 0), o.frequency), 0);
   const month = getUserCurrentMonth(input.timezone);
-  const thisMonthSpend = input.expenses
+  const thisMonthSpend = excludeTestData(input.expenses as any[], input.includeTestData)
     .filter((e: any) => typeof e?.date === "string" && e.date.startsWith(month))
     .reduce((s: number, e: any) => s + Number(e.amount || 0), 0);
   return { netWorth: nw.netWorth, assets: nw.assets, liabilities: nw.liabilities, monthlySubs, thisMonthSpend, month };

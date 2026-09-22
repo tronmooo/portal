@@ -11,7 +11,7 @@ import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate,
 // One writer at a time per (user, month) within this process; see mutateBudgets.
 const budgetWriteLocks = new Map<string, Promise<void>>();
 import { assertEventSpan } from "@shared/event-span";
-import { searchCorpus } from "@shared/search-match";
+import { searchCorpus, searchRowHref } from "@shared/search-match";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
 import { formatDollars } from "@shared/money";
 // ---- Shared Supabase client (PERF) ----
@@ -142,7 +142,7 @@ import {
   type LiabilityPayment, type InsertLiabilityPayment,
   type AssetPartyLink, type InsertAssetPartyLink,
   type OwnershipHistoryEntry,
-  type AiActionLog, type InsertAiActionLog,
+  type AiActionLog, type InsertAiActionLog, type AiChatRun, type UpsertAiChatRun,
   MOOD_SCORES,
 } from "@shared/schema";
 import { type IStorage, computeSecondaryData } from "./storage";
@@ -153,6 +153,10 @@ import { ProfileLinkFailure } from "./profile-link-failure";
 import { replaceOwnerSetWithRollback, type OwnerSetRecord } from "./owner-set-replacement";
 import { OWNERSHIP_TABLES, type OwnedEntityType, resolveAutoOwner } from "../shared/ownership";
 import { shareForParty, shareForParties, validateOwnership, roundPct, type OwnershipLink, scaleSharesTo100 } from "../shared/ownership-model";
+import { resolveOwnerForNewRecord, isOwnerQuestion, OwnerRequiredError } from "../shared/owner-resolution";
+import { findPossibleDuplicates, takeDuplicateControls, DEFAULT_RECENT_WINDOW_MS } from "../shared/duplicate-guard";
+import { assertWriteCandidate } from "../shared/write-validation";
+import { getActiveProfileIds } from "./active-scope-context";
 
 const DOCUMENTS_BUCKET = "documents";
 
@@ -729,6 +733,119 @@ export class SupabaseStorage implements IStorage {
     return p;
   }
 
+  // ── Rules 6 / 34 / 35 — one owner resolver, one write validator, one duplicate guard ──
+  //
+  // Every createX used to carry its own "default to self" block (eleven
+  // copies, plus `parent = linkedProfiles[0] || self` on bills). They are
+  // gone. The owner of a new record is the EXPLICIT owner when the caller
+  // named one, else the single ACTIVE profile (the scope chip the user can
+  // see, carried by server/active-scope-context), else self — and an
+  // ambiguous scope or an owner that does not exist is an OwnerRequiredError
+  // (HTTP 409 OWNER_REQUIRED), never a guess. See shared/owner-resolution.ts.
+  //
+  // The same call validates the candidate (Rule 34): owners exist, a named
+  // parent exists, dates are dates, money is money — before anything is
+  // inserted.
+  private async resolveOwnersAndValidate(entityType: string, data: Record<string, any>): Promise<string[]> {
+    const [profiles, self] = await Promise.all([
+      this.getProfiles().catch(() => [] as Profile[]),
+      this.getSelfProfile(),
+    ]);
+    // A store with no profiles yet (a brand-new account) has nothing to check
+    // ownership against; `null` skips the existence checks rather than
+    // failing every id.
+    const valid = profiles.length > 0 ? new Set(profiles.map(p => p.id)) : null;
+    const raw = data?.linkedProfiles;
+    const explicit = Array.isArray(raw) ? raw : (typeof raw === "string" && raw ? [raw] : []);
+    const resolution = resolveOwnerForNewRecord({
+      explicitOwnerIds: explicit,
+      activeProfileIds: getActiveProfileIds(),
+      selfProfileId: self?.id ?? null,
+      ownerRequired: false,
+      validProfileIds: valid,
+    });
+    if (isOwnerQuestion(resolution)) throw new OwnerRequiredError(resolution.reason);
+    assertWriteCandidate(entityType, { ...data, linkedProfiles: resolution.ownerIds }, { validProfileIds: valid });
+    return resolution.ownerIds;
+  }
+
+  /**
+   * Rule 35 at the last write path: a create that is CERTAINLY a repeat of a
+   * row written moments ago (same request/operation stamp, or same owner +
+   * date + amount + name inside the recent window) returns that row instead
+   * of inserting a twin. This is retry/double-submit idempotency; whether an
+   * older identical row is "the same one" is a question the route (409
+   * POSSIBLE_DUPLICATE) or the AI tool (needsConfirmation) asks the user.
+   * `__allowDuplicate: true` on the payload skips it. Never blocks a create:
+   * any failure in the lookup means "no duplicate found".
+   */
+  private async reuseRecentDuplicate(
+    entityType: "expense" | "income" | "task" | "event",
+    candidate: Record<string, any>,
+    ctl: { requestId: string | null; operationId: string | null },
+  ): Promise<any | null> {
+    try {
+      const rows = await this.duplicateCandidateRows(entityType, candidate);
+      if (rows.length === 0) return null;
+      const now = new Date();
+      const verdict = findPossibleDuplicates({
+        entityType,
+        ownerIds: candidate.linkedProfiles || [],
+        date: candidate.date ?? candidate.dueDate ?? null,
+        amount: candidate.amount ?? null,
+        name: candidate.title ?? candidate.name ?? null,
+        description: candidate.description ?? null,
+        time: candidate.time ?? null,
+        requestId: ctl.requestId,
+        operationId: ctl.operationId,
+      }, rows, { now });
+      if (verdict.tier !== "high") return null;
+      const top = verdict.matches[0];
+      const hit = rows.find(r => r.id === top.id);
+      if (!hit) return null;
+      const stamped = top.reasons.includes("same_request");
+      const createdAt = new Date(hit.createdAt || 0).getTime();
+      const recent = Number.isFinite(createdAt) && now.getTime() - createdAt <= DEFAULT_RECENT_WINDOW_MS;
+      if (!stamped && !recent) return null;
+      console.info(`[duplicate-guard] ${entityType} create matched existing ${String(hit.id).slice(0, 8)} (${top.reasons.join(",")}) — reusing`);
+      return hit;
+    } catch (e: any) {
+      console.warn(`[duplicate-guard] lookup failed for ${entityType}: ${e?.message || e}`);
+      return null;
+    }
+  }
+
+  /** The narrow set of rows a create could duplicate (same day / amount / title). */
+  private async duplicateCandidateRows(entityType: "expense" | "income" | "task" | "event", c: Record<string, any>): Promise<any[]> {
+    const base = (table: string) => this.supabase.from(table).select("*").eq("user_id", this.userId).is("deleted_at", null);
+    if (entityType === "expense") {
+      if (typeof c.amount !== "number") return [];
+      const date = c.date || getUserToday(this._timezone);
+      const { data } = await base("expenses").eq("amount", c.amount).eq("date", date).limit(20);
+      return (data || []).map((r: any) => this.rowToExpense(r));
+    }
+    if (entityType === "income") {
+      if (typeof c.amount !== "number") return [];
+      let q = base("incomes").eq("amount", c.amount);
+      q = c.date ? q.eq("date", c.date) : q.is("date", null);
+      const { data } = await q.limit(20);
+      return (data || []).map((r: any) => this.rowToIncome(r));
+    }
+    if (entityType === "task") {
+      const title = String(c.title || "").trim();
+      if (!title) return [];
+      const pattern = title.replace(/[\\%_]/g, (m) => `\\${m}`);
+      const { data } = await base("tasks").ilike("title", pattern).neq("status", "done").limit(20);
+      return (data || []).map((r: any) => this.rowToTask(r));
+    }
+    if (entityType === "event") {
+      if (!c.date) return [];
+      const { data } = await base("events").eq("date", c.date).limit(50);
+      return (data || []).map((r: any) => this.rowToEvent(r));
+    }
+    return [];
+  }
+
   /**
    * PERF (profile-switch, 2026-08-05): export this request's resolved memo so a
    * LATER request for the same user can start with the same tables already in
@@ -882,7 +999,54 @@ export class SupabaseStorage implements IStorage {
       reversible: !!r.reversible, reversePlan: r.reverse_plan,
       source: r.source, createdAt: r.created_at,
       undoneAt: r.undone_at, undoneByLogId: r.undone_by_log_id,
+      turnId: r.turn_id ?? null, requestId: r.request_id ?? null, operationId: r.operation_id ?? null,
     };
+  }
+
+  /** Rule 2: the ledger row a completed operation left, if any. */
+  async findAiActionByOperationId(operationId: string): Promise<AiActionLog | undefined> {
+    if (!operationId) return undefined;
+    const { data, error } = await this.supabase.from("ai_action_log").select("*")
+      .eq("user_id", this.userId).eq("operation_id", operationId)
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (error) throw error;
+    return data ? this.rowToAiActionLog(data) : undefined;
+  }
+
+  // ============================================================
+  // AI CHAT RUNS (Rule 22: execution state lives server-side)
+  // ============================================================
+  private rowToAiChatRun(r: any): AiChatRun {
+    return {
+      id: r.id, requestId: r.request_id, status: r.status, turnId: r.turn_id ?? null,
+      message: r.message ?? null, result: r.result ?? null, error: r.error ?? null,
+      createdAt: r.created_at, updatedAt: r.updated_at,
+    };
+  }
+
+  async getAiChatRun(requestId: string): Promise<AiChatRun | undefined> {
+    if (!requestId) return undefined;
+    const { data, error } = await this.supabase.from("ai_chat_runs").select("*")
+      .eq("user_id", this.userId).eq("request_id", requestId).maybeSingle();
+    if (error) throw error;
+    return data ? this.rowToAiChatRun(data) : undefined;
+  }
+
+  async upsertAiChatRun(run: UpsertAiChatRun): Promise<AiChatRun | undefined> {
+    const patch: Record<string, unknown> = {
+      user_id: this.userId,
+      request_id: run.requestId,
+      status: run.status,
+      updated_at: new Date().toISOString(),
+    };
+    if (run.turnId !== undefined) patch.turn_id = run.turnId;
+    if (run.message !== undefined) patch.message = String(run.message).slice(0, 2000);
+    if (run.result !== undefined) patch.result = run.result;
+    if (run.error !== undefined) patch.error = run.error;
+    const { data, error } = await this.supabase.from("ai_chat_runs")
+      .upsert(patch, { onConflict: "user_id,request_id" }).select().single();
+    if (error) throw error;
+    return data ? this.rowToAiChatRun(data) : undefined;
   }
 
   async createAiActionLog(entry: InsertAiActionLog): Promise<AiActionLog | undefined> {
@@ -899,8 +1063,18 @@ export class SupabaseStorage implements IStorage {
       reversible: entry.reversible ?? false,
       reverse_plan: entry.reversePlan ?? null,
       source: entry.source || "chat",
+      turn_id: entry.turnId ?? null,
+      request_id: entry.requestId ?? null,
+      operation_id: entry.operationId ?? null,
     }).select().single();
-    if (error) throw error;
+    if (error) {
+      // Rule 2: a concurrent replay of the same operation loses the unique
+      // index race — the first row is the record, return it.
+      if (entry.operationId && String((error as any).code) === "23505") {
+        return this.findAiActionByOperationId(entry.operationId);
+      }
+      throw error;
+    }
     return data ? this.rowToAiActionLog(data) : undefined;
   }
 
@@ -1206,6 +1380,8 @@ export class SupabaseStorage implements IStorage {
       // PR H: surface canonical metric metadata. Older rows return null and
       // the client falls back to category defaults at render time.
       metricDefinition: r.metric_definition || undefined,
+      // Rules 19/20: the habit this tracker mirrors (migrations/20260922).
+      linkedHabitId: r.linked_habit_id || undefined,
     };
   }
 
@@ -1796,8 +1972,15 @@ export class SupabaseStorage implements IStorage {
     const childTypes = new Set(["vehicle", "asset", "subscription", "loan", "liability", "investment", "account", "property"]);
     let parentProfileId = data.parentProfileId;
     if (!parentProfileId && childTypes.has(data.type)) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) parentProfileId = selfProfile.id;
+      // Rule 6: an asset/liability created while ONE profile is selected is
+      // nested under (and so owned by) THAT profile — the "new asset landed on
+      // the wrong person" regression — else under self. Two selected is a
+      // question (OwnerRequiredError), never a guess.
+      parentProfileId = (await this.resolveOwnersAndValidate("profile", { linkedProfiles: [] }))[0];
+    } else if (parentProfileId) {
+      // Rule 34: a named parent must exist — a dangling parent drops the
+      // asset out of every owner walk.
+      await this.resolveOwnersAndValidate("profile", { parentProfileId, linkedProfiles: [parentProfileId] });
     }
     // Parent is stored ONLY in the `parent_profile_id` column. The legacy
     //   `fields._parentProfileId` JSON shadow is no longer written — it caused
@@ -3087,10 +3270,9 @@ export class SupabaseStorage implements IStorage {
     // Resolve the owner FIRST: an unspecified owner means the self profile, not
     // "any owner". Matching any owner is what let one person's log land on
     // another person's tracker.
-    const selfForDedup = requestedProfiles.length === 0 ? await this.getSelfProfile() : null;
-    const ownerForDedup: string[] = requestedProfiles.length > 0
-      ? requestedProfiles
-      : (selfForDedup ? [selfForDedup.id] : []);
+    // Rule 6/34: explicit → the single active profile → self; owners must
+    // exist. Resolved once, used for the dedup AND the row (see below).
+    const ownerForDedup: string[] = await this.resolveOwnersAndValidate("tracker", data as any);
     // Owner names, for recognising a LEGACY "<Name> - <Owner>" row as the same
     // tracker. New rows are never named that way, but rows created before
     // migrations/20260824_tracker_owner_scoped_names.sql are — and a deployment
@@ -3117,12 +3299,7 @@ export class SupabaseStorage implements IStorage {
 
     const id = randomUUID();
     const now = new Date().toISOString();
-    // Auto-link to self profile if no profiles specified
-    let linkedProfiles = (data as any).linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
-    }
+    const linkedProfiles = ownerForDedup;
 
     // NAME: the tracker keeps the name it was asked for. Trackers are unique on
     // (user_id, owner_profile_id, lower(name)) — migrations/20260824_tracker_
@@ -3165,12 +3342,15 @@ export class SupabaseStorage implements IStorage {
         unit: data.unit || null, icon: data.icon || null, fields: safeFields,
         linked_profiles: linkedProfiles, created_at: now,
       };
-      const full = (data as any).metricDefinition
-        ? { ...base, metric_definition: (data as any).metricDefinition }
-        : base;
+      // Optional columns: metric_definition (PR H) and linked_habit_id
+      // (migrations/20260922, Rules 19/20 — the mirror relationship).
+      const optional: any = {};
+      if ((data as any).metricDefinition) optional.metric_definition = (data as any).metricDefinition;
+      if ((data as any).linkedHabitId) optional.linked_habit_id = (data as any).linkedHabitId;
+      const full = Object.keys(optional).length ? { ...base, ...optional } : base;
       let err = (await this.supabase.from("trackers").insert(full)).error;
       if (err && full !== base &&
-          /metric_definition|column .* does not exist|schema cache|could not find/i.test(err.message || "")) {
+          /metric_definition|linked_habit_id|column .* does not exist|schema cache|could not find/i.test(err.message || "")) {
         console.warn(`[createTracker] optional column rejected (${err.message}); retrying with base columns`);
         err = (await this.supabase.from("trackers").insert(base)).error;
       }
@@ -3689,17 +3869,20 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createTask(data: InsertTask): Promise<Task> {
+    const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
     // A caller may supply the row id (the recurring-task spawn derives one
     // from the series, so two concurrent completions collide on the primary
     // key instead of inserting two clones).
     const suppliedId = (data as any).id;
     const id = typeof suppliedId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(suppliedId) ? suppliedId : randomUUID();
     const now = new Date().toISOString();
-    // Auto-link to self profile if no profiles specified
-    let linkedProfiles = data.linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
+    // Rule 6/34: owner = explicit → the single active profile → self (never
+    // a guess); every owner must exist. See resolveOwnersAndValidate.
+    const linkedProfiles = await this.resolveOwnersAndValidate("task", data as any);
+    // Rule 35: a repeat of a row written moments ago is that row.
+    if (!dupCtl.allowDuplicate) {
+      const twin = await this.reuseRecentDuplicate("task", { ...data, linkedProfiles }, dupCtl);
+      if (twin) return twin as Task;
     }
     // Insert empty; setOwners handles both JSONB and junction. See createExpense.
     const { error } = await this.supabase.from("tasks").insert({
@@ -4012,13 +4195,16 @@ export class SupabaseStorage implements IStorage {
 
   async createExpense(data: InsertExpense): Promise<Expense> {
     if (typeof data.amount !== 'number' || data.amount <= 0) throw new Error("Expense amount must be a positive number");
+    const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
     const id = randomUUID();
     const now = new Date().toISOString();
-    // Auto-link to self profile if no profiles specified
-    let linkedProfiles = (data as any).linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
+    // Rule 6/34: owner = explicit → the single active profile → self (never
+    // a guess); every owner must exist. See resolveOwnersAndValidate.
+    const linkedProfiles = await this.resolveOwnersAndValidate("expense", data as any);
+    // Rule 35: a repeat of a row written moments ago is that row.
+    if (!dupCtl.allowDuplicate) {
+      const twin = await this.reuseRecentDuplicate("expense", { ...data, linkedProfiles }, dupCtl);
+      if (twin) return twin as Expense;
     }
     // Insert with EMPTY linked_profiles — setOwners writes both the JSONB and
     //   the junction in one place. Inserting with the populated array and then
@@ -4112,12 +4298,16 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createIncome(data: InsertIncome): Promise<Income> {
+    const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
     const id = randomUUID();
     const now = new Date().toISOString();
-    let linkedProfiles = data.linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
+    // Rule 6/34: owner = explicit → the single active profile → self (never
+    // a guess); every owner must exist. See resolveOwnersAndValidate.
+    const linkedProfiles = await this.resolveOwnersAndValidate("income", data as any);
+    // Rule 35: a repeat of a row written moments ago is that row.
+    if (!dupCtl.allowDuplicate) {
+      const twin = await this.reuseRecentDuplicate("income", { ...data, linkedProfiles }, dupCtl);
+      if (twin) return twin as Income;
     }
     const { error } = await this.supabase.from("incomes").insert({
       id, user_id: this.userId, description: data.description,
@@ -4193,13 +4383,16 @@ export class SupabaseStorage implements IStorage {
 
   async createEvent(data: InsertEvent): Promise<CalendarEvent> {
     assertEventSpan(data as any); // ends before it starts → 400 (shared/event-span)
+    const dupCtl = takeDuplicateControls(data as any); data = dupCtl.data;
     const id = randomUUID();
     const now = new Date().toISOString();
-    // Auto-link to self profile if no profiles specified
-    let linkedProfiles = data.linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
+    // Rule 6/34: owner = explicit → the single active profile → self (never
+    // a guess); every owner must exist. See resolveOwnersAndValidate.
+    const linkedProfiles = await this.resolveOwnersAndValidate("event", data as any);
+    // Rule 35: a repeat of a row written moments ago is that row.
+    if (!dupCtl.allowDuplicate) {
+      const twin = await this.reuseRecentDuplicate("event", { ...data, linkedProfiles }, dupCtl);
+      if (twin) return twin as CalendarEvent;
     }
     const { error } = await this.supabase.from("events").insert({
       id, user_id: this.userId, title: data.title, date: data.date,
@@ -4375,7 +4568,7 @@ export class SupabaseStorage implements IStorage {
       })) {
         if (occ.date < startDate || occ.date > endDate) continue;
         items.push({
-          id: `${ser.id}-${occ.date}`, type: "event", title: ser.title, date: occ.date,
+          id: `${ser.id}-${occ.date}`, type: "event", sourceType: "income", title: ser.title, date: occ.date,
           allDay: true, color: "#4FA37A", category: "finance",
           linkedProfiles: ser.source.ownerIds || [], sourceId: ser.source.id,
           meta: { kind: "income", amount: occ.amount, recurrence: ser.recurrence, href: ser.source.href },
@@ -4410,6 +4603,7 @@ export class SupabaseStorage implements IStorage {
           // from: occurrence → rule → source entity.
           id: `${ser.id}-${occ.date}`,
           type: "event",
+          sourceType: ser.kind, // Rule 37: "birthday" / "expiration" / "renewal" / "appointment"…
           title: ser.title,
           date: occ.date,
           allDay: true,
@@ -4446,7 +4640,7 @@ export class SupabaseStorage implements IStorage {
         !rdMeta.skippedDates.includes(dateISO) && !(rdMeta.paused && dateISO >= rdTodayISO && !rdMeta.completedDates.includes(dateISO));
       const baseDate = ev.date.slice(0, 10);
       if (baseDate >= startDate && baseDate <= endDate && rdShow(baseDate)) {
-        items.push({ id: `event-${ev.id}-${baseDate}`, type: "event", title: ev.title, date: baseDate, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, completed: rdMeta.completedDates.includes(baseDate), meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
+        items.push({ id: `event-${ev.id}-${baseDate}`, type: "event", sourceType: "event", title: ev.title, date: baseDate, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, completed: rdMeta.completedDates.includes(baseDate), meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
       }
       if (ev.recurrence !== "none") {
         // [P4.3] Expand occurrences all the way to the requested window's end
@@ -4468,7 +4662,7 @@ export class SupabaseStorage implements IStorage {
         const gapDays = Math.floor((parseLocalDate(startDate).getTime() - base.getTime()) / 86400000);
         const pushOccurrence = (nextStr: string) => {
           if (nextStr >= startDate && rdShow(nextStr)) {
-            items.push({ id: `event-${ev.id}-${nextStr}`, type: "event", title: ev.title, date: nextStr, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, completed: rdMeta.completedDates.includes(nextStr), meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
+            items.push({ id: `event-${ev.id}-${nextStr}`, type: "event", sourceType: "event", title: ev.title, date: nextStr, time: ev.time, endTime: ev.endTime, allDay: ev.allDay, color, category: ev.category, description: ev.description, location: ev.location, linkedProfiles: ev.linkedProfiles, sourceId: ev.id, completed: rdMeta.completedDates.includes(nextStr), meta: { recurrence: ev.recurrence, tags: ev.tags, source: ev.source } });
           }
         };
         const evDaySet = weekdaySetFor(ev.recurrence);
@@ -4546,7 +4740,7 @@ export class SupabaseStorage implements IStorage {
           // A projected occurrence is not the stored row, so its id carries the
           // date — two occurrences of one task must not collide as one item.
           id: isSeries ? `task-${task.id}-${d}` : `task-${task.id}`,
-          type: "task", title: task.title, date: d,
+          type: "task", sourceType: "task", title: task.title, date: d,
           time: task.dueTime || undefined,
           allDay: !task.dueTime,
           color: taskColor, category: "task", description: task.description,
@@ -4614,6 +4808,7 @@ export class SupabaseStorage implements IStorage {
           items.push({
             id: `bill-${p.id}-${o.date}`,
             type: "obligation",
+            sourceType: fam === "recurring" ? "bill" : "liability", // Rule 37
             title: p.name,
             date: o.effectiveDate,
             allDay: true,
@@ -5087,11 +5282,9 @@ export class SupabaseStorage implements IStorage {
       }
     }
 
-    let linkedProfiles = data.linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
-    }
+    // Rule 6/34: owner = explicit → the single active profile → self (never
+    // a guess); every owner must exist. See resolveOwnersAndValidate.
+    const linkedProfiles = await this.resolveOwnersAndValidate("document", data as any);
     const { error } = await this.supabase.from("documents").insert({
       id, user_id: this.userId, name: data.name, type: data.type || "other",
       mime_type: data.mimeType || "image/jpeg", file_data: fileDataForDB,
@@ -5403,12 +5596,9 @@ export class SupabaseStorage implements IStorage {
   async createHabit(data: InsertHabit): Promise<Habit> {
     const id = randomUUID();
     const now = new Date().toISOString();
-    // Auto-link to self profile if no profiles specified
-    let linkedProfiles = (data as any).linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
-    }
+    // Rule 6/34: owner = explicit → the single active profile → self (never
+    // a guess); every owner must exist. See resolveOwnersAndValidate.
+    const linkedProfiles = await this.resolveOwnersAndValidate("habit", data as any);
     const { error } = await this.supabase.from("habits").insert({
       id, user_id: this.userId, name: data.name, icon: data.icon || null,
       color: data.color || null, frequency: data.frequency || "daily",
@@ -5523,17 +5713,23 @@ export class SupabaseStorage implements IStorage {
     // Fail CLOSED: any doubt means the tracker stays. (A lookup error once
     // made the `every` below vacuously true and retired a user's own tracker.)
     const [{ data: tracker, error: tErr }, { data: entries, error: eErr }] = await Promise.all([
-      this.supabase.from("trackers").select("name").eq("id", linkedTrackerId).eq("user_id", this.userId).maybeSingle(),
+      this.supabase.from("trackers").select("name, linked_habit_id").eq("id", linkedTrackerId).eq("user_id", this.userId).maybeSingle(),
       this.supabase.from("tracker_entries").select("entry_values").eq("tracker_id", linkedTrackerId).eq("user_id", this.userId).is("deleted_at", null).limit(500),
     ]);
     if (tErr || eErr || !tracker) return null;
+    // Rules 19/20: the RELATIONSHIP decides mirror-hood. A tracker stamped as
+    // another habit's mirror is never this one's, whatever its entries say.
+    const stampedFor = (tracker as any).linked_habit_id ? String((tracker as any).linked_habit_id) : null;
+    if (stampedFor && stampedFor !== habitId) return null;
     const rows = entries || [];
     const allMirrors = rows.every((e: any) => (e?.entry_values as any)?.["_habitId"] === habitId);
     if (!allMirrors) return null;
     // An EMPTY tracker is only a mirror if it is the one auto-created for this
-    // habit (habit-completion names it after the habit); a tracker the user
-    // made and linked, with nothing logged yet, is theirs.
-    if (rows.length === 0 && String(tracker.name || "").trim() !== String(habitName || "").trim()) return null;
+    // habit: stamped with its id (migrations/20260922), or — for a legacy
+    // mirror created before the stamp existed — still carrying the habit's
+    // name. A tracker the user made and linked, with nothing logged yet, is
+    // theirs.
+    if (rows.length === 0 && stampedFor !== habitId && String(tracker.name || "").trim() !== String(habitName || "").trim()) return null;
     return linkedTrackerId;
   }
 
@@ -5839,11 +6035,9 @@ export class SupabaseStorage implements IStorage {
     const foldedFrequency = (() => { const f = canonicalIncomeFrequency((data as any).frequency); return f && (["weekly", "biweekly", "monthly", "quarterly", "yearly", "once"] as string[]).includes(f) ? f : (data as any).frequency; })();
     const rawName = String(data.name || "").trim();
     const typeKey = this.billTypeKey(kind, category, rawName);
-    let parent: string | undefined = ((data as any).linkedProfiles || [])[0];
-    if (!parent) {
-      const self = await this.getSelfProfile();
-      parent = self?.id;
-    }
+    // Rule 6/34: the bill's party = explicit → the single active profile →
+    // self (never a guess), and it must exist. See resolveOwnersAndValidate.
+    const parent: string | undefined = (await this.resolveOwnersAndValidate("obligation", data as any))[0];
     const amount = Number(data.amount) || 0;
     const freq = foldedFrequency || "monthly";
     const nextDue = String((data as any).nextDueDate || getUserToday(this._timezone)).slice(0, 10);
@@ -6474,12 +6668,9 @@ export class SupabaseStorage implements IStorage {
     const now = new Date().toISOString();
     const id = randomUUID();
     const items: ChecklistItem[] = (data.items || []).map((item, i) => ({ id: randomUUID(), text: item.text, checked: item.checked ?? false, order: i }));
-    // Auto-link to self profile if no profiles specified
-    let linkedProfiles = (data as any).linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
-    }
+    // Rule 6/34: owner = explicit → the single active profile → self (never
+    // a guess); every owner must exist. See resolveOwnersAndValidate.
+    const linkedProfiles = await this.resolveOwnersAndValidate("artifact", data as any);
     // Build metadata for non-column artifact fields (language, dataBindings,
     // chartData, sheetData, source). All live inside the metadata JSONB column
     // so adding new fields stays migration-free.
@@ -6640,11 +6831,9 @@ export class SupabaseStorage implements IStorage {
   async createJournalEntry(data: InsertJournalEntry): Promise<JournalEntry> {
     const id = randomUUID();
     const now = new Date().toISOString();
-    let linkedProfiles = (data as any).linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
-    }
+    // Rule 6/34: owner = explicit → the single active profile → self (never
+    // a guess); every owner must exist. See resolveOwnersAndValidate.
+    const linkedProfiles = await this.resolveOwnersAndValidate("journal", data as any);
     const { error } = await this.supabase.from("journal_entries").insert({
       id, user_id: this.userId, date: data.date || getUserToday(this._timezone), mood: data.mood,
       content: data.content || "", tags: data.tags || [], energy: data.energy ?? null,
@@ -6962,12 +7151,9 @@ export class SupabaseStorage implements IStorage {
     const id = randomUUID();
     const now = new Date().toISOString();
     const milestones = (data.milestones || []).map(m => ({ ...m, reached: false }));
-    // Auto-link to self profile if no profiles specified
-    let linkedProfiles = (data as any).linkedProfiles || [];
-    if (linkedProfiles.length === 0) {
-      const selfProfile = await this.getSelfProfile();
-      if (selfProfile) linkedProfiles = [selfProfile.id];
-    }
+    // Rule 6/34: owner = explicit → the single active profile → self (never
+    // a guess); every owner must exist. See resolveOwnersAndValidate.
+    const linkedProfiles = await this.resolveOwnersAndValidate("goal", data as any);
     const { error } = await this.supabase.from("goals").insert({
       // Bug fix (AI e2e): `type` column is NOT NULL but the AI's
       // create_goal often omits it (the LLM treats it as optional). Fall
@@ -7343,7 +7529,7 @@ export class SupabaseStorage implements IStorage {
   // ============================================================
   // DASHBOARD
   // ============================================================
-  async getStats(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean }): Promise<DashboardStats> {
+  async getStats(filterProfileId?: string, filterProfileIds?: string[], opts?: { sharedFetches?: boolean; includeTestData?: boolean }): Promise<DashboardStats> {
     // PERF (2026-05-28): single Promise.all wave — was two serial waves
     // (one before computing streaks/habits, then another for
     // profiles/events/artifacts/memories). The streak/habit math is pure JS
@@ -7411,7 +7597,7 @@ export class SupabaseStorage implements IStorage {
     const filterCtxStats = { selectedIds: fpIds || [], allProfiles, assetPartyLinks: statsAssetLinks as any[], liabilityProfileLinks: statsLiabLinks as any[] };
     const matchesProfile = (linkedProfiles: string[]) =>
       passesProfileFilter(linkedProfiles, filterCtxStats);
-    const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles));
+    const tasks = allTasks.filter(t => matchesProfile(t.linkedProfiles) && (opts?.includeTestData || !isTestEntity(t)));
     // COST OF OWNERSHIP in the person-scoped dashboard: an expense linked to an
     // asset ("$50 gas for my truck") must count in the OWNER's monthly spend /
     // cash flow, not just under the asset. Widen the expense scope to include
@@ -7434,10 +7620,13 @@ export class SupabaseStorage implements IStorage {
     // round trip; the JS filter below applies the widened ctx either way.
     const expenseSource = (fpIds && ownedAssetSet.size > 0 && !opts?.sharedFetches)
       ? await this.getExpenses(expenseScopeIds) : allExpenses;
-    const expenses = expenseSource.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpense));
+    // Rule 27: test-patterned rows never enter a total unless opted in (the
+    // same `includeTestData` switch getDashboardEnhanced takes).
+    const keepRow = (row: any) => opts?.includeTestData || !isTestEntity(row);
+    const expenses = expenseSource.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpense) && keepRow(e));
     const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
     const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
-    const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles));
+    const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles) && keepRow(o));
     // Phase-fix: journal entries were the one entity not run through the
     // unified filter, so brand-new profiles (e.g. EMPTYPROBE_QA) saw the
     // global journalStreak/currentMood and a phantom "1 entry" badge on
@@ -7591,13 +7780,18 @@ export class SupabaseStorage implements IStorage {
         ...recentLiabilityPayments.map((p: any) => {
           const liability = allProfiles.find((x) => x.id === p.liabilityProfileId);
           return {
+            id: String(p.id), // Rule 36: the payment's own id
             type: 'liability_payment',
+            // Rule 24: the row names its record so the feed can open it.
+            entityType: 'liability', entityId: p.liabilityProfileId,
             description: `Paid ${formatMoneyMajor(p.amount)} — ${liability?.name || 'liability'}`,
             timestamp: p.createdAt || p.paymentDate,
           };
         }),
         ...trackers.flatMap(t => t.entries.slice(-2).map(e => ({
+          id: String(e.id), // Rule 36: the entry's own id
           type: 'tracker_entry',
+          entityType: 'tracker', entityId: t.id,
           description: (() => {
             const nums = Object.entries(e.values).filter(([,v]) => typeof v === 'number') as [string, number][];
             const strs = Object.entries(e.values).filter(([,v]) => typeof v === 'string' && v) as [string, string][];
@@ -7627,7 +7821,9 @@ export class SupabaseStorage implements IStorage {
         ...tasks.filter(t => t.status === 'done')
           .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
           .slice(0, 3).map(t => ({
+            id: String(t.id), // Rule 36
             type: 'task_completed',
+            entityType: 'task', entityId: t.id,
             // The OCCURRENCE that was completed ("Put out the trash (Sep 16)"):
             // the series' next row carries the same title and may itself be
             // overdue, and the two read as one task otherwise.
@@ -7636,7 +7832,9 @@ export class SupabaseStorage implements IStorage {
           })),
         // Expenses are ordered date DESC — take the head, not the tail.
         ...expenses.slice(0, 3).map(e => ({
+          id: String(e.id), // Rule 36
           type: 'expense',
+          entityType: 'expense', entityId: e.id,
           description: `${formatMoneyMajor(e.amount)} — ${e.description}`, // QA 2026-09-18 BUG-18: "$184.1" for 184.10
           // QA 2026-09-18 BUG-15: the feed is about WHEN it was logged; the
           // expense's calendar date read "14h ago" seconds after it was added.
@@ -8235,7 +8433,7 @@ export class SupabaseStorage implements IStorage {
     // PERF: Fetch all top-level tables in parallel instead of 9 sequential awaits.
     // Previously this was ~9 round trips taking ~90–300ms each before any
     // filtering even started.
-    const [profiles, trackers, tasks, expenses, habits, obligations, artifacts, journal, memories, events, documents] = await Promise.all([
+    const [profiles, trackers, tasks, expenses, habits, obligations, artifacts, journal, memories, events, documents, incomes, goals] = await Promise.all([
       this.getProfiles(),
       this.getTrackers(),
       this.getTasks(),
@@ -8247,12 +8445,15 @@ export class SupabaseStorage implements IStorage {
       this.getMemories(),
       this.getEvents().catch(() => [] as any[]),
       this.getDocuments().catch(() => [] as any[]),
+      // Rule 23: incomes and goals were not searchable at all.
+      this.getIncomes().catch(() => [] as any[]),
+      this.getGoals().catch(() => [] as any[]),
     ]);
 
     // Which fields match is decided ONCE, in shared/search-match (the same
     // matcher MemStorage runs), including the dates a profile carries.
     const results: any[] = searchCorpus(
-      { profiles, trackers, tasks, expenses, habits, obligations, artifacts, journal, memories, events, documents },
+      { profiles, trackers, tasks, expenses, habits, obligations, artifacts, journal, memories, events, documents, incomes, goals },
       query,
     );
 
@@ -8324,7 +8525,8 @@ export class SupabaseStorage implements IStorage {
         }
       }
       if (entity) {
-        results.push({ ...entity, _type: ref.otherType, _related: true, _relationship: ref.link.relationship, _confidence: ref.link.confidence });
+        const related = { ...entity, _type: ref.otherType, _related: true, _relationship: ref.link.relationship, _confidence: ref.link.confidence };
+        results.push({ ...related, href: searchRowHref(related) });
       }
     }
 
@@ -8764,7 +8966,7 @@ export class SupabaseStorage implements IStorage {
     "event_documents", "extraction_corrections", "liability_payments",
     "liability_asset_links", "liability_profile_links", "asset_party_links",
     "ownership_history", "net_worth_snapshots", "loan_amortization",
-    "cashflow_projections", "audit_log", "ai_action_log", "ai_bulk_plans",
+    "cashflow_projections", "audit_log", "ai_action_log", "ai_bulk_plans", "ai_chat_runs",
     "undo_log", "user_notifications", "chat_artifacts", "chat_idempotency",
     "finance_imports", "finance_sync_runs", "financial_transaction_overrides",
     "financial_transfer_links", "financial_transactions", "financial_accounts",

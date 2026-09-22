@@ -16,6 +16,7 @@ function domainForEndpoint(ep: string): any {
 }
 import { perfMark, perfMeasure, logServerTimings } from "@/lib/perf-marks";
 import { hashNavigate } from "@/lib/hashNavigate";
+import { routeForEntity, entityTypeFromSearchRow, normalizeEntityType } from "@shared/entity-routes";
 import { stashPendingReview } from "@/lib/pending-review";
 import { stopProp } from "@/lib/event-utils";
 import { isInternalDirective } from "@shared/ai-message-kinds";
@@ -2423,21 +2424,31 @@ const MessageRow = memo(function MessageRow({
                 : result.frequency !== undefined ? "obligations"
                 : result.date !== undefined ? "events"
                 : null;
-              // Tap destination: profile rows (people/pets/vehicles/assets/
-              // liabilities carry parentProfileId or a profile type) open
-              // their detail page; tracker entries open their tracker;
-              // list entities open their module page.
+              // Tap destination (Rules 23/24): the RECORD's canonical route
+              // from shared/entity-routes. The entity type comes from the
+              // envelope when the server stamped it (`entityType` /
+              // `entity.type` / `_entityType`); the field duck-typing below is
+              // the last resort for un-stamped rows. A loan receipt used to
+              // land on the generic /profiles list; a task on the top of
+              // /tasks.
+              const stampedType = normalizeEntityType(
+                result.entityType || result._entityType || result.entity?.type || result._type,
+              );
               const isProfileRow = entityId && (
                 Object.prototype.hasOwnProperty.call(result, "parentProfileId")
                 || ["person", "pet", "vehicle", "asset", "liability", "property", "medical", "self"].includes(String(result.type || ""))
               );
-              const href = isProfileRow ? `/profiles/${entityId}`
-                : result.trackerId ? `/trackers?tracker=${result.trackerId}`
-                : ep === "tasks" ? "/tasks"
-                : ep === "expenses" ? "/finance"
-                : ep === "obligations" ? "/obligations"
-                : ep === "events" ? "/calendar"
+              const duckType = isProfileRow ? entityTypeFromSearchRow({ ...result, _type: "profile" })
+                : result.trackerId ? "trackerEntry"
+                : ep === "tasks" ? "task"
+                : ep === "expenses" ? "expense"
+                : ep === "obligations" ? "obligation"
+                : ep === "events" ? "event"
                 : null;
+              const linkType = stampedType || duckType;
+              const href = !linkType ? null
+                : linkType === "trackerEntry" ? routeForEntity("tracker", result.trackerId)
+                : routeForEntity(linkType, entityId);
 
               return (
                 <ConfirmationCard
@@ -2769,40 +2780,11 @@ export default function ChatPage() {
         },
       );
     },
-    onSuccess: (data) => {
+    onSuccess: (data, { userMsgId }) => {
       perfMark("chat:final");
       perfMeasure("chat:round-trip", "chat:send");
       logServerTimings(data);
-      const assistantMsg: any = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: data.reply,
-        timestamp: new Date().toISOString(),
-        actions: data.actions,
-        results: data.results,
-        operations: data.operations,
-        turnId: data.turnId,
-        sourceMessageId: data.sourceMessageId,
-        documentPreview: data.documentPreview,
-        documentPreviews: data.documentPreviews,
-        charts: data.charts,
-        tables: data.tables,
-        report: data.report,
-        artifact: data.artifact,
-      };
-      setMessages((prev: any) => [...prev, assistantMsg]);
-      // set_dashboard_scope: apply the returned profile filter so the dashboard/
-      // Executive tab actually re-scopes from a chat command ("show me Mike's
-      // dashboard only" / "switch to Everyone").
-      if (data?.scope && typeof data.scope === "object") {
-        try {
-          if (data.scope.mode === "everyone") setFilterEveryone();
-          else if (data.scope.mode === "selected" && data.scope.profileId) {
-            setFilterSelected([data.scope.profileId], [data.scope.profileName || "Selected"]);
-          }
-        } catch { /* filter store not ready — non-fatal */ }
-      }
-      syncFromResponse(data);
+      applyChatResult(data, userMsgId);
     },
     onError: (err: Error, { userMsgId }) => {
       // A dropped connection ("Load failed" / timeout) does NOT mean nothing
@@ -2816,7 +2798,7 @@ export default function ChatPage() {
       setMessages((prev) => [
         // Keep the optimistically pushed user bubble visible, but mark it
         // failed so the row shows a "Not sent · Retry" affordance (defect #1).
-        ...prev.map((m) => (m.id === userMsgId ? ({ ...m, failed: true } as ChatMessage) : m)),
+        ...prev.map((m) => (m.id === userMsgId ? ({ ...m, failed: true, pending: false } as ChatMessage) : m)),
         {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -2844,7 +2826,7 @@ export default function ChatPage() {
   // state changes. (chatMutation.mutate is stable in react-query v5.)
   const handleRetryMessage = useCallback((msg: ChatMessage) => {
     if (sendingRef.current) return;
-    setMessages((prev) => prev.map((m) => (m.id === msg.id ? ({ ...m, failed: false } as ChatMessage) : m)));
+    setMessages((prev) => prev.map((m) => (m.id === msg.id ? ({ ...m, failed: false, pending: true } as ChatMessage) : m)));
     sendingRef.current = true;
     chatMutation.mutate({ message: msg.content, userMsgId: msg.id });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3115,6 +3097,108 @@ export default function ChatPage() {
   // older server) falls back to the full invalidation, so nothing is missed.
   const syncFromResponse = useCallback((data?: { mutations?: ChatMutation[]; dataVersion?: number } | null) => {
     void applyChatMutations(data?.mutations, data?.dataVersion);
+  }, []);
+
+  /**
+   * ONE completion path for a chat turn — used by the live send AND by the
+   * Rule 22 restore below, so a reply that arrives after a navigation renders
+   * exactly as one that arrived while the page was open. Idempotent per
+   * request id: a run restored twice (a focus event racing a poll) appends
+   * one assistant message.
+   */
+  const applyChatResult = useCallback((data: any, userMsgId?: string) => {
+    const requestId = userMsgId || data?.sourceMessageId;
+    const assistantMsg: any = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: data.reply,
+      timestamp: new Date().toISOString(),
+      actions: data.actions,
+      results: data.results,
+      operations: data.operations,
+      turnId: data.turnId,
+      sourceMessageId: data.sourceMessageId ?? requestId,
+      documentPreview: data.documentPreview,
+      documentPreviews: data.documentPreviews,
+      charts: data.charts,
+      tables: data.tables,
+      report: data.report,
+      artifact: data.artifact,
+    };
+    setMessages((prev: any[]) => {
+      const alreadyApplied = requestId
+        && prev.some((m) => m.role === "assistant" && m.sourceMessageId === requestId && (!data.turnId || m.turnId === data.turnId));
+      const settled = prev.map((m) => (requestId && m.id === requestId ? { ...m, pending: false, failed: false } : m));
+      return alreadyApplied ? settled : [...settled, assistantMsg];
+    });
+    // set_dashboard_scope: apply the returned profile filter so the dashboard/
+    // Executive tab actually re-scopes from a chat command ("show me Mike's
+    // dashboard only" / "switch to Everyone").
+    if (data?.scope && typeof data.scope === "object") {
+      try {
+        if (data.scope.mode === "everyone") setFilterEveryone();
+        else if (data.scope.mode === "selected" && data.scope.profileId) {
+          setFilterSelected([data.scope.profileId], [data.scope.profileName || "Selected"]);
+        }
+      } catch { /* filter store not ready — non-fatal */ }
+    }
+    syncFromResponse(data);
+  }, [setMessages, syncFromResponse]);
+
+  // ── Rule 22: BACKGROUND AI JOBS SURVIVE NAVIGATION ─────────────────────
+  // A user message still marked `pending` when this page mounts belongs to a
+  // run the server kept executing after the socket died (navigation, reload,
+  // tab discard). Subscribe to that run's server-side state and restore its
+  // reply — never re-send the message, which is how a lost response used to
+  // become a second income row.
+  useEffect(() => {
+    const pending = getChatCache().filter((m) => m.role === "user" && m.pending && !m.failed);
+    if (pending.length === 0) return;
+    let cancelled = false;
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    const RESTORE_POLL_MS = 3000;
+    const RESTORE_DEADLINE_MS = 6 * 60_000;
+    const started = Date.now();
+    const markFailed = (id: string, note: string) => {
+      setMessages((prev) => {
+        const already = prev.some((m) => m.role === "assistant" && m.sourceMessageId === id);
+        const next = prev.map((m) => (m.id === id ? ({ ...m, pending: false, failed: true } as ChatMessage) : m));
+        return already ? next : [...next, { id: crypto.randomUUID(), role: "assistant", content: note, timestamp: new Date().toISOString() } as ChatMessage];
+      });
+    };
+    const poll = async (msg: ChatMessage) => {
+      if (cancelled) return;
+      try {
+        const res = await apiRequest("GET", `/api/chat/runs/${encodeURIComponent(msg.id)}`);
+        const run = await res.json();
+        if (cancelled) return;
+        if (run?.status === "completed" && run.result) {
+          applyChatResult(run.result, msg.id);
+          return;
+        }
+        if (run?.status === "failed" || run?.status === "cancelled") {
+          markFailed(msg.id, "That message didn't finish while you were away. Nothing else was changed — you can retry it.");
+          return;
+        }
+      } catch (e: any) {
+        // 404: the server never opened a run for this id (old server, or the
+        // send never reached it). A dropped send is a retry, not a restore.
+        if (/^404/.test(String(e?.message || ""))) {
+          markFailed(msg.id, "That message never reached the server. You can retry it.");
+          return;
+        }
+      }
+      if (Date.now() - started > RESTORE_DEADLINE_MS) {
+        markFailed(msg.id, "That message didn't finish. Nothing was re-run — you can retry it.");
+        return;
+      }
+      timers.push(setTimeout(() => { void poll(msg); }, RESTORE_POLL_MS));
+    };
+    for (const msg of pending) void poll(msg);
+    return () => { cancelled = true; for (const t of timers) clearTimeout(t); };
+    // Mount-only: the pending set is read from the cache once; later sends are
+    // handled by the mutation while this page is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Stable (useCallback) so memoized MessageRows keep their shallow-equal props.
@@ -3518,6 +3602,9 @@ export default function ChatPage() {
       role: "user",
       content: msg,
       timestamp: new Date().toISOString(),
+      // Rule 22: pending until the run settles. Survives navigation and reload
+      // through the chat cache, so the page can restore the run on return.
+      pending: true,
     };
 
     // ✨ Smart Fill in-thread: if intent + recent PDF/image attached, surface chip.

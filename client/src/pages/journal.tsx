@@ -11,6 +11,7 @@ import { getFilterLabel } from "@/lib/profileFilter";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { useProfileFilterCtx } from "@/hooks/useProfileFilterCtx";
+import { useRecordHighlight } from "@/hooks/useRecordHighlight";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -79,7 +80,7 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
   });
 
   return (
-    <Card data-testid={`card-journal-${entry.id}`} className="overflow-hidden">
+    <Card data-testid={`card-journal-${entry.id}`} data-record-id={entry.id} className="overflow-hidden">
       <CardContent className="p-5">
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-3">
@@ -184,6 +185,8 @@ export default function JournalPage() {
   useEffect(() => { document.title = "Journal — Portol"; }, []);
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
+  // Rules 23/24: `?highlight=journal:<id>` lands on that entry's card.
+  useRecordHighlight("journal");
   // QA Bug 7 + user report 2026-07-16 ("Write entry doesn't let me write"):
   // ?new=1 opens the FREE-WRITE composer (a plain text box), not the
   // mood-gated guided template, and the check re-fires on hash changes so a

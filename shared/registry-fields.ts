@@ -8,6 +8,7 @@ import { toCents as centsOf } from "./schema";
 import { isRecurringBill } from "./liability-types";
 import { advanceLiabilityDueDate } from "./liability-recurrence";
 import { isWithinOverdueGrace } from "./liability-status";
+import { canonicalFieldKey, canonicalizeProfileFields } from "./profile-field-canon";
 
 export interface RegistryFieldDef { key: string; type?: string; label?: string; required?: boolean }
 
@@ -71,28 +72,38 @@ export function coerceRegistryFields(schema: RegistryFieldDef[] | null | undefin
  * model's key at write time; the model key wins when both are present, and
  * the snake_case copy is dropped so later edits cannot diverge.
  */
-export const REGISTRY_KEY_ALIASES: ReadonlyArray<readonly [string, string]> = [
-  ["monthly_payment", "monthlyAmount"],
+// Rule 11 (2026-09-22): every target is passed through the ONE alias table
+// (shared/profile-field-canon `canonicalFieldKey`), so this fold and the AI
+// write fold point the same way. Before, `monthly_payment` landed on
+// `monthlyAmount` here and on `monthlyPayment` there, `current_value` on
+// `value` here and `currentValue` there — and the same loan carried both.
+const REGISTRY_ALIAS_SOURCE: ReadonlyArray<readonly [string, string]> = [
+  ["monthly_payment", "monthlyPayment"],
+  ["monthly_amount", "monthlyPayment"],
   ["minimum_payment", "minimumPayment"],
   ["current_balance", "balance"],
   ["loan_balance", "balance"],
-  ["original_balance", "originalAmount"],
-  ["original_amount", "originalAmount"],
+  ["original_balance", "originalBalance"],
+  ["original_amount", "originalBalance"],
   ["interest_rate", "interestRate"],
+  ["annual_interest_rate", "interestRate"],
+  ["apr", "interestRate"],
   ["loan_term_months", "termMonths"],
   ["due_date_day", "dueDay"],
   ["credit_limit", "creditLimit"],
   ["extra_payment", "extraPayment"],
-  ["current_value", "value"],
-  ["estimated_value", "value"],
-  ["appraised_value", "value"],
-  ["current_market_value", "value"],
+  ["current_value", "currentValue"],
+  ["estimated_value", "currentValue"],
+  ["appraised_value", "currentValue"],
+  ["current_market_value", "currentValue"],
   ["purchase_price", "purchasePrice"],
   ["purchase_date", "purchaseDate"],
   ["next_billing_date", "dueDate"],
   ["renewal_date", "renewalDate"],
   ["date_of_birth", "birthday"],
 ];
+export const REGISTRY_KEY_ALIASES: ReadonlyArray<readonly [string, string]> =
+  REGISTRY_ALIAS_SOURCE.map(([alias, target]) => [alias, canonicalFieldKey(target)] as const);
 
 const isBlank = (v: unknown) => v === undefined || v === null || v === "";
 
@@ -139,13 +150,13 @@ export function canonicalizeRegistryFields<T extends Record<string, any>>(fields
 }
 
 const NUMERIC_MODEL_KEYS = new Set([
-  "value", "balance", "originalAmount", "monthlyAmount", "minimumPayment", "interestRate", "termMonths", "dueDay",
+  "value", "currentValue", "balance", "originalAmount", "monthlyAmount", "minimumPayment", "interestRate", "termMonths", "dueDay",
   "creditLimit", "extraPayment", "purchasePrice", "amount", "monthlyPayment", "currentBalance", "originalBalance",
 ]);
 // Money keys are cents: a balance typed as 1000.004 was stored as typed and
 // every reader carried the third decimal (D286). Rates and counts stay as is.
 const MONEY_MODEL_KEYS = new Set([
-  "value", "balance", "originalAmount", "monthlyAmount", "minimumPayment", "creditLimit", "extraPayment",
+  "value", "currentValue", "balance", "originalAmount", "monthlyAmount", "minimumPayment", "creditLimit", "extraPayment",
   "purchasePrice", "amount", "monthlyPayment", "currentBalance", "originalBalance",
 ]);
 // Round half up on the decimal digits the user typed: 555.555 → 555.56 (the
@@ -163,7 +174,13 @@ const toCents = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? c
  */
 export function prepareProfileFields<T extends Record<string, any>>(fields: T, ctx?: { typeKey?: string | null; todayISO?: string }): T {
   if (!fields || typeof fields !== "object" || Array.isArray(fields)) return fields;
-  const out: Record<string, any> = canonicalizeRegistryFields(liftLegacySubscriptionGroup(fields), ctx);
+  // Registry fold first (snake_case → model key), then the SAME alias fold the
+  // AI write path runs (shared/profile-field-canon), so `currentBalance`,
+  // `annualInterestRate`, `monthlyAmount`… reach storage under their canonical
+  // key whichever door they came through (Rule 11). A payload that carries two
+  // spellings with DIFFERENT values keeps both here; the storage layer's
+  // integrity pass (shared/entity-integrity) decides and logs.
+  const out: Record<string, any> = canonicalizeProfileFields(canonicalizeRegistryFields(liftLegacySubscriptionGroup(fields), ctx)).fields;
   for (const k of Object.keys(out)) {
     if (NUMERIC_MODEL_KEYS.has(k)) out[k] = coerceRegistryFieldValue("number", out[k]);
     if (MONEY_MODEL_KEYS.has(k)) out[k] = toCents(out[k]);

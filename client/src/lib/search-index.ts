@@ -15,9 +15,15 @@
  * Only string VALUES are included — not object keys — so a query can't
  * accidentally match a field name like "description".
  */
+/** Fields that are never search text: the row's canonical href (Rule 23). */
+const NON_TEXT_FIELDS = new Set(["href"]);
+
 export function searchableText(item: any): string {
   const parts: string[] = [];
-  for (const v of Object.values(item ?? {})) {
+  for (const [k, v] of Object.entries(item ?? {})) {
+    // The row's canonical destination (Rule 23) is routing data, not text —
+    // "task" must not match every row whose href says /dashboard/tasks.
+    if (NON_TEXT_FIELDS.has(k)) continue;
     if (typeof v === "string") parts.push(v);
     else if (Array.isArray(v)) {
       for (const el of v) if (typeof el === "string") parts.push(el);
@@ -48,6 +54,7 @@ const IGNORED_FIELDS = new Set([
   "id", "userId", "user_id", "createdAt", "updatedAt", "deletedAt", "date", "startDate", "endDate",
   "_type", "_related", "_relationship", "_confidence", "_outOfScope", "_score", "_matchField",
   "linkedProfiles", "profileId", "mimeType", "storagePath", "fileData", "status", "priority",
+  "href", "virtual",
 ]);
 
 export interface SearchMatch {

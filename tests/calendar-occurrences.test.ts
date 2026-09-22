@@ -449,7 +449,9 @@ describe("sourceHref — every item knows where it came from", () => {
     // A document expiration is edited on the document, not on the person it
     // happens to be attached to.
     expect(sourceHref("document", "d-1", JOE)).toBe("#/documents/d-1");
-    expect(sourceHref("task", "t-1", JOE)).toBe("#/tasks?focus=t-1");
+    // Rules 23/24: the task's canonical deep link (the old `?focus=` param was
+    // read by no page).
+    expect(sourceHref("task", "t-1", JOE)).toBe("#/dashboard/tasks?highlight=task%3At-1");
   });
 
   it("routes a profile-owned date to that profile", () => {
@@ -459,11 +461,22 @@ describe("sourceHref — every item knows where it came from", () => {
   });
 
   it("falls back to the owning system's record when there is no profile", () => {
-    expect(sourceHref("obligation", "ob-1")).toBe("#/obligations?focus=ob-1");
-    expect(sourceHref("task", "t-1")).toBe("#/tasks?focus=t-1");
-    expect(sourceHref("event", "e-1")).toBe("#/calendar?event=e-1");
+    // Rules 23/24: every fallback is the record's canonical route from
+    // shared/entity-routes — the `highlight` param the list pages read — not
+    // the `?focus=` / `?event=` links nothing consumed.
+    expect(sourceHref("obligation", "ob-1")).toBe("#/dashboard/obligations?highlight=obligation%3Aob-1");
+    expect(sourceHref("task", "t-1")).toBe("#/dashboard/tasks?highlight=task%3At-1");
+    expect(sourceHref("event", "e-1")).toBe("#/calendar?highlight=event%3Ae-1");
     expect(sourceHref("document", "d-1")).toBe("#/documents/d-1");
     expect(sourceHref("liability", "l-1")).toBe("#/profiles/l-1");
+    expect(sourceHref("income", "i-1")).toBe("#/dashboard/finance?highlight=income%3Ai-1");
+    // No id → the list page, and never a bare /documents (no such route).
+    expect(sourceHref("document", "")).toBe("#/linked?tab=documents");
+    for (const sys of ["event", "profile", "obligation", "liability", "task", "habit", "document", "goal", "income"] as const) {
+      const href = sourceHref(sys, "id-1");
+      expect(href, sys).not.toMatch(/[?&](focus|open|event)=/);
+      expect(href, sys).not.toBe("#/documents");
+    }
   });
 
   it("never returns an empty href", () => {

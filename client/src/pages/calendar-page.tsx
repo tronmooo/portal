@@ -10,6 +10,7 @@ import { RecurringDatesPage } from "@/components/recurring/RecurringDatesPage";
 import { SeriesDialogHost } from "@/components/recurring/RecurringDatesManager";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useProfileScope } from "@/hooks/useProfileScope";
+import { useRecordHighlight } from "@/hooks/useRecordHighlight";
 import type { ProfileSelection } from "@shared/profile-selection";
 import { canonicalTimelineWindow, timelineQueryKey, timelineUrl } from "@shared/calendar-window";
 import { rollupOccurrences } from "@shared/dated-items";
@@ -31,6 +32,9 @@ export default function CalendarPage() {
   const [tab, setTab] = useState<"calendar" | "recurring">(() => {
     try { return new URL(window.location.href).searchParams.get("tab") === "recurring" ? "recurring" : "calendar"; } catch { return "calendar"; }
   });
+  // Rules 23/24: `?highlight=event:<id>` — CalendarView selects the day and
+  // opens the event itself (manual: the row only exists once it has).
+  const highlight = useRecordHighlight("event", { manual: true, onHighlight: () => setTab("calendar") });
 
   // ── Today / This Week / Total summary band ────────────────────────────────
   //
@@ -131,7 +135,7 @@ export default function CalendarPage() {
             ))}
           </div>
 
-          <CalendarView externalFilterIds={filterIds} externalFilterMode={filterMode} />
+          <CalendarView externalFilterIds={filterIds} externalFilterMode={filterMode} highlightSourceId={highlight?.id ?? null} />
         </>
       ) : (
         <SeriesDialogHost>

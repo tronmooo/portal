@@ -14,8 +14,9 @@
 
 import { advance, type RecurrenceRule } from "./recurrence";
 import { billRecurrenceRule } from "./liability-recurrence";
-import { nextLoanDueDate } from "./loan-facts";
 import { normalizeDateString } from "./extraction-normalize";
+import { readMonthlyPayment, readStoredDueDate } from "./liability-fields";
+import { getRecordTemporalStatus } from "./temporal-status";
 import { liabilityBillStatus, type BillStatus } from "./liability-status";
 import { liabilityFamily } from "./liability-types";
 import {
@@ -119,21 +120,9 @@ import { addMonthsISO } from "./date-math";
  * must not be shadowed by the `dueDate` written when the liability was created.
  */
 export function resolveLiabilityDueDate(f: Record<string, any> | null | undefined): string | null {
-  const fields = f || {};
-  // The first spelling that PARSES, not the first that is merely present.
-  // Coalescing with `??` first meant an empty-string `nextPayment` — which `??`
-  // does not skip — short-circuited the chain and returned null, and the
-  // liability then emitted no series at all: it left the calendar entirely.
-  for (const v of [
-    fields.nextPaymentDate, fields.nextPayment, fields.next_payment,
-    fields.nextDueDate, fields.next_due_date,
-    fields.dueDate, fields.due_date,
-    fields.firstPaymentDate,
-  ]) {
-    const iso = normalizeDateString(v);
-    if (iso) return iso;
-  }
-  return null;
+  // The first spelling that PARSES, not the first that is merely present —
+  // ONE precedence, shared/liability-fields `readStoredDueDate` (Rule 11).
+  return readStoredDueDate(f);
 }
 
 /**
@@ -165,40 +154,20 @@ export function deriveScheduleFields(
   const fam = liabilityFamily(typeKey);
   if (fam === "recurring") return f;
 
-  const amount = Number(f.monthlyPayment ?? f.minimumPayment ?? f.amount ?? f.monthlyAmount ?? 0) || 0;
-  // Next payment date: an explicit date, else the due day this/next month.
-  // `nextPayment` included for the same reason as in shared/calendar-adapters:
-  // it is a spelling the profile writer produces, and without it this falls
-  // through to `todayISO` — putting a payment on the wrong day rather than
-  // none at all, which is worse.
+  const amount = readMonthlyPayment(f);
+  // Next payment date: THE temporal engine (shared/temporal-status, Rule 13).
   // A loan or card is due on its PAYMENT DAY, counted from today (shared/
-  // loan-facts) — never on the origin date. Anchoring on `firstPaymentDate`
-  // put the Dodge loan's schedule at Mar 31 2025: "536d overdue", two
-  // "missed" months that were history, and a next-due the list contradicted.
-  let due = fam === "one_time"
-    ? clip(resolveLiabilityDueDate(f) ?? "")
-    : (nextLoanDueDate(f, todayISO) ?? "");
-  if (!ISO_RE.test(due)) {
-    const day = parseInt(String(f.dueDay ?? ""), 10);
-    if (day >= 1 && day <= 31) {
-      const d = new Date(todayISO + "T00:00:00");
-      let mo = d.getMonth() + (d.getDate() > day ? 1 : 0);
-      const yr = d.getFullYear() + (mo > 11 ? 1 : 0);
-      mo = ((mo % 12) + 12) % 12;
-      const last = new Date(yr, mo + 1, 0).getDate();
-      due = new Date(yr, mo, Math.min(day, last)).toLocaleDateString("en-CA");
-    }
-  }
-  // No explicit date and no due day: the last recorded payment plus one cycle
-  // is the only date the data actually supports. Without even that there is
-  // NO due date — and none is invented. This used to fall back to `todayISO`,
-  // which put a loan with no due date on the calendar as "due today" every
-  // single day (the anchor moved with the clock), and the assistant then told
-  // the user their mortgage was due today, forever.
-  if (!ISO_RE.test(due)) {
-    const lastPaid = clip(f.lastPaidDate ?? f.last_paid_date);
-    if (ISO_RE.test(lastPaid)) due = addMonthsISO(lastPaid, 1);
-  }
+  // loan-facts) — never on the origin date; a one-time debt on its stored
+  // date. Anchoring on `firstPaymentDate` put the Dodge loan's schedule at
+  // Mar 31 2025: "536d overdue", two "missed" months that were history, and a
+  // next-due the list contradicted.
+  //
+  // Rule 14: with no explicit date and no due day there is NO due date — and
+  // none is invented. This used to fall back to `todayISO` (a loan with no
+  // due date was "due today" every day, forever) and then to "last paid + 1
+  // month", which inferred a schedule from payment history. Neither exists
+  // now: the schedule has no anchor, the status is "not scheduled".
+  const due = getRecordTemporalStatus({ kind: "liability", fields: f, typeKey }, todayISO).nextOccurrence ?? "";
   const hasDue = ISO_RE.test(due);
 
   let count: number | null = null;
@@ -232,10 +201,9 @@ export function liabilityFrequency(liability: Liabilityish): string {
   return String(f.frequency ?? f.billingFrequency ?? "monthly").toLowerCase().trim() || "monthly";
 }
 
-/** The base per-occurrence amount (before per-occurrence overrides). */
+/** The base per-occurrence amount (before per-occurrence overrides) — the ONE reader (shared/liability-fields). */
 export function liabilityAmount(liability: Liabilityish): number {
-  const f = liability.fields || {};
-  return Number(f.monthlyAmount ?? f.amount ?? f.cost ?? 0) || 0;
+  return readMonthlyPayment(liability.fields || {});
 }
 
 /** Anchor date the series is generated from. */

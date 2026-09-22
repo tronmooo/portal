@@ -51,6 +51,7 @@ import {
   Clock, MapPin, Repeat, Trash2, Pencil, X,
   ListTodo, Flame, CreditCard, Users, FileText,
   CheckSquare, ChevronDown, RefreshCw, CheckCircle2, Settings2,
+  Banknote, Cake, Heart, Stethoscope, Wrench,
 } from "lucide-react";
 import CalendarManagerPanel from "@/components/CalendarManagerPanel";
 import { WeekdayPicker, isCustomDaySet, seedDaySet, CUSTOM_DAYS_VALUE } from "@/components/recurring/WeekdayPicker";
@@ -58,11 +59,14 @@ import type {
   CalendarTimelineItem, CalendarEvent, EventCategory, Profile,
 } from "@shared/schema";
 import { EVENT_CATEGORY_COLORS } from "@shared/schema";
+import { KIND_LABELS, calendarItemLabel, calendarSourceKind } from "@shared/calendar-occurrences";
 import { isInScope, selfIdsFrom, withAncestorOwnerIds } from "@shared/scope";
 import { isOfferablePerson } from "@shared/entity-classify";
 import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
+import { routeForEntity } from "@shared/entity-routes";
+import { flashRecordElement } from "@/hooks/useRecordHighlight";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -155,6 +159,33 @@ const TYPE_LABELS: Record<string, string> = {
   habit: "Habit",
   obligation: "Bill Due",
 };
+
+// Rule 37: an item is labelled and iconed by what it CAME FROM (item.sourceType,
+// stamped by the timeline builders; legacy rows fall back to meta.kind), so a
+// paycheck reads "Income", a birthday "Birthday", a licence "Document
+// Expiration" — never all "Event". TYPE_* above are the coarse fallback.
+const SOURCE_ICONS: Record<string, any> = {
+  income: Banknote,
+  birthday: Cake,
+  anniversary: Heart,
+  appointment: Stethoscope,
+  maintenance: Wrench,
+  document: FileText,
+  expiration: FileText,
+  renewal: FileText,
+  bill: CreditCard,
+  liability: CreditCard,
+  subscription: CreditCard,
+  payment: CreditCard,
+  task: ListTodo,
+  habit: Flame,
+  event: CalendarIcon,
+};
+const itemIcon = (item: { type: string; sourceType?: string | null; meta?: Record<string, any> }) =>
+  SOURCE_ICONS[calendarSourceKind(item)] || TYPE_ICONS[item.type] || CalendarIcon;
+const itemLabel = (item: { type: string; sourceType?: string | null; meta?: Record<string, any> }) =>
+  calendarItemLabel(item) || TYPE_LABELS[item.type] || "Event";
+const kindLabel = (kind: unknown) => (KIND_LABELS as Record<string, string>)[String(kind)] ?? String(kind);
 
 const CATEGORY_LABELS: Record<EventCategory, string> = {
   personal: "Personal",
@@ -667,7 +698,7 @@ export function EventDetailDialog({
   const { toast } = useToast();
   const [, setLocation] = useLocation();
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const Icon = TYPE_ICONS[item.type] || CalendarIcon;
+  const Icon = itemIcon(item);
   // A single dated occurrence of a recurring bill — deleting it skips that date
   // rather than destroying the whole series.
   const isOccurrence = item.type === "obligation" && !!item.meta?.occurrenceId;
@@ -868,7 +899,7 @@ export function EventDetailDialog({
               className="text-xs h-5"
               style={{ borderColor: item.color, color: item.color }}
             >
-              {TYPE_LABELS[item.type]}
+              {itemLabel(item)}
             </Badge>
             {item.category && item.type === "event" && (
               <Badge
@@ -941,7 +972,7 @@ export function EventDetailDialog({
                 <Badge variant="outline" className="text-xs h-5 text-green-600 border-green-600">autopay</Badge>
               )}
               {item.meta?.kind && (
-                <Badge variant="outline" className="text-xs h-5">{item.meta.kind}</Badge>
+                <Badge variant="outline" className="text-xs h-5">{kindLabel(item.meta.kind)}</Badge>
               )}
               {item.meta?.status && item.meta.status !== "pending" && (
                 <Badge
@@ -986,7 +1017,7 @@ export function EventDetailDialog({
             <Button
               variant="secondary"
               size="sm"
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setLocation(`/profile/${item.sourceId}`); onClose(); }}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setLocation(routeForEntity("liability", item.sourceId)); onClose(); }}
               data-testid="btn-occ-open-bill"
             >
               <CreditCard className="h-3.5 w-3.5 mr-1" />Open bill
@@ -1122,13 +1153,14 @@ function DayAgenda({
   return (
     <div className="space-y-1">
       {dayItems.map(item => {
-        const Icon = TYPE_ICONS[item.type] || CalendarIcon;
+        const Icon = itemIcon(item);
         return (
           <button
             key={item.id}
             className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-muted/50 transition-colors text-left group"
             onClick={() => onItemClick(item)}
             data-testid={`agenda-item-${item.id}`}
+            data-record-id={item.sourceId}
           >
             <div
               className="w-1 h-8 rounded-full shrink-0"
@@ -1165,7 +1197,7 @@ function DayAgenda({
               className="text-2xs h-4 px-1 shrink-0 opacity-60 group-hover:opacity-100"
               style={{ borderColor: item.color, color: item.color }}
             >
-              {TYPE_LABELS[item.type]}
+              {itemLabel(item)}
             </Badge>
           </button>
         );
@@ -1181,9 +1213,15 @@ interface CalendarViewProps {
   externalFilterIds?: string[];
   /** External filter mode from parent */
   externalFilterMode?: "everyone" | "selected";
+  /**
+   * Rules 23/24: the event (timeline item id or source record id) a
+   * `?highlight=event:<id>` link asked for. The view jumps to its month,
+   * selects its day, opens its detail and flashes its agenda row.
+   */
+  highlightSourceId?: string | null;
 }
 
-export default function CalendarView({ externalFilterIds, externalFilterMode }: CalendarViewProps = {}) {
+export default function CalendarView({ externalFilterIds, externalFilterMode, highlightSourceId }: CalendarViewProps = {}) {
   const [, setLocation] = useLocation();
   const today = new Date();
   const todayStr = toLocalDateStr(today);
@@ -1357,6 +1395,28 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
     () => getMonthDays(viewYear, viewMonth),
     [viewYear, viewMonth]
   );
+
+  // Land on the highlighted event once the timeline that contains it is in:
+  // its month, its day selected, its detail open, its agenda row lit.
+  const highlightedOnce = useRef<string | null>(null);
+  useEffect(() => {
+    if (!highlightSourceId || highlightedOnce.current === highlightSourceId) return;
+    const hit = timelineItems.find(i => i.sourceId === highlightSourceId || i.id === highlightSourceId);
+    if (!hit) return;
+    highlightedOnce.current = highlightSourceId;
+    const day = String(hit.date || "").slice(0, 10);
+    if (day) {
+      const [y, m] = day.split("-").map(Number);
+      if (y && m) { setViewYear(y); setViewMonth(m - 1); setViewDate(new Date(y, m - 1, Number(day.slice(8, 10)) || 1)); }
+      setSelectedDate(day);
+    }
+    setDetailItem(hit);
+    const t = setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-record-id="${hit.sourceId}"]`);
+      if (el) flashRecordElement(el);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [highlightSourceId, timelineItems]);
 
   const goToday = () => {
     setViewMonth(today.getMonth());

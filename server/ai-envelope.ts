@@ -28,6 +28,7 @@ import type { ChatMutation } from "@shared/schema";
 import { domainsForEntity, endpointForEntity, type Domain } from "@shared/entity-domains";
 import { deleteDocumentEverywhere } from "./document-deletion";
 import { unpayBillOccurrence } from "./liability-payments";
+import { logIntegrity } from "./integrity-log";
 
 export interface ToolVerification {
   /** Post-write read-back: the record is visible in the database (creates/
@@ -286,6 +287,8 @@ export async function recordActionLog(
   envelope: any,
   beforeRows: any[] | null,
   source = "chat",
+  /** Rule 2: the identity that makes this write idempotent on replay. */
+  ids?: { turnId?: string; requestId?: string; operationId?: string },
 ): Promise<void> {
   try {
     const op = classifyOperation(toolName);
@@ -328,6 +331,9 @@ export async function recordActionLog(
       reversible,
       reversePlan,
       source,
+      ...(ids?.turnId ? { turnId: ids.turnId } : {}),
+      ...(ids?.requestId ? { requestId: ids.requestId } : {}),
+      ...(ids?.operationId ? { operationId: ids.operationId } : {}),
     });
     await Promise.race([write, new Promise((r) => setTimeout(r, 750))]);
   } catch (e: any) {
@@ -647,12 +653,32 @@ export async function finalizeToolResult(
                 verification.duplicate_count = rows.filter(
                   (r: any) => r.id !== entityId && normalizeName(meta.name(r)) === norm
                 ).length;
+                // Rule 38: a same-named sibling after a create is an anomaly
+                // the integrity log must count, not a diagnostic the model is
+                // told to keep quiet about. (Duplicate profiles are allowed
+                // by product policy for non-people — still worth counting.)
+                if (verification.duplicate_count > 0) {
+                  logIntegrity({
+                    kind: "duplicate_write",
+                    message: `${toolName} created "${meta.name(row)}" alongside ${verification.duplicate_count} same-named ${entityType} row(s)`,
+                    entityType, entityId: String(entityId),
+                    detail: { tool: toolName, duplicateCount: verification.duplicate_count },
+                  });
+                }
               }
             }
             const linked: string[] = Array.isArray(row.linkedProfiles) ? row.linkedProfiles : [];
             if (linked.length > 0) {
               const ids = await profileIdSet(ctx, entityType === "profile");
               verification.profile_isolation_valid = linked.every((id) => ids.has(id));
+              if (!verification.profile_isolation_valid) {
+                logIntegrity({
+                  kind: "scope_mismatch",
+                  message: `${toolName} wrote ${entityType} ${String(entityId).slice(0, 8)} linked to a profile outside this user's set`,
+                  entityType, entityId: String(entityId),
+                  detail: { tool: toolName, linked: linked.filter((id) => !ids.has(id)) },
+                });
+              }
             } else {
               // Orphans belong to self by the app-wide scope rule — valid.
               verification.profile_isolation_valid = true;

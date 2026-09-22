@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { OccurrenceKind } from "./calendar-occurrences";
 import {
   type TrackerMetricDefinition,
   trackerMetricDefinitionSchema,
@@ -144,6 +145,12 @@ export interface ChatMessage {
    *  so historical actions never re-attach to a newer response. */
   turnId?: string;
   sourceMessageId?: string;
+  /** Rule 22 — a user message whose run has not settled yet. The chat page
+   *  restores it from GET /api/chat/runs/:id after a navigation or reload
+   *  instead of re-sending it. */
+  pending?: boolean;
+  /** The send failed; the row shows "Not sent · Retry". */
+  failed?: boolean;
   attachment?: {
     name: string;
     mimeType: string;
@@ -414,6 +421,14 @@ export interface Tracker {
    * nothing was capped. Additive — `entries` keeps its name and shape.
    */
   entriesTotal?: number;
+  /**
+   * The habit this tracker was auto-created to MIRROR (server/habit-completion
+   * resolveTrackerForHabit stamps it). A tracker the user made themselves and
+   * later linked from a habit has none. This is the RELATIONSHIP the rename
+   * cascade and the "is it a mirror?" test read — never the name (Rules 19/20;
+   * see FIELD_ORIGIN["tracker.name[mirror]"]).
+   */
+  linkedHabitId?: string | null;
 }
 
 export interface TrackerField {
@@ -488,6 +503,8 @@ export const insertTrackerSchema = z.object({
     isPrimary: z.boolean().optional(),
   })).default([]),
   metricDefinition: trackerMetricDefinitionSchema.optional(),
+  /** Reverse edge of habit.linkedTrackerId, set only when a tracker is created AS a habit's mirror. */
+  linkedHabitId: z.string().nullable().optional(),
 });
 
 export type InsertTracker = z.infer<typeof insertTrackerSchema>;
@@ -530,6 +547,62 @@ export type HabitFrequency = "daily" | "weekly" | "custom";
 // Morning/Afternoon/Evening/Night grouping on the Habits screen instead of
 // inferring the slot from the last check-in timestamp.
 export type HabitTimeOfDay = "morning" | "afternoon" | "evening" | "bedtime" | "anytime";
+
+// ============================================================
+// FIELD PROVENANCE (Rules 19/20)
+// ============================================================
+/**
+ * Linked data propagates through RELATIONSHIPS, not copies. Every persisted
+ * field is one of four kinds, and the code that reads or writes it has to
+ * know which:
+ *
+ *  - "canonical": the one place the fact lives. Everything else resolves it
+ *    by id, so an edit here is seen everywhere at once.
+ *  - "derived": computed from canonical fields at read time (a streak, a
+ *    total, a KPI, a calendar occurrence). Never hand-written, never stored
+ *    as truth.
+ *  - "copied": a duplicate of a canonical field kept on ANOTHER row for
+ *    display or query convenience. A copy is only legitimate while a cascade
+ *    keeps it in sync when the canonical field changes
+ *    (server/habit-rename-cascade.ts, server/profile-rename-cascade.ts). A
+ *    copy with no cascade is a stale-dependency bug.
+ *  - "snapshot": a deliberate point-in-time record that must NOT follow later
+ *    edits — a payment's amount as it was paid, an audit row. Rewriting one
+ *    to match the present is falsifying history.
+ */
+export type FieldProvenance = "canonical" | "derived" | "copied" | "snapshot";
+
+export interface FieldOrigin {
+  kind: FieldProvenance;
+  /** For copied/derived fields: the canonical field it comes from. */
+  from?: string;
+  /** For copied fields: the module that carries a change across. */
+  syncedBy?: string;
+  note?: string;
+}
+
+/** Which fields are canonical, derived, copied or snapshots — the map every
+ *  cascade and every "why did this not update?" investigation starts from. */
+export const FIELD_ORIGIN: Record<string, FieldOrigin> = {
+  "habit.name": { kind: "canonical" },
+  "habit.linkedTrackerId": { kind: "canonical", note: "the habit → tracker edge; tracker.linkedHabitId is the reverse edge stamped when the mirror is created" },
+  "habit.currentStreak": { kind: "derived", from: "habit.checkins" },
+  "tracker.name": { kind: "canonical", note: "a tracker the user made themselves" },
+  "tracker.name[mirror]": {
+    kind: "copied", from: "habit.name", syncedBy: "server/habit-rename-cascade.ts",
+    note: "a tracker auto-created to mirror a habit (tracker.linkedHabitId === habit.id) is named after the habit and follows its renames; 'Read for 15 minutes' → 'Read for 12 minutes' renames the tracker too",
+  },
+  "tracker.linkedHabitId": { kind: "canonical" },
+  "tracker_entries.entry_values._habitId": { kind: "copied", from: "habit.id", note: "provenance marker on a mirrored entry — an id, so it never goes stale" },
+  "profile.name": { kind: "canonical" },
+  "tracker.name[owner suffix]": { kind: "copied", from: "profile.name", syncedBy: "server/profile-rename-cascade.ts" },
+  "event.title[birthday]": { kind: "copied", from: "profile.name", syncedBy: "server/profile-rename-cascade.ts" },
+  "liability_payments.*": { kind: "snapshot", note: "amount / date / balance as they were when the payment was recorded; editing the liability later never rewrites them" },
+  "ai_action_log.*": { kind: "snapshot", note: "what happened at the time" },
+  "expense.amount": { kind: "canonical" },
+  "stats.recentActivity": { kind: "derived", note: "rows carry the source entity's real id and are deduped on it (Rule 36)" },
+  "calendar_timeline.item": { kind: "derived", note: "virtual; sourceType names the originating record kind (Rule 37)" },
+};
 
 export interface Habit {
   id: string;
@@ -1184,9 +1257,21 @@ export type InsertEvent = z.input<typeof insertEventSchema>;
 
 export type CalendarItemType = "event" | "task" | "habit" | "obligation";
 
+/**
+ * Rule 37: what KIND of record a calendar item came from. `type` is the
+ * coarse rendering/action family (a paycheck and a birthday both behave like
+ * events on the grid); `sourceType` is the honest label — "income",
+ * "birthday", "document" (expiration), "bill", "reminder"… — so the calendar
+ * never shows a paycheck as "Event". Vocabulary: shared/calendar-occurrences
+ * OccurrenceKind (+ the four coarse types for plain records).
+ */
+export type CalendarSourceType = OccurrenceKind | CalendarItemType | "reminder";
+
 export interface CalendarTimelineItem {
   id: string;
   type: CalendarItemType;
+  /** Rule 37 — set by every timeline builder; readers fall back to `type`. */
+  sourceType?: CalendarSourceType;
   title: string;
   date: string;
   time?: string;
@@ -1407,7 +1492,11 @@ export interface DashboardStats {
   monthlySpend: number;
   weeklyEntries: number;
   streaks: { name: string; days: number }[];
-  recentActivity: { type: string; description: string; timestamp: string }[];
+  // entityType/entityId (Rule 24): the record the row is about, so the feed
+  // opens it through shared/entity-routes instead of a list page.
+  /** Rule 36: `id` is the SOURCE entity's id (expense / task / payment /
+   *  entry), never a generated string — the feed dedupes on `${type}|${id}`. */
+  recentActivity: { id: string; type: string; description: string; timestamp: string; entityType?: string; entityId?: string }[];
   // Phase 2 additions
   totalHabits: number;
   habitCompletionRate: number; // 0-100%
@@ -1681,6 +1770,10 @@ export interface AiActionLog {
   createdAt: string;
   undoneAt?: string | null;
   undoneByLogId?: string | null;
+  /** Rule 2: which turn / client request / operation produced this write. */
+  turnId?: string | null;
+  requestId?: string | null;
+  operationId?: string | null;
 }
 
 export interface InsertAiActionLog {
@@ -1695,4 +1788,41 @@ export interface InsertAiActionLog {
   reversible?: boolean;
   reversePlan?: Record<string, unknown>;
   source?: string;
+  turnId?: string;
+  requestId?: string;
+  operationId?: string;
+}
+
+// ============================================================
+// AI CHAT RUNS (Rule 22: background AI jobs survive navigation)
+// ============================================================
+// One row per client request to /api/chat, keyed by the client's request id.
+// The row is the execution state the UI subscribes to: leaving the page and
+// coming back restores status, reply and action results from here instead of
+// re-running the request. It is also the durable half of Rule 2: a retry of a
+// completed request returns the stored result.
+
+export type AiChatRunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface AiChatRun {
+  id: string;
+  requestId: string;
+  status: AiChatRunStatus;
+  turnId?: string | null;
+  /** The user's message, clipped — for the restore UI and for debugging. */
+  message?: string | null;
+  /** The exact body the buffered /api/chat response carried. */
+  result?: Record<string, unknown> | null;
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertAiChatRun {
+  requestId: string;
+  status: AiChatRunStatus;
+  turnId?: string;
+  message?: string;
+  result?: Record<string, unknown> | null;
+  error?: string | null;
 }

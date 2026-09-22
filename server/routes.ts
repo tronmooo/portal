@@ -55,9 +55,11 @@ import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-c
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
 import { checkProfileDelete } from "@shared/profile-delete";
 import { cascadeProfileRename } from "./profile-rename-cascade";
+import { cascadeHabitRename } from "./habit-rename-cascade";
 import { normalizeEntityDateFields, impossibleCalendarDays, isRealCalendarDay, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { itemsClaimedByActions, type ProposedAction } from "@shared/extraction-actions";
+import { classifyFinancialDocKind, decideExpenseCreation, detectExpenseInstruction, inferFinancialStatus, isFinancialStatus } from "@shared/financial-status";
 import { executeActions } from "./action-executor";
 import { seriesFromAll } from "@shared/calendar-adapters";
 import { fieldIdentity, PROFILE_FIELD_GROUPS, cleanupStoredProfileFields, mergeFieldWrite, fieldValuePersisted } from "@shared/profile-field-identity";
@@ -1790,6 +1792,43 @@ export async function registerRoutes(
   // the module import is deliberate: on Vercel, work started after the
   // response can be frozen mid-flight, so we hold the (unread) response until
   // the chunk graph is actually parsed.
+  /** A run still marked running after this long is presumed dead (the
+   *  platform's hard limit is 300s); a retry may open a fresh run. */
+  const CHAT_RUN_STALE_MS = 6 * 60_000;
+  /** The stored result must fit a jsonb column comfortably; document
+   *  previews are lazy ids already, artifacts can be large. */
+  const clipChatRunResult = (result: any): Record<string, unknown> => {
+    try {
+      const s = JSON.stringify(result ?? {});
+      if (s.length <= 400_000) return JSON.parse(s);
+      const { artifact, charts, tables, report, ...rest } = result || {};
+      return { ...rest, truncated: true };
+    } catch {
+      return { reply: String(result?.reply ?? ""), truncated: true };
+    }
+  };
+
+  // Rule 22: the client subscribes to a run's state — after a navigation, a
+  // reload or a dropped socket — instead of re-sending the message.
+  app.get("/api/chat/runs/:requestId", asyncHandler(async (req, res) => {
+    const requestId = String(req.params.requestId || "");
+    if (!/^[A-Za-z0-9._:\-]{8,128}$/.test(requestId)) {
+      return res.status(400).json({ error: "Invalid request id" });
+    }
+    const run = await storage.getAiChatRun(requestId);
+    if (!run) return res.status(404).json({ error: "No run with that id", status: "unknown" });
+    const stale = run.status === "running" && Date.now() - Date.parse(run.updatedAt) >= CHAT_RUN_STALE_MS;
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      requestId: run.requestId,
+      status: stale ? "failed" : run.status,
+      turnId: run.turnId ?? null,
+      updatedAt: run.updatedAt,
+      ...(run.status === "completed" ? { result: run.result } : {}),
+      ...(run.status === "failed" || stale ? { error: run.error || "The request did not finish." } : {}),
+    });
+  }));
+
   app.get("/api/chat/warmup", asyncHandler(async (_req, res) => {
     try { await aiEngineMod(); } catch { /* warmup is best-effort */ }
     res.json({ ok: true, ts: Date.now() });
@@ -1837,6 +1876,9 @@ export async function registerRoutes(
       send("ack", { ok: true });
       return handle;
     };
+    // Rule 22: the durable run this request is recorded under ("" when the
+    // client sent no request identity — then nothing is restorable).
+    let runRequestId = "";
     try {
       const { message, history } = req.body;
       if (!message || typeof message !== "string") {
@@ -1893,6 +1935,36 @@ export async function registerRoutes(
         setIdem(userId, idem, { status: "pending", expires: Date.now() + IDEM_TTL_MS });
       }
 
+      // Turn identity (chat hallucination remediation, item 7): the client's
+      // optimistic message id rides along so every action/operation the engine
+      // emits can be traced back to the message that caused it. The engine
+      // mints the turn id itself — a replayed or duplicated client id must
+      // never merge two turns' action cards.
+      const sourceMessageId = typeof req.body?.sourceMessageId === "string" && req.body.sourceMessageId.length <= 128
+        ? req.body.sourceMessageId
+        : undefined;
+
+      // ── Rules 2 + 22: DURABLE RUN STATE, KEYED BY THE CLIENT'S REQUEST ID ──
+      // The in-memory Idempotency-Key cache above dies with the serverless
+      // instance; this row does not. A request that already COMPLETED returns
+      // its stored result (no tool re-runs); one still RUNNING tells the client
+      // to poll GET /api/chat/runs/:requestId instead of starting a second
+      // execution; anything else opens a fresh run. The client restores the
+      // same row when it navigates away and back (Rule 22).
+      runRequestId = idem || sourceMessageId || "";
+      if (runRequestId) {
+        const priorRun = await storage.getAiChatRun(runRequestId).catch(() => undefined);
+        if (priorRun?.status === "completed" && priorRun.result) {
+          res.setHeader("X-Idempotent-Replay", "1");
+          return res.json(priorRun.result);
+        }
+        if (priorRun?.status === "running" && Date.now() - Date.parse(priorRun.updatedAt) < CHAT_RUN_STALE_MS) {
+          res.setHeader("Retry-After", "2");
+          return res.status(409).json({ error: "This message is still being processed.", code: "RUN_IN_PROGRESS", requestId: runRequestId });
+        }
+        await storage.upsertAiChatRun({ requestId: runRequestId, status: "running", message: sanitize(message) }).catch(() => undefined);
+      }
+
       // Validation passed — switch to SSE mode now (headers flush, ack frame,
       // heartbeat timer) before any AI latency accrues.
       if (wantsStream) sse = beginSse();
@@ -1942,19 +2014,15 @@ export async function registerRoutes(
             console.warn("[classifyCapture] swallowed error:", (err as Error).message);
             return null;
           });
-      // Turn identity (chat hallucination remediation, item 7): the client's
-      // optimistic message id rides along so every action/operation the engine
-      // emits can be traced back to the message that caused it. The engine
-      // mints the turn id itself — a replayed or duplicated client id must
-      // never merge two turns' action cards.
-      const sourceMessageId = typeof req.body?.sourceMessageId === "string" && req.body.sourceMessageId.length <= 128
-        ? req.body.sourceMessageId
-        : undefined;
       const tEngineStart = Date.now();
       const result = await (processMessage as any)(cleanMessage, boundedHistory, userId, {
         profileFilterIds,
         debug,
         sourceMessageId,
+        // Rule 2: the stable client request id every operation id derives from.
+        requestId: runRequestId || undefined,
+        // Rule 6: the UI's selected profile is the default owner for creates.
+        activeProfileIds: activeProfileIds(req),
         // Forward engine progress frames (round / assistant_delta /
         // tool_start / tool_result) straight onto the SSE stream.
         ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
@@ -2153,6 +2221,17 @@ export async function registerRoutes(
         console.error("[capture] failed to record chat capture:", (err as Error).message);
       }
 
+      // Rule 22: the run is COMPLETED in the durable state before the stream
+      // closes — a serverless instance may freeze the moment the response
+      // ends, and a client that navigated away restores from this row.
+      if (runRequestId) {
+        await storage.upsertAiChatRun({
+          requestId: runRequestId, status: "completed",
+          turnId: typeof (result as any)?.turnId === "string" ? (result as any).turnId : undefined,
+          result: clipChatRunResult(result),
+        }).catch((e: any) => console.warn("[chat-run] completion write failed:", e?.message || e));
+      }
+
       // Production latency accounting — one line per turn in the function logs.
       console.log(`[chat-timing] engine=${tEngine}ms classifierWait=${tClassifierWait}ms capture=${tCapture}ms bump=${tBump}ms mutations=${mutations.length} total=${Date.now() - tTurnStart}ms cold=${coldTurn} routed=${routed}`);
 
@@ -2169,6 +2248,10 @@ export async function registerRoutes(
     } catch (err: any) {
       const msg = err?.message || "unknown error";
       log.error("[Chat]", msg);
+      // Rule 22: a failed run is recorded as failed, never left "running".
+      if (runRequestId) {
+        await storage.upsertAiChatRun({ requestId: runRequestId, status: "failed", error: String(msg).slice(0, 500) }).catch(() => undefined);
+      }
       // Provide actionable error messages based on error type. In SSE mode
       // headers are already sent (200), so errors are delivered as an `error`
       // frame carrying the same status + body the buffered path returns.
@@ -4169,8 +4252,43 @@ ${JSON.stringify(ctx, null, 2)}`;
         }
       }
 
-      // Create expense if user confirmed
-      if (req.body.createExpense) {
+      // Create expense if user confirmed.
+      //
+      // ── RULE 3 / RULE 4: NEVER TRUST `createExpense` ALONE ──────────────
+      // The body used to be the whole decision: whatever the client put in
+      // `createExpense` became a row in the ledger, and the review pane sent
+      // the AI's proposal unconditionally — so an unpaid $549.50 estimate
+      // became an expense. The decision is made here, from what the DOCUMENT
+      // records (the financialStatus the upload stored, or inferred from its
+      // fields), and the user's explicit word outranks all of it
+      // (shared/financial-status.decideExpenseCreation). Refusal is a 200 with
+      // `expenseSkipped`, not a failure: nothing went wrong, nothing was owed.
+      let expenseSkipped: { reason: string; status: string } | null = null;
+      const expenseGate = (() => {
+        const exp = req.body.createExpense;
+        if (!exp) return null;
+        const docData: Record<string, any> =
+          (extractionDoc as any)?.extractedData && typeof (extractionDoc as any).extractedData === "object"
+            ? (extractionDoc as any).extractedData : {};
+        const userMsg = [req.body.userMessage, req.body.userInstruction, exp?.userMessage]
+          .filter((s: unknown) => typeof s === "string" && s.trim()).join("\n");
+        // A tick the user made on a row the review told them is NOT paid is
+        // an explicit instruction; the default tick is not.
+        const instruction = detectExpenseInstruction(userMsg)
+          ?? (exp?.userConfirmed === true ? "require" : null);
+        const docKind = classifyFinancialDocKind(docData.documentKind || (extractionDoc as any)?.type, docData);
+        const status = isFinancialStatus(docData.financialStatus) ? docData.financialStatus
+          : isFinancialStatus(exp?.financialStatus) ? exp.financialStatus
+          : inferFinancialStatus({ docKind, extractedData: docData, userMessage: userMsg }).status;
+        const decision = decideExpenseCreation({ financialStatus: status, userInstruction: instruction });
+        log.info(`[confirm-extraction] expense gate: kind=${docKind} status=${status} instruction=${instruction ?? "none"} create=${decision.create} source=${decision.source}`);
+        return { status, decision };
+      })();
+      if (req.body.createExpense && expenseGate && !expenseGate.decision.create) {
+        const amt = parseFloat(req.body.createExpense?.amount);
+        expenseSkipped = { reason: expenseGate.decision.reason, status: expenseGate.status };
+        skippedFields.push(`expense${isFinite(amt) && amt > 0 ? ` $${amt.toFixed(2)}` : ""} (${expenseGate.status}) — ${expenseGate.decision.reason}`);
+      } else if (req.body.createExpense) {
         try {
           const exp = req.body.createExpense;
           const amt = parseFloat(exp.amount);
@@ -4277,6 +4395,8 @@ ${JSON.stringify(ctx, null, 2)}`;
           actions: reviewedActions,
           documentId: extractionId,
           documentName: extractionDoc?.name,
+          // RULE 4: "do not create an expense" reaches the write layer.
+          userMessage: typeof req.body.userMessage === "string" ? req.body.userMessage : undefined,
         });
         actionResults = outcome.results;
         saved.push(...outcome.saved);
@@ -4339,6 +4459,9 @@ ${JSON.stringify(ctx, null, 2)}`;
         // Fields deliberately kept on the document only (metadata/junk) —
         // named so a partial save is visible instead of silently claimed.
         skipped: skippedFields,
+        // RULE 3: the expense the client asked for was refused because there
+        // is no evidence it was paid (or the user said not to). Not an error.
+        ...(expenseSkipped ? { expenseSkipped: true, expenseSkippedReason: expenseSkipped.reason, financialStatus: expenseSkipped.status } : {}),
       });
     } catch (err: any) {
       log.error("[ConfirmExtraction]", err?.message || "unknown error");
@@ -4384,7 +4507,11 @@ ${JSON.stringify(ctx, null, 2)}`;
     const profileId = req.query.profileId as string | undefined;
     const filterIds = profileIdsParam ? profileIdsParam.split(",").filter(Boolean) : (profileId ? [profileId] : undefined);
     const userId = cacheUserKey(req as AuthenticatedRequest, "stats:");
-    const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}`;
+    // Rule 27: synthetic QA rows stay out of every total unless the hidden
+    // "show test data" toggle opted in — the same switch /api/dashboard-enhanced
+    // takes, so the lists it reveals add up to the totals it reveals.
+    const includeTestData = String(req.query.includeTestData || "") === "1";
+    const cacheKey = `stats:${userId}:${filterIds?.join(",") || "all"}${includeTestData ? ":test" : ""}`;
     const cached = await getCachedShared(cacheKey);
     if (cached) return res.json(cached);
     // PERF 2026-05-30: enable per-request memo so getStats's internal ~10
@@ -4393,7 +4520,7 @@ ${JSON.stringify(ctx, null, 2)}`;
     // memo it should match the bootstrap path's ~1.5s.
     try { (storage as any).enableRequestMemo?.(); } catch {}
     // dedupe: concurrent identical requests share one DB query
-    const stats = await dedupe(cacheKey, () => storage.getStats(undefined, filterIds));
+    const stats = await dedupe(cacheKey, () => storage.getStats(undefined, filterIds, includeTestData ? { includeTestData } : undefined));
     try { (storage as any).disableRequestMemo?.(); } catch {}
     // 60-second cache. cacheBustMiddleware drops it synchronously on any mutation
     // (including AI-driven /api/chat and /api/upload paths), so this cannot serve
@@ -8208,10 +8335,20 @@ Rules:
         if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
         req.body = { ...req.body, ...parsed.data };
       }
+      // Rules 19/20: a rename carries into the habit's MIRROR tracker by
+      // relationship (server/habit-rename-cascade.ts). Read the old name
+      // first — after the write it is gone.
+      const previousName = typeof req.body?.name === "string"
+        ? (await storage.getHabit(req.params.id))?.name
+        : undefined;
       const result = await storage.updateHabit(req.params.id, req.body);
       if (!result) return res.status(404).json({ error: "Habit not found" });
       const uid_h4 = cacheUserKey(req as AuthenticatedRequest);
       bustCache(`habits:${uid_h4}`); bustCache(`stats:${uid_h4}`);
+      if (previousName !== undefined && result.name !== previousName) {
+        const cascade = await cascadeHabitRename(storage, req.params.id, previousName, result.name);
+        if (cascade.renamedTrackerId) bustCache(`trackers:${uid_h4}`);
+      }
       res.json(result);
     } catch (e: any) {
       // Every refusal is the handler's to map — a typed 409/400, and the

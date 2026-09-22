@@ -282,7 +282,8 @@ describe("seriesFromTasks / Documents", () => {
       { id: "t1", title: "Water plants", dueDate: "2026-07-26", tags: ["recur:weekly"], linkedProfiles: ["me"] },
     ]);
     expect(s).toMatchObject({ kind: "task", recurrence: "weekly", baseDate: "2026-07-26" });
-    expect(s.source.href).toBe("#/tasks?focus=t1");
+    // Rules 23/24: the canonical task deep link (`?focus=` was read by no page).
+    expect(s.source.href).toBe("#/dashboard/tasks?highlight=task%3At1");
   });
 
   it("treats an untagged task as one-off and drops completed ones", () => {

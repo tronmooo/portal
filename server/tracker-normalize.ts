@@ -13,6 +13,7 @@
 
 import type { Tracker, TrackerField } from "../shared/schema";
 import { classifyFitnessActivity, metricKindForKey } from "../shared/fitness-metrics";
+import { isSystemFieldKey } from "../shared/system-fields";
 
 /**
  * Would landing `sourceKey` on `fieldName` change what the number MEANS?
@@ -323,7 +324,7 @@ export function normalizeTrackerEntry(
   const exactClaimed = new Set<string>();
   let numericSourceCount = 0;
   for (const [k, v] of Object.entries(rawValues || {})) {
-    if (k.startsWith("_")) continue; // reserved metadata keys (_notes, _enrichment)
+    if (isSystemFieldKey(k)) continue; // reserved metadata keys (_notes, _enrichment)
     const lc = k.toLowerCase();
     const f = (tracker.fields || []).find(f => String(f.name).toLowerCase() === lc);
     if (f) exactClaimed.add(f.name);
@@ -349,7 +350,7 @@ export function normalizeTrackerEntry(
   for (const [k, v] of Object.entries(rawValues || {})) {
     // Reserved metadata keys pass through untouched: _notes (free text) and
     // _enrichment (provenance/estimates from shared/estimation-engine).
-    if (k.startsWith("_")) { (out as any)[k] = v; continue; }
+    if (isSystemFieldKey(k)) { (out as any)[k] = v; continue; }
     if (consumedUnitKeys.has(k)) continue;
 
     // Resolve field name (value-aware: a non-numeric stray never gets mapped

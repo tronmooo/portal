@@ -9,6 +9,7 @@ import {
   type DateRuleType,
 } from "./date-rules";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "./date-math";
+import { routeForEntity, listRouteForEntity } from "./entity-routes";
 // Pulls every time-sensitive item across the app into a single normalized stream
 // so the dashboard can render one definitive "what's next" view.
 //
@@ -467,7 +468,7 @@ interface AggregatorInputs {
 }
 
 function profileHref(p: any): string {
-  return `#/profiles/${p.id}`;
+  return routeForEntity("profile", p.id, { hash: true });
 }
 
 /** "14:30" → "2:30 PM". Used by the task rows, which show the hour. */
@@ -596,7 +597,7 @@ function upcomingFromRules(rules: readonly DateRule[], profiles: any[]): Upcomin
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: r.occurrenceType === "recurring",
-      href: r.href || "#/calendar",
+      href: r.href || listRouteForEntity("event", { hash: true }),
       relatedProfileId: r.profileId,
       relatedDocumentId: r.sourceEntityType === "document" ? r.sourceEntityId : undefined,
       // Only dates you must DO something about. Flagging every rule within 30
@@ -637,7 +638,7 @@ function extractTasks(tasks: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: (t.tags || []).some((x: any) => String(x).startsWith("recur:")),
-      href: `#/tasks`,
+      href: routeForEntity("task", t.id, { hash: true }),
       relatedProfileId: (t.linkedProfiles || [])[0],
       needsActionSoon: daysUntil <= 3 || t.priority === "high",
       icon: CATEGORY_ICONS.task_due,
@@ -675,7 +676,7 @@ function extractEvents(events: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: e.recurrence && e.recurrence !== "none",
-      href: `#/calendar`,
+      href: routeForEntity("event", e.id, { hash: true }),
       relatedProfileId: (e.linkedProfiles || [])[0],
       needsActionSoon: daysUntil <= 3,
       icon: CATEGORY_ICONS[cat] || CATEGORY_ICONS.calendar_event,
@@ -745,7 +746,7 @@ function extractObligations(obligations: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: o.frequency && o.frequency !== "once",
-      href: `#/obligations`,
+      href: routeForEntity("obligation", o.id, { hash: true }),
       relatedProfileId: (o.linkedProfiles || [])[0],
       needsActionSoon: !o.autopay && daysUntil <= (o.leadTimeDays || 7),
       icon: CATEGORY_ICONS[cat],
@@ -777,7 +778,7 @@ function extractGoals(goals: any[]): UpcomingDate[] {
       urgency: classifyUrgency(daysUntil),
       timeframe: classifyTimeframe(daysUntil),
       recurring: false,
-      href: `#/goals`,
+      href: routeForEntity("goal", g.id, { hash: true }),
       relatedProfileId: (g.linkedProfiles || [])[0],
       needsActionSoon: daysUntil <= 14,
       icon: CATEGORY_ICONS.goal_target,

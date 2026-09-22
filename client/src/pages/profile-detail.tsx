@@ -289,6 +289,8 @@ import { useProfileDocuments } from "@/hooks/useProfileDocuments";
 import { isDocumentOfProfile } from "@shared/document-scope";
 import { checkProfileRename } from "@shared/profile-rename";
 import { isReservedFieldKey } from "@shared/profile-field-identity";
+import { systemFieldEntries } from "@shared/system-fields";
+import { devToolsEnabled } from "@/lib/dev-affordances";
 import { allocatePayment } from "@shared/liability-calc";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
@@ -3391,6 +3393,10 @@ function StaticInfoTab({
     ([k, v]) => !groupedKeys.has(k) && !ALWAYS_HIDDEN_FROM_OTHER.has(k) && !hiddenByAccountCard(k)
       && !isReservedFieldKey(k) && v != null && v !== "" && typeof v !== "object"
   );
+  // Rule 25: system fields never reach an editable row. Developer Mode may
+  // reveal them read-only (below the "Other" section) — through the one gate
+  // in shared/system-fields, so this screen and the delete sweep agree.
+  const systemFields: Array<[string, unknown]> = devToolsEnabled() ? systemFieldEntries(profile.fields) : [];
 
   const handleSaved = () => {
     invalidateDomains("profiles");
@@ -3802,6 +3808,32 @@ function StaticInfoTab({
               ))}
             </CardContent>
           )}
+        </Card>
+      )}
+
+      {/* Developer Mode only: internal metadata, read-only (Rule 25). */}
+      {systemFields.length > 0 && (
+        <Card className="border-dashed" data-testid="profile-system-fields">
+          <CardHeader className="py-2.5 px-4">
+            <CardTitle className="text-xs font-semibold flex items-center gap-2">
+              System
+              <span className="text-[9px] px-1 py-0 rounded border border-border uppercase tracking-wide text-muted-foreground">developer mode</span>
+              <span className="text-[11px] px-1.5 py-0 rounded-full bg-muted text-muted-foreground tabular-nums">{systemFields.length}</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-3 pt-0 space-y-1.5">
+            {systemFields.map(([k, v]) => (
+              <div key={k} className="rounded-md border border-border/60 bg-muted/30 px-2.5 py-1.5 min-w-0" data-testid={`profile-system-field-${k}`}>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-mono text-muted-foreground truncate">{k}</span>
+                  <span className="text-[9px] px-1 py-0 rounded border border-border uppercase tracking-wide text-muted-foreground">system</span>
+                </div>
+                <pre className="text-[10px] font-mono text-foreground/80 whitespace-pre-wrap break-all mt-1 max-h-24 overflow-auto">
+                  {typeof v === "object" && v !== null ? JSON.stringify(v, null, 1) : String(v)}
+                </pre>
+              </div>
+            ))}
+          </CardContent>
         </Card>
       )}
 
@@ -12799,9 +12831,10 @@ function SubscriptionDetailsTab({ profile, profileId, onChanged }: { profile: Pr
       const prev = queryClient.getQueryData(["/api/profiles", profileId, "detail"]);
       queryClient.setQueryData(["/api/profiles", profileId, "detail"], (old: any) => old ? { ...old, notes } : old);
       setIsEditingNotes(false);
-      toast({ title: "Notes saved" });
+      // Rule 16: "Notes saved" waits for the commit (onSuccess below).
       return { prev };
     },
+    onSuccess: () => { toast({ title: "Notes saved" }); },
     onError: (_err: Error, _v: void, ctx: any) => {
       if (ctx?.prev) queryClient.setQueryData(["/api/profiles", profileId, "detail"], ctx.prev);
       toast({ title: "Failed to save notes", variant: "destructive" });

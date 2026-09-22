@@ -61,6 +61,7 @@ import { normalizeDateString } from "./extraction-normalize";
 import type { CalendarSeries, OccurrenceKind } from "./calendar-occurrences";
 import { sourceHref } from "./calendar-occurrences";
 import { profileAndOwnerIds } from "./scope";
+import { isSystemFieldKey } from "./system-fields";
 
 // ─── Vocabulary ──────────────────────────────────────────────────────────────
 
@@ -800,7 +801,7 @@ export function scanEntityDates(
     if (!obj || typeof obj !== "object" || depth > maxDepth) return;
     for (const [key, value] of Object.entries(obj)) {
       // Reserved metadata (`_docFields`, `_mileageHistory`) is bookkeeping.
-      if (key.startsWith("_")) continue;
+      if (isSystemFieldKey(key)) continue;
       const here = path ? `${path}.${key}` : key;
       if (value && typeof value === "object" && !Array.isArray(value)) {
         visit(value, depth + 1, here);
@@ -1552,7 +1553,7 @@ export function impossibleCalendarDays(fields: Record<string, any> | null | unde
   const walk = (obj: any, depth: number, path: string) => {
     if (!obj || typeof obj !== "object" || Array.isArray(obj) || depth > maxDepth) return;
     for (const [key, value] of Object.entries(obj)) {
-      if (key.startsWith("_")) continue;
+      if (isSystemFieldKey(key)) continue;
       const here = path ? `${path}.${key}` : key;
       if (value && typeof value === "object" && !Array.isArray(value)) { walk(value, depth + 1, here); continue; }
       if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) continue;
@@ -1578,7 +1579,7 @@ export function normalizeEntityDateFields<T extends Record<string, any>>(
     if (!obj || typeof obj !== "object" || Array.isArray(obj) || depth > maxDepth) return obj;
     let copy: any = null;
     for (const [key, value] of Object.entries(obj)) {
-      if (key.startsWith("_")) continue;
+      if (isSystemFieldKey(key)) continue;
       const here = path ? `${path}.${key}` : key;
       if (value && typeof value === "object" && !Array.isArray(value)) {
         const nested = walk(value, depth + 1, here);

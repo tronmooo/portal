@@ -9,6 +9,7 @@ import { withFullLimit } from "@/lib/list-limit";
 import { getFilterLabel } from "@/lib/profileFilter";
 import { passesProfileFilter } from "@shared/profile-filter";
 import { useProfileFilterCtx } from "@/hooks/useProfileFilterCtx";
+import { useRecordHighlight } from "@/hooks/useRecordHighlight";
 import { useProfileScope, useActiveCreateProfileId } from "@/hooks/useProfileScope";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -84,24 +85,24 @@ function HabitCard({ habit }: { habit: Habit }) {
           : h
         )
       );
-      // Confirm instantly — the ring/count already flipped optimistically and
-      // the message is computed from local state, not the server reply.
-      // Toasting in onSuccess bound it to the roundtrip (8s+ on a cold
-      // serverless write): "the notification comes 30 seconds later".
+      // Rule 16: the ring/count flip optimistically, but the confirmation is
+      // a claim that the check-in is committed — it fires in onSuccess. The
+      // message is computed HERE (from the pre-tap count) and carried in the
+      // context so a re-render between tap and reply cannot skew it.
       const newCount = todayCheckins + 1;
-      if (newCount >= targetPerDay) {
+      return { prev, newCount };
+    },
+    onSuccess: (serverHabit: any, _v: unknown, ctx: any) => {
+      const newCount = Number(ctx?.newCount ?? todayCheckins + 1);
+      if (serverHabit?.completion?.notScheduled) {
+        // The tap landed on a day this habit isn't scheduled for (a weekly
+        // habit is due on Mondays unless days are set): it is recorded, but
+        // "complete!" would overstate it — say what really happened.
+        toast({ title: `${habit.name} — recorded`, description: "Not one of its scheduled days, so it doesn't count toward the streak." });
+      } else if (newCount >= targetPerDay) {
         toast({ title: `✨ ${habit.name} complete!`, description: targetPerDay > 1 ? `All ${targetPerDay} done for today.` : "Keep the streak going!" });
       } else {
         toast({ title: `${habit.name} — ${newCount} / ${targetPerDay}`, description: `${targetPerDay - newCount} more to go today` });
-      }
-      return { prev };
-    },
-    onSuccess: (serverHabit: any) => {
-      // The tap landed on a day this habit isn't scheduled for (a weekly
-      // habit is due on Mondays unless days are set): it is recorded, but the
-      // optimistic "complete!" above overstated it — say what really happened.
-      if (serverHabit?.completion?.notScheduled) {
-        toast({ title: `${habit.name} — recorded`, description: "Not one of its scheduled days, so it doesn't count toward the streak." });
       }
       // BUG-HAB-001: Reconcile with server-truth so the displayed streak
       // doesn't pop down a second later when invalidate refetches.
@@ -149,10 +150,10 @@ function HabitCard({ habit }: { habit: Habit }) {
           : h
         )
       );
-      // Instant confirmation (see checkinMutation note).
-      toast({ title: `${habit.name} check-in undone` });
+      // Rule 16: confirmation waits for the commit (onSuccess below).
       return { prev };
     },
+    onSuccess: () => { toast({ title: `${habit.name} check-in undone` }); },
     onError: (err: Error, _v: unknown, ctx: any) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }
       toast({ title: `Failed to undo ${habit.name}`, description: formatApiError(err), variant: "destructive" });
@@ -271,6 +272,7 @@ function HabitCard({ habit }: { habit: Habit }) {
   return (
     // SOLID COLOR card — full accentColor background, white text, Habituator style
     <div
+      data-record-id={habit.id}
       className="relative rounded-2xl overflow-hidden transition-all active:scale-[0.99]"
       style={{
         background: completedToday
@@ -412,6 +414,8 @@ export default function HabitsPage() {
   useEffect(() => { document.title = "Habits — Portol"; }, []);
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
+  // Rules 23/24: `?highlight=habit:<id>` lands on that habit's card.
+  useRecordHighlight("habit");
   // QA Bug 7: auto-open create form when arriving via command palette ?new=1
   useEffect(() => {
     const hash = window.location.hash || "";

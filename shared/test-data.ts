@@ -5,6 +5,21 @@
 //
 // Pure + dependency-free so both the client (filtering lists) and any server
 // cleanup job can share ONE definition of "this is test data".
+//
+// ── How test data is isolated (Rule 27) ─────────────────────────────────────
+// There is no `is_test` column. Isolation is two layers:
+//   1. The smoke/QA fixture account is a SEPARATE workspace (see
+//      REGRESSION_TESTS.md) — suites that need a real account run there.
+//   2. Rows that still land in a real account are recognised by the NAME
+//      PATTERNS below (`isTestEntity`) and excluded from every total by
+//      default: the dashboard snapshot (`getDashboardEnhanced`), `/api/stats`,
+//      and the AI's financial snapshot all pass their rows through
+//      `excludeTestData`. The client hides them from lists (showTestData.ts,
+//      default off).
+// `includeTestData` (`?includeTestData=1`, the hidden "show test data"
+// toggle) is the ONLY way a test row enters a total. Plain list endpoints
+// (`/api/expenses`, …) are NOT filtered: the client filters lists itself, and
+// test suites seed test-patterned rows through them and read them back.
 
 // Anchored / boundaried patterns — deliberately conservative so a real expense
 // like "Quarterly taxes" (starts with "QA"? no — needs the QA_ / QA<space>Test
@@ -45,4 +60,20 @@ export function isTestDataRow(nameOrDescription: string | null | undefined): boo
 export function isTestEntity(e: { name?: string | null; description?: string | null } | null | undefined): boolean {
   if (!e) return false;
   return isTestDataRow(e.name) || isTestDataRow(e.description);
+}
+
+/**
+ * The rows a TOTAL may count: test-patterned rows removed unless the caller
+ * explicitly opted in (`includeTestData`, from `?includeTestData=1`). Pure —
+ * returns the same array when nothing is filtered so callers can compare by
+ * identity. Every aggregate on the server (dashboard snapshot, /api/stats,
+ * the AI's financial snapshot) reads its rows through this one gate.
+ */
+export function excludeTestData<T extends { name?: string | null; description?: string | null }>(
+  rows: readonly T[] | null | undefined,
+  includeTestData?: boolean,
+): T[] {
+  const list = (rows || []) as T[];
+  if (includeTestData) return list;
+  return list.filter((r) => !isTestEntity(r));
 }

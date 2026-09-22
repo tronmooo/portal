@@ -54,6 +54,10 @@ import {
 import { type ExtractionDestination, type ExtractionItem, personFieldScope } from "./extraction-destinations";
 import { classifyDateField } from "./date-rules";
 import { normalizeDateString } from "./extraction-normalize";
+import {
+  classifyFinancialDocKind, inferFinancialStatus, isFinancialStatus,
+  type FinancialStatus,
+} from "./financial-status";
 import { rankByName, sameEntityName } from "./entity-resolution";
 import { trackerIdentityKey } from "./tracker-identity";
 import { derivePeriodDeadlines } from "./period-deadlines";
@@ -749,6 +753,12 @@ export interface PlanInput {
   documentId: string;
   documentName?: string;
   today: string;
+  /**
+   * RULE 3: the payment state of the money on this document, when the upload
+   * already worked it out (shared/financial-status). Absent, the planner
+   * infers it from the rows. Only "paid" money may become an expense.
+   */
+  financialStatus?: FinancialStatus;
 }
 
 /**
@@ -790,6 +800,20 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       if (!factByItem.has(iid)) factByItem.set(iid, fact);
     }
   }
+
+  // ── RULE 3: was this money PAID? ─────────────────────────────────────────
+  // A dollar amount on a quote, an estimate, an invoice or a statement is not
+  // a transaction. The upload already decided this from the whole document
+  // (and the user's message) when it could; otherwise the rows decide. Every
+  // expense action below carries the answer, and only "paid" is savable.
+  const docFinancialStatus: FinancialStatus = isFinancialStatus(input.financialStatus)
+    ? input.financialStatus
+    : (() => {
+        const record: Record<string, any> = {};
+        for (const it of items) if (it?.key && !(it.key in record)) record[it.key] = it.value;
+        const docKind = classifyFinancialDocKind(semantic.documentType, record);
+        return inferFinancialStatus({ docKind, extractedData: record }).status;
+      })();
 
   // ── Resolve every entity once ──
   // ── RULE 1: the parent is the context, and it is never duplicated ────────
@@ -1369,7 +1393,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
         push(componentAction(fact, componentTotal, documentId, itemById));
         continue;
       }
-      const moneyAction = financialAction(fact, landingFor(fact.subject.entityRef), index, documentId, today, itemById);
+      const moneyAction = financialAction(fact, landingFor(fact.subject.entityRef), index, documentId, today, itemById, docFinancialStatus);
       if (moneyAction) { push(moneyAction); continue; }
       // `balance` and `rate` fall through deliberately: they are FIELDS on the
       // record, and a balance is additionally a point in a time series, both of
@@ -2022,6 +2046,7 @@ function financialAction(
   documentId: string,
   today: string,
   rows: Map<string, ExtractionItem>,
+  docFinancialStatus: FinancialStatus = "pending",
 ): PushInput | null {
   const amount = Number(fact.value);
   const when = normalizeDateString(fact.date) || today;
@@ -2077,12 +2102,16 @@ function financialAction(
           dedupeKey: stableKey([documentId, "payment", target.id, fact.id]),
         };
       }
-      // Paid to someone who is not a debt of ours — that is a charge.
-      return expenseAction(base, fact, target, amount, when, documentId, "payment");
+      // Paid to someone who is not a debt of ours — that is a charge. A
+      // "payment" fact is money that MOVED, so it is paid whatever the
+      // document as a whole is.
+      return expenseAction(base, fact, target, amount, when, documentId, "payment", "paid");
 
     case "charge":
     case "fee":
-      return expenseAction(base, fact, target, amount, when, documentId, fact.financialKind);
+      // A charge is a cost INCURRED. Whether it was paid is a property of
+      // the document — an invoice's charges are owed, a receipt's are paid.
+      return expenseAction(base, fact, target, amount, when, documentId, fact.financialKind, docFinancialStatus);
 
     case "income":
       return {
@@ -2136,24 +2165,51 @@ function expenseAction(
   when: string,
   documentId: string,
   kind: string,
+  financialStatus: FinancialStatus,
 ): PushInput {
+  // RULE 3: only money that was PAID enters the ledger. An unpaid invoice,
+  // a quote or an estimate is shown — the user should see the engine
+  // understood it — but it cannot be saved as an expense until the payment
+  // is recorded. The executor refuses it again at the write (server/
+  // action-executor), so an edited request body gets no further.
+  const paid = financialStatus === "paid";
+  const unpaidReason = UNPAID_EXPENSE_REASON[financialStatus] ?? UNPAID_EXPENSE_REASON.pending;
   return {
     ...base,
     operation: "CREATE",
     destination: "expense",
     target: { kind: "expense", id: null, name: fact.label },
     title: `${kind === "fee" ? "Record fee" : "Record expense"} — ${money(amount)}`,
-    detail: [targetLabel(target), when].filter(Boolean).join(" · "),
+    detail: [targetLabel(target), when, paid ? undefined : financialStatus].filter(Boolean).join(" · "),
     payload: {
       description: fact.label, amount, date: when,
       category: "general",
+      financialStatus,
       linkedProfileId: target.kind === "profile" ? target.id : undefined,
       _source: { documentId, factIds: [fact.id] },
     },
-    selected: confidenceTier(fact.confidence) !== "low",
+    selected: paid && confidenceTier(fact.confidence) !== "low",
+    ...(paid ? {} : {
+      savable: false,
+      unsupportedCode: "not_a_ledger_event" as const,
+      unsupportedReason: unpaidReason,
+      writesLabel: "Nothing — no payment has been recorded",
+    }),
     dedupeKey: stableKey([documentId, "expense", fact.id]),
   };
 }
+
+/** Why a non-paid amount stays on the document, in the words the row shows. */
+const UNPAID_EXPENSE_REASON: Record<FinancialStatus, string> = {
+  estimated: "This is an estimate — a projection, not a charge. It stays on the document until you record the payment.",
+  quoted: "This is a quote — a price offered, not money spent. It stays on the document until you record the payment.",
+  invoiced: "This is an unpaid invoice — it stays on the document until you record the payment.",
+  unpaid: "Nothing has been paid yet — it stays on the document until you record the payment.",
+  scheduled: "This payment is scheduled, not made — it stays on the document until it goes through.",
+  pending: "No evidence this was paid — it stays on the document until you record the payment.",
+  paid: "",
+  refunded: "This money was refunded — a refund is not an expense.",
+};
 
 /**
  * The money facts that are PARTS of another money fact on the same document.

@@ -71,12 +71,14 @@ const FIELD_ALIASES: Record<string, string[]> = {
   make: ["vehiclemake", "carmake"],
   model: ["vehiclemodel", "carmodel"],
   year: ["vehicleyear", "modelyear", "caryear"],
-  // ── money (kept in step with shared/profile-field-canon) ─────────────────
-  currentValue: ["value", "worth", "marketvalue", "estimatedvalue", "currentworth", "assetvalue", "presentvalue"],
+  // ── money (kept in step with shared/profile-field-canon CANONICAL_ALIASES;
+  //    tests/entity-integrity.test.ts pins that the two tables agree) ────────
+  currentValue: ["value", "worth", "marketvalue", "estimatedvalue", "currentworth", "assetvalue", "presentvalue", "appraisedvalue", "currentmarketvalue"],
   purchasePrice: ["pricepaid", "boughtfor", "purchaseamount", "originalprice", "purchasecost"],
-  balance: ["amountowed", "remainingbalance", "loanbalance", "balanceowed", "outstandingbalance", "currentbalance", "balanceremaining"],
-  interestRate: ["apr"],
-  monthlyPayment: ["paymentamount", "monthlycost", "monthlyamount"],
+  balance: ["amountowed", "remainingbalance", "loanbalance", "balanceowed", "outstandingbalance", "currentbalance", "balanceremaining", "principalbalance", "unpaidbalance", "payoffbalance"],
+  interestRate: ["apr", "annualinterestrate", "annualrate", "loanrate", "annualinterest", "noterate", "interestratepct", "interestratepercent"],
+  monthlyPayment: ["paymentamount", "monthlycost", "monthlyamount", "regularpayment", "scheduledpayment", "installmentamount"],
+  originalBalance: ["originalamount", "originalprincipal", "loanamount", "originalloanamount"],
   purchaseDate: ["datepurchased", "boughton", "acquisitiondate", "dateacquired"],
   accountNumber: ["accountno", "acctnumber", "acctno"],
 };
@@ -170,7 +172,9 @@ export function readProfileFieldValue(
  * report, 2026-09-04: "whenever I press the x button, nothing happens".
  */
 export function isReservedFieldKey(key: unknown): boolean {
-  return typeof key === "string" && key.startsWith("_");
+  // One definition for the whole app — shared/system-fields (Rule 25): the
+  // `_` prefix plus the explicit inventory of internal keys.
+  return isSystemFieldKey(key);
 }
 
 /**
@@ -531,6 +535,7 @@ export function fieldBelongsOnProfileType(key: unknown, profileType: unknown): b
 // Pinned by tests/profile-field-write-identity.test.ts.
 
 import { looselyEqual } from "./profile-field-canon";
+import { isSystemFieldKey } from "./system-fields";
 
 const isBlank = (v: unknown) => v === undefined || v === null || String(v).trim() === "";
 

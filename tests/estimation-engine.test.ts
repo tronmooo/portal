@@ -17,6 +17,9 @@ import {
   calculateDurationFromTimes,
   estimateStrideMeters,
   summarizeEnrichment,
+  isEstimatedValue,
+  formatProvenanced,
+  entryValueProvenance,
   MIN_SAVE_CONFIDENCE,
   METERS_PER_MILE,
 } from "@shared/estimation-engine";
@@ -326,5 +329,56 @@ describe("strength volume", () => {
   it("defaults sets to 1 and respects an explicit volume", () => {
     expect(enrichStrengthEntry({ weight: 100, reps: 10 }).calculated.totalVolume.value).toBe(1000);
     expect(enrichStrengthEntry({ weight: 100, reps: 10, totalVolume: 999 }).calculated.totalVolume).toBeUndefined();
+  });
+});
+
+// ─── Rule 26: every inferred value carries isEstimated; the UI shows ≈ ───────
+describe("Rule 26 — provenance flag and formatting", () => {
+  it("stamps isEstimated on every provenanced value from its source", () => {
+    const e = enrichWalkRunEntry("walking", { duration: 30 }, { heightCm: 175 });
+    for (const pv of Object.values(e.estimated)) expect(pv.isEstimated).toBe(true);
+    for (const pv of Object.values(e.calculated)) expect(pv.isEstimated).toBe(false);
+    expect(e.estimated.distance.isEstimated).toBe(true);
+    expect(e.estimated.steps.isEstimated).toBe(true);
+    const exact = enrichWalkRunEntry("running", { distance: 2, duration: 20 }, {});
+    expect(exact.calculated.paceMinutesPerMile.isEstimated).toBe(false);
+    expect(enrichHydrationEntry({ bottles: 2 }).estimated.ounces.isEstimated).toBe(true);
+    expect(enrichSleepEntry({ minutes: 450 }).calculated.hours.isEstimated).toBe(false);
+    expect(enrichStrengthEntry({ weight: 100, reps: 10 }).calculated.totalVolume.isEstimated).toBe(false);
+  });
+
+  it("isEstimatedValue reads the flag and falls back to the source for old blobs", () => {
+    expect(isEstimatedValue({ value: 1, source: "estimated", confidence: 0.5 })).toBe(true);
+    expect(isEstimatedValue({ value: 1, source: "default", confidence: 0.5 })).toBe(true);
+    expect(isEstimatedValue({ value: 1, source: "historical_pattern", confidence: 0.5 })).toBe(true);
+    expect(isEstimatedValue({ value: 1, source: "calculated", confidence: 1 })).toBe(false);
+    expect(isEstimatedValue({ value: 1, source: "user", confidence: 1 })).toBe(false);
+    expect(isEstimatedValue({ value: 1, source: "user", confidence: 1, isEstimated: true })).toBe(true);
+    expect(isEstimatedValue(null)).toBe(false);
+  });
+
+  it("formatProvenanced marks estimates with ≈ and one decimal, exact values verbatim", () => {
+    expect(formatProvenanced({ value: 1.25, source: "estimated", confidence: 0.5, isEstimated: true }, "mi")).toBe("≈1.3 mi");
+    expect(formatProvenanced({ value: 1.25, source: "calculated", confidence: 1, isEstimated: false }, "mi")).toBe("1.25 mi");
+    expect(formatProvenanced({ value: 2150, source: "estimated", confidence: 0.6 }, "steps")).toBe("≈2150 steps");
+    expect(formatProvenanced({ value: 7, source: "user", confidence: 1 })).toBe("7");
+  });
+
+  it("entryValueProvenance finds the provenance wherever the pipeline left it", () => {
+    const e = enrichWalkRunEntry("walking", { duration: 30 }, { heightCm: 175 });
+    const values: Record<string, any> = { duration: 30 };
+    applyEnrichmentToValues(values, e);
+    // Before the storage layer moves it: values._enrichment.
+    values._enrichment = e;
+    expect(entryValueProvenance({ values }, "distance")?.isEstimated).toBe(true);
+    expect(entryValueProvenance({ values }, "duration")).toBeNull(); // stated, no provenance
+    // After: computed.enrichment (and the blob stored without the flag still answers).
+    const stored = JSON.parse(JSON.stringify(e));
+    for (const pv of Object.values<any>(stored.estimated)) delete pv.isEstimated;
+    const entry = { values: { duration: 30, distance: values.distance }, computed: { enrichment: stored } };
+    expect(entryValueProvenance(entry, "distance")?.isEstimated).toBe(true);
+    expect(entryValueProvenance(entry, "distance")?.source).toBe("estimated");
+    expect(entryValueProvenance({ values: { distance: 2 } }, "distance")).toBeNull();
+    expect(entryValueProvenance(null, "distance")).toBeNull();
   });
 });
