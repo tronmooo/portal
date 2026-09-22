@@ -37,6 +37,7 @@ import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX 
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { getValuationSnapshot, refreshValuation, isValuableProfile, getValuationStatus } from "./valuation/service";
+import { isAutoValuationEnabled } from "@shared/valuation/context";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
 import { registerFinanceRoutes } from "./finance-routes";
 import { HIDDEN_TRACKER_CATEGORIES } from "@shared/hidden-tracker-categories";
@@ -5802,6 +5803,12 @@ ${JSON.stringify(ctx, null, 2)}`;
     }
     const profile = await storage.getProfile(id);
     if (!profile) return res.status(404).json({ error: "Profile not found" });
+    // The switch is the real gate here, not the hidden button: a stale client
+    // (or the AI) must not be able to go and fetch a value the user said to
+    // stop gathering.
+    if (!isAutoValuationEnabled(profile.fields)) {
+      return res.status(400).json({ error: "Automatic value tracking is off for this asset. Turn it back on to estimate its value." });
+    }
 
     // Build a rich search query from all known profile fields
     const f = profile.fields || {};
@@ -6126,6 +6133,9 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
       if (!isValuableProfile(detail as any)) {
         return res.status(400).json({ error: `Cannot estimate value for type '${detail.type}'` });
       }
+      if (!isAutoValuationEnabled((detail as any).fields)) {
+        return res.status(400).json({ error: "Automatic value tracking is off for this asset. Turn it back on to estimate its value." });
+      }
 
       // The button is the user asking for a fresh estimate NOW: force the
       // pipeline regardless of freshness. Persistence, history, and the
@@ -6204,6 +6214,10 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
     if (!detail) return res.status(404).json({ error: "Not found" });
     if ((detail as any).userId && (detail as any).userId !== (req as AuthenticatedRequest).userId) {
       return res.status(404).json({ error: "Not found" });
+    }
+    // The UI hides Refresh for a manual asset; this is the gate that matters.
+    if (!isAutoValuationEnabled((detail as any).fields)) {
+      return res.status(400).json({ error: "Automatic value tracking is off for this asset. Turn it back on to estimate its value." });
     }
     const force = req.body?.force === true;
     const reason = force ? "user_requested" : "scheduled";

@@ -6,16 +6,27 @@
 // of evidence with its source and age, the facts that were used, and what
 // would tighten the estimate. Presentation only — all numbers come from the
 // ValuationRecord the server computed.
+//
+// It also carries the ONE switch that turns automatic tracking off for this
+// asset (`fields.valuationMode`, read through isAutoValuationEnabled — absent
+// means auto, so every existing asset is unchanged). Off, the card becomes
+// the user's own value with an inline editor; the last estimate stays
+// reachable under the disclosure, labelled as history.
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp, RefreshCw, Sparkles, History as HistoryIcon, AlertCircle } from "lucide-react";
+import { ChevronDown, ChevronUp, RefreshCw, Sparkles, History as HistoryIcon, AlertCircle, Pencil } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateDomains } from "@/lib/cache-bus";
+import { useToast } from "@/hooks/use-toast";
 import { formatMoneyCompact, formatTimeAgo } from "@/lib/format";
 import { formatLocalDate } from "@/lib/dates";
-import { useAssetValuation, useAssetValuationHistory } from "@/hooks/useAssetValuation";
-import { isEstimatorOwnedValue } from "@shared/valuation/context";
+import { useAssetValuation, useAssetValuationHistory, valuationQueryKey } from "@/hooks/useAssetValuation";
+import { isEstimatorOwnedValue, isAutoValuationEnabled, VALUATION_MODE_FIELD } from "@shared/valuation/context";
 import { METHOD_LABEL } from "@shared/valuation/engine";
 import { parseMoney } from "@shared/asset-value";
 import type { ValuationRecord } from "@shared/valuation/types";
@@ -46,7 +57,28 @@ export function CurrentValueCard({
 }) {
   const { snapshot, isLoading, refreshing, refresh } = useAssetValuation(profileId);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const { toast } = useToast();
   const history = useAssetValuationHistory(profileId, showHistory && open);
+
+  // One write path for both controls: the app's PATCH + cache-bus pattern, so
+  // every screen that shows this asset's value refreshes with it.
+  const writeFields = async (patch: Record<string, any>): Promise<boolean> => {
+    try {
+      await apiRequest("PATCH", `/api/profiles/${profileId}`, { fields: patch });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "detail"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/profiles", profileId, "overview"] });
+      queryClient.invalidateQueries({ queryKey: valuationQueryKey(profileId) });
+      await invalidateDomains("profiles");
+      return true;
+    } catch {
+      toast({ title: "Couldn't save", variant: "destructive" });
+      return false;
+    }
+  };
 
   if (!snapshot && isLoading) {
     return (
@@ -64,16 +96,100 @@ export function CurrentValueCard({
     ? (parseMoney(fields.userEnteredValue) || (!isEstimatorOwnedValue(fields) ? parseMoney(fields.currentValue ?? fields.current_value) : 0))
     : 0;
   const stale = !snapshot.freshness.fresh;
+  // The server is authoritative; a payload from an older build has no mode,
+  // and absent means auto — exactly as this asset behaved before the switch.
+  const auto = snapshot.mode ? snapshot.mode === "auto" : isAutoValuationEnabled(fields);
+  // What the user's own value is worth right now (manual state headline).
+  const ownValue = fields ? parseMoney(fields.currentValue ?? fields.current_value) : 0;
+
+  const toggleAuto = async (next: boolean) => {
+    setSwitching(true);
+    // Only ever written by a deliberate flip — an asset that has never been
+    // touched keeps no valuationMode at all and stays automatic.
+    await writeFields({ [VALUATION_MODE_FIELD]: next ? "auto" : "manual" });
+    setSwitching(false);
+  };
+
+  const saveOwnValue = async () => {
+    const n = parseMoney(draft);
+    if (!Number.isFinite(n) || n < 0 || String(draft).trim() === "") {
+      toast({ title: "Enter a value of 0 or more", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
+    // `currentValue` is the ONE canonical value every screen reads. The
+    // profile PATCH route stamps its provenance (currentValueSource "user",
+    // currentValueAsOf, and clears the kept userEnteredValue mirror) — the
+    // same convention a value typed anywhere else in the app gets.
+    const ok = await writeFields({ currentValue: n });
+    setSaving(false);
+    if (ok) setEditing(false);
+  };
+
+  const trackingSwitch = (
+    <div className="flex items-start justify-between gap-3 border-t border-border/40 pt-2" data-testid="valuation-mode-row">
+      <div className="min-w-0">
+        <p className="text-[12px] font-medium leading-tight">Track value automatically</p>
+        <p className="text-[11px] text-muted-foreground leading-tight" data-testid="valuation-mode-help">
+          {auto ? "On — Portol estimates and refreshes this value" : "Off — you set the value yourself"}
+        </p>
+      </div>
+      <Switch
+        checked={auto}
+        disabled={switching}
+        onCheckedChange={(v) => { void toggleAuto(v); }}
+        aria-label="Track value automatically"
+        data-testid="valuation-mode-switch"
+      />
+    </div>
+  );
 
   return (
     <Card className={className} data-testid="current-value-card">
       <CardContent className="pt-4 pb-3 space-y-2">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="micro-label text-muted-foreground flex items-center gap-1.5">
-              <Sparkles className="h-3 w-3 text-primary" /> Estimated current value
-            </p>
-            {record?.status === "valued" && record.value != null ? (
+            {auto ? (
+              <p className="micro-label text-muted-foreground flex items-center gap-1.5">
+                <Sparkles className="h-3 w-3 text-primary" /> Estimated current value
+              </p>
+            ) : (
+              <p className="micro-label text-muted-foreground flex items-center gap-1.5" data-testid="current-value-manual-heading">
+                <Pencil className="h-3 w-3" /> Your current value
+              </p>
+            )}
+            {!auto ? (
+              editing ? (
+                <div className="flex items-center gap-1.5 pt-1" data-testid="current-value-manual-editor">
+                  <Input
+                    type="number"
+                    min={0}
+                    step="any"
+                    inputMode="decimal"
+                    className="h-8 w-36 text-[15px] tabular-nums"
+                    value={draft}
+                    autoFocus
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { void saveOwnValue(); } if (e.key === "Escape") setEditing(false); }}
+                    aria-label="Current value"
+                    data-testid="current-value-manual-input"
+                  />
+                  <Button size="sm" className="h-8 text-xs" disabled={saving} onClick={() => { void saveOwnValue(); }} data-testid="current-value-manual-save">
+                    {saving ? "Saving…" : "Save"}
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => setEditing(false)} data-testid="current-value-manual-cancel">Cancel</Button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="text-2xl font-bold tabular-nums leading-tight hover:text-primary text-left"
+                  onClick={() => { setDraft(ownValue > 0 ? String(ownValue) : ""); setEditing(true); }}
+                  data-testid="current-value-manual-amount"
+                >
+                  {ownValue > 0 ? formatMoneyCompact(ownValue) : <span className="text-sm font-medium text-muted-foreground">Tap to set a value</span>}
+                </button>
+              )
+            ) : record?.status === "valued" && record.value != null ? (
               <>
                 <p className="text-2xl font-bold tabular-nums leading-tight" data-testid="current-value-amount">
                   {formatMoneyCompact(record.value)}
@@ -93,31 +209,39 @@ export function CurrentValueCard({
             )}
           </div>
           <div className="text-right shrink-0 space-y-1">
-            {record && record.confidenceLabel !== "none" && (
-              <Badge variant="secondary" className={`text-[11px] capitalize ${confidenceClass(record.confidenceLabel)}`} data-testid="current-value-confidence">
-                {record.confidenceLabel} confidence · {Math.round(record.confidence * 100)}%
-              </Badge>
+            {!auto ? (
+              <Badge variant="secondary" className="text-[11px]" data-testid="current-value-set-by-you">Set by you</Badge>
+            ) : (
+              <>
+                {record && record.confidenceLabel !== "none" && (
+                  <Badge variant="secondary" className={`text-[11px] capitalize ${confidenceClass(record.confidenceLabel)}`} data-testid="current-value-confidence">
+                    {record.confidenceLabel} confidence · {Math.round(record.confidence * 100)}%
+                  </Badge>
+                )}
+                <div>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { void refresh(); }} disabled={refreshing} data-testid="current-value-refresh">
+                    <RefreshCw className={`h-3 w-3 mr-1 ${refreshing ? "animate-spin" : ""}`} />
+                    {refreshing ? "Refreshing…" : "Refresh"}
+                  </Button>
+                </div>
+              </>
             )}
-            <div>
-              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { void refresh(); }} disabled={refreshing} data-testid="current-value-refresh">
-                <RefreshCw className={`h-3 w-3 mr-1 ${refreshing ? "animate-spin" : ""}`} />
-                {refreshing ? "Refreshing…" : "Refresh"}
-              </Button>
-            </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground" data-testid="current-value-meta">
-          {record?.valuedAt && <span title={record.valuedAt}>Valued {relative(record.valuedAt)}</span>}
-          {refreshing && <span className="text-primary" data-testid="current-value-refreshing">Refreshing in background…</span>}
-          {!refreshing && stale && record && <span>Re-check due ({snapshot.freshness.reason?.replace(/_/g, " ")})</span>}
-          {record?.methodSummary && <span className="truncate max-w-full">Method: {record.methodSummary}</span>}
-          {userOwned > 0 && record?.value != null && userOwned !== record.value && (
-            <span data-testid="current-value-user-value">Your entered value: {formatMoneyCompact(userOwned)} (kept)</span>
-          )}
-        </div>
+        {auto && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground" data-testid="current-value-meta">
+            {record?.valuedAt && <span title={record.valuedAt}>Valued {relative(record.valuedAt)}</span>}
+            {refreshing && <span className="text-primary" data-testid="current-value-refreshing">Refreshing in background…</span>}
+            {!refreshing && stale && record && <span>Re-check due ({snapshot.freshness.reason?.replace(/_/g, " ")})</span>}
+            {record?.methodSummary && <span className="truncate max-w-full">Method: {record.methodSummary}</span>}
+            {userOwned > 0 && record?.value != null && userOwned !== record.value && (
+              <span data-testid="current-value-user-value">Your entered value: {formatMoneyCompact(userOwned)} (kept)</span>
+            )}
+          </div>
+        )}
 
-        {record?.status === "error" && record.error && (
+        {auto && record?.status === "error" && record.error && (
           <p className="text-[11px] text-amber-500 flex items-center gap-1" data-testid="current-value-error">
             <AlertCircle className="h-3 w-3" /> Last refresh had a problem: {record.error}
           </p>
@@ -131,12 +255,19 @@ export function CurrentValueCard({
             data-testid="current-value-details-toggle"
           >
             {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-            How this was estimated
+            {auto ? "How this was estimated" : "Last AI estimate (not in use)"}
           </button>
         )}
 
         {open && record && (
           <div className="space-y-2 text-[12px] border-t border-border/40 pt-2" data-testid="current-value-details">
+            {!auto && (
+              <p className="text-muted-foreground" data-testid="current-value-historical-note">
+                Automatic tracking is off. This is the last estimate Portol made
+                {record.value != null ? <> — {formatMoneyCompact(record.value)}{record.valuedAt ? <> on {formatLocalDate(record.valuedAt, { month: "short", day: "numeric", year: "numeric" })}</> : null}</> : null}
+                . It is history, not your current value.
+              </p>
+            )}
             {record.methodology.length > 0 && (
               <p><span className="font-medium text-foreground/80">Methodology:</span> {record.methodology.map(m => METHOD_LABEL[m]).join(" · ")}</p>
             )}
@@ -167,13 +298,13 @@ export function CurrentValueCard({
             {record.factors.length > 0 && (
               <p className="text-muted-foreground"><span className="font-medium text-foreground/80">Notes:</span> {record.factors.join(" · ")}</p>
             )}
-            {record.missingInfo.length > 0 && (
+            {auto && record.missingInfo.length > 0 && (
               <p className="text-muted-foreground"><span className="font-medium text-foreground/80">Would tighten it:</span> {record.missingInfo.join(" · ")}</p>
             )}
             <p className="text-muted-foreground">
               Inputs used: {Object.keys((record.materialInputs as any)?.attributes || {}).length} characteristics
               {record.marketDataAsOf ? ` · market data as of ${formatLocalDate(record.marketDataAsOf, { month: "short", day: "numeric" })}` : " · no live market data"}
-              {` · next check ${relative(record.nextRefreshAt) || "soon"}`}
+              {auto ? ` · next check ${relative(record.nextRefreshAt) || "soon"}` : ""}
               {` · ${record.modelVersion}`}
             </p>
             {showHistory && (
@@ -195,6 +326,8 @@ export function CurrentValueCard({
             )}
           </div>
         )}
+
+        {trackingSwitch}
       </CardContent>
     </Card>
   );

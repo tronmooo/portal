@@ -50,8 +50,20 @@ const ENUM_LABELS: Record<string, string> = {
   loan_receivable: "Loan receivable",
   estimate: "Estimated by Portol",
   user: "Entered by you",
-  manual: "Entered by you",
+  manual: "Off — you set the value yourself",
+  auto: "On — Portol tracks the value",
 };
+
+/** Keys whose derived name reads wrong — "Valuation Mode" says nothing. */
+const FIELD_LABEL_OVERRIDES: Record<string, string> = {
+  valuationMode: "Automatic value tracking",
+  valuation_mode: "Automatic value tracking",
+};
+
+/** The human label for a stored profile field key. */
+export function fieldKeyLabel(key: string): string {
+  return FIELD_LABEL_OVERRIDES[key] ?? humanizeFieldName(key);
+}
 
 /** "high_value_item" → "High-value item"; "estimate" → "Estimated by Portol". */
 export function humanizeEnumValue(value: unknown): string {
@@ -74,6 +86,12 @@ export const FIELD_ENUM_OPTIONS: Record<string, EnumOption[]> = {
     { value: "estimate", label: humanizeEnumValue("estimate") },
   ],
   valuationConfidence: ["high", "medium", "low", "none"].map((v) => ({ value: v, label: humanizeEnumValue(v) })),
+  // The per-asset switch: absent means "auto", so "auto" is only ever written
+  // by someone turning tracking back on.
+  valuationMode: [
+    { value: "auto", label: humanizeEnumValue("auto") },
+    { value: "manual", label: humanizeEnumValue("manual") },
+  ],
 };
 
 /**
