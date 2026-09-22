@@ -35,6 +35,7 @@ export default defineConfig({
       'tests/test-data-filter.test.ts',
       'tests/quick-add.test.ts',
       'tests/mutate-reset-race.test.ts',
+      'tests/liability-identity.test.ts',
       'tests/liability-types.test.ts',
       'tests/liability-recurrence.test.ts',
       'tests/liability-schedule.test.ts',

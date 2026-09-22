@@ -143,6 +143,7 @@ import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { isRecurringBill as sharedIsRecurringBill } from "@shared/liability-types";
 import { readDueDate as sharedReadDueDate, currentBillDueDate as sharedCurrentBillDue } from "@shared/liability-recurrence";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
+import { resolveLiabilityDueDate } from "@shared/liability-schedule";
 import { buildValuationDossier, parseValuationResponse, VALUATION_RESPONSE_SPEC, enforceRangeDiscipline, MAX_RANGE_SPREAD, type AssetValuation, type AssetValuationContext } from "./valuation";
 import { shouldUseBulkPath, countActionClauses } from "@shared/action-split";
 import { parseQuickRun, parseQuickSleep, parseQuickWeight, buildTurnRecap, type RecapOp } from "@shared/quick-log";
@@ -9897,36 +9898,39 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           }
         }
       }
+      // NO COMPANION "<name> payment" RECORD.
+      //
+      // This used to create a recurring obligation beside every loan so the
+      // payment would land on the calendar. An obligation in this app IS a
+      // liability profile (supabase-storage.createObligation ends in
+      // createProfile({ type: "liability" })), so that companion was a SECOND
+      // liability for one debt — the "Dodge Ram 2025 Auto Loan" / "Dodge Ram
+      // 2025 Auto Loan payment" pair the user reported, one filed as fixed and
+      // one as variable, disagreeing about the very payment they described.
+      //
+      // It was also unnecessary: a liability profile carrying a payment and a
+      // due date already emits its own calendar series
+      // (shared/calendar-adapters seriesFromLiabilityProfiles). So the loan is
+      // given the due date it needs and nothing else is written. Should a
+      // future caller create one anyway, identity at the storage chokepoint
+      // (shared/liability-identity) now folds it into this same profile rather
+      // than minting a twin.
+      if (liability?.id && fields.monthlyPayment && fields.dueDay && !resolveLiabilityDueDate(fields)) {
+        try {
+          const today = new Date();
+          const dueDay = Math.max(1, Math.min(31, Number(fields.dueDay)));
+          const next = new Date(today.getFullYear(), today.getMonth(), dueDay);
+          if (next.getTime() < today.getTime()) next.setTime(addMonthsClamped(next, 1, dueDay).getTime());
+          const nextDueDate = next.toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
+          liability = await storage.updateProfile(liability.id, {
+            fields: { ...(liability.fields || {}), nextDueDate, dueDate: nextDueDate, frequency: (liability.fields as any)?.frequency || "monthly" },
+          } as any) || liability;
+        } catch (e: any) { logger.warn("ai", `liability due-date derivation failed: ${e?.message}`); }
+      }
       // Stash suggestedAssetLink on the liability response so the AI sees it
       // in the tool result and can ask the user a clarifying question.
       if (suggestedAssetLink && liability) {
         (liability as any).suggestedAssetLink = suggestedAssetLink;
-      }
-      // Auto-generate a recurring obligation so the liability appears on the calendar
-      // (mirrors how create_obligation drives subscription calendar entries).
-      // Only do this when we have BOTH a monthly payment and a due-day.
-      if (liability?.id && fields.monthlyPayment && fields.dueDay) {
-        try {
-          const existingObs = await storage.getObligations();
-          const obName = `${input.name} payment`;
-          const dup = existingObs.find((o: any) => o.name.toLowerCase() === obName.toLowerCase());
-          if (!dup) {
-            const today = new Date();
-            const dueDay = Math.max(1, Math.min(31, Number(fields.dueDay)));
-            const next = new Date(today.getFullYear(), today.getMonth(), dueDay);
-            if (next.getTime() < today.getTime()) next.setTime(addMonthsClamped(next, 1, dueDay).getTime());
-            const nextDueDate = next.toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
-            const newOb = await storage.createObligation({
-              name: obName,
-              amount: Number(fields.monthlyPayment),
-              frequency: "monthly",
-              category: "liability",
-              nextDueDate,
-              autopay: false,
-            } as any);
-            try { await directLinkToProfile("obligation", newOb.id, input.name); } catch {}
-          }
-        } catch (e: any) { logger.warn("ai", `auto-create liability obligation failed: ${e?.message}`); }
       }
       return { result: liability, actions: [{ type: "create", category: "liability", data: liability }] };
     }

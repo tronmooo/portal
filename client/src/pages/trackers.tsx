@@ -23,7 +23,8 @@ import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isHoldingVisible, isOwnershipKnown } from "@/lib/holding-visibility";
-import { countsTowardNetWorth, liabilityFamily } from "@shared/liability-types";
+import { countsTowardNetWorth, liabilityFamily, isPaymentBillOfListedDebt } from "@shared/liability-types";
+import { liabilitySubtypeKey } from "@shared/liability-identity";
 
 // A loan secured by an asset (the truck's auto loan, parented to the truck)
 // is balance-sheet DEBT and belongs on the Liabilities tab wherever debt is
@@ -6414,8 +6415,15 @@ export default function TrackersPage() {
       const c = (f.subtype || f.kind || f.category || "Subscription") as string;
       return String(c).trim().replace(/_/g, " ") || "Subscription";
     }
-    const c = (f.subtype || f.liabilityType || f.kind || f.type || f.category || "Other") as string;
-    return String(c).trim().replace(/_/g, " ") || "Other";
+    // The registry key first, then the field spellings — one canonical answer
+    // to "what kind of liability is this?", so the chip, the card and the
+    // Fixed/Variable split (which reads type_key through liabilityFamily)
+    // cannot describe the same debt three ways. Reading fields.category first
+    // is how an auto loan came to be labelled "Other" while the bill beside it
+    // was labelled "Liability".
+    const c = String(liabilitySubtypeKey(p) || "Other").trim().replace(/_/g, " ");
+    if (!c) return "Other";
+    return c.replace(/\b\w/g, (m) => m.toUpperCase());
   };
 
   // Liability category list (after profile filter) for the Liabilities tab chip row.
@@ -7554,6 +7562,14 @@ export default function TrackersPage() {
         };
         const liabs = (profiles || []).filter(p => {
           if (!isLiabilityLikeProfile(p)) return false;
+          // A "<name> payment" bill written beside the debt it pays is that
+          // debt under a second name, and listing both is what put "Dodge Ram
+          // 2025 Auto Loan" under Fixed and "Dodge Ram 2025 Auto Loan payment"
+          // under Variable at once. New writes can no longer create the pair
+          // (shared/liability-identity folds them at the storage chokepoint);
+          // this keeps rows written before that fix from showing the debt
+          // twice, and is the same rule the profiles list already applies.
+          if (isPaymentBillOfListedDebt(p, profiles || [])) return false;
           // Hide liabilities nested under an asset — they live inside the
           // parent asset's detail page (Linked Liabilities section). Real
           // debt (a secured loan) stays listed.

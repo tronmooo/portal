@@ -224,7 +224,26 @@ describe("#4 a bill named for a loan pays that loan", () => {
 
   it("leaves a name that isn't a payment bill alone", () => {
     expect(normalizeLiabilityName("Netflix")).toBe("netflix");
-    expect(normalizeLiabilityName("Internet Bill")).toBe("internet bill");
+  });
+
+  // Revised 2026-09-22 (duplicate-liability report). This used to pin
+  // "Internet Bill" → "internet bill" while "Phone Bill Payments" → "phone",
+  // and that asymmetry WAS a duplicate factory: "Phone Bill" and "Phone Bill
+  // Payments" normalized differently, so identity never recognised them as one
+  // liability and both records were kept. A trailing "bill"/"payment" says what
+  // KIND of record a name is, not WHICH liability, so every spelling of one
+  // obligation now folds to the same key.
+  it("folds every 'bill'/'payment' spelling of one obligation to one key", () => {
+    const key = normalizeLiabilityName("Phone");
+    for (const spelling of ["Phone Bill", "Phone Bill Payments", "Phone payment", "Phone Bills"]) {
+      expect(normalizeLiabilityName(spelling)).toBe(key);
+    }
+    expect(normalizeLiabilityName("Internet Bill")).toBe("internet");
+  });
+
+  it("never normalizes a name away entirely", () => {
+    expect(normalizeLiabilityName("Bill")).toBe("bill");
+    expect(normalizeLiabilityName("Payment")).toBe("payment");
   });
 });
 

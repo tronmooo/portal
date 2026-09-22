@@ -66,6 +66,15 @@ afterEach(() => { vi.useRealTimers(); });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // #1 createObligation must not convert a same-named loan into a bill
+//
+// Revised 2026-09-22 (duplicate-liability report). The original fix kept the
+// loan's identity by writing the bill as a SEPARATE profile beside it — which
+// is exactly the "Dodge Ram 2025 Auto Loan" / "Dodge Ram 2025 Auto Loan
+// payment" pair the user found: one debt, two profiles, filed as fixed and
+// variable at once. The invariant these tests protect is unchanged (a bill
+// must never demote a loan into a monthly shell); the remedy is: identity
+// folds the two into ONE record and classification precedence keeps that
+// record an auto_loan. See shared/liability-identity.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("#1 createObligation: a same-named loan keeps its identity", () => {
   const self = { id: SELF, type: "self", name: "Me", fields: {} };
@@ -76,10 +85,12 @@ describe("#1 createObligation: a same-named loan keeps its identity", () => {
     const createProfile = vi.fn(async (d: any) => ({ id: "bill-new", ...d }));
     const s = bareStorage({
       getProfiles: async () => profiles,
+      getProfile: async (id: string) => profiles.find((p) => p.id === id),
       getSelfProfile: async () => self,
       updateProfile, createProfile,
       ensureAutoOwnerLink: async () => undefined,
       getObligation: async (id: string) => ({ id, name: "x" }),
+      obligationViewOf: async (id: string) => ({ id, name: "x" }),
     });
     return { s, updateProfile, createProfile };
   }
@@ -93,26 +104,32 @@ describe("#1 createObligation: a same-named loan keeps its identity", () => {
     expect(isRecurringBillShell({ type_key: "medical_debt" })).toBe(false);
   });
 
-  it("creates a SEPARATE bill linked to the loan instead of overwriting the loan's type_key", async () => {
+  it("folds '<loan> payment' INTO the loan — one profile, still an auto_loan", async () => {
     const { s, updateProfile, createProfile } = obligationStorage([self, loan]);
     const res = await s.createObligation({ name: "Car Loan payment", amount: 400, frequency: "monthly", nextDueDate: "2026-09-15" });
-    expect(res.id).toBe("bill-new");
-    // The loan row was never touched.
-    expect(updateProfile).not.toHaveBeenCalled();
-    // A new recurring-bill profile, related to the loan it pays.
-    expect(createProfile).toHaveBeenCalledTimes(1);
-    const arg = createProfile.mock.calls[0][0] as any;
-    expect(arg.type).toBe("liability");
-    expect(arg.type_key).toBe("bill");
-    expect(arg.name).toBe("Car Loan payment");
-    expect(arg.fields.linkedLiabilityId).toBe(LIVE);
-    expect(arg.fields.monthlyAmount).toBe(400);
+    // No second liability is minted for the debt that already exists.
+    expect(createProfile).not.toHaveBeenCalled();
+    expect(res.id).toBe(LIVE);
+    expect(updateProfile).toHaveBeenCalledTimes(1);
+    const [id, patch] = updateProfile.mock.calls[0] as any;
+    expect(id).toBe(LIVE);
+    // The loan keeps its identity: name, subtype, and the loan terms it held.
+    expect(patch.name).toBe("Car Loan");
+    expect(patch.type_key).toBe("auto_loan");
+    expect(patch.fields.principal).toBe(20000);
+    expect(patch.fields.apr).toBe(6);
+    // …and gains the payment the bill described, in every spelling readers use.
+    expect(patch.fields.monthlyAmount).toBe(400);
+    expect(patch.fields.monthlyPayment).toBe(400);
+    expect(patch.fields.dueDate).toBe("2026-09-15");
+    // A placeholder category must not become the loan's subtype.
+    expect(patch.fields.category).not.toBe("liability");
   });
 
   it("still upserts a bare liability shell (no type_key) of the same name", async () => {
     const shell = { ...loan, type_key: undefined, name: "Water", fields: {} };
     const { s, updateProfile, createProfile } = obligationStorage([self, shell]);
-    // normLiabilityName: "Water payment" ≡ "Water".
+    // normalizeLiabilityName: "Water payment" ≡ "Water".
     await s.createObligation({ name: "Water payment", amount: 60 });
     expect(createProfile).not.toHaveBeenCalled();
     expect(updateProfile).toHaveBeenCalledTimes(1);
@@ -128,6 +145,7 @@ describe("#1 createObligation: a same-named loan keeps its identity", () => {
     expect(updateProfile).toHaveBeenCalledTimes(1);
     const patch = (updateProfile.mock.calls[0] as any)[1];
     expect(patch.fields.monthlyAmount).toBe(60);
+    // One record, so there is nothing for it to point at.
     expect(patch.fields.linkedLiabilityId).toBeUndefined();
   });
 });

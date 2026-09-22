@@ -68,6 +68,7 @@ import {
   MOOD_SCORES,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
+import { findCanonicalLiability, mergeLiabilityRecords, isLiabilityRecord } from "@shared/liability-identity";
 
 // NOTE: the `Reminder` entity was retired on 2026-08-09. Portol models
 // scheduled life with EVENTS (things that happen) and TASKS (things you do),
@@ -1059,6 +1060,31 @@ export class MemStorage implements IStorage {
     // because the storage layer will not take another. See shared/date-rules.
     if (data.fields && typeof data.fields === "object") {
       data = { ...data, fields: prepareProfileFields(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (data as any).typeKey, todayISO: getUserToday((this as any)._timezone) }) };
+    }
+    // ONE LIABILITY = ONE PROFILE — the same chokepoint rule SupabaseStorage
+    // applies (shared/liability-identity). Parity matters here: a dev run or a
+    // test that can mint a duplicate loan is a dev run that disagrees with
+    // production about what a liability IS.
+    if (isLiabilityRecord(data as any)) {
+      const selfProfileId = [...this.profiles.values()].find((p) => p.type === "self")?.id ?? null;
+      const canonical = findCanonicalLiability(
+        data as any,
+        [...this.profiles.values()].filter((p) => !(p as any).deletedAt) as any[],
+        { selfProfileId },
+      );
+      if (canonical?.id) {
+        const stored = this.profiles.get(canonical.id)!;
+        const merged = mergeLiabilityRecords(stored as any, data as any);
+        const incomingTags = Array.isArray(data.tags) ? data.tags : [];
+        const updated = {
+          ...stored, ...merged, updatedAt: now,
+          tags: incomingTags.length > 0 ? Array.from(new Set([...(stored.tags || []), ...incomingTags])) : stored.tags,
+          parentProfileId: stored.parentProfileId ?? data.parentProfileId ?? null,
+        } as Profile;
+        this.profiles.set(stored.id, updated);
+        this.logActivity("profile", `Merged into existing liability: ${merged.name}`);
+        return updated;
+      }
     }
     const profile: Profile = { id: randomUUID(), ...data, fields: data.fields || {}, tags: data.tags || [], notes: data.notes || "", documents: [], linkedTrackers: [], linkedExpenses: [], linkedTasks: [], linkedEvents: [], createdAt: now, updatedAt: now };
     this.profiles.set(profile.id, profile);

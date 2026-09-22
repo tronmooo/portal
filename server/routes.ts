@@ -5396,6 +5396,10 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
     }
 
+    // Snapshot the ids BEFORE the write: `existing` may be the storage's own
+    // live array, which the insert then appends to, and a membership test
+    // against a mutated list would call every create a merge.
+    const idsBeforeCreate = new Set(existing.map((p) => p.id));
     const created = await storage.createProfile(parsed.data);
     bustCache(`profiles:${uid_p1}`); bustCache(`stats:${uid_p1}`); bustCache(`profile-detail:${uid_p1}:`);
 
@@ -5444,7 +5448,15 @@ ${JSON.stringify(ctx, null, 2)}`;
       })();
     }
 
-    res.status(201).json(created);
+    // A liability that turned out to already exist was merged into the record
+    // it IS, not inserted a second time (shared/liability-identity, applied at
+    // the storage chokepoint). Say so rather than letting the caller believe it
+    // created something: the client shows the existing liability, and a 201 for
+    // a row that predates the request would be a quiet lie.
+    const mergedIntoExisting = idsBeforeCreate.has(created.id);
+    res.status(mergedIntoExisting ? 200 : 201).json(
+      mergedIntoExisting ? { ...created, mergedIntoExisting: true } : created,
+    );
   }));
   app.patch("/api/profiles/:id", asyncHandler(async (req, res) => {
     const uid_p2 = cacheUserKey(req as AuthenticatedRequest);

@@ -84,7 +84,10 @@ import {
   isLiabilityProfile,
   isNetWorthLiabilityProfile,
 } from "../shared/asset-value";
-import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName, billsServicingDebt } from "../shared/liability-types";
+import { isRecurringBill, isRecurringBillProfile, billsServicingDebt } from "../shared/liability-types";
+import {
+  findCanonicalLiability, mergeLiabilityRecords, isLiabilityRecord,
+} from "../shared/liability-identity";
 import { withEffectiveCategories, debtPaymentLiabilityIds } from "../shared/expense-effective-category";
 import {
   addCharge, removeCharge, setEstimate, setActual, normalizeBillingModel,
@@ -1790,6 +1793,47 @@ export class SupabaseStorage implements IStorage {
         if (existing) return existing;
       }
     }
+    // ── ONE LIABILITY = ONE PROFILE ────────────────────────────────────────
+    //
+    // Every door that can mint a liability funnels through here: the REST
+    // create route, the AI tools, a statement import, document extraction's
+    // executor, createObligation (a recurring bill IS a liability profile).
+    // Deciding identity at this chokepoint is what makes "never two profiles
+    // for one debt" structural instead of a rule each door has to remember.
+    //
+    // A candidate that IS an existing liability (same account number, or the
+    // same name under the same owner once the "… payment" spelling is folded
+    // away — shared/liability-identity) UPDATES that record and returns it.
+    // Two genuinely separate debts against one asset are untouched: a
+    // disagreeing loan/policy number or creditor vetoes the match.
+    if (isLiabilityRecord(data as any)) {
+      const canonical = await this.resolveCanonicalLiability(data as any);
+      if (canonical) {
+        const merged = mergeLiabilityRecords(canonical as any, data as any);
+        const incomingTags = Array.isArray(data.tags) ? data.tags : [];
+        const patch: any = { ...merged };
+        // Nothing the caller brought is dropped on the floor: tags union, and
+        // notes are kept side by side rather than one overwriting the other.
+        if (incomingTags.length > 0) {
+          patch.tags = Array.from(new Set([...(canonical.tags || []), ...incomingTags]));
+        }
+        const incomingNotes = String(data.notes || "").trim();
+        const heldNotes = String(canonical.notes || "").trim();
+        if (incomingNotes && incomingNotes !== heldNotes) {
+          patch.notes = heldNotes ? `${heldNotes}\n\n${incomingNotes}` : incomingNotes;
+        }
+        // A candidate that names an owner the record never had adopts it; an
+        // owner already on file is never moved by a create.
+        if (!canonical.parentProfileId && data.parentProfileId) {
+          patch.parentProfileId = data.parentProfileId;
+        }
+        await this.updateProfile(canonical.id, patch);
+        // A shell created by an older door may never have gotten an owner link.
+        await this.ensureAutoOwnerLink(canonical.id, "liability", (patch.parentProfileId ?? canonical.parentProfileId) ?? null);
+        this.logActivity("profile", `Merged into existing liability: ${merged.name}`);
+        return (await this.getProfile(canonical.id))!;
+      }
+    }
     const now = new Date().toISOString();
     const id = randomUUID();
     // Auto-assign parent to self profile if not specified for child types
@@ -1835,6 +1879,60 @@ export class SupabaseStorage implements IStorage {
     await this.ensureAutoOwnerLink(id, data.type, parentProfileId ?? null);
 
     return (await this.getProfile(id))!;
+  }
+
+  /**
+   * The liability a candidate IS, if one already exists.
+   *
+   * Reads the rows DIRECTLY rather than through the request-memoized
+   * getProfiles, for the same reason the person dedup above does: two creates
+   * in one chat turn (the model emitting a loan and its payment bill together)
+   * must see each other, and a stale memo is how the second one slips through.
+   */
+  private async resolveCanonicalLiability(candidate: any): Promise<Profile | undefined> {
+    const rows = await this.liabilityRowsForIdentity();
+    if (rows.length === 0) return undefined;
+    const self = await this.getSelfProfile().catch(() => undefined);
+    const match = findCanonicalLiability(candidate, rows, { selfProfileId: self?.id ?? null });
+    if (!match?.id) return undefined;
+    return (await this.getProfile(match.id).catch(() => undefined)) ?? (match as any);
+  }
+
+  /**
+   * The liability rows identity is decided against.
+   *
+   * Read DIRECTLY rather than through the request-memoized getProfiles, for the
+   * same reason the person dedup above does: two creates in one chat turn (the
+   * model emitting a loan and its payment bill together) must see each other,
+   * and a stale memo is how the second one slips through. The memoized read is
+   * the fallback, not the source — identity is a guard, never a gate, so a
+   * failed read degrades to "no match" (at worst the duplicate this guard
+   * exists to prevent) rather than blocking the create.
+   */
+  private async liabilityRowsForIdentity(): Promise<any[]> {
+    try {
+      const { data } = await this.supabase
+        .from("profiles")
+        .select("id, name, type, type_key, parent_profile_id, fields, deleted_at")
+        .eq("user_id", this.userId)
+        .in("type", ["liability", "loan", "subscription"])
+        .limit(2000);
+      if (Array.isArray(data)) {
+        return data
+          .filter((r: any) => r && !r.deleted_at)
+          .map((r: any) => ({
+            id: r.id, name: r.name, type: r.type, type_key: r.type_key,
+            parentProfileId: r.parent_profile_id ?? null, fields: r.fields || {},
+          }));
+      }
+    } catch (e: any) {
+      console.warn("[liability-identity] direct read unavailable:", e?.message || e);
+    }
+    try {
+      return (await this.getProfiles()).filter((p: any) => p && !p.deletedAt);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -5801,33 +5899,15 @@ export class SupabaseStorage implements IStorage {
     return this.liabilityToObligation(p, (payRows || []).map(r => this.paymentRowToObligationPayment(r)), parties);
   }
 
-  /** Normalize a liability/bill name for identity: drop a trailing "payment"
-   *  suffix, collapse whitespace, lowercase. "Water Bill payment" ≡ "Water Bill". */
-  // ONE definition of the bill/loan pairing name rule, shared with the payment
-  // path (server/liability-payments.ts) so the two cannot drift.
-  private normLiabilityName(n: string): string {
-    return normalizeLiabilityName(n);
-  }
-
-  /** Find an existing liability profile that IS this one (same normalized name,
-   *  same owner) so create becomes an idempotent upsert — one liability = one
-   *  profile, no matter how many times / ways it's created. */
-  private async resolveExistingLiability(
-    name: string,
-    ownerId: string | undefined,
-    all?: Profile[],
-    opts: { billShellsOnly?: boolean } = {},
-  ): Promise<Profile | undefined> {
-    const target = this.normLiabilityName(name);
-    if (!target) return undefined;
-    const profiles = all || await this.getProfiles();
-    const isLiab = (p: any) => (p.type === "liability" || p.type === "loan")
-      && (!opts.billShellsOnly || isRecurringBillShell(p));
-    // Same owner first; then a self/orphan-owned shell of the same name.
-    const selfId = profiles.find(p => p.type === "self")?.id;
-    return profiles.find((p: any) => isLiab(p) && this.normLiabilityName(p.name) === target && p.parentProfileId === ownerId)
-      || profiles.find((p: any) => isLiab(p) && this.normLiabilityName(p.name) === target && (p.parentProfileId == null || p.parentProfileId === selfId));
-  }
+  // Identity — "is this liability already on file?" — is no longer answered
+  // here. It lives in shared/liability-identity and is applied at the
+  // createProfile chokepoint (see resolveCanonicalLiability), so the storage
+  // layer, the AI tools and the client cannot hold three different opinions
+  // about whether two rows are the same debt. The pair of private helpers that
+  // used to answer it by name alone were deleted rather than left behind: a
+  // second, weaker identity rule sitting next to the real one is how the
+  // "Dodge Ram 2025 Auto Loan" / "… payment" twins were minted in the first
+  // place.
 
   async createObligation(data: InsertObligation): Promise<Obligation> {
     const kind = (data as any).kind || "bill";
@@ -5872,44 +5952,39 @@ export class SupabaseStorage implements IStorage {
       ...(data.notes ? { notes: data.notes } : {}),
     };
 
-    // IDEMPOTENT UPSERT — one liability = one profile. If a RECURRING BILL (or
-    // a bare liability shell with no type_key yet — a create_liability shell,
-    // a prior create, a re-run) with this normalized name already exists for
-    // the owner, UPDATE it into this recurring bill and return it instead of
-    // inserting a duplicate.
+    // IDEMPOTENT UPSERT — one liability = one profile.
     //
-    // Only bill shells qualify. The match used to accept ANY liability of the
-    // same name, so "Car Loan payment" (normalized: "car loan") UPDATED the
-    // amortizing "Car Loan" into a recurring bill — type_key overwritten, the
-    // loan dropped out of net worth, its amortization replaced by a monthly
-    // shell. A loan, credit card or one-time debt of the same name is a
-    // different thing: it keeps its identity, and the bill is created as a
-    // separate profile that records which liability it pays
-    // (fields.linkedLiabilityId), so the two stay related without merging.
-    const profiles = await this.getProfiles();
-    const existing = await this.resolveExistingLiability(rawName, parent, profiles, { billShellsOnly: true });
-    // Which debt this bill PAYS, recorded whether or not a bill shell of the
-    // same name already exists. It used to be resolved only on the
-    // never-seen-before branch, so a bill created twice (or created as a shell
-    // first, which is the common path) ended up with no link at all — every
-    // bill in the field carries a null linkedLiabilityId, which is why paying
-    // a car-loan bill never moved the car loan.
-    const paysFor = await this.resolveExistingLiability(rawName, parent, profiles);
-    if (paysFor && paysFor.id !== existing?.id && !isRecurringBillProfile(paysFor)) {
-      billFields.linkedLiabilityId = paysFor.id;
-    }
-    if (existing) {
-      await this.updateProfile(existing.id, {
-        name: rawName,
-        type: "liability",
-        type_key: typeKey,
-        fields: { ...(existing.fields || {}), ...billFields },
-      } as any);
+    // A recurring bill IS a liability profile here, so "create a bill" and
+    // "create a liability" are the same act under two names and must resolve
+    // to the same record. Identity is decided once, in
+    // shared/liability-identity, by account number (or name-under-owner with
+    // the "… payment" spelling folded away) — so a bill written beside the
+    // loan it pays lands ON the loan instead of beside it.
+    //
+    // This used to match only BILL SHELLS, on the reasoning that merging a
+    // bill into a loan would overwrite the loan's subtype and drop it out of
+    // net worth. That reasoning was right about the danger and wrong about the
+    // remedy: it kept the twin. The danger is now handled where it belongs, by
+    // classification precedence — mergeLiabilityRecords keeps the more
+    // specific subtype, so folding "Car Loan payment" into "Car Loan" gives
+    // the loan the bill's amount and due date while it stays an auto_loan that
+    // amortizes and counts as debt.
+    const candidate = {
+      name: rawName,
+      type: "liability",
+      type_key: typeKey,
+      parentProfileId: parent ?? null,
+      fields: billFields,
+    };
+    const canonical = await this.resolveCanonicalLiability(candidate);
+    if (canonical) {
+      const merged = mergeLiabilityRecords(canonical as any, candidate as any);
+      await this.updateProfile(canonical.id, merged as any);
       // The upsert path skips createProfile, so ensure the owner link exists
       // (an existing shell may never have gotten one).
-      await this.ensureAutoOwnerLink(existing.id, "liability", (existing as any).parentProfileId ?? parent ?? null);
-      this.logActivity("obligation", `Updated bill: ${rawName}`);
-      return (await this.getObligation(existing.id))!;
+      await this.ensureAutoOwnerLink(canonical.id, "liability", (canonical as any).parentProfileId ?? parent ?? null);
+      this.logActivity("obligation", `Updated bill: ${merged.name}`);
+      return (await this.obligationViewOf(canonical.id))!;
     }
 
     const created = await this.createProfile({
@@ -5921,7 +5996,31 @@ export class SupabaseStorage implements IStorage {
       tags: [],
     } as any);
     this.logActivity("obligation", `Created bill: ${rawName}`);
-    return (await this.getObligation(created.id))!;
+    return (await this.obligationViewOf(created.id))!;
+  }
+
+  /**
+   * The Obligation view of a liability profile, whatever its subtype.
+   *
+   * `getObligation` deliberately answers only for recurring-bill profiles —
+   * that gate is what keeps a mortgage off the bills list. But once a bill and
+   * the debt it pays are ONE record, a caller that asked to create a bill and
+   * got the loan back still needs an Obligation in its hands, so this reads the
+   * same view without the gate.
+   */
+  private async obligationViewOf(id: string): Promise<Obligation | undefined> {
+    const p = await this.getProfile(id).catch(() => undefined);
+    if (!p) return undefined;
+    if (isRecurringBillProfile(p)) return this.getObligation(id);
+    // A debt instrument that a "create a bill" call landed on: the caller still
+    // needs an Obligation back, read off the one record that now holds both.
+    const { data: payRows } = await this.supabase
+      .from("liability_payments").select("*")
+      .eq("user_id", this.userId).eq("liability_profile_id", id)
+      .order("payment_date", { ascending: true });
+    const parties = (await this.getLiabilityProfileLinks(id).catch(() => [] as LiabilityProfileLink[]))
+      .map((l) => l.partyProfileId).filter(Boolean) as string[];
+    return this.liabilityToObligation(p, (payRows || []).map((r) => this.paymentRowToObligationPayment(r)), parties);
   }
 
   async updateObligation(id: string, data: Partial<Obligation>): Promise<Obligation | undefined> {

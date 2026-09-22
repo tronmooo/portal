@@ -98,7 +98,20 @@ export function isRecurringBillProfile(p: { type?: string | null; type_key?: str
  * whose link was never written can still be paired to its loan).
  */
 export function normalizeLiabilityName(n: string): string {
-  return String(n || "").toLowerCase().replace(/\s+(bill\s+)?payments?$/i, "").replace(/\s+/g, " ").trim();
+  // Trailing "payment(s)" and "bill(s)" are how a name says WHAT KIND OF
+  // RECORD it is, not WHICH liability it is, so they are folded away one token
+  // at a time. Stripping them in a single pattern left a hole the duplicate
+  // report walked straight through: `"Phone Bill Payments"` folded to "phone"
+  // while `"Phone Bill"` folded to "phone bill", so the two were never
+  // recognised as one liability and both were kept. Iterating closes it —
+  // "Water Bill payments", "Water Bill" and "Water" all answer "water".
+  //
+  // The loop never consumes the last token: a liability genuinely named "Bill"
+  // or "Payment" keeps its name rather than normalizing to nothing, which
+  // would make it identical to every other empty-named row.
+  let tokens = String(n || "").toLowerCase().replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  while (tokens.length > 1 && /^(bills?|payments?)$/.test(tokens[tokens.length - 1])) tokens.pop();
+  return tokens.join(" ");
 }
 
 /** True for a name spelled as a debt's payment bill ("… payment", "… bill payment"). */
