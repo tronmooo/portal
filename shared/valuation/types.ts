@@ -282,6 +282,13 @@ export interface ValuationStatusRow {
   reason: RefreshReason | null;
 }
 
+/**
+ * Whether the estimator may gather this asset's value. "auto" is the default
+ * everywhere — see `isAutoValuationEnabled` in ./context, the one reader of
+ * the stored `valuationMode` field.
+ */
+export type ValuationMode = "auto" | "manual";
+
 export interface ValuationSnapshot {
   record: ValuationRecord | null;
   freshness: FreshnessVerdict;
@@ -289,6 +296,12 @@ export interface ValuationSnapshot {
   inputFingerprint: string;
   /** True when the profile is one the valuation system can value at all. */
   supported: boolean;
+  /**
+   * Auto (the default) or manual — the user turned automatic tracking off for
+   * this asset, so `record` is history and nothing will refresh it. Absent on
+   * a payload from an older build, which means auto.
+   */
+  mode?: ValuationMode;
   /** A refresh is currently running (lock held). */
   refreshing?: boolean;
 }

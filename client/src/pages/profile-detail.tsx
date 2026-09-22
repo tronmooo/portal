@@ -149,6 +149,7 @@ import { SmartFillTrigger } from "@/components/SmartFillTrigger";
 import { SectionErrorBoundary } from "@/components/ErrorBoundary";
 import { ImproveEstimatePanel } from "@/components/asset/ImproveEstimatePanel";
 import { CurrentValueCard } from "@/components/asset/CurrentValueCard";
+import { isAutoValuationEnabled } from "@shared/valuation/context";
 import { useAssetValuation } from "@/hooks/useAssetValuation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1923,7 +1924,7 @@ interface AISummaryData {
   fingerprint?: string;
 }
 
-function AISummaryCard({ profileId, profileType, profileUpdatedAt, valueFingerprint }: { profileId: string; profileType: string; profileUpdatedAt?: string; valueFingerprint?: string }) {
+function AISummaryCard({ profileId, profileType, profileUpdatedAt, valueFingerprint, fields }: { profileId: string; profileType: string; profileUpdatedAt?: string; valueFingerprint?: string; fields?: Record<string, any> | null }) {
   // When set, the next fetch appends ?force=true so the server regenerates
   // instead of serving its 2h cache. Kept as a ref so the single useQuery
   // queryFn stays the only fetch path (see handleRefresh).
@@ -1977,7 +1978,10 @@ function AISummaryCard({ profileId, profileType, profileUpdatedAt, valueFingerpr
 
   // Wave 9: Look up current market value via web search + AI.
   // Only shown for asset-like profile types (asset/vehicle/property/investment).
-  const canLookupValue = ["asset", "vehicle", "property", "investment"].includes(profileType);
+  // ...and only while the user still wants Portol gathering this value: with
+  // the switch off, the estimate affordances go away with it.
+  const canLookupValue = ["asset", "vehicle", "property", "investment"].includes(profileType)
+    && isAutoValuationEnabled(fields);
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookupResult, setLookupResult] = useState<null | {
     value: number;
@@ -2563,7 +2567,9 @@ function GroupedInlineField({ profileId, fieldKey, label, value, onSaved, allFie
       toast({ title: "Failed to delete", variant: "destructive" });
     }
   };
-  const isValueField = fieldKey === "currentValue";
+  // "Find Value" asks the AI to go and get a number — not offered once the
+  // user has turned automatic tracking off for this asset.
+  const isValueField = fieldKey === "currentValue" && isAutoValuationEnabled(allFields);
 
   const save = async () => {
     setSaving(true);
@@ -3193,7 +3199,7 @@ function InfoTab({ profile, onEdit }: { profile: ProfileDetail; onEdit: () => vo
       {isAssetTabProfile(profile as any) && (
         <CurrentValueCard profileId={profile.id} fields={profile.fields} className="mb-3" />
       )}
-      <DynamicOverview profileId={profile.id} fallback={legacy}>
+      <DynamicOverview profileId={profile.id} fallback={legacy} autoValuation={isAutoValuationEnabled(profile.fields)}>
         <OverviewEditors profile={profile} />
       </DynamicOverview>
     </>
@@ -3364,6 +3370,8 @@ function StaticInfoTab({
     "valuation_confidence", "valuation_method", "valuation_date", "valuation_range",
     "valuationLow", "valuationHigh", "valuationFactors", "valuationMissingInfo", "valuationSources",
     "currentValueSource", "current_value_source", "currentValueAsOf", "userEnteredValueAsOf",
+    // The automatic-tracking switch on the value card — a control, not a fact.
+    "valuationMode", "valuation_mode",
     "assetSubtype", "asset_subtype",
   ]);
   // Keys the ACCOUNT card above already renders (balance, limit, available,
@@ -9841,9 +9849,11 @@ function ValuationTab({ profile, profileId, onChanged }: { profile: any; profile
   // refresh when stale, full history here. Re-estimating goes through the same
   // hook the card uses so the two can never disagree.
   const { snapshot, refreshing, refresh } = useAssetValuation(profileId);
-  const missingInfo: string[] = snapshot?.record?.missingInfo?.length
-    ? snapshot.record.missingInfo
-    : (Array.isArray(f.valuationMissingInfo) ? f.valuationMissingInfo : []);
+  const missingInfo: string[] = !isAutoValuationEnabled(f)
+    ? []
+    : snapshot?.record?.missingInfo?.length
+      ? snapshot.record.missingInfo
+      : (Array.isArray(f.valuationMissingInfo) ? f.valuationMissingInfo : []);
   return (
     <div className="space-y-3" data-testid="valuation-tab">
       <CurrentValueCard profileId={profileId} fields={f} showHistory />
@@ -13502,7 +13512,7 @@ export default function ProfileDetailPage() {
           compact inline error instead of blanking the whole profile page. */}
       <div className="px-4 md:px-6 pt-4">
         <SectionErrorBoundary name="profile-ai-summary" inline>
-          <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} />
+          <AISummaryCard profileId={id} profileType={profile.type} profileUpdatedAt={profile.updatedAt} valueFingerprint={profileValueFingerprint(profile)} fields={profile.fields} />
         </SectionErrorBoundary>
       </div>
 

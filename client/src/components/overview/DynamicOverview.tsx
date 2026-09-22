@@ -567,14 +567,16 @@ function FindValueButton({ profileId, fieldKey }: { profileId: string; fieldKey:
   );
 }
 
-function IdentityHeader({ spec }: { spec: OverviewSpec }) {
+function IdentityHeader({ spec, autoValuation }: { spec: OverviewSpec; autoValuation: boolean }) {
   const { identity, summaryMetrics } = spec;
   // Offer a market lookup where one is meaningful: an owned thing whose
   // headline IS its value, or one that is missing that value entirely.
   const headlineValueKey = identity.headline?.editable && /value$/i.test(identity.headline.semanticKey)
     ? identity.headline.editable.fieldKey : null;
   const missingValueKey = spec.missingInformation.find(m => m.semanticKey === "currentValue")?.fieldKey || null;
-  const valueLookupKey = identity.entityClass === "asset" ? (headlineValueKey || missingValueKey) : null;
+  // Not offered once the user has turned automatic value tracking off for
+  // this asset — the server refuses the lookup anyway.
+  const valueLookupKey = identity.entityClass === "asset" && autoValuation ? (headlineValueKey || missingValueKey) : null;
   const toneCls = identity.status?.tone === "positive" ? "bg-emerald-500/15 text-emerald-400"
     : identity.status?.tone === "critical" ? "bg-red-500/15 text-red-400"
     : identity.status?.tone === "warning" ? "bg-amber-500/15 text-amber-400"
@@ -646,8 +648,13 @@ export function DynamicOverview({
   profileId,
   fallback,
   children,
+  autoValuation = true,
 }: {
   profileId: string;
+  /** False when the user turned automatic value tracking off for this asset:
+   *  the market-lookup action goes away with it. Defaults to on, so a caller
+   *  that doesn't know behaves exactly as before. */
+  autoValuation?: boolean;
   /** Rendered when the composition is unavailable (offline, 500, or a profile
    *  class this engine doesn't drive). The page must never go blank because a
    *  layout couldn't be composed. */
@@ -680,7 +687,7 @@ export function DynamicOverview({
 
   return (
     <div className="space-y-3" data-testid="dynamic-overview">
-      <IdentityHeader spec={spec} />
+      <IdentityHeader spec={spec} autoValuation={autoValuation} />
       <AttentionStrip spec={spec} />
       {spec.sections.map(section => renderSection(section, profileId))}
       {children}

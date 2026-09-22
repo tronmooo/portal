@@ -14,6 +14,15 @@
 // User-entered values are never overwritten: the estimate lives in its own
 // record; `fields.currentValue` is mirrored only when it is empty or already
 // estimator-owned (tracked by `currentValueSource`).
+//
+// A user can also turn the estimator OFF for one asset (`fields.valuationMode`
+// = "manual", read ONLY through isAutoValuationEnabled — absent means auto, so
+// every existing and newly created asset is tracked exactly as before). A
+// manual asset still reports its last stored estimate as history, but it is
+// never stale, never swept, and refreshValuation returns without a resolver,
+// a provider, the model, the lock or a write. The mode is re-read again just
+// before persisting, so a run already in flight when the user flips the switch
+// is discarded instead of landing on their number.
 
 import type { IStorage } from "../storage";
 import type { ProfileDetail } from "@shared/schema";
@@ -26,13 +35,14 @@ import {
   computeValuation,
   deriveInternalEvidence,
   errorRecord,
+  isAutoValuationEnabled,
   isEstimatorOwnedValue,
   planValuation,
   scheduleNextRefresh,
   VALUATION_MODEL_VERSION,
 } from "@shared/valuation";
 import type {
-  AssetUnderstanding, RefreshReason, ValuationContext, ValuationPlan, ValuationRecord, ValuationSnapshot, ValuationStatusRow,
+  AssetUnderstanding, RefreshReason, ValuationContext, ValuationMode, ValuationPlan, ValuationRecord, ValuationSnapshot, ValuationStatusRow,
 } from "@shared/valuation/types";
 import { startTrace } from "../latency";
 import { bundleFromDetail, resolveAssetBundle } from "./resolver";
@@ -47,6 +57,9 @@ export function valuationLockName(profileId: string): string { return `valuation
 export function isValuableProfile(p: { type?: string | null; fields?: any } | null | undefined): boolean {
   return !!p && isAssetTabProfile(p);
 }
+
+/** Shown wherever a manual asset explains why nothing is refreshing. */
+export const MANUAL_DETAIL = "Automatic value tracking is off for this asset";
 
 export interface SnapshotOptions {
   detail?: ProfileDetail | null;
@@ -64,9 +77,10 @@ export async function getValuationSnapshot(
   const detail = opts.detail ?? (await storage.getProfileDetail(profileId));
   if (!detail) return null;
   const record = opts.record !== undefined ? opts.record : await storage.getAssetValuation(profileId).catch(() => null);
+  const mode: ValuationMode = isAutoValuationEnabled(detail.fields) ? "auto" : "manual";
   if (!isValuableProfile(detail)) {
     return {
-      record: null, supported: false, inputFingerprint: "",
+      record: null, supported: false, mode, inputFingerprint: "",
       freshness: { fresh: true, reason: null, detail: "Not an owned asset" },
     };
   }
@@ -74,8 +88,13 @@ export async function getValuationSnapshot(
   return {
     record,
     supported: true,
+    mode,
     inputFingerprint: ctx.inputFingerprint,
-    freshness: assessFreshness(record, ctx.inputFingerprint, now, VALUATION_MODEL_VERSION),
+    // Manual: the stored record is the LAST estimate, kept as history. It is
+    // never stale, so no client, sweep or scheduler ever asks for a refresh.
+    freshness: mode === "manual"
+      ? { fresh: true, reason: null, detail: MANUAL_DETAIL }
+      : assessFreshness(record, ctx.inputFingerprint, now, VALUATION_MODEL_VERSION),
   };
 }
 
@@ -202,7 +221,11 @@ export async function getValuationStatus(
     const ctx = buildValuationContext({
       profile: { id: p.id, name: p.name, type: p.type, type_key: (p as any).type_key ?? null, tags: p.tags, fields: p.fields || {}, notes: p.notes ?? null },
     }, now);
-    const freshness = assessListFreshness(record, ctx.profileFingerprint, now, VALUATION_MODEL_VERSION);
+    // A manual asset is never swept: the Assets tab sees it as fresh, so no
+    // background refresh is ever scheduled for it.
+    const freshness = isAutoValuationEnabled(p.fields)
+      ? assessListFreshness(record, ctx.profileFingerprint, now, VALUATION_MODEL_VERSION)
+      : { fresh: true, reason: null, detail: MANUAL_DETAIL };
     rows.push({
       profileId: p.id,
       status: record?.status ?? "none",
@@ -253,6 +276,13 @@ export async function refreshValuation(
   if (!detail) return none;
   if (!isValuableProfile(detail)) {
     return { ...none, snapshot: await getValuationSnapshot(storage, profileId, { detail, record: null, now }) };
+  }
+  // Automatic tracking is off: report the stored record as the (fresh, never
+  // re-checked) history it now is and stop. No resolver, no provider, no
+  // model, no lock, no write — `ran: false`, the same way a fresh record or an
+  // unsupported profile reports a non-run.
+  if (!isAutoValuationEnabled(detail.fields)) {
+    return { ...none, snapshot: await getValuationSnapshot(storage, profileId, { detail, now }) };
   }
 
   const previous = await storage.getAssetValuation(profileId).catch(() => null);
@@ -354,6 +384,16 @@ export async function refreshValuation(
     // An error record carries the previous numbers forward; it is bookkeeping
     // (retry backoff), not a new estimate, so it is neither journaled nor
     // added to the history.
+    // The pipeline can take tens of seconds. If the user turned tracking off
+    // while it ran, their asset is now manual and this result is stale
+    // intent: drop it rather than persist an estimate over their own value.
+    const latest = await storage.getProfile(profileId).catch(() => null);
+    if (latest && !isAutoValuationEnabled(latest.fields)) {
+      trace.set("skipped", "switched_to_manual"); trace.end();
+      logger.info("valuation", `discarded refresh for ${profileId}: tracking switched off mid-run`);
+      return { ...none, snapshot: await getValuationSnapshot(storage, profileId, { record: previous, now }) };
+    }
+
     const changed = record.status !== "error" && !sameEstimate(previous, record);
     let wrote = false;
     let previousValue: number | null = null;

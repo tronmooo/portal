@@ -378,6 +378,10 @@ export default defineConfig({
       // QA 2026-09-18: money — net worth change baseline, income MTD, paychecks, expenses, formatting.
       'tests/qa-2026-09-18-money-networth.test.ts',
       'tests/qa-2026-09-18-money.dom.test.tsx',
+      // QA 2026-09-22: per-asset automatic value tracking (the switch) — absent
+      // valuationMode always means auto; manual gathers nothing anywhere.
+      'tests/qa-2026-09-22-valuation-mode.test.ts',
+      'tests/qa-2026-09-22-valuation-mode.dom.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

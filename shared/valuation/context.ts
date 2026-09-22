@@ -142,6 +142,28 @@ function normalizeScalar(v: unknown): string | number | boolean | null {
   return null;
 }
 
+// ── Automatic vs manual valuation ───────────────────────────────────────────
+// A user can turn the estimator OFF for one asset and keep the value by hand.
+// The switch lives in `fields.valuationMode`. ABSENT MEANS AUTO: every asset
+// that predates this field — and every newly created one, since no creation
+// path writes it — is tracked automatically exactly as before. Only the
+// explicit token "manual" turns tracking off, so an empty string, a stray
+// value or a typo can never silently stop an asset being valued.
+
+/** The one field that says whether the estimator may value an asset. */
+export const VALUATION_MODE_FIELD = "valuationMode";
+
+/**
+ * May the estimator gather this asset's value? The ONE predicate every check
+ * (client card, snapshot, refresh, routes, sweep) routes through — there are
+ * no inline `fields.valuationMode === ...` comparisons anywhere.
+ */
+export function isAutoValuationEnabled(fields: Record<string, any> | null | undefined): boolean {
+  // Both spellings, like the readers next door.
+  const raw = fields?.[VALUATION_MODE_FIELD] ?? fields?.valuation_mode;
+  return String(raw ?? "").trim().toLowerCase() !== "manual";
+}
+
 /** Is `fields.currentValue` owned by the estimator (mirrored from a prior run)? */
 export function isEstimatorOwnedValue(fields: Record<string, any>): boolean {
   const src = fields?.currentValueSource ?? fields?.current_value_source;

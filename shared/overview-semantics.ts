@@ -11,7 +11,7 @@
 // Pinned by tests/overview-compose.test.ts.
 
 import { canonicalFieldKey } from "./profile-field-canon";
-import { humanizeFieldName } from "./field-label";
+import { fieldKeyLabel, humanizeFieldName } from "./field-label";
 import { isAssetTabProfile, isLiabilityTabProfile } from "./asset-value";
 import type { DateMeaning, DisplayType, Importance } from "./overview-spec";
 
@@ -53,6 +53,7 @@ const ADMIN_EXACT = new Set([
   "valuation_method", "valuation_date", "valuation_confidence", "valuation_range",
   "valuationLow", "valuationHigh", "valuationFactors", "valuationMissingInfo", "valuationSources",
   "currentValueSource", "current_value_source", "currentValueAsOf", "userEnteredValueAsOf",
+  "valuationMode", "valuation_mode",
   "previousValue", "previous_value", "includeInNetWorth", "countTowardOwner",
   "balanceHistory", "balance_history", "currency",
 ]);
@@ -213,7 +214,7 @@ export function fieldSemantics(rawKey: string, value: unknown): FieldSemantics {
   const displayType = inferDisplayType(key, value, role);
   const semantics: FieldSemantics = {
     key,
-    label: humanizeFieldName(key),
+    label: fieldKeyLabel(key),
     role,
     displayType,
     importance: baseImportance(key, role, value),
