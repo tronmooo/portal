@@ -33,7 +33,7 @@ import {
   type CalendarCategory,
 } from "@shared/calendar-categories";
 import {
-  KIND_LABELS, relativeDayLabel, isRecurringRule, isImportantDate,
+  KIND_LABELS, relativeDayLabel, isRecurringRule, isImportantDate, isPaymentKind,
   type CalendarOccurrence, type CalendarSeries,
 } from "@shared/calendar-occurrences";
 import { humanRecurrenceLabel } from "@shared/recurring-dates";
@@ -269,7 +269,12 @@ export function RecurringDatesPage({ filterIds, filterMode, onAddRecurring }: {
     const labels = (cal.duplicateLabelsBySeries?.get(series.id) || []).filter((l) => l !== series.title);
     if (labels.length === 0) return "Recorded twice — shown once here";
     const named = labels.map((l) => `“${l}”`).join(" and ");
-    return `Also recorded as ${named} — the same payment, shown once here`;
+    // "The same payment" is true of a loan and its bill; it is nonsense on a
+    // birthday, which is what the card actually said (user report 2026-09-22:
+    // a birthday captioned "the same payment, shown once here"). The merged
+    // thing is a DATE; only payment kinds may call it a payment.
+    const what = isPaymentKind(series.kind) ? "payment" : "date";
+    return `Also recorded as ${named} — the same ${what}, shown once here`;
   };
 
   return (
