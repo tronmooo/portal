@@ -281,15 +281,95 @@ describe("ExecutiveBriefing", () => {
       ],
     });
     await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+    // Occasions live in Schedule's Important dates block — the one place on
+    // the tab that answers "when is it actually happening".
     await waitFor(() => {
-      expect(screen.getByTestId("exec-card-upcoming").textContent).toContain("Maya's Graduation");
+      expect(screen.getByTestId("exec-important-dates").textContent).toContain("Maya's Graduation");
     });
-    const upcoming = screen.getByTestId("exec-card-upcoming");
-    expect(upcoming.textContent).toContain("Mom's Birthday");
+    const dates = screen.getByTestId("exec-important-dates");
+    expect(dates.textContent).toContain("Mom's Birthday");
     // Writable occurrence → Done. A profile-derived date is read-only — its
     // sourceId is not an event id, so offering Done would PATCH into a 404.
     expect(screen.getByTestId("exec-action-event:ev-rd-1").textContent).toContain("Done");
     expect(screen.queryByTestId("exec-action-event:ev-bd-1")).toBeNull();
+  });
+
+  // Requested 2026-09-22: "there should be a place in the executive tab that
+  // displays all these important dates … in the schedule place … birthdays
+  // etc. … and when things are about to expire."
+  describe("Schedule · Important dates", () => {
+    const soon = (n: number) => {
+      const d = new Date(); d.setDate(d.getDate() + n);
+      return d.toLocaleDateString("en-CA");
+    };
+
+    it("lists birthdays and expirations together, soonest first, inside Schedule", async () => {
+      stubRoutes({
+        "/api/calendar/timeline": [
+          { id: "ev-b2", type: "event", title: "Dad's Birthday", date: soon(20), allDay: true,
+            sourceId: "ev-b2", linkedProfiles: [], meta: { kind: "birthday", recurrence: "yearly" } },
+          { id: "ev-b1", type: "event", title: "Mom's Birthday", date: soon(3), allDay: true,
+            sourceId: "ev-b1", linkedProfiles: [], meta: { kind: "birthday", recurrence: "yearly" } },
+        ],
+      });
+      await mount(enhancedWith());
+      const block = await screen.findByTestId("exec-important-dates");
+      await waitFor(() => expect(block.textContent).toContain("Mom's Birthday"));
+      // Expirations belong here too — "when things are about to expire".
+      expect(block.textContent).toContain("Passport");
+      expect(block.textContent).toContain("Dad's Birthday");
+      // Soonest first: Mom (3d) before Passport (12d) before Dad (20d).
+      const order = ["Mom's Birthday", "Passport", "Dad's Birthday"]
+        .map((t) => block.textContent!.indexOf(t));
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      // It sits in the Schedule card, not in a card of its own.
+      expect(screen.getByTestId("exec-card-schedule").contains(block)).toBe(true);
+    });
+
+    it("says how the list splits, so the week you must act on is legible", async () => {
+      stubRoutes({
+        "/api/calendar/timeline": [
+          { id: "ev-b1", type: "event", title: "Mom's Birthday", date: soon(3), allDay: true,
+            sourceId: "ev-b1", linkedProfiles: [], meta: { kind: "birthday", recurrence: "yearly" } },
+          { id: "ev-b2", type: "event", title: "Dad's Birthday", date: soon(20), allDay: true,
+            sourceId: "ev-b2", linkedProfiles: [], meta: { kind: "birthday", recurrence: "yearly" } },
+        ],
+      });
+      await mount(enhancedWith());
+      await waitFor(() => {
+        // Mom (3d) is inside the week; Passport (12d) and Dad (20d) are not.
+        expect(screen.getByTestId("exec-important-dates-note").textContent)
+          .toBe("1 in the next 7 days · 2 more within 45");
+      });
+    });
+
+    it("is present and explains itself when there is nothing coming up", async () => {
+      await mount(enhancedWith({ expiringDocuments: [] }));
+      const block = await screen.findByTestId("exec-important-dates");
+      expect(block.textContent).toContain("Important dates");
+      expect(block.textContent).toContain("No birthdays or expirations in the next 45 days.");
+    });
+
+    it("does not also render the same date in the Upcoming card", async () => {
+      stubRoutes({
+        "/api/calendar/timeline": [
+          { id: "ev-b1", type: "event", title: "Mom's Birthday", date: soon(3), allDay: true,
+            sourceId: "ev-b1", linkedProfiles: [], meta: { kind: "birthday", recurrence: "yearly" } },
+        ],
+      });
+      await mount(enhancedWith());
+      await waitFor(() => {
+        expect(screen.getByTestId("exec-important-dates").textContent).toContain("Mom's Birthday");
+      });
+      expect(screen.getByTestId("exec-card-upcoming").textContent).not.toContain("Mom's Birthday");
+      // One row, one testid — the duplicate is what made the DOM ambiguous.
+      expect(screen.getAllByTestId("exec-item-event:ev-b1")).toHaveLength(1);
+      // "View all upcoming" is still the COMPLETE list, because the KPI above
+      // it opens the same panel and names its first row.
+      fireEvent.click(screen.getByTestId("exec-view-upcoming"));
+      const dlg = await screen.findByTestId("upcoming-popup");
+      expect(dlg.textContent).toContain("Mom's Birthday");
+    });
   });
 
   it("never asks for AI advice on mount, and renders it only once asked", async () => {
