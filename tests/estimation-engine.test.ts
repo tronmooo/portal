@@ -430,9 +430,30 @@ describe("Rule 26 — provenance flag and formatting", () => {
       expect(Object.keys(e.estimated)).toHaveLength(0);
     });
 
-    it("makes no claim when there is nothing to price the burn from", () => {
+    it("assumes a typical session when no duration was given, and says so", () => {
+      // "I played soccer" — a blank where a burn belongs helps nobody, so a
+      // typical session is assumed, registered, and the burn discounted for it.
       const e = enrichFitnessEntry("Soccer", { notes: "fun game" }, { weightKg: 84 });
-      expect(e.estimated.caloriesBurned).toBeUndefined();
+      expect(e.estimated.caloriesBurned?.value).toBeGreaterThan(0);
+      expect(e.estimated.duration?.value).toBe(45);
+      expect(e.estimated.duration?.isEstimated).toBe(true);
+      expect(e.estimated.caloriesBurned!.method).toMatch(/assumed typical soccer session/);
+      expect(e.assumptions.some(a => a.field === "duration" && /no duration was given/i.test(a.assumption))).toBe(true);
+      // …and it is a weaker claim than the same game with a stated duration.
+      const stated = enrichFitnessEntry("Soccer", { duration: 45 }, { weightKg: 84 });
+      expect(e.estimated.caloriesBurned!.confidence).toBeLessThan(stated.estimated.caloriesBurned!.confidence);
+    });
+
+    it("every activity shape ends up with a burn; non-activities still get none", () => {
+      const ctx = { weightKg: 84 };
+      for (const name of ["Soccer", "Basketball", "Yoga", "Swimming", "Plank", "Bench Press", "Workout", "Tennis"]) {
+        const e = enrichFitnessEntry(name, {}, ctx);
+        expect(e.estimated.caloriesBurned?.value, `${name} must carry a calorie estimate`).toBeGreaterThan(0);
+      }
+      for (const name of ["Blood Pressure", "Mood", "Body Weight", "Water"]) {
+        const e = enrichFitnessEntry(name, {}, ctx);
+        expect(e.estimated.caloriesBurned, `${name} must make no calorie claim`).toBeUndefined();
+      }
     });
 
     it("applies the estimate into the entry's real fields", () => {

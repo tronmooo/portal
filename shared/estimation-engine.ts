@@ -22,6 +22,7 @@ import {
   isCalorieBearingActivity,
   readFitnessFacts,
   type FitnessActivity,
+  type FitnessActivityKind,
   type FitnessFacts,
   type FitnessField,
 } from "./fitness-metrics";
@@ -456,6 +457,24 @@ export function enrichWalkRunEntry(
     }
   }
 
+  // Nothing stated at all ("I went for a walk"): assume a typical outing rather
+  // than log a cardio entry with no measurement on it. Labelled, registered,
+  // and discounted like every other assumption here.
+  if (workingMiles == null && explicitCalories == null) {
+    const assumedMinutes = activity === "cycling" ? 30 : activity === "running" ? 30 : 20;
+    const assumedMiles = assumedMinutes / paceSource.pace;
+    const method = `typical ${activity} outing (${assumedMinutes} min at ${paceSource.pace} min/mile)`;
+    out.estimated.duration = { value: assumedMinutes, source: "default", confidence: 0.4, method };
+    out.estimated.distance = { value: round(assumedMiles, 2), source: "default", confidence: 0.4, method };
+    out.assumptions.push({ field: "duration", assumption: `Assumed a typical ${activity} outing — nothing was stated`, valueUsed: `${assumedMinutes} min`, confidence: 0.4 });
+    workingMiles = assumedMiles;
+    out.canonical.durationSeconds = assumedMinutes * 60;
+    out.canonical.distanceMeters = round(assumedMiles * METERS_PER_MILE, 1);
+    if (hasSteps) {
+      out.estimated.steps = { value: Math.round(assumedMiles * stepsPerMile), source: "default", confidence: 0.4, method: `${method}; ${stepsBasis.method}` };
+    }
+  }
+
   // calories: keep explicit; otherwise defer to THE canonical estimator.
   //
   // This used to be a second MET table living here, so the same walk could be
@@ -546,28 +565,73 @@ export function enrichFitnessEntry(
   if (facts.duration != null && facts.duration > 0) out.canonical.durationSeconds = round(facts.duration * 60);
   if (facts.distanceMiles != null && facts.distanceMiles > 0) out.canonical.distanceMeters = round(facts.distanceMiles * METERS_PER_MILE, 1);
 
+  // "I played soccer" with no duration at all. The estimator is deliberately
+  // strict — it returns nothing rather than invent a number — so the ASSUMPTION
+  // is made here, where assumptions are registered and labelled, and the result
+  // is discounted for it. A typical-session figure the user can see and correct
+  // beats a blank where a burn belongs.
+  const assumedMinutes = facts.duration == null && facts.distanceMiles == null && facts.reps == null && facts.sets == null
+    ? DEFAULT_SESSION_MINUTES[activity.kind]
+    : null;
+  if (assumedMinutes != null && assumedMinutes > 0) {
+    facts.duration = assumedMinutes;
+    out.estimated.duration = {
+      value: assumedMinutes,
+      source: "default",
+      confidence: 0.4,
+      method: `typical ${activity.label.toLowerCase()} session (${assumedMinutes} min)`,
+    };
+    out.assumptions.push({
+      field: "duration",
+      assumption: `Assumed a typical ${activity.label.toLowerCase()} session — no duration was given`,
+      valueUsed: `${assumedMinutes} min`,
+      confidence: 0.4,
+    });
+    out.canonical.durationSeconds = round(assumedMinutes * 60);
+  }
+
   const est = estimateCaloriesBurned(activity, facts, {
     bodyWeightKg: ctx.weightKg ?? null,
     ageYears: ctx.ageYears ?? null,
     sex: ctx.sex ?? null,
     ownerLabel: ctx.ownerLabel ?? null,
   });
-  if (est && est.estimated && est.confidence >= MIN_SAVE_CONFIDENCE) {
-    out.estimated.caloriesBurned = {
-      value: est.value,
-      source: "estimated",
-      confidence: est.confidence,
-      method: est.method,
-    };
-    out.assumptions.push({
-      field: "caloriesBurned",
-      assumption: est.usedDefaultWeight ? "Used population default weight" : "Used profile weight",
-      valueUsed: est.usedDefaultWeight ? `${DEFAULT_WEIGHT_KG} kg` : `${round(ctx.weightKg!)} kg`,
-      confidence: est.confidence,
-    });
+  if (est && est.estimated) {
+    // A burn resting on an assumed duration is a weaker claim than one resting
+    // on a stated one, and must read that way everywhere it is shown.
+    const confidence = assumedMinutes != null ? round(est.confidence * 0.6, 2) : est.confidence;
+    const method = assumedMinutes != null
+      ? est.method.replace(/from logged duration$/, `an assumed typical ${activity.label.toLowerCase()} session`)
+      : est.method;
+    if (confidence >= MIN_SAVE_CONFIDENCE) {
+      out.estimated.caloriesBurned = { value: est.value, source: "estimated", confidence, method };
+      out.assumptions.push({
+        field: "caloriesBurned",
+        assumption: est.usedDefaultWeight ? "Used population default weight" : "Used profile weight",
+        valueUsed: est.usedDefaultWeight ? `${DEFAULT_WEIGHT_KG} kg` : `${round(ctx.weightKg!)} kg`,
+        confidence,
+      });
+    }
   }
   return stampProvenance(out);
 }
+
+/**
+ * How long a session of this shape typically runs, used ONLY when the user gave
+ * no duration, distance or set scheme. Every one of these is an assumption, is
+ * registered as one, and discounts the burn that rests on it.
+ */
+const DEFAULT_SESSION_MINUTES: Record<FitnessActivityKind, number> = {
+  sport: 45,
+  cardio_distance: 30,
+  cardio_duration: 30,
+  strength: 45,
+  bodyweight: 20,
+  isometric: 5,
+  flexibility: 30,
+  generic_workout: 30,
+  non_fitness: 0,
+};
 
 /**
  * The activity a logged entry is really about: the tracker names it ("Soccer"),

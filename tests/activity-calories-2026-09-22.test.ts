@@ -121,6 +121,20 @@ describe("every physical activity gets a calorie estimate, not just cardio", () 
     expect(entry!.values.caloriesBurned).toBeGreaterThan(0);
   });
 
+  it("still lands a burn when the user gave no duration at all", async () => {
+    script = [
+      round(use("log_tracker_entry", { trackerName: "Soccer", values: { activityType: "soccer" } })),
+      done("Logged."),
+    ];
+    await processMessage("played soccer today", [], "u1");
+    const entry = db.entries.find((e) => e.trackerId === "t-soccer");
+    expect(entry!.values.caloriesBurned).toBeGreaterThan(0);
+    // The assumed session is itself stored and labelled, so the number is explicable.
+    expect(entry!.values.duration).toBe(45);
+    expect(entryValueProvenance(entry!, "duration")?.isEstimated).toBe(true);
+    expect(entryValueProvenance(entry!, "caloriesBurned")?.method).toMatch(/assumed typical/);
+  });
+
   it("makes no calorie claim about a non-activity tracker", async () => {
     script = [
       round(use("log_tracker_entry", { trackerName: "Blood Pressure", values: { systolic: 118, diastolic: 76 } })),
