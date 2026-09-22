@@ -53,10 +53,39 @@ const joeBirthdayFromEvent: CalendarSeries = {
 };
 
 describe("identity is date-free, so disagreeing sources still collapse", () => {
-  it("gives one birthday per profile regardless of source or base date", () => {
-    expect(seriesIdentityKey(joeBirthdayFromProfile)).toBe(`birthday:${JOE}`);
-    expect(seriesIdentityKey(joeBirthdayFromEvent)).toBe(`birthday:${JOE}`);
+  it("gives one birthday per person regardless of source or base date", () => {
+    expect(seriesIdentityKey(joeBirthdayFromProfile)).toBe(`birthday:${JOE}:joe`);
+    expect(seriesIdentityKey(joeBirthdayFromEvent)).toBe(`birthday:${JOE}:joe`);
     expect(seriesIdentityKey(joeBirthdayFromProfile)).toBe(seriesIdentityKey(joeBirthdayFromEvent));
+  });
+
+  // User report 2026-09-22: "Dad's Birthday" added from chat never appeared —
+  // the Birthdays tab showed one row, "Mom's Birthday", captioned "Also
+  // recorded as 'Dad's Birthday' — the same payment, shown once here". Both
+  // events hang off the same profile, and singleton identity keyed on the
+  // profile alone, so the second family birthday was swallowed as a duplicate.
+  it("keeps two people's birthdays filed under one profile distinct", () => {
+    const mom: CalendarSeries = {
+      id: "event:mom", kind: "birthday", title: "🎂 Mom's Birthday",
+      source: { system: "event", id: "mom", profileId: JOE, href: "#" },
+      baseDate: "2026-05-12", recurrence: "yearly",
+    };
+    const dad: CalendarSeries = { ...mom, id: "event:dad", title: "🎂 Dad's Birthday", baseDate: "2027-03-14" };
+    expect(seriesIdentityKey(mom)).not.toBe(seriesIdentityKey(dad));
+    const out = dedupeSeries([mom, dad]);
+    expect(out).toHaveLength(2);
+    expect(out.map((g) => g.series.id).sort()).toEqual(["event:dad", "event:mom"]);
+    expect(out.every((g) => g.duplicateIds.length === 0)).toBe(true);
+  });
+
+  it("a birthday naming nobody keeps the owner-only identity", () => {
+    const bare: CalendarSeries = {
+      id: "event:bare", kind: "birthday", title: "Birthday",
+      source: { system: "event", id: "bare", profileId: JOE, href: "#" },
+      baseDate: "2026-02-11", recurrence: "yearly",
+    };
+    expect(seriesIdentityKey(bare)).toBe(`birthday:${JOE}`);
+    expect(seriesIdentityKey({ ...bare, title: "My Birthday" })).toBe(`birthday:${JOE}`);
   });
 
   it("keeps different people's birthdays distinct", () => {
@@ -199,7 +228,7 @@ describe("occurrence generation", () => {
     const [first] = generateSeriesOccurrences(joeBirthdayFromProfile, { todayISO: TODAY });
     expect(first.source.href).toBe(`#/profiles/${JOE}`);
     expect(first.source.profileId).toBe(JOE);
-    expect(first.identityKey).toBe(`birthday:${JOE}`);
+    expect(first.identityKey).toBe(`birthday:${JOE}:joe`);
     expect(first.kind).toBe("birthday");
   });
 
@@ -270,7 +299,7 @@ describe("occurrence generation", () => {
 describe("buildCalendarOccurrences — one row per date, app-wide", () => {
   it("renders Joe's birthday once, not twice", () => {
     const all = buildCalendarOccurrences([joeBirthdayFromEvent, joeBirthdayFromProfile], { todayISO: TODAY });
-    const joes = all.filter((o) => o.identityKey === `birthday:${JOE}`);
+    const joes = all.filter((o) => o.identityKey === `birthday:${JOE}:joe`);
     expect(joes.length).toBeGreaterThan(0);
     // One occurrence per date, and the surviving one is the profile record.
     expect(new Set(joes.map((o) => o.date)).size).toBe(joes.length);

@@ -420,6 +420,29 @@ function paymentName(title: unknown): string {
 }
 
 /**
+ * WHO a birthday/anniversary belongs to, as named by its own title.
+ *
+ *   "🎂 Dad's Birthday"  → "dad"
+ *   "Joe's Birthday"     → "joe"
+ *   "Sarah — Anniversary"→ "sarah"
+ *   "Birthday" / "My Birthday" → ""   (names nobody)
+ *
+ * Returning "" is deliberate: a title that names nobody must not invent a
+ * distinction, so those rows keep the owner-only identity they always had.
+ */
+function singletonPersonName(title: unknown): string {
+  const t = stripGeneratedSuffix(String(title ?? "")).replace(/\s+/g, " ").trim();
+  // Trailing "…'s Birthday" / "… — Anniversary" is the LABEL; what precedes it
+  // is the person. A title that is nothing but the label leaves the name empty.
+  const m = t.match(/^(.*?)(?:['\u2019]s)?\s*(?:[—–-]\s*)?(birthday|b-?day|anniversary)$/i);
+  const name = slug(m ? m[1] : t);
+  // "40th Birthday", "Happy Birthday", "My Birthday" name no one — same list
+  // `parseBirthdayLabel` (shared/date-rules) rejects on the write path.
+  if (!name || /^(happy|my|the|a|an|his|her|their|our|your|\d+(st|nd|rd|th)?)$/.test(name)) return "";
+  return name;
+}
+
+/**
  * The semantic identity of a series — what real-world recurring date it is.
  *
  * Two series with the same key are the SAME date and must render once:
@@ -436,9 +459,25 @@ function paymentName(title: unknown): string {
 export function seriesIdentityKey(series: CalendarSeries): string {
   const owner = series.source.profileId || "";
 
-  // A person has ONE birthday, however many systems describe it.
+  // A person has ONE birthday, however many systems describe it — but the
+  // person is named by the TITLE, not by the profile the row is filed under.
+  //
+  // User report 2026-09-22: "Dad's Birthday" (Mar 14) was created from chat
+  // and vanished; the Birthdays tab showed only "Mom's Birthday" (May 12),
+  // captioned "Also recorded as 'Dad's Birthday'". Both events were linked to
+  // the SAME profile — chat-created events attach to the owner profile — so
+  // keying singletons on the profile alone made every family birthday filed
+  // under one person collapse into whichever arrived first. Two people's
+  // birthdays are two dates, however they are filed.
+  //
+  // The name is what merges the pair this rule exists for: the profile's
+  // date-of-birth rule is titled "Joe's Birthday" (shared/date-rules
+  // `ruleLabel`) and so is the typed-in event, so they still collide — and a
+  // bare "Birthday" event, which names nobody, keeps the old owner-only key
+  // and is caught by the `shadow` flag the adapters set.
   if (SINGLETON_KINDS.has(series.kind) && owner) {
-    return `${series.kind}:${owner}`;
+    const who = singletonPersonName(series.title);
+    return who ? `${series.kind}:${owner}:${who}` : `${series.kind}:${owner}`;
   }
 
   // A recurring payment is one payment. Anchor on the linked financial record
