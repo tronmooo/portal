@@ -707,12 +707,68 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // UPCOMING = everything dated from tomorrow on, across every domain, soonest
   // first. Records were already claimed once by the router, so nothing here
   // can be a duplicate of another row.
+  //
+  // Important dates stay in this DATASET even though Schedule now previews
+  // them itself (below). The list is not just a card: it is what the Upcoming
+  // panel renders, and the "Next Important" KPI IS its first row — so a
+  // birthday dropped from here would be a KPI that opens a panel not
+  // containing the thing it names. What changes is only the card PREVIEW,
+  // `upcomingPreview` below.
   const upcomingItems = useMemo(() => {
     const from: ExecSectionId[] = ["bills", "upcoming", "importantDates", "documents", "health", "today"];
     const rows = from.flatMap(id => secItems(id)).filter(i => (i.daysUntil ?? 0) >= 1);
     return rows.slice().sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sections]);
+
+  // IMPORTANT DATES = when is it actually happening?
+  //
+  // Requested 2026-09-22: "there should be a place in the executive tab that
+  // displays all these important dates … in the schedule place … birthdays
+  // etc., important days and when it's gonna happen … and when things are
+  // about to expire."
+  //
+  // The two feeds either side of it answer different questions — Needs
+  // Attention is what is ON FIRE, Documents is the INVENTORY — and neither
+  // tells you a birthday is eleven days out. This is the calendar lens: every
+  // dated occasion and expiration in the window, soonest first, each showing
+  // its real date and how long until it.
+  //
+  // Today counts. A birthday you are told about tomorrow is a birthday you
+  // missed.
+  const importantDates = useMemo(() => {
+    const rows: AttentionItem[] = [];
+    const seen = new Set<string>();
+    for (const i of [...secItems("importantDates"), ...secItems("documents")]) {
+      if ((i.daysUntil ?? -1) < 0 || seen.has(i.key)) continue;
+      seen.add(i.key);
+      rows.push(i);
+    }
+    return rows.sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sections]);
+
+  // What the Upcoming CARD previews: everything coming up that Schedule is not
+  // already showing. Rendering a birthday in both cards put two rows with one
+  // `data-testid` on the screen and asked the user to read the same date
+  // twice. "View all upcoming" still opens the complete list — a "view all"
+  // showing more than its preview is the point of it.
+  const upcomingPreview = useMemo(() => {
+    const shown = new Set(importantDates.map((i) => i.key));
+    return upcomingItems.filter((i) => !shown.has(i.key));
+  }, [upcomingItems, importantDates]);
+
+  // How the list splits, so the week you have to act on is legible without
+  // reading every row's date. Mirrors the Important Dates subtitle the
+  // sections engine writes (shared/executive-sections `subtitleFor`).
+  const importantDatesNote = useMemo(() => {
+    const week = importantDates.filter(i => (i.daysUntil ?? 99) <= 7).length;
+    const rest = importantDates.length - week;
+    if (week > 0 && rest > 0) return `${week} in the next 7 days · ${rest} more within 45`;
+    if (week > 0) return `${week} in the next 7 days`;
+    if (rest > 0) return `${rest} within the next 45 days`;
+    return null;
+  }, [importantDates]);
   // The "Next Important" tile: today counts — a 2 pm appointment is the next
   // important thing at noon, not tomorrow's errand. The upcoming PANEL above
   // keeps tomorrow-onward, because today's rows already sit under Needs
@@ -1408,6 +1464,42 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </button>
                 </div>
               )}
+
+              {/* ── Important dates ─────────────────────────────────────────
+                  Birthdays, anniversaries and occasions, plus everything
+                  about to expire — with the DATE and the countdown, so a
+                  birthday is never a surprise. Always rendered, empty
+                  included: a block that appears only when it has contents is
+                  a block nobody knows to look for. */}
+              <div className="mt-3 pt-3 border-t border-border/60" data-testid="exec-important-dates">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="micro-label text-muted-foreground">Important dates</p>
+                  <ViewLink
+                    label="View all dates"
+                    accent={CARD_ACCENTS.schedule}
+                    onClick={() => go("/calendar?tab=recurring")}
+                    testId="exec-view-important-dates"
+                  />
+                </div>
+                {importantDatesNote && (
+                  <p className="text-[11px] text-muted-foreground mt-0.5" data-testid="exec-important-dates-note">
+                    {importantDatesNote}
+                  </p>
+                )}
+                {importantDates.length === 0 ? (
+                  <CardEmpty>No birthdays or expirations in the next 45 days.</CardEmpty>
+                ) : (
+                  <div className="space-y-1.5 mt-2">
+                    <ExpandableRows id="important-dates" count={importantDates.length} cap={5}>
+                      {importantDates.map((i) => (
+                        <ItemRow key={i.key} item={i}
+                          busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
+                          onAction={onAction} onOpen={openItem} />
+                      ))}
+                    </ExpandableRows>
+                  </div>
+                )}
+              </div>
             </ExecCard>
 
             {/* ── Habits ───────────────────────────────────────────────────── */}
@@ -1673,12 +1765,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               accent={CARD_ACCENTS.upcoming} index={8}
               headerRight={<ViewLink label="View all upcoming" accent={CARD_ACCENTS.upcoming} onClick={() => setPopup("upcoming")} testId="exec-view-upcoming" />}
             >
-              {upcomingItems.length === 0 ? (
-                <CardEmpty>Nothing coming up in the next few weeks.</CardEmpty>
+              {upcomingPreview.length === 0 ? (
+                <CardEmpty>
+                  {importantDates.length > 0
+                    ? "Nothing else coming up — your dates are under Schedule."
+                    : "Nothing coming up in the next few weeks."}
+                </CardEmpty>
               ) : (
                 <div className="space-y-1.5">
-                  <ExpandableRows id="upcoming" count={upcomingItems.length} cap={5}>
-                    {upcomingItems.map((i) => (
+                  <ExpandableRows id="upcoming" count={upcomingPreview.length} cap={5}>
+                    {upcomingPreview.map((i) => (
                       <ItemRow key={i.key} item={i}
                         busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
                         onAction={onAction} onOpen={openItem} />
