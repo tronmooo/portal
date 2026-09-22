@@ -42,6 +42,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { itemMatches, rankResults, matchNote } from "@/lib/search-index";
+import { searchGroupFor, iconNameFor, canonicalEntityType, entityTypeMeta } from "@shared/domain/entity-types";
+import { iconByName } from "@/lib/icon-map";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -425,7 +427,9 @@ export function CommandSearch() {
   const eventTarget = (e: CalendarEvent) => (e.virtual && e.href ? e.href : "/calendar");
 
   // ── Helpers for subtitle text ──────────────────────────────────────────────
-  const profileSubtitle = (p: Profile) => p.type ? `Type: ${p.type}` : "Profile";
+  // The canonical entity type, in words — "Vehicle", "Liability" — never the
+  // storage token ("Type: vehicle").
+  const profileSubtitle = (p: Profile) => entityTypeMeta(canonicalEntityType("profile", p)).label;
   const trackerSubtitle = (t: Tracker) => t.category ?? "Tracker";
   const taskSubtitle = (t: Task) =>
     t.priority ? `Priority: ${t.priority}${t.completed ? " · Done" : ""}` : t.completed ? "Completed" : "Task";
@@ -551,26 +555,39 @@ export function CommandSearch() {
         {/* Search results */}
         {!loading && hasResults && results && (
           <>
-            {results.profiles && results.profiles.length > 0 && (
-              <CommandGroup heading="Profiles">
-                {byRank(results.profiles).map((p) => (
-                  <CommandItem
-                    key={`profile-${p.id}`}
-                    value={`profile-${p.id}-${p.name}`}
-                    onSelect={() => handleSelect(`/profiles/${p.id}`, query)}
-                    data-testid={`item-search-profile-${p.id}`}
-                  >
-                    <Users className="shrink-0 text-violet-500" />
-                    <div className="flex flex-col min-w-0">
-                      <span className="truncate font-medium text-sm">{p.name}</span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {withNote(p, profileSubtitle(p))}
-                      </span>
-                    </div>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )}
+            {/* Profile rows are grouped by their CANONICAL entity type
+                (shared/domain/entity-types): a vehicle lands under Assets with
+                a car icon, a loan under Liabilities — never under People. */}
+            {results.profiles && results.profiles.length > 0 && (() => {
+              const groups = new Map<string, Profile[]>();
+              for (const p of byRank(results.profiles)) {
+                const g = searchGroupFor("profile", p);
+                (groups.get(g) ?? groups.set(g, []).get(g)!).push(p);
+              }
+              return [...groups.entries()].map(([heading, rows]) => (
+                <CommandGroup heading={heading} key={`profile-group-${heading}`}>
+                  {rows.map((p) => {
+                    const Icon = iconByName(iconNameFor("profile", p), Users);
+                    return (
+                      <CommandItem
+                        key={`profile-${p.id}`}
+                        value={`profile-${p.id}-${p.name}`}
+                        onSelect={() => handleSelect(`/profiles/${p.id}`, query)}
+                        data-testid={`item-search-profile-${p.id}`}
+                      >
+                        <Icon className="shrink-0 text-violet-500" />
+                        <div className="flex flex-col min-w-0">
+                          <span className="truncate font-medium text-sm">{p.name}</span>
+                          <span className="truncate text-xs text-muted-foreground">
+                            {withNote(p, profileSubtitle(p))}
+                          </span>
+                        </div>
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              ));
+            })()}
 
             {results.trackers && results.trackers.length > 0 && (
               <CommandGroup heading="Trackers">

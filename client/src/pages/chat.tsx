@@ -4,7 +4,7 @@ import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
 import { EXPENSE_CATEGORIES, categoryLabel } from "@shared/category-canon";
 import { useProfileScope } from "@/hooks/useProfileScope";
-import { setFilterSelected, setFilterEveryone } from "@/lib/profileFilter";
+import { setFilterSelected, setFilterEveryone, getProfileFilter } from "@/lib/profileFilter";
 import { applyChatMutations } from "@/lib/chat-sync";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 
@@ -2707,10 +2707,13 @@ export default function ChatPage() {
         .filter(m => m.id !== "welcome" && m.id !== userMsgId)
         .slice(-10)
         .map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
-      // Chat is deliberately UNSCOPED. The global profile selector used by the
-      // dashboard does not silently retarget the assistant here: attribution
-      // comes from what the user actually writes ("log Jane's weight"), so the
-      // request carries no profileFilterIds.
+      // Scope enforcement (shared/domain/ownership resolveRequestedScope):
+      // the request carries the profile selection the UI shows, so the
+      // assistant answers for Bob when Bob is selected. Naming another person
+      // ("log Jane's weight") or asking for Everyone switches or widens the
+      // scope on the server — attribution still comes from what the user
+      // writes, and Jane's records never arrive unasked.
+      const scopedProfileIds = getProfileFilter().selectedIds;
       // Streaming send (P0 fix): POST with SSE opt-in and paint frames as they
       // arrive. streamChat resolves with the SAME body the old buffered
       // `apiRequest → res.json()` returned — including when it talks to an
@@ -2735,6 +2738,7 @@ export default function ChatPage() {
         {
           message,
           history,
+          profileFilterIds: scopedProfileIds,
           // Turn identity: the server stamps every action and operation it
           // produces with the turn id it derives from this, so the reply's
           // cards can be scoped to the message that caused them.

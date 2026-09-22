@@ -9,7 +9,11 @@
 import {
   HeartPulse, Wallet, CalendarDays, FileText, Bell, CheckCircle2, Flame,
   Car, TrendingDown, Users, Activity, BookOpen, Sparkles, Target, Moon,
-  Footprints, Pill, Brain, type LucideIcon,
+  Footprints, Pill, Brain, User, PawPrint, Package, Landmark, Repeat, Receipt,
+  Banknote, CreditCard, StickyNote, Contact, RefreshCw, Home, TrendingUp,
+  Heart, Gauge, Thermometer, Scale, Dumbbell, Bike, Waves, Trophy,
+  StretchHorizontal, Coffee, Droplets, Utensils, ShowerHead, Bath, Cigarette, Wine,
+  type LucideIcon,
 } from "lucide-react";
 import {
   ICON_VOCABULARY, CONCEPT_ACCENT, type ConceptIcon,
@@ -18,8 +22,20 @@ import {
 const BY_NAME: Record<string, LucideIcon> = {
   HeartPulse, Wallet, CalendarDays, FileText, Bell, CheckCircle2, Flame,
   Car, TrendingDown, Users, Activity, BookOpen, Sparkles, Target, Moon,
-  Footprints, Pill, Brain,
+  Footprints, Pill, Brain, User, PawPrint, Package, Landmark, Repeat, Receipt,
+  Banknote, CreditCard, StickyNote, Contact, RefreshCw, Home, TrendingUp,
+  Heart, Gauge, Thermometer, Scale, Dumbbell, Bike, Waves, Trophy,
+  StretchHorizontal, Coffee, Droplets, Utensils, ShowerHead, Bath, Cigarette, Wine,
 };
+
+/**
+ * The component for an icon NAME the shared layer resolved
+ * (shared/domain/entity-types, tracker-icons). Unknown names fall back to a
+ * neutral glyph — never a heart.
+ */
+export function iconByName(name: string | null | undefined, fallback: LucideIcon = Activity): LucideIcon {
+  return (name && BY_NAME[name]) || fallback;
+}
 
 export function conceptIcon(concept: ConceptIcon): LucideIcon {
   return BY_NAME[ICON_VOCABULARY[concept]] ?? Activity;

@@ -340,3 +340,53 @@ All of the following must be true:
 - [ ] Pre-push hook still green on every commit.
 - [ ] `npm run smoke:post-deploy` is green against production.
 - [ ] This document is committed to main and referenced from `REGRESSION_TESTS.md`.
+
+---
+
+## 10. Global consistency layer — `shared/domain/` (2026-09-22)
+
+The QA review of 2026-09-22 found the same classes of bug across surfaces: records
+assigned to the wrong profile, counts that disagreed between screens, duplicate
+records, inconsistent classifications, and one field interpreted differently per
+page. `shared/domain/` replaces page-specific interpretation with shared logic:
+
+```
+Database / source records
+  ↓ canonicalEntityType            entity-types.ts    (Person · Pet · Asset · Liability · … · Recurring rule)
+  ↓ resolveOwnership / visibility  ownership.ts       (record → entity → canonical owner → visibility; scope from the question)
+  ↓ findDuplicate                  dedup.ts           (owner + entity + type + date + amount + name + source)
+  ↓ domain logic                   date-status.ts · financial-period.ts · health.ts · payment-classification.ts ·
+                                   liability-payment.ts · alerts.ts · priority.ts · outliers.ts · wellness-window.ts ·
+                                   counts.ts · data-environment.ts · tracker-metadata.ts · tracker-icons.ts
+  ↓ shared aggregates              resolveRecordSet (index.ts)
+Dashboard / Chat / Search / Calendar / Notifications / Profiles
+```
+
+**Rules every surface obeys**
+
+| Question | Answered ONLY by |
+|---|---|
+| What kind of thing is this? | `canonicalEntityType`, `classifyEntityDescription`, `resolveProfileTypeForCreate` (never falls back to a person) |
+| Who owns it / may the current profile see it? | `resolveOwnership`, `visibilityFor`, `resolveRequestedScope` (chat: named person or "everyone" widens; otherwise the UI selection) |
+| Is this a duplicate? | `findDuplicate` — high ⇒ refuse (409 with `existingId`), uncertain ⇒ create + `SIMILAR_RECORD_WARNING` |
+| Is this write a liability or a payment? | `classifyLiabilityWrite`; payments live in `attachPayment` history, never as a second liability |
+| Is it upcoming / due today / happening now / overdue / completed / expired? | `resolveDateStatus`, `nextImportantItem`, `DATE_STATUS_LABEL` |
+| Which period does money belong to? | `periodTotals` — `actual · pending · scheduled · forecast`, never merged; future-dated rows are never actual |
+| Is this test data? | `dataEnvironmentOf` / `forEnvironment` (`environment` / `isTestData` / `env:test` tag / name pattern) |
+| Fixed or variable? | `getPaymentClassification` |
+| What does a health reading mean? | `classifyReading`, `classifyBloodPressureReading` (each half against its own range), `restingHeartRate` (workout context excluded), `referenceRangeFor` |
+| How many? | `getTaskCount` / `getTrackerCount` / `getRecordCount` — scope is a required argument and returned as a label |
+| How loud is an alert? | `alertSeverity` (informational · upcoming · warning · critical), `consolidateAlerts` (one row per entity) |
+| What needs me first? | `thingsThatNeedYou` (severity + urgency + money + safety + overdue duration; habits never displace serious items) |
+| Is this value suspicious? | `detectOutliers` / `sanitizedTotal` |
+| How is it shown? | `humanizeLabel`, `formatUserDate`, `stripInternalIds`, `polishAssistantReply` (chat replies leave by this door) |
+| What is this page called? | `pageTitleFor` / `routeMetaFor` (`/linked?tab=assets` → "Assets — Portol") |
+| Document or artifact? | `libraryPurposeOf` — documents are uploaded source files; artifacts are created outputs |
+
+**Habits vs trackers.** A habit answers "did I do it?" (check-ins, streaks — `shared/habit-*`);
+a tracker answers "how much / what value?" (entries with units — `shared/tracker-*`). A habit may
+link to the tracker that measures it (`linkedTrackerId`; `server/habit-completion.ts` appends the
+entry), but the two are never merged into one concept.
+
+**Tests:** `tests/consistency-layer-*.test.ts` — the 25 required system-level behaviours plus
+source guards (`consistency-layer-wiring.test.ts`) that fail if a surface grows its own copy of a rule.

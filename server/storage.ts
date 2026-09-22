@@ -19,6 +19,7 @@ import { stripTrackerOwnerSuffix, stripOwnerPossessivePrefix } from "@shared/ent
 import { parseRecurringMeta } from "@shared/recurring-dates";
 import { rulesFromAll, seriesFromDateRules, daysBetweenISO, normalizeEntityDateFields, EXPIRY_RULE_TYPES, isDocumentAttentionRule } from "@shared/date-rules";
 import { prepareProfileFields } from "../shared/registry-fields";
+import { forEnvironment } from "../shared/domain";
 import { mergeFieldWrite } from "../shared/profile-field-identity";
 import { deleteProfileFields } from "@shared/profile-field-identity";
 import { seriesFromEvents, seriesFromIncomes } from "@shared/calendar-adapters";
@@ -2320,9 +2321,9 @@ export class MemStorage implements IStorage {
     const allHabits = Array.from(this.habits.values());
     const allObligations = Array.from(this.obligations.values());
     const allJournal = Array.from(this.journal.values());
-    const tasks = allTasks.filter(t => matchesFilter((t as any).linkedProfiles));
-    const expenses = allExpenses.filter(e => matchesFilter((e as any).linkedProfiles));
-    const trackers = allTrackers.filter(t => matchesFilter((t as any).linkedProfiles));
+    const tasks = forEnvironment(allTasks.filter(t => matchesFilter((t as any).linkedProfiles)));
+    const expenses = forEnvironment(allExpenses.filter(e => matchesFilter((e as any).linkedProfiles)));
+    const trackers = forEnvironment(allTrackers.filter(t => matchesFilter((t as any).linkedProfiles)));
     const habits = allHabits.filter(h => matchesFilter((h as any).linkedProfiles));
     const obligations = allObligations.filter(o => matchesFilter((o as any).linkedProfiles));
     const journalEntries = allJournal.filter(j => matchesFilter((j as any).linkedProfiles));
@@ -2330,7 +2331,9 @@ export class MemStorage implements IStorage {
     const thisMonth = now.getMonth();
     const thisYear = now.getFullYear();
 
-    const monthlyExpenses = expenses.filter(e => { const dd = new Date(e.date); return dd.getMonth() === thisMonth && dd.getFullYear() === thisYear; });
+    // ACTUAL spend: this month and not after today (shared/domain/financial-period).
+    const todayStats = getUserToday();
+    const monthlyExpenses = expenses.filter(e => { const dd = new Date(e.date); return dd.getMonth() === thisMonth && dd.getFullYear() === thisYear && String(e.date || "").slice(0, 10) <= todayStats; });
     const weekAgo = new Date(now.getTime() - 7 * 86400000);
     let weeklyEntries = 0;
     for (const t of trackers) { weeklyEntries += t.entries.filter(e => new Date(e.timestamp) > weekAgo).length; }

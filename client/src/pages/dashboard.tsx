@@ -632,7 +632,8 @@ function HeroKPISection({ enhanced, stats, filterMode, filterIds, allProfiles, r
       ]);
       const budgets = budgetRes.budgets || [];
       const allExpenses = Array.isArray(expensesRes) ? expensesRes : (expensesRes.items || []);
-      const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(currentMonth));
+      // Actual spend: this month AND not after today (shared/domain/financial-period).
+      const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(currentMonth) && String(e.date).slice(0, 10) <= localTodayISO());
       const totalBudget = budgets.reduce((s: number, b: any) => s + b.amount, 0);
       const totalSpent = monthExpenses.reduce((s: number, e: any) => s + e.amount, 0);
       return { totalBudget, totalSpent, remaining: totalBudget - totalSpent };
@@ -3774,7 +3775,8 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
       ]);
       const budgets = budgetRes.budgets || [];
       const allExpenses = Array.isArray(expensesRes) ? expensesRes : (expensesRes.items || []);
-      const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(currentMonth));
+      // Actual spend: this month AND not after today (shared/domain/financial-period).
+      const monthExpenses = allExpenses.filter((e: any) => e.date?.startsWith(currentMonth) && String(e.date).slice(0, 10) <= localTodayISO());
       const byCategory: Record<string, number> = {};
       monthExpenses.forEach((e: any) => { byCategory[e.category || "general"] = (byCategory[e.category || "general"] || 0) + e.amount; });
       const totalBudget = budgets.reduce((s: number, b: any) => s + b.amount, 0);

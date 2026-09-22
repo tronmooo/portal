@@ -4,6 +4,7 @@ import { parse as parseRoutePattern } from "regexparam";
 import { seedDashboardCaches } from "@/lib/bootstrap-seed";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "./lib/queryClient";
 import { getUserCurrentMonth } from "@shared/timezone";
+import { pageTitleFor } from "@shared/domain/route-metadata";
 import { getProfileFilter } from "@/lib/profileFilter";
 import { warmup } from "@/lib/warmup";
 import { hashNavigate } from "./lib/hashNavigate";
@@ -532,50 +533,12 @@ function ScrollToTop() {
 function RouteTitle() {
   const [location] = useLocation();
   useEffect(() => {
-    const path = location.split("?")[0].replace(/\/$/, "") || "/";
-    const map: Record<string, string> = {
-      "/chat": "Chat — Portol",
-      "/dashboard": "Dashboard — Portol",
-      "/dashboard/finance": "Finance — Portol",
-      "/dashboard/habits": "Habits — Portol",
-      "/dashboard/journal": "Journal — Portol",
-      "/dashboard/obligations": "Bills — Portol",
-      "/dashboard/tasks": "Tasks — Portol",
-      "/dashboard/documents": "Documents — Portol",
-      "/dashboard/artifacts": "Artifacts — Portol",
-      "/dashboard/health": "Wellness — Portol",
-      "/health": "Wellness — Portol",
-      "/wellness": "Wellness — Portol",
-      "/trackers": "Trackers — Portol",
-      "/linked": "Linked — Portol",
-      "/liabilities": "Liabilities — Portol",
-      "/profiles": "Profiles — Portol",
-      "/profiles/list": "Profiles — Portol",
-      "/calendar": "Calendar — Portol",
-      "/settings": "Settings — Portol",
-      "/artifacts": "Artifacts — Portol",
-      "/insights": "Insights — Portol",
-      "/tasks": "Tasks — Portol",
-      "/finance": "Finance — Portol",
-      "/obligations": "Bills — Portol",
-      "/bills": "Bills — Portol",
-      "/journal": "Journal — Portol",
-      "/habits": "Habits — Portol",
-      "/privacy": "Privacy — Portol",
-      "/terms": "Terms — Portol",
-    };
-    let title = map[path];
-    if (!title) {
-      if (path.startsWith("/profiles/") || path.startsWith("/profile/")) title = "Profile — Portol";
-      else if (path.startsWith("/documents/")) title = "Document — Portol";
-      else if (path.startsWith("/editor/")) title = "Editor — Portol";
-      else if (path.startsWith("/share/")) title = "Shared — Portol";
-    }
-    // Fall back to the product name rather than leaving the PREVIOUS page's
-    // title in the tab (QA 2026-07-29 UX-018). An unmapped route used to keep
-    // whatever was there before, so the tab claimed to be a page the user had
-    // already navigated away from — and browser history recorded it that way.
-    document.title = title || "Portol";
+    // ONE route metadata map (shared/domain/route-metadata): the title, the
+    // navigation label and the canonical path for every section come from
+    // the same table, so /linked?tab=assets is "Assets — Portol" and never
+    // "Linked — Portol". A page may refine the title once its record loads
+    // (a profile's name); it never invents a different string.
+    document.title = pageTitleFor(location);
   }, [location]);
   return null;
 }

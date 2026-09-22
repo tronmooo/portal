@@ -1187,7 +1187,10 @@ export default function CalendarView({ externalFilterIds, externalFilterMode }: 
   const [, setLocation] = useLocation();
   const today = new Date();
   const todayStr = toLocalDateStr(today);
-  const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">("month");
+  // A phone gets the Agenda view first: month cells there hold only dots,
+  // and readable titles matter more than a 6-week grid. Desktop keeps Month.
+  const [viewMode, setViewMode] = useState<"month" | "week" | "day" | "agenda">(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches ? "agenda" : "month");
   const [managerOpen, setManagerOpen] = useState(false);
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [viewYear, setViewYear] = useState(today.getFullYear());

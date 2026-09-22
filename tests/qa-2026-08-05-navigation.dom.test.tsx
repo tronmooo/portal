@@ -22,6 +22,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { readFileSync } from "fs";
 import { resolve as resolvePath } from "path";
+import { pageTitleFor } from "../shared/domain/route-metadata";
 import { ExpandableRows } from "../client/src/components/dashboard/ExecutiveBriefing";
 
 const read = (p: string) => readFileSync(resolvePath(__dirname, "..", p), "utf8");
@@ -184,9 +185,10 @@ describe("notification rows", () => {
 // ── #9 — the page tells you which page it is ─────────────────────────────────
 describe("page titles", () => {
   it("titles /liabilities as Liabilities in both places that set it", () => {
-    expect(read("client/src/App.tsx").includes('"/liabilities": "Liabilities — Portol"')).toBe(true);
-    const trackers = read("client/src/pages/trackers.tsx");
-    expect(/startsWith\('\/liabilities'\) \? "Liabilities — Portol"/.test(trackers)).toBe(true);
+    // Both writers read the ONE route metadata map (shared/domain/route-metadata).
+    expect(read("client/src/App.tsx").includes("pageTitleFor(location)")).toBe(true);
+    expect(read("client/src/pages/trackers.tsx").includes("document.title = pageTitleFor(")).toBe(true);
+    expect(pageTitleFor("/liabilities")).toBe("Liabilities — Portol");
   });
 });
 

@@ -6,6 +6,7 @@ import { formatListDate } from "@/lib/format";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { formatFieldKey, stringifyFieldFor } from "@/lib/field-display";
 import { userVisibleTags } from "@shared/system-tags";
+import { libraryPurposeOf } from "@shared/domain/documents-artifacts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,7 +84,7 @@ type FilterTab = "all" | "documents" | "ai_reports" | "scans";
 const FILTER_TABS: { key: FilterTab; label: string; icon: React.ElementType }[] = [
   { key: "all",        label: "All",        icon: Archive },
   { key: "documents",  label: "Documents",  icon: FileText },
-  { key: "ai_reports", label: "AI Reports", icon: Brain },
+  { key: "ai_reports", label: "AI Outputs", icon: Brain },
   { key: "scans",      label: "Scans",      icon: Camera },
 ];
 
@@ -893,11 +894,12 @@ export default function ArtifactsPage() {
       ...artifacts.map(a => ({
         id: a.id,
         title: a.title,
-        // Doc/Sheet behave more like documents than "AI Reports"; tag them so
-        // they show up in the Documents tab too.
-        type: (a.type === "doc" || a.type === "sheet" ? "document" : "ai_report") as "document" | "ai_report",
+        // Documents are UPLOADED source files; artifacts are created outputs
+        // (shared/domain/documents-artifacts). A generated doc or sheet is an
+        // artifact and lists under Artifacts, never beside a scanned policy.
+        type: (libraryPurposeOf(a as any) === "document" ? "document" : "ai_report") as "document" | "ai_report",
         typeLabel: a.type === "checklist" ? "Checklist"
-                 : a.type === "doc" ? "Document"
+                 : a.type === "doc" ? "Generated document"
                  : a.type === "sheet" ? "Spreadsheet"
                  : "AI Note",
         date: a.createdAt,

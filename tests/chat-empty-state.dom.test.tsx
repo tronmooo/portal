@@ -44,7 +44,7 @@ describe("chat empty state", () => {
     expect(root.textContent).toContain("Good morning, Robert.");
     expect(root.textContent).toContain("2 things need you");
     // The summary must not restate a suggestion's full label + reason.
-    expect(root.textContent).not.toContain("Mark morning walk done · still due today");
+    expect(root.textContent).not.toContain("Log morning walk · still due today");
   });
 
   it("shows each suggestion's reason, so it reads as an observation", () => {

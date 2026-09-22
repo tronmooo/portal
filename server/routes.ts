@@ -1,6 +1,7 @@
 import { z } from "zod";
 import express, { type Express, type Request } from "express";
 import { fieldPatchBetween } from "../shared/field-patch";
+import { resolveProfileTypeForCreate, findDuplicate, dedupRecordFromExpense, dedupRecordFromEvent, dedupRecordFromTask, isObligationFieldKey } from "../shared/domain";
 import { shouldAppendClarifyingQuestion, appendClarifyingQuestion } from "@shared/chat-clarify";
 import { canonicalExpenseCategory, canonicalObligationCategory, EXPENSE_CATEGORIES } from "@shared/category-canon";
 import { createServer, type Server } from "http";
@@ -5311,6 +5312,10 @@ ${JSON.stringify(ctx, null, 2)}`;
       return res.status(400).json({ error: "Profile type is required" });
     }
     req.body.name = sanitize(req.body.name);
+    // The manual door follows the same entity rule as chat and extraction
+    // (shared/domain/entity-types): an object phrase is never a person, and an
+    // unknown type resolves from the name — never to "person" as a fallback.
+    req.body.type = resolveProfileTypeForCreate(req.body.name, req.body.type);
     // Manual entry follows the exact same rule as extraction and chat: a date
     // typed as "7/18/2034" is stored as 2034-07-18, so the Date Rule engine
     // (shared/date-rules) derives the same rule whichever door the date came
@@ -5478,6 +5483,24 @@ ${JSON.stringify(ctx, null, 2)}`;
       } else {
         // Strip any non-array garbage that may have come in.
         delete (req.body as any).fieldsToDelete;
+      }
+    }
+    // Structured data that describes an OBLIGATION (a parking ticket's due
+    // date, an amount due, a citation number) is not a person's attribute
+    // (shared/domain isObligationFieldKey), so "DUE DATE: 2026-09-25" never
+    // lands in a person's Info fields by way of a manual or AI update. The
+    // keys kept off are reported back so the caller can route them to the
+    // ticket or bill they belong to. A person's own dates stay.
+    let keptOffProfile: string[] = [];
+    if (req.body.fields && typeof req.body.fields === "object" && !Array.isArray(req.body.fields)) {
+      const target = await storage.getProfile(req.params.id);
+      if (target && (target.type === "person" || target.type === "self" || target.type === "pet")) {
+        const next: Record<string, any> = {};
+        for (const [key, value] of Object.entries(req.body.fields as Record<string, any>)) {
+          if (isObligationFieldKey(key)) keptOffProfile.push(key);
+          else next[key] = value;
+        }
+        req.body.fields = next;
       }
     }
     let renamedFromName: string | undefined;
@@ -6819,6 +6842,15 @@ Rules:
     applyActiveProfileScope(req, req.body);
     const parsed = insertTaskSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
+    // Duplicate detection (shared/domain/dedup): the same title on the same
+    // day for the same owner is one task. A confident match is refused with
+    // the existing row; an uncertain one is created with a warning.
+    let taskDupWarning: string | null = null;
+    if (!req.body.skipDupCheck) {
+      const dup = findDuplicate(dedupRecordFromTask(parsed.data), (await storage.getTasks()).filter((t: any) => !t.deletedAt && String(t.status || "") !== "done").map(dedupRecordFromTask));
+      if (dup.confidence === "high") return res.status(409).json({ error: `A task "${dup.match!.record.name}" already exists for that day`, existingId: dup.match!.record.id, duplicate: true });
+      taskDupWarning = dup.warning;
+    }
     const newTask = await storage.createTask(parsed.data);
     const uid_t1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`tasks:${uid_t1}`); bustCache(`stats:${uid_t1}`); bustCache(`calendar:${uid_t1}`); bustCache(`notifications:${uid_t1}`);
@@ -6828,7 +6860,7 @@ Rules:
     const rules_t1 = await syncDateRulesForEntity(storage, uid_t1, "task", newTask.id).catch(() => null);
     res.status(201).json({
       ...newTask,
-      ...(taskSanitized ? { warning: SANITIZE_NOTICE } : {}),
+      ...(taskSanitized ? { warning: SANITIZE_NOTICE } : taskDupWarning ? { warning: taskDupWarning } : {}),
       ...(rules_t1 ? { dateRules: rules_t1.rules } : {}),
     });
   }));
@@ -7207,11 +7239,21 @@ Rules:
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
     // Only the payment pipeline may mark an expense as a bill payment (D282).
     if (Array.isArray((parsed.data as any).tags)) (parsed.data as any).tags = await stripDanglingPaymentTags(storage, (parsed.data as any).tags);
+    // Duplicate detection (shared/domain/dedup): owner + amount + date +
+    // description decide, not exact text — "Dinner at Chili's $100 Aug 9" and
+    // "Chilis dinner $100 on August 9" are one expense. A confident match is
+    // refused with the existing row; an uncertain one is created with a warning.
+    let expenseDupWarning: string | null = null;
+    if (!req.body.skipDupCheck) {
+      const dup = findDuplicate(dedupRecordFromExpense(parsed.data), (await storage.getExpenses()).filter((e: any) => !e.deletedAt).map(dedupRecordFromExpense));
+      if (dup.confidence === "high") return res.status(409).json({ error: `An expense "${dup.match!.record.name}" for that amount already exists on that day`, existingId: dup.match!.record.id, duplicate: true });
+      expenseDupWarning = dup.warning;
+    }
     const newExpense = await storage.createExpense(parsed.data);
     const uid_e1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`expenses:${uid_e1}`); bustCache(`stats:${uid_e1}`);
     // Tell the caller when their text was altered — never change it silently.
-    res.status(201).json(expenseSanitized ? { ...newExpense, warning: SANITIZE_NOTICE } : newExpense);
+    res.status(201).json(expenseSanitized ? { ...newExpense, warning: SANITIZE_NOTICE } : expenseDupWarning ? { ...newExpense, warning: expenseDupWarning } : newExpense);
   }));
   app.patch("/api/expenses/:id", asyncHandler(async (req, res) => {
     {
@@ -7515,10 +7557,18 @@ Rules:
     applyActiveProfileScope(req, req.body);
     const parsed = insertEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Validation failed", issues: parsed.error.issues });
+    // Duplicate detection (shared/domain/dedup): same title, date and time is
+    // one event.
+    let eventDupWarning: string | null = null;
+    if (!req.body.skipDupCheck) {
+      const dup = findDuplicate(dedupRecordFromEvent(parsed.data), (await storage.getEvents()).map(dedupRecordFromEvent));
+      if (dup.confidence === "high") return res.status(409).json({ error: `An event "${dup.match!.record.name}" already exists at that time`, existingId: dup.match!.record.id, duplicate: true });
+      eventDupWarning = dup.warning;
+    }
     const newEvent = await storage.createEvent(parsed.data);
     const uid_ev1 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_ev1}`); bustCache(`stats:${uid_ev1}`); bustCache(`calendar:${uid_ev1}`);
-    res.status(201).json(newEvent);
+    res.status(201).json(eventDupWarning ? { ...newEvent, warning: eventDupWarning } : newEvent);
   }));
   app.patch("/api/events/:id", asyncHandler(async (req, res) => {
     {
