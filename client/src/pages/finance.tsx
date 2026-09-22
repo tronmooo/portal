@@ -1446,7 +1446,9 @@ export default function FinancePage() {
         const upcomingBills = Array.isArray(snap.upcomingBills) ? snap.upcomingBills : [];
         const monthLabel = new Date().toLocaleDateString("en-US", { month: "short", timeZone: BROWSER_TIMEZONE }).toUpperCase();
         const ymNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
-        const monthExpenses = (Array.isArray(expenses) ? expenses : []).filter((e: any) => String(e.date || "").slice(0, 7) === ymNow);
+        const todayNow = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
+        // Actual spend: this month AND not after today (shared/domain/financial-period).
+        const monthExpenses = (Array.isArray(expenses) ? expenses : []).filter((e: any) => String(e.date || "").slice(0, 7) === ymNow && String(e.date || "").slice(0, 10) <= todayNow);
         const cashTrend = buildCashTrend(expenses as any[], incomes || [], localTodayISO(), BROWSER_TIMEZONE,
           { paychecks: paychecks || [], pendingOutflowThisMonth: recurringOut });
         const closer = (o: boolean) => !o && setFinancePopup(null);

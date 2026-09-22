@@ -57,7 +57,7 @@ describe("F-33 one blood-pressure verdict for a pair", () => {
     expect(bloodPressureCategory(85, 55)).toBe("low");
   });
 
-  it("the Wellness Body & vitals rows carry the pair's verdict, not a single-value 'High'", () => {
+  it("the Wellness Body & vitals rows judge each half against its own displayed range (never 'High' for 121)", () => {
     const rows = bodyVitals(collectMetrics([
       tracker({ name: "Blood Pressure", entries: [entry({ systolic: 121, diastolic: 76 }, daysAgo(0))] }),
     ], { now: NOW })).flatMap((p) => p.rows);
@@ -65,7 +65,10 @@ describe("F-33 one blood-pressure verdict for a pair", () => {
     const dia = rows.find((r) => r.metricId === "bp_diastolic")!;
     expect(sys.flag).toBe("elevated");
     expect(sys.flagLabel).toBe("Elevated");
-    expect(dia.flag).toBe("elevated");
+    // Consistency layer 2026-09-22: a diastolic 76 beside "< 80 mmHg" is
+    // Normal; the pair's "Elevated" verdict is the card badge's, not this row's.
+    expect(dia.flag).toBe("normal");
+    expect(dia.flagLabel).toBeNull();
     expect(sys.reference).toBe("< 120 mmHg");
     expect(dia.reference).toBe("< 80 mmHg");
     expect(bloodPressureFlag("high_stage1")).toBe("high");

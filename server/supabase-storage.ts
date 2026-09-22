@@ -64,6 +64,7 @@ import { readMonthlyPayment } from "../shared/liability-fields";
 import { sumExpenses } from "../shared/expense-ledger";
 import { validateEntityIntegrity, resolveCanonicalFields } from "../shared/entity-integrity";
 import { logIntegrity } from "./integrity-log";
+import { resolveProfileTypeForCreate, forEnvironment } from "../shared/domain";
 import { nextRecurringTaskSpawn, rollForwardRecurringTask } from "../shared/recurrence";
 import { isLegacyReminderTask, LEGACY_REMINDER_TASK_SOURCE } from "../shared/legacy-reminder-tasks";
 import { addMonthsClamped, addYearsClamped, weekdaySetFor } from "../shared/date-math";
@@ -1933,8 +1934,14 @@ export class SupabaseStorage implements IStorage {
     if (data.fields && typeof data.fields === "object") {
       data = { ...data, fields: this._prepareFieldsForWrite(normalizeEntityDateFields(data.fields as Record<string, any>, { contextKey: String(data.type ?? "") }).fields, { typeKey: (data as any).type_key ?? (data as any).typeKey, todayISO: getUserToday(this._timezone) }, { entityType: String(data.type ?? "profile") }) };
     }
-    const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "liability", "investment", "property", "account", "insurance", "medical"]);
-    if (data.type && !validProfileTypes.has(data.type)) data.type = "person";
+    // An unrecognised type used to be stored as "person" — the last door by
+    // which "tires for my Dodge Ram" became a human being. The canonical rule
+    // (shared/domain/entity-types) resolves an unknown type from the name and
+    // never falls back to a person.
+    {
+      const validProfileTypes = new Set(["self", "person", "pet", "vehicle", "asset", "subscription", "loan", "liability", "investment", "property", "account", "insurance", "medical"]);
+      if (data.type && !validProfileTypes.has(data.type)) data.type = resolveProfileTypeForCreate(data.name, data.type) as any;
+    }
     // NAME NORMALIZATION (BUG-20260709-double-profile): strip a leading
     // "a/an/the/my [new] <type> named/called " descriptor that the model
     // sometimes passes as the literal name ("a person named Mike" → "Mike").
@@ -7668,11 +7675,13 @@ export class SupabaseStorage implements IStorage {
     // round trip; the JS filter below applies the widened ctx either way.
     const expenseSource = (fpIds && ownedAssetSet.size > 0 && !opts?.sharedFetches)
       ? await this.getExpenses(expenseScopeIds) : allExpenses;
-    // Rule 27: test-patterned rows never enter a total unless opted in (the
-    // same `includeTestData` switch getDashboardEnhanced takes).
-    const keepRow = (row: any) => opts?.includeTestData || !isTestEntity(row);
-    const expenses = expenseSource.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpense) && keepRow(e));
-    const trackers = allTrackers.filter(t => matchesProfile(t.linkedProfiles));
+    // Rule 27 + shared/domain/data-environment: test-patterned rows never
+    // enter a total unless opted in (the same `includeTestData` switch
+    // getDashboardEnhanced takes); the environment gate applies on top.
+    const includeTestRows = !!opts?.includeTestData;
+    const keepRow = (row: any) => includeTestRows || !isTestEntity(row);
+    const expenses = forEnvironment(expenseSource.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpense) && keepRow(e)), { includeTest: includeTestRows });
+    const trackers = forEnvironment(allTrackers.filter(t => matchesProfile(t.linkedProfiles)), { includeTest: includeTestRows });
     const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles) && keepRow(o));
     // Phase-fix: journal entries were the one entity not run through the
@@ -7689,8 +7698,11 @@ export class SupabaseStorage implements IStorage {
     // expense would silently disappear from "this month" totals.
     // We compare YYYY-MM strings (which are timezone-stable for the stored
     // date strings, since expenses store local YYYY-MM-DD).
-    const userYM = new Date().toLocaleDateString('en-CA', { timeZone: this._timezone }).slice(0, 7);
-    const monthlyExpenses = expenses.filter(e => (e.date || '').slice(0, 7) === userYM);
+    const userTodayStats = new Date().toLocaleDateString('en-CA', { timeZone: this._timezone });
+    const userYM = userTodayStats.slice(0, 7);
+    // ACTUAL spend: this month AND not after today. A bill dated later this
+    // month is scheduled, not spent (shared/domain/financial-period).
+    const monthlyExpenses = expenses.filter(e => (e.date || '').slice(0, 7) === userYM && (e.date || '').slice(0, 10) <= userTodayStats);
     const weekAgo = new Date(now.getTime() - 7 * 86400000);
     let weeklyEntries = 0;
     for (const t of trackers) weeklyEntries += t.entries.filter(e => new Date(e.timestamp) > weekAgo).length;
@@ -8122,7 +8134,10 @@ export class SupabaseStorage implements IStorage {
       healthSnapshot.push({ trackerId: t.id, name: t.name, category: t.category, unit: primaryField.unit || t.unit || '', latestValue: latest, latestLabel, average: Math.round(avg * 10) / 10, trend: trend > 0 ? 'up' : trend < 0 ? 'down' : 'flat', trendValue: Math.round(Math.abs(trend) * 10) / 10, entryCount: recent.length, lastEntry: lastEntry?.timestamp, dailyTotal });
     }
 
-    const monthlyExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === userYearMonth);
+    // ACTUAL spend only: a row dated after today is scheduled, not spent
+    // (shared/domain/financial-period — the same rule /api/stats applies).
+    const userTodayEnh = new Date().toLocaleDateString('en-CA', { timeZone: this._timezone });
+    const monthlyExpenses = allExpenses.filter(e => (e.date || '').slice(0, 7) === userYearMonth && (e.date || '').slice(0, 10) <= userTodayEnh);
     // Keyed like the budget caps (budgetCategoryKey): the finance page reads a
     // cap's spending straight out of this map by the cap's category.
     // A payment logged against a loan, or against the bill that pays one,

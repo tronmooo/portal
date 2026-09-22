@@ -26,6 +26,8 @@ import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isHoldingVisible, isOwnershipKnown } from "@/lib/holding-visibility";
 import { countsTowardNetWorth, liabilityFamily } from "@shared/liability-types";
+import { getPaymentClassification } from "@shared/domain/payment-classification";
+import { pageTitleFor } from "@shared/domain/route-metadata";
 
 // A loan secured by an asset (the truck's auto loan, parented to the truck)
 // is balance-sheet DEBT and belongs on the Liabilities tab wherever debt is
@@ -5971,11 +5973,11 @@ export default function TrackersPage() {
     // This component serves /trackers, /linked AND /liabilities. Only /linked
     // was special-cased, so the Liabilities page announced itself as
     // "Trackers — Portol" in the tab and in browser history (QA 2026-08-05).
-    const path = pageLoc || window.location.pathname || '';
-    document.title =
-      path.startsWith('/liabilities') ? "Liabilities — Portol"
-      : path.startsWith('/linked') ? "Linked — Portol"
-      : "Trackers — Portol";
+    // The route metadata map decides (shared/domain/route-metadata): the
+    // ?tab= a hub route carries names the section, so Assets and Documents
+    // are titled as themselves, never "Linked".
+    const path = pageLoc || `${window.location.pathname}${window.location.search}` || '';
+    document.title = pageTitleFor(path.includes('?') ? path : `${path}${window.location.search || ''}`);
   }, [pageLoc]);
   const [filterIds, setFilterIds] = useState<string[]>(() => getProfileFilter().selectedIds);
   const [filterMode, setFilterMode] = useState(() => getProfileFilter().mode);
@@ -7649,14 +7651,14 @@ export default function TrackersPage() {
             </button>
             )}
             {(!collapsedSections.has("liabilities") || (hubEmbedded && sectionFilter !== "all")) && (() => {
-              // Photo-4 layout: split into FIXED (amortizing loans — mortgage,
-              // auto, student, personal) vs VARIABLE (revolving cards, one-time
-              // debt, recurring bills) using the shared family classifier, and
-              // render each as a labeled card (Type / Creditor / Balance / Due
-              // Date + payoff progress bar).
+              // Split into FIXED vs VARIABLE with the ONE payment classifier
+              // (shared/domain/payment-classification) every other surface
+              // reads — a fixed-billing Netflix is Fixed here exactly as it is
+              // on its own card and in chat. Rendered as labeled cards (Type /
+              // Creditor / Balance / Due Date + payoff progress bar).
               const sortByName = (a: any, b: any) => (a.name || '').localeCompare(b.name || '');
-              const fixed = liabs.filter(l => liabilityFamily(l.type_key) === 'amortizing').sort(sortByName);
-              const variable = liabs.filter(l => liabilityFamily(l.type_key) !== 'amortizing').sort(sortByName);
+              const fixed = liabs.filter(l => getPaymentClassification(l).classification === 'fixed').sort(sortByName);
+              const variable = liabs.filter(l => getPaymentClassification(l).classification === 'variable').sort(sortByName);
               const fmtMoney = formatMoneyCents;
               const parseDue = (raw: any): Date | null => {
                 if (!raw) return null;

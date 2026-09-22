@@ -32,7 +32,7 @@ describe("what gets suggested is what's actually true", () => {
     const out = buildChatSuggestions(base({
       habits: [{ id: "h1", name: "morning walk", frequency: "daily", checkins: [] }],
     }));
-    expect(texts(out)).toContain("Mark morning walk done");
+    expect(texts(out)).toContain("Log morning walk");
     expect(out[0].reason).toBe("still due today");
   });
 
@@ -43,7 +43,7 @@ describe("what gets suggested is what's actually true", () => {
       habits: [{ id: "h1", name: "morning walk", frequency: "daily",
         checkins: [{ date: "2026-07-31" }] }],
     }));
-    expect(texts(out)).not.toContain("Mark morning walk done");
+    expect(texts(out)).not.toContain("Log morning walk");
   });
 
   it("names the bill and its amount, and says when it's due", () => {

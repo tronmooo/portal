@@ -1,6 +1,7 @@
 import { logger } from "./logger";
 import { getAnthropicClient } from "./anthropic-client";
 import { fieldPatchBetween } from "../shared/field-patch";
+import { resolveRequestedScope, resolveProfileTypeForCreate, polishAssistantReply } from "../shared/domain";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { deleteDocumentEverywhere } from "./document-deletion";
@@ -16354,7 +16355,13 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
   // When no filter ids arrive, behavior is unchanged.
   const allProfiles = profiles;
   const selfProfileId = allProfiles.find((p: any) => p.type === "self")?.id || '';
-  const profileFilterIds = (options?.profileFilterIds || []).filter((id: any) => typeof id === "string" && id.length > 0);
+  // Scope enforcement (shared/domain/ownership): the UI selection is the
+  // default scope; a question that NAMES another person switches to them and
+  // one that asks for Everyone widens. Bob never receives Jane's records unless
+  // he asked for Jane. The resolved scope is what the context below is cut to.
+  const uiSelection = (options?.profileFilterIds || []).filter((id: any) => typeof id === "string" && id.length > 0);
+  const requestedScope = resolveRequestedScope({ message: userMessage, selectedProfileIds: uiSelection, profiles: allProfiles });
+  const profileFilterIds = requestedScope.profileIds;
   if (profileFilterIds.length > 0) {
     // The link tables feed both the entity rule (co-ownership widens the
     // selection — shared/profile-filter) and the profile rule below.
@@ -17929,6 +17936,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               inferredType = suggestObjectProfileType(candidateName);
               logger.warn("ai", `[hallucination-guard] "${candidateName}" reads as a thing, not a person — recovering as ${inferredType}`);
             }
+            // The canonical create-door rule: never a person as a fallback.
+            inferredType = resolveProfileTypeForCreate(candidateName, inferredType);
             try {
               const recovered = await executeTool("create_profile", { name: candidateName, type: inferredType, __userMessage: userMessage }, userId);
               if (recovered && !(recovered as any).error) {
@@ -18116,6 +18125,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       // Validation must never cost the user their reply.
       logger.warn("ai", `[claim-check] skipped: ${e?.message || e}`);
     }
+
+    // No raw database ids and no "let me look that up" preamble reach the
+    // person (shared/domain/format) — the one door every reply leaves by.
+    finalReply = polishAssistantReply(finalReply);
 
     return {
       reply: finalReply,

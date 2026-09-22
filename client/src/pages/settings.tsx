@@ -484,8 +484,8 @@ export default function SettingsPage() {
               <p className="text-xs font-medium text-muted-foreground mb-2">Your Data</p>
               <div className="grid grid-cols-2 gap-2">
                 <StatCard icon={Users} label="Profiles" hint="People, pets, property & accounts" value={profiles.length} href="/profiles/list" accent="188 55% 50%" />
-                <StatCard icon={ListTodo} label="Active Tasks" value={stats?.activeTasks || 0} href="/dashboard" accent="262 65% 62%" />
-                <StatCard icon={Activity} label="Trackers" value={stats?.totalTrackers || 0} href="/linked" accent="173 60% 44%" />
+                <StatCard icon={ListTodo} label="Active Tasks" hint="Open · all profiles" value={stats?.activeTasks || 0} href="/dashboard" accent="262 65% 62%" />
+                <StatCard icon={Activity} label="Trackers" hint="All profiles" value={stats?.totalTrackers || 0} href="/linked" accent="173 60% 44%" />
                 <StatCard icon={FileText} label="Documents" hint="Across all profiles" value={allDocs.length} href="/artifacts" accent="25 80% 54%" />
               </div>
             </div>

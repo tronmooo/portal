@@ -64,6 +64,7 @@ import { computeHealthScore } from "@/lib/tracker-health";
 // "/linked?tab=documents") — wouter's hash navigate hoists the query out of
 // the hash, landing on the bare page instead (the CommandSearch bug).
 import { hashNavigate } from "@/lib/hashNavigate";
+import { useHubChrome } from "@/components/hub/hub-context";
 import { BubbleModal } from "@/components/ui/bubble-modal";
 import { ProgressRing, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
@@ -521,6 +522,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
    * dashboard's gate self-releases after 8s even if bootstrap hangs. */
   ready?: boolean;
 }) {
+  const hubEmbedded = useHubChrome();
   const [, navigate] = useLocation();
   // Query-safe navigation: wouter's hash navigate loses "?tab=…"/"?open=…"
   // query strings, which is exactly "the link went to the wrong place".
@@ -1186,12 +1188,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
       )}
 
       {/* ── Overview bar ─────────────────────────────────────────────────── */}
+      {/* Under the hub shell the KPI strip already shows Net Worth, Cash Flow
+          and Tasks; repeating them here spent a third of the viewport on the
+          same three numbers. Embedded, this bar keeps only what the strip
+          does not carry — the next important item. */}
       <div
-        className="bubble bubble-enter mb-3 p-3.5 sm:p-4 grid grid-cols-2 lg:grid-cols-4 gap-3"
+        className={`bubble bubble-enter mb-3 p-3.5 sm:p-4 grid gap-3 ${hubEmbedded ? "grid-cols-1" : "grid-cols-2 lg:grid-cols-4"}`}
         style={{ ["--accent-hsl" as any]: "240 5% 55%", ["--i" as any]: 0 }}
         data-testid="exec-overview"
       >
-        <OverviewCell
+        {!hubEmbedded && <OverviewCell
           icon={netWorth != null && netWorth < 0 ? TrendingDown : TrendingUp}
           accent="155 65% 45%"
           label="Net Worth"
@@ -1202,8 +1208,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           testId="exec-kpi-networth"
           error={enhancedError && snap == null}
           revalidating={enhancedFetching && snap != null}
-        />
-        <OverviewCell
+        />}
+        {!hubEmbedded && <OverviewCell
           icon={CircleDollarSign}
           accent={cashFlow != null && cashFlow < 0 ? "0 72% 58%" : "155 65% 45%"}
           label="Cash Flow"
@@ -1213,8 +1219,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           testId="exec-kpi-cashflow"
           error={enhancedError && snap == null}
           revalidating={enhancedFetching && snap != null}
-        />
-        <OverviewCell
+        />}
+        {!hubEmbedded && <OverviewCell
           icon={CheckSquare}
           accent={CARD_ACCENTS.tasks}
           label="Tasks Remaining"
@@ -1225,7 +1231,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           testId="exec-kpi-tasks"
           error={tasksError}
           revalidating={tasksFetching && !tasksPending}
-        />
+        />}
         <OverviewCell
           icon={CalendarDays}
           accent={CARD_ACCENTS.schedule}

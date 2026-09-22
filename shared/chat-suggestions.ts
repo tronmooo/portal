@@ -26,6 +26,7 @@
 import { isHabitOutstandingOn, type HabitScheduleShape } from "./habit-schedule";
 import { habitDayProgress } from "./habit-progress";
 import { dayLabel } from "./now-rank";
+import { suggestionFor } from "./domain/priority";
 import type { ConceptIcon } from "./icon-vocabulary";
 
 export type SuggestionKind =
@@ -168,10 +169,14 @@ export function buildChatSuggestions(input: SuggestionInput, max = 6): ChatSugge
     // A multi-completion habit that is part-done needs a suggestion that says
     // so — "Mark X done · still due today" reads as if nothing were recorded.
     const hp = habitDayProgress(h as any, today);
+    // Natural language from the priority engine ("Log bathroom visit"), and
+    // no chip at all when there is nothing meaningful to say.
+    const wording = suggestionFor({ key: `habit:${h.id}`, kind: "habit", title: h.name, outstanding: true });
+    if (!wording) continue;
     push({
       id: `habit:${h.id}`,
-      text: `Mark ${h.name} done`,
-      label: `Mark ${h.name} done`,
+      text: wording,
+      label: wording,
       reason: hp.isPartial ? `${hp.completed} of ${hp.required} done today` : "still due today",
       icon: "habits",
       kind: "due",

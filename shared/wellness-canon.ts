@@ -457,7 +457,12 @@ export function bloodPressureVerdict(
   }
   const v = classifyBloodPressure(sys, dia);
   const flag = bloodPressureFlag(v.category);
-  return { label: BP_LABEL[v.category], flag, systolicFlag: flag, diastolicFlag: flag, category: v.category, summary: v.sentence };
+  // Each half is flagged against ITS OWN displayed range (consistency layer
+  // 2026-09-22): 121/76 is Elevated as a pair, and the diastolic row beside
+  // "< 80 mmHg" reads Normal — the label never contradicts the range shown.
+  const systolicFlag = flagAgainstReference(getCanonicalMetric("bp_systolic")!, sys);
+  const diastolicFlag = flagAgainstReference(getCanonicalMetric("bp_diastolic")!, dia);
+  return { label: BP_LABEL[v.category], flag, systolicFlag, diastolicFlag, category: v.category, summary: v.sentence };
 }
 
 /** "70–100 bpm", "< 100 mg/dL", "> 40 mg/dL" — or undefined when no range. */

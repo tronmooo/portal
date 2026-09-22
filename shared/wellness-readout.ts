@@ -32,7 +32,7 @@ import {
   flagLabelFor, flagIsConcern, isRestingHeartRateReading,
   type CanonicalMetric, type MetricPanel, type RangeFlag,
 } from "./wellness-canon";
-import { classifyBloodPressure, bloodPressureFlag, BLOOD_PRESSURE_REFERENCE } from "./blood-pressure";
+import { BLOOD_PRESSURE_REFERENCE } from "./blood-pressure";
 
 export interface Reading {
   /** Canonical-unit value. */
@@ -623,21 +623,18 @@ export function bodyVitals(metrics: Map<string, MetricSeries>): LabPanel[] {
 
 function panelsFor(metrics: Map<string, MetricSeries>, wanted: MetricPanel[]): LabPanel[] {
   const panels: LabPanel[] = [];
-  // Blood pressure is judged as a PAIR (shared/blood-pressure.ts): both rows
-  // carry the verdict for the latest systolic/diastolic together, so 121/76
-  // reads "Elevated" here exactly as it does on the tracker card.
-  const sys = metrics.get("bp_systolic")?.latest;
-  const dia = metrics.get("bp_diastolic")?.latest;
-  const bp = sys && dia ? classifyBloodPressure(sys.value, dia.value) : null;
+  // Blood pressure: the PAIR's verdict (shared/blood-pressure.ts) is what the
+  // card badge says; each ROW here is judged against its own displayed range
+  // (shared/domain/health), so a diastolic 76 beside "< 80 mmHg" reads Normal
+  // while 121 systolic reads Elevated — the label and the range never disagree.
+
   for (const panel of wanted) {
     const rows: LabRow[] = [];
     for (const s of metrics.values()) {
       if (s.metric.panel !== panel || !s.latest) continue;
       const isBp = s.metric.id === "bp_systolic" || s.metric.id === "bp_diastolic";
-      const flag: RangeFlag = isBp && bp ? bloodPressureFlag(bp.category) : flagAgainstReference(s.metric, s.latest.value);
-      const flagLabel = isBp && bp
-        ? (bp.category === "normal" ? null : bp.label)
-        : flagLabelFor(s.metric, flag);
+      const flag: RangeFlag = flagAgainstReference(s.metric, s.latest.value);
+      const flagLabel = flagLabelFor(s.metric, flag);
       const reference = isBp
         ? BLOOD_PRESSURE_REFERENCE[s.metric.id === "bp_systolic" ? "systolic" : "diastolic"]
         : formatReference(s.metric);
