@@ -52,7 +52,11 @@ import {
   CONFIDENCE_MEDIUM,
 } from "./semantic-document";
 import { type ExtractionDestination, type ExtractionItem, personFieldScope } from "./extraction-destinations";
-import { classifyDateField } from "./date-rules";
+import {
+  classifyDateField, ruleTypeLabel, isAlertDateRule, isDocumentAttentionRule,
+  dateRuleAlertWords, rulesFromDocuments, normalizeFieldKey, bareDateOf,
+  CALENDAR_OPT_OUT_KEY, type DateRuleType,
+} from "./date-rules";
 import { normalizeDateString } from "./extraction-normalize";
 import {
   classifyFinancialDocKind, inferFinancialStatus, isFinancialStatus,
@@ -228,6 +232,29 @@ export interface ProposedAction {
    */
   kind: ActionKind;
   kindLabel: string;
+
+  /**
+   * Everything this ONE action will cause, downstream effects included, in the
+   * order it happens: "Save Expiration Date: Apr 5, 2027 on Honda CR-V",
+   * "Create expiration rule", "Show on Calendar", "Notify before it expires".
+   *
+   * User directive 2026-09-22: "Suggested Actions should answer one simple
+   * question: exactly what will this document change in my app?" A date action
+   * used to read as one line while a rule, a calendar entry, an Upcoming row and
+   * a bell alert all followed from it unseen. Each effect listed here is one
+   * the app really performs, worked out by the same predicates the surfaces use
+   * (shared/date-rules), so the list cannot promise what never happens.
+   */
+  effects?: ActionEffect[];
+}
+
+export type ActionEffectKind =
+  | "save_date" | "update_date" | "no_change" | "keep_on_document"
+  | "date_rule" | "calendar" | "event" | "upcoming" | "notification";
+
+export interface ActionEffect {
+  kind: ActionEffectKind;
+  label: string;
 }
 
 // ─── The partition: what a row's data owes to the action that cites it ───────
@@ -958,6 +985,34 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     }
     usedDedupeKeys.add(a.dedupeKey);
 
+    // EXISTING DATA: a date the record already holds is not "added". The rail
+    // must say whether this saves, changes or leaves the stored day alone, and
+    // a different stored day is a conflict to show, not a silent overwrite.
+    if (a.destination === "calendar" && a.payload?.fields && a.payload?.profileId
+      && a.payload.existingValue === undefined && a.payload.key) {
+      const stored = readField(
+        index.profiles.find((pr) => pr.id === a.payload.profileId)?.fields,
+        String(a.payload.key), a.payload.group,
+      );
+      if (stored !== undefined && stored !== null && String(stored).trim() !== "") {
+        const differs = dayOf(stored) !== dayOf(a.payload.date);
+        a = {
+          ...a,
+          payload: { ...a.payload, existingValue: stored },
+          warnings: differs
+            ? [...(a.warnings ?? []), {
+                code: "value_conflict" as const,
+                blocking: false,
+                field: String(a.payload.key),
+                existing: stored,
+                incoming: a.payload.date,
+                message: `${a.target?.name || "This record"} has ${prettyDay(stored)}; the document says ${prettyDay(a.payload.date)}. Saving updates it.`,
+              }]
+            : a.warnings,
+        };
+      }
+    }
+
     // ── RULE 1, ENFORCED IN ONE PLACE ────────────────────────────────────
     // Every action passes through here, so this is the only gate that has to
     // hold. Creating a profile, asset or liability is never allowed — not at
@@ -1010,6 +1065,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
       unsupportedCode,
       unsupportedReason,
       writesLabel: a.writesLabel ?? describeWrite(a.destination, a.operation, a.payload, a.target),
+      effects: a.effects ?? dateActionEffects(a),
       // Options follow the TARGET's family, not the document's: a policy filed
       // under a house offers what a house can hold.
       // Nothing that cannot be written is ever ticked. An unsavable row is
@@ -1344,6 +1400,41 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
   for (const fact of semantic.facts) {
     if (claimedFacts.has(fact.id)) continue;
     const roles = fact.roles;
+
+    // ── A date is the date engine's call, whatever role it was given ──
+    //
+    // User report 2026-09-22: an auto insurance card's "Expiration Date
+    // 04/05/2027" was tagged document metadata about "Progressive Auto Policy
+    // 907344659", an entity that matched no record. It became a "No record
+    // found … Pick where this should go" card, the dates pass below treated the
+    // row as handled, and the rail never offered the expiration, although
+    // the document went on to derive an expiration rule from it anyway.
+    // `classifyDateField` is the authority on what a date MEANS (see
+    // dateActionFor), so a date it calls actionable is routed as a date here,
+    // before role or subject can send it anywhere else. A date about a
+    // subject we cannot place stays on the document. It is not a question.
+    if (!roles.includes("reference_only") && fact.volatility !== "historical"
+      && !roles.includes("financial") && !roles.includes("measurement")
+      && !roles.includes("event_occurred") && !roles.includes("status_change")
+      && !roles.includes("actionable_date")) {
+      const dateKey = fieldKeyFor(fact, itemById);
+      const iso = normalizeDateString(fact.value) || normalizeDateString(fact.date);
+      if (iso && isDateValue(fact.value ?? fact.date)) {
+        const landing = landingFor(fact.subject.entityRef);
+        if (classifyDateField(dateKey, semantic.documentType).actionable) {
+          push(dateActionFor(fact, landing, semantic, documentId, itemById));
+          continue;
+        }
+        if (!landing.target.id) {
+          push({
+            ...referenceAction(fact, semantic, documentId, itemById),
+            detail: "Kept on the document · nothing scheduled",
+            payload: { key: dateKey, value: fact.value, date: iso, calendarOptOut: true },
+          });
+          continue;
+        }
+      }
+    }
 
     // ── Reference-only and document metadata: kept, never acted on ──
     if (roles.includes("reference_only") || roles.includes("document_metadata")) {
@@ -1684,6 +1775,10 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
     const dateSettled = new Set<string>();
     const singletonDates = new Set<string>();
     for (const a of actions) {
+      // A "pick where this should go" card has not decided anything about the
+      // DATE on its row, so it does not settle it. Letting it do so is how an
+      // expiration disappeared from the rail (user report 2026-09-22).
+      if (a.warnings.some((w) => w.code === "unresolved_target")) continue;
       if (a.destination === "calendar" || a.destination === "reference") {
         for (const iid of a.itemIds) dateSettled.add(iid);
       }
@@ -1767,6 +1862,7 @@ export function planExtractionActions(input: PlanInput): ActionPlan {
         itemIds: [item.id],
         payload: {
           key: item.key,
+          label: item.label,
           date: iso,
           ruleType: cls.ruleType,
           recurrence: cls.recurrence,
@@ -2506,7 +2602,7 @@ function dateActionFor(
     factIds: [fact.id],
     itemIds: [...fact.itemIds],
     payload: {
-      key, date: iso, ruleType: cls.ruleType,
+      key, label: fact.label, date: iso, ruleType: cls.ruleType,
       recurrence: cls.recurrence,
       documentExpiration: cls.ruleType === "expiration"
         && (fact.roles.includes("document_metadata")
@@ -2650,6 +2746,205 @@ function targetLabel(t: TargetRef | undefined): string {
     ? t.profileType.charAt(0).toUpperCase() + t.profileType.slice(1)
     : t.kind === "profile" ? "Profile" : "";
   return kind ? `${kind}: ${t.name}` : t.name;
+}
+
+/**
+ * Is this value written as a calendar day, rather than a number that merely
+ * parses as one? "2018" (a year built) and "12345" (an NAIC code) must never
+ * reach the date engine because of what their field happens to be called.
+ */
+function isDateValue(v: unknown): boolean {
+  if (v instanceof Date) return !isNaN(v.getTime());
+  const s = String(v ?? "").trim();
+  return /\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}/.test(s)
+    || /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}/i.test(s)
+    || /\b\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}/i.test(s);
+}
+
+/** One calendar day, whichever way it was written, or "" when it is not one. */
+function dayOf(value: unknown): string {
+  return normalizeDateString(value) || bareDateOf(value) || "";
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "2027-04-05" → "Apr 5, 2027". No clock and no timezone: a calendar day. */
+export function prettyDay(value: unknown): string {
+  const iso = dayOf(value);
+  const m = iso ? /^(\d{4})-(\d{2})-(\d{2})/.exec(iso) : null;
+  if (!m) return String(value ?? "");
+  return `${MONTHS[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}`;
+}
+
+/**
+ * The downstream effects of one date action, derived from what the app
+ * actually does with a date (see ProposedAction.effects).
+ *
+ *   • the write:   on the record, or kept on the document, or no change
+ *   • the rule:    a Date Rule is derived from that stored field
+ *                  (shared/date-rules), so no copy is created
+ *   • Calendar:    the rule's occurrence, or a standalone event when no
+ *                  stored field can carry the date
+ *   • Upcoming:    every rule feeds Upcoming, and expirations also feed the
+ *                  Executive dashboard's "expiring & due" list
+ *   • alerts:      only for the rule types the notification bell raises
+ */
+export function dateActionEffects(a: {
+  destination: ExtractionDestination;
+  target?: TargetRef;
+  payload: Record<string, any>;
+}): ActionEffect[] {
+  if (a.destination !== "calendar") return [];
+  const p = a.payload || {};
+  const day = prettyDay(p.date);
+  const ruleType = String(p.ruleType || "") as DateRuleType;
+  const label = p.label || (p.key ? humanKey(String(p.key)) : "Date");
+  const onRecord = Boolean(p.fields && p.profileId);
+  const recurrence = String(p.recurrence || "none");
+  const repeats = recurrence !== "none" ? `, repeating ${recurrence}` : "";
+  const out: ActionEffect[] = [];
+
+  // 1. Where the date is stored, and whether that changes anything.
+  if (onRecord) {
+    const where = a.target?.name ? ` on ${a.target.name}` : "";
+    if (p.existingValue !== undefined && dayOf(p.existingValue) === dayOf(p.date)) {
+      out.push({ kind: "no_change", label: `${label} already ${day}${where} — no change` });
+    } else if (p.existingValue !== undefined && p.existingValue !== null && String(p.existingValue).trim() !== "") {
+      out.push({ kind: "update_date", label: `Update ${label}${where} from ${prettyDay(p.existingValue)} → ${day}` });
+    } else {
+      out.push({ kind: "save_date", label: `Save ${label}: ${day}${where}` });
+    }
+  } else if (p.key && !p.periodKind) {
+    out.push({ kind: "save_date", label: `Save ${label}: ${day} on this document` });
+  }
+
+  // 2. The rule, which exists only when a STORED field carries the date. A
+  //    computed deadline (a warranty's end) has no field; its event is its home.
+  const derivesRule = Boolean(p.key) && !p.periodKind && Boolean(ruleType);
+  if (derivesRule) {
+    const word = ruleTypeLabel(ruleType).toLowerCase();
+    out.push({ kind: "date_rule", label: `Create ${word} rule for ${day}${repeats}` });
+  }
+
+  // 3. The calendar. A standalone event beside a rule on the same document and
+  //    day is shadowed (shared/calendar-adapters), so it is still ONE entry.
+  if (p.createEvent) {
+    out.push({ kind: "event", label: `Add "${p.title || a.target?.name || label}" to Calendar on ${day}${repeats}` });
+  } else if (derivesRule) {
+    out.push({ kind: "calendar", label: `Show on Calendar on ${day}` });
+  }
+
+  // 4. Upcoming / Executive, and 5. alerts — the same predicates those
+  //    surfaces filter with, so the list cannot overpromise.
+  if (derivesRule || p.createEvent) {
+    const source = onRecord ? "profile" : "document";
+    const rule = { ruleType, sourceEntityType: source } as const;
+    out.push({
+      kind: "upcoming",
+      label: isDocumentAttentionRule(rule as any)
+        ? "Show in Upcoming and the Executive dashboard's expiring & due list"
+        : "Show in Upcoming dates",
+    });
+    if (ruleType && isAlertDateRule(rule as any)) {
+      const verb = dateRuleAlertWords(ruleType)[3];
+      out.push({ kind: "notification", label: `Notify before it ${verb}` });
+    }
+  }
+  return out;
+}
+
+function humanKey(key: string): string {
+  const leaf = key.split(".").pop() || key;
+  return leaf
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
+/**
+ * Which of a document's own dates it may derive rules from, given the
+ * reviewed plan.
+ *
+ * A document derives a Date Rule from every actionable date in its
+ * extractedData (shared/date-rules.rulesFromDocuments), so a date the rail did
+ * not show, or one the user unticked, still became an expiration on the
+ * calendar, in Upcoming and on the bell. That write went round the rail. This
+ * is the gate: a date the document holds reaches those surfaces only while a
+ * SELECTED calendar action in the plan names it. Every other date is recorded
+ * as a calendar opt-out, the mechanism the rule engine already honours. A date
+ * re-ticked on a later confirmation is cleared from the list again.
+ *
+ * Pure: the caller reads and writes the document.
+ */
+export function documentDateOptOuts(
+  extractedData: Record<string, any> | null | undefined,
+  actions: readonly Pick<ProposedAction, "destination" | "operation" | "selected" | "savable" | "payload">[],
+  opts: { documentId: string; contextKey?: string; name?: string },
+): { optOut: string[]; changed: boolean } {
+  const data = extractedData && typeof extractedData === "object" ? extractedData : {};
+  const prior: string[] = Array.isArray((data as any)[CALENDAR_OPT_OUT_KEY])
+    ? (data as any)[CALENDAR_OPT_OUT_KEY].map((v: any) => String(v)) : [];
+  const norm = (v: string) => String(v ?? "").split(".").map(normalizeFieldKey).filter(Boolean).join(".");
+  const leaf = (v: string) => normalizeFieldKey(String(v ?? "").split(".").pop() || "");
+
+  const shown = new Set<string>();
+  for (const a of actions) {
+    if (a.destination !== "calendar" || a.operation === "NO_ACTION") continue;
+    if (!a.selected || a.savable === false) continue;
+    if (a.payload?.key) { shown.add(norm(a.payload.key)); shown.add(leaf(a.payload.key)); }
+  }
+
+  // Every rule the document would derive with nothing opted out.
+  const { [CALENDAR_OPT_OUT_KEY]: _ignored, ...bare } = data as Record<string, any>;
+  const rules = rulesFromDocuments([{
+    id: opts.documentId, name: opts.name || "Document", type: opts.contextKey || "", extractedData: bare,
+  }]);
+  const isShown = (field: string, path: string) =>
+    shown.has(norm(path)) || shown.has(norm(field)) || shown.has(leaf(path));
+
+  const next = new Set<string>();
+  for (const k of prior) {
+    // A prior opt-out stands unless the user just chose that date again.
+    if (!shown.has(norm(k)) && !shown.has(leaf(k))) next.add(k);
+  }
+  for (const r of rules) {
+    if (!isShown(r.sourceField, r.sourcePath)) next.add(r.sourcePath || r.sourceField);
+  }
+  const optOut = Array.from(next);
+  const changed = optOut.length !== prior.length || optOut.some((k) => !prior.includes(k));
+  return { optOut, changed };
+}
+
+// ─── Rail grouping ───────────────────────────────────────────────────────────
+
+export type RailGroup = "conflicts" | "records" | "dates" | "trackers" | "money" | "links" | "notes";
+
+export const RAIL_GROUP_LABEL: Record<RailGroup, string> = {
+  conflicts: "Needs review",
+  records: "Profile & records",
+  dates: "Dates, calendar & reminders",
+  trackers: "Trackers",
+  money: "Money",
+  links: "Links & filing",
+  notes: "Notes, tasks & journal",
+};
+
+export const RAIL_GROUP_ORDER: readonly RailGroup[] =
+  ["conflicts", "records", "dates", "trackers", "money", "links", "notes"];
+
+/** Which heading one suggested action sits under in the rail. Grouping only:
+ *  every action is still its own row. */
+export function railGroupOf(a: Pick<ProposedAction, "destination" | "warnings">): RailGroup {
+  if (a.warnings?.some((w) => w.blocking)) return "conflicts";
+  switch (a.destination) {
+    case "calendar": return "dates";
+    case "tracker": case "profile_tracker": return "trackers";
+    case "expense": case "income": case "obligation": case "liability_payment": return "money";
+    case "relationship_link": case "document_attach": return "links";
+    case "note": case "task": case "journal": case "habit": return "notes";
+    default: return "records";
+  }
 }
 
 function primaryTarget(doc: SemanticDocument, targets: Map<string, TargetRef>): TargetRef {

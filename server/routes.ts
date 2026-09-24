@@ -59,7 +59,7 @@ import { cascadeProfileRename } from "./profile-rename-cascade";
 import { cascadeHabitRename } from "./habit-rename-cascade";
 import { normalizeEntityDateFields, impossibleCalendarDays, isRealCalendarDay, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
-import { itemsClaimedByActions, type ProposedAction } from "@shared/extraction-actions";
+import { itemsClaimedByActions, documentDateOptOuts, type ProposedAction } from "@shared/extraction-actions";
 import { classifyFinancialDocKind, decideExpenseCreation, detectExpenseInstruction, inferFinancialStatus, isFinancialStatus } from "@shared/financial-status";
 import { executeActions } from "./action-executor";
 import { seriesFromAll } from "@shared/calendar-adapters";
@@ -3933,9 +3933,15 @@ ${JSON.stringify(ctx, null, 2)}`;
       // it is skipped here — but a ticked date whose field did not persist, or
       // which no rule can be derived from, still gets the real event it needs
       // instead of silently going nowhere.
+      //
+      // With a reviewed plan, the plan owns dates. Every date it acts on
+      // is a visible calendar action (shared/extraction-actions), so turning
+      // `calendarDates` into events here as well was a second, unseen write:
+      // standalone "date-rule-uncovered" events the rail never listed (user
+      // report 2026-09-22). The side channel is used only when there is no plan.
       const calendarEventCandidates = [
         ...(Array.isArray(createCalendarEvents) ? createCalendarEvents : []),
-        ...calendarDates
+        ...(reviewedActions.length > 0 ? [] : calendarDates)
           .filter((d) => d && d.addToCalendar !== false && d.field && d.date)
           .map((d) => ({
             field: String(d.path || d.field),
@@ -4421,20 +4427,30 @@ ${JSON.stringify(ctx, null, 2)}`;
         // them — the same mechanism the Calendar section already uses, so a
         // signature date declines to become an event by the same route
         // whichever pane the decision was made in.
-        if (outcome.calendarOptOuts.length > 0) {
-          try {
-            const doc = await storage.getDocument(extractionId);
-            const data: Record<string, any> = { ...((doc as any)?.extractedData || {}) };
-            const prior: string[] = Array.isArray(data[CALENDAR_OPT_OUT_KEY])
-              ? data[CALENDAR_OPT_OUT_KEY].map((v: any) => String(v)) : [];
-            const next = Array.from(new Set([...prior, ...outcome.calendarOptOuts]));
-            if (next.length !== prior.length) {
-              data[CALENDAR_OPT_OUT_KEY] = next;
-              await storage.updateDocument(extractionId, { extractedData: data });
-            }
-          } catch (e: any) {
-            log.warn(`[confirm-extraction] could not record calendar opt-outs: ${e?.message || e}`);
+        //
+        // NO SILENT DATE WRITES: the document derives a rule from every date it
+        // holds, so a date the rail did not show, or one the user unticked,
+        // still reached the calendar, Upcoming and the bell. Only dates a
+        // SELECTED calendar action names keep deriving (documentDateOptOuts).
+        try {
+          const doc = await storage.getDocument(extractionId);
+          const data: Record<string, any> = { ...((doc as any)?.extractedData || {}) };
+          const planned = documentDateOptOuts(data, reviewedActions, {
+            documentId: extractionId,
+            contextKey: `${(doc as any)?.type ?? ""} ${(doc as any)?.name ?? ""}`,
+            name: (doc as any)?.name,
+          });
+          const prior: string[] = Array.isArray(data[CALENDAR_OPT_OUT_KEY])
+            ? data[CALENDAR_OPT_OUT_KEY].map((v: any) => String(v)) : [];
+          const next = Array.from(new Set([...planned.optOut, ...outcome.calendarOptOuts]));
+          const changed = next.length !== prior.length || next.some((k) => !prior.includes(k));
+          if (doc && changed) {
+            if (next.length > 0) data[CALENDAR_OPT_OUT_KEY] = next;
+            else delete data[CALENDAR_OPT_OUT_KEY];
+            await storage.updateDocument(extractionId, { extractedData: data });
           }
+        } catch (e: any) {
+          log.warn(`[confirm-extraction] could not record calendar opt-outs: ${e?.message || e}`);
         }
       }
 

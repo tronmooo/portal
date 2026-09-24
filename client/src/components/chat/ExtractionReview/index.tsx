@@ -92,9 +92,23 @@ export function ExtractionConfirmation({
 
   const itemsById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
 
-  /** Keep / Don't save. */
-  const toggleAction = (id: string) =>
-    setActions((prev) => prev.map((a) => (a.id === id ? { ...a, selected: !a.selected } : a)));
+  /**
+   * Keep / Don't save. A date row cited only by date actions follows them, so
+   * turning off "Expiration — Expiration Date" does not quietly save the same
+   * date down the data path, where the record would derive the rule anyway.
+   */
+  const toggleAction = (id: string) => {
+    const nextActions = actions.map((a) => (a.id === id ? { ...a, selected: !a.selected } : a));
+    const toggled = nextActions.find((a) => a.id === id);
+    setActions(nextActions);
+    if (!toggled || toggled.destination !== "calendar") return;
+    setItems((prev) => prev.map((i) => {
+      if (!toggled.itemIds.includes(i.id)) return i;
+      const citing = nextActions.filter((a) => a.itemIds.includes(i.id) && a.operation !== "NO_ACTION");
+      if (citing.length === 0 || citing.some((a) => a.destination !== "calendar")) return i;
+      return { ...i, selected: citing.some((a) => a.selected) };
+    }));
+  };
 
   /**
    * Change destination. Re-routing something is an act of WANTING it saved, so
@@ -445,7 +459,8 @@ export function ExtractionConfirmation({
       createCalendarEvents,
       actions: hasPlan ? actions : undefined,
       items: hasItems ? unclaimedItems : undefined,
-      calendarDates,
+      // With a plan, the plan's calendar actions are the only date writes.
+      calendarDates: hasPlan ? [] : calendarDates,
       trackerEntries: hasItems
         ? []
         : (extraction.trackerEntries || []).filter((_: any, i: number) => selectedTrackers[i]),

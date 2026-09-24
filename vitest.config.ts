@@ -185,6 +185,8 @@ export default defineConfig({
       'tests/trackable-values.test.ts',
       'tests/tracker-actions.test.ts',
       'tests/date-actions.test.ts',
+      'tests/suggested-actions-completeness.test.ts',
+      'tests/suggested-actions-rail.dom.test.tsx',
       'tests/action-executor-recurrence.test.ts',
       'tests/action-kinds.test.ts',
       'tests/medical-report-extraction.test.ts',

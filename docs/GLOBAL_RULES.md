@@ -81,6 +81,7 @@ import), now passes:
 | 38 | Anomalies fail loudly | **Added** | `server/integrity-log.ts logIntegrity` with kinds `ai_read_triggered_write`, `duplicate_write`, `scope_mismatch`, `idempotent_replay`, `conflicting_canonical_facts`, `owner_unresolved`, `validation_failed`, `stale_dependency`; fed by the engine gate, the envelope verifier, the storage guards and the integrity validator. | `tests/read-only-turn-guard.test.ts` |
 | 39 | Entity registry | **Added** | `shared/entity-registry.ts ENTITY_REGISTRY` composed from the existing facet modules (domains, ownership, search fields, routes, deletion, calendar, finance, icon). | `tests/entity-registry.test.ts` |
 | 40 | Shared domain services | **Existing → extended** | The consolidation that already existed for asset value / net worth / monthly conversion is extended by Rules 11‑15, 23‑24, 39. | the tests above |
+| 41 | Suggested Actions = the execution plan | **Added** | The rail renders `actionPlan.actions` (`shared/extraction-actions.ts`), and Confirm sends back those same objects to `server/action-executor.ts`. No second list is generated for display. **Dates:** `classifyDateField` decides every date-shaped fact whatever role or subject the reasoner gave it, so an actionable date is always a visible calendar action, and an unmatched subject keeps it on the document instead of turning it into a "pick where this goes" card. **Derived effects:** each date action lists what follows from it (`dateActionEffects`: save/update/no change, the Date Rule, Calendar, Upcoming/Executive, bell alert), using the same predicates those surfaces filter with. **Existing data:** a stored value reads "already … no change" or "Update from X → Y" with a `value_conflict` warning. **No silent writes:** with a plan, `calendarDates` creates no events (the client sends none), and `documentDateOptOuts` opts out every document date that no selected calendar action names, so an unshown or unticked date derives no rule. **Refresh:** a row and its date actions follow each other (tick/untick either one). | `tests/suggested-actions-completeness.test.ts`, `tests/suggested-actions-rail.dom.test.tsx`, `tests/confirm-extraction-actions.test.ts` ("no silent date writes") |
 
 ---
 
@@ -105,6 +106,7 @@ The "Permanent regression rules" from the brief map to:
 | Save persistence | existing journal tests |
 | Navigation persistence (leave, return, no duplicate) | `tests/storage-proxy-read-only.test.ts` (run store) + Rule 2 replay test |
 | Scope isolation | `tests/smoke/contracts/isolation.test.ts`, `tests/profile-scope.test.ts` (existing) |
+| Document actions (every date the document acts on is shown in Suggested Actions; unticking removes its rule) | `tests/suggested-actions-completeness.test.ts`, `tests/suggested-actions-rail.dom.test.tsx` |
 
 ---
 

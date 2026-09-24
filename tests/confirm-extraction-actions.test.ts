@@ -572,4 +572,58 @@ describe("POST /api/chat/confirm-extraction — the reviewed plan", () => {
     expect(stubState.profiles.get("prop-1").fields.yearBuilt).toBe("2018");
     expect(stubState.profiles.get("person-1").fields.yearBuilt).toBeUndefined();
   });
+
+  // ── User report 2026-09-22: the rail is the plan ───────────────────────────
+  // An auto insurance card's expiration reached the calendar through channels
+  // the Suggested Actions rail never showed. With a reviewed plan, a date takes
+  // effect only through a visible, selected calendar action.
+  describe("no silent date writes", () => {
+    const expiryAction = (selected: boolean) => action({
+      id: "a-card-expiry", destination: "calendar", operation: "CREATE",
+      target: { kind: "event", id: null, name: "Expiration Date" },
+      title: "Expiration — Expiration Date",
+      itemIds: ["field-expirationdate"],
+      payload: {
+        key: "expirationDate", date: "2027-04-05", ruleType: "expiration",
+        recurrence: "none", createEvent: true, title: "Expiration Date — policy",
+      },
+      selected,
+      stage: 4,
+      dedupeKey: "k-card-expiry",
+    });
+    const calendarDates = [{
+      field: "expirationDate", path: "expirationDate", date: "2027-04-05",
+      ruleType: "expiration", title: "Expiration Date — card", category: "finance",
+      addToCalendar: true, derived: true,
+    }];
+
+    beforeEach(() => {
+      stubState.documents.set(DOC, {
+        id: DOC, name: "IMG_1199.jpeg", type: "insurance_card", mimeType: "image/jpeg",
+        extractedData: { policyNumber: "907344659", effectiveDate: "2026-10-05", expirationDate: "2027-04-05" },
+        linkedProfiles: [], tags: [],
+      });
+    });
+
+    it("a stray calendarDates entry creates no event the plan did not list", async () => {
+      const res = await post(base, { extractionId: DOC, actions: [expiryAction(false)], calendarDates });
+      expect(res.status).toBeLessThan(500);
+      expect(stubState.events).toHaveLength(0);
+    });
+
+    it("an unticked expiration action stops the document deriving the rule", async () => {
+      await post(base, { extractionId: DOC, actions: [expiryAction(false)] });
+      const optOut = stubState.documents.get(DOC).extractedData._calendarOptOut ?? [];
+      expect(optOut).toContain("expirationDate");
+    });
+
+    it("a ticked expiration action keeps the rule and puts exactly one entry on the calendar", async () => {
+      stubState.documents.get(DOC).extractedData._calendarOptOut = ["expirationDate"];
+      const res = await post(base, { extractionId: DOC, actions: [expiryAction(true)], calendarDates });
+      expect(res.status).toBe(200);
+      const optOut = stubState.documents.get(DOC).extractedData._calendarOptOut ?? [];
+      expect(optOut).not.toContain("expirationDate");
+      expect(stubState.events.filter((e) => e.date === "2027-04-05")).toHaveLength(1);
+    });
+  });
 });

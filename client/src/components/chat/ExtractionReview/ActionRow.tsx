@@ -15,6 +15,7 @@ import {
   DESTINATION_LABEL, type ExtractionDestination, type ExtractionItem,
 } from "@shared/extraction-destinations";
 import { OPERATION_LABEL, type ProposedAction } from "@shared/extraction-actions";
+import { ActionEffects } from "./ActionEffects";
 
 export interface ActionRowProps {
   action: ProposedAction;
@@ -118,6 +119,9 @@ export function ActionRow({
           )}
           {action.detail && (
             <div className="text-[11px] text-muted-foreground leading-tight">{action.detail}</div>
+          )}
+          {!unsavable && !isReference && (
+            <ActionEffects effects={action.effects} actionId={action.id} />
           )}
 
           {blocking.map((w, i) => (

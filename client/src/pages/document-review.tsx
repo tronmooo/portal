@@ -54,7 +54,11 @@ import {
 } from "@shared/extraction-destinations";
 import { extractionDateRows, type CalendarDateDecision } from "@shared/extraction-calendar";
 import { groupItemsIntoSections } from "@shared/extraction-sections";
-import { itemsClaimedByActions, OPERATION_LABEL, type ProposedAction } from "@shared/extraction-actions";
+import {
+  itemsClaimedByActions, OPERATION_LABEL, RAIL_GROUP_LABEL, RAIL_GROUP_ORDER, railGroupOf,
+  type ProposedAction,
+} from "@shared/extraction-actions";
+import { ActionEffects } from "@/components/chat/ExtractionReview/ActionEffects";
 import type { SemanticEntity } from "@shared/semantic-document";
 import { CONFIDENCE_HIGH, CONFIDENCE_MEDIUM } from "@shared/semantic-document";
 
@@ -401,8 +405,24 @@ export function DocumentReviewScreen({
     setActions(nextActions);
   };
 
+  /**
+   * A date action and its date row are one decision. Unticking "Expiration —
+   * Expiration Date" while its row stayed ticked still sent the date down the
+   * data path, where the record derived the same rule the user had just
+   * turned off. So a row whose only citing actions are date actions follows
+   * them, the same way an action follows its rows in setRowChoice.
+   */
   const toggleAction = (id: string) => {
-    setActions((prev) => prev.map((a) => (a.id === id ? { ...a, selected: !a.selected } : a)));
+    const nextActions = actions.map((a) => (a.id === id ? { ...a, selected: !a.selected } : a));
+    const toggled = nextActions.find((a) => a.id === id);
+    setActions(nextActions);
+    if (!toggled || toggled.destination !== "calendar") return;
+    setItems((prev) => prev.map((i) => {
+      if (!toggled.itemIds.includes(i.id)) return i;
+      const citing = nextActions.filter((a) => a.itemIds.includes(i.id) && a.operation !== "NO_ACTION");
+      if (citing.length === 0 || citing.some((a) => a.destination !== "calendar")) return i;
+      return { ...i, selected: citing.some((a) => a.selected) };
+    }));
   };
 
   /** Auto-map off = hand-pick mode; back on = restore the proposed routing.
@@ -487,6 +507,15 @@ export function DocumentReviewScreen({
     () => actions.filter((a) => a.operation !== "NO_ACTION"),
     [actions],
   );
+  // Grouped for reading, never collapsed: every action keeps its own row.
+  const suggestedGroups = useMemo(() => {
+    const by = new Map<string, ProposedAction[]>();
+    for (const a of suggestedActions) {
+      const g = railGroupOf(a);
+      by.set(g, [...(by.get(g) ?? []), a]);
+    }
+    return RAIL_GROUP_ORDER.filter((g) => by.has(g)).map((g) => ({ group: g, actions: by.get(g)! }));
+  }, [suggestedActions]);
   // Dates the engine deliberately does NOT schedule — a report date, a printed-on
   // date. They used to be filtered out of the rail entirely, so the middle table
   // could list three rows under "Dates & Deadlines" beside an empty rail with no
@@ -559,7 +588,9 @@ export function DocumentReviewScreen({
       createCalendarEvents,
       actions: hasPlan ? liveActions : undefined,
       items: hasItems ? unclaimedItems : undefined,
-      calendarDates,
+      // With a plan, every date the confirmation acts on is a visible calendar
+      // action above. The side channel would be a second, unseen date write.
+      calendarDates: hasPlan ? [] : calendarDates,
       trackerEntries: [],
       // RULE 3: the proposal is only sent when the upload found evidence the
       // money was paid (`create`). An unpaid invoice or an estimate stays on
@@ -1102,13 +1133,23 @@ export function DocumentReviewScreen({
                       : "Nothing to do beyond saving these fields."}
                   </p>
                 )}
-                {suggestedActions.map((a) => {
+                {suggestedGroups.map(({ group, actions: groupActions }) => (
+                  <Fragment key={group}>
+                  {suggestedGroups.length > 1 && (
+                    <p
+                      className="micro-label text-muted-foreground/80 px-2 pt-2"
+                      data-testid={`suggested-group-${group}`}
+                    >
+                      {RAIL_GROUP_LABEL[group]}
+                    </p>
+                  )}
+                  {groupActions.map((a) => {
                   const vis = actionVisual(a);
                   return (
                     <label
                       key={a.id}
                       className={cn(
-                        "flex items-center gap-2.5 rounded-lg px-2 py-2 cursor-pointer transition-colors hover:bg-muted/40",
+                        "flex items-start gap-2.5 rounded-lg px-2 py-2 cursor-pointer transition-colors hover:bg-muted/40",
                         !a.selected && "opacity-55",
                       )}
                       data-testid={`suggested-action-${a.id}`}
@@ -1146,6 +1187,13 @@ export function DocumentReviewScreen({
                         {!a.savable && a.unsupportedReason && (
                           <p className="text-[11px]" style={{ color: `hsl(${ACCENT.amber})` }}>{a.unsupportedReason}</p>
                         )}
+                        {a.destination === "calendar" && a.detail && (
+                          <p className="text-[11px] text-muted-foreground" data-testid={`action-detail-${a.id}`}>{a.detail}</p>
+                        )}
+                        {a.warnings.filter((w) => !w.blocking && w.code === "value_conflict").map((w, i) => (
+                          <p key={i} className="text-[11px]" style={{ color: `hsl(${ACCENT.amber})` }}>{w.message}</p>
+                        ))}
+                        {a.savable && <ActionEffects effects={a.effects} actionId={a.id} />}
                       </div>
                       <Checkbox
                         checked={a.selected}
@@ -1157,6 +1205,8 @@ export function DocumentReviewScreen({
                     </label>
                   );
                 })}
+                  </Fragment>
+                ))}
                 {suggestedActions.length > 0 && (
                   <Button
                     variant="outline"
