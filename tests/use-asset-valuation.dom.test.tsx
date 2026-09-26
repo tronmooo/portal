@@ -180,16 +180,16 @@ function SweepProbe({ enabled }: { enabled: boolean }) {
 }
 
 describe("Assets-tab sweep (useAssetsValuationSweep)", () => {
-  it("refreshes only the stale assets, concurrently but bounded, and reports progress as each lands", async () => {
+  it("refreshes the due assets concurrently but bounded, and reports progress as each lands", async () => {
     const releases: Record<string, (r: Response) => void> = {};
     let maxInFlight = 0, inFlightNow = 0;
+    const stale = Array.from({ length: SWEEP_CONCURRENCY + 2 }, (_, i) => `s${i}`);
     apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
       calls.push({ method, url, body });
       if (url === "/api/valuations/status") {
         return json({ rows: [
-          { profileId: "a", fresh: false, reason: "first_valuation" }, { profileId: "b", fresh: false, reason: "scheduled" },
-          { profileId: "c", fresh: true, reason: null }, { profileId: "d", fresh: false, reason: "inputs_changed" },
-          { profileId: "e", fresh: false, reason: "scheduled" },
+          ...stale.map(id => ({ profileId: id, fresh: false, reason: "scheduled" })),
+          { profileId: "c", fresh: true, reason: null },
         ] });
       }
       const m = url.match(/\/api\/profiles\/([^/]+)\/valuation\/refresh/);
@@ -199,19 +199,23 @@ describe("Assets-tab sweep (useAssetsValuationSweep)", () => {
       }
       return json({});
     });
+    const total = stale.length;
     render(<QueryClientProvider client={queryClient}><SweepProbe enabled /></QueryClientProvider>);
     await waitFor(() => expect(Object.keys(releases).length).toBe(SWEEP_CONCURRENCY));
-    expect(screen.getByTestId("sweep").textContent).toBe("running 0/4 failed=0");
-    expect(releases.c).toBeUndefined(); // fresh — never refreshed
-    releases.a(json({ snapshot: snapshot(record(10), true), ran: true, changed: true }));
-    await waitFor(() => expect(screen.getByTestId("sweep").textContent).toBe("running 1/4 failed=0"));
-    // The next one started as soon as a slot freed — without waiting for b or d.
-    await waitFor(() => expect(Object.keys(releases).length).toBe(4));
-    for (const id of ["b", "d", "e"]) releases[id]?.(json({ snapshot: snapshot(record(20), true), ran: true, changed: true }));
-    await waitFor(() => expect(screen.getByTestId("sweep").textContent).toBe("idle 4/4 failed=0"));
+    expect(screen.getByTestId("sweep").textContent).toBe(`running 0/${total} failed=0`);
+    expect(releases.c).toBeUndefined(); // fresh with no auto flag (older server) — never refreshed
+    releases.s0(json({ snapshot: snapshot(record(10), true), ran: true, changed: true }));
+    await waitFor(() => expect(screen.getByTestId("sweep").textContent).toBe(`running 1/${total} failed=0`));
+    // The next one started as soon as a slot freed — without waiting for the rest.
+    await waitFor(() => expect(Object.keys(releases).length).toBe(SWEEP_CONCURRENCY + 1));
+    const releaseAll = () => { for (const id of stale.slice(1)) releases[id]?.(json({ snapshot: snapshot(record(20), true), ran: true, changed: true })); };
+    releaseAll();
+    await waitFor(() => expect(Object.keys(releases).length).toBe(total));
+    releaseAll();
+    await waitFor(() => expect(screen.getByTestId("sweep").textContent).toBe(`idle ${total}/${total} failed=0`));
     expect(maxInFlight).toBe(SWEEP_CONCURRENCY);
-    expect(calls.filter(c => c.url.includes("/refresh")).map(c => c.url).sort()).toEqual(["a", "b", "d", "e"].map(id => `/api/profiles/${id}/valuation/refresh`));
-    expect((queryClient.getQueryData(valuationQueryKey("a")) as ValuationSnapshot).record?.value).toBe(10);
+    expect(calls.filter(c => c.url.includes("/refresh")).map(c => c.url).sort()).toEqual(stale.map(id => `/api/profiles/${id}/valuation/refresh`).sort());
+    expect((queryClient.getQueryData(valuationQueryKey("s0")) as ValuationSnapshot).record?.value).toBe(10);
   });
 
   it("a second Assets mount during a sweep joins it; one failure does not stop the rest", async () => {
@@ -229,6 +233,30 @@ describe("Assets-tab sweep (useAssetsValuationSweep)", () => {
     expect(calls.filter(c => c.url.includes("/refresh"))).toHaveLength(2);
     expect((queryClient.getQueryData(valuationQueryKey("b")) as ValuationSnapshot).record?.value).toBe(5);
     first.unmount();
+  });
+
+  it("re-values every auto-tracked asset even when its record is fresh; skips manual and just-checked ones", async () => {
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    const old = new Date(Date.now() - 2 * 86_400_000).toISOString();
+    apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
+      calls.push({ method, url, body });
+      if (url === "/api/valuations/status") {
+        return json({ rows: [
+          { profileId: "fresh-auto", fresh: true, reason: null, auto: true, checkedAt: old },
+          { profileId: "never", fresh: false, reason: "first_valuation", auto: true, checkedAt: null },
+          { profileId: "manual", fresh: true, reason: null, auto: false, checkedAt: old },
+          { profileId: "just-checked", fresh: true, reason: null, auto: true, checkedAt: recent },
+          { profileId: "legacy", fresh: true, reason: null },
+        ] });
+      }
+      if (url.includes("/refresh")) return json({ snapshot: snapshot(record(7), true), ran: true, changed: true });
+      return json({});
+    });
+    render(<QueryClientProvider client={queryClient}><SweepProbe enabled /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByTestId("sweep").textContent).toBe("idle 2/2 failed=0"));
+    const refreshes = calls.filter(c => c.url.includes("/refresh"));
+    expect(refreshes.map(c => c.url).sort()).toEqual(["/api/profiles/fresh-auto/valuation/refresh", "/api/profiles/never/valuation/refresh"]);
+    expect(refreshes.every(c => c.body?.force === true)).toBe(true);
   });
 
   it("does nothing while the Assets tab is not the active section", async () => {

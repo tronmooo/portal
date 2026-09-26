@@ -50,7 +50,7 @@ describe("Assets-tab valuation sweep", () => {
     await Promise.all([car, laptop].map(p => refreshValuation(storage, p.id, { reason: "first_valuation", now: NOW })));
     let rows = await getValuationStatus(storage, { now: NOW });
     const byId = Object.fromEntries(rows.map(r => [r.profileId, r]));
-    expect(byId[car.id]).toMatchObject({ fresh: true, status: "valued" });
+    expect(byId[car.id]).toMatchObject({ fresh: true, status: "valued", auto: true, checkedAt: NOW.toISOString() });
     expect(byId[car.id].value).toBeGreaterThan(0);
     expect(byId[laptop.id].fresh).toBe(true);
 

@@ -223,7 +223,8 @@ export async function getValuationStatus(
     }, now);
     // A manual asset is never swept: the Assets tab sees it as fresh, so no
     // background refresh is ever scheduled for it.
-    const freshness = isAutoValuationEnabled(p.fields)
+    const auto = isAutoValuationEnabled(p.fields);
+    const freshness = auto
       ? assessListFreshness(record, ctx.profileFingerprint, now, VALUATION_MODEL_VERSION)
       : { fresh: true, reason: null, detail: MANUAL_DETAIL };
     rows.push({
@@ -234,6 +235,8 @@ export async function getValuationStatus(
       confidenceLabel: record?.confidenceLabel ?? "none",
       fresh: freshness.fresh,
       reason: freshness.reason,
+      auto,
+      checkedAt: record?.checkedAt ?? null,
     });
   }
   return rows;

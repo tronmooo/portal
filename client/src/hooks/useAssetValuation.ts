@@ -95,12 +95,17 @@ export function refreshAssetValuation(profileId: string, opts: { force?: boolean
 
 // ─── The Assets-tab sweep ────────────────────────────────────────────────────
 // OPEN ASSETS → the list renders from stored values at once → one cheap
-// status call says which owned things need a re-valuation → those run
-// CONCURRENTLY (bounded) → each completion patches its own row and the
-// aggregates as it lands, never waiting for the rest.
+// status call lists every owned thing → EVERY asset with "Track value
+// automatically" on is re-valued, all at once (bounded) → each completion
+// patches its own row and the aggregates as it lands, never waiting for the
+// rest. Opening the tab is the request for current values; nobody has to open
+// each asset. Only an asset checked within the last few minutes is skipped,
+// so reloading the tab doesn't re-buy the same lookups.
 
 /** How many valuations run at once from one tab. */
-export const SWEEP_CONCURRENCY = 3;
+export const SWEEP_CONCURRENCY = 8;
+/** An asset the estimator looked at more recently than this is not re-run. */
+export const SWEEP_RECHECK_MS = 10 * 60_000;
 /** Don't re-sweep the same list more often than this from one tab. */
 const SWEEP_THROTTLE_MS = 60_000;
 let lastSweepAt = 0;
@@ -128,8 +133,8 @@ async function runBounded<T>(items: T[], limit: number, fn: (item: T) => Promise
 }
 
 /**
- * Sweep every owned thing when the Assets tab is open: find the stale ones,
- * refresh them with bounded concurrency, and report progress. One asset's
+ * Sweep every owned thing when the Assets tab is open: re-value every stale
+ * or automatically-tracked asset with bounded concurrency, and report progress. One asset's
  * failure or slowness never holds the others; a second mount while a sweep
  * is running joins it instead of starting another.
  */
@@ -153,13 +158,23 @@ export function useAssetsValuationSweep(enabled: boolean): SweepProgress {
       } catch {
         return; // the list already shows stored values; nothing to sweep
       }
-      const stale = rows.filter(r => !r.fresh).map(r => r.profileId)
-        .filter(id => !inFlight.has(id) && Date.now() - (lastAttemptAt.get(id) || 0) >= ATTEMPT_THROTTLE_MS);
+      const now = Date.now();
+      const due = (r: ValuationStatusRow) => {
+        if (!r.fresh) return true;
+        // A fresh row is re-valued only when the server says tracking is on
+        // (manual assets also report fresh) and it wasn't just checked.
+        if (r.auto !== true) return false;
+        const checked = r.checkedAt ? new Date(r.checkedAt).getTime() : NaN;
+        return !Number.isFinite(checked) || now - checked >= SWEEP_RECHECK_MS;
+      };
+      const stale = rows.filter(due).map(r => r.profileId)
+        .filter(id => !inFlight.has(id) && now - (lastAttemptAt.get(id) || 0) >= ATTEMPT_THROTTLE_MS);
       update({ total: stale.length, done: 0, failed: 0, running: stale.length > 0 });
       if (stale.length === 0) return;
       let done = 0, failed = 0;
       await runBounded(stale, SWEEP_CONCURRENCY, async (id) => {
-        const snap = await refreshAssetValuation(id);
+        // force: a record still inside its freshness window is re-valued too.
+        const snap = await refreshAssetValuation(id, { force: true });
         done++;
         if (!snap || snap.record?.status === "error") failed++;
         update({ done, failed });

@@ -280,6 +280,10 @@ export interface ValuationStatusRow {
   confidenceLabel: ValuationRecord["confidenceLabel"];
   fresh: boolean;
   reason: RefreshReason | null;
+  /** "Track value automatically" is on. Absent from older servers. */
+  auto?: boolean;
+  /** When the estimator last looked at this asset (valued or not). */
+  checkedAt?: string | null;
 }
 
 /**
