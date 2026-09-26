@@ -101,6 +101,26 @@ describe("CurrentValueCard — automatic value tracking switch", () => {
     expect(patches()[0].body).toEqual({ fields: { valuationMode: "auto" } });
   });
 
+  it("turning it back ON forces a re-valuation after the PATCH, even though the stored record is fresh", async () => {
+    queryClient.setQueryData(valuationQueryKey("a"), snapshot("manual"));
+    mount({ valuationMode: "manual" });
+    fireEvent.click(screen.getByTestId("valuation-mode-switch"));
+    await waitFor(() => expect(calls.some(c => c.method === "POST")).toBe(true));
+    const patchAt = calls.findIndex(c => c.method === "PATCH");
+    const postAt = calls.findIndex(c => c.method === "POST");
+    expect(postAt).toBeGreaterThan(patchAt);
+    expect(calls[postAt]).toMatchObject({ url: "/api/profiles/a/valuation/refresh", body: { force: true } });
+  });
+
+  it("turning it OFF never fires a refresh", async () => {
+    queryClient.setQueryData(valuationQueryKey("a"), snapshot("auto"));
+    mount();
+    fireEvent.click(screen.getByTestId("valuation-mode-switch"));
+    await waitFor(() => expect(patches()).toHaveLength(1));
+    await new Promise(r => setTimeout(r, 20));
+    expect(calls.some(c => c.method === "POST")).toBe(false);
+  });
+
   it("manual: the user's own value leads, the estimate machinery is gone, the old estimate is labelled history", () => {
     queryClient.setQueryData(valuationQueryKey("a"), snapshot("manual"));
     mount({ valuationMode: "manual", currentValue: 1200, currentValueSource: "user" });

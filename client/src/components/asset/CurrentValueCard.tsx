@@ -106,8 +106,13 @@ export function CurrentValueCard({
     setSwitching(true);
     // Only ever written by a deliberate flip — an asset that has never been
     // touched keeps no valuationMode at all and stays automatic.
-    await writeFields({ [VALUATION_MODE_FIELD]: next ? "auto" : "manual" });
+    const ok = await writeFields({ [VALUATION_MODE_FIELD]: next ? "auto" : "manual" });
     setSwitching(false);
+    // Turning tracking back ON is a request for a current estimate. The stored
+    // record is usually still inside its freshness window (it was written
+    // before the asset went manual), so the freshness check alone would never
+    // re-value it — force one run now.
+    if (ok && next && !auto) void refresh();
   };
 
   const saveOwnValue = async () => {
