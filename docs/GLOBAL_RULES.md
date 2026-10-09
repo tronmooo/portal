@@ -107,6 +107,28 @@ that hold for every user-owned type, not patches for assets or statements.
 | S9 | **Never silently delete.** The navigation tests fail on ANY non-GET request while chips are pressed and sections are switched. | — | `tests/sync-asset-navigation.dom.test.tsx` |
 | S10 | **Recover gracefully.** A 401 on a slot that already holds data fails the query (data kept) instead of resolving `null`; no `queryFn` turns a failed request into `[]` (eight removed). | `client/src/lib/queryClient.ts getQueryFn` | `tests/sync-rules-failed-request.dom.test.tsx` (500 / network / 401 + static scan) |
 
+**Follow-ups (same day).**
+- *One key, one payload:* every list route is full by default, so
+  `withFullLimit` is now the bare URL — a `?limit=500` fetch capped a cache
+  slot that bare fetches of the same key filled completely. The KPI strip's
+  slim profile list shares the nav's `["/api/profiles", "lite"]` slot.
+- *Snooze hides, never rewrites:* Action Required dismissals and the bill
+  "snooze" are one synced preference (`shared/alert-snoozes.ts`,
+  `useAlertSnoozes`) instead of per-browser localStorage, and the bill snooze no
+  longer moves the obligation's real `nextDueDate`.
+- *Two taps to destroy:* bill/goal/budget deletes and the goal-complete circle
+  arm on the first tap (`useConfirmArm`).
+- *No lost updates on tags:* occurrence marks and pause/archive go through
+  `POST /api/events/:id/occurrence` and `/series-flag`, applied to the stored
+  tags server-side; no client rebuilds a whole tag array from a cached copy.
+- *Drafts re-seed:* the profile LocationEditor uses `useResyncedState`.
+- *No invented trends:* valuation `historyDrift` needs ≥180 days of history and
+  is clamped to ±30%/yr (it annualized 17-day estimate noise into "+60%/yr" and
+  fed it back as evidence).
+- *Canonical server reads:* the AI engine and the stale-valuation route value
+  assets through `resolveAssetValue`.
+- Pinned by `tests/sync-rules-followups.test.ts`, `tests/sync-confirm-arm.dom.test.tsx`.
+
 **Instrumentation.** `shared/sync-log.ts` records mutation start/success/failure,
 invalidations, stale-response rejections, valuation landings, notification
 resolutions, filter apply/reset/clear and owner-set changes. On in dev builds

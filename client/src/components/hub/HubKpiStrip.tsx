@@ -167,7 +167,10 @@ export function HubKpiStrip() {
   // for one person, never blended (same rule as pages/wellness.tsx). The slim
   // profile list is already cached by the nav chrome, so this is free.
   const { data: profilesLite } = useQuery<any[]>({
-    queryKey: ["/api/profiles/lite"],
+    // The SAME slot the nav chrome fills (["/api/profiles", "lite"]) — the
+    // bare "/api/profiles/lite" string was a second, separately-cached copy
+    // that the ["/api/profiles"] prefix invalidation never matched.
+    queryKey: ["/api/profiles", "lite"],
     queryFn: () => apiRequest("GET", "/api/profiles/lite").then(r => r.json()),
     staleTime: 300_000,
   });

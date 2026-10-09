@@ -771,7 +771,10 @@ function LocationEditor({
   onSaved: () => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(String(profile.fields?.location || ""));
+  // Re-seeded from the record while not editing (useResyncedState): a plain
+  // useState seeded once, so a location changed by chat or another tab showed
+  // the old value here and Save could write it back over the new one.
+  const [value, setValue] = useResyncedState(String(profile.fields?.location || ""), profile.id, editing);
   const { toast } = useToast();
 
   const locationMut = useMutation({
@@ -1420,7 +1423,7 @@ function MaintenanceCard({
   const { data: allEvents } = useQuery<any[]>({
     queryKey: ["/api/events", profile.id, "maint-scope", ...maintScopeIds],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/events?profileIds=${encodeURIComponent(maintScopeIds.join(","))}&limit=500`);
+      const res = await apiRequest("GET", `/api/events?profileIds=${encodeURIComponent(maintScopeIds.join(","))}`);
       return res.json();
     },
     staleTime: 60000,

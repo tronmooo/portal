@@ -132,7 +132,7 @@ describe("item 9: CalendarManagerPanel Manage tab reads under the active profile
     scope.mode = "selected"; scope.selectedIds = ["jane-1"]; scope.selectedNames = ["Jane"]; scope.isFiltered = true;
   });
 
-  it("fetches obligations / events / tasks with ?profileIds= and the full-list limit", async () => {
+  it("fetches obligations / events / tasks with ?profileIds= (whole list — routes are full by default)", async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
@@ -151,7 +151,9 @@ describe("item 9: CalendarManagerPanel Manage tab reads under the active profile
       const hit = urls.find((u) => u.startsWith(`/api/${ep}`));
       expect(hit, ep).toBeDefined();
       expect(hit, ep).toContain("profileIds=jane-1");
-      expect(hit, ep).toContain("limit=500");
+      // No `limit=500` cap: every list route returns the whole set by default,
+      // and a capped fetch of the same key disagreed with the bare one.
+      expect(hit, ep).not.toContain("limit=");
       // And no bare, unscoped read of the same list.
       expect(urls.filter((u) => u === `/api/${ep}`), ep).toEqual([]);
     }

@@ -148,17 +148,18 @@ describe("each action hits the right API", () => {
     expect(requests[0]).toMatchObject({ method: "DELETE", url: "/api/obligations/ob-lubi" });
   });
 
-  it("checks off a recurring event by writing an rd:done tag", async () => {
+  it("checks off a recurring event as one occurrence mark, applied server-side", async () => {
+    // The server writes the rd:done tag onto the STORED tags
+    // (POST /api/events/:id/occurrence) — a client PATCH of a whole tag array
+    // rebuilt from a cached copy lost concurrent marks (sync audit 2026-10-09).
     await run(SERIES.event, "complete");
-    expect(requests[0].method).toBe("PATCH");
-    expect(requests[0].url).toBe("/api/events/ev-trash");
-    expect(requests[0].body.tags).toContain("rd:done:2026-07-27");
+    expect(requests[0]).toMatchObject({ method: "POST", url: "/api/events/ev-trash/occurrence", body: { date: "2026-07-27", state: "done" } });
   });
 
   it("moves a recurring event by skipping the slot and creating a one-off", async () => {
     await run(SERIES.event, "move", "2026-07-29");
     expect(requests).toHaveLength(2);
-    expect(requests[0].body.tags).toContain("rd:skip:2026-07-27");
+    expect(requests[0]).toMatchObject({ method: "POST", url: "/api/events/ev-trash/occurrence", body: { date: "2026-07-27", state: "skip" } });
     expect(requests[1]).toMatchObject({
       method: "POST", url: "/api/events",
       body: { date: "2026-07-29", recurrence: "none", title: "Trash day" },
@@ -220,8 +221,7 @@ describe("destructive actions never destroy the wrong record", () => {
 
   it("deleting ONE occurrence of a recurring series is a skip, not a delete", async () => {
     await run(SERIES.event, "deleteOccurrence");
-    expect(requests[0].method).toBe("PATCH");
-    expect(requests[0].body.tags).toContain("rd:skip:2026-07-27");
+    expect(requests[0]).toMatchObject({ method: "POST", url: "/api/events/ev-trash/occurrence", body: { date: "2026-07-27", state: "skip" } });
     expect(requests.some((r) => r.method === "DELETE")).toBe(false);
   });
 });

@@ -58,6 +58,7 @@ import { checkProfileDelete } from "@shared/profile-delete";
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { cascadeHabitRename } from "./habit-rename-cascade";
 import { normalizeEntityDateFields, impossibleCalendarDays, isRealCalendarDay, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, markSupersededDocumentRules, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
+import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags, setSeriesFlag as setRecurringSeriesFlag } from "@shared/recurring-dates";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { itemsClaimedByActions, documentDateOptOuts, type ProposedAction } from "@shared/extraction-actions";
 import { classifyFinancialDocKind, decideExpenseCreation, detectExpenseInstruction, inferFinancialStatus, isFinancialStatus } from "@shared/financial-status";
@@ -6441,7 +6442,7 @@ Generate 0-5 action items (only real, actionable ones). Generate 2-4 highlights 
             id: p.id,
             name: p.name,
             type: p.type,
-            currentValue: Number(f.currentValue || f.purchasePrice || 0),
+            currentValue: resolveAssetValue(p), // canonical (shared/asset-value.ts)
             lastValuedAt: lastValuedRaw || null,
             ageDays,
           };
@@ -7776,6 +7777,44 @@ Rules:
     if (!updated) return res.status(404).json({ error: "Not found" });
     const uid_ev2 = cacheUserKey(req as AuthenticatedRequest);
     bustCache(`events:${uid_ev2}`); bustCache(`stats:${uid_ev2}`); bustCache(`calendar:${uid_ev2}`);
+    res.json(updated);
+  }));
+  // Check off / skip / restore ONE occurrence of a recurring event.
+  //
+  // Rule 7 (no lost updates): every surface used to compute the new tag list
+  // from ITS cached copy of the event and PATCH the whole array back, so a
+  // check-off in the briefing and a skip in the calendar a moment apart left
+  // only whichever landed last. The read-modify-write happens here, against
+  // the row as stored, so concurrent marks on different dates all survive.
+  app.post("/api/events/:id/occurrence", asyncHandler(async (req, res) => {
+    const date = typeof req.body?.date === "string" ? req.body.date.slice(0, 10) : "";
+    const state = req.body?.state;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: "date (YYYY-MM-DD) required" });
+    if (state !== "done" && state !== "skip" && state !== "clear") return res.status(400).json({ error: "state must be done, skip or clear" });
+    const existing = await storage.getEvent(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    const today = getUserToday(getTimezone(req));
+    const tags = pruneRecurringOccurrenceTags(markRecurringOccurrence((existing as any).tags ?? [], date, state), today);
+    const updated = await storage.updateEvent(req.params.id, { tags } as any);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_evo = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`events:${uid_evo}`); bustCache(`stats:${uid_evo}`); bustCache(`calendar:${uid_evo}`); bustCache(`notifications:${uid_evo}`);
+    res.json(updated);
+  }));
+  // Pause / resume / archive / unarchive a recurring series — same reason as
+  // the occurrence route above: flip ONE flag on the stored tags rather than
+  // accept a whole tag array rebuilt from a client's cached copy.
+  app.post("/api/events/:id/series-flag", asyncHandler(async (req, res) => {
+    const flag = req.body?.flag;
+    const on = req.body?.on;
+    if (flag !== "paused" && flag !== "archived") return res.status(400).json({ error: "flag must be paused or archived" });
+    if (typeof on !== "boolean") return res.status(400).json({ error: "on (boolean) required" });
+    const existing = await storage.getEvent(req.params.id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    const updated = await storage.updateEvent(req.params.id, { tags: setRecurringSeriesFlag((existing as any).tags ?? [], flag, on) } as any);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    const uid_evf = cacheUserKey(req as AuthenticatedRequest);
+    bustCache(`events:${uid_evf}`); bustCache(`stats:${uid_evf}`); bustCache(`calendar:${uid_evf}`); bustCache(`notifications:${uid_evf}`);
     res.json(updated);
   }));
   app.delete("/api/events/:id", asyncHandler(async (req, res) => {

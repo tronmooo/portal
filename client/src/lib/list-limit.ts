@@ -1,16 +1,21 @@
-// ─── Full-list fetch limit ─────────────────────────────────────────────────
-// The list routes that go through the server's generic paginate() (tasks,
-// habits, obligations, goals, events, documents, journal) return the NEWEST
-// 100 rows unless the caller passes ?limit=. The aggregate tiles are computed
-// server-side over the whole set, so a page that fetched a list without a
-// limit counted everything in its tile and listed only the newest hundred —
-// the 101st task was invisible everywhere but the count.
+// ─── Full-list fetch ───────────────────────────────────────────────────────
+// History: list routes used to go through a generic paginate() that returned
+// the NEWEST 100 rows unless the caller passed ?limit=, so whole-set pages
+// appended `limit=500` through this helper.
 //
-// Every page that is meant to show the WHOLE set appends this. 500 is the
-// route-level hard cap, so asking for more changes nothing.
-export const FULL_LIST_LIMIT = 500;
+// Every list route is full-by-default now (server/routes.ts paginateFull /
+// paginateProfiles; tests/list-routes-full-by-default.test.ts), and that made
+// the old `?limit=500` actively harmful: it CAPPED the list at 500 rows while
+// other components fetched the same cache key with the bare URL and got every
+// row. One cache slot, two payloads — whichever component fetched last decided
+// what the dashboard, Tasks and Habits showed (audit 2026-10-09, Rule 1: one
+// resource, one query key, one payload).
+//
+// So the whole set is the bare URL. The helper stays (28 call sites name the
+// intent "I need the whole list") but no longer adds a pager.
+export const FULL_LIST_LIMIT: number | null = null;
 
-/** Append `limit=FULL_LIST_LIMIT` to a list URL, whether or not it has a query string. */
+/** The URL that returns the whole list — the bare URL, now that routes are full by default. */
 export function withFullLimit(url: string): string {
-  return `${url}${url.includes("?") ? "&" : "?"}limit=${FULL_LIST_LIMIT}`;
+  return url;
 }

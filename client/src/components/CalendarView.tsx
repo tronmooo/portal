@@ -1,5 +1,6 @@
 import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
+import { setEventOccurrence } from "@/lib/event-occurrence";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { useState, useMemo, useEffect, useRef } from "react";
@@ -62,7 +63,6 @@ import { EVENT_CATEGORY_COLORS } from "@shared/schema";
 import { KIND_LABELS, calendarItemLabel, calendarSourceKind } from "@shared/calendar-occurrences";
 import { isInScope, selfIdsFrom, withAncestorOwnerIds } from "@shared/scope";
 import { isOfferablePerson } from "@shared/entity-classify";
-import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
 import { canonicalTimelineWindow } from "@shared/calendar-window";
 import { routeForEntity } from "@shared/entity-routes";
@@ -744,9 +744,8 @@ export function EventDetailDialog({
         if (isRecurringEvent && scope === "one") {
           // Skip just this occurrence — the series survives. Same tag write
           // the Recurring Dates manager uses (shared/recurring-dates).
-          const row = await apiRequest("GET", `/api/events/${item.sourceId}`).then(r => r.json());
-          const tags = pruneOccurrenceTags(markOccurrence(row?.tags ?? [], occDate, "skip"), toLocalDateStr(new Date()));
-          await apiRequest("PATCH", `/api/events/${item.sourceId}`, { tags });
+          // Applied server-side to the stored tags (Rule 7 — no lost updates).
+          await setEventOccurrence(item.sourceId, occDate, "skip");
         } else if (isRecurringEvent && scope === "future") {
           // End the series the day before this occurrence; history survives.
           await apiRequest("PATCH", `/api/events/${item.sourceId}`, { recurrenceEnd: addDaysISO(occDate, -1) });
@@ -2161,9 +2160,7 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
             const { seriesId, date } = oneOffDraft;
             void (async () => {
               try {
-                const row = await apiRequest("GET", `/api/events/${seriesId}`).then(r => r.json());
-                const tags = pruneOccurrenceTags(markOccurrence(row?.tags ?? [], date, "skip"), toLocalDateStr(new Date()));
-                await apiRequest("PATCH", `/api/events/${seriesId}`, { tags });
+                await setEventOccurrence(seriesId, date, "skip");
               } catch (err) {
                 console.error("[CalendarView] failed to detach occurrence from series:", err);
               } finally {

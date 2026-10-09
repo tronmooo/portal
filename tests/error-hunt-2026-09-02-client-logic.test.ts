@@ -219,11 +219,12 @@ describe("item 10: asset-party-links / liability-profile-links are invalidated w
 
 // ── Item 11: whole-set pages ask for the whole set ──────────────────────────
 describe("item 11: list pages pass the full-list limit", () => {
-  it("withFullLimit appends the shared limit whatever the query string", () => {
-    expect(withFullLimit("/api/tasks")).toBe(`/api/tasks?limit=${FULL_LIST_LIMIT}`);
-    expect(withFullLimit("/api/tasks?profileIds=a,b")).toBe(`/api/tasks?profileIds=a,b&limit=${FULL_LIST_LIMIT}`);
-    // The server's paginate() caps at 500; asking for more would change nothing.
-    expect(FULL_LIST_LIMIT).toBe(500);
+  it("withFullLimit asks for the whole set — the bare URL, since every list route is full by default", () => {
+    // A `?limit=500` CAPPED the list while sibling components fetched the same
+    // cache key bare and got every row (audit 2026-10-09): one key, one payload.
+    expect(withFullLimit("/api/tasks")).toBe("/api/tasks");
+    expect(withFullLimit("/api/tasks?profileIds=a,b")).toBe("/api/tasks?profileIds=a,b");
+    expect(FULL_LIST_LIMIT).toBeNull();
   });
 
   it("every whole-set list fetch on the dashboard / tabs / calendar carries it", () => {

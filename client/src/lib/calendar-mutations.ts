@@ -15,12 +15,8 @@
 // without requiring a refresh" requirement.
 
 import { apiRequest } from "@/lib/queryClient";
+import { setEventOccurrence } from "./event-occurrence";
 import { invalidateDomains, type Domain } from "@/lib/cache-bus";
-import {
-  markOccurrence,
-  pruneOccurrenceTags,
-  setSeriesFlag,
-} from "@shared/recurring-dates";
 import { addDaysISO } from "@shared/date-math";
 import { can, canEditMoney, type CalendarAction, type CalendarMoneyAction } from "@shared/calendar-capabilities";
 import type { CalendarSeries, CalendarOccurrence } from "@shared/calendar-occurrences";
@@ -99,9 +95,8 @@ export async function applyCalendarAction(input: ApplyActionInput): Promise<void
       const mode = action === "complete" ? "done" : "skip";
 
       if (system === "event") {
-        const row = input.getEventRow?.(id);
-        const tags = pruneOccurrenceTags(markOccurrence(row?.tags ?? [], date, mode), todayISO);
-        await apiRequest("PATCH", `/api/events/${id}`, { tags });
+        // Applied to the stored tags server-side (Rule 7 — no lost updates).
+        await setEventOccurrence(id, date, mode);
       } else if (system === "obligation" || system === "liability") {
         // Both are addressed by the same `<recordId>:<date>` occurrence id.
         await apiRequest("POST", `/api/obligation-occurrences/${id}:${date}/status`, {
@@ -129,8 +124,7 @@ export async function applyCalendarAction(input: ApplyActionInput): Promise<void
         // A recurring occurrence moves by skipping the scheduled slot and
         // creating a one-off on the new date. The series keeps its schedule —
         // the same semantics the recurring manager already used.
-        const tags = pruneOccurrenceTags(markOccurrence(row?.tags ?? [], date, "skip"), todayISO);
-        await apiRequest("PATCH", `/api/events/${id}`, { tags });
+        await setEventOccurrence(id, date, "skip");
         await apiRequest("POST", "/api/events", {
           title: series.title,
           date: newDate,

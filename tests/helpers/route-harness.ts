@@ -246,6 +246,7 @@ export function makeFakeStorage(db: FakeDb) {
     },
 
     getEvents: async () => db.events,
+    getEvent: async (rid: string) => db.events.find(e => e.id === rid),
     createEvent: async (data: any) => {
       const row = { id: id("ev"), tags: [], linkedProfiles: [], ...data };
       db.events.push(row);

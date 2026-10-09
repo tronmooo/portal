@@ -22,6 +22,7 @@
 // "Taken", managed recurring dates get "Done". Popups are the same components
 // the dashboard KPI tiles use.
 import { sumMonthIncomeNow, selectUpcomingBills, UPCOMING_BILLS_EMPTY_COPY } from "@shared/obligation-windows";
+import { setEventOccurrence } from "@/lib/event-occurrence";
 import { isDoneToday } from "@shared/task-counts";
 import { relativeTimeShort, elapsedDays } from "@shared/relative-time";
 import { netWorthChange } from "@shared/net-worth-change";
@@ -77,7 +78,6 @@ import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-d
 import { buildExecutiveSections, normalizeAiSuggestions, type AiSuggestion, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
-import { markOccurrence, pruneOccurrenceTags } from "@shared/recurring-dates";
 import { isTestDataRow } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { extractVitals, countWellnessTrackers } from "@/lib/wellness-metrics";
@@ -1020,9 +1020,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // calendar and the Recurring Dates manager make (shared/recurring-dates).
   const markOccurrenceDone = useMutation({
     mutationFn: async (row: any) => {
-      const date = String(row?.date || "").slice(0, 10);
-      const tags = pruneOccurrenceTags(markOccurrence(row?.meta?.tags ?? [], date, "done"), todayStr);
-      await apiRequest("PATCH", `/api/events/${row.sourceId}`, { tags });
+      // Server-side read-modify-write: a cached tag list can be stale (Rule 7).
+      await setEventOccurrence(row.sourceId, String(row?.date || "").slice(0, 10), "done");
     },
     onSuccess: () => { toast({ title: "Marked done" }); invalidateDomain("events"); },
     onError: () => toast({ title: "Couldn't mark it done", variant: "destructive" }),

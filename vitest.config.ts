@@ -444,6 +444,8 @@ export default defineConfig({
       'tests/sync-rules-notifications.test.ts',
       'tests/sync-rules-failed-request.dom.test.tsx',
       'tests/sync-rules-invalidation.test.ts',
+      'tests/sync-rules-followups.test.ts',
+      'tests/sync-confirm-arm.dom.test.tsx',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

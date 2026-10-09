@@ -10,6 +10,7 @@
 // off ONE occurrence marks only that date done — the series stays live and
 // the next occurrence rolls forward automatically.
 import { useMemo, useState } from "react";
+import { setEventOccurrence, setEventSeriesFlag } from "@/lib/event-occurrence";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -40,8 +41,8 @@ import {
   Wallet, CheckSquare, FileText, AlertTriangle,
 } from "lucide-react";
 import {
-  RECURRING_KINDS, kindDef, parseRecurringMeta, metaToTags, markOccurrence,
-  setSeriesFlag, pruneOccurrenceTags, expandRecurrenceDates, nextOccurrence,
+  RECURRING_KINDS, kindDef, parseRecurringMeta, metaToTags,
+  expandRecurrenceDates, nextOccurrence,
   occurrenceStatus, seriesStatus, humanRecurrenceLabel, addDaysISO,
   REMINDER_PRESETS, RD_TAG,
   type RecurringKind, type SeriesStatus,
@@ -371,7 +372,7 @@ function MoveNextDialog({ event, onClose }: { event: any; onClose: () => void })
       // Skip the scheduled occurrence and place a one-off on the chosen date.
       // The rest of the series is untouched.
       const meta = parseRecurringMeta(event.tags);
-      await apiRequest("PATCH", `/api/events/${event.id}`, { tags: markOccurrence(event.tags, next, "skip") });
+      await setEventOccurrence(event.id, next, "skip");
       await apiRequest("POST", "/api/events", {
         title: event.title,
         date,
@@ -476,21 +477,27 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
   const owner = profiles.find((p: any) => (ev.linkedProfiles || []).includes(p.id));
   const daysUntil = next ? Math.round((new Date(`${next}T12:00:00`).getTime() - new Date(`${today}T12:00:00`).getTime()) / 86400000) : null;
 
-  const patchTags = async (tags: string[], msg: string) => {
+  const setFlag = async (flag: "paused" | "archived", on: boolean, msg: string) => {
     try {
-      await apiRequest("PATCH", `/api/events/${ev.id}`, { tags });
+      await setEventSeriesFlag(ev.id, flag, on);
       invalidateRecurringSurfaces();
       toast({ title: msg });
     } catch (e: any) {
       toast({ title: "Couldn't update", description: e?.message || "Try again", variant: "destructive" });
     }
   };
-  const mark = (date: string, action: "done" | "skip" | "clear") =>
-    patchTags(
-      pruneOccurrenceTags(markOccurrence(ev.tags, date, action), today),
-      action === "done" ? `Checked off ${fmtShort(date)} — next one stays on schedule`
-        : action === "skip" ? `Skipped ${fmtShort(date)}` : `Restored ${fmtShort(date)}`,
-    );
+  // One occurrence at a time, applied server-side to the stored tags (Rule 7).
+  const mark = async (date: string, action: "done" | "skip" | "clear") => {
+    const msg = action === "done" ? `Checked off ${fmtShort(date)} — next one stays on schedule`
+      : action === "skip" ? `Skipped ${fmtShort(date)}` : `Restored ${fmtShort(date)}`;
+    try {
+      await setEventOccurrence(ev.id, date, action);
+      invalidateRecurringSurfaces();
+      toast({ title: msg });
+    } catch (e: any) {
+      toast({ title: "Couldn't update", description: e?.message || "Try again", variant: "destructive" });
+    }
+  };
 
   const occurrences = useMemo(() => {
     const all = expandRecurrenceDates(ev.date, ev.recurrence, {
@@ -562,11 +569,11 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
             <DropdownMenuItem onClick={onReassign}><Users className="h-3.5 w-3.5 mr-2" />Reassign profile</DropdownMenuItem>
             <DropdownMenuSeparator />
             {meta.paused
-              ? <DropdownMenuItem onClick={() => patchTags(setSeriesFlag(ev.tags, "paused", false), "Resumed")}><Play className="h-3.5 w-3.5 mr-2" />Resume</DropdownMenuItem>
-              : <DropdownMenuItem onClick={() => patchTags(setSeriesFlag(ev.tags, "paused", true), "Paused — occurrences hidden until resumed")}><Pause className="h-3.5 w-3.5 mr-2" />Pause</DropdownMenuItem>}
+              ? <DropdownMenuItem onClick={() => setFlag("paused", false, "Resumed")}><Play className="h-3.5 w-3.5 mr-2" />Resume</DropdownMenuItem>
+              : <DropdownMenuItem onClick={() => setFlag("paused", true, "Paused — occurrences hidden until resumed")}><Pause className="h-3.5 w-3.5 mr-2" />Pause</DropdownMenuItem>}
             {meta.archived
-              ? <DropdownMenuItem onClick={() => patchTags(setSeriesFlag(ev.tags, "archived", false), "Unarchived")}><ArchiveRestore className="h-3.5 w-3.5 mr-2" />Unarchive</DropdownMenuItem>
-              : <DropdownMenuItem onClick={() => patchTags(setSeriesFlag(ev.tags, "archived", true), "Archived — hidden everywhere except here")}><Archive className="h-3.5 w-3.5 mr-2" />Archive</DropdownMenuItem>}
+              ? <DropdownMenuItem onClick={() => setFlag("archived", false, "Unarchived")}><ArchiveRestore className="h-3.5 w-3.5 mr-2" />Unarchive</DropdownMenuItem>
+              : <DropdownMenuItem onClick={() => setFlag("archived", true, "Archived — hidden everywhere except here")}><Archive className="h-3.5 w-3.5 mr-2" />Archive</DropdownMenuItem>}
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-red-500 focus:text-red-500" onClick={() => setConfirmDelete(true)}>
               <Trash2 className="h-3.5 w-3.5 mr-2" />Delete series

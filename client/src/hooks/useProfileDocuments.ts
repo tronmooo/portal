@@ -27,7 +27,7 @@ export function useProfileDocuments<T extends { id: string; linkedProfiles?: Rea
   const { data: listed } = useQuery<T[]>({
     queryKey: profileDocumentsQueryKey(profileId ?? ""),
     queryFn: async () =>
-      (await apiRequest("GET", `/api/documents?profileId=${encodeURIComponent(profileId ?? "")}&limit=500`)).json(),
+      (await apiRequest("GET", `/api/documents?profileId=${encodeURIComponent(profileId ?? "")}`)).json(),
     enabled: !!profileId,
   });
   return useMemo(() => {

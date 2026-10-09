@@ -21,19 +21,42 @@ function parseIso(iso: string | null | undefined): Date | null {
 
 function money(n: number): string { return `$${Math.round(n).toLocaleString()}`; }
 
-/** Annualized drift implied by the last two valued history points. */
+/** A trend needs history spanning at least this long to mean anything. */
+export const MIN_TREND_SPAN_DAYS = 180;
+/** No asset class this estimator values moves faster than this per year on trend. */
+export const MAX_TREND_DRIFT = 0.3;
+
+/**
+ * Annualized drift implied by the valuation history — over at least
+ * MIN_TREND_SPAN_DAYS, never between two neighbouring estimates.
+ *
+ * It used to annualize the last two points whenever they were 14+ days apart.
+ * Two estimates of the same car a few weeks apart differ by estimation NOISE,
+ * and annualizing noise is wild: the Honda CR-V's $20,600 → $22,500 seventeen
+ * days later became "trending 60%/yr" (the clamp), and that invented trend was
+ * then fed back into the next valuation as evidence — the estimator citing
+ * its own jitter (user report 2026-10-09: "the asset values didn't change").
+ * Now the trend runs from the newest point back to the most recent point at
+ * least six months older, and is clamped to a plausible ±30%/yr.
+ */
 export function historyDrift(ctx: ValuationContext): number | null {
-  const pts = ctx.history.filter(h => h.status === "valued" && h.value && h.value > 0);
+  const pts = ctx.history
+    .filter(h => h.status === "valued" && h.value && h.value > 0 && parseIso(h.valuedAt))
+    .sort((x, y) => parseIso(x.valuedAt)!.getTime() - parseIso(y.valuedAt)!.getTime());
   if (pts.length < 2) return null;
-  const a = pts[pts.length - 2], b = pts[pts.length - 1];
-  const ta = parseIso(a.valuedAt), tb = parseIso(b.valuedAt);
-  if (!ta || !tb) return null;
-  const years = (tb.getTime() - ta.getTime()) / (YEAR_DAYS * MS_PER_DAY);
-  if (years < 14 / YEAR_DAYS) return null; // two points a week apart say nothing about a year
+  const b = pts[pts.length - 1];
+  const tb = parseIso(b.valuedAt)!;
+  let a: typeof b | undefined;
+  for (let i = pts.length - 2; i >= 0; i--) {
+    const days = (tb.getTime() - parseIso(pts[i].valuedAt)!.getTime()) / MS_PER_DAY;
+    if (days >= MIN_TREND_SPAN_DAYS) { a = pts[i]; break; }
+  }
+  if (!a) return null;
+  const years = (tb.getTime() - parseIso(a.valuedAt)!.getTime()) / (YEAR_DAYS * MS_PER_DAY);
   const ratio = b.value! / a.value!;
-  if (!(ratio > 0)) return null;
+  if (!(ratio > 0) || !(years > 0)) return null;
   const drift = Math.pow(ratio, 1 / years) - 1;
-  return Math.max(-0.6, Math.min(0.6, drift));
+  return Math.max(-MAX_TREND_DRIFT, Math.min(MAX_TREND_DRIFT, drift));
 }
 
 export function deriveInternalEvidence(ctx: ValuationContext, plan: ValuationPlan, now: Date = new Date()): ValuationEvidence[] {

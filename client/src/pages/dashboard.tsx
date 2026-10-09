@@ -29,6 +29,8 @@ import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, refreshFilterNames, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
 import { useDocSnoozeMap } from "@/lib/docSnooze";
+import { useAlertSnoozes } from "@/hooks/useAlertSnoozes";
+import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { groupDocumentDates, ruleIdsOf, summarizeDocumentUrgency } from "@shared/document-dates";
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
 import { useLiveTotal } from "@/lib/derived-aggregates";
@@ -1560,37 +1562,11 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
 // timezones or DST shifts, the bucket invalidates and the dismissal
 // expires. v2 = added tz field; v1 buckets are ignored (treated as
 // empty) since they could be from a stale timezone.
-const DISMISSED_LS_KEY = "portol_dismissed_action_v2";
-const DISMISSED_LS_KEY_LEGACY = "portol_dismissed_action_v1";
-function loadDismissed(): Set<string> {
-  try {
-    // Clean up legacy v1 slot so it doesn't accumulate.
-    localStorage.removeItem(DISMISSED_LS_KEY_LEGACY);
-    const raw = localStorage.getItem(DISMISSED_LS_KEY);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as { tz?: string; date: string; ids: string[] };
-    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
-    // Bucket expires when EITHER the date OR the timezone changes. The tz
-    // check catches travelers and DST hops mid-day; without it, a user who
-    // dismissed something at 11pm before "spring forward" would still see it
-    // hidden after the clock jump.
-    if (parsed.date !== todayStr || parsed.tz !== BROWSER_TIMEZONE) {
-      localStorage.removeItem(DISMISSED_LS_KEY);
-      return new Set();
-    }
-    return new Set(parsed.ids);
-  } catch { return new Set(); }
-}
-function saveDismissed(ids: Set<string>) {
-  try {
-    const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE });
-    localStorage.setItem(DISMISSED_LS_KEY, JSON.stringify({
-      tz: BROWSER_TIMEZONE,
-      date: todayStr,
-      ids: Array.from(ids),
-    }));
-  } catch { /* ignore quota errors */ }
-}
+// Action Required dismissals and snoozes now live in ONE synced preference
+// (shared/alert-snoozes.ts via useAlertSnoozes) instead of this browser's
+// localStorage, so every device hides the same alerts. The old per-device
+// slots are cleared on mount (ActionRequiredSection).
+const LEGACY_DISMISSED_KEYS = ["portol_dismissed_action_v2", "portol_dismissed_action_v1"];
 
 // ─── Section: HERO BRIEFING (Dashboard v2, Phase 2) ──────────────────────────
 // Replaces the long AI Summary narrative with a greeting + ONE state
@@ -2037,7 +2013,9 @@ function NowQueueSection({ enhanced, stats, filterIds = [], filterMode = "everyo
 
 function ActionRequiredSection({ stats, enhanced, profileId }: { stats: DashboardStats; enhanced: any; profileId?: string }) {
   const { toast } = useToast();
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => loadDismissed());
+  const { snoozes, snooze } = useAlertSnoozes();
+  const dismissedIds = useMemo(() => new Set(Object.keys(snoozes)), [snoozes]);
+  useEffect(() => { try { for (const k of LEGACY_DISMISSED_KEYS) localStorage.removeItem(k); } catch { /* storage blocked */ } }, []);
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const now = new Date();
@@ -2103,7 +2081,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
       newDate.setDate(newDate.getDate() + 7);
       await apiRequest("PATCH", `/api/tasks/${taskId}`, { dueDate: newDate.toLocaleDateString("en-CA") });
       invalidateDomain("tasks");
-      toast({ title: `"${task?.title || "Task"}" snoozed`, description: `Moved to ${newDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}` });
+      toast({ title: `"${task?.title || "Task"}" rescheduled`, description: `Due date moved to ${newDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}` });
     } catch {
       toast({ title: `Failed to snooze "${task?.title || "task"}"`, variant: "destructive" });
     }
@@ -2128,31 +2106,20 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
     }
   };
 
-  // Bill snooze — push the next due date out by 7d. Uses the obligation's
-  // nextDueDate field. Server PATCH at /api/obligations/:id.
+  // Bill snooze — hide this bill's REMINDER for 7 days, on every device.
+  // It used to PATCH the obligation's nextDueDate seven days out, which moved
+  // the bill's real due date on the calendar, the bills list, cash flow and
+  // the bell (Rule 9: a convenience control never rewrites the record). The
+  // bill keeps its true date; only this alert steps aside.
   const handleBillSnooze = async (billId: string) => {
     const bill = allItems.find(i => i.id === billId);
-    try {
-      const newDate = new Date();
-      newDate.setDate(newDate.getDate() + 7);
-      await apiRequest("PATCH", `/api/obligations/${billId}`, {
-        nextDueDate: newDate.toLocaleDateString("en-CA"),
-      });
-      // Same fan-out as handleBillPay above (bus + the two keys it lacks).
-      invalidateDomain("obligations");
-      queryClient.invalidateQueries({ queryKey: ["/api/obligation-occurrences"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/calendar/timeline"] });
-      toast({ title: `"${bill?.title || "Bill"}" snoozed`, description: `Moved to ${newDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}` });
-    } catch {
-      toast({ title: `Failed to snooze "${bill?.title || "bill"}"`, variant: "destructive" });
-    }
+    const ok = await snooze(`bill-${billId}`, 7);
+    if (ok) toast({ title: `Reminder for "${bill?.title || "bill"}" hidden for 7 days`, description: "The bill's due date is unchanged." });
+    else toast({ title: `Failed to snooze "${bill?.title || "bill"}"`, variant: "destructive" });
   };
 
-  const dismiss = (key: string) => setDismissedIds(prev => {
-    const next = new Set([...prev, key]);
-    saveDismissed(next);
-    return next;
-  });
+  // Dismiss = hide for the rest of today, synced across devices.
+  const dismiss = (key: string) => { void snooze(key, 1).then(ok => { if (!ok) toast({ title: "Couldn't dismiss", variant: "destructive" }); }); };
 
   // Build all items sorted by urgency
   const allItems: Array<{
@@ -2674,7 +2641,7 @@ onDismiss: (key: string) => void;
               className="h-5 w-5 rounded flex items-center justify-center hover:bg-green-500/20 text-green-600">
               <Check className="h-2.5 w-2.5" />
             </button>
-            <button onClick={() => onSnooze(id)} title="Snooze 7d"
+            <button onClick={() => onSnooze(id)} title="Move due date 7 days later" aria-label="Move due date 7 days later"
               className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600">
               <Clock className="h-2.5 w-2.5" />
             </button>
@@ -2693,7 +2660,8 @@ onDismiss: (key: string) => void;
             </button>
             <button
               onClick={() => onBillSnooze(id)}
-              title="Snooze 7d"
+              title="Hide this reminder for 7 days (due date unchanged)"
+              aria-label="Hide this reminder for 7 days"
               className="h-5 w-5 rounded flex items-center justify-center hover:bg-amber-500/20 text-amber-600"
               data-testid={`btn-snooze-bill-${id}`}
             >
@@ -2701,7 +2669,7 @@ onDismiss: (key: string) => void;
             </button>
           </>
         )}
-        <button onClick={() => onDismiss(`${sourceType}-${id}`)} title="Dismiss"
+        <button onClick={() => onDismiss(`${sourceType}-${id}`)} title="Hide until tomorrow" aria-label="Hide until tomorrow"
           className="h-5 w-5 rounded flex items-center justify-center hover:bg-muted text-muted-foreground">
           <X className="h-2 w-2" />
         </button>
@@ -2751,6 +2719,7 @@ function BillGroup({ title, bills, color, onSelectBill }: {
 }
 
 function ObligationsSection({ data }: { data: any[] }) {
+  const confirmArm = useConfirmArm(); // Rule 9: deletes/completions need a second tap
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [selectedBill, setSelectedBill] = useState<any>(null);
@@ -2948,9 +2917,9 @@ function ObligationsSection({ data }: { data: any[] }) {
                     disabled={payMutation.isPending}>
                     <Check className="h-3 w-3 mr-1" /> Mark Paid
                   </Button>
-                  <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => deleteMutation.mutate({ id: bill.id, name: bill.name })}
-                    disabled={deleteMutation.isPending}>
-                    <Trash2 className="h-3 w-3 mr-1" /> Delete
+                  <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => confirmArm.confirm(`bill-del-${bill.id}`, () => deleteMutation.mutate({ id: bill.id, name: bill.name }))}
+                    disabled={deleteMutation.isPending} data-testid={`btn-delete-bill-${bill.id}`}>
+                    <Trash2 className="h-3 w-3 mr-1" /> {confirmArm.isArmed(`bill-del-${bill.id}`) ? "Tap again to delete" : "Delete"}
                   </Button>
                 </div>
               </>
@@ -3030,6 +2999,7 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
 }
 
 export function GoalsSection({ profileId, profileIds = [] }: { profileId?: string; profileIds?: string[] }) {
+  const confirmArm = useConfirmArm(); // Rule 9: deletes/completions need a second tap
   // Multi-profile aware: prefer profileIds (array) when present, fall back to single profileId.
   const ids = profileIds.length > 0 ? profileIds : (profileId ? [profileId] : []);
   const profileParam = ids.length > 0 ? `?profileIds=${ids.join(",")}` : "";
@@ -3176,14 +3146,16 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                   data-testid={`goal-card-${g.id}`}>
                   <button
                     className="h-5 w-5 rounded-full border-2 border-primary/40 flex items-center justify-center shrink-0 hover:bg-green-500/20 hover:border-green-500 active:scale-90 transition-all disabled:opacity-50 disabled:pointer-events-none"
-                    onClick={() => updateMutation.mutate({ id: g.id, status: "completed" })}
+                    onClick={() => confirmArm.confirm(`goal-done-${g.id}`, () => updateMutation.mutate({ id: g.id, status: "completed" }))}
                     disabled={updateMutation.isPending}
-                    title="Mark complete"
+                    title={confirmArm.isArmed(`goal-done-${g.id}`) ? "Tap again to mark complete" : "Mark complete"}
+                    aria-label={confirmArm.isArmed(`goal-done-${g.id}`) ? `Tap again to complete ${g.title}` : `Mark ${g.title} complete`}
+                    data-testid={`btn-complete-goal-${g.id}`}
                   >
                     {updateMutation.isPending ? (
                       <span className="h-2.5 w-2.5 border border-primary/40 border-t-transparent rounded-full animate-spin" />
                     ) : (
-                      <Check className="h-2.5 w-2.5 text-transparent group-hover:text-green-500" />
+                      <Check className={`h-2.5 w-2.5 ${confirmArm.isArmed(`goal-done-${g.id}`) ? "text-green-500" : "text-transparent group-hover:text-green-500"}`} />
                     )}
                   </button>
                   <div className="flex-1 min-w-0 cursor-pointer" role="button" tabIndex={0} aria-label={`Open goal: ${g.title}`} onClick={() => setActionGoal(g)} onKeyDown={onEnterOrSpace(() => setActionGoal(g))}>
@@ -3402,9 +3374,9 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                     variant="destructive"
                     className="h-9 text-xs gap-1.5"
                     disabled={deleteMutation.isPending}
-                    onClick={() => { deleteMutation.mutate({ id: actionGoal.id, title: actionGoal.title }); setActionGoal(null); }}
+                    onClick={() => confirmArm.confirm(`goal-del-${actionGoal.id}`, () => { deleteMutation.mutate({ id: actionGoal.id, title: actionGoal.title }); setActionGoal(null); })}
                   >
-                    <Trash2 className="h-3.5 w-3.5" /> {deleteMutation.isPending ? "Deleting…" : "Delete"}
+                    <Trash2 className="h-3.5 w-3.5" /> {deleteMutation.isPending ? "Deleting…" : confirmArm.isArmed(`goal-del-${actionGoal.id}`) ? "Tap again to delete" : "Delete"}
                   </Button>
                 </div>
               </div>
@@ -3502,8 +3474,8 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
           </div>
           <DialogFooter className="gap-2">
             {editGoal && (
-              <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => deleteMutation.mutate({ id: editGoal.id, title: editGoal.title })} disabled={deleteMutation.isPending} data-testid="btn-delete-goal">
-                <Trash2 className="h-3 w-3 mr-1" /> Delete
+              <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={() => confirmArm.confirm(`goal-del-${editGoal.id}`, () => deleteMutation.mutate({ id: editGoal.id, title: editGoal.title }))} disabled={deleteMutation.isPending} data-testid="btn-delete-goal">
+                <Trash2 className="h-3 w-3 mr-1" /> {confirmArm.isArmed(`goal-del-${editGoal.id}`) ? "Tap again to delete" : "Delete"}
               </Button>
             )}
             {editGoal && normalizeFilter(editGoal.status) === normalizeFilter("active") && (
@@ -3530,6 +3502,7 @@ const BUDGET_CATEGORIES = [
 ];
 
 function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?: string[]; filterMode?: string }) {
+  const confirmArm = useConfirmArm(); // Rule 9: deletes/completions need a second tap
   const { toast } = useToast();
   const [month, setMonth] = useState(() => new Date().toLocaleDateString('en-CA', { timeZone: BROWSER_TIMEZONE }).slice(0, 7));
   const [addOpen, setAddOpen] = useState(false);
@@ -3696,7 +3669,7 @@ function BudgetManager({ filterIds = [], filterMode = "everyone" }: { filterIds?
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditId(b.id)} data-testid={`edit-budget-${b.category}`} aria-label={`Edit ${b.category} budget`}>
                           <Pencil className="h-2.5 w-2.5" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(b.id)} data-testid={`delete-budget-${b.category}`} aria-label={`Delete ${b.category} budget`}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" disabled={deleteMutation.isPending} onClick={() => confirmArm.confirm(`budget-del-${b.id}`, () => deleteMutation.mutate(b.id))} data-testid={`delete-budget-${b.category}`} aria-label={confirmArm.isArmed(`budget-del-${b.id}`) ? `Tap again to delete ${b.category} budget` : `Delete ${b.category} budget`}>
                           <X className="h-2.5 w-2.5" />
                         </Button>
                       </>

@@ -13579,7 +13579,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         return { error: "Could not estimate value for " + profile.name };
       }
 
-      const oldValue = profile.fields?.currentValue || profile.fields?.purchasePrice || 0;
+      const oldValue = sharedAssetValue(profile); // canonical (shared/asset-value.ts)
       await storage.updateProfile(profile.id, {
         fields: {
           currentValue: valuation.estimatedValue,
@@ -14133,7 +14133,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // Helper: extract numeric value from a profile's fields
       const extractValue = (p: typeof allProfiles[0]): number => {
         const f: any = p.fields || {};
-        return Number(f.currentValue ?? f.value ?? f.purchasePrice ?? f.balance ?? 0) || 0;
+        return sharedAssetValue({ ...p, fields: f }); // canonical — the same number net worth sums
       };
       const extractLoan = (p: typeof allProfiles[0]): number => {
         const f: any = p.fields || {};
@@ -14606,7 +14606,7 @@ async function buildChartSpec(input: Record<string, any>): Promise<ChartSpec> {
     const assetTypes = new Set(["vehicle","property","investment","asset","account","banking"]);
     const ownerId = profileId;
     const assets = profiles.filter((p:any) => assetTypes.has(p.type) && (!ownerId || p.id === ownerId || p.parentProfileId === ownerId));
-    const valued = assets.map((p:any) => ({ name: String(p.name).slice(0,22), value: Number(p.fields?.currentValue || p.fields?.value || p.fields?.balance || p.fields?.purchasePrice || 0) }))
+    const valued = assets.map((p:any) => ({ name: String(p.name).slice(0,22), value: sharedAssetValue(p) }))
       .filter(a => a.value > 0).sort((a,b)=>b.value-a.value);
     if (valued.length === 0) throw new Error("No valued assets found to chart. Add a value to an asset first.");
     const totalVal = valued.reduce((s,a)=>s+a.value,0);
