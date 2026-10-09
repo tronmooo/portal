@@ -1,12 +1,13 @@
 import { type Profile } from "./schema";
 import { toMonthlyAmount } from "./obligation-windows";
+import { resolveAssetValue } from "./asset-value";
 
 // ============================================================
 // ASSET ROLLUP — pure function, no I/O, usable from client + server
 // ============================================================
 
 export interface AssetRollup {
-  baseValue: number;       // profile.fields.currentValue || value || purchasePrice || balance || 0
+  baseValue: number;       // resolveAssetValue(profile) — the same number net worth uses
   nestedValue: number;     // sum of descendants' base values (recursive)
   totalValue: number;      // baseValue + nestedValue
   baseLoans: number;       // profile loans: remainingBalance || loanBalance
@@ -66,15 +67,18 @@ function firstPositive(root: Record<string, any>, paths: string[]): number {
  *  Reads camelCase, snake_case, and nested namespaces because legacy AI
  *  extractions and manual entries store values under many different paths.
  */
-function extractBaseValue(fields: Record<string, any>): number {
-  if (!fields || typeof fields !== "object") return 0;
-  const namespaces = ["", "finance", "other", "housing", "vehicle", "vehicles", "investment", "investments", "asset", "assets", "property", "properties", "account", "accounts"];
-  const keys = ["currentValue", "current_value", "value", "purchasePrice", "purchase_price", "balance", "amount", "cost", "price"];
-  const paths: string[] = [];
-  for (const ns of namespaces) {
-    for (const k of keys) paths.push(ns ? `${ns}.${k}` : k);
-  }
-  return firstPositive(fields, paths);
+/**
+ * A profile's own value — the CANONICAL resolver (shared/asset-value.ts).
+ *
+ * This used to keep its own key list in its own precedence (currentValue,
+ * value, purchasePrice, balance…), so an asset valued by `marketValue` or
+ * `estimatedValue` counted $0 in a parent's "includes nested" total while net
+ * worth counted it in full, and a loan's balance was added to an asset total
+ * the resolver deliberately leaves out. One function, one number (Rule 1;
+ * tests/sync-rules-guards.test.ts).
+ */
+function extractBaseValue(profile: Pick<Profile, "fields"> & { type?: string }): number {
+  return resolveAssetValue(profile);
 }
 
 /** Extract the base loan balance from a single profile's fields. */
@@ -196,7 +200,7 @@ export function computeAssetRollup(
   profile: Profile,
   descendants: Profile[],
 ): AssetRollup {
-  const baseValue = extractBaseValue(profile.fields);
+  const baseValue = extractBaseValue(profile);
   const baseLoans = extractBaseLoans(profile.fields);
 
   // Direct children — profiles whose parentProfileId === profile.id
@@ -207,7 +211,7 @@ export function computeAssetRollup(
   const descendantCount = descendants.length;
 
   const nestedValue = descendants.reduce(
-    (sum, d) => sum + extractBaseValue(d.fields),
+    (sum, d) => sum + extractBaseValue(d),
     0,
   );
 
@@ -258,7 +262,7 @@ export function computeAssetRollup(
     isSelf: true,
   };
   const descRows: AssetRollupRow[] = descendants.map((d) => {
-    const bv = extractBaseValue(d.fields);
+    const bv = extractBaseValue(d);
     const bl = extractBaseLoans(d.fields);
     return {
       id: d.id,

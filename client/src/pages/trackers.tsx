@@ -7898,7 +7898,7 @@ export default function TrackersPage() {
                 user is already on the Documents tab, the contextual filter row
                 at the top of the page handles type filtering, and showing it
                 twice would be noisy. */}
-            {sectionFilter === "all" && docTypes.length > 1 && (
+            {sectionFilter === "all" && showFilterControls(docTypes.length, docFilterStates) && (
               <div className="flex items-center gap-1.5 overflow-x-auto flex-nowrap scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
                 <button
                   onClick={() => setDocTypeFilter("all")}

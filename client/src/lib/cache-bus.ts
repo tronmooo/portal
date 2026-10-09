@@ -322,6 +322,22 @@ export const DERIVED_ENDPOINT_DEPENDENCIES: Readonly<Record<string, readonly Dom
   "/api/cashflow": ["expenses", "incomes", "obligations", "liabilities", "assets"],
 };
 
+/**
+ * Derived payloads whose key carries an id, so they cannot be a prefix in the
+ * table above. A profile page (["/api/profiles", id, "detail"]) embeds that
+ * person's tasks, trackers, habits, events, bills, expenses, documents and
+ * child profiles — its server cache prefix ("profile-detail:") depends on
+ * "all" — but only some domains reached it, so a task added from chat or the
+ * Tasks page stayed off the person's page until a reload (audit 2026-10-09).
+ */
+export const DERIVED_KEY_SHAPES: ReadonlyArray<{ name: string; matches: (key: readonly unknown[]) => boolean; deps: readonly Domain[] }> = [
+  {
+    name: "profile detail / overview",
+    matches: (k) => k[0] === "/api/profiles" && typeof k[1] === "string" && (k[2] === "detail" || k[2] === "overview"),
+    deps: DATA_DOMAINS,
+  },
+];
+
 /** Every top-level key a domain must invalidate: its own list + derived endpoints that read it. */
 export function domainKeys(domain: Domain): string[][] {
   const own = DOMAIN_KEYS[domain] || [];
@@ -542,6 +558,9 @@ function invalidateDomainsInternal(domains: Domain[], remote: boolean): Promise<
     }
     const pred = predicateForDomain(d);
     if (pred) predicates.push(pred);
+    for (const shape of DERIVED_KEY_SHAPES) {
+      if (shape.deps.includes(d)) predicates.push((q) => Array.isArray(q?.queryKey) && shape.matches(q.queryKey));
+    }
   }
   if (prefixes.length === 0 && predicates.length === 0) return Promise.resolve();
 

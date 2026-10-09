@@ -199,7 +199,11 @@ function valueFor(
 
 // ── Derived financial intelligence ───────────────────────────────────────────
 
-const VALUE_KEYS = ["currentValue", "estimatedValue", "appraisedValue", "assessedValue", "marketValue"];
+// Same precedence as shared/asset-value.ts resolveAssetValue (current, then
+// market, then estimated), so the Overview's headline value is the number net
+// worth counts. Purchase price is deliberately NOT here: this is the "worth
+// now" side that appreciation/depreciation compares against it.
+const VALUE_KEYS = ["currentValue", "marketValue", "estimatedValue", "appraisedValue", "assessedValue"];
 const PURCHASE_KEYS = ["purchasePrice", "originalPrice", "costBasis"];
 const BALANCE_KEYS = ["balance", "principal", "payoffAmount", "statementBalance"];
 const ORIGINAL_DEBT_KEYS = ["originalPrincipal", "originalBalance", "loanAmount", "originalAmount"];

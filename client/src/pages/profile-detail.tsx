@@ -10913,7 +10913,7 @@ function LinkAssetDialog({ open, onOpenChange, search, setSearch, candidates, pe
             {candidates.length === 0 ? (
               <p className="text-xs text-muted-foreground text-center py-6">No assets available to link.</p>
             ) : candidates.map((p: any) => {
-              const value = p.currentValue ?? p.fields?.currentValue ?? p.fields?.value ?? p.fields?.marketValue;
+              const value = resolveAssetValue(p) || p.currentValue || null; // canonical — the number net worth uses
               return (
                 <button
                   key={p.id}

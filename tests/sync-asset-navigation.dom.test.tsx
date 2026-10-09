@@ -229,3 +229,65 @@ describe("asset navigation regression — pressing chips never loses assets", ()
     expect(writes).toEqual([]);
   });
 });
+
+// ── Every section, not just Assets ────────────────────────────────────────
+// The same page renders Liabilities, Documents and Trackers with their own
+// chip rows. Each one must obey the same rules: pressing chips writes nothing,
+// a filter is always clearable, and leaving the section drops it.
+describe("every section of the page: chips are presentation only", () => {
+  const LIABS = [
+    { id: "l0000000-0000-4000-8000-000000000001", name: "Chase Sapphire", type: "liability", fields: { subtype: "credit_card", currentBalance: 1200 }, parentProfileId: SELF, linkedProfiles: [SELF], tags: [], notes: "", documents: [], createdAt: "2026-04-01T00:00:00Z" },
+    { id: "l0000000-0000-4000-8000-000000000002", name: "Honda Auto Loan", type: "liability", fields: { subtype: "auto_loan", currentBalance: 9000 }, parentProfileId: SELF, linkedProfiles: [SELF], tags: [], notes: "", documents: [], createdAt: "2026-04-01T00:00:00Z" },
+  ];
+  const DOCS = [
+    { id: "d1", name: "Passport", type: "passport", linkedProfiles: [SELF], extractedData: {}, tags: [], createdAt: "2026-04-01T00:00:00Z" },
+    { id: "d2", name: "Home Depot Receipt", type: "receipt", linkedProfiles: [SELF], extractedData: {}, tags: [], createdAt: "2026-04-01T00:00:00Z" },
+  ];
+  const TRACKERS = [
+    { id: "t1", name: "Weight", category: "health", unit: "lb", fields: [{ name: "value", type: "number", isPrimary: true }], entries: [{ id: "e1", timestamp: "2026-10-08T12:00:00Z", values: { value: 180 } }], linkedProfiles: [SELF] },
+    { id: "t2", name: "Running", category: "fitness", unit: "mi", fields: [{ name: "distance", type: "number", isPrimary: true }], entries: [{ id: "e2", timestamp: "2026-10-08T12:00:00Z", values: { distance: 3 } }], linkedProfiles: [SELF] },
+  ];
+
+  beforeEach(() => {
+    profilesServed = [...profilesFixture(), ...LIABS];
+    vi.mocked(fetch as any).mockImplementation(async (input: any, init?: any) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (method !== "GET") { writes.push({ method, url }); return json({ ok: true }); }
+      const p = url.replace(/^https?:\/\/[^/]+/, "").split("?")[0];
+      if (p === "/api/profiles") return json(profilesServed);
+      if (p === "/api/documents") return json(DOCS);
+      if (p === "/api/trackers") return json(TRACKERS);
+      if (p === "/api/valuations/status") return json({ rows: [] });
+      if (p === "/api/dashboard-enhanced") return json({ financeSnapshot: { assetBreakdown: [], liabilityBreakdown: LIABS.map(l => ({ id: l.id })) } });
+      return json([]);
+    });
+  });
+
+  const SECTIONS = [
+    { tab: "liabilities", row: "category-filter-chips-liabilities", names: ["Chase Sapphire", "Honda Auto Loan"] },
+    { tab: "documents", row: "category-filter-chips-documents", names: ["Passport", "Home Depot Receipt"] },
+    { tab: "trackers", row: "category-filter-chips-trackers", names: ["Weight", "Running"] },
+  ] as const;
+
+  for (const sec of SECTIONS) {
+    it(`${sec.tab}: every chip, then away and back — nothing written, every record still listed`, async () => {
+      const { navigate } = renderAt(`/linked?tab=${sec.tab}`);
+      for (const n of sec.names) await waitFor(() => expect(screen.getAllByText(new RegExp(n)).length).toBeGreaterThan(0));
+      const labels = Array.from(screen.getByTestId(sec.row).querySelectorAll("button")).map(b => b.textContent || "");
+      expect(labels.length).toBeGreaterThan(1);
+      for (const label of labels) {
+        const chip = Array.from(screen.getByTestId(sec.row).querySelectorAll("button")).find(b => b.textContent === label);
+        if (chip) fireEvent.click(chip);
+        // While anything is filtered, the row (and its reset) stays on screen.
+        expect(screen.getByTestId(sec.row)).toBeTruthy();
+      }
+      // Leave the section with a filter possibly on, and come back.
+      navigate("/linked?tab=assets");
+      await waitFor(() => expect(screen.queryByTestId(sec.row)).toBeNull());
+      navigate(`/linked?tab=${sec.tab}`);
+      for (const n of sec.names) await waitFor(() => expect(screen.getAllByText(new RegExp(n)).length).toBeGreaterThan(0));
+      expect(writes).toEqual([]);
+    });
+  }
+});

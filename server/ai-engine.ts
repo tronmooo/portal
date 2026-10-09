@@ -8014,7 +8014,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // prior value in previousValue (same behavior the mirror below had before
       // canonicalization made it a no-op for renamed keys).
       if (changes.fields && !isPersonLike && updateCanon && Object.values(updateCanon.renamed).includes("currentValue") && changes.fields.previousValue === undefined) {
-        const prevVal = profile.fields?.currentValue ?? profile.fields?.purchasePrice;
+        const prevVal = sharedAssetValue(profile) || undefined; // the value every screen showed before this edit
         if (prevVal !== undefined && !looselyEqual(prevVal, changes.fields.currentValue)) changes.fields.previousValue = prevVal;
       }
       // VALUE NORMALIZATION: net worth reads currentValue with the HIGHEST
@@ -8030,7 +8030,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
             if (VALUE_KEYS.includes(k) || VALUE_KEYS.includes(k.toLowerCase())) {
               const num = Number(String((updateFlatFields as any)[k]).replace(/[^0-9.-]/g, ""));
               if (isFinite(num) && num > 0) {
-                changes.fields.previousValue = profile.fields?.currentValue ?? profile.fields?.purchasePrice;
+                changes.fields.previousValue = sharedAssetValue(profile) || undefined;
                 changes.fields.currentValue = num;
                 break;
               }
