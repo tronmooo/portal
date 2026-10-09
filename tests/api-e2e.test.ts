@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 
 const BASE = "https://portol.me/api";
 let TOKEN = "";
@@ -14,7 +15,7 @@ async function api(method: string, path: string, body?: any) {
 
 describe('API E2E Tests', () => {
   beforeAll(async () => {
-    const res = await api("POST", "/auth/signin", { email: "tron@aol.com", password: "password" });
+    const res = await api("POST", "/auth/signin", { email: LIVE_EMAIL, password: LIVE_PASSWORD });
     expect(res.ok).toBe(true);
     TOKEN = res.data?.session?.access_token;
     expect(TOKEN).toBeTruthy();

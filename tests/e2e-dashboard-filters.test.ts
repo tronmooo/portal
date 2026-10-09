@@ -25,6 +25,7 @@
  * down in afterAll, so a failed assertion never leaves orphaned seed data.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 
 const BASE = "https://portol.me/api";
 let TOKEN = "";
@@ -105,7 +106,7 @@ const BOB_DEBT = 10_000;
 
 describe("Part E — dashboard filter scope (live)", () => {
   beforeAll(async () => {
-    const auth = await api("POST", "/auth/signin", { email: "tron@aol.com", password: "password" });
+    const auth = await api("POST", "/auth/signin", { email: LIVE_EMAIL, password: LIVE_PASSWORD });
     expect(auth.ok, `signin failed: ${JSON.stringify(auth.data)}`).toBe(true);
     TOKEN = auth.data?.session?.access_token;
     expect(TOKEN).toBeTruthy();

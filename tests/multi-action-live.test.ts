@@ -15,10 +15,11 @@
 //      MULTIACTION_EMAIL / MULTIACTION_PASSWORD (default smoke account).
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { trackerNamesMatch } from "../shared/tracker-identity";
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 
 const BASE = process.env.MULTIACTION_BASE_URL || process.env.E2E_BASE_URL || "https://portol.me/api";
-const EMAIL = process.env.MULTIACTION_EMAIL || process.env.E2E_EMAIL || "tron@aol.com";
-const PASSWORD = process.env.MULTIACTION_PASSWORD || process.env.E2E_PASSWORD || "password";
+const EMAIL = process.env.MULTIACTION_EMAIL || LIVE_EMAIL;
+const PASSWORD = process.env.MULTIACTION_PASSWORD || LIVE_PASSWORD;
 const RUN = `MA${Date.now().toString(36)}`;
 
 let TOKEN = "";

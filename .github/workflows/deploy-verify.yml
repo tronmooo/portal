@@ -1,0 +1,97 @@
+name: Production serves main
+
+# Why this exists (2026-10-09): Vercel retired Node 20 while the project was
+# pinned to it. From then on EVERY production deployment failed before the
+# build started — and nothing said so. CI was green (it builds on its own
+# runner), the site kept serving the last good build, and two weeks of pushes
+# never reached users until someone looked by hand.
+#
+# This job closes that gap from the outside: after every push to main, and
+# once a day, it asks the live site which commit it is serving
+# (GET /api/version → { sha }) and fails unless that is the commit on main —
+# or a newer one, when pushes race. A failure opens (or updates) one GitHub
+# issue so it lands in the owner's notifications; the next success closes it.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 14 * * *" # daily — catches a platform change with no push
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: deploy-verify
+  cancel-in-progress: true
+
+env:
+  SITE: https://portol.me
+  ISSUE_TITLE: "Production is not serving main"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 200
+
+      - name: Wait for the live site to serve this commit
+        id: wait
+        run: |
+          want="$(git rev-parse HEAD)"
+          echo "Expecting $SITE to serve $want (or a descendant)"
+          # A Vercel build takes ~2-5 min; give it 20.
+          for i in $(seq 1 40); do
+            served="$(curl -sS --max-time 20 "$SITE/api/version" | sed -n 's/.*"sha":"\([0-9a-f]\{7,40\}\)".*/\1/p' || true)"
+            echo "poll $i: serving ${served:-<no answer>}"
+            if [ -n "$served" ]; then
+              if [ "$served" = "$want" ]; then echo "Live on main."; exit 0; fi
+              # A newer push already deployed: that commit contains ours.
+              if git cat-file -e "$served^{commit}" 2>/dev/null && git merge-base --is-ancestor "$want" "$served"; then
+                echo "Live on a newer commit that includes main."; exit 0
+              fi
+            fi
+            sleep 30
+          done
+          echo "served=${served:-none}" >> "$GITHUB_OUTPUT"
+          echo "::error::$SITE is serving ${served:-nothing} — not $want. The production deployment of main failed or never started. Check the Vercel deployment for this commit (GitHub → commit → Vercel status)."
+          exit 1
+
+      - name: Open or update the alert issue
+        if: failure()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const title = process.env.ISSUE_TITLE;
+            const sha = context.sha.slice(0, 7);
+            const body = [
+              `The deploy watchdog found **${process.env.SITE}** is not serving main (\`${sha}\`).`,
+              ``,
+              `Served: \`${'${{ steps.wait.outputs.served }}' || 'no answer'}\``,
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ``,
+              `Likely causes: a failed Vercel build (see the Vercel status on the commit — e.g. a discontinued Node version), a disconnected Git integration, or the site being down.`,
+            ].join("\n");
+            const { data: open } = await github.rest.issues.listForRepo({ ...context.repo, state: "open", per_page: 100 });
+            const existing = open.find((i) => i.title === title && !i.pull_request);
+            if (existing) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title, body });
+            }
+
+      - name: Close the alert issue once healthy
+        if: success()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const title = process.env.ISSUE_TITLE;
+            const { data: open } = await github.rest.issues.listForRepo({ ...context.repo, state: "open", per_page: 100 });
+            for (const i of open.filter((x) => x.title === title && !x.pull_request)) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: i.number, body: `Resolved: production is serving main (\`${context.sha.slice(0, 7)}\`).` });
+              await github.rest.issues.update({ ...context.repo, issue_number: i.number, state: "closed", state_reason: "completed" });
+            }

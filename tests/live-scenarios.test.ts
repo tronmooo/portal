@@ -14,9 +14,16 @@
 //   npx vitest run --config vitest.live.config.ts
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
-const BASE = process.env.E2E_BASE_URL || "https://portol.me/api";
-const EMAIL = process.env.E2E_EMAIL || "tron@aol.com";
-const PASSWORD = process.env.E2E_PASSWORD || "password";
+import { SMOKE_EMAIL, SMOKE_PASSWORD, API_BASE } from "./smoke/fixture/account";
+import { budgetCategoryKey } from "../shared/budget-ledger";
+
+// The DEDICATED smoke account — the one the contract suite already mutates and
+// resets — never a person's account. This used to default to a real login
+// (with its password in this public repository), so every run created and
+// deleted Bob/Jane/Mike inside someone's own data.
+const BASE = process.env.E2E_BASE_URL || API_BASE;
+const EMAIL = process.env.E2E_EMAIL || SMOKE_EMAIL;
+const PASSWORD = process.env.E2E_PASSWORD || SMOKE_PASSWORD;
 const RUN = `E2E${Date.now().toString(36)}`;
 
 let TOKEN = "";
@@ -44,6 +51,33 @@ async function api(method: string, path: string, body?: any, label?: string) {
 
 const byName = (arr: any[], name: string) =>
   (arr || []).find((p: any) => p?.name === name);
+
+// The REAL response shapes (2026-10-09). This suite was written against
+// guesses — `data.assetBreakdown`, a bare budgets array, children on
+// GET /profiles/:id — and had been red on every run since June, so its
+// failures were ignored; worse, the "car gone from breakdown" check read an
+// always-empty array and passed no matter what. Read through these helpers so
+// a shape change fails loudly in ONE place instead of passing vacuously.
+const assetRows = (enhanced: any): any[] => {
+  const rows = enhanced?.financeSnapshot?.assetBreakdown;
+  if (!Array.isArray(rows)) throw new Error(`dashboard-enhanced has no financeSnapshot.assetBreakdown (keys: ${Object.keys(enhanced?.financeSnapshot || {}).join(",")})`);
+  return rows;
+};
+const liabilityRows = (enhanced: any): any[] => {
+  const rows = enhanced?.financeSnapshot?.liabilityBreakdown;
+  if (!Array.isArray(rows)) throw new Error(`dashboard-enhanced has no financeSnapshot.liabilityBreakdown (keys: ${Object.keys(enhanced?.financeSnapshot || {}).join(",")})`);
+  return rows;
+};
+const budgetRows = (payload: any): any[] => {
+  const rows = Array.isArray(payload) ? payload : payload?.budgets;
+  if (!Array.isArray(rows)) throw new Error(`budgets payload has no rows (keys: ${Object.keys(payload || {}).join(",")})`);
+  return rows;
+};
+const childIdsOf = (detail: any): string[] => {
+  const kids = detail?.childProfiles;
+  if (!Array.isArray(kids)) throw new Error(`profile detail has no childProfiles (keys: ${Object.keys(detail || {}).join(",")})`);
+  return kids.map((c: any) => c.id);
+};
 
 describe("live scenarios: Bob / Jane / Mike", () => {
   let bob: any, jane: any, mike: any;
@@ -106,7 +140,7 @@ describe("live scenarios: Bob / Jane / Mike", () => {
     });
     expect(r.ok).toBe(true); house = r.data; createdProfileIds.push(house.id);
     const jview = await api("GET", `/dashboard-enhanced?profileIds=${jane.id}`, undefined, "enhanced(jane) after house");
-    const janeHasHouse = (jview.data?.assetBreakdown || []).some((a: any) => a.id === house.id);
+    const janeHasHouse = assetRows(jview.data).some((a: any) => a.id === house.id);
     expect(janeHasHouse, "house in Jane's breakdown immediately").toBe(true);
     const bobAfter = await api("GET", `/dashboard-enhanced?profileIds=${bob.id}`);
     expect(
@@ -175,8 +209,13 @@ describe("live scenarios: Bob / Jane / Mike", () => {
     const r = await api("POST", "/budgets", { month, category: `groceries-${RUN}`, amount: 300, profileId: mike.id });
     expect(r.ok, JSON.stringify(r.data)).toBe(true);
     const budgets = await api("GET", `/budgets?month=${month}`, undefined, "budgets after create");
-    const mine = (budgets.data || []).find((b: any) => b.category === `groceries-${RUN}`);
+    // The category is folded into the expense canon on purpose — one cap per
+    // (category, owner) bucket, so the cap meets the spend
+    // (shared/budget-ledger.ts) — so find the row by the id the write returned.
+    const mine = budgetRows(budgets.data).find((b: any) => b.id === r.data?.id);
     expect(mine, "budget row visible immediately").toBeTruthy();
+    expect(mine.category, "category folded to the expense canon").toBe(budgetCategoryKey(`groceries-${RUN}`));
+    expect(mine.profileId, "owned by Mike").toBe(mike.id);
     expect(Number(mine.amount)).toBe(300);
   }, 60_000);
 
@@ -211,7 +250,7 @@ describe("live scenarios: Bob / Jane / Mike", () => {
     const profiles = await api("GET", "/profiles", undefined, "profiles after car delete");
     expect(byName(profiles.data, `Car ${RUN}`), "car gone from profile list immediately").toBeFalsy();
     const after = await api("GET", `/dashboard-enhanced?profileIds=${bob.id}`, undefined, "enhanced(bob) after car delete");
-    expect((after.data?.assetBreakdown || []).some((a: any) => a.id === car.id), "car gone from breakdown").toBe(false);
+    expect(assetRows(after.data).some((a: any) => a.id === car.id), "car gone from breakdown").toBe(false);
     expect(
       Number(before.data?.financeSnapshot?.totalAssetValue) - Number(after.data?.financeSnapshot?.totalAssetValue),
       "Bob's totals dropped by exactly the car's $20k — no stale cache",
@@ -230,8 +269,8 @@ describe("live scenarios: Bob / Jane / Mike", () => {
     expect(r.ok, JSON.stringify(r.data)).toBe(true);
     const jview = await api("GET", `/dashboard-enhanced?profileIds=${jane.id}`, undefined, "enhanced(jane) 50/50");
     const bview = await api("GET", `/dashboard-enhanced?profileIds=${bob.id}`, undefined, "enhanced(bob) 50/50");
-    const janeHouse = (jview.data?.assetBreakdown || []).find((a: any) => a.id === house.id);
-    const bobHouse = (bview.data?.assetBreakdown || []).find((a: any) => a.id === house.id);
+    const janeHouse = assetRows(jview.data).find((a: any) => a.id === house.id);
+    const bobHouse = assetRows(bview.data).find((a: any) => a.id === house.id);
     expect(janeHouse, "house in Jane's breakdown").toBeTruthy();
     expect(bobHouse, "house in Bob's breakdown after co-ownership").toBeTruthy();
     const shareOf = (row: any) => Number(row.value ?? row.shareValue ?? row.share ?? row.netValue ?? row.amount ?? NaN);
@@ -254,9 +293,9 @@ describe("live scenarios: Bob / Jane / Mike", () => {
     }, "link loan to mike");
     expect(add.ok, JSON.stringify(add.data)).toBe(true);
     const mview = await api("GET", `/dashboard-enhanced?profileIds=${mike.id}`, undefined, "enhanced(mike) after move");
-    expect((mview.data?.liabilityBreakdown || []).some((l: any) => l.id === loan.id), "loan now under Mike").toBe(true);
+    expect(liabilityRows(mview.data).some((l: any) => l.id === loan.id), "loan now under Mike").toBe(true);
     const bview = await api("GET", `/dashboard-enhanced?profileIds=${bob.id}`, undefined, "enhanced(bob) after move");
-    expect((bview.data?.liabilityBreakdown || []).some((l: any) => l.id === loan.id), "loan no longer under Bob").toBe(false);
+    expect(liabilityRows(bview.data).some((l: any) => l.id === loan.id), "loan no longer under Bob").toBe(false);
   }, 60_000);
 
   // ── 14. Nested assets ────────────────────────────────────────────────
@@ -269,15 +308,13 @@ describe("live scenarios: Bob / Jane / Mike", () => {
       name: `Mouse ${RUN}`, type: "asset", fields: { currentValue: 80 }, parentProfileId: pc.id, tags: [], notes: "", skipDupCheck: true,
     });
     expect(rMouse.ok).toBe(true); mouse = rMouse.data; createdProfileIds.push(mouse.id);
-    const detail = await api("GET", `/profiles/${house.id}`, undefined, "house detail (nested)");
-    const kids = detail.data?.childProfiles || detail.data?.children || detail.data?.profile?.childProfiles || [];
-    if (!kids.length) console.log("[shape] house detail keys:", Object.keys(detail.data || {}).join(","));
-    const childIds = kids.map((c: any) => c.id);
-    expect(childIds, "PC nested under house").toContain(pc.id);
-    const pcDetail = await api("GET", `/profiles/${pc.id}`, undefined, "pc detail (nested)");
-    const pcKids = pcDetail.data?.childProfiles || pcDetail.data?.children || pcDetail.data?.profile?.childProfiles || [];
-    const pcChildIds = pcKids.map((c: any) => c.id);
-    expect(pcChildIds, "mouse nested under PC").toContain(mouse.id);
+    const detail = await api("GET", `/profiles/${house.id}/detail`, undefined, "house detail (nested)");
+    expect(childIdsOf(detail.data), "PC nested under house").toContain(pc.id);
+    const pcDetail = await api("GET", `/profiles/${pc.id}/detail`, undefined, "pc detail (nested)");
+    expect(childIdsOf(pcDetail.data), "mouse nested under PC").toContain(mouse.id);
+    // ...and the rollup the title promises: Jane's total counts the house and everything inside it.
+    const jview = await api("GET", `/dashboard-enhanced?profileIds=${jane.id}`, undefined, "enhanced(jane) nested");
+    expect(assetRows(jview.data).some((a: any) => a.id === pc.id || a.id === house.id), "nested assets reach Jane's breakdown").toBe(true);
   }, 60_000);
 
   // ── 15. AI chat ──────────────────────────────────────────────────────

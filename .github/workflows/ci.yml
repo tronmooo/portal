@@ -5,17 +5,23 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Weekly, with no push: a new security advisory, a retired runtime or a
+  # dependency that broke under us shows up here instead of ambushing the next
+  # person who pushes (2026-10-09: Node 20 was retired and nobody knew).
+  schedule:
+    - cron: "41 13 * * 1"
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
       
       - name: Install dependencies

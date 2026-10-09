@@ -1,3 +1,5 @@
+
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 /**
  * AI Chat Parallel Test — runs independent tests concurrently
  * Groups sequential tests (create→update→delete) but runs groups in parallel
@@ -12,7 +14,7 @@ async function login(): Promise<string> {
   const res = await fetch(`${API_BASE}/auth/signin`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: "tron@aol.com", password: "password" }),
+    body: JSON.stringify({ email: LIVE_EMAIL, password: LIVE_PASSWORD }),
   });
   const data = await res.json();
   return data.session.access_token;

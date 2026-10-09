@@ -1,0 +1,19 @@
+# Keep dependencies moving in small, reviewable steps so security fixes never
+# pile up into one risky jump (2026-10-09: 18 advisories, 10 high, had
+# accumulated unseen until a push was blocked by the audit gate).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for all patch/minor bumps; majors arrive one at a time.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

@@ -1,11 +1,13 @@
+
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 /**
  * AI Chat Quick Test — runs tests sequentially with timeout handling
  * Tests against live portol.me
  */
 
 const API_BASE = "https://portol.me/api";
-const TEST_EMAIL = "tron@aol.com";
-const TEST_PASSWORD = "password";
+const TEST_EMAIL = LIVE_EMAIL;
+const TEST_PASSWORD = LIVE_PASSWORD;
 
 let authToken = "";
 const results: { cat: string; test: string; pass: boolean; detail: string }[] = [];

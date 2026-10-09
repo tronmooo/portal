@@ -1,3 +1,5 @@
+
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 /**
  * Comprehensive AI Chat Feature Test Suite
  * Tests every tool/feature in the Portol AI chat engine
@@ -6,8 +8,8 @@
  */
 
 const API_BASE = "https://portol.me/api";
-const TEST_EMAIL = "tron@aol.com";
-const TEST_PASSWORD = "password";
+const TEST_EMAIL = LIVE_EMAIL;
+const TEST_PASSWORD = LIVE_PASSWORD;
 
 interface TestResult {
   category: string;

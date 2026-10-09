@@ -1,3 +1,5 @@
+
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 /**
  * Playwright E2E Tests for Portol Frontend
  * Tests actual UI interactions via js_repl
@@ -16,8 +18,8 @@ const browser = await chromium.launch();
 const page = await browser.newPage();
 await page.goto('https://portol.me');
 await page.waitForSelector('[data-testid="input-email"]', { timeout: 10000 });
-await page.fill('[data-testid="input-email"]', 'tron@aol.com');
-await page.fill('[data-testid="input-password"]', 'password');
+await page.fill('[data-testid="input-email"]', LIVE_EMAIL);
+await page.fill('[data-testid="input-password"]', LIVE_PASSWORD);
 await page.click('[data-testid="button-sign-in"]');
 await page.waitForSelector('[data-testid="page-dashboard"]', { timeout: 15000 });
 console.log('✅ Login successful');

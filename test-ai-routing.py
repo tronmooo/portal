@@ -42,11 +42,11 @@ def supabase_get(path):
 
 def get_token_google():
     """Get a token for the Google OAuth user by using service role to generate one"""
-    # We'll use the tron@aol.com account for API testing since we can get tokens for it
+    # We'll use the the live test account account for API testing since we can get tokens for it
     r = subprocess.run(
         ["curl", "-s", "-X", "POST", f"{SB_URL}/auth/v1/token?grant_type=password",
          "-H", f"apikey: {API_KEY}", "-H", "Content-Type: application/json",
-         "-d", '{"email":"tron@aol.com","password":"password"}'],
+         "-d", json.dumps({"email": os.environ.get("LIVE_EMAIL", "portol-smoke@aol.com"), "password": os.environ.get("LIVE_PASSWORD", "Smoke-Test-2026!")})],
         capture_output=True, text=True, timeout=10)
     return json.loads(r.stdout)["access_token"]
 
@@ -93,10 +93,10 @@ def delete_task(task_id):
          "-H", f"apikey: {SRK}", "-H", f"Authorization: Bearer {SRK}"],
         capture_output=True, text=True, timeout=10)
 
-# Use tron@aol.com for testing (we can authenticate with it)
+# Use the live test account for testing (we can authenticate with it)
 # The same code path runs for both accounts
 token = get_token_google()
-# Get tron@aol.com's user ID and profile info
+# Get the live test account's user ID and profile info
 TRON_USER_RESP = supabase_get("profiles?name=eq.Me&select=id,user_id")
 if TRON_USER_RESP:
     TRON_USER_ID = TRON_USER_RESP[0]["user_id"]
@@ -105,15 +105,15 @@ else:
     print("ERROR: Can't find Me profile")
     sys.exit(1)
 
-# Get tron@aol.com's Rex profile
+# Get the live test account's Rex profile
 REX_TRON = supabase_get(f"profiles?user_id=eq.{TRON_USER_ID}&name=eq.Rex&select=id")
 REX_TRON_ID = REX_TRON[0]["id"] if REX_TRON else None
 
-# Get tron@aol.com's trackers
+# Get the live test account's trackers
 TRON_TRACKERS = supabase_get(f"trackers?user_id=eq.{TRON_USER_ID}&select=id,name,linked_profiles")
 tron_tracker_map = {t["name"]: t for t in TRON_TRACKERS}
 
-# Get tron@aol.com's Running tracker for Me
+# Get the live test account's Running tracker for Me
 me_running = next((t for t in TRON_TRACKERS if t["name"] == "Running" and ME_ID in (t.get("linked_profiles") or [])), None)
 # Also check junction
 if not me_running:
@@ -126,7 +126,7 @@ if not me_running:
 
 rex_running = next((t for t in TRON_TRACKERS if "Rex" in t["name"] and "running" in t["name"].lower()), None)
 
-print(f"Testing with tron@aol.com user")
+print(f"Testing with the live test account user")
 print(f"Me profile: {ME_ID[:8]}")
 print(f"Rex profile: {REX_TRON_ID[:8] if REX_TRON_ID else 'NONE'}")
 print(f"Me Running tracker: {me_running['id'][:8] if me_running else 'NONE'}")

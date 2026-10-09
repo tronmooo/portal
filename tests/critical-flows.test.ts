@@ -1,3 +1,5 @@
+
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 /**
  * Critical Flow Tests for Portol
  * 
@@ -14,8 +16,8 @@ const SB_URL = "https://uvaniovwrezzzlzmizyg.supabase.co";
 // environment to override the checked-in default.
 const SB_KEY = process.env.SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV2YW5pb3Z3cmV6enpsem1penlnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQwNDA5MjgsImV4cCI6MjA4OTYxNjkyOH0.0tn5gFfpWN-k5jRUiFehB1cD0BO-DAWP7LQO_IGI1AQ";
 
-const TEST_EMAIL = "tron@aol.com";
-const TEST_PASSWORD = "password";
+const TEST_EMAIL = LIVE_EMAIL;
+const TEST_PASSWORD = LIVE_PASSWORD;
 
 let authToken = "";
 let testProfileId = "";

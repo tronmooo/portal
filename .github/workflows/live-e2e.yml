@@ -1,14 +1,21 @@
 name: Live E2E (deployed app)
 
-# On-demand end-to-end scenario suite against the DEPLOYED app (portol.me)
-# using the repo's smoke account. Creates real Bob/Jane/Mike test data,
-# exercises every CRUD flow + ownership + AI chat, asserts instant
-# read-your-writes and latency budgets, and cleans up after itself.
-# Trigger manually (workflow_dispatch) — typically right after a deploy.
+# End-to-end scenario suite against the DEPLOYED app (portol.me) using the
+# dedicated smoke account (tests/smoke/fixture/account.ts). Creates Bob/Jane/
+# Mike test data, exercises every CRUD flow + ownership + AI chat, asserts
+# instant read-your-writes and latency budgets, and cleans up after itself.
+#
+# Runs automatically once the production watchdog confirms a new deploy is
+# live ("Production serves main"), so a flow broken in production is caught
+# within minutes of the deploy rather than whenever someone remembers.
+# (Until 2026-10-09 it was manual-only and had been red on every run because
+# it read response shapes that no longer existed — an alarm nobody trusted.)
 on:
   workflow_dispatch:
-  # The MCP integration can't dispatch workflows (403), so also run when the
-  # suite itself changes — pushing a suite update both ships and executes it.
+  workflow_run:
+    workflows: ["Production serves main"]
+    types: [completed]
+    branches: [main]
   push:
     branches: [main]
     paths:
@@ -16,15 +23,21 @@ on:
       - "vitest.live.config.ts"
       - ".github/workflows/live-e2e.yml"
 
+concurrency:
+  group: live-e2e
+  cancel-in-progress: false
+
 jobs:
   live-e2e:
+    # After a watchdog run, only when it confirmed the deploy is live.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version-file: '.nvmrc'
           cache: 'npm'
       - run: npm ci
       - name: Run live scenario suite against portol.me

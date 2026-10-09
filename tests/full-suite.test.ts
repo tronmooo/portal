@@ -1,3 +1,5 @@
+
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 /**
  * FULL E2E TEST SUITE — Portol
  * Tests every API route, every CRUD operation, every edge case
@@ -52,7 +54,7 @@ function isArr(v: any, msg: string) { if (!Array.isArray(v)) throw new Error(msg
 async function auth() {
   const { createClient } = await import("@supabase/supabase-js");
   const sb = createClient(SB_URL, SB_ANON);
-  const { data, error } = await sb.auth.signInWithPassword({ email: "tron@aol.com", password: "password" });
+  const { data, error } = await sb.auth.signInWithPassword({ email: LIVE_EMAIL, password: LIVE_PASSWORD });
   if (error || !data.session) throw new Error(`Auth: ${error?.message}`);
   TOKEN = data.session.access_token;
 }

@@ -4,6 +4,7 @@
  */
 
 import * as fs from "fs";
+import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 
 const API = "https://portol.me/api";
 let token = "";
@@ -11,7 +12,7 @@ let token = "";
 async function login() {
   const r = await fetch(`${API}/auth/signin`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: "tron@aol.com", password: "password" }),
+    body: JSON.stringify({ email: LIVE_EMAIL, password: LIVE_PASSWORD }),
   });
   const d = await r.json();
   token = d.session.access_token;
