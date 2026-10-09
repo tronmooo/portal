@@ -19,6 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { ValuationHistoryEntry, ValuationSnapshot, ValuationStatusRow } from "@shared/valuation/types";
 import { perfMark, perfMeasure } from "@/lib/perf-marks";
+import { syncLog } from "@shared/sync-log";
 
 export function valuationQueryKey(profileId: string) {
   return ["/api/profiles", profileId, "valuation"] as const;
@@ -40,6 +41,25 @@ const lastAttemptAt = new Map<string, number>();
 export function __resetValuationRefreshState(): void {
   inFlight.clear();
   lastAttemptAt.clear();
+}
+
+function snapshotStamp(s: ValuationSnapshot | null | undefined): number {
+  const r: any = s?.record;
+  const raw = r?.valuedAt || r?.checkedAt;
+  const t = raw ? Date.parse(String(raw)) : NaN;
+  return Number.isFinite(t) ? t : NaN;
+}
+
+/**
+ * May `incoming` replace `cached`? Yes unless both are stamped and the
+ * incoming estimate was made strictly earlier. Exported for the regression
+ * test (tests/sync-rules-valuation.test.ts).
+ */
+export function isSnapshotNewerOrEqual(incoming: ValuationSnapshot | null | undefined, cached: ValuationSnapshot | null | undefined): boolean {
+  const a = snapshotStamp(incoming);
+  const b = snapshotStamp(cached);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return true;
+  return a >= b;
 }
 
 async function fetchSnapshot(profileId: string): Promise<ValuationSnapshot> {
@@ -83,6 +103,14 @@ export function refreshAssetValuation(profileId: string, opts: { force?: boolean
       }
     }
     if (snapshot) {
+      // Rule 7: a slower, older run (the sweep's, another tab's, a polled
+      // snapshot) must not put an older estimate back over a newer one.
+      const cached = queryClient.getQueryData<ValuationSnapshot>(valuationQueryKey(profileId));
+      if (!isSnapshotNewerOrEqual(snapshot, cached)) {
+        syncLog("stale-reject", "older valuation snapshot ignored", { valuedAt: snapshot.record?.valuedAt, cachedAt: cached?.record?.valuedAt });
+        return cached ?? snapshot;
+      }
+      syncLog("valuation", "valuation landed", { value: snapshot.record?.value ?? null, valuedAt: snapshot.record?.valuedAt ?? null });
       queryClient.setQueryData(valuationQueryKey(profileId), snapshot);
       queryClient.invalidateQueries({ queryKey: valuationHistoryQueryKey(profileId) });
       perfMark(`valuation:cache-updated:${profileId}`);

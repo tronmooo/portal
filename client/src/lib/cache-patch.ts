@@ -13,6 +13,7 @@ import type { ChatMutation } from "@shared/schema";
 import { passesProfileFilter } from "@shared/profile-filter";
 import type { Domain } from "@shared/entity-domains";
 import { queryClient } from "./queryClient";
+import { syncLog } from "@shared/sync-log";
 
 /** Domains the bus knows how to expand. Anything else falls back to "everything". */
 function toDomains(raw: unknown): Domain[] {
@@ -98,6 +99,24 @@ function rowBelongsInScope(row: Record<string, any>, selectedIds: string[]): boo
   });
 }
 
+function rowStamp(row: Record<string, any> | null | undefined): number {
+  const raw = row?.updatedAt ?? row?.updated_at;
+  if (raw == null || raw === "") return NaN;
+  const t = typeof raw === "number" ? raw : Date.parse(String(raw));
+  return Number.isFinite(t) ? t : NaN;
+}
+
+/**
+ * Is `incoming` a strictly older version of `cached`? Only when BOTH carry an
+ * update stamp — a row without one (most create responses, legacy routes)
+ * is never second-guessed.
+ */
+export function isOlderRow(incoming: Record<string, any> | null | undefined, cached: Record<string, any> | null | undefined): boolean {
+  const a = rowStamp(incoming);
+  const b = rowStamp(cached);
+  return Number.isFinite(a) && Number.isFinite(b) && a < b;
+}
+
 /** Apply one mutation to one cached list. Returns the new list, or the old one. */
 function patchList(
   list: Array<Record<string, any>>,
@@ -114,6 +133,14 @@ function patchList(
   if (!row) return list;
   const existing = list.findIndex((r) => r?.id === id);
   if (existing >= 0) {
+    // Rule 7: an older copy of a row never overwrites a newer one. Two writes
+    // (or a write and a refetch) can settle out of order — a background
+    // revaluation finishing after the user's own edit, say — and merging the
+    // late, older row put the previous value back on screen.
+    if (isOlderRow(row, list[existing])) {
+      syncLog("stale-reject", "older row patch ignored", { endpoint: mutation.endpoint });
+      return list;
+    }
     // Update (or a create whose refetch already landed): merge over the cached
     // row so fields the tool didn't return survive.
     const next = list.slice();

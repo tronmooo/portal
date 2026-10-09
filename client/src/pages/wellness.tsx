@@ -74,7 +74,7 @@ export default function WellnessPage() {
   });
   const { data: documents = [] } = useQuery<Doc[]>({
     queryKey: ["/api/documents", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", withFullLimit(`/api/documents${profileParam}`)).then((r) => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", withFullLimit(`/api/documents${profileParam}`)).then((r) => r.json()),
   });
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],

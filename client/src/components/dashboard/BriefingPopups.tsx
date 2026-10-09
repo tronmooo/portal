@@ -13,7 +13,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { invalidateDomain } from "@/lib/cache-bus";
 import { addMonthsClamped, addYearsClamped, toISODate } from "@shared/date-math";
 import { useToast } from "@/hooks/use-toast";
-import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
+import { useDocSnoozeMap } from "@/lib/docSnooze";
 import { groupDocumentDates, countDocumentDateRecords, ruleIdsOf } from "@shared/document-dates";
 import { Button } from "@/components/ui/button";
 import {
@@ -613,7 +613,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
   const owners = useOwnerNames();
   const { data: allDocsRaw } = useQuery<any[]>({ queryKey: ["/api/documents"], staleTime: 60_000, enabled: open });
   const docById = useMemo(() => new Map((Array.isArray(allDocsRaw) ? allDocsRaw : []).map((d: any) => [d.id, d])), [allDocsRaw]);
-  const [snoozeMap, setSnoozeMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
+  const [snoozeMap, saveSnooze] = useDocSnoozeMap();
   const [renewId, setRenewId] = useState<string | null>(null);
   const [renewDate, setRenewDate] = useState("");
 
@@ -679,7 +679,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
     const until = Date.now() + 30 * 86400000;
     const next = { ...snoozeMap };
     for (const id of ids) next[id] = until;
-    setSnoozeMap(next); saveDocSnoozeMap(next);
+    saveSnooze(next);
     toast({ title: label, description: "Hidden from document alerts for 30 days." });
   };
 

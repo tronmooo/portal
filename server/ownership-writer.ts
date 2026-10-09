@@ -10,6 +10,7 @@
  * Stage 1 of docs/ownership_consolidation_plan.md.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { syncLog } from "@shared/sync-log";
 import {
   OWNERSHIP_TABLES,
   normalizeOwners,
@@ -173,6 +174,16 @@ export async function setOwners(
   const beforeSet = new Set(before);
   const afterSet = new Set(after);
   const jsonbChanged = before.length !== after.length || after.some(id => !beforeSet.has(id)) || before.some(id => !afterSet.has(id));
+
+  // Rule 8 instrumentation (dev/test only — shared/sync-log is silent in
+  // production): every owner-set change is visible, with counts, so a record
+  // that "disappeared from a profile" can be traced to the write that moved it.
+  if (jsonbChanged) {
+    syncLog("ownership", "owner set changed", {
+      entityType, removed: before.filter(id => !afterSet.has(id)).length,
+      added: after.filter(id => !beforeSet.has(id)).length, defaultedToSelf,
+    });
+  }
 
   // Write JSONB if it changed. Skipping a no-op write saves a roundtrip on
   //   the hot path (most setOwners calls leave the JSONB column alone).

@@ -22,6 +22,7 @@
 
 import { queryClient } from "./queryClient";
 import type { Domain } from "@shared/entity-domains";
+import { syncLog } from "@shared/sync-log";
 
 // ─── Domains ────────────────────────────────────────────────────────
 // A "domain" is a logical category of data. Mutations declare what
@@ -283,6 +284,59 @@ const DOMAIN_KEYS: Record<Domain, string[][]> = {
   everything: [],
 };
 
+// ─── Derived endpoints: declared once, inverted into every domain ────
+// Rule 2 (mutations propagate everywhere) / Rule 6 (derived values stay
+// consistent). A derived payload — the notification feed, the calendar, the
+// date rules, the dashboard aggregates — is computed on the server FROM other
+// records. Listing it under each source domain by hand is how it went missing:
+// the bell derives "expired" from profiles and documents, habit-streak alerts
+// from habits, recurring-date reminders from events — but only tasks,
+// profiles, documents and obligations ever refreshed it, so revaluing an asset,
+// checking in a habit or completing a recurring date left the bell stale.
+//
+// Each derived endpoint now names the domains its server computation READS,
+// and the bus adds it to every one of those domains' expansions. Adding a new
+// source to a derived payload is one line here, and
+// tests/sync-rules-invalidation.test.ts holds this table to what the server
+// actually reads (server/notification-service.ts etc.).
+const DATA_DOMAINS: Domain[] = [
+  "tasks", "habits", "trackers", "profiles", "assets", "liabilities", "people", "documents",
+  "expenses", "incomes", "obligations", "budgets", "goals", "events", "journal",
+];
+export const DERIVED_ENDPOINT_DEPENDENCIES: Readonly<Record<string, readonly Domain[]>> = {
+  // server/notification-service.ts buildNotifications: documents + profiles
+  // (date rules), tasks, obligations, habits, events (recurring dates), custom
+  // rows, dismissals/mutes (preferences).
+  "/api/notifications": ["documents", "profiles", "assets", "liabilities", "people", "tasks", "obligations", "habits", "events", "notifications", "preferences"],
+  // shared/date-rules rulesFromAll + rulesFromSeries.
+  "/api/date-rules": ["documents", "profiles", "assets", "liabilities", "people", "tasks", "obligations", "incomes", "events"],
+  "/api/calendar/timeline": ["documents", "profiles", "assets", "liabilities", "people", "tasks", "obligations", "incomes", "events", "habits"],
+  // Account-wide aggregates (server cache prefixes declared "all").
+  "/api/dashboard-enhanced": DATA_DOMAINS,
+  "/api/stats": DATA_DOMAINS,
+  "/api/dashboard-bootstrap": DATA_DOMAINS,
+  "/api/insights": DATA_DOMAINS,
+  "/api/ai-digest": DATA_DOMAINS,
+  // Net worth moves with every asset value, liability balance and owner share.
+  "/api/net-worth/history": ["assets", "liabilities", "profiles", "people"],
+  "/api/cashflow": ["expenses", "incomes", "obligations", "liabilities", "assets"],
+};
+
+/** Every top-level key a domain must invalidate: its own list + derived endpoints that read it. */
+export function domainKeys(domain: Domain): string[][] {
+  const own = DOMAIN_KEYS[domain] || [];
+  const seen = new Set(own.map((k) => JSON.stringify(k)));
+  const out = [...own];
+  for (const [endpoint, deps] of Object.entries(DERIVED_ENDPOINT_DEPENDENCIES)) {
+    if (!deps.includes(domain)) continue;
+    const tag = JSON.stringify([endpoint]);
+    if (seen.has(tag)) continue;
+    seen.add(tag);
+    out.push([endpoint]);
+  }
+  return out;
+}
+
 // ─── Nested key predicates ──────────────────────────────────────────
 // Some queries use composite keys like ["/api/profiles", id, "detail"]
 // or ["/api/assets", profileId, "liabilities"]. Top-level invalidation
@@ -467,6 +521,7 @@ function notifyBustListeners(domains: Domain[]): void {
 
 function invalidateDomainsInternal(domains: Domain[], remote: boolean): Promise<void> {
   if (domains.length > 0) notifyBustListeners(domains);
+  if (domains.length > 0) syncLog("invalidate", remote ? "replayed from another tab" : "domains invalidated", { domains });
   // Collect every top-level key prefix and nested predicate the domains name,
   // then invalidate ONCE with a single combined predicate. Issuing one
   // invalidateQueries per key and another per predicate made React Query
@@ -479,7 +534,7 @@ function invalidateDomainsInternal(domains: Domain[], remote: boolean): Promise<
   const seen = new Set<string>();
   const predicates: Array<(q: any) => boolean> = [];
   for (const d of domains) {
-    for (const key of DOMAIN_KEYS[d] || []) {
+    for (const key of domainKeys(d)) {
       const tag = JSON.stringify(key);
       if (seen.has(tag)) continue;
       seen.add(tag);

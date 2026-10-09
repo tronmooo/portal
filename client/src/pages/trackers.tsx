@@ -17,6 +17,8 @@ import { warmProfileDetail } from "@/lib/scope-prefetch";
 import { StuckLoadingGuard } from "@/components/StuckLoadingGuard";
 import { stopProp, stopPropAndDefault } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { useSectionFilter, activeViewFilters, showFilterControls, emptyReason } from "@/lib/view-filters";
+import { ActiveFilterNotice, FilteredEmptyState } from "@/components/ActiveFilterNotice";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAssetsValuationSweep } from "@/hooks/useAssetValuation";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -6252,22 +6254,36 @@ export default function TrackersPage() {
   const setSectionFilter = (val: "all" | "profiles" | "liabilities" | "documents" | "trackers") => {
     setSectionFilterRaw(val);
   };
+  // Section sub-filters (rules 3/4, client/src/lib/view-filters.ts): plain
+  // component state, reset whenever the section changes, never persisted.
+  //
+  // The nesting filter used to live in sessionStorage. One tap on "Has
+  // children" then followed the user to every later visit of the Assets tab
+  // and — because the chip row hid itself once a single type was left — with
+  // nothing on screen saying four assets were filtered out (user report
+  // 2026-10-09: "I pressed on bubbles and now all my assets are missing").
+  // Drop any value an older build left behind so a stuck tab un-sticks.
+  useEffect(() => { try { sessionStorage.removeItem("portol_asset_nesting_filter"); } catch { /* storage blocked */ } }, []);
   // Document type filter
-  const [docTypeFilter, setDocTypeFilter] = useState<string>("all");
+  const [docTypeFilter, setDocTypeFilter] = useSectionFilter<string>(sectionFilter, "docType", "all");
   // Tracker category filter
-  const [trackerCatFilter, setTrackerCatFilter] = useState<string>("all");
+  const [trackerCatFilter, setTrackerCatFilter] = useSectionFilter<string>(sectionFilter, "trackerCategory", "all");
   // Asset type filter (Vehicles, Properties, Investments, Assets…)
-  const [assetTypeFilter, setAssetTypeFilter] = useState<string>("all");
+  const [assetTypeFilter, setAssetTypeFilter] = useSectionFilter<string>(sectionFilter, "assetType", "all");
   // Asset nesting filter (Top-level / Has children / Nested)
-  const [assetNestingFilter, setAssetNestingFilter] = useState<"all" | "topLevel" | "hasChildren" | "nested">(() => {
-    try { return (sessionStorage.getItem("portol_asset_nesting_filter") as any) || "all"; } catch { return "all"; }
-  });
-  const setAssetNesting = (val: "all" | "topLevel" | "hasChildren" | "nested") => {
-    setAssetNestingFilter(val);
-    try { sessionStorage.setItem("portol_asset_nesting_filter", val); } catch {};
-  };
+  const [assetNestingFilter, setAssetNesting] = useSectionFilter<"all" | "topLevel" | "hasChildren" | "nested">(sectionFilter, "assetNesting", "all");
   // Subscription category filter
-  const [subCatFilter, setSubCatFilter] = useState<string>("all");
+  const [subCatFilter, setSubCatFilter] = useSectionFilter<string>(sectionFilter, "liabilityCategory", "all");
+  const NESTING_LABEL: Record<string, string> = { topLevel: "Top-level", hasChildren: "Has children", nested: "Nested" };
+  const assetFilterStates = [
+    { key: "assetType", label: assetTypeFilter, value: assetTypeFilter, defaultValue: "all" },
+    { key: "assetNesting", label: NESTING_LABEL[assetNestingFilter] || assetNestingFilter, value: assetNestingFilter, defaultValue: "all" },
+  ];
+  const activeAssetFilterLabels = activeViewFilters(assetFilterStates).map(f => f.label);
+  const clearAssetFilters = () => { setAssetTypeFilter("all"); setAssetNesting("all"); };
+  const liabilityFilterStates = [{ key: "liabilityCategory", label: subCatFilter, value: subCatFilter, defaultValue: "all" }];
+  const docFilterStates = [{ key: "docType", label: String(docTypeFilter).replace(/_/g, " "), value: docTypeFilter, defaultValue: "all" }];
+  const trackerFilterStates = [{ key: "trackerCategory", label: trackerCatFilter, value: trackerCatFilter, defaultValue: "all" }];
   // Collapsible sections
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const toggleSection = (key: string) => setCollapsedSections(prev => {
@@ -6281,23 +6297,12 @@ export default function TrackersPage() {
   // hasSelf: true when filter includes the self profile (or is everyone)
   const hasSelf = filterMode === "everyone" || filterIds.includes(selfProfile?.id || "");
 
-  // On mount, migrate any unlinked trackers to the "self" profile
-  const migrationDone = useRef(false);
-  useEffect(() => {
-    if (!migrationDone.current && trackers && profiles) {
-      const hasUnlinked = trackers.some(t => !t.linkedProfiles || t.linkedProfiles.length === 0);
-      if (hasUnlinked) {
-        migrationDone.current = true;
-        apiRequest("POST", "/api/trackers/migrate-to-self").then(async (r) => {
-          // Invalidate only when rows actually moved. When nothing was
-          // migrated this mount-time write used to refetch trackers, profiles,
-          // stats and the dashboard aggregates on EVERY visit to the page.
-          const out = await r.json().catch(() => null);
-          if (out && Number(out.migrated) > 0) invalidateDomains("trackers", "profiles");
-        }).catch(() => {});
-      }
-    }
-  }, [trackers, profiles]);
+  // Rule 3 — navigation cannot mutate data. Opening this page used to POST
+  // /api/trackers/migrate-to-self and rewrite the owner of every unlinked
+  // tracker, a write nobody asked for, made by a page view. It is gone: the
+  // canonical filter (shared/profile-filter passesProfileFilter) already shows
+  // an ownerless tracker under Self, so nothing on screen depended on it. The
+  // route stays for an explicit, user-invoked repair.
 
   const deleteTarget = deleteTargetId
     ? (trackers || []).find((t) => t.id === deleteTargetId)
@@ -6506,6 +6511,7 @@ export default function TrackersPage() {
   // bind the header, the "All" chip total, and the per-section chips to them.
   const {
     filteredAssetCount,
+    scopedAssetTotal,
     filteredLiabilityCount,
     allItemsCount,
   } = useMemo(() => {
@@ -6527,12 +6533,17 @@ export default function TrackersPage() {
       }
       return false;
     };
+    // Rule 4: the in-scope total BEFORE the presentation filters, so a
+    // filtered view can say "Showing 1 of 5" instead of looking like four
+    // assets were deleted.
+    let scopedTotal = 0;
     const assets = (profiles || []).filter(p => {
       if (!isAssetTabProfile(p)) return false;
       const pParent = p.parentProfileId;
       const parentIsAsset = hasAssetAncestor(p);
       const inScope = isShowAll || isAssetVisible(p.id, pParent as string | null | undefined);
       if (!inScope) return false;
+      scopedTotal++;
       if (sectionFilter === "profiles" && assetTypeFilter !== "all" && assetTypeLabel(p.type) !== assetTypeFilter) return false;
       const nestingFilter = sectionFilter === "profiles" ? assetNestingFilter : "all";
       // QA 2026-09-18 BUG-22: "all" includes nested assets — only the
@@ -6556,6 +6567,7 @@ export default function TrackersPage() {
     }).length;
     return {
       filteredAssetCount: assets,
+      scopedAssetTotal: scopedTotal,
       filteredLiabilityCount: liabilities,
       allItemsCount: filteredTrackers.length + filteredDocuments.length + assets + liabilities,
     };
@@ -6754,7 +6766,7 @@ export default function TrackersPage() {
           row reflects whatever data the user is currently looking at. The
           "All" tab intentionally has no chip row — it would be ambiguous which
           dataset it filters. */}
-      {sectionFilter === "trackers" && allTrackerCats.length > 1 && (
+      {sectionFilter === "trackers" && showFilterControls(allTrackerCats.length, trackerFilterStates) && (
         <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-trackers">
           <button
             onClick={() => setTrackerCatFilter("all")}
@@ -6782,7 +6794,7 @@ export default function TrackersPage() {
         </div>
       )}
 
-      {sectionFilter === "documents" && docTypes.length > 1 && (
+      {sectionFilter === "documents" && showFilterControls(docTypes.length, docFilterStates) && (
         <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-documents">
           <button
             onClick={() => setDocTypeFilter("all")}
@@ -6808,7 +6820,7 @@ export default function TrackersPage() {
         </div>
       )}
 
-      {sectionFilter === "profiles" && assetTypeOptions.length > 1 && (
+      {sectionFilter === "profiles" && showFilterControls(assetTypeOptions.length, assetFilterStates) && (
         <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-assets">
           {valuationSweep.running && (
             <span className="text-[11px] text-muted-foreground flex items-center gap-1 mr-1" data-testid="assets-valuation-sweep">
@@ -6856,7 +6868,19 @@ export default function TrackersPage() {
         </div>
       )}
 
-      {sectionFilter === "liabilities" && liabilityCategoryOptions.length > 1 && (
+      {/* Rule 4: whenever a sub-filter hides assets, say so — and how to undo it. */}
+      {sectionFilter === "profiles" && activeAssetFilterLabels.length > 0 && (
+        <ActiveFilterNotice
+          shown={filteredAssetCount}
+          total={scopedAssetTotal}
+          noun={{ one: "asset", many: "assets" }}
+          labels={activeAssetFilterLabels}
+          onClear={clearAssetFilters}
+          testId="assets-active-filter"
+        />
+      )}
+
+      {sectionFilter === "liabilities" && showFilterControls(liabilityCategoryOptions.length, liabilityFilterStates) && (
         <div className="flex flex-wrap items-center gap-1.5 pb-0.5" data-testid="category-filter-chips-liabilities">
           <button
             onClick={() => setSubCatFilter("all")}
@@ -7097,6 +7121,19 @@ export default function TrackersPage() {
           });
         }
         if (rows.length === 0) {
+          // Rule 4 in list view too: a sub-filter that hides every asset is
+          // a filtered view, not an empty account.
+          if (sectionFilter === "profiles" && emptyReason({ shown: 0, total: scopedAssetTotal, filters: assetFilterStates }) === "filtered") {
+            return (
+              <FilteredEmptyState
+                total={scopedAssetTotal}
+                noun={{ one: "asset", many: "assets" }}
+                labels={activeAssetFilterLabels}
+                onClear={clearAssetFilters}
+                testId="assets-filtered-empty"
+              />
+            );
+          }
           return (
             <div className="bubble p-8 text-center" data-testid="linked-list-empty">
               <p className="text-sm text-muted-foreground">Nothing to list here yet</p>
@@ -7372,8 +7409,19 @@ export default function TrackersPage() {
             <Skeleton className="h-4 w-24 mx-auto" />
           </div>
         );
+        // Rule 4: records exist, the presentation filter hides them all — that
+        // is not "No assets yet".
+        if (emptyReason({ shown: childProfiles.length, total: scopedAssetTotal, filters: sectionFilter === "profiles" ? assetFilterStates : [] }) === "filtered") return (
+          <FilteredEmptyState
+            total={scopedAssetTotal}
+            noun={{ one: "asset", many: "assets" }}
+            labels={activeAssetFilterLabels}
+            onClear={clearAssetFilters}
+            testId="assets-filtered-empty"
+          />
+        );
         if (childProfiles.length === 0) return (
-          <div className="bubble p-6 text-center">
+          <div className="bubble p-6 text-center" data-testid="assets-empty">
             <Star className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No assets or vehicles yet</p>
             <p className="text-xs text-muted-foreground mt-1">Add vehicles, property, or investments to track them here</p>
@@ -7588,8 +7636,18 @@ export default function TrackersPage() {
             <Skeleton className="h-4 w-24 mx-auto" />
           </div>
         );
+        // Rule 4: a category chip hiding every liability is a filtered view.
+        if (liabs.length === 0 && sectionFilter === "liabilities" && subCatFilter !== "all" && filteredLiabilityCount > 0) return (
+          <FilteredEmptyState
+            total={filteredLiabilityCount}
+            noun={{ one: "liability", many: "liabilities" }}
+            labels={[subCatFilter]}
+            onClear={() => setSubCatFilter("all")}
+            testId="liabilities-filtered-empty"
+          />
+        );
         if (liabs.length === 0) return (
-          <div className="bubble p-6 text-center">
+          <div className="bubble p-6 text-center" data-testid="liabilities-empty">
             <TrendingDown className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">No liabilities yet</p>
             <p className="text-xs text-muted-foreground mt-1">Track mortgages, loans, credit cards, subscriptions, and recurring bills here</p>

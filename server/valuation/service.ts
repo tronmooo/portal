@@ -397,13 +397,26 @@ export async function refreshValuation(
       return { ...none, snapshot: await getValuationSnapshot(storage, profileId, { record: previous, now }) };
     }
 
+    // Rule 7: an older run must never overwrite a newer one. The lock makes
+    // overlap rare, but it has a TTL and a slow provider can outlive it — a
+    // second run then lands first and this one would put its older estimate
+    // back. If the stored record moved on while we ran, it wins.
+    const current = await storage.getAssetValuation(profileId).catch(() => null);
+    if (current && current.valuedAt && current.valuedAt !== previous?.valuedAt && current.valuedAt > now.toISOString()) {
+      trace.set("skipped", "superseded_by_newer_run"); trace.end();
+      logger.info("valuation", `discarded refresh for ${profileId}: a newer valuation landed mid-run`);
+      return { ...none, snapshot: await getValuationSnapshot(storage, profileId, { record: current, now }) };
+    }
+
     const changed = record.status !== "error" && !sameEstimate(previous, record);
     let wrote = false;
     let previousValue: number | null = null;
     if (changed) {
       await trace.measure("persist.record", () => storage.saveAssetValuation(profileId, record));
       wrote = true;
-      const mirror = mirrorPatchFor(detail.fields || {}, record, filledSpecs);
+      // Mirror against the row as it is NOW, not as it was when the run began:
+      // a value the user typed mid-run must be recognised as theirs.
+      const mirror = mirrorPatchFor((latest?.fields as any) || detail.fields || {}, record, filledSpecs);
       previousValue = mirror.previousValue;
       if (Object.keys(mirror.patch).length > 0) {
         await trace.measure("persist.mirror", () => storage.updateProfile(profileId, { fields: mirror.patch } as any));

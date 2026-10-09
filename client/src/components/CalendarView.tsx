@@ -1802,8 +1802,20 @@ export default function CalendarView({ externalFilterIds, externalFilterMode, hi
       {!timelineLoading && Object.values(itemsByDate).every(arr => arr.length === 0) && (
         <div className="rounded-lg border border-dashed border-border/50 p-6 text-center mt-4">
           <CalendarIcon className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground mb-1">No events this month</p>
-          <p className="text-xs text-muted-foreground/70">Tell the AI: "Doctor appointment Friday at 2pm" or "Rex vet checkup next week"</p>
+          {/* Rule 4: when a filter is what emptied the month, say so and offer the way back. */}
+          {filterType !== "all" || profileFilter !== "all" ? (
+            <>
+              <p className="text-sm text-muted-foreground mb-1">No events match the current filter this month</p>
+              <button type="button" className="text-xs text-primary hover:underline" onClick={() => { setFilterType("all"); setProfileFilter("all"); }} data-testid="calendar-clear-filter">
+                Clear filter
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground mb-1">No events this month</p>
+              <p className="text-xs text-muted-foreground/70">Tell the AI: "Doctor appointment Friday at 2pm" or "Rex vet checkup next week"</p>
+            </>
+          )}
         </div>
       )}
       </div>{/* /left column */}

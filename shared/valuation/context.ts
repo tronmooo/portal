@@ -454,3 +454,38 @@ export function buildValuationContext(bundle: AssetDataBundle, now: Date = new D
     },
   };
 }
+
+// ── The ONE current value (rules 1 and 6) ───────────────────────────────────
+//
+// An owned thing's value reaches the screen from two stores: the profile row
+// (`fields.currentValue`, what the Assets list, net worth, ownership shares and
+// every rollup read through resolveAssetValue) and the valuation record (the
+// estimate with its range and evidence, what the asset's own value card read).
+// They agree once the estimator has mirrored its result — but not between a
+// user typing a value and the next run, and not while one cache has refetched
+// and the other has not. The card showed the estimate while the list beside it
+// showed the user's newer number.
+//
+// Every surface that shows "what is it worth" now asks this function, and it
+// answers with the NEWEST of the two: the record wins only when it is newer
+// than the value stored on the row (or the row has no value at all).
+export function currentAssetValue(
+  fields: Record<string, any> | null | undefined,
+  record: { status?: string; value?: number | null; valuedAt?: string | null } | null | undefined,
+  resolveStored: (fields: Record<string, any>) => number,
+): { value: number | null; source: "stored" | "estimate" | "none" } {
+  const stored = fields ? resolveStored(fields) : 0;
+  const estimate = record && record.status !== "none" && record.value != null && Number.isFinite(record.value) ? Number(record.value) : null;
+  if (stored <= 0) return estimate != null ? { value: estimate, source: "estimate" } : { value: null, source: "none" };
+  if (estimate == null) return { value: stored, source: "stored" };
+  const asOfRaw = fields?.currentValueAsOf ?? fields?.valuationDate ?? fields?.valueAsOf ?? null;
+  const asOf = asOfRaw ? Date.parse(String(asOfRaw)) : NaN;
+  const valuedAt = record?.valuedAt ? Date.parse(String(record.valuedAt)) : NaN;
+  if (Number.isFinite(valuedAt) && Number.isFinite(asOf)) {
+    return valuedAt > asOf ? { value: estimate, source: "estimate" } : { value: stored, source: "stored" };
+  }
+  // No as-of on the row: a user-owned number with no date is the user's word
+  // and stays; an estimator-owned one is the mirror of some estimate, and the
+  // record in hand is at least as new.
+  return isEstimatorOwnedValue(fields || {}) ? { value: estimate, source: "estimate" } : { value: stored, source: "stored" };
+}

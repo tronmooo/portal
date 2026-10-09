@@ -7,6 +7,7 @@
 // client filters by set membership. Caching and the profile filter stay in the
 // route — this module is pure "compute the list".
 import type { IStorage } from "./storage";
+import { syncLog } from "@shared/sync-log";
 import { getUserToday, parseLocalDate } from "@shared/timezone";
 import { parseRecurringMeta, nextOccurrence, missedOccurrences, kindDef } from "@shared/recurring-dates";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
@@ -178,7 +179,13 @@ export async function buildNotifications(storage: IStorage, notifTz: string): Pr
   // dashboard's insight cards read too.
   const docById = new Map<string, any>((documents as any[]).map((d: any) => [String(d.id), d]));
   for (const rule of rulesFromAll({ profiles, documents })) {
-    if (!rule.active || !isAlertDateRule(rule)) continue;
+    if (!rule.active) continue;
+    if (rule.supersededBy) {
+      // Rule 5: the newer document resolved this alert — derived, not dismissed.
+      syncLog("notification", "date alert resolved by a newer document", { ruleType: rule.ruleType });
+      continue;
+    }
+    if (!isAlertDateRule(rule)) continue;
     const isDoc = rule.sourceEntityType === "document";
     const diff = daysBetweenISO(todayStr, rule.date);
     if (diff > 30) continue;

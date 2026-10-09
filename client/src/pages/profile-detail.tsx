@@ -29,6 +29,7 @@ import { isAccountProfile, accountKindMeta, accountKindOf } from "@shared/financ
 import { Pill } from "@/components/dashboard/visuals";
 import { stopProp } from "@/lib/event-utils";
 import { normalizeFilter } from "@/lib/filter-utils";
+import { showFilterControls } from "@/lib/view-filters";
 import { isPast, isUpcoming, parseDate, relativeDayLabel, daysFromToday, localTodayISO, localDaysFromNowISO, formatLocalDate, monthKeyLabel } from "@/lib/dates";
 import {
   type TrackerMetricDefinition,
@@ -3650,7 +3651,7 @@ function StaticInfoTab({
       {/* ── Asset Valuation Card ── */}
       {["vehicle", "asset", "property", "investment"].includes(profile.type) && profile.fields?.currentValue != null && profile.fields?.valuationMethod && (() => {
         const f = profile.fields;
-        const currentVal = Number(f.currentValue) || 0;
+        const currentVal = resolveAssetValue(f);
         const purchaseVal = Number(f.purchasePrice) || 0;
         const change = purchaseVal > 0 ? currentVal - purchaseVal : 0;
         const changePct = purchaseVal > 0 ? ((change / purchaseVal) * 100) : 0;
@@ -4078,10 +4079,8 @@ function ProductivityHubTab({
   // filter client-side. Prefix invalidations on ["/api/journal"] still match.
   const { data: allJournals = [] } = useQuery<any[]>({
     queryKey: ["/api/journal", profileId, "profile-scoped"],
-    queryFn: async () => {
-      try { return await apiRequest("GET", `/api/journal?profileIds=${encodeURIComponent(profileId)}`).then(r => r.json()); }
-      catch { return []; }
-    },
+    // Rule 10: no catch → [] — a failed request keeps the last good list.
+    queryFn: () => apiRequest("GET", `/api/journal?profileIds=${encodeURIComponent(profileId)}`).then(r => r.json()),
   });
   const profileJournals = useMemo(() => (allJournals || []).filter((j: any) =>
     Array.isArray(j.linkedProfiles) && j.linkedProfiles.includes(profileId)
@@ -4615,7 +4614,8 @@ function DocumentsTab({
             />
             <LinkedViewToggle view={docView} onChange={setDocView} />
           </div>
-          {docTypes.length > 1 && (
+          {/* Rule 4: the chip row stays while a filter is on, so it can be cleared. */}
+          {showFilterControls(docTypes.length, [{ value: docTypeFilter, defaultValue: "all" }]) && (
             <div className="flex items-center gap-1 flex-wrap">
               <button onClick={() => setDocTypeFilter("all")} className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${docTypeFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>All ({documents.length})</button>
               {docTypes.map(t => (
@@ -4648,6 +4648,12 @@ function DocumentsTab({
                   ? `No ${docTypeFilter.replace(/_/g, " ")} documents`
                   : "No documents to show"}
             </p>
+            {(docSearch.trim() || (docTypeFilter && docTypeFilter !== "all")) && (
+              <p className="text-xs text-muted-foreground mt-1">
+                {documents.length} document{documents.length === 1 ? " is" : "s are"} hidden by this filter, not deleted.{" "}
+                <button type="button" className="text-primary hover:underline" data-testid="profile-docs-clear-filter" onClick={() => { setDocTypeFilter("all"); setDocSearch(""); }}>Clear filter</button>
+              </p>
+            )}
           </CardContent>
         </Card>
       ) : docView === "sheet" ? (
@@ -9802,7 +9808,8 @@ function InsightsTab({ profile }: { profile: any }) {
 function ValuationTab({ profile, profileId, onChanged }: { profile: any; profileId: string; onChanged: () => void }) {
   const f = profile.fields || {};
   const purchase = Number(f.purchasePrice) || 0;
-  const current = Number(f.currentValue) || 0;
+  // Canonical resolver: "$1,200" and nested values read the same here as in net worth.
+  const current = f.currentValue != null && String(f.currentValue).trim() !== "" ? resolveAssetValue({ currentValue: f.currentValue }) : 0;
   const change = current - purchase;
   const changePct = purchase > 0 ? ((change / purchase) * 100).toFixed(1) : null;
   const valuationFields = [
@@ -11822,11 +11829,8 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
   // matches what LinkedAssetsTab actually renders (orphan-filtered, etc).
   const { data: assetRows = [] } = useQuery<any[]>({
     queryKey: ["/api/parties", profile.id, "assets"],
-    queryFn: async () => {
-      try {
-        return await apiRequest("GET", `/api/parties/${profile.id}/assets`).then(r => r.json());
-      } catch { return []; }
-    },
+    // Rule 10: a failed request must not read as "0 assets, $0".
+    queryFn: () => apiRequest("GET", `/api/parties/${profile.id}/assets`).then(r => r.json()),
   });
   const { assetCount, assetTotal } = useMemo(() => {
     const ASSET_LIKE = new Set(["asset","vehicle","property","investment","account"]);
@@ -11970,7 +11974,7 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
         // Asset: ONLY show assets directly linked via a shared liability (co-collateral).
         // We deliberately do NOT bridge through owner/person nodes — co-ownership does
         // not make two assets "linked". Direct co-collateral via the same liability does.
-        const liabs = await apiRequest("GET", `/api/assets/${profileId}/liabilities`).then(r => r.json()).catch(() => []);
+        const liabs = await apiRequest("GET", `/api/assets/${profileId}/liabilities`).then(r => r.json());
         if (!Array.isArray(liabs) || liabs.length === 0) return [];
         const liabIds = Array.from(new Set(liabs.map((l: any) => l.liabilityProfileId).filter(Boolean)));
         const peers: Record<string, { id: string; name: string; typeKey: string }> = {};
@@ -12021,7 +12025,9 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
     })
     .map((it: any) => {
       const live = liveById.get(it.id);
-      const liveValue = live?.currentValue ?? live?.fields?.currentValue ?? live?.fields?.value ?? null;
+      // Canonical resolver — the same number the totals beside this card sum.
+      const liveResolved = live ? resolveAssetValue(live) : 0;
+      const liveValue = liveResolved > 0 ? liveResolved : (live?.currentValue ?? null);
       return {
         id: it.id,
         linkId: it.linkId,

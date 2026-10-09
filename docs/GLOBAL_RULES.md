@@ -85,6 +85,37 @@ import), now passes:
 
 ---
 
+## Sync rules — user-facing state stays in agreement (2026-10-09)
+
+**Origin:** "I pressed on bubbles and now all my assets are missing", asset
+values that did not change, and a bank-statement notification that stayed
+after the statement was handled. None of the three lost data (verified against
+the account: every asset, value and owner link intact). Each was a screen that
+disagreed with the records — the same class of bug, so the fixes are rules
+that hold for every user-owned type, not patches for assets or statements.
+
+| # | Rule | Enforced by | Pinned by |
+|---|---|---|---|
+| S1 | **One authoritative source.** An asset's value is `fields.currentValue` read through `resolveAssetValue`; the value card shows the NEWEST of that and the valuation record (`currentAssetValue`), so it can never disagree with the list and net worth beside it. Inline `currentValue \|\| value` chains in the asset overview / profile pages are gone. | `shared/valuation/context.ts currentAssetValue`, `shared/asset-value.ts` | `tests/sync-rules-valuation.test.ts`, `tests/sync-rules-valuation.dom.test.tsx` |
+| S2 | **Mutations propagate everywhere.** Derived payloads declare the domains their server computation reads (`DERIVED_ENDPOINT_DEPENDENCIES`); the bus adds them to every source domain. The bell now refreshes on asset, habit, event, people and liability writes (it did not), and every data domain refreshes the account-wide aggregates. | `client/src/lib/cache-bus.ts domainKeys` | `tests/sync-rules-invalidation.test.ts` (held to `server/notification-service.ts`'s actual reads) |
+| S3 | **Navigation cannot mutate data.** No page writes from a mount effect (the Trackers/Assets page used to POST `migrate-to-self` and rewrite tracker owners on every visit). Scope-switching cards say they switch the view. | static scan of every `useEffect` body | `tests/sync-rules-filters.test.ts`, `tests/sync-asset-navigation.dom.test.tsx` |
+| S4 | **Filters cannot masquerade as deletion.** Presentation filters are section-scoped component state (`useSectionFilter`), reset on section change, never persisted; a chip row stays up while any of its filters is on (`showFilterControls`); a filtered view says "Showing 1 of 5 assets · Clear filter" (`ActiveFilterNotice`) and an all-hidden one says "hidden, not deleted" (`FilteredEmptyState`), never "No assets yet". Applied to Assets, Liabilities, Documents, Trackers, profile documents, Finance expenses, Calendar, dashboard Upcoming. | `client/src/lib/view-filters.ts`, `client/src/components/ActiveFilterNotice.tsx` | `tests/sync-rules-filters.test.ts` (no hiding filter in storage, chip-row gates), `tests/sync-asset-navigation.dom.test.tsx` |
+| S5 | **Completed actions resolve downstream UI — derived, not flagged.** A reporting period's boundaries (`statementPeriod.endDate`, `billingPeriodEnd`, `payPeriodEnd`, …) are history, never an alert. A newer document of the same type, about the same subject (same vehicle/policy, or same person for personal documents), with the same date further out resolves the older document's alert on every read (`supersededBy`) — the bell, the Documents card, insight cards and the digest all go through `isAlertDateRule` / `isDocumentAttentionRule`. Nothing is stored, so reload/relogin agree and deleting the newer document restores the alert. | `shared/date-rules.ts isReportingPeriodBoundary, markSupersededDocumentRules` | `tests/sync-rules-notifications.test.ts` |
+| S6 | **Derived values recompute from the source.** Same mechanisms as S1/S2/S5; no new stored totals were added. Document snooze is one live store (`useDocSnoozeMap`) instead of two copies read at mount. | `client/src/lib/docSnooze.ts` | — |
+| S7 | **No stale async result overwrites newer state.** Row patches never merge an older `updatedAt` over a newer row; an older valuation snapshot never replaces a newer one; on the server a valuation run that a newer run overtook is discarded, and the mirror is computed against the row as it is at persist time. | `client/src/lib/cache-patch.ts isOlderRow`, `client/src/hooks/useAssetValuation.ts isSnapshotNewerOrEqual`, `server/valuation/service.ts` | `tests/sync-rules-valuation.test.ts`, `tests/sync-rules-valuation.dom.test.tsx` |
+| S8 | **Ownership stays intact.** Owner-set changes are logged (dev) at the one writer; navigation no longer reassigns owners (S3); every new regression test asserts owner links unchanged. | `server/ownership-writer.ts` | `tests/sync-asset-navigation.dom.test.tsx` |
+| S9 | **Never silently delete.** The navigation tests fail on ANY non-GET request while chips are pressed and sections are switched. | — | `tests/sync-asset-navigation.dom.test.tsx` |
+| S10 | **Recover gracefully.** A 401 on a slot that already holds data fails the query (data kept) instead of resolving `null`; no `queryFn` turns a failed request into `[]` (eight removed). | `client/src/lib/queryClient.ts getQueryFn` | `tests/sync-rules-failed-request.dom.test.tsx` (500 / network / 401 + static scan) |
+
+**Instrumentation.** `shared/sync-log.ts` records mutation start/success/failure,
+invalidations, stale-response rejections, valuation landings, notification
+resolutions, filter apply/reset/clear and owner-set changes. On in dev builds
+and under the test runner (tests read its ring buffer), off in production; opt
+one browser in with `localStorage.portol_sync_debug = "1"`. Paths are logged
+with ids elided; nothing is shown to users.
+
+---
+
 ## Permanent regression checks
 
 Local suite (`npm test`) — the rules' tests are listed at the end of

@@ -38,6 +38,7 @@
 
 import {
   classifyDateField,
+  isReportingPeriodBoundary,
   bareDateOf,
   daysBetweenISO,
   countdownLabel,
@@ -156,6 +157,9 @@ export function extractionDateRows(
     if (!iso) continue;
 
     const path = String(f?.path || key);
+    // A statement's own period (`statementPeriod.endDate`) is the span it
+    // reports on, not a date to act on — the same rule the engine applies.
+    if (isReportingPeriodBoundary(key, path, opts.documentContext)) continue;
     const cls = classifyDateField(key, opts.documentContext);
     if (!cls.actionable) continue;
 

@@ -696,7 +696,7 @@ export function RecurringDatesManager({ filterIds, filterMode }: {
 
   const { data: events = [] } = useQuery<any[]>({
     queryKey: ["/api/events"],
-    queryFn: () => apiRequest("GET", "/api/events").then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", "/api/events").then(r => r.json()),
   });
   const { data: profilesRaw } = useQuery<any>({ queryKey: ["/api/profiles"] });
   const profiles: any[] = Array.isArray(profilesRaw) ? profilesRaw : (profilesRaw?.data ?? []);

@@ -26,9 +26,9 @@ import { useToast } from "@/hooks/use-toast";
 import { formatMoneyCompact, formatTimeAgo } from "@/lib/format";
 import { formatLocalDate } from "@/lib/dates";
 import { useAssetValuation, useAssetValuationHistory, valuationQueryKey } from "@/hooks/useAssetValuation";
-import { isEstimatorOwnedValue, isAutoValuationEnabled, VALUATION_MODE_FIELD } from "@shared/valuation/context";
+import { isEstimatorOwnedValue, isAutoValuationEnabled, VALUATION_MODE_FIELD, currentAssetValue } from "@shared/valuation/context";
 import { METHOD_LABEL } from "@shared/valuation/engine";
-import { parseMoney } from "@shared/asset-value";
+import { parseMoney, resolveAssetValue } from "@shared/asset-value";
 import type { ValuationRecord } from "@shared/valuation/types";
 
 // "2d ago", not "2 d ago" — the app-wide relative formatter (F-58).
@@ -99,8 +99,13 @@ export function CurrentValueCard({
   // The server is authoritative; a payload from an older build has no mode,
   // and absent means auto — exactly as this asset behaved before the switch.
   const auto = snapshot.mode ? snapshot.mode === "auto" : isAutoValuationEnabled(fields);
-  // What the user's own value is worth right now (manual state headline).
-  const ownValue = fields ? parseMoney(fields.currentValue ?? fields.current_value) : 0;
+  // What the user's own value is worth right now (manual state headline) —
+  // through the canonical resolver, the same read net worth makes.
+  const ownValue = fields ? resolveAssetValue(fields) : 0;
+  // The auto-state headline: the NEWEST of the row's value and the estimate
+  // (shared/valuation/context currentAssetValue), so this card can never show
+  // a different number from the Assets list and net worth beside it.
+  const headline = currentAssetValue(fields, record, resolveAssetValue);
 
   const toggleAuto = async (next: boolean) => {
     setSwitching(true);
@@ -197,7 +202,7 @@ export function CurrentValueCard({
             ) : record?.status === "valued" && record.value != null ? (
               <>
                 <p className="text-2xl font-bold tabular-nums leading-tight" data-testid="current-value-amount">
-                  {formatMoneyCompact(record.value)}
+                  {formatMoneyCompact(headline.value ?? record.value)}
                 </p>
                 {record.low != null && record.high != null && (
                   <p className="text-xs text-muted-foreground tabular-nums" data-testid="current-value-range">

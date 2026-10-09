@@ -28,7 +28,7 @@ import {
 import { DrillDownDialog } from "@/components/DrillDownDialog";
 import { ChatGPTImportDialog } from "@/components/ChatGPTImportDialog";
 import { getProfileFilter, setFilterSelected, initDefaultProfileFilter, reconcileProfileFilter, refreshFilterNames, subscribeProfileFilter, type FilterMode } from "@/lib/profileFilter";
-import { loadDocSnoozeMap, saveDocSnoozeMap } from "@/lib/docSnooze";
+import { useDocSnoozeMap } from "@/lib/docSnooze";
 import { groupDocumentDates, ruleIdsOf, summarizeDocumentUrgency } from "@shared/document-dates";
 import { computeNetWorth, type OwnershipTables } from "@shared/net-worth";
 import { useLiveTotal } from "@/lib/derived-aggregates";
@@ -1135,7 +1135,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     if (filterMode === "selected" && filterIds.length === 1) return filterIds[0];
     return (kpiProfiles.find((p: any) => p.type === "self")?.id) || "";
   }, [filterMode, filterIds, kpiProfiles]);
-  const [docSnoozeMap, setDocSnoozeMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
+  const [docSnoozeMap, saveSnooze] = useDocSnoozeMap();
   const snoozeDoc = (docIdOrRow: string | { ruleIds?: string[]; ruleId?: string }) => {
     // A card can stand for several rules (one record, one day, two kinds of
     // date). Snoozing only the first left its twin on screen.
@@ -1144,8 +1144,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
     const until = Date.now() + 30 * 86400000;
     const next = { ...docSnoozeMap };
     for (const id of ids) next[id] = until;
-    setDocSnoozeMap(next);
-    saveDocSnoozeMap(next);
+    saveSnooze(next);
     toast({ title: "Document snoozed", description: "Hidden from alerts for 30 days" });
   };
   const visibleDocs: any[] = useMemo(() => {
@@ -4855,10 +4854,22 @@ function UpcomingSection({ filterIds = [], filterMode = "everyone", ready = true
         ) : (
         <div className="text-center py-6">
           <CalendarDays className="h-7 w-7 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-xs text-muted-foreground">No upcoming dates</p>
-          <p className="text-[11px] text-muted-foreground/60 mt-0.5">
-            Birthdays, renewals, appointments, and deadlines surface here automatically
-          </p>
+          {/* Rule 4: a type filter that hides everything is not "nothing upcoming". */}
+          {entityFilter !== "all" ? (
+            <>
+              <p className="text-xs text-muted-foreground">Nothing upcoming of this type</p>
+              <button type="button" className="text-[11px] text-primary hover:underline mt-0.5" onClick={() => setEntityFilter("all")} data-testid="upcoming-clear-filter">
+                Show all upcoming dates
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-muted-foreground">No upcoming dates</p>
+              <p className="text-[11px] text-muted-foreground/60 mt-0.5">
+                Birthdays, renewals, appointments, and deadlines surface here automatically
+              </p>
+            </>
+          )}
         </div>
         )}
       </CollapsibleSection>
@@ -5422,7 +5433,13 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
         return (
           <button
             key={c.id}
+            // Rule 3: this card CHANGES THE VIEW (the dashboard re-scopes to one
+            // person); it never touches data. Say so, so a tap that narrows
+            // every tab is an explicit, labelled choice — and the switcher in
+            // the header shows the scope and switches back.
             onClick={() => setFilterSelected([c.id], [c.name])}
+            title={`Show ${c.name}'s dashboard`}
+            aria-label={`Show ${c.name}'s dashboard`}
             className="text-left bubble hover:bg-muted/20 transition-colors p-3"
             style={{ borderLeft: `3px solid hsl(${accent})` }}
             data-testid={`household-profile-${c.id}`}

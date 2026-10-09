@@ -54,6 +54,7 @@ import { resolveAnnualRate } from "@shared/liability-calc";
 import { sumExpenses, spendByCategory, savingsRatePct } from "@shared/expense-ledger";
 import { loanPayoff, loanStoredTermMonths } from "@shared/loan-facts";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
+import { ActiveFilterNotice } from "@/components/ActiveFilterNotice";
 import { netWorthChange } from "@shared/net-worth-change";
 import { invalidateDomain, invalidateDomains } from "@/lib/cache-bus";
 import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
@@ -200,15 +201,18 @@ export default function FinancePage() {
     queryKey: ["/api/expenses", filterMode, ...filterIds],
     queryFn: () => apiRequest("GET", `/api/expenses${profileParam}`).then(r => r.json()),
   });
-  // Expenses page controls — persisted in localStorage so the toolbar survives
-  // reloads (search + category + sort + date range).
-  const [filterCategory, setFilterCategory] = useState<string>(() => { try { return localStorage.getItem("portol_exp_cat") || "all"; } catch { return "all"; } });
+  // Expenses page controls. Only the SORT is remembered across reloads — it
+  // reorders, it never hides. The category and date-range filters HIDE rows
+  // (and move the Expenses total), so they are page state that starts clear
+  // on every visit (rules 3/4, client/src/lib/view-filters.ts): a category
+  // picked last week, or one that no longer exists, used to keep filtering
+  // with a blank picker and nothing saying why expenses were missing.
+  const [filterCategory, setFilterCategory] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortBy, setSortBy] = useState<ExpenseSort>(() => { try { return (localStorage.getItem("portol_exp_sort") as ExpenseSort) || "date-desc"; } catch { return "date-desc"; } });
-  const [dateRange, setDateRange] = useState<"all" | "month" | "30d" | "year">(() => { try { return (localStorage.getItem("portol_exp_range") as any) || "all"; } catch { return "all"; } });
-  useEffect(() => { try { localStorage.setItem("portol_exp_cat", filterCategory); } catch {} }, [filterCategory]);
+  const [dateRange, setDateRange] = useState<"all" | "month" | "30d" | "year">("all");
+  useEffect(() => { try { localStorage.removeItem("portol_exp_cat"); localStorage.removeItem("portol_exp_range"); } catch {} }, []);
   useEffect(() => { try { localStorage.setItem("portol_exp_sort", sortBy); } catch {} }, [sortBy]);
-  useEffect(() => { try { localStorage.setItem("portol_exp_range", dateRange); } catch {} }, [dateRange]);
   const [addOpen, setAddOpen] = useState(false);
   // QA Bug 7: open Add Expense dialog when arriving via command palette with ?new=expense
   useEffect(() => {
@@ -838,7 +842,7 @@ export default function FinancePage() {
   const budgets: any[] = Array.isArray(budgetData?.budgets) ? budgetData.budgets : (Array.isArray(budgetData) ? budgetData : []);
   const { data: nwHistory = [] } = useQuery<any[]>({
     queryKey: ["/api/net-worth/history", filterMode, ...filterIds],
-    queryFn: () => apiRequest("GET", `/api/net-worth/history${profileParam}${profileParam ? "&" : "?"}lookbackDays=120`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", `/api/net-worth/history${profileParam}${profileParam ? "&" : "?"}lookbackDays=120`).then(r => r.json()),
   });
 
   // Pay a bill straight from the Finance "Bills · next 14d" card — same
@@ -1612,6 +1616,9 @@ export default function FinancePage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Categories</SelectItem>
+                {filterCategory !== "all" && !(categories as string[]).includes(filterCategory) && (
+                  <SelectItem value={filterCategory}>{categoryLabel(filterCategory as any)}</SelectItem>
+                )}
                 {categories.map(c => (
                   <SelectItem key={c} value={c}>{categoryLabel(c)}</SelectItem>
                 ))}
@@ -1649,6 +1656,23 @@ export default function FinancePage() {
             <EmptyState icon={DollarSign} label="No expenses logged yet." hint={'Try: "spent $50 on groceries"'} />
           ) : (
             <div className="divide-y divide-border">
+              {/* Rule 4: say what is hiding rows, and offer the way back. */}
+              {filtered.length < profileFiltered.length && (filterCategory !== "all" || dateRange !== "all" || searchQuery.trim() !== "") && (
+                <div className="py-2">
+                  <ActiveFilterNotice
+                    shown={filtered.length}
+                    total={profileFiltered.length}
+                    noun={{ one: "expense", many: "expenses" }}
+                    labels={[
+                      ...(filterCategory !== "all" ? [categoryLabel(filterCategory as any)] : []),
+                      ...(dateRange !== "all" ? [dateRange === "month" ? "This month" : dateRange === "30d" ? "Last 30 days" : "This year"] : []),
+                      ...(searchQuery.trim() ? [`"${searchQuery.trim()}"`] : []),
+                    ]}
+                    onClear={() => { setFilterCategory("all"); setDateRange("all"); setSearchQuery(""); }}
+                    testId="expenses-active-filter"
+                  />
+                </div>
+              )}
               {filtered.length === 0 && profileFiltered.length > 0 && (
                 <EmptyState icon={Filter} label="No expenses match the selected filter." />
               )}

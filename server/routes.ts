@@ -57,7 +57,7 @@ import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rena
 import { checkProfileDelete } from "@shared/profile-delete";
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { cascadeHabitRename } from "./habit-rename-cascade";
-import { normalizeEntityDateFields, impossibleCalendarDays, isRealCalendarDay, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
+import { normalizeEntityDateFields, impossibleCalendarDays, isRealCalendarDay, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, markSupersededDocumentRules, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { itemsClaimedByActions, documentDateOptOuts, type ProposedAction } from "@shared/extraction-actions";
 import { classifyFinancialDocKind, decideExpenseCreation, detectExpenseInstruction, inferFinancialStatus, isFinancialStatus } from "@shared/financial-status";
@@ -10500,7 +10500,8 @@ If unsure, use "other". Use "subscription" for recurring services; "vehicle" for
       // parsing: yet another date vocabulary, blind to due dates and to every
       // non-ISO value. It reads the ONE Date Rule engine now, so the digest
       // sees exactly what the Executive tab and the calendar see.
-      const expiringDocs = rulesFromDocuments(documents)
+      // Superseded rules (a newer copy of the same document) are resolved.
+      const expiringDocs = markSupersededDocumentRules(rulesFromDocuments(documents), documents, profiles)
         .filter((rule) => isDocumentAttentionRule(rule))
         .map((rule) => ({
           name: rule.label,

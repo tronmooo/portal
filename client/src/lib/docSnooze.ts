@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useState } from "react";
+
 // Per-document 30-day snooze for expiring-document alerts. Client-side
 // (localStorage) so no schema field is needed. Values are { docId: expiry-ms };
 // entries past their expiry are dropped on read. Shared by the dashboard KPI
@@ -21,6 +23,29 @@ export function loadDocSnoozeMap(): Record<string, number> {
   } catch { return {}; }
 }
 
+const CHANGE_EVENT = "portol:doc-snooze-changed";
+
 export function saveDocSnoozeMap(m: Record<string, number>) {
   try { localStorage.setItem(DOC_SNOOZE_LS_KEY, JSON.stringify(m)); } catch {}
+  // Rule 1: every reader holds the same map. Each surface used to read its own
+  // copy once at mount, so a snooze in the briefing left the dashboard card
+  // showing the alert until a remount.
+  try { window.dispatchEvent(new CustomEvent(CHANGE_EVENT)); } catch {}
+}
+
+/**
+ * The live snooze map: re-read whenever any surface (or another tab) saves.
+ * Returns `[map, setAndSave]`.
+ */
+export function useDocSnoozeMap(): [Record<string, number>, (next: Record<string, number>) => void] {
+  const [map, setMap] = useState<Record<string, number>>(() => loadDocSnoozeMap());
+  useEffect(() => {
+    const reload = () => setMap(loadDocSnoozeMap());
+    const onStorage = (e: StorageEvent) => { if (e.key === DOC_SNOOZE_LS_KEY) reload(); };
+    window.addEventListener(CHANGE_EVENT, reload);
+    window.addEventListener("storage", onStorage);
+    return () => { window.removeEventListener(CHANGE_EVENT, reload); window.removeEventListener("storage", onStorage); };
+  }, []);
+  const save = useCallback((next: Record<string, number>) => { setMap(next); saveDocSnoozeMap(next); }, []);
+  return [map, save];
 }

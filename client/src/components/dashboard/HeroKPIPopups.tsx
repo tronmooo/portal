@@ -237,7 +237,7 @@ export function NetWorthPopup({
   const histUrl = param ? `/api/net-worth/history${param}&lookbackDays=120` : `/api/net-worth/history?lookbackDays=120`;
   const { data: nwHistory = [] } = useQuery<any[]>({
     queryKey: ["/api/net-worth/history", filterMode, ...filterIds, "popup"],
-    queryFn: async () => apiRequest("GET", histUrl).then(r => r.json()).catch(() => []),
+    queryFn: async () => apiRequest("GET", histUrl).then(r => r.json()),
     enabled: open,
   });
 
@@ -492,7 +492,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
   const leading = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
   const { data: expRaw } = useQuery<any>({
     queryKey: ["/api/expenses", filterMode, ...filterIds, "spend-breakdown"],
-    queryFn: () => apiRequest("GET", `/api/expenses${leading}`).then(r => r.json()).catch(() => []),
+    queryFn: () => apiRequest("GET", `/api/expenses${leading}`).then(r => r.json()),
   });
   const expenses: any[] = Array.isArray(expRaw) ? expRaw : (expRaw?.items || []);
 

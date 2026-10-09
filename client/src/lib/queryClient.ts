@@ -4,6 +4,7 @@ import { bootstrapSeedEntries, projectBootstrapShell } from "./bootstrap-seed-ke
 import { getProfileFilterSnapshot } from "./profileFilter";
 import { ACTIVE_PROFILE_HEADER } from "@shared/active-scope";
 import { decodeVersionMap, encodeVersionMap, EPOCH_KEY } from "@shared/cache-domains";
+import { syncLog } from "@shared/sync-log";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -138,6 +139,11 @@ export async function apiRequest(
     : DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const isWrite = method.toUpperCase() !== "GET";
+  // Dev/test instrumentation (silent in production). Ids are elided from the
+  // path: the log is about which KIND of write ran, not which row.
+  const logPath = isWrite ? url.split("?")[0].replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, ":id") : "";
+  if (isWrite) syncLog("mutation", `start ${method.toUpperCase()} ${logPath}`);
   try {
     // Document file GETs may 302 to a cross-origin storage CDN. fetch re-sends
     // request headers to the redirect target, and custom headers would force a
@@ -154,7 +160,11 @@ export async function apiRequest(
       body: data ? JSON.stringify(data) : undefined,
       signal: controller.signal,
     });
-    await throwIfResNotOk(res);
+    try { await throwIfResNotOk(res); } catch (e: any) {
+      if (isWrite) syncLog("mutation", `failure ${method.toUpperCase()} ${logPath}`, { status: res.status });
+      throw e;
+    }
+    if (isWrite) syncLog("mutation", `success ${method.toUpperCase()} ${logPath}`, { status: res.status });
     // Every write in the app goes through this one function, so this is the
     // single place that can make ALL of them behave like the chat path:
     //   · learn the post-write data version, so the refetch this write triggers
@@ -270,6 +280,15 @@ export const getQueryFn: <T>(options: {
           detail: { reason: "query-401", url },
         }));
       } catch { /* ignore */ }
+      // Rule 10: a failed request is not an empty account. Resolving `null`
+      // here REPLACED the cached list as a successful answer, so a 401 during
+      // a token refresh rendered "No assets yet" over records that were never
+      // touched. When this slot already holds data, fail the query instead:
+      // React Query keeps the last good data on error.
+      if (queryClient.getQueryData(queryKey) !== undefined) {
+        syncLog("fetch-failure", "401 kept last good data", { url });
+        throw new Error("401: Session expired");
+      }
       return null;
     }
 

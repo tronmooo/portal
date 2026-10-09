@@ -150,6 +150,15 @@ export interface DateRule {
   importantVisible: boolean;
   countdownEnabled: boolean;
   active: boolean;
+  /**
+   * Rule 5 — a completed action resolves its alert. Set when a NEWER document
+   * of the same kind, about the same subject, carries the same date further
+   * out (the renewed registration, the replacement passport): the old
+   * document's expiry has been dealt with. The rule stays on the calendar as
+   * history; it no longer raises an alert anywhere (isAlertDateRule,
+   * isDocumentAttentionRule). Derived on every read — never a stored flag.
+   */
+  supersededBy?: string;
 
   href?: string;
 }
@@ -201,6 +210,42 @@ export function normalizeFieldKey(key: unknown): string {
   return String(key ?? "").replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
 }
 
+// ── Reporting periods ────────────────────────────────────────────────────────
+// A statement, a pay stub or an invoice REPORTS on a span of time that has
+// already happened. Its start and end say which span — they are the document's
+// subject, not something it asks the user to do before a date.
+//
+// Deliberately not "closingDate" on its own: a house closing is a real,
+// upcoming event. Only a closing qualified as a statement/billing cycle's is.
+const REPORTING_PERIOD_KEY_RE =
+  /^(statement|billing|billingcycle|cycle|payperiod|reportingperiod|reporting|earningsperiod)(period|cycle)?(start|begin|beginning|end|ending|close|closing|from|to|through|thru)(date)?$|^(statementdate|statementclosingdate|statementclosedate|cycleclosingdate|billingclosedate|statementperiod|billingperiod|payperiod|reportingperiod|periodcovered|coverageperiodstatement)$/;
+/** A group name that IS a reporting period ("statementPeriod", "billingCycle"). */
+const REPORTING_GROUP_RE = /^(statement|billing|pay|reporting|earnings)(period|cycle)$|^(billingcycle|statementcycle)$/;
+/** A bare "period" group is a reporting period only on a document that reports. */
+const REPORTING_DOC_RE = /statement|pay ?stub|payslip|pay slip|earnings|invoice|\bbill\b|remittance/i;
+const PERIOD_BOUNDARY_RE = /^(start|begin|beginning|end|ending|from|to|through|thru|close|closing)(date)?$|^(startdate|enddate|periodstart|periodend|periodstartdate|periodenddate)$/;
+
+/**
+ * Is this date one boundary of a reporting period — history the document
+ * describes rather than a date anything happens on?
+ *
+ *   isReportingPeriodBoundary("endDate", "statementPeriod.endDate")           → true
+ *   isReportingPeriodBoundary("end", "period.end", "bank_statement")          → true
+ *   isReportingPeriodBoundary("endDate", "coveragePeriod.endDate", "policy")  → false  (coverage ends: real)
+ *   isReportingPeriodBoundary("statementPeriodEndDate", "statementPeriodEndDate") → true
+ */
+export function isReportingPeriodBoundary(key: unknown, path?: unknown, contextKey?: unknown): boolean {
+  const k = normalizeFieldKey(key);
+  if (REPORTING_PERIOD_KEY_RE.test(k)) return true;
+  if (!PERIOD_BOUNDARY_RE.test(k)) return false;
+  const segments = String(path ?? "").split(".").filter(Boolean);
+  // The group holding the boundary: the segment before the leaf.
+  const group = normalizeFieldKey(segments.length >= 2 ? segments[segments.length - 2] : "");
+  if (!group) return false;
+  if (REPORTING_GROUP_RE.test(group)) return true;
+  return group === "period" && REPORTING_DOC_RE.test(String(contextKey ?? ""));
+}
+
 /**
  * Ordered — FIRST match wins, so specific patterns precede generic ones.
  *
@@ -223,6 +268,14 @@ const FIELD_MATCHERS: FieldMatcher[] = [
   // A period's own start marker is informational unless something else gives
   // it meaning (a lease start is captured by the lease matcher below).
   { ruleType: "informational", match: /^(policystart|coveragestart|periodstart|statementstart|billingperiodstart|termstart)/ },
+  // A REPORTING period's boundaries are history, not deadlines. A bank
+  // statement covering April 2024 "ends" on April 30 the way a month does;
+  // nothing expires and there is nothing to act on. Classifying
+  // `statementPeriodEndDate` as an `end` rule put "Bank Statement — expired
+  // 892 days ago" in the bell and the Documents card for good, with no action
+  // that could ever satisfy it (user report 2026-10-09). The NESTED spelling
+  // (`statementPeriod: { endDate }`) is caught by `isReportingPeriodBoundary`.
+  { ruleType: "informational", match: REPORTING_PERIOD_KEY_RE },
 
   // ── Birthdays & anniversaries: genuinely yearly ──
   {
@@ -358,8 +411,9 @@ export const DOCUMENT_DUE_RULE_TYPES = new Set<DateRuleType>([
  * list? Something running out anywhere, or something a DOCUMENT says is due.
  */
 export function isDocumentAttentionRule(
-  rule: { ruleType: DateRuleType; sourceEntityType?: DateRuleSourceType },
+  rule: { ruleType: DateRuleType; sourceEntityType?: DateRuleSourceType; supersededBy?: string },
 ): boolean {
+  if (rule.supersededBy) return false; // resolved by a newer document (Rule 5)
   if (EXPIRY_RULE_TYPES.has(rule.ruleType)) return true;
   return rule.sourceEntityType === "document" && DOCUMENT_DUE_RULE_TYPES.has(rule.ruleType);
 }
@@ -379,8 +433,9 @@ export function isDocumentAttentionRule(
  * days, or lapsed three days ago, is exactly what a bell is for.
  */
 export function isAlertDateRule(
-  rule: { ruleType: DateRuleType; sourceEntityType?: DateRuleSourceType },
+  rule: { ruleType: DateRuleType; sourceEntityType?: DateRuleSourceType; supersededBy?: string },
 ): boolean {
+  if (rule.supersededBy) return false; // resolved by a newer document (Rule 5)
   if (ALERT_RULE_TYPES.has(rule.ruleType)) return true;
   return rule.sourceEntityType === "document" && DOCUMENT_DUE_RULE_TYPES.has(rule.ruleType);
 }
@@ -816,6 +871,10 @@ export function scanEntityDates(
       const iso = bareDateOf(raw);
       if (!iso) continue;
 
+      // A reporting period's own boundaries (`statementPeriod.endDate`) are the
+      // span the document describes, never a deadline — see
+      // isReportingPeriodBoundary. The leaf alone ("endDate") cannot say so.
+      if (isReportingPeriodBoundary(key, here, ctx.contextKey)) continue;
       const cls = classifyDateField(key, `${ctx.contextKey ?? ""} ${path}`);
       if (!cls.actionable) continue;
       if (opts.skipRuleTypes?.has(cls.ruleType)) continue;
@@ -1202,12 +1261,103 @@ export interface DateRuleInputs {
  */
 export function rulesFromAll(input: DateRuleInputs): DateRule[] {
   const documents = input.documents || [];
-  const documentRules = rulesFromDocuments(documents);
+  const documentRules = markSupersededDocumentRules(rulesFromDocuments(documents), documents, input.profiles || []);
   const profileRules = rulesFromProfiles(input.profiles || []);
   return dedupeRules([
     ...suppressDocumentCopies(profileRules, documents, documentRules),
     ...documentRules,
   ]);
+}
+
+// ─── Supersession (Rule 5: completed actions resolve downstream UI) ──────────
+//
+// "Your registration expired" is satisfied by registering the car again, and
+// the app learns that the moment the user uploads the new registration. The
+// old document still exists (it is history) and still carries its date, so
+// without this its alert stayed in the bell, the Documents card and the
+// insight cards until someone dismissed an already-handled warning by hand.
+//
+// Deliberately conservative — a false "resolved" hides a real warning, which
+// is worse than one alert too many. A newer document resolves an older one's
+// rule only when ALL of these hold:
+//   · same document type (a real one — not "other"/"document"),
+//   · same rule type and the same date qualifier (expiration ↔ expiration),
+//   · the newer one's date is LATER,
+//   · same subject: the things they are about (a vehicle, a policy) overlap,
+//     or — for documents about a person (a passport) — the same people, and
+//   · the names describe the same thing (most of the shorter name's words
+//     appear in the longer one, years and numbers ignored), so a home policy
+//     never resolves an auto policy held by the same person.
+const GENERIC_DOC_TYPES = new Set(["", "other", "document", "documents", "file", "image", "unknown", "misc", "general"]);
+const PERSON_PROFILE_TYPES = new Set(["self", "person", "pet"]);
+const NAME_STOPWORDS = new Set(["the", "a", "an", "of", "for", "and", "my", "to", "copy", "scan", "new", "updated", "renewed", "renewal"]);
+
+function nameTokens(name: unknown): Set<string> {
+  return new Set(
+    String(name ?? "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length > 1 && !/^\d+$/.test(t) && !NAME_STOPWORDS.has(t)),
+  );
+}
+
+/** Do two document names describe the same thing? (containment ≥ 0.8) */
+export function documentNamesMatch(a: unknown, b: unknown): boolean {
+  const A = nameTokens(a);
+  const B = nameTokens(b);
+  if (A.size === 0 || B.size === 0) return false;
+  let shared = 0;
+  for (const t of A) if (B.has(t)) shared++;
+  return shared / Math.min(A.size, B.size) >= 0.8;
+}
+
+function documentSubject(doc: any, personIds: ReadonlySet<string>): { things: string[]; people: string[] } {
+  const linked: string[] = Array.isArray(doc?.linkedProfiles) ? doc.linkedProfiles.filter((x: unknown) => typeof x === "string") : [];
+  return {
+    things: linked.filter((id) => !personIds.has(id)),
+    people: linked.filter((id) => personIds.has(id)),
+  };
+}
+
+function overlaps(a: readonly string[], b: readonly string[]): boolean {
+  return a.some((x) => b.includes(x));
+}
+
+/**
+ * Stamp `supersededBy` on every document rule a newer document has resolved.
+ * Pure; returns new rule objects only for the rules it changes.
+ */
+export function markSupersededDocumentRules(
+  rules: readonly DateRule[],
+  documents: readonly any[],
+  profiles: readonly any[] = [],
+): DateRule[] {
+  const docs = new Map<string, any>();
+  for (const d of documents || []) if (d?.id && !d.deletedAt) docs.set(String(d.id), d);
+  if (docs.size < 2) return [...rules];
+  const personIds = new Set<string>((profiles || []).filter((p: any) => PERSON_PROFILE_TYPES.has(String(p?.type))).map((p: any) => String(p.id)));
+  const typeOf = (d: any) => normalizeFieldKey(d?.type);
+  return rules.map((r) => {
+    if (r.sourceEntityType !== "document" || !isAlertDateRule(r)) return r;
+    const doc = docs.get(r.sourceEntityId);
+    if (!doc || GENERIC_DOC_TYPES.has(typeOf(doc))) return r;
+    const subject = documentSubject(doc, personIds);
+    const qualifier = dateFieldQualifier(r.sourceField);
+    const newer = rules.find((o) => {
+      if (o === r || o.sourceEntityType !== "document" || o.sourceEntityId === r.sourceEntityId) return false;
+      if (o.ruleType !== r.ruleType || o.date <= r.date) return false;
+      if (dateFieldQualifier(o.sourceField) !== qualifier) return false;
+      const other = docs.get(o.sourceEntityId);
+      if (!other || typeOf(other) !== typeOf(doc)) return false;
+      const os = documentSubject(other, personIds);
+      const sameSubject = subject.things.length > 0 || os.things.length > 0
+        ? overlaps(subject.things, os.things)
+        : overlaps(subject.people, os.people);
+      if (!sameSubject) return false;
+      return documentNamesMatch(doc.title || doc.name, other.title || other.name);
+    });
+    return newer ? { ...r, supersededBy: newer.sourceEntityId } : r;
+  });
 }
 
 /**

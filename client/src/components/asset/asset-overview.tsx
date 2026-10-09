@@ -20,6 +20,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { resolveAssetValue } from "@shared/asset-value";
 import { PERSON_LIKE_TYPES } from "@shared/scope";
 import { readBalance } from "@shared/liability-fields";
 import { formatMoneyCompact } from "@/lib/format";
@@ -397,14 +398,7 @@ export function AssetSummaryCard({
   const reversedSuspect = useMemo(() => {
     if (ownRollup.totalValue <= 0) return null;
     for (const c of directChildren) {
-      const cv =
-        Number(
-          (c.fields as any)?.currentValue ??
-            (c.fields as any)?.value ??
-            (c.fields as any)?.purchasePrice ??
-            (c.fields as any)?.balance ??
-            0,
-        ) || 0;
+      const cv = resolveAssetValue(c); // canonical (shared/asset-value.ts)
       if (cv >= ownRollup.totalValue * 5) {
         return { name: c.name, id: c.id, value: cv };
       }
@@ -571,7 +565,7 @@ export function TopChildrenPreview({
   const sorted = [...directChildren]
     .map((c) => ({
       c,
-      v: (c.fields as any)?.currentValue || (c.fields as any)?.value || 0,
+      v: resolveAssetValue(c),
     }))
     .sort((a, b) => Number(b.v) - Number(a.v))
     .slice(0, 3);

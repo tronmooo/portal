@@ -433,6 +433,17 @@ export default defineConfig({
       'tests/consistency-layer-alerts.test.ts',
       'tests/consistency-layer-ux.test.ts',
       'tests/consistency-layer-wiring.test.ts',
+      // 2026-10-09 user-data synchronization rules (docs/GLOBAL_RULES.md "Sync
+      // rules"): navigation/filters never lose records, valuations propagate
+      // and never go backwards, completed actions resolve their alerts, a
+      // failed request is never an empty account.
+      'tests/sync-asset-navigation.dom.test.tsx',
+      'tests/sync-rules-filters.test.ts',
+      'tests/sync-rules-valuation.test.ts',
+      'tests/sync-rules-valuation.dom.test.tsx',
+      'tests/sync-rules-notifications.test.ts',
+      'tests/sync-rules-failed-request.dom.test.tsx',
+      'tests/sync-rules-invalidation.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
