@@ -81,7 +81,12 @@ green. After a push to `main`:
    an alert (`useAlertSnoozes`, synced across devices). It never moves the
    record's real date.
 9. **Ownership has one writer** (`server/ownership-writer.ts`). Profile
-   scoping goes through `shared/profile-filter.ts`.
+   scoping goes through `shared/profile-filter.ts`. Deleting a profile is
+   fail-safe: if any cascade step fails, the profile is kept, so no record
+   points at a missing owner (`deleteProfile` in `server/supabase-storage.ts`).
+10. **Only owned things are estimated.** The valuation engine never touches an
+    `account`: its value is its balance (`isValuableProfile` in
+    `server/valuation/service.ts`).
 
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.

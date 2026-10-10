@@ -9,6 +9,12 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    ignore:
+      # Node's type definitions follow the RUNTIME (.nvmrc / engines), not the
+      # newest Node release: types for a newer Node accept APIs production
+      # doesn't have. Bump this together with .nvmrc.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       # One PR for all patch/minor bumps; majors arrive one at a time.
       minor-and-patch:

@@ -159,3 +159,21 @@ describe("server value reads go through the canonical resolver", () => {
     expect(read("server/routes.ts")).not.toMatch(/Number\(f\.currentValue \|\| f\.purchasePrice \|\| 0\)/);
   });
 });
+
+describe("accounts are never estimated", () => {
+  it("isValuableProfile: owned things yes, cash accounts no (their value is the balance)", async () => {
+    const { isValuableProfile } = await import("../server/valuation/service");
+    expect(isValuableProfile({ type: "vehicle", fields: {} })).toBe(true);
+    expect(isValuableProfile({ type: "asset", fields: {} })).toBe(true);
+    expect(isValuableProfile({ type: "account", fields: { accountKind: "savings", balance: 8500.25 } })).toBe(false);
+    expect(isValuableProfile({ type: "account", fields: { accountKind: "checking", balance: 1285 } })).toBe(false);
+  });
+});
+
+describe("deleting a profile never leaves records pointing at it", () => {
+  it("a failed cascade keeps the profile instead of deleting it (no dangling owner ids)", () => {
+    const src = read("server/supabase-storage.ts");
+    const body = src.slice(src.indexOf("  async deleteProfile(id: string)"), src.indexOf("// Finally, delete the profile itself"));
+    expect(body).toMatch(/if \(errors\.length > 0\) \{[\s\S]*?return false;\s*\}\s*$/);
+  });
+});

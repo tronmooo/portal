@@ -5816,7 +5816,7 @@ ${JSON.stringify(ctx, null, 2)}`;
       // Cascade had partial failures or the final row delete failed.
       // Surface as 500 so the client can show a real error instead of a
       // misleading success toast while orphan rows linger.
-      return res.status(500).json({ error: "Profile deletion partially failed. Some linked items may remain." });
+      return res.status(500).json({ error: "This profile couldn't be fully deleted, so it was kept (nothing is left pointing at a missing profile). Please try again." });
     }
     res.json({ success: true });
   }));

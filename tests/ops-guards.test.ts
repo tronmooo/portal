@@ -28,6 +28,12 @@ describe("one Node version everywhere", () => {
     expect(engines, "package.json engines.node").toBe(`${nvmrc}.x`);
   });
 
+  it("@types/node describes the runtime we actually run (same major as .nvmrc)", () => {
+    const pkg = JSON.parse(read("package.json"));
+    const types = String(pkg.devDependencies?.["@types/node"] ?? pkg.dependencies?.["@types/node"] ?? "");
+    expect(types.replace(/^[^\d]*/, "").split(".")[0], "@types/node major").toBe(nvmrc);
+  });
+
   it("every workflow that sets up Node reads .nvmrc instead of hard-coding a version", () => {
     for (const f of workflows) {
       const src = read(`.github/workflows/${f}`);

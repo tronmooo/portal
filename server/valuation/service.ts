@@ -55,7 +55,13 @@ export function valuationLockName(profileId: string): string { return `valuation
 
 /** Profiles the valuation system values: owned things (the Assets tab set). */
 export function isValuableProfile(p: { type?: string | null; fields?: any } | null | undefined): boolean {
-  return !!p && isAssetTabProfile(p);
+  // An ACCOUNT's value is its balance — known exactly, kept by the ledger and
+  // bank sync — never an estimate. Valuing one ran a web search for a savings
+  // account ("comparable market analysis") and mirrored the rounded estimate
+  // into currentValue, which resolveAssetValue reads BEFORE balance, so an
+  // estimate could override a real balance in net worth (found in production
+  // data, audit 2026-10-09). Owned things only.
+  return !!p && isAssetTabProfile(p) && String(p.type) !== "account";
 }
 
 /** Shown wherever a manual asset explains why nothing is refreshing. */

@@ -2584,7 +2584,15 @@ export class SupabaseStorage implements IStorage {
     ]);
 
     if (errors.length > 0) {
-      console.warn(`[deleteProfile] Cascade delete partial failures for profile ${id}: ${errors.join(", ")}`);
+      // FAIL SAFE (audit 2026-10-09): a cascade step failed, so some rows may
+      // still name this profile as their owner. Deleting the profile anyway
+      // left them pointing at an id that no longer exists — a task found in
+      // production linked to a hard-deleted profile, invisible under every
+      // person's filter. Keep the profile instead: nothing dangles, and since
+      // every cascade step is idempotent (sole-owner deletes, co-owner
+      // strips), deleting again finishes the job.
+      console.warn(`[deleteProfile] Cascade failed for profile ${id} (${errors.join(", ")}) — profile kept so no record is left pointing at it`);
+      return false;
     }
 
     // Finally, delete the profile itself
