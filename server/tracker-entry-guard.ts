@@ -15,6 +15,7 @@ import {
   resolveCanonicalMetric,
   validateCanonicalValue,
 } from "../shared/wellness-canon";
+import { isNutritionTrackerName } from "../shared/nutrition-shaped";
 
 export interface TrackerFieldish {
   name: string;
@@ -147,11 +148,18 @@ export function sanitizeTrackerEntryValues(
   // A medication/supplement tracker, or a dose-shaped field, is bounded by the
   // field-name rules above only.
   const doseTracker = /^(medication|medications|supplement|supplements|meds?)$/i.test(String(tracker?.category || "").trim());
+  // INTAKE is not a blood level either. A Nutrition entry's `sodium` is the
+  // 45 mg in a Coke or the 1,050 mg in a Big Mac — the lab metric the name
+  // resolves to (serum sodium, 90–200 mmol/L) refused both, so a food with
+  // any sodium outside that band could not be logged or enriched at all
+  // (2026-10-16, found by the live enrichment run). The field-name rules
+  // above still bound a nutrition entry.
+  const intakeTracker = /^nutrition$/i.test(String(tracker?.category || "").trim()) || isNutritionTrackerName(tracker?.name);
   const DOSE_KEY = /^(dosage|dose|doses|units?|iu|mg|mcg|ml|pills?|tablets?|capsules?|drops?|puffs?|completions|taken|servings?)$/i;
   for (const [k, v] of Object.entries(values)) {
     if (!tracker?.name && !tracker?.category) break;
     if (typeof v !== "number" || META_KEYS.has(k) || k.startsWith("_")) continue;
-    if (doseTracker || DOSE_KEY.test(k)) continue;
+    if (doseTracker || intakeTracker || DOSE_KEY.test(k)) continue;
     const metric = resolveCanonicalMetric(tracker?.name, tracker?.category, k);
     if (!metric) continue;
     const unit =

@@ -17,6 +17,7 @@ import {
 } from "../server/nutrition-enrichment";
 import { removeTrackerEntry, updateTrackerEntryEverywhere } from "../server/tracker-entries";
 import { LINKED_SOURCE_KEY, NUTRITION_ENRICHMENT_PREF_KEY } from "../shared/nutrition-enrichment";
+import { sanitizeTrackerEntryValues } from "../server/tracker-entry-guard";
 
 const NOW = "2026-10-16T12:00:00.000Z";
 const NUTRITION_FIELDS = [
@@ -303,6 +304,17 @@ describe("modes", () => {
     expect(after.values.calories).toBe(400);
     expect(after.values.sodium).toBe(900);
     expect((after.computed as any).enrichment.estimated.sodium.isEstimated).toBe(true);
+  });
+});
+
+describe("the value guard reads nutrition as intake, not blood levels", () => {
+  const fields = [...NUTRITION_FIELDS, { name: "sodium", type: "number" as const, unit: "mg" }, { name: "caffeine", type: "number" as const, unit: "mg" }];
+  it("a Coke's 45 mg and a Big Mac's 1,050 mg of sodium both pass on a Nutrition tracker (live-run regression)", () => {
+    expect(sanitizeTrackerEntryValues(fields, { item: "Coke", calories: 140, sodium: 45, caffeine: 34 }, { name: "Calories", category: "nutrition" }).error).toBeUndefined();
+    expect(sanitizeTrackerEntryValues(fields, { item: "Big Mac", calories: 590, sodium: 1050 }, { name: "Nutrition", category: "custom" }).error).toBeUndefined();
+  });
+  it("a serum sodium reading on a lab tracker is still bounded", () => {
+    expect(sanitizeTrackerEntryValues([{ name: "sodium", type: "number", unit: "mmol/L" }], { sodium: 45 }, { name: "Sodium", category: "health" }).error).toMatch(/sodium/i);
   });
 });
 

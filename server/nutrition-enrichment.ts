@@ -562,8 +562,13 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
       return done({ status: "skipped", reason: skipped.reason, enrichment: skipped, entry: updated, trackerId: tracker.id, trackerName: tracker.name });
     }
     if (existing.components.length > 0) {
-      const applied = await applyEnrichment(storage, tracker, entry, { ...existing, status: "applied", reason: undefined, enrichedAt: now }, now);
-      return done({ status: "applied", enrichment: applied.enrichment, entry: applied.entry, linkedEntries: applied.enrichment.linkedEntries, trackerId: tracker.id, trackerName: tracker.name });
+      try {
+        const applied = await applyEnrichment(storage, tracker, entry, { ...existing, status: "applied", reason: undefined, enrichedAt: now }, now);
+        return done({ status: "applied", enrichment: applied.enrichment, entry: applied.entry, linkedEntries: applied.enrichment.linkedEntries, trackerId: tracker.id, trackerName: tracker.name });
+      } catch (e: any) {
+        logger.warn("nutrition-enrichment", `write refused for ${tracker.name}/${entry.id.slice(0, 8)}: ${e?.message || e}`);
+        return done({ status: "failed", reason: `could not write the refined values: ${String(e?.message || e).slice(0, 160)}`, enrichment: existing, trackerId: tracker.id, trackerName: tracker.name });
+      }
     }
   }
   if (existing?.status === "applied" && intent === "auto") {
@@ -621,7 +626,15 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
     return done({ status: "proposed", reason: enrichment.reason, enrichment, entry: updated, trackerId: tracker.id, trackerName: tracker.name });
   }
 
-  const applied = await applyEnrichment(storage, tracker, entry, { ...enrichment, status: "applied" }, now);
+  let applied: Awaited<ReturnType<typeof applyEnrichment>>;
+  try {
+    applied = await applyEnrichment(storage, tracker, entry, { ...enrichment, status: "applied" }, now);
+  } catch (e: any) {
+    // A refused write (the value guard, a collision) leaves the base entry as
+    // the agent saved it; the caller learns why instead of a bare 500.
+    logger.warn("nutrition-enrichment", `write refused for ${tracker.name}/${entry.id.slice(0, 8)}: ${e?.message || e}`);
+    return done({ status: "failed", reason: `could not write the refined values: ${String(e?.message || e).slice(0, 160)}`, enrichment, trackerId: tracker.id, trackerName: tracker.name });
+  }
   logger.info("nutrition-enrichment", `applied to ${tracker.name}/${entry.id.slice(0, 8)}: ${applied.enrichment.summary} [${confidence}${lookup.usedNetwork ? ", network" : ", internal"}] in ${Date.now() - started}ms`);
   return done({ status: "applied", enrichment: applied.enrichment, entry: applied.entry, linkedEntries: applied.enrichment.linkedEntries, trackerId: tracker.id, trackerName: tracker.name });
 }

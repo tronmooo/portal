@@ -22,6 +22,19 @@ import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/sche
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate, isNutritionTrackerName } from "@shared/nutrition-shaped";
 import { planEnrichmentCandidate, rescaleNutritionEntry } from "./nutrition-enrichment";
+
+/**
+ * Item Enrichment Layer: stamp a just-saved Nutrition entry with the candidate
+ * the client posts back after the reply renders. Pure string work; a failure
+ * here can never cost the log (server/nutrition-enrichment.ts).
+ */
+function attachEnrichmentCandidate(entry: any, tracker: { id: string; name: string; category?: string | null } | null | undefined, input: any): void {
+  if (!entry || !tracker) return;
+  try {
+    const candidate = planEnrichmentCandidate(entry, tracker, String(input?.__userMessage || ""));
+    if (candidate) entry._nutritionEnrichment = candidate;
+  } catch { /* never block a log on enrichment planning */ }
+}
 import {
   FINANCE_TOOL_DEFINITIONS, FINANCE_TOOL_SYSTEM_GUIDANCE, executeFinanceTool, isFinanceTool,
 } from "./finance-ai-tools";
@@ -9183,12 +9196,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         // a candidate the client posts back to /api/tracker-entries/:id/enrich
         // once the reply is on screen — product lookup never runs inside the
         // chat turn, so it costs the turn nothing (pure string work here).
-        if (entry) {
-          try {
-            const candidate = planEnrichmentCandidate(entry as any, tracker, String((input as any).__userMessage || ""));
-            if (candidate) (entry as any)._nutritionEnrichment = candidate;
-          } catch { /* never block a log on enrichment planning */ }
-        }
+        attachEnrichmentCandidate(entry, tracker, input);
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, normalizedValues);
@@ -9332,6 +9340,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         } catch { /* non-fatal */ }
         const { values: nv } = normalizeTrackerEntry(conflictTracker as any, entryValues);
         const conflictEntry = await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        attachEnrichmentCandidate(conflictEntry, conflictTracker, input);
         await syncHabitsForTrackerLog(conflictEntry, conflictTracker, {
           userMessage: String((input as any).__userMessage || ""),
           targetProfileId,
@@ -9380,6 +9389,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         // Surface what was auto-created so callers (bulk path, chat UI) can
         // report "created a new X tracker" honestly.
         if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
+        // The first food ever logged creates the Nutrition tracker on this
+        // path — it is as specific as any later one.
+        attachEnrichmentCandidate(entry, newTracker, input);
         // A habit for this activity may already exist with no tracker to point
         // at — this is where it adopts the one we just made.
         await syncHabitsForTrackerLog(entry, newTracker, {
@@ -9419,7 +9431,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
             if (existing) {
               logger.info("ai", `Auto-create raced on "${trackerDisplayName}" — reusing existing tracker ${existing.id} instead of duplicating`);
               const { values: nv } = normalizeTrackerEntry(existing as any, entryValues);
-              return await storage.logEntry({ trackerId: existing.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+              const racedEntry = await storage.logEntry({ trackerId: existing.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+              attachEnrichmentCandidate(racedEntry, existing, input);
+              return racedEntry;
             }
           } catch (retryErr: any) {
             logger.warn("ai", `Race-recovery for "${trackerDisplayName}" failed: ${retryErr?.message || retryErr}`);
