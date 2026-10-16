@@ -64,6 +64,8 @@ import { ChatComposer, type ChatComposerHandle } from "@/components/chat/ChatCom
 import { streamChat } from "@/components/chat/chat-stream";
 import { isDuplicateResend, type LastSend } from "@shared/chat-progress";
 import { ThinkingBubble } from "@/components/chat/ThinkingBubble";
+import { NutritionEnrichmentCard } from "@/components/chat/NutritionEnrichmentCard";
+import { runPendingEnrichment, type NutritionEnrichmentCardData } from "@/lib/nutrition-enrichment";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -2471,6 +2473,22 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
 
+        {/* Item Enrichment Layer: one card per Nutrition entry the lookup
+            refined or wants a decision on. Attached after the reply. */}
+        {msg.nutritionEnrichments && msg.nutritionEnrichments.length > 0 && (
+          <div className="mt-2 space-y-1.5">
+            {msg.nutritionEnrichments.map((card: any) => (
+              <NutritionEnrichmentCard
+                key={card.entryId}
+                data={card}
+                onChange={(next) => setMessages((prev) => prev.map((m) => m.id === msg.id
+                  ? { ...m, nutritionEnrichments: (m.nutritionEnrichments || []).map((x) => (x.entryId === next.entryId ? next : x)) }
+                  : m))}
+              />
+            ))}
+          </div>
+        )}
+
         {/* Timestamp — the user's own rides on the copy row above (F-47 /
             BUG-33): a muted-foreground tint on the primary bubble was
             unreadable. */}
@@ -2788,7 +2806,7 @@ export default function ChatPage() {
       perfMark("chat:final");
       perfMeasure("chat:round-trip", "chat:send");
       logServerTimings(data);
-      applyChatResult(data, userMsgId);
+      applyChatResult(data, userMsgId, { enrich: true });
     },
     onError: (err: Error, { userMsgId }) => {
       // A dropped connection ("Load failed" / timeout) does NOT mean nothing
@@ -3110,7 +3128,7 @@ export default function ChatPage() {
    * request id: a run restored twice (a focus event racing a poll) appends
    * one assistant message.
    */
-  const applyChatResult = useCallback((data: any, userMsgId?: string) => {
+  const applyChatResult = useCallback((data: any, userMsgId?: string, opts?: { enrich?: boolean }) => {
     const requestId = userMsgId || data?.sourceMessageId;
     const assistantMsg: any = {
       id: crypto.randomUUID(),
@@ -3147,6 +3165,19 @@ export default function ChatPage() {
       } catch { /* filter store not ready — non-fatal */ }
     }
     syncFromResponse(data);
+    // Item Enrichment Layer: the reply is on screen; now (and only on the live
+    // send — a restored run never writes) look up the specific foods this
+    // turn logged and attach one card per entry as each lookup settles.
+    if (opts?.enrich && Array.isArray(data?.pendingEnrichment) && data.pendingEnrichment.length > 0) {
+      const target = assistantMsg.id;
+      void runPendingEnrichment(data.pendingEnrichment, (card: NutritionEnrichmentCardData) => {
+        setMessages((prev: any[]) => prev.map((m) => {
+          if (m.id !== target) return m;
+          const rest = (m.nutritionEnrichments || []).filter((x: NutritionEnrichmentCardData) => x.entryId !== card.entryId);
+          return { ...m, nutritionEnrichments: [...rest, card] };
+        }));
+      });
+    }
   }, [setMessages, syncFromResponse]);
 
   // ── Rule 22: BACKGROUND AI JOBS SURVIVE NAVIGATION ─────────────────────

@@ -109,7 +109,8 @@ export interface IStorage {
   logEntry(data: InsertTrackerEntry): Promise<TrackerEntry | undefined>;
   /** Authoritative by-id read-back for a logged entry (chat write verification). */
   getTrackerEntry(entryId: string): Promise<TrackerEntry | undefined>;
-  updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; notes?: string; mood?: any; tags?: string[]; timestamp?: string }): Promise<TrackerEntry | undefined>;
+  /** `computed` merges extra provenance (enrichment / nutrition) into the entry's computed column; existing provenance survives a recompute. */
+  updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; valuesToDelete?: string[]; notes?: string; mood?: any; tags?: string[]; timestamp?: string; computed?: Record<string, any> }): Promise<TrackerEntry | undefined>;
   deleteTrackerEntry(trackerId: string, entryId: string): Promise<boolean>;
   deleteTracker(id: string): Promise<boolean>;
   migrateUnlinkedTrackersToSelf(): Promise<number>;
@@ -1469,7 +1470,7 @@ export class MemStorage implements IStorage {
     this.logActivity("tracker", `Updated tracker: ${updated.name}`);
     return updated;
   }
-  async updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; valuesToDelete?: string[]; notes?: string; mood?: any; tags?: string[]; timestamp?: string }): Promise<TrackerEntry | undefined> {
+  async updateTrackerEntry(trackerId: string, entryId: string, patch: { values?: Record<string, any>; valuesToDelete?: string[]; notes?: string; mood?: any; tags?: string[]; timestamp?: string; computed?: Record<string, any> }): Promise<TrackerEntry | undefined> {
     const tracker = this.trackers.get(trackerId);
     if (!tracker) return undefined;
     const idx = tracker.entries.findIndex(e => e.id === entryId);
@@ -1477,6 +1478,9 @@ export class MemStorage implements IStorage {
     const existing = tracker.entries[idx];
     const updated: TrackerEntry = {
       ...existing,
+      // Parity with SupabaseStorage: provenance written by the enrichment
+      // layers merges into computed and survives the edit.
+      computed: { ...(existing.computed || {}), ...(patch.computed || {}) } as any,
       values: (() => {
         const merged = patch.values ? { ...existing.values, ...patch.values } : { ...existing.values };
         // Parity with SupabaseStorage: `valuesToDelete` names keys to drop.

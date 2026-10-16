@@ -11,6 +11,7 @@
 import type { IStorage } from "./storage";
 import { HABIT_MIRROR_KEY, mirrorHabitIds, completeHabitOccurrence, uncompleteHabitOccurrence, type HabitLogger } from "./habit-completion";
 import { toLocalDateStr, DEFAULT_TIMEZONE } from "@shared/timezone";
+import { removeLinkedEntries, markUserEditedNutrients } from "./nutrition-enrichment";
 
 const noopLogger: HabitLogger = { warn: () => {} };
 
@@ -47,6 +48,16 @@ export async function removeTrackerEntry(
 
   const deleted = await storage.deleteTrackerEntry(input.trackerId, input.entryId);
   if (!deleted) return { ...base, reason: "not_found" };
+
+  // The measurements this entry produced on OTHER trackers (the Hydration and
+  // Caffeine rows a logged Coke linked, server/nutrition-enrichment) go with
+  // it — otherwise the drink is gone and its fluid still counts. Best effort.
+  try {
+    const removedLinked = await removeLinkedEntries(storage, input.entryId);
+    if (removedLinked.length > 0) (base as any).removedLinkedEntryIds = removedLinked;
+  } catch (e: any) {
+    logger.warn(`[tracker-entries] linked-entry cascade failed for ${input.entryId}:`, e?.message || e);
+  }
 
   if (!habitId || !entryDay) return { ...base, ok: true };
 
@@ -111,7 +122,15 @@ export async function updateTrackerEntryEverywhere(
   const habitIds = before ? mirrorHabitIds(before.values) : [];
   const oldDay = before?.timestamp ? toLocalDateStr(new Date(String(before.timestamp)), timezone) : "";
 
-  const entry = await storage.updateTrackerEntry(input.trackerId, input.entryId, input.patch as any);
+  // A nutrient the user edits by hand on an enriched entry becomes the user's
+  // value in the enrichment's provenance, so no later lookup overwrites it.
+  let patch = input.patch;
+  try {
+    const marked = markUserEditedNutrients((before as any)?.computed?.nutrition, input.patch?.values, new Date().toISOString());
+    if (marked) patch = { ...input.patch, computed: { ...(input.patch.computed || {}), nutrition: marked } };
+  } catch { /* provenance is best effort; the edit itself is the contract */ }
+
+  const entry = await storage.updateTrackerEntry(input.trackerId, input.entryId, patch as any);
   if (!entry) return { ok: false, reason: "not_found", movedHabitIds: [] };
 
   const newDay = entry.timestamp ? toLocalDateStr(new Date(String(entry.timestamp)), timezone) : "";

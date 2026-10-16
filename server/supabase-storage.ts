@@ -3728,6 +3728,8 @@ export class SupabaseStorage implements IStorage {
       mood?: any;
       tags?: string[];
       timestamp?: string;
+      /** Extra provenance for the computed column (enrichment / nutrition). */
+      computed?: Record<string, any>;
     }
   ): Promise<any> {
     // Fetch existing row so we can merge values + recompute computed fields.
@@ -3777,12 +3779,25 @@ export class SupabaseStorage implements IStorage {
     if (patch.timestamp) update.timestamp = patch.timestamp;
     // Recompute derived/computed data from the new values so badges (BP
     // category, sleep quality, pace, calories, etc.) stay correct after an edit.
+    // Provenance written by the estimation engine (`enrichment`) and the
+    // nutrition enrichment layer (`nutrition`, `servingFactor`) is not
+    // recomputable from the values — it used to be dropped by this rebuild, so
+    // one edit erased every ≈ marker. It is carried over, and a caller's
+    // `computed` patch merges on top.
+    const carried: Record<string, any> = {};
+    for (const k of ["enrichment", "nutrition", "servingFactor"]) {
+      if (row.computed && row.computed[k] !== undefined) carried[k] = row.computed[k];
+    }
+    const extra = { ...carried, ...(patch.computed || {}) };
     try {
       if (tracker) {
         update.computed = {
-          ...computeSecondaryData(tracker.name, tracker.category, mergedValues, editOwnerCtx, tracker.fields, row.computed?.enrichment),
+          ...computeSecondaryData(tracker.name, tracker.category, mergedValues, editOwnerCtx, tracker.fields, extra.enrichment ?? row.computed?.enrichment),
           validated: (row.computed && row.computed.validated) ?? true,
+          ...extra,
         };
+      } else if (Object.keys(patch.computed || {}).length > 0) {
+        update.computed = { ...(row.computed || {}), ...extra };
       }
     } catch { /* leave computed untouched if recompute fails */ }
     return update;

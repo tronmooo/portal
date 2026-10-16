@@ -21,6 +21,7 @@ import { planSharedActivityFanout, type FanoutWrite } from "@shared/shared-activ
 import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate, isNutritionTrackerName } from "@shared/nutrition-shaped";
+import { planEnrichmentCandidate, rescaleNutritionEntry } from "./nutrition-enrichment";
 import {
   FINANCE_TOOL_DEFINITIONS, FINANCE_TOOL_SYSTEM_GUIDANCE, executeFinanceTool, isFinanceTool,
 } from "./finance-ai-tools";
@@ -5102,8 +5103,9 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
       properties: {
         trackerName: { type: "string", description: "Name of the tracker (partial match)" },
         forProfile: { type: "string", description: "Profile name to narrow tracker search." },
-        values: { type: "object", description: "New values to set for the entry (replaces old values)." },
+        values: { type: "object", description: "New values to set for the entry (replaces old values). May be {} when scaleBy is given." },
         entryIndex: { type: "number", description: "0 = most recent entry (default). 1 = second most recent, etc." },
+        scaleBy: { type: "number", description: "NUTRITION ONLY — a portion correction as a multiplier: 'actually I only ate half of it' → 0.5; 'I had two of those' → 2; 'I ate about a third' → 0.33. The server rescales every nutrient (calories, macros, sugar, sodium, caffeine), the meal's components, and any linked hydration/caffeine rows together. Do NOT recompute the numbers yourself and do NOT log a second entry." },
       },
       required: ["trackerName", "values"],
     },
@@ -5885,6 +5887,10 @@ BEHAVIOR:
   Example: "I drank a Coke" → log_tracker_entry for Nutrition with values: { item: "Coca-Cola", calories: 140, sugar: 39, carbs: 39, protein: 0, fat: 0 }.
   Example: "Had a grande latte from Starbucks" → log_tracker_entry for Nutrition with values: { item: "Grande Latte (Starbucks)", calories: 190, protein: 13, carbs: 18, fat: 7 }.
   ALWAYS set the "item" field to a human-readable food name. Capitalize it. This is the most visible part of the entry.
+  KEEP THE SPECIFICS IN "item": brand, product, flavor, restaurant, size and the user's quantity wording ("Quaker Instant Oatmeal Maple & Brown Sugar (1 packet) + 2% milk (1 cup)", "Coca-Cola (12 oz)", "Big Mac + medium fries"). The server's enrichment layer identifies specific products from that text AFTER the entry is saved and refines the numbers with label data — still pass your best estimate now; a generic estimate for a vague item ("cereal") is correct and stays.
+  ONE MEAL = ONE ENTRY: several foods eaten together ("3 eggs, 2 wheat toast with butter, a banana and coffee with creamer") are ONE log_tracker_entry whose item lists every component and whose values are the meal totals — never six separate meals. Separate eating occasions (breakfast and lunch) are separate entries.
+  PORTION CORRECTIONS: "actually I only ate half" / "I had two of those" → update_tracker_entry(trackerName:"Nutrition", values:{}, scaleBy:0.5 or 2). Never log a second entry and never halve the numbers yourself.
+  USER-STATED LABEL VALUES WIN: "it says 210 calories and 20g protein" → pass exactly calories:210, protein:20; the server keeps them even if a product lookup disagrees.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
 - MULTI-EXERCISE WORKOUTS: A workout that lists several exercises is NOT one entry. Emit ONE log_tracker_entry PER exercise so none is silently dropped. "45-min chest workout: bench press 135 for 3x10, incline dumbbells 40lb, pushups to failure" → THREE log_tracker_entry calls: (1) trackerName:"Bench Press" values:{exercise:"Bench Press", weight:135, sets:3, reps:10}; (2) trackerName:"Incline Dumbbell Press" values:{exercise:"Incline Dumbbell Press", weight:40, sets:3}; (3) trackerName:"Pushups" values:{exercise:"Pushups", reps:0, notes:"to failure"}. Bodyweight/"to failure" moves (pushups, planks, pullups) STILL get their own entry even without a weight number — never omit an exercise just because it has no load. Pick the specific exercise name for each trackerName.
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
@@ -9170,6 +9176,19 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         }
 
         const entry = await storage.logEntry({ trackerId: tracker.id, values: normalizedValues, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
+        // ── ITEM ENRICHMENT CANDIDATE (nutrition) ─────────────────────────
+        // The entry is SAVED above with the model's estimate; that is the
+        // contract. When the food is specific enough to identify ("a 12 oz
+        // Coke", "1 packet of Quaker Maple & Brown Sugar"), the result carries
+        // a candidate the client posts back to /api/tracker-entries/:id/enrich
+        // once the reply is on screen — product lookup never runs inside the
+        // chat turn, so it costs the turn nothing (pure string work here).
+        if (entry) {
+          try {
+            const candidate = planEnrichmentCandidate(entry as any, tracker, String((input as any).__userMessage || ""));
+            if (candidate) (entry as any)._nutritionEnrichment = candidate;
+          } catch { /* never block a log on enrichment planning */ }
+        }
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, normalizedValues);
@@ -12944,6 +12963,14 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const uIdx = input.entryIndex ?? 0;
       const uEntry = uEntries[uEntries.length - 1 - uIdx];
       if (!uEntry) return { error: `No entry found at index ${uIdx}` };
+      // "Actually I only ate half": one in-place rescale of every derived
+      // nutrition value (server/nutrition-enrichment), never a second entry.
+      const scaleBy = Number((input as any).scaleBy);
+      if (isFinite(scaleBy) && scaleBy > 0 && scaleBy !== 1) {
+        const scaled = await rescaleNutritionEntry(storage, { entryId: uEntry.id, trackerId: uTracker.id, factor: scaleBy });
+        if (!scaled.ok) return { error: scaled.reason || `Couldn't rescale the ${uTracker.name} entry` };
+        return { updated: true, trackerName: uTracker.name, oldValues: uEntry.values, newValues: scaled.entry?.values, newEntry: scaled.entry, scaledBy: scaleBy, linkedUpdated: scaled.linkedUpdated };
+      }
       // A real in-place update. This used to be delete + re-log ("storage
       // doesn't have updateTrackerEntry" — a stale comment; it does), which
       // minted a new id, reset the timestamp to NOW (wrecking charts and

@@ -173,6 +173,17 @@ export interface ChatMessage {
     extractedData?: Record<string, any>;
     type?: string;
   }>;
+  /** Item Enrichment Layer outcomes for the Nutrition entries this turn
+   *  logged (client/src/lib/nutrition-enrichment). Attached AFTER the reply
+   *  renders, one card per entry; absent until the lookup settles. */
+  nutritionEnrichments?: Array<{
+    entryId: string;
+    trackerId?: string;
+    trackerName?: string;
+    status: "pending" | "applied" | "proposed" | "skipped" | "failed";
+    reason?: string;
+    enrichment?: any;
+  }>;
   /** Inline Smart Fill suggestion chip — click to open SmartFillDialog with this file. */
   smartFillSuggestion?: {
     fileName: string;

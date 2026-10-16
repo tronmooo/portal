@@ -307,6 +307,10 @@ export default function SettingsPage() {
     queryKey: ["/api/preferences/ai_auto_create_trackers"],
     queryFn: () => apiRequest("GET", "/api/preferences/ai_auto_create_trackers").then(r => r.json()),
   });
+  const { data: prefNutritionEnrichment } = useQuery<{ value: string | null }>({
+    queryKey: ["/api/preferences/nutrition_enrichment"],
+    queryFn: () => apiRequest("GET", "/api/preferences/nutrition_enrichment").then(r => r.json()),
+  });
 
   // (2026-05-24) Map retired Sonnet 4.5 saved preferences onto the current
   // Sonnet 4.6 so the Select displays the right option and the server doesn't
@@ -323,6 +327,8 @@ export default function SettingsPage() {
   const aiAutoExpense = prefAutoExpense?.value !== "false";
   const aiSmartRouting = prefSmartRouting?.value !== "false";
   const aiAutoCreateTrackers = prefAutoCreateTrackers?.value !== "false";
+  // off | auto | ask — anything unset or unknown is Automatic (the default).
+  const nutritionEnrichment = prefNutritionEnrichment?.value === "off" ? "off" : prefNutritionEnrichment?.value === "ask" ? "ask" : "auto";
 
   async function setAiPreference(key: string, value: string) {
     // Optimistic: reflect the new value immediately so the Switch/Select doesn't flicker back
@@ -792,6 +798,26 @@ export default function SettingsPage() {
                 checked={aiAutoCreateTrackers}
                 onCheckedChange={(checked) => setAiPreference("ai_auto_create_trackers", String(checked))}
               />
+            </div>
+            <Separator />
+            <div className="flex items-center justify-between">
+              <div className="flex-1 mr-4">
+                <Label className="text-sm font-medium">Enhanced Nutrition Lookup</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">After a food is logged, match a specific product (brand, flavor, serving) to its label and refine calories and macros. The entry is saved first either way; values you state are never replaced.</p>
+              </div>
+              <Select
+                value={nutritionEnrichment}
+                onValueChange={(v) => setAiPreference("nutrition_enrichment", v)}
+              >
+                <SelectTrigger className="w-[200px] h-8 text-xs" data-testid="select-nutrition-enrichment">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Automatic</SelectItem>
+                  <SelectItem value="ask">Ask when uncertain</SelectItem>
+                  <SelectItem value="off">Off</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </CardContent>
         </Card>

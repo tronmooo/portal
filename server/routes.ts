@@ -37,6 +37,7 @@ import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersi
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
+import { enrichNutritionEntry, rescaleNutritionEntry } from "./nutrition-enrichment";
 import { getValuationSnapshot, refreshValuation, isValuableProfile, getValuationStatus } from "./valuation/service";
 import { isAutoValuationEnabled } from "@shared/valuation/context";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
@@ -2043,6 +2044,17 @@ export async function registerRoutes(
         ...(sse ? { onEvent: (ev: any) => { try { sse!.send(ev.type, ev); } catch { /* stream may be gone */ } } } : {}),
       });
       const tEngine = Date.now() - tEngineStart;
+      // Item Enrichment Layer: every Nutrition entry this turn saved that is
+      // specific enough to identify carries a candidate; hoist them so the
+      // client can post them to /api/tracker-entries/:id/enrich AFTER the
+      // reply renders. Nothing here waits on a lookup.
+      try {
+        const rs: any[] = Array.isArray((result as any)?.results) ? (result as any).results : [];
+        const pending = rs
+          .filter((r) => r && typeof r === "object" && (r as any)._nutritionEnrichment)
+          .map((r) => { const c = (r as any)._nutritionEnrichment; delete (r as any)._nutritionEnrichment; return c; });
+        if (pending.length > 0) (result as any).pendingEnrichment = pending;
+      } catch { /* an enrichment candidate is never worth a failed reply */ }
       if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
 
       // Projections computed up front — they feed the capture bookkeeping AND
@@ -6747,6 +6759,34 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
   // cards, which only carry the entry id. Resolves the owning tracker, then
   // applies the same value/notes/timestamp/valuesToDelete patch as the
   // tracker-scoped route.
+  // ── Item Enrichment Layer (server/nutrition-enrichment) ─────────────────
+  // Refine a saved Nutrition entry from a product match. The chat client calls
+  // this AFTER the reply is on screen with the candidate the turn emitted;
+  // the Suggested-action card calls it with intent "force" (Use exact match)
+  // or "reject" (Use generic estimate). The preference `nutrition_enrichment`
+  // (off | auto | ask) is read here, so "off" makes this a no-op.
+  app.post("/api/tracker-entries/:entryId/enrich", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anonymous";
+    if (rateLimit(`enrich:${uid}`, 40)) return res.status(429).json({ error: "Too many requests. Please wait a moment." });
+    const body = req.body || {};
+    const message = typeof body.message === "string" ? body.message.slice(0, 2000) : undefined;
+    const intent = ["auto", "preview", "force", "reject"].includes(String(body.intent)) ? String(body.intent) as "auto" | "preview" | "force" | "reject" : "auto";
+    const outcome = await enrichNutritionEntry(storage, { entryId: req.params.entryId, trackerId: typeof body.trackerId === "string" ? body.trackerId : undefined, message, intent });
+    if (outcome.status === "failed" && /not found/.test(outcome.reason || "")) return res.status(404).json({ error: outcome.reason });
+    const uid_en = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_en}`); bustCache(`profile-detail:${uid_en}:`);
+    return res.json(outcome);
+  }));
+  // "Edit serving size" / "actually I only ate half": one in-place rescale of
+  // the entry's nutrients, its components and every linked measurement.
+  app.post("/api/tracker-entries/:entryId/rescale", asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const factor = Number(body.factor);
+    if (!isFinite(factor) || factor <= 0 || factor > 100) return res.status(400).json({ error: "factor must be a positive number" });
+    const scaled = await rescaleNutritionEntry(storage, { entryId: req.params.entryId, trackerId: typeof body.trackerId === "string" ? body.trackerId : undefined, factor });
+    if (!scaled.ok) return res.status(/not found/.test(scaled.reason || "") ? 404 : 400).json({ error: scaled.reason || "Could not rescale" });
+    const uid_rs = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_rs}`); bustCache(`profile-detail:${uid_rs}:`);
+    return res.json(scaled);
+  }));
   app.patch("/api/tracker-entries/:entryId", asyncHandler(async (req, res) => {
     const located = await locateTrackerEntry(req.params.entryId);
     if (!located) return res.status(404).json({ error: "Entry not found" });

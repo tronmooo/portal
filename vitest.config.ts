@@ -450,6 +450,10 @@ export default defineConfig({
       // the production watchdog, weekly CI, Dependabot.
       'tests/ops-guards.test.ts',
       'tests/sync-rules-guards.test.ts',
+      // 2026-10-16 Item Enrichment Layer: specific foods are refined from
+      // product/label data AFTER the base entry is saved; user values win.
+      'tests/nutrition-enrichment.test.ts',
+      'tests/nutrition-enrichment-flow.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,
