@@ -224,6 +224,15 @@ describe("components and meal totals", () => {
   it("a sentence boundary ends a component: the label reading is not part of the quantity", () => {
     expect(splitComponentPhrases("a Quest protein bar. It says 210 calories and 20g protein.")).toEqual(["a Quest protein bar", "It says 210 calories", "20g protein"]);
   });
+  it("a Title-Case 'with' tail still splits off the added food; a composed dish keeps its ingredient (live-run regression)", () => {
+    expect(splitComponentPhrases("Wheat Toast with Butter (2 slices)")).toEqual(["Wheat Toast (2 slices)", "Butter"]);
+    expect(splitComponentPhrases("Coffee with Creamer")).toEqual(["Coffee", "Creamer"]);
+    expect(splitComponentPhrases("Spinach Blueberry Banana Smoothie with Greek Yogurt")).toEqual(["Spinach Blueberry Banana Smoothie with Greek Yogurt"]);
+    expect(splitComponentPhrases("Grande Latte with Oat Milk")).toEqual(["Grande Latte with Oat Milk"]);
+    const comps = splitComponentPhrases("Wheat Toast with Butter (2 slices)").map((p) => dbComponent(p));
+    expect(comps.map((c) => [c.sourceItem, c.servings])).toEqual([["Whole wheat bread", 2], ["Butter, salted", 1]]);
+    expect(sumComponentTotals(comps, NOW).calories!.value).toBe(80 * 2 + 102);
+  });
   it("a product name with '&' is not split into two foods", () => {
     expect(splitComponentPhrases("Quaker Instant Oatmeal Honey & Almonds (1 packet) + 2% milk (1 cup)")).toEqual([
       "Quaker Instant Oatmeal Honey & Almonds (1 packet)", "2% milk (1 cup)",

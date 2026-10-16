@@ -859,6 +859,9 @@ export function isNutritionTrackerLike(t: { name?: string | null; category?: str
   return /^\s*(daily |weekly |my )?(nutrition|nutrients?|calorie counter|calories?|caloric intake|diet|macros?|macro tracker|food log|food diary|food journal|food tracker|meal log|meal tracker|meals?|eating|nutrition tracker)\s*$/i.test(String(t.name || ""));
 }
 
+/** A dish whose "with …" names an ingredient already inside it, not a second food. */
+const COMPOSED_DISH_RE = /\b(smoothie|shake|milkshake|salad|bowl|sandwich|sub|burger|cheeseburger|burrito|wrap|taco|tacos|pizza|soup|stew|chili|curry|omelet|omelette|parfait|casserole|pasta|noodles|ramen|sushi|quesadilla|nachos|latte|frappuccino)\b/i;
+
 /** Split a composed item into component phrases: "eggs, toast with butter, a banana and coffee with creamer". */
 export function splitComponentPhrases(text: string): string[] {
   const t = String(text || "").replace(/\s+/g, " ").trim();
@@ -870,10 +873,27 @@ export function splitComponentPhrases(text: string): string[] {
   const parts = t
     .split(/\s*(?:,|\+|;|\.(?!\d)|!|\?|\band\b|\bplus\b|\balong with\b)\s*/i)
     .flatMap((p) => {
-      // "toast with butter" / "oatmeal with 1 cup of 2% milk" split; a
-      // Capitalized tail ("Smoothie with Greek Yogurt") is a product name.
-      const m = p.match(/^(.*?)\s+with\s+([^A-Z]{1,40})$/);
-      if (m && m[2].trim().split(/\s+/).length <= 5) return [m[1].trim(), m[2].trim()];
+      // "toast with butter" / "oatmeal with 1 cup of 2% milk" / "Wheat Toast
+      // with Butter (2 slices)" split into the base item and what was added to
+      // it. A composed dish keeps its "with" (the yogurt in "Smoothie with
+      // Greek Yogurt" is an ingredient, not a second food), and so does a
+      // long Title-Case tail, which reads as a product name. A trailing
+      // parenthetical quantity on the tail belongs to the head when the head
+      // has none ("(2 slices)" counts the toast, not the butter).
+      const m = p.match(/^(.*?)\s+with\s+(.{1,40}?)\s*(\([^)]*\))?$/);
+      if (m) {
+        const head = m[1].trim();
+        const tail = m[2].trim();
+        const paren = m[3] || "";
+        const tailWords = tail.split(/\s+/);
+        const capitalizedTail = /[A-Z]/.test(tail.slice(1)) || /^[A-Z]/.test(tail);
+        const composedDish = COMPOSED_DISH_RE.test(head);
+        const ok = !composedDish && (capitalizedTail ? tailWords.length <= 2 : tailWords.length <= 5);
+        if (ok) {
+          const headHasQty = /\d|\b(a|an|half|one|two|three)\b/i.test(head);
+          return [paren && !headHasQty ? `${head} ${paren}` : head, paren && headHasQty ? `${tail} ${paren}` : tail];
+        }
+      }
       return [p.trim()];
     })
     .map((p) => p.replace(/^(i\s+)?(ate|had|drank|took|got|ordered|grabbed)\s+/i, "").trim())
