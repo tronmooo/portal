@@ -256,6 +256,7 @@ export function normalizeQuantity(text: string): QuantityNormalization {
   // "a 12 oz coke" / "12 oz" / "12oz" / "2 cups" / "1 packet" / "3 bites"
   const amountUnit = lc.match(new RegExp(`${AMOUNT_RE}\\s*(fl\\.?\\s*oz|[a-z]+)`));
 
+  let amountToken = "";
   const resolveUnit = (amount: number, unitRaw: string, out: QuantityNormalization): QuantityNormalization => {
     const unit = unitRaw.replace(/\./g, "").replace(/\s+/g, " ").trim();
     out.amount = amount;
@@ -285,20 +286,26 @@ export function normalizeQuantity(text: string): QuantityNormalization {
       out.confidence = "high";
       return out;
     }
-    // "2 bananas", "3 eggs" — a count of the named food.
+    // The word after the number is the FOOD, not a unit: "2 bananas", "3 eggs",
+    // "2 wheat toast" are counts of the item itself. "a Quest bar" / "a Coke"
+    // (an article, then the food) is no quantity at all — one standard serving.
+    if (/^(a|an)$/.test(amountToken)) return { ...base };
+    out.unit = null;
     out.count = amount;
-    out.confidence = "medium";
+    out.confidence = "high";
     return out;
   };
 
   const fracWord: Record<string, number> = { half: 0.5, quarter: 0.25, third: 1 / 3, "a third": 1 / 3, "two thirds": 2 / 3, "three quarters": 0.75 };
   if (fracContainer && (fracWord[fracContainer[1]] != null || parseAmountToken(fracContainer[1]) != null) && /^(of|a|an|the)\b/.test(lc.slice(fracContainer[1].length).trim())) {
     const amount = fracWord[fracContainer[1]] ?? parseAmountToken(fracContainer[1])!;
+    amountToken = fracContainer[1].toLowerCase();
     return resolveUnit(amount, fracContainer[2], { ...base });
   }
   if (amountUnit) {
     const amount = parseAmountToken(amountUnit[1]);
     if (amount != null) {
+      amountToken = amountUnit[1].toLowerCase();
       const unitTok = amountUnit[2];
       // "2 large eggs" → the adjective is not the unit.
       if (SIZE_ADJECTIVES[unitTok] != null) {
@@ -861,7 +868,7 @@ export function splitComponentPhrases(text: string): string[] {
   // split: only split on " with " when what follows is a plain food word
   // phrase of ≤3 words that itself is not capitalized like a product.
   const parts = t
-    .split(/\s*(?:,|\+|;|\band\b|\bplus\b|\balong with\b)\s*/i)
+    .split(/\s*(?:,|\+|;|\.(?!\d)|!|\?|\band\b|\bplus\b|\balong with\b)\s*/i)
     .flatMap((p) => {
       // "toast with butter" / "oatmeal with 1 cup of 2% milk" split; a
       // Capitalized tail ("Smoothie with Greek Yogurt") is a product name.

@@ -97,6 +97,12 @@ describe("quantity normalization keeps the user's wording", () => {
     expect(normalizeQuantity("large banana")).toMatchObject({ count: 1, confidence: "medium" });
     expect(normalizeQuantity("a big apple").assumption).toMatch(/big/);
     expect(normalizeQuantity("").amount).toBeNull();
+    // A number before the FOOD word is a count of the food (live-run regression: "2 wheat toast" counted as one).
+    expect(normalizeQuantity("2 wheat toast")).toMatchObject({ count: 2, unit: null, confidence: "high" });
+    expect(normalizeQuantity("3 eggs")).toMatchObject({ count: 3, unit: "eggs" });
+    // An article before a brand is no quantity at all ("a Quest protein bar" dropped to medium).
+    expect(normalizeQuantity("a Quest protein bar")).toMatchObject({ amount: null, count: null });
+    expect(normalizeQuantity("a Coke").count).toBeNull();
   });
 });
 
@@ -179,6 +185,11 @@ describe("internal reference lookup", () => {
     expect(large.confidence).toBe("medium");
     const oreo = lookupNutritionDb("oreos")!.item;
     expect(resolveServings(oreo, normalizeQuantity("2 cookies")).servings).toBeCloseTo(2 / 3);
+    const toast = lookupNutritionDb("wheat toast")!.item;
+    expect(resolveServings(toast, normalizeQuantity("2 wheat toast"), "2 wheat toast")).toMatchObject({ servings: 2, confidence: "exact" });
+    const quest = lookupNutritionDb("Quest bar")!.item;
+    expect(resolveServings(quest, normalizeQuantity("a Quest protein bar")).servings).toBe(1);
+    expect(resolveServings(quest, normalizeQuantity("a Quest protein bar")).confidence).toBe("exact");
     // No quantity at all → one serving, the row's own confidence.
     expect(resolveServings(coke, normalizeQuantity("")).confidence).toBe("exact");
   });
@@ -209,6 +220,9 @@ describe("components and meal totals", () => {
     const totals = sumComponentTotals(comps, NOW);
     expect(totals.calories!.value).toBe(Math.round(72 * 3 + 80 * 2 + 102 + 105 + 2 + 20));
     expect(totals.caffeine!.value).toBe(95);
+  });
+  it("a sentence boundary ends a component: the label reading is not part of the quantity", () => {
+    expect(splitComponentPhrases("a Quest protein bar. It says 210 calories and 20g protein.")).toEqual(["a Quest protein bar", "It says 210 calories", "20g protein"]);
   });
   it("a product name with '&' is not split into two foods", () => {
     expect(splitComponentPhrases("Quaker Instant Oatmeal Honey & Almonds (1 packet) + 2% milk (1 cup)")).toEqual([
