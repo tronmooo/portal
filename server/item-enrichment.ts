@@ -251,11 +251,15 @@ export interface ItemEnrichOptions {
   mode?: EnrichmentMode;
   intent?: "auto" | "preview" | "force" | "reject";
   deps?: ItemEnrichmentDeps;
+  /** The in-turn pass: curated tables only (medication, supplement), no model. */
+  sync?: boolean;
 }
 
 export interface ItemEnrichOutcome {
   status: ItemEnrichment["status"];
   reason?: string;
+  /** Sync pass: the model could still identify this — keep the asynchronous candidate. */
+  needsMore?: boolean;
   enrichment?: ItemEnrichment;
   record?: any;
   target: EnrichmentTarget;
@@ -366,7 +370,7 @@ async function loadRecord(storage: IStorage, opts: ItemEnrichOptions): Promise<L
  */
 export async function enrichItem(storage: IStorage, opts: ItemEnrichOptions): Promise<ItemEnrichOutcome> {
   const started = Date.now();
-  const deps = { ...defaultDeps(), ...(opts.deps || {}) };
+  const deps: ItemEnrichmentDeps = opts.sync ? { now: () => new Date().toISOString(), ...(opts.deps || {}), modelIdentify: undefined } : { ...defaultDeps(), ...(opts.deps || {}) };
   const now = deps.now!();
   const done = (o: Omit<ItemEnrichOutcome, "ms" | "target" | "id">): ItemEnrichOutcome => ({ ...o, target: opts.target, id: opts.id, ms: Date.now() - started });
 
@@ -429,7 +433,7 @@ export async function enrichItem(storage: IStorage, opts: ItemEnrichOptions): Pr
     return done({ status: "failed", reason: "identification failed" });
   }
   for (const k of userProvided) delete attrs[k];
-  if (Object.keys(attrs).length === 0) return done({ status: "skipped", reason: `nothing identified for "${text.slice(0, 80)}"` });
+  if (Object.keys(attrs).length === 0) return done({ status: "skipped", reason: `nothing identified for "${text.slice(0, 80)}"`, needsMore: !!opts.sync && specificity.level !== "category" });
 
   const confidence = overallItemConfidence(attrs);
   // What decides the write is the attributes that CLEAR the floor, not the

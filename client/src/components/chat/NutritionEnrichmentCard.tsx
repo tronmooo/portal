@@ -16,6 +16,7 @@ import {
   CONFIDENCE_LABEL,
   ENTRY_VALUE_NUTRIENTS,
   NUTRIENT_LABELS,
+  describeSources,
   formatNutrient,
   type NutrientKey,
   type NutritionEnrichment,
@@ -73,6 +74,7 @@ export function NutritionEnrichmentCard({ data, onChange }: { data: NutritionEnr
           </div>
         </div>
       </div>
+      <div className="text-[11px] text-muted-foreground">Source: {describeSources(e)}</div>
       {scaled && <div className="mt-1 text-[11px] text-muted-foreground">Your total ({e.components.map((c) => `${Math.round(c.servings * 100) / 100} serving${Math.abs(c.servings - 1) < 0.01 ? "" : "s"}`).join(" + ")})</div>}
       <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
         {SHOWN.filter((k) => ENTRY_VALUE_NUTRIENTS.includes(k)).map((k) => {

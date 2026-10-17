@@ -371,6 +371,14 @@ export function normalizeTrackerEntry(
     );
     const fieldUnit = fieldDef?.unit;
 
+    // A declared TEXT field keeps its text: "2 eggs" / "3 slices" in a
+    // Nutrition entry's `item` is the food's name, and parsing it as "2 with
+    // unit eggs" stored the number 2 as the label (2026-10-17).
+    if (fieldDef && (fieldDef.type === "text" || fieldDef.type === "select") && typeof v === "string") {
+      out[canonicalKey] = v;
+      continue;
+    }
+
     // Parse numeric + unit suffix
     const parsed = parseNumericWithUnit(v);
     if (parsed) {

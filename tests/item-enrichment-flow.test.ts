@@ -144,6 +144,18 @@ describe("tracker entries: medications and supplements", () => {
     expect(prov.attributes.strengthMg.sourceType).toBe("user");
   });
 
+  it("the in-turn pass identifies from the table with no model; an unknown device is left for the full pass", async () => {
+    const t = await medTracker("Advil");
+    const entry = (await storage.logEntry({ trackerId: t.id, values: { drug: "Advil", dosage: 200 } }))!;
+    const out = await enrichItem(storage, { target: "trackerEntry", id: entry.id, trackerId: t.id, message: "I took two Advil 200 mg tablets", mode: "auto", sync: true, deps: { modelIdentify: async () => { throw new Error("no model in the turn"); } } });
+    expect(out.status).toBe("applied");
+    expect(out.needsMore).toBeFalsy();
+    const dev = await storage.createProfile({ type: "asset", name: "EcoFlow Delta 2", fields: {} });
+    const sync = await enrichItem(storage, { target: "profile", id: dev.id, mode: "auto", sync: true });
+    expect(sync.status).toBe("skipped");
+    expect(sync.needsMore).toBe(true);
+  });
+
   it("'I took Tylenol' identifies acetaminophen and keeps the strength ambiguous", async () => {
     const t = await medTracker("Tylenol");
     const entry = (await storage.logEntry({ trackerId: t.id, values: { drug: "Tylenol" } }))!;

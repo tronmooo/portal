@@ -54,7 +54,7 @@ import {
   type QuantityNormalization,
   type Specificity,
 } from "@shared/nutrition-enrichment";
-import { lookupNutritionDb, resolveServings, type NutritionDbItem } from "@shared/nutrition-db";
+import { NUTRITION_DB, lookupNutritionDb, resolveServings, type NutritionDbItem } from "@shared/nutrition-db";
 import { ITEM_ENRICHMENT_PREF_KEY } from "@shared/item-identity";
 import { getAnthropicClient } from "./anthropic-client";
 import { logger } from "./logger";
@@ -100,10 +100,21 @@ export function planEnrichmentCandidate(
  * Item Lookup: off | auto | ask), falling back to the nutrition-only key it
  * generalizes. Unset is Automatic.
  */
+const modeMemo = new Map<string, { mode: EnrichmentMode; at: number }>();
+const MODE_MEMO_MS = 5 * 60_000;
+/** Forget a memoized mode (the preference route calls this on a write). */
+export function forgetEnrichmentMode(userKey: string): void { modeMemo.delete(userKey); }
+
 export async function readEnrichmentMode(storage: IStorage): Promise<EnrichmentMode> {
+  const key = String((storage as any).userId || "");
+  const hit = key ? modeMemo.get(key) : undefined;
+  if (hit && Date.now() - hit.at < MODE_MEMO_MS) return hit.mode;
   const item = await storage.getPreference(ITEM_ENRICHMENT_PREF_KEY).catch(() => null);
-  if (item != null && String(item).trim()) return parseEnrichmentMode(item);
-  return parseEnrichmentMode(await storage.getPreference(NUTRITION_ENRICHMENT_PREF_KEY).catch(() => null));
+  const mode = item != null && String(item).trim()
+    ? parseEnrichmentMode(item)
+    : parseEnrichmentMode(await storage.getPreference(NUTRITION_ENRICHMENT_PREF_KEY).catch(() => null));
+  if (key) modeMemo.set(key, { mode, at: Date.now() });
+  return mode;
 }
 
 /** The food the entry names, from whichever text field the agent used. */
@@ -122,6 +133,8 @@ export interface ExternalProductMatch {
   name: string;
   brand?: string;
   serving: { amount: number; unit: string; grams?: number | null; ml?: number | null; label: string };
+  /** The package the product is sold in, when the source states it ("473 ml", "27.5 oz (780 g)"). */
+  package?: { grams?: number; ml?: number; label: string };
   perServing: NutrientVector;
   source: string;
   sourceType: EnrichmentSourceType;
@@ -143,9 +156,53 @@ export interface ModelComponentEstimate {
   basis?: string;
 }
 
+/** A shorthand the user has confirmed: "fairlife choc" → a reference row or a product the database answered once. */
+export type LearnedAlias = { kind: "db"; id: string } | { kind: "external"; match: ExternalProductMatch };
+export const PRODUCT_ALIASES_PREF_KEY = "product_aliases";
+const MAX_LEARNED_ALIASES = 300;
+
+/** The alias key of a phrase: lower-case words, quantities and parentheticals removed. */
+export function aliasKey(phrase: string): string {
+  return String(phrase || "")
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\b\d+(?:\.\d+)?\s*(fl\.?\s*oz|oz|ml|l|g|kg|lb|lbs|cups?|cup|tbsp|tsp|servings?|slices?|pieces?|packets?|cans?|bottles?|bars?|scoops?)\b/g, " ")
+    .replace(/\b(a|an|the|of|my|some|one|two|three|half|whole|i|ate|had|drank|took)\b/g, " ")
+    .replace(/[^a-z0-9&'%+ ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export async function loadLearnedAliases(storage: IStorage): Promise<Record<string, LearnedAlias>> {
+  try {
+    const raw = await storage.getPreference(PRODUCT_ALIASES_PREF_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch { return {}; }
+}
+
+/** Remember that `phrase` means `target`, so the next mention resolves without a lookup. */
+export async function learnAlias(storage: IStorage, phrase: string, target: LearnedAlias): Promise<void> {
+  const key = aliasKey(phrase);
+  if (!key || key.split(" ").length > 8) return;
+  const all = await loadLearnedAliases(storage);
+  all[key] = target;
+  const keys = Object.keys(all);
+  if (keys.length > MAX_LEARNED_ALIASES) for (const k of keys.slice(0, keys.length - MAX_LEARNED_ALIASES)) delete all[k];
+  try { await storage.setPreference(PRODUCT_ALIASES_PREF_KEY, JSON.stringify(all)); } catch { /* best effort */ }
+}
+
 export interface EnrichmentDeps {
   /** Product database lookup for a branded phrase. Null when nothing matched. `strict` when the phrase carries no known brand, only a proper name. */
   productLookup?: (phrase: string, opts?: { strict?: boolean }) => Promise<ExternalProductMatch | null>;
+  /** Shorthand the user confirmed earlier (loadLearnedAliases). */
+  aliases?: Record<string, LearnedAlias>;
+  /**
+   * The synchronous pass inside the chat turn: deterministic tables only, no
+   * generic fallback for a branded phrase (that phrase waits for the product
+   * sources in the asynchronous pass), no network, no model.
+   */
+  syncOnly?: boolean;
   /** Model estimate for the phrases nothing else matched. */
   modelEstimate?: (input: { item: string; message: string; phrases: string[] }) => Promise<ModelComponentEstimate[] | null>;
   now?: () => string;
@@ -197,6 +254,29 @@ export function nutrientsFromOffNutriments(n: Record<string, any> | null | undef
   set("caffeine", pick("caffeine", 1000));
   if (out.calories == null && out.protein == null && out.carbs == null && out.fat == null) return null;
   return out;
+}
+
+/** "473 ml" / "27.5 oz (780 g)" / "1 L" / "14.3 oz" → the package in ml and/or grams. */
+export function parsePackageQuantity(q: string): { grams?: number; ml?: number; label: string } | null {
+  const t = String(q || "").toLowerCase().trim();
+  if (!t) return null;
+  const out: { grams?: number; ml?: number; label: string } = { label: q.trim() };
+  let ozGrams: number | undefined;
+  for (const m of t.matchAll(/(\d+(?:[.,]\d+)?)\s*(ml|l|cl|fl\.?\s*oz|g|kg|oz|lb|lbs)\b/g)) {
+    const n = parseFloat(m[1].replace(",", "."));
+    const u = m[2].replace(/\s|\./g, "");
+    if (!isFinite(n)) continue;
+    if (u === "ml" && out.ml == null) out.ml = n;
+    else if (u === "l" && out.ml == null) out.ml = n * 1000;
+    else if (u === "cl" && out.ml == null) out.ml = n * 10;
+    else if (u === "floz" && out.ml == null) out.ml = n * 29.5735;
+    else if (u === "g" && out.grams == null) out.grams = n;
+    else if (u === "kg" && out.grams == null) out.grams = n * 1000;
+    else if ((u === "lb" || u === "lbs") && out.grams == null) out.grams = n * 453.6;
+    else if (u === "oz" && ozGrams == null) ozGrams = n * 28.3495; // a bare oz on a package is weight — unless a gram figure follows
+  }
+  if (out.grams == null && out.ml == null && ozGrams != null) out.grams = Math.round(ozGrams * 10) / 10;
+  return out.grams != null || out.ml != null ? out : null;
 }
 
 /**
@@ -259,6 +339,7 @@ export async function openFoodFactsLookup(phrase: string, opts: { timeoutMs?: nu
   const servingG = !isBeverage && servingQty ? servingQty : null;
   if (isBeverage && servingMl) perServing.fluidMl = Math.round(servingMl);
   const label = servingSize || (servingQty ? `${servingQty} ${isBeverage ? "ml" : "g"}` : "1 serving");
+  const pkg = parsePackageQuantity(String(p.quantity || ""));
   const brand = String(p.brands || "").split(",")[0].trim() || undefined;
   const fullCoverage = qTok.every((t) => new Set([...tokens(p.product_name), ...tokens(p.brands || "")]).has(t));
   const confidence: EnrichmentConfidence = fullCoverage && servingQty ? "exact" : servingQty ? "high" : "medium";
@@ -266,6 +347,7 @@ export async function openFoodFactsLookup(phrase: string, opts: { timeoutMs?: nu
     name: brand && !new RegExp(brand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(p.product_name) ? `${brand} ${p.product_name}` : String(p.product_name),
     brand,
     serving: { amount: 1, unit: "serving", grams: servingG, ml: servingMl, label },
+    ...(pkg ? { package: pkg } : {}),
     perServing,
     source: `Open Food Facts product ${p.code || ""}`.trim(),
     sourceType: "product_database",
@@ -394,6 +476,7 @@ function componentFromExternal(m: ExternalProductMatch, phrase: Phrase, now: str
   const asRow: NutritionDbItem = {
     id: "external", name: m.name, brand: m.brand, kind: "branded", serving: { amount: m.serving.amount, unit: m.serving.unit, grams: m.serving.grams ?? undefined, ml: m.serving.ml ?? undefined, label: m.serving.label },
     perServing: m.perServing, sourceType: m.sourceType, source: m.source, confidence: m.confidence, isBeverage: m.isBeverage, match: [], unitWords: m.unitWords,
+    package: m.package,
   };
   const resolved = resolveServings(asRow, qty, phrase.quantityText);
   const confidence = minConf(m.confidence, resolved.confidence);
@@ -466,12 +549,27 @@ export async function lookupComponents(
   const components: Array<NutritionComponent | null> = phrases.map(() => null);
   let usedNetwork = false;
 
+  // 0. shorthand the user confirmed before ("fairlife choc", "quest cookies bar")
+  const aliases = deps.aliases || {};
+  phrases.forEach((ph, i) => {
+    const learned = aliases[aliasKey(ph.text)] || aliases[aliasKey(ph.quantityText)];
+    if (!learned) return;
+    if (learned.kind === "db") {
+      const row = NUTRITION_DB.find((r) => r.id === learned.id);
+      if (row) components[i] = componentFromDb(row, ph, now);
+    } else if (learned.match) {
+      components[i] = componentFromExternal(learned.match, ph, now);
+    }
+  });
+
   // 1. internal reference. A GENERIC row that matches a BRANDED phrase is a
   // fallback, not an answer: "Kellogg's Special K Red Berries Breakfast
   // Cereal" contains "cereal", and the cereal average is not that product.
-  // Such a match waits until the product sources below have had their turn.
+  // Such a match waits until the product sources below have had their turn
+  // (and in the synchronous pass it waits for the asynchronous one).
   const fallback: Array<NutritionComponent | null> = phrases.map(() => null);
   phrases.forEach((ph, i) => {
+    if (components[i]) return;
     const m = lookupNutritionDb(ph.text) || lookupNutritionDb(ph.quantityText);
     if (!m) return;
     const spec = detectSpecificity(ph.text);
@@ -479,6 +577,10 @@ export async function lookupComponents(
     if (m.item.kind === "generic" && branded) fallback[i] = componentFromDb(m.item, ph, now);
     else components[i] = componentFromDb(m.item, ph, now);
   });
+  if (deps.syncOnly) {
+    const unresolved = phrases.filter((_, i) => !components[i]).map((p) => p.text);
+    return { components: components.filter((c): c is NutritionComponent => !!c), unresolved, usedNetwork: false };
+  }
 
   // 2. product database for branded leftovers
   const deadline = Date.now() + (deps.deadlineMs ?? DEFAULT_DEADLINE_MS);
@@ -535,11 +637,15 @@ export interface EnrichOptions {
    */
   intent?: "auto" | "preview" | "force" | "reject";
   deps?: EnrichmentDeps;
+  /** The in-turn pass: deterministic tables only, applies only exact/high, never a proposal. */
+  sync?: boolean;
 }
 
 export interface EnrichOutcome {
   status: NutritionEnrichment["status"];
   reason?: string;
+  /** Sync pass: a product source or the model could still improve this entry — keep the asynchronous candidate. */
+  needsMore?: boolean;
   enrichment?: NutritionEnrichment;
   entry?: TrackerEntry;
   trackerId?: string;
@@ -571,7 +677,9 @@ async function resolveTracker(storage: IStorage, entry: any, trackerId?: string)
  */
 export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOptions): Promise<EnrichOutcome> {
   const started = Date.now();
-  const deps = { ...defaultDeps(), ...(opts.deps || {}) };
+  const deps: EnrichmentDeps = opts.sync
+    ? { now: () => new Date().toISOString(), syncOnly: true, aliases: {}, ...(opts.deps || {}) }
+    : { ...defaultDeps(), ...(opts.deps || {}) };
   const now = deps.now!();
   const done = (o: Omit<EnrichOutcome, "ms">): EnrichOutcome => ({ ...o, ms: Date.now() - started });
 
@@ -587,6 +695,10 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
 
   if (mode === "off" && intent === "auto") return done({ status: "skipped", reason: "Enhanced Nutrition Lookup is off", trackerId: tracker.id, trackerName: tracker.name });
 
+  // Shorthand the user confirmed before is the first source (one read; the
+  // synchronous pass skips it to stay I/O-free beyond the entry itself).
+  if (!opts.sync && deps.aliases === undefined) deps.aliases = await loadLearnedAliases(storage);
+
   // The user decided on a stored proposal.
   if (existing && (intent === "force" || intent === "reject")) {
     if (intent === "reject") {
@@ -597,6 +709,16 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
     if (existing.components.length > 0) {
       try {
         const applied = await applyEnrichment(storage, tracker, entry, { ...existing, status: "applied", reason: undefined, enrichedAt: now }, now);
+        // The user confirmed this is the product: remember the wording, so the
+        // next mention resolves offline.
+        for (const c of existing.components) {
+          if (c.sourceType !== "manufacturer" && c.sourceType !== "restaurant" && c.sourceType !== "product_database") continue;
+          const row = NUTRITION_DB.find((r) => r.name === c.sourceItem);
+          const target: LearnedAlias | null = row ? { kind: "db", id: row.id } : c.sourceType === "product_database" && c.matchedServing
+            ? { kind: "external", match: { name: c.sourceItem || c.name, brand: c.brand, serving: { amount: c.matchedServing.amount, unit: c.matchedServing.unit, grams: c.matchedServing.grams, ml: c.matchedServing.ml, label: c.matchedServing.label }, perServing: c.perServing, source: c.source.split(" · ")[0], sourceType: c.sourceType, confidence: c.confidence, isBeverage: c.isBeverage } }
+            : null;
+          if (target) await learnAlias(storage, c.userQuantity || c.name, target);
+        }
         return done({ status: "applied", enrichment: applied.enrichment, entry: applied.entry, linkedEntries: applied.enrichment.linkedEntries, trackerId: tracker.id, trackerName: tracker.name });
       } catch (e: any) {
         logger.warn("nutrition-enrichment", `write refused for ${tracker.name}/${entry.id.slice(0, 8)}: ${e?.message || e}`);
@@ -625,11 +747,11 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
     return done({ status: "failed", reason: "lookup failed", trackerId: tracker.id, trackerName: tracker.name });
   }
   if (lookup.components.length === 0) {
-    return done({ status: "skipped", reason: `no source matched "${text.slice(0, 80)}"`, trackerId: tracker.id, trackerName: tracker.name });
+    return done({ status: "skipped", reason: `no source matched "${text.slice(0, 80)}"`, needsMore: !!opts.sync, trackerId: tracker.id, trackerName: tracker.name });
   }
   if (lookup.unresolved.length > 0) {
     // A partial meal total would under-count. Keep the base estimate.
-    return done({ status: "skipped", reason: `could not identify: ${lookup.unresolved.join(", ")}`, trackerId: tracker.id, trackerName: tracker.name });
+    return done({ status: "skipped", reason: `could not identify: ${lookup.unresolved.join(", ")}`, needsMore: !!opts.sync, trackerId: tracker.id, trackerName: tracker.name });
   }
 
   const summed = sumComponentTotals(lookup.components, now);
@@ -659,6 +781,11 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
     enrichedAt: now,
   };
 
+  // The in-turn pass writes only what a label or a menu states (exact/high)
+  // and never leaves a proposal behind; anything less waits for the full pass.
+  if (opts.sync && (confidence === "medium" || !appliesAutomatically(mode, confidence))) {
+    return done({ status: "skipped", reason: `sync pass: ${confidence} — left for the full lookup`, needsMore: true, trackerId: tracker.id, trackerName: tracker.name });
+  }
   const shouldApply = intent === "force" || (intent === "auto" && appliesAutomatically(mode, confidence));
   if (!shouldApply) {
     enrichment.reason = intent === "preview" ? "preview" : mode === "ask" ? "waiting for the user" : `confidence ${confidence} — kept the generic estimate`;

@@ -21,24 +21,60 @@ import { planSharedActivityFanout, type FanoutWrite } from "@shared/shared-activ
 import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate, isNutritionTrackerName } from "@shared/nutrition-shaped";
-import { rescaleNutritionEntry } from "./nutrition-enrichment";
-import { planTrackerEntryCandidate, planProfileCandidate, planObligationCandidate } from "./item-enrichment";
+import { rescaleNutritionEntry, enrichNutritionEntry } from "./nutrition-enrichment";
+import { planTrackerEntryCandidate, planProfileCandidate, planObligationCandidate, enrichItem } from "./item-enrichment";
+import { recapLine, describeSources, CONFIDENCE_LABEL } from "@shared/nutrition-enrichment";
+import { formatAttribute } from "@shared/item-identity";
 
 /**
- * Item Enrichment Layer: stamp a just-saved tracker entry with the candidate
- * the client posts back after the reply renders — a Nutrition entry gets the
- * food lookup (server/nutrition-enrichment), a medication/supplement/pet-food
- * entry the item identification (server/item-enrichment). Pure string work;
- * a failure here can never cost the log.
+ * Item Enrichment Layer, in two passes.
+ *
+ * IN THE TURN (here, microseconds): the deterministic tables — the internal
+ * label/menu reference, the OTC medication table — identify the item and the
+ * entry is refined before the reply is written, so the reply itself says
+ * "Kellogg's Special K Red Berries (2 × 1 cup) — 280 kcal" and "ibuprofen,
+ * 400 mg total". No network, no model, no proposal.
+ *
+ * AFTER THE REPLY (the client posts the candidate back): the product
+ * database and the model take anything the tables could not pin. The
+ * candidate is attached only when that pass could still improve the entry.
+ * A failure anywhere here can never cost the log.
  */
-function attachEnrichmentCandidate(entry: any, tracker: { id: string; name: string; category?: string | null } | null | undefined, input: any): void {
+async function attachEnrichmentCandidate(entry: any, tracker: { id: string; name: string; category?: string | null } | null | undefined, input: any): Promise<void> {
   if (!entry || !tracker) return;
   try {
     const candidate = planTrackerEntryCandidate(entry, tracker, String(input?.__userMessage || ""));
     if (!candidate) return;
-    if ((candidate as any).target) entry._itemEnrichment = candidate;
+    const isItem = !!(candidate as any).target;
+    let needsMore = true;
+    if (!isItem) {
+      const sync = await enrichNutritionEntry(storage, { entryId: entry.id, trackerId: tracker.id, message: candidate.message, sync: true });
+      if (sync.status === "applied" && sync.enrichment && sync.entry) {
+        entry.values = sync.entry.values;
+        entry.computed = sync.entry.computed;
+        entry._recapDetail = recapLine(sync.enrichment);
+        entry.enrichmentNote = `${CONFIDENCE_LABEL[sync.enrichment.confidence]} · source: ${describeSources(sync.enrichment)}`;
+        needsMore = false;
+      } else {
+        needsMore = sync.needsMore !== false || sync.status === "failed";
+      }
+    } else {
+      const sync = await enrichItem(storage, { target: "trackerEntry", id: entry.id, trackerId: tracker.id, message: candidate.message, sync: true });
+      if (sync.status === "applied" && sync.enrichment && sync.record) {
+        entry.values = sync.record.values;
+        entry.computed = sync.record.computed;
+        const a = sync.enrichment.attributes;
+        const bits = [a.activeIngredient && `${formatAttribute(a.activeIngredient)}`, a.totalDoseMg && `${formatAttribute(a.totalDoseMg)} total`, a.strengthAmbiguous?.value === true && "strength not stated", a.omega3Mg && `${formatAttribute(a.omega3Mg)} omega-3`].filter(Boolean);
+        if (bits.length) entry.enrichmentNote = `${sync.enrichment.identity.name}: ${bits.join(", ")}`;
+        needsMore = sync.needsMore === true;
+      } else {
+        needsMore = sync.needsMore !== false || sync.status === "failed";
+      }
+    }
+    if (!needsMore) return;
+    if (isItem) entry._itemEnrichment = candidate;
     else entry._nutritionEnrichment = candidate;
-  } catch { /* never block a log on enrichment planning */ }
+  } catch { /* never block a log on enrichment */ }
 }
 
 /** Same for a just-created profile (vehicle, device, account, subscription). */
@@ -6840,6 +6876,11 @@ function summarizeSingleItem(item: any): any {
       ...(item.preview ? { preview: item.preview } : {}),
       ...(item.deleted ? { deleted: item.deleted } : {}),
       ...(item.total !== undefined ? { total: item.total } : {}),
+      // Enrichment honesty: what the in-turn product/label match refined, so
+      // the model reports the refined numbers and their source.
+      ...(item.estimateNote ? { estimateNote: item.estimateNote } : {}),
+      ...(item.enrichmentNote ? { enrichmentNote: item.enrichmentNote } : {}),
+      ...(item._recapDetail ? { refined: item._recapDetail } : {}),
     };
   }
 
@@ -9227,7 +9268,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         // a candidate the client posts back to /api/tracker-entries/:id/enrich
         // once the reply is on screen — product lookup never runs inside the
         // chat turn, so it costs the turn nothing (pure string work here).
-        attachEnrichmentCandidate(entry, tracker, input);
+        await attachEnrichmentCandidate(entry, tracker, input);
         // Do NOT call autoLinkToProfiles for existing trackers — they already have their profile set.
         // Adding profiles here causes cross-contamination (Rex's entry adds Rex to Me's tracker).
         await autoUpdateGoalProgress(tracker.id, normalizedValues);
@@ -9371,7 +9412,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         } catch { /* non-fatal */ }
         const { values: nv } = normalizeTrackerEntry(conflictTracker as any, entryValues);
         const conflictEntry = await storage.logEntry({ trackerId: conflictTracker.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
-        attachEnrichmentCandidate(conflictEntry, conflictTracker, input);
+        await attachEnrichmentCandidate(conflictEntry, conflictTracker, input);
         await syncHabitsForTrackerLog(conflictEntry, conflictTracker, {
           userMessage: String((input as any).__userMessage || ""),
           targetProfileId,
@@ -9422,7 +9463,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (entry) (entry as any).__createdTracker = { id: newTracker.id, name: newTracker.name };
         // The first food ever logged creates the Nutrition tracker on this
         // path — it is as specific as any later one.
-        attachEnrichmentCandidate(entry, newTracker, input);
+        await attachEnrichmentCandidate(entry, newTracker, input);
         // A habit for this activity may already exist with no tracker to point
         // at — this is where it adopts the one we just made.
         await syncHabitsForTrackerLog(entry, newTracker, {
@@ -9463,7 +9504,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
               logger.info("ai", `Auto-create raced on "${trackerDisplayName}" — reusing existing tracker ${existing.id} instead of duplicating`);
               const { values: nv } = normalizeTrackerEntry(existing as any, entryValues);
               const racedEntry = await storage.logEntry({ trackerId: existing.id, values: nv, forProfile: targetProfileId, profileId: targetProfileId, timestamp: input.at || undefined });
-              attachEnrichmentCandidate(racedEntry, existing, input);
+              await attachEnrichmentCandidate(racedEntry, existing, input);
               return racedEntry;
             }
           } catch (retryErr: any) {
@@ -17680,8 +17721,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             status: o.status,
             tool: o.tool,
             label: String(r?._displayData?.trackerName || o.trackerName || o.raw || o.tool),
-            detail: summarizeOpDetail(inp) || undefined,
-            estimateNote: typeof r?.estimateNote === "string" ? r.estimateNote : undefined,
+            // A refined record (in-turn enrichment) speaks for itself: its
+            // own line, not the agent's placeholder numbers from the input.
+            detail: (typeof r?._recapDetail === "string" && r._recapDetail) || summarizeOpDetail(inp) || undefined,
+            estimateNote: [typeof r?.estimateNote === "string" ? r.estimateNote : "", typeof r?.enrichmentNote === "string" ? r.enrichmentNote : ""].filter(Boolean).join(" · ") || undefined,
             createdTrackerName: o.createdTracker?.name,
             error: o.error,
           });

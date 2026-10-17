@@ -27,7 +27,8 @@ import {
   type NutritionComponent,
   type NutritionEnrichment,
 } from "../shared/nutrition-enrichment";
-import { lookupNutritionDb, resolveServings, NUTRITION_DB } from "../shared/nutrition-db";
+import { lookupNutritionDb, resolveServings, nutritionCandidates, NUTRITION_DB } from "../shared/nutrition-db";
+import { detectPackageFraction, recapLine, describeSources } from "../shared/nutrition-enrichment";
 
 const NOW = "2026-10-16T12:00:00.000Z";
 
@@ -202,6 +203,40 @@ describe("internal reference lookup", () => {
     expect(comp.nutrients.calories.value).toBe(280);
     expect(comp.nutrients.carbs.value).toBe(68);
     expect(comp.nutrients.fat.value).toBe(1);
+  });
+});
+
+describe("aliases, ambiguity and package fractions", () => {
+  it("shorthand resolves to the canonical product", () => {
+    expect(lookupNutritionDb("a bowl of hnc")?.item.id).toBe("honey-nut-cheerios");
+    expect(lookupNutritionDb("special k berries")?.item.id).toBe("special-k-red-berries");
+    expect(lookupNutritionDb("quest cookies bar")?.item.id).toBe("quest-bar");
+    expect(lookupNutritionDb("zero ultra")?.item.id).toBe("monster-zero-ultra-16oz");
+  });
+  it("candidates are ranked and a bare line name does not pretend to be one product", () => {
+    expect(nutritionCandidates("Monster")[0].item.id).toBe("monster-16oz");
+    expect(nutritionCandidates("Monster").map((c) => c.item.id)).not.toContain("monster-zero-ultra-16oz");
+    expect(lookupNutritionDb("Special K")).toBeNull();
+  });
+  it("'half the bottle' / 'the whole can' are fractions of the PACKAGE when the product knows it", () => {
+    expect(detectPackageFraction("half the bottle of Gatorade")).toEqual({ fraction: 0.5, word: "bottle" });
+    expect(detectPackageFraction("I drank the whole can of Monster")).toEqual({ fraction: 1, word: "can" });
+    expect(detectPackageFraction("12 oz of Coke")).toBeNull();
+    const gatorade = lookupNutritionDb("Gatorade")!.item;
+    const half = resolveServings(gatorade, normalizeQuantity("half the bottle of Gatorade"), "half the bottle of Gatorade");
+    expect(half).toMatchObject({ servings: 0.5, confidence: "exact" });
+    expect(half.method).toMatch(/20 fl oz bottle/);
+    const monster = lookupNutritionDb("Monster")!.item;
+    expect(resolveServings(monster, normalizeQuantity("the whole can")).servings).toBe(1);
+    // 4 Oreos of a 3-cookie serving — the package is known, the count still rules.
+    const oreo = lookupNutritionDb("Oreos")!.item;
+    expect(resolveServings(oreo, normalizeQuantity("4 oreos"), "4 oreos").servings).toBeCloseTo(4 / 3);
+  });
+  it("the chat line and the source line read from the record", () => {
+    const comp = dbComponent("Kellogg's Special K Red Berries Breakfast Cereal", "2 servings");
+    const totals = sumComponentTotals([comp], NOW);
+    expect(recapLine({ components: [comp], totals })).toBe("Kellogg's Special K Red Berries (2 × 1 cup (39 g)) — 280 kcal, 6 g protein, 68 g carbs, 1 g fat");
+    expect(describeSources({ components: [comp] })).toBe("manufacturer label");
   });
 });
 

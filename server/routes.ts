@@ -37,7 +37,7 @@ import { EPOCH_KEY, versionStamp, encodeVersionMap, decodeVersionMap, mergeVersi
 import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX } from "@shared/import-fingerprint";
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
-import { enrichNutritionEntry, rescaleNutritionEntry } from "./nutrition-enrichment";
+import { enrichNutritionEntry, rescaleNutritionEntry, forgetEnrichmentMode } from "./nutrition-enrichment";
 import { enrichItem, type EnrichmentTarget } from "./item-enrichment";
 import { isNutritionTrackerLike } from "@shared/nutrition-enrichment";
 import { getValuationSnapshot, refreshValuation, isValuableProfile, getValuationStatus } from "./valuation/service";
@@ -11540,6 +11540,7 @@ No emojis. No prose outside the JSON.`,
         return res.status(400).json({ error: "Validation failed: preference key is reserved" });
       }
       await storage.setPreference(key, value);
+      if (key === "item_enrichment" || key === "nutrition_enrichment") forgetEnrichmentMode(String((req as AuthenticatedRequest).userId || ""));
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: "Failed to set preference" });

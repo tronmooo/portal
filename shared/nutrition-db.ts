@@ -53,6 +53,10 @@ export interface NutritionDbItem {
   exclude?: string[];
   /** Words that name one unit of this serving's `unit` ("slice", "slices"). */
   unitWords?: string[];
+  /** Shorthand people type for this product ("hnc", "special k berries"); matched as whole phrases/words. */
+  aliases?: string[];
+  /** The package the product is sold in, for "half the bottle" / "the whole pizza". */
+  package?: { grams?: number; ml?: number; servings?: number; label: string };
 }
 
 const FL = ML_PER_FL_OZ;
@@ -286,6 +290,7 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     perServing: { calories: 140, protein: 0, carbs: 39, fat: 0, sugar: 39, addedSugar: 39, sodium: 45, caffeine: 34, ...beverage(355) },
     sourceType: "manufacturer", source: "Coca-Cola Classic 12 fl oz label", confidence: "exact",
     match: [["coke"], ["coca-cola"], ["coca", "cola"], ["cocacola"]], exclude: ["diet", "zero", "cherry", "vanilla", "rum", "jack"], unitWords: ["can", "cans", "coke", "cokes"],
+    package: { ml: 355, servings: 1, label: "12 fl oz can" },
   },
   {
     id: "diet-coke-12oz", name: "Diet Coke", brand: "Coca-Cola", kind: "branded", isBeverage: true,
@@ -299,7 +304,8 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     serving: { amount: 1, unit: "can", ml: 355, label: "12 fl oz can (355 ml)" },
     perServing: { calories: 0, protein: 0, carbs: 0, fat: 0, sugar: 0, sodium: 40, caffeine: 34, ...beverage(355) },
     sourceType: "manufacturer", source: "Coca-Cola Zero Sugar 12 fl oz label", confidence: "exact",
-    match: [["coke", "zero"], ["coca-cola", "zero"], ["coca", "cola", "zero"], ["zero", "sugar", "coke"]], unitWords: ["can", "cans"],
+    match: [["coke", "zero"], ["coca-cola", "zero"], ["coca", "cola", "zero"], ["zero", "sugar", "coke"]], unitWords: ["can", "cans"], aliases: ["coke zero", "coca cola zero sugar"],
+    package: { ml: 355, servings: 1, label: "12 fl oz can" },
   },
   {
     id: "pepsi-12oz", name: "Pepsi", brand: "Pepsi", kind: "branded", isBeverage: true,
@@ -335,13 +341,15 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     perServing: { calories: 210, protein: 0, carbs: 54, fat: 0, sugar: 54, addedSugar: 54, sodium: 370, caffeine: 160, ...beverage(473) },
     sourceType: "manufacturer", source: "Monster Energy 16 fl oz label", confidence: "exact",
     match: [["monster"]], exclude: ["zero", "ultra", "rehab", "java", "sugar free", "sugar-free"], unitWords: ["can", "cans", "monster", "monsters"],
+    package: { ml: 473, servings: 1, label: "16 fl oz can" },
   },
   {
     id: "monster-zero-ultra-16oz", name: "Monster Zero Ultra", brand: "Monster", kind: "branded", isBeverage: true,
     serving: { amount: 1, unit: "can", ml: 473, label: "16 fl oz can (473 ml)" },
     perServing: { calories: 10, protein: 0, carbs: 2, fat: 0, sugar: 0, sodium: 370, caffeine: 140, ...beverage(473) },
     sourceType: "manufacturer", source: "Monster Zero Ultra 16 fl oz label", confidence: "exact",
-    match: [["monster", "ultra"], ["monster", "zero"], ["zero", "ultra"]], unitWords: ["can", "cans"],
+    match: [["monster", "ultra"], ["monster", "zero"], ["zero", "ultra"]], unitWords: ["can", "cans"], aliases: ["zero ultra", "monster ultra white"],
+    package: { ml: 473, servings: 1, label: "16 fl oz can" },
   },
   {
     id: "red-bull-8oz", name: "Red Bull Energy Drink", brand: "Red Bull", kind: "branded", isBeverage: true,
@@ -363,6 +371,7 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     perServing: { calories: 140, protein: 0, carbs: 36, fat: 0, sugar: 34, addedSugar: 34, sodium: 270, potassium: 80, ...beverage(591) },
     sourceType: "manufacturer", source: "Gatorade Thirst Quencher 20 fl oz label", confidence: "exact",
     match: [["gatorade"]], exclude: ["zero", "g2", "fit", "protein"], unitWords: ["bottle", "bottles"],
+    package: { ml: 591, servings: 1, label: "20 fl oz bottle" },
   },
   {
     id: "starbucks-grande-latte", name: "Starbucks Caffè Latte, grande (2% milk)", brand: "Starbucks", kind: "restaurant", isBeverage: true,
@@ -376,21 +385,21 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     serving: { amount: 2, unit: "tbsp", grams: 33, label: "2 tbsp (33 g)" },
     perServing: { calories: 190, protein: 7, carbs: 8, fat: 16, saturatedFat: 3, fiber: 2, sugar: 3, addedSugar: 2, sodium: 140, potassium: 190 },
     sourceType: "manufacturer", source: "Jif Creamy Peanut Butter label", confidence: "exact",
-    match: [["jif"]], exclude: ["natural", "reduced", "crunchy", "extra", "whips", "power"], unitWords: ["tbsp", "tablespoon", "tablespoons"],
+    match: [["jif"]], exclude: ["natural", "reduced", "crunchy", "extra", "whips", "power"], unitWords: ["tbsp", "tablespoon", "tablespoons"], aliases: ["jif pb", "jif peanut butter"],
   },
   {
     id: "honey-nut-cheerios", name: "Honey Nut Cheerios", brand: "General Mills", kind: "branded",
     serving: { amount: 1, unit: "cup", grams: 37, label: "1 cup (37 g)" },
     perServing: { calories: 140, protein: 3, carbs: 30, fat: 2, saturatedFat: 0, fiber: 3, sugar: 12, addedSugar: 12, sodium: 210, calcium: 130, iron: 12.6 },
     sourceType: "manufacturer", source: "Honey Nut Cheerios label (1 cup serving)", confidence: "exact",
-    match: [["honey", "nut", "cheerios"], ["honey", "nut", "cheerio"], ["hnc"]], unitWords: ["cup", "cups", "bowl", "bowls"],
+    match: [["honey", "nut", "cheerios"], ["honey", "nut", "cheerio"], ["hnc"]], unitWords: ["cup", "cups", "bowl", "bowls"], aliases: ["hnc", "honey nut cheerio"],
   },
   {
     id: "special-k-red-berries", name: "Kellogg's Special K Red Berries", brand: "Kellogg's", kind: "branded",
     serving: { amount: 1, unit: "cup", grams: 39, label: "1 cup (39 g)" },
     perServing: { calories: 140, protein: 3, carbs: 34, fat: 0.5 },
     sourceType: "manufacturer", source: "Kellogg's Special K Red Berries label (1 cup, 39 g)", confidence: "exact",
-    match: [["special", "k", "red", "berries"], ["special", "k", "berries"], ["special", "k", "strawberr"]], unitWords: ["cup", "cups", "bowl", "bowls"],
+    match: [["special", "k", "red", "berries"], ["special", "k", "berries"], ["special", "k", "strawberr"]], unitWords: ["cup", "cups", "bowl", "bowls"], aliases: ["special k berries", "special k red berry", "sk red berries"],
   },
   {
     id: "cheerios-original", name: "Cheerios (original)", brand: "General Mills", kind: "branded",
@@ -460,7 +469,7 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     serving: { amount: 1, unit: "bar", grams: 60, label: "1 bar (60 g)" },
     perServing: { calories: 190, protein: 21, carbs: 21, fat: 9, saturatedFat: 3, fiber: 14, sugar: 1, addedSugar: 0, sodium: 240, potassium: 130 },
     sourceType: "manufacturer", source: "Quest Bar label (Chocolate Chip Cookie Dough)", confidence: "high",
-    match: [["quest", "bar"], ["quest", "protein"]], exclude: ["chips", "cookie", "pizza", "hero", "mini"], unitWords: ["bar", "bars"],
+    match: [["quest", "bar"], ["quest", "protein"]], exclude: ["chips", "pizza", "hero", "mini"], unitWords: ["bar", "bars"], aliases: ["quest cookies bar", "quest cookies and cream bar", "quest cookies & cream"],
   },
   {
     id: "rxbar", name: "RXBAR", brand: "RXBAR", kind: "branded",
@@ -489,6 +498,7 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     perServing: { calories: 160, protein: 1, carbs: 25, fat: 7, saturatedFat: 2, fiber: 1, sugar: 14, addedSugar: 14, sodium: 135 },
     sourceType: "manufacturer", source: "Oreo label (3 cookies)", confidence: "high",
     match: [["oreo"], ["oreos"]], exclude: ["double", "thins", "golden", "mega", "mcflurry", "blizzard", "shake"], unitWords: ["cookie", "cookies", "oreo", "oreos"],
+    package: { grams: 405, servings: 12, label: "family size package (14.3 oz, ~36 cookies)" },
   },
   {
     id: "snickers", name: "Snickers bar", brand: "Mars", kind: "branded",
@@ -644,7 +654,10 @@ const NUTRITION_WORD_WHOLE = new Set(["chicken", "oatmeal", "cheerios", "gatorad
 export function lookupNutritionDb(phrase: string): NutritionDbMatch | null {
   const hay = normalizeQuery(phrase);
   if (hay.trim().length === 0) return null;
-  let best: NutritionDbMatch | null = null;
+  // A shorthand alias ("hnc", "special k berries") names the product outright.
+  const byAlias = lookupNutritionAlias(hay);
+  if (byAlias) return byAlias;
+  const matches: NutritionDbMatch[] = [];
   for (const item of NUTRITION_DB) {
     if (item.exclude?.some((x) => hasWord(hay, x))) continue;
     let bestAlt = 0;
@@ -653,13 +666,54 @@ export function lookupNutritionDb(phrase: string): NutritionDbMatch | null {
     }
     if (bestAlt === 0) continue;
     const kindBonus = item.kind === "generic" ? 0 : 0.5;
-    const score = bestAlt + kindBonus;
-    if (!best || score > best.score) best = { item, score };
+    matches.push({ item, score: bestAlt + kindBonus });
+  }
+  if (matches.length === 0) return null;
+  matches.sort((a, b) => b.score - a.score);
+  // Two branded products tied at the top ("Special K" alone could be any of
+  // the line) is an ambiguity, not a match: say so rather than pick one.
+  if (matches.length > 1 && matches[1].score === matches[0].score && matches[0].item.kind !== "generic" && matches[1].item.kind !== "generic") return null;
+  return matches[0];
+}
+
+/** The product an alias names, when the phrase is (or contains, as whole words) one. Longest alias wins. */
+export function lookupNutritionAlias(normalizedPhrase: string): NutritionDbMatch | null {
+  const hay = normalizedPhrase.includes(" ") && normalizedPhrase.startsWith(" ") ? normalizedPhrase : normalizeQuery(normalizedPhrase);
+  let best: NutritionDbMatch | null = null;
+  let bestLen = 0;
+  for (const item of NUTRITION_DB) {
+    for (const alias of item.aliases || []) {
+      const a = normalizeQuery(alias).trim();
+      if (a.length > bestLen && hay.includes(` ${a} `)) { best = { item, score: 100 }; bestLen = a.length; }
+    }
   }
   return best;
 }
 
+/** The candidates a phrase could mean, best first — for an "is this ambiguous?" check or a picker. */
+export function nutritionCandidates(phrase: string, limit = 5): NutritionDbMatch[] {
+  const hay = normalizeQuery(phrase);
+  const out: NutritionDbMatch[] = [];
+  for (const item of NUTRITION_DB) {
+    if (item.exclude?.some((x) => hasWord(hay, x))) continue;
+    let bestAlt = 0;
+    for (const alt of item.match) if (alt.every((w) => hasWord(hay, w))) bestAlt = Math.max(bestAlt, alt.length);
+    if (bestAlt > 0) out.push({ item, score: bestAlt + (item.kind === "generic" ? 0 : 0.5) });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
 // ─── Servings ────────────────────────────────────────────────────────────────
+
+/** "bottle" fits a "20 fl oz bottle"; it does not fit a "12 fl oz can". A label naming no container fits any word. */
+function packageWordFits(word: string | undefined, label: string): boolean {
+  const w = String(word || "").toLowerCase().replace(/s$/, "");
+  const l = String(label || "").toLowerCase();
+  const named = l.match(/\b(package|pack|box|bag|bottle|can|pint|quart|tub|jar|carton|container|pizza|sleeve|pouch|tray|cup|bar)s?\b/g) || [];
+  if (named.length === 0) return true;
+  if (!w) return true;
+  return named.some((n) => n.replace(/s$/, "") === w) || w === "package" || w === "pack" || w === "container";
+}
 
 /** Spellings of one unit word collapse to one key: tablespoons → tbsp, ounces → fl oz. */
 export function canonUnitWord(u: string): string {
@@ -716,6 +770,23 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
   // An explicit number + unit ("12 oz", "2 tablespoons", "182 g") matched to
   // the row's serving is the serving size the spec calls exact.
   const explicit: EnrichmentConfidence = qty.confidence === "high" ? "exact" : qty.confidence;
+
+  // "Half the bottle" / "the whole pizza": a fraction of the PACKAGE, when the
+  // product knows its package — a 20 fl oz bottle is 20 fl oz, not the
+  // assumed container size.
+  if (qty.packageFraction != null && item.package && packageWordFits(qty.packageWord, item.package.label)) {
+    const p = item.package;
+    const perPackage = p.servings ?? (p.ml && s.ml ? p.ml / s.ml : p.grams && s.grams ? p.grams / s.grams : null);
+    if (perPackage != null && perPackage > 0) {
+      return { servings: qty.packageFraction * perPackage, confidence: "exact", method: `${Math.round(qty.packageFraction * 100)}% of ${p.label} (${Math.round(perPackage * 100) / 100} servings)` };
+    }
+  }
+  // A volume the row only knows by mass ("half a pint" of ice cream): go
+  // through the package when it carries both.
+  if (qty.ml != null && !s.ml && item.package?.ml && item.package?.grams && s.grams) {
+    const servings = (qty.ml / item.package.ml) * (item.package.grams / s.grams);
+    return { servings, confidence: qty.confidence === "low" ? "low" : "high", method: `${Math.round(qty.ml)} ml of a ${item.package.label} ÷ ${s.grams} g serving` };
+  }
 
   // The user's unit IS the row's serving unit ("2 tablespoons" of a 2-tbsp
   // row, "1 packet" of a per-packet row, "12 oz" of a 12 fl oz row): compare

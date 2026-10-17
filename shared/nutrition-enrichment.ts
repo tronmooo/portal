@@ -151,6 +151,14 @@ export interface QuantityNormalization {
   confidence: EnrichmentConfidence;
   /** What was assumed to get here ("assumed a 20 fl oz bottle"). */
   assumption?: string;
+  /**
+   * The user spoke in terms of the PACKAGE: "half the bottle", "the whole
+   * pizza", "a third of the bag". The fraction of one package, when the
+   * matched product knows its package size this outranks the assumed
+   * container above.
+   */
+  packageFraction?: number;
+  packageWord?: string;
 }
 
 export const ML_PER_FL_OZ = 29.5735;
@@ -245,11 +253,26 @@ const AMOUNT_RE = `(?<![a-z0-9])(${AMOUNT_WORDS})(?![a-z])`;
  * "large banana"). Unparseable wording returns a null-measure normalization
  * with low confidence rather than a guess.
  */
+const PACKAGE_UNIT_WORDS = "package|pack|box|bag|bottle|can|pint|quart|tub|jar|carton|container|pizza|sleeve|pouch|tray|cup|bar";
+const PACKAGE_FRACTION_RE = new RegExp(`\\b(whole|entire|all of|most of|half|a half|quarter|a quarter|a third|third|two thirds|three quarters|\\d+/\\d+)\\s+(?:of\\s+)?(?:a|an|the|my|this|that)?\\s*(?:[a-z0-9'&.-]+\\s+){0,4}?(${PACKAGE_UNIT_WORDS})\\b`);
+const FRACTION_WORD: Record<string, number> = { whole: 1, entire: 1, "all of": 1, "most of": 0.75, half: 0.5, "a half": 0.5, quarter: 0.25, "a quarter": 0.25, "a third": 1 / 3, third: 1 / 3, "two thirds": 2 / 3, "three quarters": 0.75 };
+
+/** "half the bottle" / "the whole pizza" → the fraction of one package and the package word. */
+export function detectPackageFraction(text: string): { fraction: number; word: string } | null {
+  const m = String(text || "").toLowerCase().match(PACKAGE_FRACTION_RE);
+  if (!m) return null;
+  const f = FRACTION_WORD[m[1]] ?? (m[1].includes("/") ? Number(m[1].split("/")[0]) / Number(m[1].split("/")[1]) : NaN);
+  if (!isFinite(f) || f <= 0) return null;
+  return { fraction: f, word: m[2] };
+}
+
 export function normalizeQuantity(text: string): QuantityNormalization {
   const original = String(text || "").trim();
   const base: QuantityNormalization = { original, amount: null, unit: null, grams: null, ml: null, count: null, confidence: "low" };
   if (!original) return base;
   const lc = original.toLowerCase().replace(/\s+/g, " ");
+  const pkg = detectPackageFraction(lc);
+  if (pkg) { base.packageFraction = pkg.fraction; base.packageWord = pkg.word; }
 
   // "half a bottle" / "half of the bottle" / "half the bottle"
   const fracContainer = lc.match(new RegExp(`^(half|quarter|third|a third|two thirds|three quarters|${AMOUNT_WORDS})\\s+(?:of\\s+)?(?:a|an|the)?\\s*([a-z]+)`));
@@ -841,6 +864,40 @@ export function formatNutrient(key: NutrientKey, value: number): string {
 export const CONFIDENCE_LABEL: Record<EnrichmentConfidence, string> = {
   exact: "exact product match", high: "close product match", medium: "generic estimate", low: "rough estimate",
 };
+
+/** Source words for a card or a chat line: "manufacturer label", "restaurant menu", "product database", "standard reference", "AI estimate". */
+export const SOURCE_TYPE_LABEL: Record<EnrichmentSourceType, string> = {
+  user: "stated by you", manufacturer: "manufacturer label", restaurant: "restaurant menu", product_database: "product database",
+  reference: "standard reference", model_estimate: "AI estimate", calculated: "calculated", default: "generic estimate",
+};
+
+/** The sources behind an enrichment, de-duplicated, for "Source: …". */
+export function describeSources(e: Pick<NutritionEnrichment, "components">): string {
+  const seen = new Set<string>();
+  for (const c of e.components) seen.add(SOURCE_TYPE_LABEL[c.sourceType] || c.sourceType);
+  return Array.from(seen).join(" + ");
+}
+
+/**
+ * One chat line for a refined entry: "Kellogg's Special K Red Berries, 2
+ * servings — 280 kcal, 6 g protein, 68 g carbs, 1 g fat". The recap shows
+ * this instead of the agent's placeholder numbers.
+ */
+export function recapLine(e: Pick<NutritionEnrichment, "components" | "totals">): string {
+  const who = e.components.map((c) => {
+    const n = Math.round(c.servings * 100) / 100;
+    const unit = c.matchedServing?.label || "serving";
+    const qty = n === 1 ? unit : `${n} × ${unit}`;
+    return `${c.sourceItem || c.name} (${qty})`;
+  }).join(" + ");
+  const parts: string[] = [];
+  const t = e.totals;
+  if (t.calories) parts.push(`${roundNutrient(t.calories.value, "calories")} kcal`);
+  if (t.protein) parts.push(`${roundNutrient(t.protein.value, "protein")} g protein`);
+  if (t.carbs) parts.push(`${roundNutrient(t.carbs.value, "carbs")} g carbs`);
+  if (t.fat) parts.push(`${roundNutrient(t.fat.value, "fat")} g fat`);
+  return parts.length ? `${who} — ${parts.join(", ")}` : who;
+}
 
 export function summarizeEnrichment(e: Pick<NutritionEnrichment, "components" | "totals">): string {
   const names = e.components.map((c) => c.sourceItem || c.name).filter(Boolean);

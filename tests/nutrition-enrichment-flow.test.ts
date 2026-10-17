@@ -17,6 +17,7 @@ import {
 } from "../server/nutrition-enrichment";
 import { removeTrackerEntry, updateTrackerEntryEverywhere } from "../server/tracker-entries";
 import { LINKED_SOURCE_KEY, NUTRITION_ENRICHMENT_PREF_KEY } from "../shared/nutrition-enrichment";
+import { parsePackageQuantity, loadLearnedAliases, aliasKey } from "../server/nutrition-enrichment";
 import { sanitizeTrackerEntryValues } from "../server/tracker-entry-guard";
 
 const NOW = "2026-10-16T12:00:00.000Z";
@@ -354,6 +355,60 @@ describe("the value guard reads nutrition as intake, not blood levels", () => {
   });
   it("a serum sodium reading on a lab tracker is still bounded", () => {
     expect(sanitizeTrackerEntryValues([{ name: "sodium", type: "number", unit: "mmol/L" }], { sodium: 45 }, { name: "Sodium", category: "health" }).error).toMatch(/sodium/i);
+  });
+});
+
+describe("the in-turn pass (sync): tables only, exact/high only, never a proposal", () => {
+  it("Special K is refined inside the turn from the label table with no network and no model", async () => {
+    const entry = await logFood({ item: "Kellogg's Special K Red Berries Breakfast Cereal (2 servings)", calories: 220 });
+    const out = await enrichNutritionEntry(storage, { entryId: entry.id, message: "I ate 2 servings of Kellogg's Special K Red Berries Breakfast Cereal", sync: true, deps: { productLookup: async () => { throw new Error("no network in the turn"); }, modelEstimate: async () => { throw new Error("no model in the turn"); }, now: () => NOW } });
+    expect(out.status).toBe("applied");
+    expect(out.needsMore).toBeFalsy();
+    expect(out.entry!.values.calories).toBe(280);
+  });
+  it("a branded phrase the tables cannot pin is left for the full pass — nothing written, candidate kept", async () => {
+    const entry = await logFood({ item: "Honey Bunches of Oats cereal (1 cup)", calories: 160 });
+    const out = await enrichNutritionEntry(storage, { entryId: entry.id, sync: true, deps: { now: () => NOW } });
+    expect(out.status).toBe("skipped");
+    expect(out.needsMore).toBe(true);
+    expect(((await storage.getTrackerEntry(entry.id))!.computed as any).nutrition).toBeUndefined();
+    expect((await storage.getTrackerEntry(entry.id))!.values.calories).toBe(160);
+  });
+  it("a generic food resolves in the turn and needs nothing more", async () => {
+    const entry = await logFood({ item: "2 eggs", calories: 140 });
+    const out = await enrichNutritionEntry(storage, { entryId: entry.id, sync: true, deps: { now: () => NOW } });
+    expect(out.status).toBe("applied");
+    expect(out.needsMore).toBeFalsy();
+  });
+});
+
+describe("learned aliases", () => {
+  it("accepting a product-database match teaches the wording; the next mention resolves offline", async () => {
+    const match = { name: "Post Honey Bunches of Oats Honey Roasted", brand: "Post", serving: { amount: 1, unit: "cup", grams: 40, ml: null, label: "1 cup (40 g)" }, perServing: { calories: 160, protein: 3, carbs: 33, fat: 2, sodium: 190 }, source: "Open Food Facts product 2", sourceType: "product_database" as const, confidence: "high" as const, unitWords: ["cup", "cups"] };
+    await storage.setPreference(NUTRITION_ENRICHMENT_PREF_KEY, "ask");
+    const first = await logFood({ item: "Honey Bunches of Oats cereal (1 cup)", calories: 160 });
+    const proposed = await enrichNutritionEntry(storage, { entryId: first.id, deps: { productLookup: async () => match, modelEstimate: async () => null, now: () => NOW } });
+    expect(proposed.status).toBe("proposed");
+    const accepted = await enrichNutritionEntry(storage, { entryId: first.id, intent: "force", deps: { now: () => NOW } });
+    expect(accepted.status).toBe("applied");
+    const learned = await loadLearnedAliases(storage);
+    expect(Object.keys(learned)).toContain(aliasKey("Honey Bunches of Oats cereal (1 cup)"));
+    // Next time, the same wording never reaches the network.
+    const second = await logFood({ item: "Honey Bunches of Oats cereal (2 cups)", calories: 320 });
+    const out = await enrichNutritionEntry(storage, { entryId: second.id, mode: "auto", deps: { productLookup: async () => { throw new Error("must not be called"); }, modelEstimate: async () => { throw new Error("must not be called"); }, now: () => NOW } });
+    expect(out.status).toBe("applied");
+    expect(out.enrichment!.components[0]).toMatchObject({ sourceType: "product_database", servings: 2 });
+    expect((await storage.getTrackerEntry(second.id))!.values.sodium).toBe(380);
+  });
+  it("aliasKey strips quantities and filler", () => {
+    expect(aliasKey("2 cups of Cinnamon Toast Crunch")).toBe("cinnamon toast crunch");
+    expect(aliasKey("Fairlife choc (8 oz)")).toBe("fairlife choc");
+  });
+  it("a package size from the product database parses into grams or ml", () => {
+    expect(parsePackageQuantity("473 ml")).toEqual({ ml: 473, label: "473 ml" });
+    expect(parsePackageQuantity("27.5 oz (780 g)")).toEqual({ grams: 780, label: "27.5 oz (780 g)" });
+    expect(parsePackageQuantity("1 L")).toEqual({ ml: 1000, label: "1 L" });
+    expect(parsePackageQuantity("")).toBeNull();
   });
 });
 
