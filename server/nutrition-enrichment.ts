@@ -144,8 +144,8 @@ export interface ModelComponentEstimate {
 }
 
 export interface EnrichmentDeps {
-  /** Product database lookup for a branded phrase. Null when nothing matched. */
-  productLookup?: (phrase: string) => Promise<ExternalProductMatch | null>;
+  /** Product database lookup for a branded phrase. Null when nothing matched. `strict` when the phrase carries no known brand, only a proper name. */
+  productLookup?: (phrase: string, opts?: { strict?: boolean }) => Promise<ExternalProductMatch | null>;
   /** Model estimate for the phrases nothing else matched. */
   modelEstimate?: (input: { item: string; message: string; phrases: string[] }) => Promise<ModelComponentEstimate[] | null>;
   now?: () => string;
@@ -204,7 +204,8 @@ export function nutrientsFromOffNutriments(n: Record<string, any> | null | undef
  * data contributed per product. Bounded to one request with a short timeout.
  * Disabled with NUTRITION_LOOKUP_DISABLE=1.
  */
-export async function openFoodFactsLookup(phrase: string, timeoutMs = 6000): Promise<ExternalProductMatch | null> {
+export async function openFoodFactsLookup(phrase: string, opts: { timeoutMs?: number; strict?: boolean } = {}): Promise<ExternalProductMatch | null> {
+  const timeoutMs = opts.timeoutMs ?? 6000;
   if (process.env.NUTRITION_LOOKUP_DISABLE === "1") return null;
   const q = String(phrase || "").trim();
   if (!q) return null;
@@ -237,7 +238,16 @@ export async function openFoodFactsLookup(phrase: string, timeoutMs = 6000): Pro
     if (!hasNutrients) continue;
     if (!best || score > best.score) best = { p, score };
   }
-  if (!best || best.score < 0.6) return null;
+  // A phrase with a KNOWN brand can take a looser name match; one that is
+  // only a proper name must be covered almost entirely by the product's own
+  // name, or "Peanut Butter Sandwich" would become somebody's crackers.
+  const minScore = opts.strict ? 0.75 : 0.6;
+  if (!best || best.score < minScore) return null;
+  if (opts.strict) {
+    const pTok = new Set([...tokens(best.p.product_name), ...tokens(best.p.brands || "")]);
+    const coverage = qTok.filter((t) => pTok.has(t)).length / qTok.length;
+    if (coverage < 0.8) return null;
+  }
   const p = best.p;
   const servingQty = Number(p.serving_quantity) || null;
   const perServing = nutrientsFromOffNutriments(p.nutriments, servingQty);
@@ -456,10 +466,18 @@ export async function lookupComponents(
   const components: Array<NutritionComponent | null> = phrases.map(() => null);
   let usedNetwork = false;
 
-  // 1. internal reference
+  // 1. internal reference. A GENERIC row that matches a BRANDED phrase is a
+  // fallback, not an answer: "Kellogg's Special K Red Berries Breakfast
+  // Cereal" contains "cereal", and the cereal average is not that product.
+  // Such a match waits until the product sources below have had their turn.
+  const fallback: Array<NutritionComponent | null> = phrases.map(() => null);
   phrases.forEach((ph, i) => {
     const m = lookupNutritionDb(ph.text) || lookupNutritionDb(ph.quantityText);
-    if (m) components[i] = componentFromDb(m.item, ph, now);
+    if (!m) return;
+    const spec = detectSpecificity(ph.text);
+    const branded = spec.level === "brand" || spec.level === "product";
+    if (m.item.kind === "generic" && branded) fallback[i] = componentFromDb(m.item, ph, now);
+    else components[i] = componentFromDb(m.item, ph, now);
   });
 
   // 2. product database for branded leftovers
@@ -471,7 +489,7 @@ export async function lookupComponents(
       if (spec.level !== "brand" && spec.level !== "product") return;
       if (Date.now() > deadline) return;
       try {
-        const m = await deps.productLookup!(ph.text);
+        const m = await deps.productLookup!(ph.text, { strict: !spec.signals.includes("brand") });
         if (m) { components[i] = componentFromExternal(m, ph, now); usedNetwork = true; }
       } catch { /* optional source */ }
     });
@@ -492,6 +510,9 @@ export async function lookupComponents(
       }
     } catch { /* optional source */ }
   }
+
+  // 4. the generic row, for a branded phrase no product source could answer
+  phrases.forEach((_, i) => { if (!components[i] && fallback[i]) components[i] = fallback[i]; });
 
   const unresolved = phrases.filter((_, i) => !components[i]).map((p) => p.text);
   return { components: components.filter((c): c is NutritionComponent => !!c), unresolved, usedNetwork };
@@ -528,7 +549,7 @@ export interface EnrichOutcome {
 }
 
 const defaultDeps = (): EnrichmentDeps => ({
-  productLookup: (phrase) => openFoodFactsLookup(phrase),
+  productLookup: (phrase, opts) => openFoodFactsLookup(phrase, { strict: opts?.strict }),
   modelEstimate: (input) => modelEstimateComponents(input),
   now: () => new Date().toISOString(),
 });
@@ -614,6 +635,13 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
   const summed = sumComponentTotals(lookup.components, now);
   const { totals, userProvided } = applyUserProvided(summed, userValues, now);
   const confidence = overallConfidence(lookup.components);
+  // A LOW-confidence match is a rough generic estimate — exactly what the
+  // base entry already carries. Showing it as a proposal under the saved
+  // numbers is a second guess competing with the first (the Special K
+  // screenshot), so it is dropped unless the user explicitly asks for it.
+  if (confidence === "low" && intent !== "force") {
+    return done({ status: "skipped", reason: "only a rough generic estimate matched — the saved estimate stands", trackerId: tracker.id, trackerName: tracker.name });
+  }
   const enrichment: NutritionEnrichment = {
     version: 1,
     status: "proposed",

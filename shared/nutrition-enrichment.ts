@@ -389,7 +389,10 @@ export function detectSpecificity(text: string): Specificity {
   const brandHit = KNOWN_BRANDS.find((b) => new RegExp(`(^|[^a-z])${b.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`).test(lc));
   // Two or more consecutive Capitalized words that are not sentence-initial read
   // as a proper product name ("Honey Nut Cheerios", "Chicken Shawarma Bowl").
-  const properName = /(?:^|\s)(?:[A-Z][\w'&-]+\s+){1,}[A-Z][\w'&-]+/.test(t.replace(/^I\s+/, "").replace(/^[A-Z]/, (c) => c.toLowerCase()));
+  // Two or more Capitalized words in a row, allowing a connector between them
+  // ("Honey Bunches of Oats", "Ben & Jerry's"); the sentence-initial capital
+  // is discounted first.
+  const properName = /(?:^|\s)[A-Z][\w'&-]+(?:\s+(?:of|and|&|the|'n|n'|with|in|de|du|la|le)\s+|\s+)[A-Z][\w'&-]+/.test(t.replace(/^I\s+/, "").replace(/^[A-Z]/, (c) => c.toLowerCase()));
   if (brandHit) signals.push("brand");
   if (RESTAURANT_WORDS.test(t)) signals.push("restaurant");
   if (properName || /\b(instant|original|classic|protein|zero sugar|sugar free|lite|light)\b/i.test(t) && brandHit) signals.push("product");
@@ -836,7 +839,7 @@ export function formatNutrient(key: NutrientKey, value: number): string {
 }
 
 export const CONFIDENCE_LABEL: Record<EnrichmentConfidence, string> = {
-  exact: "exact match", high: "close match", medium: "generic estimate", low: "rough estimate",
+  exact: "exact product match", high: "close product match", medium: "generic estimate", low: "rough estimate",
 };
 
 export function summarizeEnrichment(e: Pick<NutritionEnrichment, "components" | "totals">): string {

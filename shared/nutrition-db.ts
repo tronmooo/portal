@@ -143,7 +143,7 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     serving: { amount: 1, unit: "cup", grams: 234, label: "1 cup cooked (234 g)" },
     perServing: { calories: 166, protein: 5.9, carbs: 28, fat: 3.6, saturatedFat: 0.7, fiber: 4, sugar: 0.6, sodium: 9, potassium: 164, calcium: 21, iron: 2.1 },
     sourceType: "reference", source: "standard nutrition reference: cooked oatmeal", confidence: "medium",
-    match: [["oatmeal"], ["oats"], ["porridge"]], exclude: ["quaker", "cookie", "cookies", "raisin", "overnight", "bar"], unitWords: ["cup", "cups", "bowl", "bowls"],
+    match: [["oatmeal"], ["oats"], ["porridge"]], exclude: ["quaker", "cookie", "cookies", "raisin", "overnight", "bar", "cereal", "bunches", "granola", "crunch"], unitWords: ["cup", "cups", "bowl", "bowls"],
   },
   {
     id: "bread-wheat-slice", name: "Whole wheat bread", kind: "generic",
@@ -384,6 +384,13 @@ export const NUTRITION_DB: readonly NutritionDbItem[] = [
     perServing: { calories: 140, protein: 3, carbs: 30, fat: 2, saturatedFat: 0, fiber: 3, sugar: 12, addedSugar: 12, sodium: 210, calcium: 130, iron: 12.6 },
     sourceType: "manufacturer", source: "Honey Nut Cheerios label (1 cup serving)", confidence: "exact",
     match: [["honey", "nut", "cheerios"], ["honey", "nut", "cheerio"], ["hnc"]], unitWords: ["cup", "cups", "bowl", "bowls"],
+  },
+  {
+    id: "special-k-red-berries", name: "Kellogg's Special K Red Berries", brand: "Kellogg's", kind: "branded",
+    serving: { amount: 1, unit: "cup", grams: 39, label: "1 cup (39 g)" },
+    perServing: { calories: 140, protein: 3, carbs: 34, fat: 0.5 },
+    sourceType: "manufacturer", source: "Kellogg's Special K Red Berries label (1 cup, 39 g)", confidence: "exact",
+    match: [["special", "k", "red", "berries"], ["special", "k", "berries"], ["special", "k", "strawberr"]], unitWords: ["cup", "cups", "bowl", "bowls"],
   },
   {
     id: "cheerios-original", name: "Cheerios (original)", brand: "General Mills", kind: "branded",
@@ -674,6 +681,7 @@ export function canonUnitWord(u: string): string {
   if (/^(egg|eggs)$/.test(w)) return "egg";
   if (/^(glass|glasses)$/.test(w)) return "glass";
   if (/^(shake|shakes)$/.test(w)) return "shake";
+  if (/^(serving|servings|portion|portions)$/.test(w)) return "serving";
   return w.replace(/s$/, "");
 }
 
@@ -715,6 +723,10 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
   if (qty.amount != null && unit) {
     const servingUnit = canonUnitWord(s.unit);
     const userUnit = canonUnitWord(unit);
+    // "2 servings" is two of the row's own serving, whatever that serving is.
+    if (userUnit === "serving") {
+      return { servings: qty.amount * size, confidence: "exact", method: `${qty.amount} × ${s.label}` };
+    }
     const unitWords = new Set([servingUnit, ...(item.unitWords || []).map(canonUnitWord)]);
     if (userUnit === servingUnit || (unitWords.has(userUnit) && servingUnit === userUnit)) {
       return { servings: (qty.amount / s.amount) * size, confidence: "exact", method: `${qty.amount} ${unit} ÷ ${s.amount} ${s.unit} per serving` };

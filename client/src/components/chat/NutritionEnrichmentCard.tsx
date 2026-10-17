@@ -34,6 +34,13 @@ export function NutritionEnrichmentCard({ data, onChange }: { data: NutritionEnr
   const names = e.components.map((c) => c.sourceItem || c.name);
   const title = data.status === "applied" ? "Nutrition refined" : "Nutrition enrichment available";
   const confidence = CONFIDENCE_LABEL[e.confidence] || e.confidence;
+  // The totals are for what the user ate; say so when that is not one serving.
+  const scaled = e.components.some((c) => Math.abs(c.servings - 1) > 0.01) || Math.abs((e.servingFactor || 1) - 1) > 0.01;
+  const servingBasis = (c: typeof e.components[number]) => {
+    const n = Math.round(c.servings * 100) / 100;
+    const base = c.matchedServing?.label || "1 serving";
+    return n === 1 ? base : `${base} × ${n}`;
+  };
 
   const run = async (kind: "exact" | "generic" | "serving") => {
     setBusy(kind);
@@ -66,6 +73,7 @@ export function NutritionEnrichmentCard({ data, onChange }: { data: NutritionEnr
           </div>
         </div>
       </div>
+      {scaled && <div className="mt-1 text-[11px] text-muted-foreground">Your total ({e.components.map((c) => `${Math.round(c.servings * 100) / 100} serving${Math.abs(c.servings - 1) < 0.01 ? "" : "s"}`).join(" + ")})</div>}
       <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
         {SHOWN.filter((k) => ENTRY_VALUE_NUTRIENTS.includes(k)).map((k) => {
           const t = e.totals[k];
@@ -78,17 +86,16 @@ export function NutritionEnrichmentCard({ data, onChange }: { data: NutritionEnr
           );
         })}
       </div>
-      {e.components.length > 1 && (
-        <ul className="mt-1.5 space-y-0.5 text-muted-foreground">
-          {e.components.map((c, i) => (
-            <li key={i} className="truncate" title={c.source}>
-              {c.sourceItem || c.name} — {c.userQuantity || `${c.servings} serving`}
-              {c.nutrients.calories ? ` · ${formatNutrient("calories", c.nutrients.calories.value)}` : ""}
-              {` · ${CONFIDENCE_LABEL[c.confidence]}`}
-            </li>
-          ))}
-        </ul>
-      )}
+      <ul className="mt-1.5 space-y-0.5 text-muted-foreground">
+        {e.components.map((c, i) => (
+          <li key={i} className="truncate" title={c.source}>
+            {e.components.length > 1 ? `${c.sourceItem || c.name} · ` : ""}Serving basis: {servingBasis(c)}
+            {c.perServing?.calories != null && Math.abs(c.servings - 1) > 0.01 ? ` · ${formatNutrient("calories", c.perServing.calories)} per serving` : ""}
+            {e.components.length > 1 && c.nutrients.calories ? ` · ${formatNutrient("calories", c.nutrients.calories.value)}` : ""}
+            {` · ${CONFIDENCE_LABEL[c.confidence]}`}
+          </li>
+        ))}
+      </ul>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         {data.status === "proposed" && (
           <>

@@ -2480,7 +2480,15 @@ const MessageRow = memo(function MessageRow({
           <div className="mt-2 space-y-1.5">
             {msg.enrichments.map((card: any) => {
               const onChange = (next: any) => setMessages((prev) => prev.map((m) => m.id === msg.id
-                ? { ...m, enrichments: (m.enrichments || []).map((x) => (x.entryId === next.entryId ? next : x)) }
+                ? {
+                  ...m,
+                  enrichments: (m.enrichments || []).map((x) => (x.entryId === next.entryId ? next : x)),
+                  // A choice or a portion edit changed the record: the
+                  // confirmation card shows the record, so it follows.
+                  results: Array.isArray(m.results) && next?.record?.values
+                    ? m.results.map((r: any) => (r && r.id === next.entryId ? { ...r, values: next.record.values } : r))
+                    : m.results,
+                }
                 : m));
               return card?.enrichment?.components
                 ? <NutritionEnrichmentCard key={card.entryId} data={card} onChange={onChange} />
@@ -3174,7 +3182,13 @@ export default function ChatPage() {
         setMessages((prev: any[]) => prev.map((m) => {
           if (m.id !== target) return m;
           const rest = (m.enrichments || []).filter((x: NutritionEnrichmentCardData) => x.entryId !== card.entryId);
-          return { ...m, enrichments: [...rest, card] };
+          // The confirmation card above shows the record as the turn saved it;
+          // once the lookup refined that same record, show the refined values
+          // there too, so the two never disagree.
+          const results = Array.isArray(m.results) && card.status === "applied" && card.record?.values
+            ? m.results.map((r: any) => (r && r.id === card.entryId ? { ...r, values: card.record.values } : r))
+            : m.results;
+          return { ...m, enrichments: [...rest, card], results };
         }));
       });
     }

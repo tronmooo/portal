@@ -274,7 +274,45 @@ describe("modes", () => {
     expect(out.status).toBe("applied");
   });
 
-  it("Automatic: a low-confidence model estimate is stored as a proposal, never applied silently", async () => {
+  it("'2 servings of Kellogg's Special K Red Berries Breakfast Cereal' → the exact product, scaled to two servings, the generic cereal row never used (screenshot regression)", async () => {
+    const entry = await logFood({ item: "Kellogg's Special K Red Berries Breakfast Cereal (2 servings)", calories: 240, protein: 6, carbs: 56, fat: 2 });
+    const out = await enrichNutritionEntry(storage, { entryId: entry.id, message: "I ate 2 servings of Kellogg's Special K Red Berries Breakfast Cereal", mode: "auto", deps: offline });
+    expect(out.status).toBe("applied");
+    const n = out.enrichment!;
+    expect(n.confidence).toBe("exact");
+    expect(n.components).toHaveLength(1);
+    expect(n.components[0]).toMatchObject({ sourceItem: "Kellogg's Special K Red Berries", servings: 2, sourceType: "manufacturer" });
+    expect(n.components[0].matchedServing!.label).toBe("1 cup (39 g)");
+    expect((await storage.getTrackerEntry(entry.id))!.values).toMatchObject({ calories: 280, protein: 6, carbs: 68, fat: 1 });
+  });
+
+  it("a branded phrase the reference only knows generically goes to the product database first; the generic row is the last resort and a rough one is dropped", async () => {
+    const entry = await logFood({ item: "Honey Bunches of Oats cereal (1 cup)", calories: 160 });
+    const seen: string[] = [];
+    const out = await enrichNutritionEntry(storage, {
+      entryId: entry.id, message: "I ate a cup of Honey Bunches of Oats", mode: "auto",
+      deps: {
+        productLookup: async (phrase) => {
+          seen.push(phrase);
+          return { name: "Post Honey Bunches of Oats Honey Roasted", brand: "Post", serving: { amount: 1, unit: "cup", grams: 40, ml: null, label: "1 cup (40 g)" }, perServing: { calories: 160, protein: 3, carbs: 33, fat: 2, sugar: 9, sodium: 190 }, source: "Open Food Facts product 2", sourceType: "product_database", confidence: "exact", unitWords: ["cup", "cups"] };
+        },
+        modelEstimate: async () => { throw new Error("not needed"); },
+        now: () => NOW,
+      },
+    });
+    expect(seen).toHaveLength(1);
+    expect(out.status).toBe("applied");
+    expect(out.enrichment!.components[0].sourceType).toBe("product_database");
+    expect((await storage.getTrackerEntry(entry.id))!.values.sodium).toBe(190);
+    // Nothing answers → the generic cereal row is LOW → no proposal, the saved estimate stands.
+    const other = await logFood({ item: "Honey Bunches of Oats cereal (1 cup)", calories: 160 });
+    const none = await enrichNutritionEntry(storage, { entryId: other.id, mode: "auto", deps: { productLookup: async () => null, modelEstimate: async () => null, now: () => NOW } });
+    expect(none.status).toBe("skipped");
+    expect(none.reason).toMatch(/rough/);
+    expect(((await storage.getTrackerEntry(other.id))!.computed as any).nutrition).toBeUndefined();
+  });
+
+  it("Automatic: a low-confidence model estimate is dropped, never shown as a competing proposal", async () => {
     const entry = await logFood({ item: "Trader Joe's Chicken Shawarma Bowl", calories: 400 });
     const out = await enrichNutritionEntry(storage, {
       entryId: entry.id, mode: "auto",
@@ -284,8 +322,9 @@ describe("modes", () => {
         now: () => NOW,
       },
     });
-    expect(out.status).toBe("proposed");
+    expect(out.status).toBe("skipped");
     expect((await storage.getTrackerEntry(entry.id))!.values.calories).toBe(400);
+    expect(((await storage.getTrackerEntry(entry.id))!.computed as any).nutrition).toBeUndefined();
   });
 
   it("Automatic: a medium model estimate fills missing nutrients but keeps the base calorie estimate (one guess does not replace another)", async () => {

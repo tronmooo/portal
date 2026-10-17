@@ -160,6 +160,8 @@ describe("internal reference lookup", () => {
     expect(lookupNutritionDb("16 oz Monster")?.item.id).toBe("monster-16oz");
     expect(lookupNutritionDb("Jif creamy peanut butter")?.item.id).toBe("jif-creamy-pb");
     expect(lookupNutritionDb("two Nature Made fish oil capsules")?.item.id).toBe("nature-made-fish-oil-1200");
+    // The branded row beats the generic "cereal" row it also contains.
+    expect(lookupNutritionDb("Kellogg's Special K Red Berries Breakfast Cereal (2 servings)")?.item.id).toBe("special-k-red-berries");
   });
   it("unknown or uncertain products fall through (no false precision)", () => {
     expect(lookupNutritionDb("Quaker Instant Oatmeal Honey & Almonds")?.item.id).not.toBe("quaker-original");
@@ -192,6 +194,14 @@ describe("internal reference lookup", () => {
     expect(resolveServings(quest, normalizeQuantity("a Quest protein bar")).confidence).toBe("exact");
     // No quantity at all → one serving, the row's own confidence.
     expect(resolveServings(coke, normalizeQuantity("")).confidence).toBe("exact");
+    // "2 servings" is two of the row's own serving (the Special K screenshot showed one).
+    const specialK = lookupNutritionDb("Special K Red Berries")!.item;
+    const two = resolveServings(specialK, normalizeQuantity("2 servings"), "2 servings");
+    expect(two).toMatchObject({ servings: 2, confidence: "exact" });
+    const comp = dbComponent("Kellogg's Special K Red Berries Breakfast Cereal", "2 servings");
+    expect(comp.nutrients.calories.value).toBe(280);
+    expect(comp.nutrients.carbs.value).toBe(68);
+    expect(comp.nutrients.fat.value).toBe(1);
   });
 });
 

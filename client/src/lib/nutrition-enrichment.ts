@@ -43,6 +43,8 @@ export interface NutritionEnrichmentCardData {
   reason?: string;
   /** A nutrition enrichment (has `components`) or an item enrichment (has `attributes`). */
   enrichment?: any;
+  /** The record as the server left it (a tracker entry's `values`, a profile's `fields`). */
+  record?: any;
 }
 
 const recordIdOf = (c: PendingEnrichmentCandidate): string => String(c.id || c.entryId || "");
@@ -99,6 +101,7 @@ async function postEnrich(c: PendingEnrichmentCandidate, intent: "auto" | "force
     status: out?.status || "failed",
     reason: out?.reason,
     enrichment: out?.enrichment,
+    record: out?.entry || out?.record,
   };
 }
 
@@ -152,5 +155,5 @@ export async function rescaleEntry(data: NutritionEnrichmentCardData, factor: nu
   const out = await res.json();
   await invalidateDomains("trackers", "dashboard");
   const enrichment = out?.entry?.computed?.nutrition as NutritionEnrichment | undefined;
-  return { ...data, status: enrichment?.status || data.status, enrichment: enrichment || data.enrichment };
+  return { ...data, status: enrichment?.status || data.status, enrichment: enrichment || data.enrichment, record: out?.entry || data.record };
 }
