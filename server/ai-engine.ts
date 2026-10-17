@@ -21,19 +21,42 @@ import { planSharedActivityFanout, type FanoutWrite } from "@shared/shared-activ
 import type { ChatMutation, ParsedAction, RecurrencePattern } from "@shared/schema";
 import { classifyTrackerAutoCreate } from "@shared/expense-shaped";
 import { classifyNutritionAutoCreate, isNutritionTrackerName } from "@shared/nutrition-shaped";
-import { planEnrichmentCandidate, rescaleNutritionEntry } from "./nutrition-enrichment";
+import { rescaleNutritionEntry } from "./nutrition-enrichment";
+import { planTrackerEntryCandidate, planProfileCandidate, planObligationCandidate } from "./item-enrichment";
 
 /**
- * Item Enrichment Layer: stamp a just-saved Nutrition entry with the candidate
- * the client posts back after the reply renders. Pure string work; a failure
- * here can never cost the log (server/nutrition-enrichment.ts).
+ * Item Enrichment Layer: stamp a just-saved tracker entry with the candidate
+ * the client posts back after the reply renders — a Nutrition entry gets the
+ * food lookup (server/nutrition-enrichment), a medication/supplement/pet-food
+ * entry the item identification (server/item-enrichment). Pure string work;
+ * a failure here can never cost the log.
  */
 function attachEnrichmentCandidate(entry: any, tracker: { id: string; name: string; category?: string | null } | null | undefined, input: any): void {
   if (!entry || !tracker) return;
   try {
-    const candidate = planEnrichmentCandidate(entry, tracker, String(input?.__userMessage || ""));
-    if (candidate) entry._nutritionEnrichment = candidate;
+    const candidate = planTrackerEntryCandidate(entry, tracker, String(input?.__userMessage || ""));
+    if (!candidate) return;
+    if ((candidate as any).target) entry._itemEnrichment = candidate;
+    else entry._nutritionEnrichment = candidate;
   } catch { /* never block a log on enrichment planning */ }
+}
+
+/** Same for a just-created profile (vehicle, device, account, subscription). */
+function attachProfileEnrichmentCandidate(profile: any, input: any): void {
+  if (!profile) return;
+  try {
+    const candidate = planProfileCandidate(profile, String(input?.__userMessage || ""));
+    if (candidate) profile._itemEnrichment = candidate;
+  } catch { /* never block a create on enrichment planning */ }
+}
+
+/** And for a just-created recurring bill that names a subscription plan. */
+function attachObligationEnrichmentCandidate(ob: any, input: any): void {
+  if (!ob) return;
+  try {
+    const candidate = planObligationCandidate(ob, String(input?.__userMessage || ""));
+    if (candidate) ob._itemEnrichment = candidate;
+  } catch { /* never block a create on enrichment planning */ }
 }
 import {
   FINANCE_TOOL_DEFINITIONS, FINANCE_TOOL_SYSTEM_GUIDANCE, executeFinanceTool, isFinanceTool,
@@ -5904,6 +5927,7 @@ BEHAVIOR:
   ONE MEAL = ONE ENTRY: several foods eaten together ("3 eggs, 2 wheat toast with butter, a banana and coffee with creamer") are ONE log_tracker_entry whose item lists every component and whose values are the meal totals — never six separate meals. Separate eating occasions (breakfast and lunch) are separate entries.
   PORTION CORRECTIONS: "actually I only ate half" / "I had two of those" → update_tracker_entry(trackerName:"Nutrition", values:{}, scaleBy:0.5 or 2). Never log a second entry and never halve the numbers yourself.
   USER-STATED LABEL VALUES WIN: "it says 210 calories and 20g protein" → pass exactly calories:210, protein:20; the server keeps them even if a product lookup disagrees.
+- ITEM IDENTITY (every tracker and profile, not just food): keep the identifying words the user gave — brand, product line, model, year, trim, plan tier, strength, size — in the record's name/item/drug field exactly as said ("2021 Honda CR-V EX AWD", "MacBook Air M3 15-inch", "Netflix Premium", "Advil 200 mg", "Nature Made Fish Oil 1200 mg", "Purina Pro Plan Sensitive Skin & Stomach Salmon"). The server's Item Enrichment Layer identifies the exact product from that text AFTER the record is saved and fills the attributes identity changes (specs, MPG, strength, plan price…). Never invent such attributes yourself and NEVER guess a medication strength when several exist: "I took Advil" → drug:"Advil" with no dosage; "two Advil 200 mg tablets" → dosage:200, count:2 (the server computes the 400 mg total). A generic mention ("my car", "pain medicine") saves as the generic record it is.
 - When creating tracker entries, use MULTIPLE tracker calls if the message describes multiple different activities (eating + exercise = 2 separate entries to 2 different trackers).
 - MULTI-EXERCISE WORKOUTS: A workout that lists several exercises is NOT one entry. Emit ONE log_tracker_entry PER exercise so none is silently dropped. "45-min chest workout: bench press 135 for 3x10, incline dumbbells 40lb, pushups to failure" → THREE log_tracker_entry calls: (1) trackerName:"Bench Press" values:{exercise:"Bench Press", weight:135, sets:3, reps:10}; (2) trackerName:"Incline Dumbbell Press" values:{exercise:"Incline Dumbbell Press", weight:40, sets:3}; (3) trackerName:"Pushups" values:{exercise:"Pushups", reps:0, notes:"to failure"}. Bodyweight/"to failure" moves (pushups, planks, pullups) STILL get their own entry even without a weight number — never omit an exercise just because it has no load. Pick the specific exercise name for each trackerName.
 - RECURRING EXPENSES / SUBSCRIPTIONS: When a user mentions a recurring payment, subscription, or bill ("I pay $X per month for Y", "subscription costs $X", "$11 Spotify every month"), use create_obligation ONLY. Do NOT also call create_event or create_expense for the same item. A subscription profile is automatically created behind the scenes — do NOT call create_profile separately. Obligations automatically generate recurring calendar entries on their due dates. Creating an event AND an obligation for the same bill causes DUPLICATE calendar entries — this is a critical bug to avoid. ONE tool call (create_obligation) handles everything: obligation + profile + calendar entries.
@@ -7898,6 +7922,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const userProvidedValue = sharedAssetValue({ type: _autoValType, fields: finalFields }) > 0;
       if (userProvidedValue) {
         logger.info("ai", `Skipping auto-valuation for "${input.name}" — user provided an exact value`);
+        attachProfileEnrichmentCandidate(newProfile, input);
         return newProfile;
       }
       try {
@@ -7919,6 +7944,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         logger.warn("ai", `Auto-valuation failed for "${input.name}": ${e}`);
       }
 
+      // Item Enrichment Layer: a vehicle/device/account named specifically
+      // enough to identify gets its specs (MPG, tank, storage, warranty, plan
+      // fee…) filled AFTER the reply — the valuation above is value, this is
+      // identity. Pure string work here; the lookup runs on the client's
+      // follow-up request.
+      attachProfileEnrichmentCandidate(newProfile, input);
       return newProfile;
     }
 
@@ -11830,6 +11861,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (dueDateInferenceNote) {
         (newObligation as any)._dueDateNote = dueDateInferenceNote;
       }
+      attachObligationEnrichmentCandidate(newObligation, input);
       return newObligation;
     }
 

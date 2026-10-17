@@ -13,47 +13,77 @@ import {
   type EnrichmentMode,
   type NutritionEnrichment,
 } from "@shared/nutrition-enrichment";
+import { ITEM_ENRICHMENT_PREF_KEY } from "@shared/item-identity";
+
+export type EnrichmentTarget = "trackerEntry" | "profile" | "obligation";
 
 export interface PendingEnrichmentCandidate {
-  entryId: string;
-  trackerId: string;
-  trackerName: string;
+  /** Absent on older servers: a tracker entry. */
+  target?: EnrichmentTarget;
+  /** A tracker entry's id (nutrition / item candidates on entries). */
+  entryId?: string;
+  /** A profile's or obligation's id (item candidates on those). */
+  id?: string;
+  trackerId?: string;
+  trackerName?: string;
+  kind?: string;
   item?: string;
   message?: string;
 }
 
-/** What the server answered for one entry — the card's data. */
+/** What the server answered for one record — the card's data. */
 export interface NutritionEnrichmentCardData {
+  target?: EnrichmentTarget;
+  /** The record's id (the entry id for tracker entries). */
   entryId: string;
   trackerId?: string;
   trackerName?: string;
+  kind?: string;
   status: NutritionEnrichment["status"];
   reason?: string;
-  enrichment?: NutritionEnrichment;
+  /** A nutrition enrichment (has `components`) or an item enrichment (has `attributes`). */
+  enrichment?: any;
 }
 
-const PREF_KEY = [`/api/preferences/${NUTRITION_ENRICHMENT_PREF_KEY}`];
+const recordIdOf = (c: PendingEnrichmentCandidate): string => String(c.id || c.entryId || "");
+const targetOf = (c: PendingEnrichmentCandidate): EnrichmentTarget => c.target || "trackerEntry";
+const TARGET_PATH: Record<EnrichmentTarget, string> = { trackerEntry: "tracker-entry", profile: "profile", obligation: "obligation" };
 
-/** The user's setting, from the cached preference query (a failure reads as the default, never as "off"). */
+const PREF_KEY = [`/api/preferences/${ITEM_ENRICHMENT_PREF_KEY}`];
+const LEGACY_PREF_KEY = [`/api/preferences/${NUTRITION_ENRICHMENT_PREF_KEY}`];
+
+async function readPref(key: string[]): Promise<string | null> {
+  const data = await queryClient.fetchQuery<{ value: string | null }>({
+    queryKey: key,
+    queryFn: async () => {
+      const r = await apiRequest("GET", key[0]);
+      if (!r.ok) throw new Error(`preference read failed: ${r.status}`);
+      return r.json();
+    },
+    staleTime: 5 * 60_000,
+  });
+  return data?.value ?? null;
+}
+
+/**
+ * The user's Enhanced Item Lookup setting, from the cached preference query
+ * (`item_enrichment`, falling back to the nutrition-only key it generalizes).
+ * A failed read is the default, never "off".
+ */
 export async function enrichmentMode(): Promise<EnrichmentMode> {
   try {
-    const data = await queryClient.fetchQuery<{ value: string | null }>({
-      queryKey: PREF_KEY,
-      queryFn: async () => {
-        const r = await apiRequest("GET", PREF_KEY[0]);
-        if (!r.ok) throw new Error(`preference read failed: ${r.status}`);
-        return r.json();
-      },
-      staleTime: 5 * 60_000,
-    });
-    return parseEnrichmentMode(data?.value);
+    const item = await readPref(PREF_KEY);
+    if (item != null && String(item).trim()) return parseEnrichmentMode(item);
+    return parseEnrichmentMode(await readPref(LEGACY_PREF_KEY));
   } catch {
     return "auto";
   }
 }
 
 async function postEnrich(c: PendingEnrichmentCandidate, intent: "auto" | "force" | "reject"): Promise<NutritionEnrichmentCardData> {
-  const res = await apiRequest("POST", `/api/tracker-entries/${encodeURIComponent(c.entryId)}/enrich`, {
+  const id = recordIdOf(c);
+  const target = targetOf(c);
+  const res = await apiRequest("POST", `/api/enrich/${TARGET_PATH[target]}/${encodeURIComponent(id)}`, {
     trackerId: c.trackerId,
     message: c.message,
     intent,
@@ -61,9 +91,11 @@ async function postEnrich(c: PendingEnrichmentCandidate, intent: "auto" | "force
   if (!res.ok) throw new Error(`enrich failed: ${res.status}`);
   const out = await res.json();
   return {
-    entryId: c.entryId,
+    target,
+    entryId: id,
     trackerId: out?.trackerId || c.trackerId,
     trackerName: out?.trackerName || c.trackerName,
+    kind: out?.enrichment?.kind || c.kind,
     status: out?.status || "failed",
     reason: out?.reason,
     enrichment: out?.enrichment,
@@ -84,7 +116,7 @@ export async function runPendingEnrichment(
   const mode = await enrichmentMode();
   if (mode === "off") return;
   let touched = false;
-  const queue = [...candidates];
+  const queue = candidates.filter((c) => recordIdOf(c));
   const worker = async () => {
     for (let c = queue.shift(); c; c = queue.shift()) {
       try {
@@ -97,16 +129,16 @@ export async function runPendingEnrichment(
     }
   };
   await Promise.all(Array.from({ length: Math.min(3, queue.length) }, worker));
-  if (touched) await invalidateDomains("trackers", "dashboard");
+  if (touched) await invalidateDomains("trackers", "profiles", "obligations", "dashboard");
 }
 
 /** "Use exact match" / "Use generic estimate" on a proposal card. */
 export async function chooseEnrichment(data: NutritionEnrichmentCardData, choice: "exact" | "generic"): Promise<NutritionEnrichmentCardData> {
   const out = await postEnrich(
-    { entryId: data.entryId, trackerId: data.trackerId || "", trackerName: data.trackerName || "" },
+    { target: data.target, entryId: data.entryId, id: data.entryId, trackerId: data.trackerId || "", trackerName: data.trackerName || "" },
     choice === "exact" ? "force" : "reject",
   );
-  await invalidateDomains("trackers", "dashboard");
+  await invalidateDomains("trackers", "profiles", "obligations", "dashboard");
   return out;
 }
 

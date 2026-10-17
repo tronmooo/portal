@@ -454,6 +454,10 @@ export default defineConfig({
       // product/label data AFTER the base entry is saved; user values win.
       'tests/nutrition-enrichment.test.ts',
       'tests/nutrition-enrichment-flow.test.ts',
+      // 2026-10-17 Item Identity Layer: the same for medications, supplements,
+      // pet food, vehicles, devices, subscriptions and accounts.
+      'tests/item-identity.test.ts',
+      'tests/item-enrichment-flow.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/full-suite.test.ts', 'tests/critical-flows.test.ts', 'tests/api-e2e.test.ts', 'tests/e2e-dashboard-filters.test.ts'],
     testTimeout: 30000,

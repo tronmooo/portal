@@ -38,6 +38,8 @@ import { exportFingerprint, alreadyRestoredMessage, IMPORTED_BACKUP_PREF_PREFIX 
 import { withLedgerNote, ledgerNoteOf, retractPaymentOfExpense, stripDanglingPaymentTags, payBillOccurrence, unpayBillOccurrence, accountThatPaid, closeBillReminderTasksWhere, isOpenBillReminderTask, collapseDuplicateBillReminders, rescheduleBillOccurrence, paymentIdOfExpense, repriceBillPaymentFromExpense, repriceBillPayment } from "./liability-payments";
 import { createWriteJournal, writeJournalContext, type WriteJournal } from "./write-journal";
 import { enrichNutritionEntry, rescaleNutritionEntry } from "./nutrition-enrichment";
+import { enrichItem, type EnrichmentTarget } from "./item-enrichment";
+import { isNutritionTrackerLike } from "@shared/nutrition-enrichment";
 import { getValuationSnapshot, refreshValuation, isValuableProfile, getValuationStatus } from "./valuation/service";
 import { isAutoValuationEnabled } from "@shared/valuation/context";
 import { encodeWriteManifest, WRITE_MANIFEST_HEADER } from "@shared/write-manifest";
@@ -2050,9 +2052,12 @@ export async function registerRoutes(
       // reply renders. Nothing here waits on a lookup.
       try {
         const rs: any[] = Array.isArray((result as any)?.results) ? (result as any).results : [];
-        const pending = rs
-          .filter((r) => r && typeof r === "object" && (r as any)._nutritionEnrichment)
-          .map((r) => { const c = (r as any)._nutritionEnrichment; delete (r as any)._nutritionEnrichment; return c; });
+        const pending: any[] = [];
+        for (const r of rs) {
+          if (!r || typeof r !== "object") continue;
+          if ((r as any)._nutritionEnrichment) { pending.push({ target: "trackerEntry", ...(r as any)._nutritionEnrichment }); delete (r as any)._nutritionEnrichment; }
+          if ((r as any)._itemEnrichment) { pending.push((r as any)._itemEnrichment); delete (r as any)._itemEnrichment; }
+        }
         if (pending.length > 0) (result as any).pendingEnrichment = pending;
       } catch { /* an enrichment candidate is never worth a failed reply */ }
       if (idem) setIdem(userId, idem, { status: "done", result, expires: Date.now() + IDEM_TTL_MS });
@@ -6661,6 +6666,7 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
   // trackerId in either storage, so the owner is looked for in the default
   // window first and, on a miss, in an effectively unbounded one.
   const ALL_TRACKER_ENTRIES_DAYS = 36_500;
+  const isNutritionTrackerLikeForRoute = (t: { name?: string | null; category?: string | null }) => isNutritionTrackerLike(t);
   const locateTrackerEntry = async (entryId: string): Promise<{ tracker: Tracker; entry: any } | null> => {
     const entry: any = await storage.getTrackerEntry(entryId);
     if (!entry || typeof entry !== "object") return null;
@@ -6774,6 +6780,35 @@ Factors: ageDays since last valuation, type churn rate, currentValue magnitude (
     const outcome = await enrichNutritionEntry(storage, { entryId: req.params.entryId, trackerId: typeof body.trackerId === "string" ? body.trackerId : undefined, message, intent });
     if (outcome.status === "failed" && /not found/.test(outcome.reason || "")) return res.status(404).json({ error: outcome.reason });
     const uid_en = cacheUserKey(req as AuthenticatedRequest); bustCache(`stats:${uid_en}`); bustCache(`profile-detail:${uid_en}:`);
+    return res.json(outcome);
+  }));
+  // The general form: identify the item behind a tracker entry (medication,
+  // supplement, pet food), a profile (vehicle, device, account, subscription)
+  // or a recurring bill, and fill the attributes identity changes for its kind
+  // (server/item-enrichment). A Nutrition entry routes to the food lookup.
+  app.post("/api/enrich/:target/:id", asyncHandler(async (req, res) => {
+    const uid = (req as AuthenticatedRequest).userId || req.ip || "anonymous";
+    if (rateLimit(`enrich:${uid}`, 40)) return res.status(429).json({ error: "Too many requests. Please wait a moment." });
+    const targetMap: Record<string, EnrichmentTarget> = { "tracker-entry": "trackerEntry", trackerEntry: "trackerEntry", profile: "profile", obligation: "obligation" };
+    const target = targetMap[String(req.params.target)];
+    if (!target) return res.status(400).json({ error: "target must be tracker-entry, profile or obligation" });
+    const body = req.body || {};
+    const message = typeof body.message === "string" ? body.message.slice(0, 2000) : undefined;
+    const intent = ["auto", "preview", "force", "reject"].includes(String(body.intent)) ? String(body.intent) as "auto" | "preview" | "force" | "reject" : "auto";
+    const trackerId = typeof body.trackerId === "string" ? body.trackerId : undefined;
+    const uid_ge = cacheUserKey(req as AuthenticatedRequest);
+    if (target === "trackerEntry") {
+      const located = await locateTrackerEntry(req.params.id);
+      if (!located) return res.status(404).json({ error: "Entry not found" });
+      if (isNutritionTrackerLikeForRoute(located.tracker)) {
+        const outcome = await enrichNutritionEntry(storage, { entryId: req.params.id, trackerId: located.tracker.id, message, intent });
+        bustCache(`stats:${uid_ge}`); bustCache(`profile-detail:${uid_ge}:`);
+        return res.json({ ...outcome, target: "trackerEntry", id: req.params.id });
+      }
+    }
+    const outcome = await enrichItem(storage, { target, id: req.params.id, trackerId, message, intent });
+    if (outcome.status === "failed" && /not found/.test(outcome.reason || "")) return res.status(404).json({ error: outcome.reason });
+    bustCache(`stats:${uid_ge}`); bustCache(`profile-detail:${uid_ge}:`); bustCache(`profiles:${uid_ge}`);
     return res.json(outcome);
   }));
   // "Edit serving size" / "actually I only ate half": one in-place rescale of

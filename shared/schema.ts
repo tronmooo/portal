@@ -173,10 +173,14 @@ export interface ChatMessage {
     extractedData?: Record<string, any>;
     type?: string;
   }>;
-  /** Item Enrichment Layer outcomes for the Nutrition entries this turn
-   *  logged (client/src/lib/nutrition-enrichment). Attached AFTER the reply
-   *  renders, one card per entry; absent until the lookup settles. */
-  nutritionEnrichments?: Array<{
+  /** Item Enrichment Layer outcomes for the records this turn saved — a
+   *  Nutrition entry's food lookup, or the identification of a medication,
+   *  supplement, vehicle, device, subscription or account
+   *  (client/src/lib/nutrition-enrichment). Attached AFTER the reply renders,
+   *  one card per record; absent until the lookup settles. */
+  enrichments?: Array<{
+    target?: "trackerEntry" | "profile" | "obligation";
+    /** The record's id (an entry id for tracker entries). */
     entryId: string;
     trackerId?: string;
     trackerName?: string;

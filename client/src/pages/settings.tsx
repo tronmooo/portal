@@ -311,6 +311,10 @@ export default function SettingsPage() {
     queryKey: ["/api/preferences/nutrition_enrichment"],
     queryFn: () => apiRequest("GET", "/api/preferences/nutrition_enrichment").then(r => r.json()),
   });
+  const { data: prefItemEnrichment } = useQuery<{ value: string | null }>({
+    queryKey: ["/api/preferences/item_enrichment"],
+    queryFn: () => apiRequest("GET", "/api/preferences/item_enrichment").then(r => r.json()),
+  });
 
   // (2026-05-24) Map retired Sonnet 4.5 saved preferences onto the current
   // Sonnet 4.6 so the Select displays the right option and the server doesn't
@@ -328,7 +332,10 @@ export default function SettingsPage() {
   const aiSmartRouting = prefSmartRouting?.value !== "false";
   const aiAutoCreateTrackers = prefAutoCreateTrackers?.value !== "false";
   // off | auto | ask — anything unset or unknown is Automatic (the default).
-  const nutritionEnrichment = prefNutritionEnrichment?.value === "off" ? "off" : prefNutritionEnrichment?.value === "ask" ? "ask" : "auto";
+  // `item_enrichment` covers every kind of item; the older nutrition-only key
+  // is honoured when the new one was never set.
+  const enrichmentRaw = prefItemEnrichment?.value && prefItemEnrichment.value.trim() ? prefItemEnrichment.value : prefNutritionEnrichment?.value;
+  const itemEnrichment = enrichmentRaw === "off" ? "off" : enrichmentRaw === "ask" ? "ask" : "auto";
 
   async function setAiPreference(key: string, value: string) {
     // Optimistic: reflect the new value immediately so the Switch/Select doesn't flicker back
@@ -802,14 +809,14 @@ export default function SettingsPage() {
             <Separator />
             <div className="flex items-center justify-between">
               <div className="flex-1 mr-4">
-                <Label className="text-sm font-medium">Enhanced Nutrition Lookup</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">After a food is logged, match a specific product (brand, flavor, serving) to its label and refine calories and macros. The entry is saved first either way; values you state are never replaced.</p>
+                <Label className="text-sm font-medium">Enhanced Item Lookup</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">After you log or add a specific item — a branded food, a medication, a supplement, a vehicle, a device, a subscription plan — identify the exact product and fill what identity changes: label nutrition, active ingredient and strength, MPG and tank size, specs, plan price. The record is saved first either way; values you state are never replaced.</p>
               </div>
               <Select
-                value={nutritionEnrichment}
-                onValueChange={(v) => setAiPreference("nutrition_enrichment", v)}
+                value={itemEnrichment}
+                onValueChange={(v) => { void setAiPreference("item_enrichment", v); void setAiPreference("nutrition_enrichment", v); }}
               >
-                <SelectTrigger className="w-[200px] h-8 text-xs" data-testid="select-nutrition-enrichment">
+                <SelectTrigger className="w-[200px] h-8 text-xs" data-testid="select-item-enrichment">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

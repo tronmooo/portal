@@ -65,6 +65,7 @@ import { streamChat } from "@/components/chat/chat-stream";
 import { isDuplicateResend, type LastSend } from "@shared/chat-progress";
 import { ThinkingBubble } from "@/components/chat/ThinkingBubble";
 import { NutritionEnrichmentCard } from "@/components/chat/NutritionEnrichmentCard";
+import { ItemEnrichmentCard } from "@/components/chat/ItemEnrichmentCard";
 import { runPendingEnrichment, type NutritionEnrichmentCardData } from "@/lib/nutrition-enrichment";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -2475,17 +2476,16 @@ const MessageRow = memo(function MessageRow({
 
         {/* Item Enrichment Layer: one card per Nutrition entry the lookup
             refined or wants a decision on. Attached after the reply. */}
-        {msg.nutritionEnrichments && msg.nutritionEnrichments.length > 0 && (
+        {msg.enrichments && msg.enrichments.length > 0 && (
           <div className="mt-2 space-y-1.5">
-            {msg.nutritionEnrichments.map((card: any) => (
-              <NutritionEnrichmentCard
-                key={card.entryId}
-                data={card}
-                onChange={(next) => setMessages((prev) => prev.map((m) => m.id === msg.id
-                  ? { ...m, nutritionEnrichments: (m.nutritionEnrichments || []).map((x) => (x.entryId === next.entryId ? next : x)) }
-                  : m))}
-              />
-            ))}
+            {msg.enrichments.map((card: any) => {
+              const onChange = (next: any) => setMessages((prev) => prev.map((m) => m.id === msg.id
+                ? { ...m, enrichments: (m.enrichments || []).map((x) => (x.entryId === next.entryId ? next : x)) }
+                : m));
+              return card?.enrichment?.components
+                ? <NutritionEnrichmentCard key={card.entryId} data={card} onChange={onChange} />
+                : <ItemEnrichmentCard key={card.entryId} data={card} onChange={onChange} />;
+            })}
           </div>
         )}
 
@@ -3173,8 +3173,8 @@ export default function ChatPage() {
       void runPendingEnrichment(data.pendingEnrichment, (card: NutritionEnrichmentCardData) => {
         setMessages((prev: any[]) => prev.map((m) => {
           if (m.id !== target) return m;
-          const rest = (m.nutritionEnrichments || []).filter((x: NutritionEnrichmentCardData) => x.entryId !== card.entryId);
-          return { ...m, nutritionEnrichments: [...rest, card] };
+          const rest = (m.enrichments || []).filter((x: NutritionEnrichmentCardData) => x.entryId !== card.entryId);
+          return { ...m, enrichments: [...rest, card] };
         }));
       });
     }

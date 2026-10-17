@@ -55,6 +55,7 @@ import {
   type Specificity,
 } from "@shared/nutrition-enrichment";
 import { lookupNutritionDb, resolveServings, type NutritionDbItem } from "@shared/nutrition-db";
+import { ITEM_ENRICHMENT_PREF_KEY } from "@shared/item-identity";
 import { getAnthropicClient } from "./anthropic-client";
 import { logger } from "./logger";
 
@@ -92,6 +93,17 @@ export function planEnrichmentCandidate(
   const decision = decideEnrichment("auto", specificity, text);
   if (!decision.attempt) return null;
   return { entryId: entry.id, trackerId: tracker.id, trackerName: tracker.name, item, specificity, message: message || undefined };
+}
+
+/**
+ * The preference both enrichment layers read: `item_enrichment` (Enhanced
+ * Item Lookup: off | auto | ask), falling back to the nutrition-only key it
+ * generalizes. Unset is Automatic.
+ */
+export async function readEnrichmentMode(storage: IStorage): Promise<EnrichmentMode> {
+  const item = await storage.getPreference(ITEM_ENRICHMENT_PREF_KEY).catch(() => null);
+  if (item != null && String(item).trim()) return parseEnrichmentMode(item);
+  return parseEnrichmentMode(await storage.getPreference(NUTRITION_ENRICHMENT_PREF_KEY).catch(() => null));
 }
 
 /** The food the entry names, from whichever text field the agent used. */
@@ -548,7 +560,7 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
   if (!tracker) return done({ status: "failed", reason: "tracker not found" });
   if (!isNutritionTrackerLike(tracker)) return done({ status: "skipped", reason: "not a nutrition tracker", trackerId: tracker.id, trackerName: tracker.name });
 
-  const mode: EnrichmentMode = opts.mode ?? parseEnrichmentMode(await storage.getPreference(NUTRITION_ENRICHMENT_PREF_KEY).catch(() => null));
+  const mode: EnrichmentMode = opts.mode ?? await readEnrichmentMode(storage);
   const intent = opts.intent ?? "auto";
   const existing: NutritionEnrichment | undefined = entry.computed?.nutrition;
 

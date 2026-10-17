@@ -18,6 +18,7 @@ import {
   NUTRIENT_LABELS,
   formatNutrient,
   type NutrientKey,
+  type NutritionEnrichment,
 } from "@shared/nutrition-enrichment";
 
 const SHOWN: NutrientKey[] = ["calories", "protein", "carbs", "fat", "sugar", "sodium", "caffeine"];
@@ -25,7 +26,7 @@ const SHOWN: NutrientKey[] = ["calories", "protein", "carbs", "fat", "sugar", "s
 export function NutritionEnrichmentCard({ data, onChange }: { data: NutritionEnrichmentCardData; onChange: (next: NutritionEnrichmentCardData) => void }) {
   const [busy, setBusy] = useState<"exact" | "generic" | "serving" | null>(null);
   const [editing, setEditing] = useState(false);
-  const e = data.enrichment;
+  const e = data.enrichment as NutritionEnrichment | undefined;
   const [portion, setPortion] = useState(String(e?.servingFactor ?? 1));
   const { toast } = useToast();
   if (!e || (data.status !== "applied" && data.status !== "proposed")) return null;
