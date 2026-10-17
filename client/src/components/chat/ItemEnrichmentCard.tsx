@@ -49,7 +49,7 @@ export function ItemEnrichmentCard({ data, onChange }: { data: NutritionEnrichme
             <li key={k} className="flex items-baseline gap-1.5 text-muted-foreground" title={`${a.source} · ${CONFIDENCE_LABEL[a.confidence]}${written ? " · saved on the record" : " · shown here only"}`}>
               <span>{a.label}:</span>
               <span className="text-foreground">{est ? "≈" : ""}{formatAttribute(a)}</span>
-              {!written && data.status === "applied" && <span className="text-[10px] opacity-70">(not saved)</span>}
+              {!written && data.status === "applied" && <span className="text-[11px] opacity-70">(not saved)</span>}
             </li>
           );
         })}

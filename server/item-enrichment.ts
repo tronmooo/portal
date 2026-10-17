@@ -179,6 +179,9 @@ export async function modelIdentifyItem(
   }
 }
 
+/** A plan price is at most medium (prices change); it fills an EMPTY amount only, flagged estimated. */
+const intentAllowsEstimatedPrice = (c: EnrichmentConfidence) => c === "exact" || c === "high" || c === "medium";
+
 const defaultDeps = (): ItemEnrichmentDeps => ({ modelIdentify: (i) => modelIdentifyItem(i), now: () => new Date().toISOString() });
 
 // ─── Identification ladder ───────────────────────────────────────────────────
@@ -200,8 +203,10 @@ function attributesFromModel(kind: ItemKind, m: ModelIdentification, now: string
     if (spec.type === "boolean") value = value === true || String(value).toLowerCase() === "true";
     if (spec.type === "list") value = Array.isArray(value) ? value.map(String) : String(value).split(/,\s*/);
     if (spec.type === "text") value = String(value);
-    // Model knowledge is never "exact" for a price/fee; specs it is certain of may be.
-    const ceiling: EnrichmentConfidence = spec.effect === "price" || spec.effect === "recurring_cost" ? "medium" : "exact";
+    // Model knowledge is never "exact" for a price or fee (they change); a
+    // plan's name or a published spec it is certain of may be.
+    const money = spec.effect === "price" || (spec.effect === "recurring_cost" && spec.type === "number");
+    const ceiling: EnrichmentConfidence = money ? "medium" : "exact";
     const confidence = clampConfidence(String(a.confidence || "medium"), ceiling);
     if (confidence === "low") continue;
     out[a.key] = {
@@ -326,15 +331,17 @@ async function loadRecord(storage: IStorage, opts: ItemEnrichOptions): Promise<L
       const applied: string[] = [];
       const patch: Record<string, any> = {};
       if (apply) {
+        // Same floor as a profile: only high+ attributes land on the record.
         for (const k of ["planTier", "annualCost", "planFeatures"]) {
-          if (attrs[k] && (ob.fields?.[k] == null)) { patch[k] = attrs[k].value; applied.push(k); }
+          const a = attrs[k];
+          if (a && ob.fields?.[k] == null && (a.confidence === "exact" || a.confidence === "high")) { patch[k] = a.value; applied.push(k); }
         }
       }
       const provenance = { ...enrichment, applied };
       // A price is filled only into an obligation that has none — an estimate
       // never replaces a figure the user gave, and it is flagged as estimated.
       let record: any = ob;
-      if (apply && attrs.price && !(ob.amount > 0) && typeof attrs.price.value === "number") {
+      if (apply && attrs.price && !(ob.amount > 0) && typeof attrs.price.value === "number" && (intentAllowsEstimatedPrice(attrs.price.confidence))) {
         record = (await storage.updateObligation(ob.id, { amount: attrs.price.value } as any)) || ob;
         patch.amountEstimated = true;
         applied.push("price");
