@@ -225,7 +225,7 @@ function TaskDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid={isEdit ? "dialog-edit-task" : "dialog-create-task"}>
+      <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid={isEdit ? "dialog-edit-task" : "dialog-create-task"}>
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit Task" : "New Task"}</DialogTitle>
           <DialogDescription>{isEdit ? "Update task details." : "Create a new task."}</DialogDescription>

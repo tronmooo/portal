@@ -438,7 +438,7 @@ function EventFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={o => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid={isEdit ? "dialog-edit-event" : "dialog-add-event"}>
+      <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid={isEdit ? "dialog-edit-event" : "dialog-add-event"}>
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit Event" : "New Event"}</DialogTitle>
         </DialogHeader>

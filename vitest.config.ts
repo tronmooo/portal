@@ -439,6 +439,7 @@ export default defineConfig({
       // failed request is never an empty account.
       'tests/sync-asset-navigation.dom.test.tsx',
       'tests/sync-rules-filters.test.ts',
+      'tests/dialog-scroll-guards.test.ts',
       'tests/sync-rules-valuation.test.ts',
       'tests/sync-rules-valuation.dom.test.tsx',
       'tests/sync-rules-notifications.test.ts',

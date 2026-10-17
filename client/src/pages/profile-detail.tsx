@@ -688,7 +688,7 @@ function BelongsToEditor({
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-sm max-h-[80vh] flex flex-col" data-testid="dialog-belongs-to">
+        <DialogContent className="max-w-sm max-h-[80dvh] flex flex-col" data-testid="dialog-belongs-to">
           <DialogHeader>
             <DialogTitle>Set Location</DialogTitle>
             <DialogDescription>Choose where this asset is located. This is its parent in the asset tree — not its owner. Use the Ownership editor to set ownership shares.</DialogDescription>
@@ -5919,7 +5919,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
         setShowAddExpense(open);
         if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(localTodayISO()); }
       }}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-add-expense">
+        <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-add-expense">
           <DialogHeader>
             <DialogTitle>Add Expense</DialogTitle>
             <DialogDescription>Add a new expense linked to this profile.</DialogDescription>
@@ -5986,7 +5986,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
       {/* Edit Expense Dialog */}
       <Dialog open={!!editingExpense} onOpenChange={(open) => { if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(localTodayISO()); } setEditingExpense(open ? editingExpense : null); }}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-edit-expense">
+        <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-edit-expense">
           <DialogHeader>
             <DialogTitle>Edit Expense</DialogTitle>
             <DialogDescription>Update this expense.</DialogDescription>
@@ -6768,7 +6768,7 @@ function TrackersTab({
         setShowCreateTracker(open);
         if (!open) { setNewTrackerName(""); setNewTrackerUnit(""); setNewTrackerCategory("custom"); setNewFieldName("value"); setNewFieldType("number"); }
       }}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-create-tracker">
+        <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-create-tracker">
           <DialogHeader>
             <DialogTitle>New Tracker</DialogTitle>
             <DialogDescription>Create a new tracker linked to this profile.</DialogDescription>
@@ -6845,7 +6845,7 @@ function TrackersTab({
 
       {/* Link Existing Tracker Dialog */}
       <Dialog open={showLinkTracker} onOpenChange={setShowLinkTracker}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-link-tracker">
+        <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-link-tracker">
           <DialogHeader>
             <DialogTitle>Link Tracker</DialogTitle>
             <DialogDescription>Link an existing tracker to this profile.</DialogDescription>
@@ -6872,7 +6872,7 @@ function TrackersTab({
 
       {/* Log Entry Dialog */}
       <Dialog open={!!showLogEntry} onOpenChange={(open) => { if (!open) { setEntryValue(""); setEntryNotes(""); } setShowLogEntry(open ? showLogEntry : null); }}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-log-entry">
+        <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-log-entry">
           <DialogHeader>
             <DialogTitle>Log Entry</DialogTitle>
             <DialogDescription>Add a new entry to {trackers.find(t => t.id === showLogEntry)?.name || "this tracker"}.</DialogDescription>
@@ -8165,7 +8165,7 @@ function TasksTab({
         setShowAddTask(open);
         if (!open) { setTaskTitle(""); setTaskDesc(""); setTaskPriority("medium"); setTaskDueDate(""); }
       }}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-add-task">
+        <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-add-task">
           <DialogHeader>
             <DialogTitle>Add Task</DialogTitle>
             <DialogDescription>Create a new task linked to this profile.</DialogDescription>
@@ -8422,7 +8422,7 @@ function EditProfileDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="dialog-edit-profile">
+      <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-edit-profile">
         <DialogHeader>
           <DialogTitle>Edit {profile.type === "self" ? "My Profile" : profile.name}</DialogTitle>
           <DialogDescription className="capitalize">{profile.type} profile</DialogDescription>
@@ -10821,7 +10821,7 @@ function LinkLiabilityDialog({ open, onOpenChange, search, setSearch, candidates
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md max-h-[85vh] flex flex-col" data-testid="dialog-link-liability">
+      <DialogContent className="max-w-md max-h-[85dvh] flex flex-col" data-testid="dialog-link-liability">
         <DialogHeader>
           <DialogTitle>Link Liability</DialogTitle>
           <DialogDescription>Connect an existing liability to this person and set their ownership share.</DialogDescription>
@@ -10896,7 +10896,7 @@ function LinkAssetDialog({ open, onOpenChange, search, setSearch, candidates, pe
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md max-h-[85vh] flex flex-col" data-testid="dialog-link-asset">
+      <DialogContent className="max-w-md max-h-[85dvh] flex flex-col" data-testid="dialog-link-asset">
         <DialogHeader>
           <DialogTitle>Link Asset</DialogTitle>
           <DialogDescription>Connect an existing asset to this person and set their ownership share.</DialogDescription>

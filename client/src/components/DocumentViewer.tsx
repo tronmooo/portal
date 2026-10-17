@@ -813,7 +813,7 @@ export function DocumentViewerDialog({
       {/* Wave 11: Cap dialog at 85vh on desktop, 90vh on mobile, with a tighter
           max-w on wide displays so it never feels like it eats the viewport.
           Header is single-row (title + Download + close) instead of stacked. */}
-      <DialogContent className="max-w-[96vw] md:max-w-5xl lg:max-w-6xl xl:max-w-[1400px] max-h-[90vh] sm:h-[90vh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
+      <DialogContent className="max-w-[96vw] md:max-w-5xl lg:max-w-6xl xl:max-w-[1400px] max-h-[90dvh] sm:h-[90dvh] flex flex-col overflow-hidden p-0" data-testid={`dialog-doc-viewer-${id}`}>
         <DialogHeader className="px-3 py-2 border-b border-border shrink-0">
           <div className="flex items-center justify-between gap-2">
             {/* Title is inline-editable here so the user doesn't have to

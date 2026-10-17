@@ -98,7 +98,7 @@ export function ChatGPTImportDialog({ open, onOpenChange }: { open: boolean; onO
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[88vh] overflow-y-auto" data-testid="dialog-chatgpt-import">
+      <DialogContent className="max-w-lg max-h-[88dvh] overflow-y-auto" data-testid="dialog-chatgpt-import">
         <DialogHeader>
           <DialogTitle className="text-sm flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" /> Import from ChatGPT

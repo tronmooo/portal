@@ -1214,7 +1214,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
 
       {/* Spending Breakdown Popup */}
       <Dialog open={popup === "spending"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
-        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-sm max-h-[85dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
               <DollarSign className="h-4 w-4 text-amber-500" />
@@ -1357,7 +1357,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
 
       {/* Bills Popup */}
       <Dialog open={popup === "bills"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
-        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-sm max-h-[85dvh] overflow-y-auto">
           {(() => {
             const bills = (finSnap?.upcomingBills || []) as any[];
             const total = bills.reduce((s, b) => s + (b.amount || 0), 0);
@@ -1472,7 +1472,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
 
       {/* Expiring Documents Popup */}
       <Dialog open={popup === "docs"} onOpenChange={(o) => { if (!o) setPopup(null); }}>
-        <DialogContent className="max-w-md max-h-[85vh] flex flex-col">
+        <DialogContent className="max-w-md max-h-[85dvh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
               <FileWarning className="h-4 w-4 text-amber-500" />
@@ -2578,7 +2578,7 @@ function HealthSection({ data }: { data: any[] }) {
 
       {/* Health Tracker Detail Popup */}
       <Dialog open={!!selectedTracker} onOpenChange={o => { if (!o) setSelectedTracker(null); }}>
-        <DialogContent className="max-w-xs max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-xs max-h-[85dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
               <HeartPulse className="h-4 w-4 text-primary" />
@@ -2836,7 +2836,7 @@ function ObligationsSection({ data }: { data: any[] }) {
 
       {/* Obligation Detail Popup */}
       <Dialog open={!!selectedBill} onOpenChange={o => { if (!o) setSelectedBill(null); }}>
-        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-sm max-h-[85dvh] overflow-y-auto">
           {(() => {
             const bill = selectedBill;
             if (!bill) return null;
@@ -3230,7 +3230,7 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
 
       {/* Goal Quick Actions Sheet */}
       <Sheet open={!!actionGoal} onOpenChange={v => { if (!v) { setActionGoal(null); setProgressInput(""); } }}>
-        <SheetContent side="bottom" className="max-h-[60vh] rounded-t-2xl px-4 pb-8">
+        <SheetContent side="bottom" className="max-h-[60dvh] rounded-t-2xl px-4 pb-8">
           {actionGoal && (() => {
             const currentVal = actionGoal.current || actionGoal.startValue || 0;
             const pct = actionGoal.target > 0 ? Math.min(100, Math.round((currentVal / actionGoal.target) * 100)) : 0;
@@ -4190,7 +4190,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
 
       {/* Budget Dialog */}
       <Dialog open={drill === "budget"} onOpenChange={(open) => { if (!open) setDrill(null); }}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[85dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Target className="h-4 w-4" />
@@ -5163,7 +5163,7 @@ function CustomizeDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md max-h-[85vh] flex flex-col" data-testid="dialog-customize-dashboard">
+      <DialogContent className="max-w-md max-h-[85dvh] flex flex-col" data-testid="dialog-customize-dashboard">
         <DialogHeader>
           <DialogTitle className="text-sm flex items-center gap-2">
             <Settings className="h-4 w-4 text-primary" />
@@ -6037,7 +6037,7 @@ export default function DashboardPage() {
 
       {/* Import Dialog */}
       <Dialog open={importOpen} onOpenChange={(o) => { if (!o) setImporting(false); setImportOpen(o); }}>
-        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-sm max-h-[85dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-sm flex items-center gap-2">
               <UploadCloud className="h-4 w-4 text-primary" />

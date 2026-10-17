@@ -4096,7 +4096,7 @@ function CreateTrackerDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" data-testid="dialog-create-tracker">
+      <DialogContent className="max-w-lg max-h-[90dvh] overflow-y-auto" data-testid="dialog-create-tracker">
         <DialogHeader>
           <DialogTitle>Create New Tracker</DialogTitle>
         </DialogHeader>
@@ -5821,7 +5821,7 @@ function TrackerDetailDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => { if (!v) { setAddEntryOpen(false); setDeleteTrackerOpen(false); onClose(); } }}>
-        <DialogContent className="max-w-2xl h-[90vh] max-h-[90vh] flex flex-col p-0" data-testid="tracker-detail-dialog">
+        <DialogContent className="max-w-2xl h-[90dvh] max-h-[90dvh] flex flex-col p-0 overflow-hidden" data-testid="tracker-detail-dialog">
           {/* ── Header ── */}
           <div className="px-5 pt-5 pb-3 pr-12 border-b shrink-0">
             <div className="flex items-center justify-between">
@@ -5865,9 +5865,14 @@ function TrackerDetailDialog({
           </div>
 
           {/* ── Dynamic Tabbed Content ── */}
-          <div className="flex-1 overflow-y-auto min-h-0" style={{ WebkitOverflowScrolling: "touch" }}>
-            <Tabs defaultValue="overview" className="h-full flex flex-col">
-              <div className="px-5 pt-2 sticky top-0 z-20 bg-background border-b border-border/50">
+          {/* The tab strip lives OUTSIDE the scroll region. It used to be
+              `sticky` inside a scroller whose only child (Tabs) was h-full, so
+              the sticky bar's containing block ended with the first screenful
+              and the bar scrolled away; on iOS the long History list then
+              wouldn't scroll back up. One scroller, flex-bounded, nothing
+              nested inside it. */}
+          <Tabs defaultValue="overview" className="flex-1 min-h-0 flex flex-col">
+              <div className="px-5 pt-2 shrink-0 bg-background border-b border-border/50">
                 <div className="overflow-x-auto -mx-1 px-1 pb-1" style={{ WebkitOverflowScrolling: "touch" }}>
                   <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
                     {tabs.map(tab => {
@@ -5883,7 +5888,7 @@ function TrackerDetailDialog({
                 </div>
               </div>
 
-              <div className="flex-1 px-5 py-4">
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y px-5 py-4" style={{ WebkitOverflowScrolling: "touch" }} data-testid="tracker-detail-scroll">
                 <TabsContent value="overview" className="mt-0">
                   <OverviewTabContent tracker={tracker} primaryField={primaryField} />
                 </TabsContent>
@@ -5906,8 +5911,7 @@ function TrackerDetailDialog({
                   <GoalsTabContent tracker={tracker} />
                 </TabsContent>
               </div>
-            </Tabs>
-          </div>
+          </Tabs>
         </DialogContent>
       </Dialog>
 

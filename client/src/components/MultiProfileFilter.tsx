@@ -376,7 +376,7 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
           <ChevronDown className="h-3 w-3 text-muted-foreground ml-0.5" />
         </Button>
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-          <SheetContent side="bottom" className="max-h-[70vh] rounded-t-2xl px-2 pb-6 flex flex-col">
+          <SheetContent side="bottom" className="max-h-[70dvh] rounded-t-2xl px-2 pb-6 flex flex-col">
             <SheetHeader className="px-2 pb-2 shrink-0">
               <div className="flex items-center justify-between">
                 <SheetTitle className="text-sm">Filter by Profile</SheetTitle>

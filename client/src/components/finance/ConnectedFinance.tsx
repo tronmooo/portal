@@ -434,7 +434,7 @@ function AccountDetailDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="account-detail-dialog">
+      <DialogContent className="max-w-lg max-h-[85dvh] overflow-y-auto" data-testid="account-detail-dialog">
         <DialogHeader>
           <DialogTitle>{accountLabel(account)}</DialogTitle>
         </DialogHeader>
@@ -703,7 +703,7 @@ function TransactionDetailPanel({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" data-testid="txn-detail-panel">
+      <DialogContent className="max-w-lg max-h-[85dvh] overflow-y-auto" data-testid="txn-detail-panel">
         <DialogHeader>
           <DialogTitle className="truncate">{t.merchantName || t.description || "Transaction"}</DialogTitle>
         </DialogHeader>

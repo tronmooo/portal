@@ -1287,7 +1287,7 @@ export default function ArtifactsPage() {
           : null;
         return (
           <Dialog open={!!selectedArtifact} onOpenChange={() => setSelectedArtifact(null)}>
-            <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+            <DialogContent className="max-w-3xl max-h-[80dvh] overflow-y-auto">
               <DialogTitle>{liveSelected?.title}</DialogTitle>
               {liveSelected?.source && (
                 <div className="mt-2">
