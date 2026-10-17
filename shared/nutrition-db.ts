@@ -806,6 +806,12 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
       const ml = qty.amount * ML_PER_FL_OZ;
       return { servings: ml / s.ml, confidence: "exact", method: `${qty.amount} fl oz (${Math.round(ml)} ml) ÷ ${s.ml} ml serving` };
     }
+    // A container the row lists ("bowl" on a cereal row) is one serving of
+    // THAT food, not the generic 250 g bowl: a bowl of Cheerios is a serving
+    // or so, never six.
+    if (unitWords.has(userUnit) && userUnit !== servingUnit) {
+      return { servings: qty.amount * size, confidence: "medium", method: `assumed 1 serving (${s.label}) per ${unit}` };
+    }
   }
 
   // Solid foods measured in ounces are mass, not volume.

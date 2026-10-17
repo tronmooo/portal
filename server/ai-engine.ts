@@ -48,7 +48,8 @@ async function attachEnrichmentCandidate(entry: any, tracker: { id: string; name
     const isItem = !!(candidate as any).target;
     let needsMore = true;
     if (!isItem) {
-      const sync = await enrichNutritionEntry(storage, { entryId: entry.id, trackerId: tracker.id, message: candidate.message, sync: true });
+      const sync = await enrichNutritionEntry(storage, { entryId: entry.id, trackerId: tracker.id, entry, tracker: tracker as any, message: candidate.message, sync: true });
+      logger.info("ai", `In-turn enrichment [${tracker.name}]: ${sync.status}${sync.reason ? ` (${sync.reason})` : ""} in ${sync.ms}ms`);
       if (sync.status === "applied" && sync.enrichment && sync.entry) {
         entry.values = sync.entry.values;
         entry.computed = sync.entry.computed;

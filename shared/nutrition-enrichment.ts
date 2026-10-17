@@ -926,12 +926,33 @@ const COMPOSED_DISH_RE = /\b(smoothie|shake|milkshake|salad|bowl|sandwich|sub|bu
 export function splitComponentPhrases(text: string): string[] {
   const t = String(text || "").replace(/\s+/g, " ").trim();
   if (!t) return [];
+  // A parenthetical belongs to its item: "Gatorade (half bottle, ~16 oz)" is
+  // one food, so its comma is not a separator. Separators are found at depth 0.
+  const topLevel = (s: string): string[] => {
+    const out: string[] = [];
+    let depth = 0;
+    let cur = "";
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === "(") depth++;
+      if (ch === ")") depth = Math.max(0, depth - 1);
+      if (depth === 0 && /[,;+!?]/.test(ch)) { out.push(cur); cur = ""; continue; }
+      if (depth === 0 && ch === "." && !/\d/.test(s[i + 1] || "")) { out.push(cur); cur = ""; continue; }
+      if (depth === 0 && /\s/.test(ch)) {
+        const rest = s.slice(i + 1);
+        const m = rest.match(/^(and|plus|along with)\b/i);
+        if (m) { out.push(cur); cur = ""; i += m[0].length; continue; }
+      }
+      cur += ch;
+    }
+    out.push(cur);
+    return out;
+  };
   // "X with Y" keeps Y as its own component (butter on toast, creamer in coffee)
   // but "with" inside a product name ("Oatmeal with Honey & Almonds") does not
   // split: only split on " with " when what follows is a plain food word
   // phrase of ≤3 words that itself is not capitalized like a product.
-  const parts = t
-    .split(/\s*(?:,|\+|;|\.(?!\d)|!|\?|\band\b|\bplus\b|\balong with\b)\s*/i)
+  const parts = topLevel(t)
     .flatMap((p) => {
       // "toast with butter" / "oatmeal with 1 cup of 2% milk" / "Wheat Toast
       // with Butter (2 slices)" split into the base item and what was added to

@@ -625,6 +625,9 @@ export async function lookupComponents(
 export interface EnrichOptions {
   entryId: string;
   trackerId?: string;
+  /** The entry and tracker the caller already holds (the in-turn pass): skips two reads. */
+  entry?: any;
+  tracker?: Tracker;
   /** The user's chat message, for quantities/brands and user-stated values. */
   message?: string;
   /** Override the stored preference (tests, explicit UI actions). */
@@ -683,9 +686,9 @@ export async function enrichNutritionEntry(storage: IStorage, opts: EnrichOption
   const now = deps.now!();
   const done = (o: Omit<EnrichOutcome, "ms">): EnrichOutcome => ({ ...o, ms: Date.now() - started });
 
-  const entry: any = await storage.getTrackerEntry(opts.entryId);
+  const entry: any = opts.entry && opts.entry.id === opts.entryId ? opts.entry : await storage.getTrackerEntry(opts.entryId);
   if (!entry) return done({ status: "failed", reason: "entry not found" });
-  const tracker = await resolveTracker(storage, entry, opts.trackerId);
+  const tracker = opts.tracker && opts.tracker.id === (opts.trackerId || entry.trackerId || opts.tracker.id) ? opts.tracker : await resolveTracker(storage, entry, opts.trackerId);
   if (!tracker) return done({ status: "failed", reason: "tracker not found" });
   if (!isNutritionTrackerLike(tracker)) return done({ status: "skipped", reason: "not a nutrition tracker", trackerId: tracker.id, trackerName: tracker.name });
 

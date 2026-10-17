@@ -269,6 +269,22 @@ describe("components and meal totals", () => {
   it("a sentence boundary ends a component: the label reading is not part of the quantity", () => {
     expect(splitComponentPhrases("a Quest protein bar. It says 210 calories and 20g protein.")).toEqual(["a Quest protein bar", "It says 210 calories", "20g protein"]);
   });
+  it("a comma inside a parenthetical is not a separator (live-run regression: Gatorade and Monster went to the model)", () => {
+    expect(splitComponentPhrases("Gatorade (half bottle, ~16 oz)")).toEqual(["Gatorade (half bottle, ~16 oz)"]);
+    expect(splitComponentPhrases("Monster Zero Ultra (1 can, 16 oz)")).toEqual(["Monster Zero Ultra (1 can, 16 oz)"]);
+    expect(splitComponentPhrases("Big Mac (1 sandwich), medium fries")).toEqual(["Big Mac (1 sandwich)", "medium fries"]);
+    const gatorade = dbComponent("Gatorade (half bottle, ~16 oz)");
+    expect(gatorade).toMatchObject({ servings: 0.5, confidence: "exact" });
+    expect(gatorade.nutrients.calories.value).toBe(70);
+    const ultra = dbComponent("Monster Zero Ultra (1 can, 16 oz)");
+    expect(ultra.nutrients.caffeine.value).toBe(140);
+  });
+  it("a bowl of a cereal is a serving of that cereal, not a 250 g bowl (live-run regression: 897 kcal)", () => {
+    const cheerios = lookupNutritionDb("Cheerios (1 bowl)")!.item;
+    const bowl = resolveServings(cheerios, normalizeQuantity("1 bowl"), "Cheerios (1 bowl)");
+    expect(bowl).toMatchObject({ servings: 1, confidence: "medium" });
+    expect(dbComponent("Cheerios (1 bowl)").nutrients.calories.value).toBe(140);
+  });
   it("a Title-Case 'with' tail still splits off the added food; a composed dish keeps its ingredient (live-run regression)", () => {
     expect(splitComponentPhrases("Wheat Toast with Butter (2 slices)")).toEqual(["Wheat Toast (2 slices)", "Butter"]);
     expect(splitComponentPhrases("Coffee with Creamer")).toEqual(["Coffee", "Creamer"]);
