@@ -45,6 +45,7 @@ function dbComponent(phrase: string, quantityText = phrase): NutritionComponent 
     perServing: m.item.perServing,
     nutrients: componentNutrients(m.item.perServing, r.servings, { source: m.item.source, sourceType: m.item.sourceType, sourceItem: m.item.name, confidence: m.item.confidence, enrichedAt: NOW }),
     isBeverage: !!m.item.isBeverage,
+    servingAssumed: !!r.assumed,
   };
 }
 
@@ -193,8 +194,9 @@ describe("internal reference lookup", () => {
     const quest = lookupNutritionDb("Quest bar")!.item;
     expect(resolveServings(quest, normalizeQuantity("a Quest protein bar")).servings).toBe(1);
     expect(resolveServings(quest, normalizeQuantity("a Quest protein bar")).confidence).toBe("exact");
-    // No quantity at all → one serving, the row's own confidence.
-    expect(resolveServings(coke, normalizeQuantity("")).confidence).toBe("exact");
+    // No quantity at all → one serving, the row's own confidence, but the size is ASSUMED and labelled.
+    expect(resolveServings(coke, normalizeQuantity(""))).toMatchObject({ servings: 1, confidence: "exact", assumed: true });
+    expect(resolveServings(coke, normalizeQuantity("12 oz")).assumed).toBeFalsy();
     // "2 servings" is two of the row's own serving (the Special K screenshot showed one).
     const specialK = lookupNutritionDb("Special K Red Berries")!.item;
     const two = resolveServings(specialK, normalizeQuantity("2 servings"), "2 servings");
@@ -231,6 +233,12 @@ describe("aliases, ambiguity and package fractions", () => {
     // 4 Oreos of a 3-cookie serving — the package is known, the count still rules.
     const oreo = lookupNutritionDb("Oreos")!.item;
     expect(resolveServings(oreo, normalizeQuantity("4 oreos"), "4 oreos").servings).toBeCloseTo(4 / 3);
+  });
+  it("a drink with no stated size says the size is assumed and leads with what the drink is about", () => {
+    const zero = dbComponent("Coke Zero", "");
+    expect(zero.servingAssumed).toBe(true);
+    const line = recapLine({ components: [zero], totals: sumComponentTotals([zero], NOW) });
+    expect(line).toBe("Coca-Cola Zero Sugar (12 fl oz can (355 ml), size assumed) — 0 kcal, 0 g protein, 0 g carbs, 0 g fat, 40 mg sodium, 34 mg caffeine");
   });
   it("the chat line and the source line read from the record", () => {
     const comp = dbComponent("Kellogg's Special K Red Berries Breakfast Cereal", "2 servings");

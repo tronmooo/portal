@@ -541,6 +541,8 @@ export interface NutritionComponent {
   nutrients: Partial<Record<NutrientKey, ProvenancedNutrient>>;
   /** True when the item is a drink — its volume feeds the linked fluid measurement. */
   isBeverage?: boolean;
+  /** The user gave no quantity: the serving size is assumed (and said so). */
+  servingAssumed?: boolean;
 }
 
 export interface LinkedEntryRef {
@@ -888,7 +890,7 @@ export function recapLine(e: Pick<NutritionEnrichment, "components" | "totals">)
     const n = Math.round(c.servings * 100) / 100;
     const unit = c.matchedServing?.label || "serving";
     const qty = n === 1 ? unit : `${n} × ${unit}`;
-    return `${c.sourceItem || c.name} (${qty})`;
+    return `${c.sourceItem || c.name} (${qty}${c.servingAssumed ? ", size assumed" : ""})`;
   }).join(" + ");
   const parts: string[] = [];
   const t = e.totals;
@@ -896,6 +898,10 @@ export function recapLine(e: Pick<NutritionEnrichment, "components" | "totals">)
   if (t.protein) parts.push(`${roundNutrient(t.protein.value, "protein")} g protein`);
   if (t.carbs) parts.push(`${roundNutrient(t.carbs.value, "carbs")} g carbs`);
   if (t.fat) parts.push(`${roundNutrient(t.fat.value, "fat")} g fat`);
+  // The nutrients a drink is really about: sugar, sodium, caffeine, when present.
+  if (t.sugar && t.sugar.value > 0) parts.push(`${roundNutrient(t.sugar.value, "sugar")} g sugar`);
+  if (t.sodium && t.sodium.value > 0) parts.push(`${roundNutrient(t.sodium.value, "sodium")} mg sodium`);
+  if (t.caffeine && t.caffeine.value > 0) parts.push(`${roundNutrient(t.caffeine.value, "caffeine")} mg caffeine`);
   return parts.length ? `${who} — ${parts.join(", ")}` : who;
 }
 

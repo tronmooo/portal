@@ -199,6 +199,30 @@ function fmtValue(n: number): string {
  * `tracker` may be the full tracker (declared field units win) or just
  * `{ name }` when only the tracker's name is known (the chat recap).
  */
+const NUTRITION_SUMMARY_ORDER: Array<[key: string, label: string, unit: string]> = [
+  ["calories", "", "kcal"], ["protein", "protein", "g"], ["carbs", "carbs", "g"], ["fat", "fat", "g"],
+  ["sugar", "sugar", "g"], ["sodium", "sodium", "mg"], ["caffeine", "caffeine", "mg"], ["fiber", "fiber", "g"],
+];
+function nutritionSummary(values: Record<string, any> | null | undefined, max: number): string[] | null {
+  const v = values || {};
+  const cal = typeof v.calories === "number" ? v.calories : (typeof v.calories === "string" && v.calories.trim() !== "" && !isNaN(Number(v.calories)) ? Number(v.calories) : null);
+  if (cal == null) return null;
+  // The food's name leads, as it always did (F-41), then the energy.
+  const out: string[] = [];
+  for (const k of ["item", "food", "meal", "name"]) {
+    const label = v[k];
+    if (typeof label === "string" && label.trim()) { out.push(label.trim()); break; }
+  }
+  out.push(`${fmtValue(cal)} kcal`);
+  const read = (k: string): number | null => { const r = v[k]; const n = typeof r === "number" ? r : (typeof r === "string" && r.trim() !== "" && !isNaN(Number(r)) ? Number(r) : null); return n != null && Number.isFinite(n) ? n : null; };
+  // Macros first; zeros are kept only when nothing else says more.
+  const rest = NUTRITION_SUMMARY_ORDER.slice(1).map(([k, label, unit]) => ({ k, label, unit, n: read(k) })).filter((x) => x.n != null) as Array<{ k: string; label: string; unit: string; n: number }>;
+  const nonZero = rest.filter((x) => x.n > 0);
+  const chosen = (nonZero.length > 0 ? nonZero : rest.slice(0, 3)).slice(0, Math.max(0, max - out.length));
+  for (const x of chosen) out.push(`${x.label} ${fmtValue(x.n)} ${x.unit}`);
+  return out;
+}
+
 export function formatLoggedValues(
   values: Record<string, any> | null | undefined,
   tracker: UnitTrackerLike | string | null | undefined,
@@ -207,6 +231,10 @@ export function formatLoggedValues(
   const t: UnitTrackerLike = typeof tracker === "string" ? { name: tracker } : (tracker || {});
   const max = opts.max ?? 4;
   const out: string[] = [];
+  // A nutrition entry reads by nutrient, the ones that are actually there: a
+  // Coke Zero is "0 kcal · sodium 40 mg · caffeine 34 mg", not four zeros.
+  const nutrition = nutritionSummary(values, max);
+  if (nutrition) return nutrition;
   for (const [key, raw] of Object.entries(values || {})) {
     if (out.length >= max) break;
     if (META_KEY.test(key) || raw == null || raw === "" || typeof raw === "object") continue;

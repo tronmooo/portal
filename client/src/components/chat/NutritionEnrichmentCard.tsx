@@ -40,7 +40,7 @@ export function NutritionEnrichmentCard({ data, onChange }: { data: NutritionEnr
   const servingBasis = (c: typeof e.components[number]) => {
     const n = Math.round(c.servings * 100) / 100;
     const base = c.matchedServing?.label || "1 serving";
-    return n === 1 ? base : `${base} × ${n}`;
+    return `${n === 1 ? base : `${base} × ${n}`}${c.servingAssumed ? " (assumed — you did not say how much)" : ""}`;
   };
 
   const run = async (kind: "exact" | "generic" | "serving") => {

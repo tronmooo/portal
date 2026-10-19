@@ -744,6 +744,8 @@ export interface ServingResolution {
   confidence: EnrichmentConfidence;
   /** Why this many servings ("12 fl oz ÷ 355 ml can", "2 slices ÷ 1 per serving"). */
   method: string;
+  /** The user did not say how much: the serving size is the app's assumption, and is labelled as one. */
+  assumed?: boolean;
 }
 
 /**
@@ -810,7 +812,7 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
     // THAT food, not the generic 250 g bowl: a bowl of Cheerios is a serving
     // or so, never six.
     if (unitWords.has(userUnit) && userUnit !== servingUnit) {
-      return { servings: qty.amount * size, confidence: "medium", method: `assumed 1 serving (${s.label}) per ${unit}` };
+      return { servings: qty.amount * size, confidence: "medium", method: `assumed 1 serving (${s.label}) per ${unit}`, assumed: true };
     }
   }
 
@@ -820,10 +822,10 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
     return { servings: grams / s.grams, confidence: "exact", method: `${qty.amount} oz (${Math.round(grams)} g) ÷ ${s.grams} g serving` };
   }
   if (qty.ml != null && s.ml) {
-    return { servings: qty.ml / s.ml, confidence: explicit, method: `${Math.round(qty.ml)} ml ÷ ${s.ml} ml serving${qty.assumption ? ` (${qty.assumption})` : ""}` };
+    return { servings: qty.ml / s.ml, confidence: explicit, method: `${Math.round(qty.ml)} ml ÷ ${s.ml} ml serving${qty.assumption ? ` (${qty.assumption})` : ""}`, assumed: !!qty.assumption };
   }
   if (qty.grams != null && s.grams) {
-    return { servings: qty.grams / s.grams, confidence: explicit, method: `${Math.round(qty.grams)} g ÷ ${s.grams} g serving${qty.assumption ? ` (${qty.assumption})` : ""}` };
+    return { servings: qty.grams / s.grams, confidence: explicit, method: `${Math.round(qty.grams)} g ÷ ${s.grams} g serving${qty.assumption ? ` (${qty.assumption})` : ""}`, assumed: !!qty.assumption };
   }
   if (qty.count != null) {
     const unitWords = new Set([s.unit.toLowerCase(), ...(item.unitWords || []).map((w) => w.toLowerCase())]);
@@ -838,8 +840,9 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
     }
     // "a bowl of Cheerios": a container word the row does not list — the
     // container's assumed volume/mass could not be applied above.
-    return { servings: 1 * size, confidence: "medium", method: `assumed 1 serving (${s.label}) for "${qty.original}"` };
+    return { servings: 1 * size, confidence: "medium", method: `assumed 1 serving (${s.label}) for "${qty.original}"`, assumed: true };
   }
-  // No quantity wording at all ("a Coke", "Big Mac"): the standard serving.
-  return { servings: 1 * size, confidence: size === 1 ? "exact" : "medium", method: `1 serving (${s.label})` };
+  // No quantity wording at all ("a Coke", "Big Mac"): the standard serving —
+  // an ASSUMPTION the reply and the card say out loud.
+  return { servings: 1 * size, confidence: size === 1 ? "exact" : "medium", method: `assumed 1 serving (${s.label})`, assumed: true };
 }

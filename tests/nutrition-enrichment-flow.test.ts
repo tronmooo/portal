@@ -358,6 +358,15 @@ describe("the value guard reads nutrition as intake, not blood levels", () => {
   });
 });
 
+describe("the confirmation card's summary", () => {
+  it("reads a nutrition entry by nutrient, keeping the ones that are there (Coke Zero screenshot regression)", async () => {
+    const { formatLoggedValues } = await import("../shared/tracker-units");
+    expect(formatLoggedValues({ fat: 0, item: "Coke Zero (12 oz)", carbs: 0, sugar: 0, sodium: 40, protein: 0, caffeine: 34, calories: 0 }, "Nutrition")).toEqual(["Coke Zero (12 oz)", "0 kcal", "sodium 40 mg", "caffeine 34 mg"]);
+    expect(formatLoggedValues({ item: "Big Mac", calories: 590, protein: 25, carbs: 46, fat: 34, sodium: 1050 }, "Calories")).toEqual(["Big Mac", "590 kcal", "protein 25 g", "carbs 46 g"]);
+    expect(formatLoggedValues({ weight: 181.2 }, "Weight")).toEqual(["181.2 lbs"]);
+  });
+});
+
 describe("the in-turn pass (sync): tables only, exact/high only, never a proposal", () => {
   it("Special K is refined inside the turn from the label table with no network and no model", async () => {
     const entry = await logFood({ item: "Kellogg's Special K Red Berries Breakfast Cereal (2 servings)", calories: 220 });

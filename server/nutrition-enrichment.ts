@@ -467,6 +467,7 @@ function componentFromDb(match: NutritionDbItem, phrase: Phrase, now: string): N
     perServing: match.perServing,
     nutrients: componentNutrients(match.perServing, resolved.servings, { source: match.source, sourceType: match.sourceType, sourceItem: match.name, confidence, enrichedAt: now }),
     isBeverage: !!match.isBeverage,
+    servingAssumed: !!resolved.assumed,
   };
 }
 
@@ -494,6 +495,7 @@ function componentFromExternal(m: ExternalProductMatch, phrase: Phrase, now: str
     perServing: m.perServing,
     nutrients: componentNutrients(m.perServing, resolved.servings, { source: m.source, sourceType: m.sourceType, sourceItem: m.name, confidence, enrichedAt: now }),
     isBeverage: !!m.isBeverage,
+    servingAssumed: !!resolved.assumed,
   };
 }
 
@@ -519,6 +521,7 @@ function componentFromModel(est: ModelComponentEstimate, phrase: Phrase, now: st
     perServing: est.nutrients,
     nutrients: componentNutrients(est.nutrients, servings, { source: `AI estimate${basis}`, sourceType: "model_estimate", sourceItem: est.name || undefined, confidence, enrichedAt: now }),
     isBeverage: !!est.isBeverage,
+    servingAssumed: qty.amount == null && qty.count == null && qty.ml == null && qty.grams == null && qty.packageFraction == null,
   };
 }
 
