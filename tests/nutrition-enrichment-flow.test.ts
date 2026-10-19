@@ -18,6 +18,7 @@ import {
 import { removeTrackerEntry, updateTrackerEntryEverywhere } from "../server/tracker-entries";
 import { LINKED_SOURCE_KEY, NUTRITION_ENRICHMENT_PREF_KEY } from "../shared/nutrition-enrichment";
 import { parsePackageQuantity, loadLearnedAliases, aliasKey } from "../server/nutrition-enrichment";
+import { recapLine } from "../shared/nutrition-enrichment";
 import { sanitizeTrackerEntryValues } from "../server/tracker-entry-guard";
 
 const NOW = "2026-10-16T12:00:00.000Z";
@@ -101,7 +102,8 @@ describe("automatic enrichment from the internal reference (no network)", () => 
     expect(n.status).toBe("applied");
     expect(n.confidence).toBe("exact");
     expect(n.totals.calories).toMatchObject({ value: 140, unit: "kcal", sourceType: "manufacturer", confidence: "exact", calculatedOrDirect: "direct" });
-    expect(n.components[0]).toMatchObject({ sourceItem: "Coca-Cola Classic", userQuantity: "Coca-Cola (12 oz)", servings: 1 });
+    // userQuantity is the USER's wording for how much, not the agent's item text.
+    expect(n.components[0]).toMatchObject({ sourceItem: "Coca-Cola Classic", userQuantity: "a 12 oz Coke", servings: 1, servingAssumed: false });
     // the ≈-marker provenance the tracker UIs already read: a label value is not an estimate
     expect((after.computed as any).enrichment.calculated.calories.isEstimated).toBe(false);
     // the tracker gained first-class fields for what was written
@@ -135,7 +137,7 @@ describe("automatic enrichment from the internal reference (no network)", () => 
     expect(out.status).toBe("applied");
     const n = out.enrichment!;
     expect(n.components.map((c) => c.sourceItem)).toEqual(["Quaker Instant Oatmeal Maple & Brown Sugar", "Milk, 2% reduced fat"]);
-    expect(n.components.map((c) => c.userQuantity)).toEqual(["Quaker Instant Oatmeal Maple & Brown Sugar (1 packet)", "2% milk (1 cup)"]);
+    expect(n.components.map((c) => c.userQuantity)).toEqual(["1 packet of Quaker Instant Oatmeal Maple & Brown Sugar", "1 cup of 2% milk"]);
     expect(n.totals.calories).toMatchObject({ value: 282, sourceType: "calculated", calculatedOrDirect: "calculated" });
     const after = (await storage.getTrackerEntry(entry.id))!;
     expect(after.values.calories).toBe(282);
@@ -453,6 +455,34 @@ describe("external product data mapping", () => {
     expect(seen).toEqual(["Trader Joe's Chicken Burrito Bowl"]);
     expect(out.status).toBe("applied");
     expect((await storage.getTrackerEntry(entry.id))!.values).toMatchObject({ calories: 370, protein: 22, carbs: 48, fat: 11, sodium: 860 });
+  });
+
+  it("'size assumed' is judged against the user's words, not the agent's: 'I just drank one Coke zero' vs 'a 20 oz Coke Zero' (screenshot regression)", async () => {
+    // The user's "one" outranks the agent's "(12 oz)": the resolver sees a bare count of a canned drink.
+    expect(componentPhrases("Coke Zero (12 oz)", "I just drank one Coke zero")[0].quantityText).toMatch(/one Coke zero$/);
+    expect(componentPhrases("Coke Zero (20 oz)", "I had a 20 oz Coke Zero")[0].userQuantityStated).toBe(true);
+    expect(componentPhrases("Coke Zero (12 oz)", "Coke Zero")[0].userQuantityStated).toBe(false);
+    expect(componentPhrases("Coke Zero (12 oz)", "")[0].userQuantityStated).toBeUndefined();
+    const entry = await logFood({ item: "Coke Zero (12 oz)", calories: 0 });
+    const out = await enrichNutritionEntry(storage, { entryId: entry.id, message: "I just drank one Coke zero", mode: "auto", deps: offline });
+    expect(out.status).toBe("applied");
+    expect(out.enrichment!.components[0].servingAssumed).toBe(true);
+    expect(recapLine(out.enrichment!)).toMatch(/size assumed/);
+    const stated = await logFood({ item: "Coke Zero (20 oz)", calories: 0 });
+    const out2 = await enrichNutritionEntry(storage, { entryId: stated.id, message: "I had a 20 oz Coke Zero", mode: "auto", deps: offline });
+    expect(out2.enrichment!.components[0].servingAssumed).toBe(false);
+    expect(out2.enrichment!.components[0].servings).toBeCloseTo(1.667, 2);
+    // 8 fl oz against a 240 ml cup is one serving, not 0.99.
+    const milk = await logFood({ item: "Fairlife 2% Milk (8 oz)", calories: 120 });
+    const out3 = await enrichNutritionEntry(storage, { entryId: milk.id, message: "I had 8 oz of Fairlife 2% milk", mode: "auto", deps: offline });
+    expect(out3.enrichment!.components[0].servings).toBe(1);
+    expect((await storage.getTrackerEntry(milk.id))!.values.calories).toBe(120);
+    // A count of a discrete food is fully specified: "4 Oreos" assumes nothing.
+    const oreos = await logFood({ item: "Oreos", calories: 0 });
+    const out4 = await enrichNutritionEntry(storage, { entryId: oreos.id, message: "I ate 4 Oreos", mode: "auto", deps: offline });
+    expect(out4.enrichment!.components[0].servingAssumed).toBe(false);
+    expect(out4.enrichment!.components[0].servings).toBeCloseTo(1.333, 2);
+    expect(recapLine(out4.enrichment!)).not.toMatch(/size assumed/);
   });
 
   it("componentPhrases pairs each food with the message's quantity for it", () => {

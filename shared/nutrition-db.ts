@@ -755,10 +755,23 @@ export interface ServingResolution {
  * of a 3-cookie row = ⅔). A quantity the row cannot interpret is one serving
  * at reduced confidence — never a silent guess at the user's number.
  */
+/**
+ * Serving units that describe HOW MUCH rather than WHICH THING: a can, a cup,
+ * a packet, 8 fl oz. A bare count of such a product ("one Coke", "two
+ * coffees") says how many, not how big — the size is assumed. A count of a
+ * discrete food ("4 Oreos", "2 eggs", "a Big Mac") is fully specified.
+ */
+const MEASURE_UNITS = new Set([
+  "serving", "cup", "can", "fl oz", "oz", "tbsp", "tsp", "packet", "container", "bottle", "bag", "box", "pouch",
+  "scoop", "shot", "glass", "bowl", "g", "ml", "shake", "grande", "tall", "venti", "small fries", "medium fries", "large fries",
+]);
+export const isMeasureUnit = (unit: string): boolean => MEASURE_UNITS.has(String(unit || "").toLowerCase().trim());
+
 export function resolveServings(item: NutritionDbItem, qty: QuantityNormalization, phrase?: string): ServingResolution {
   const r = resolveServingsRaw(item, qty, phrase);
-  // Unit rounding (12 fl oz vs a 355 ml can) must not turn one serving into 0.9997.
-  const servings = Math.abs(r.servings - 1) < 0.01 ? 1 : Math.round(r.servings * 1000) / 1000;
+  // Unit rounding (12 fl oz vs a 355 ml can, 8 fl oz vs a 240 ml cup) must not
+  // turn one serving into 0.99.
+  const servings = Math.abs(r.servings - 1) < 0.025 ? 1 : Math.round(r.servings * 1000) / 1000;
   return { ...r, servings };
 }
 
@@ -834,15 +847,20 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
     }
     if (!unit) {
       // "2 eggs" / "large banana": the count is of the item itself. A size
-      // word is an assumption, so it costs confidence.
+      // word is an assumption, so it costs confidence. When the row's serving
+      // is a MEASURE ("one Coke Zero" → a 12 fl oz can) the size of each one
+      // is the app's assumption too — the user said how many, not how big.
       const conf: EnrichmentConfidence = size === 1 ? "exact" : "medium";
-      return { servings: (qty.count / s.amount) * size, confidence: conf, method: `${qty.count} × ${s.label}${size !== 1 ? ` × ${size} (size)` : ""}` };
+      const measured = isMeasureUnit(s.unit);
+      return { servings: (qty.count / s.amount) * size, confidence: conf, method: `${qty.count} × ${s.label}${size !== 1 ? ` × ${size} (size)` : ""}${measured ? " (size assumed)" : ""}`, assumed: measured };
     }
     // "a bowl of Cheerios": a container word the row does not list — the
     // container's assumed volume/mass could not be applied above.
     return { servings: 1 * size, confidence: "medium", method: `assumed 1 serving (${s.label}) for "${qty.original}"`, assumed: true };
   }
-  // No quantity wording at all ("a Coke", "Big Mac"): the standard serving —
-  // an ASSUMPTION the reply and the card say out loud.
-  return { servings: 1 * size, confidence: size === 1 ? "exact" : "medium", method: `assumed 1 serving (${s.label})`, assumed: true };
+  // No quantity wording at all ("a Coke", "Big Mac"): the standard serving.
+  // For a measured serving (a can, a cup) that is an ASSUMPTION the reply and
+  // the card say out loud; "a Big Mac" is one sandwich, nothing was assumed.
+  const measured = isMeasureUnit(s.unit);
+  return { servings: 1 * size, confidence: size === 1 ? "exact" : "medium", method: `${measured ? "assumed " : ""}1 serving (${s.label})`, assumed: measured || size !== 1 };
 }

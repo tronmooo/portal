@@ -423,7 +423,16 @@ interface Phrase {
   text: string;
   /** The message segment with the same food, when it carries a quantity the item text lacks. */
   quantityText: string;
+  /**
+   * Did the USER state how much? The agent writes its own inference into the
+   * item ("Coke Zero (12 oz)" for "I just drank one Coke zero"), so this is
+   * judged against the user's words. Undefined when no message is available.
+   */
+  userQuantityStated?: boolean;
 }
+
+const hasQuantity = (q: ReturnType<typeof normalizeQuantity>) =>
+  q.amount != null || q.count != null || q.ml != null || q.grams != null || q.packageFraction != null;
 
 /**
  * Pair each component phrase of the item with the user's wording for how
@@ -434,18 +443,27 @@ export function componentPhrases(item: string, message: string): Phrase[] {
   const itemParts = splitComponentPhrases(item);
   const msgParts = splitComponentPhrases(message);
   const parts = itemParts.length > 0 ? itemParts : msgParts;
+  const haveMessage = String(message || "").trim().length > 0;
   return parts.map((text) => {
-    const own = normalizeQuantity(text);
-    if (own.amount != null || own.count != null || own.ml != null || own.grams != null) return { text, quantityText: text };
     const tk = new Set(tokens(text));
     let best: { seg: string; overlap: number } | null = null;
     for (const seg of msgParts) {
       const overlap = tokens(seg).filter((t) => tk.has(t)).length;
       if (overlap > 0 && (!best || overlap > best.overlap)) best = { seg, overlap };
     }
-    const q = best ? normalizeQuantity(best.seg) : null;
-    const quantityText = q && (q.amount != null || q.count != null || q.ml != null || q.grams != null) ? best!.seg : text;
-    return { text, quantityText };
+    // The user's words for this food: the segment that shares its tokens, or
+    // the whole message when it is a single-item log.
+    const userWords = best ? best.seg : (msgParts.length === 1 ? msgParts[0] : "");
+    const q = userWords ? normalizeQuantity(userWords) : null;
+    const userQuantityStated = haveMessage ? !!(q && hasQuantity(q)) : undefined;
+    // The user's own wording for how much wins over the agent's: "I just
+    // drank one Coke zero" logged as "Coke Zero (12 oz)" resolves from "one"
+    // (a can, size assumed), not from the 12 oz the agent inferred. Only when
+    // the user said nothing countable does the item's own quantity apply.
+    if (q && hasQuantity(q)) return { text, quantityText: userWords, userQuantityStated };
+    const own = normalizeQuantity(text);
+    if (hasQuantity(own)) return { text, quantityText: text, userQuantityStated };
+    return { text, quantityText: text, userQuantityStated };
   });
 }
 
@@ -467,7 +485,7 @@ function componentFromDb(match: NutritionDbItem, phrase: Phrase, now: string): N
     perServing: match.perServing,
     nutrients: componentNutrients(match.perServing, resolved.servings, { source: match.source, sourceType: match.sourceType, sourceItem: match.name, confidence, enrichedAt: now }),
     isBeverage: !!match.isBeverage,
-    servingAssumed: !!resolved.assumed,
+    servingAssumed: !!resolved.assumed || phrase.userQuantityStated === false,
   };
 }
 
@@ -495,7 +513,7 @@ function componentFromExternal(m: ExternalProductMatch, phrase: Phrase, now: str
     perServing: m.perServing,
     nutrients: componentNutrients(m.perServing, resolved.servings, { source: m.source, sourceType: m.sourceType, sourceItem: m.name, confidence, enrichedAt: now }),
     isBeverage: !!m.isBeverage,
-    servingAssumed: !!resolved.assumed,
+    servingAssumed: !!resolved.assumed || phrase.userQuantityStated === false,
   };
 }
 
@@ -521,7 +539,8 @@ function componentFromModel(est: ModelComponentEstimate, phrase: Phrase, now: st
     perServing: est.nutrients,
     nutrients: componentNutrients(est.nutrients, servings, { source: `AI estimate${basis}`, sourceType: "model_estimate", sourceItem: est.name || undefined, confidence, enrichedAt: now }),
     isBeverage: !!est.isBeverage,
-    servingAssumed: qty.amount == null && qty.count == null && qty.ml == null && qty.grams == null && qty.packageFraction == null,
+    // A bare count of a drink ("two coffees") says how many, not how big.
+    servingAssumed: !hasQuantity(qty) || phrase.userQuantityStated === false || (!!est.isBeverage && qty.count != null && !qty.unit && qty.ml == null),
   };
 }
 
