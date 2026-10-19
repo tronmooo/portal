@@ -55,7 +55,7 @@ async function attachEnrichmentCandidate(entry: any, tracker: { id: string; name
         entry.computed = sync.entry.computed;
         entry._recapDetail = recapLine(sync.enrichment);
         const assumed = sync.enrichment.components.some((c) => c.servingAssumed);
-        entry.enrichmentNote = `${CONFIDENCE_LABEL[sync.enrichment.confidence]} · source: ${describeSources(sync.enrichment)}${assumed ? " · serving size assumed, say so" : ""}`;
+        entry.enrichmentNote = `${CONFIDENCE_LABEL[sync.enrichment.confidence]} · source: ${describeSources(sync.enrichment)}${assumed ? " · serving size assumed" : ""}`;
         needsMore = false;
       } else {
         needsMore = sync.needsMore !== false || sync.status === "failed";
