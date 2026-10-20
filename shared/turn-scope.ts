@@ -38,9 +38,39 @@ export interface TurnScope {
 
 const lc = (s: unknown): string => String(s ?? "").toLowerCase();
 
-/** Clause openings that are asking, not telling. */
-const INQUIRY_LEAD =
-  /^\s*(?:so\s+|and\s+|also\s+|hey\s+|hi\s+|ok\s+|okay\s+|please\s+)?(?:what|whats|what's|when|when's|where|where's|which|who|whose|why|how|do\s+i|did\s+i|did\s+you|did\s+it|did\s+that|does|is|are|was|were|has|have\s+i|have\s+you|had|am\s+i|should\s+i|can\s+i\s+see|can\s+you\s+(?:show|tell|list|find|look|check|give|remind\s+me\s+what|explain|summari[sz]e|pull\s+up)|could\s+you\s+(?:show|tell|list|find|look|check|give|explain|summari[sz]e|pull\s+up)|would\s+you\s+(?:show|tell|list|find|explain)|show|list|display|tell\s+me|give\s+me|find|look\s+up|lookup|search|pull\s+up|summari[sz]e|recap|explain|check\s+(?:my|the|on|whether|if)|any\s+(?:idea|chance)|remind\s+me\s+(?:what|when|where|which|who|how))\b/;
+const LEAD_PREFIX = String.raw`^\s*(?:so\s+|and\s+|also\s+|hey\s+|hi\s+|ok\s+|okay\s+|please\s+)?`;
+
+/** Imperative reads: "show my…", "tell me…", "can you list…". */
+const READ_IMPERATIVE = String.raw`can\s+i\s+see|can\s+you\s+(?:show|tell|list|find|look|check|give|remind\s+me\s+what|explain|summari[sz]e|pull\s+up)|could\s+you\s+(?:show|tell|list|find|look|check|give|explain|summari[sz]e|pull\s+up)|would\s+you\s+(?:show|tell|list|find|explain)|show|list|display|tell\s+me|give\s+me|find|look\s+up|lookup|search|pull\s+up|summari[sz]e|recap|explain|check\s+(?:my|the|on|whether|if)|any\s+(?:idea|chance)|remind\s+me\s+(?:what|when|where|which|who|how)`;
+
+/** Clause openings that are asking, not telling — when the clause ends in "?". */
+const INQUIRY_LEAD = new RegExp(
+  LEAD_PREFIX +
+    String.raw`(?:what|whats|what's|when|when's|where|where's|which|who|whose|why|how|do\s+i|did\s+i|did\s+you|did\s+it|did\s+that|does|is|are|was|were|has|have\s+i|have\s+you|had|am\s+i|should\s+i|` +
+    READ_IMPERATIVE +
+    String.raw`)\b`,
+);
+
+/**
+ * The same openings WITHOUT a question mark. A bare auxiliary or "when" also
+ * opens ordinary statements — "Had cereal and 2 cups of milk", "Was at the gym
+ * for an hour", "When I got home I drank 2 beers" — and reading those as
+ * questions made the whole turn read-only and refused every log in it
+ * (2026-10-20). Without a "?", an auxiliary counts as a question only when the
+ * subject follows it ("had I", "was it", "is the bill…"), and when/where only when an
+ * auxiliary follows ("when is…").
+ */
+const AUX_AFTER_WH = String.raw`(?:'s|\s+(?:is|are|was|were|do|does|did|will|would|should|can|could|am|has|have|had))`;
+const PRONOUN = String.raw`(?:i|you|it|we|they|he|she)`;
+const SUBJECT = String.raw`(?:i|you|it|we|they|he|she|my|your|our|the|this|that|these|those|any)`;
+const UNMARKED_INQUIRY_LEAD = new RegExp(
+  LEAD_PREFIX +
+    String.raw`(?:what(?!\s+an?\b)|whats|what's|when's|where's|which|who|whose|why|how|when` + AUX_AFTER_WH + String.raw`|where` + AUX_AFTER_WH +
+    String.raw`|do\s+i|did\s+i|did\s+you|does\s+` + SUBJECT + String.raw`|(?:is|are)\s+(?:there|` + SUBJECT + String.raw`)|(?:was|were|has|had)\s+` + PRONOUN +
+    String.raw`|have\s+i|have\s+you|am\s+i|should\s+i|` +
+    READ_IMPERATIVE +
+    String.raw`)\b`,
+);
 
 /**
  * Verbs that ask for a change. Deliberately broad — a false "write" here only
@@ -68,13 +98,14 @@ function classifyClause(clause: string): "read" | "write" | "neutral" {
   // A polite request that is not one of the "show/tell/list" shapes is a
   // request for work whenever it names a change.
   if (POLITE_REQUEST.test(c) && WRITE_VERB.test(c)) return "write";
-  const inquiry = INQUIRY_LEAD.test(c) || c.endsWith("?");
-  if (inquiry) {
+  const marked = c.endsWith("?");
+  const led = marked ? INQUIRY_LEAD.test(c) : UNMARKED_INQUIRY_LEAD.test(c);
+  if (led || marked) {
     // "Where did this expense save?" / "Did I log my run?" — the write verb is
     // the subject of the question, not a request.
     if (!WRITE_VERB.test(c)) return "read";
     if (PAST_INQUIRY.test(c)) return "read";
-    if (INQUIRY_LEAD.test(c)) {
+    if (led) {
       // Question-led, but a change is named later in the same clause
       // ("what's due? also add rent" is split before we get here; "how do I
       // add an expense?" stays a read — it asks HOW).

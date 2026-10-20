@@ -77,7 +77,10 @@ export function readOnlyTurnViolation(toolName: string, label: string): RoutingV
       `Blocked: this message is a QUESTION, so no records may be created, updated or deleted during it` +
       (label ? ` (${toolName} on "${label}" refused)` : ` (${toolName} refused)`) +
       `. Answer from the data you already have. Do not re-run anything from earlier messages — earlier requests were already handled. ` +
-      `If the user wants a change, they will ask for it in a new message.`,
+      `If the user wants a change, they will ask for it in a new message. ` +
+      // Resending the same words classifies the same way, so "send it again"
+      // is never a fix. If the message was really a report, say so plainly.
+      `If the message was actually telling you something they did (a meal, a workout, a payment), say it was not saved and ask them to start with "log" — never tell them to resend the same message, and never blame "the system".`,
     // Nothing for the user: a refused write on a question is not an event the
     // user asked about, and the answer to their question follows.
     userMessage: "",

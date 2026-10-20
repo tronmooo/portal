@@ -28,6 +28,13 @@ describe("classifyTurnScope — READ turns get no mutation budget", () => {
     "Tell me what changed today",
     "what did you just change?",
     "Where did the $549.50 estimate go?",
+    // No question mark — still asked as a question.
+    "what bills are due",
+    "is the electric bill paid",
+    "had I logged my run",
+    "was it saved",
+    "when did I last take my meds",
+    "where's my license plate",
   ];
   for (const m of reads) {
     it(`READ: ${m}`, () => {
@@ -60,7 +67,23 @@ describe("classifyTurnScope — requests keep their mutation budget", () => {
     "Pay the electric bill",
     "Remember that I like tea",
   ];
-  for (const m of writes) {
+  // Reports of what the user did. A leading auxiliary or "when" opens a
+  // statement as often as a question; without a "?" these are logs, and
+  // reading them as questions refused every write in the turn (2026-10-20).
+  const reports = [
+    "Had cinnamon toast crunch, and 2 cups of milk drank a Coke zero play guitar for 30 minutes. Ran 2 miles and did 10 push-ups three sets.",
+    "Had a burger and fries for lunch",
+    "had 2 eggs",
+    "Was at the gym for an hour",
+    "Were out walking for 40 minutes",
+    "Has been a long day, drank 3 coffees",
+    "When I got home I drank 2 beers",
+    "Where I work we walked 2 miles at lunch",
+    "What a day. Ran 5 miles",
+    "Did it! Ran a 5k in 28 minutes",
+    "Is raining, did 20 minutes on the bike",
+  ];
+  for (const m of [...writes, ...reports]) {
     it(`not READ: ${m}`, () => {
       const s = classifyTurnScope(m);
       expect(s.allowedMutations).toBe("all");
