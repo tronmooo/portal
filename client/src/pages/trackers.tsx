@@ -47,7 +47,8 @@ import {
   type TrackerMetricDefinition,
   getDefaultMetricDefinition,
 } from "@shared/tracker-metric-definition";
-import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/tracker-presentation";
+import { classifyTrackerPresentation } from "@shared/tracker-presentation";
+import { buildTrackerModel, themeVars, OverviewTab, TrendsTab, BreakdownTab, CorrelationsTab, InsightsTab, type TrackerModel } from "@/components/tracker-detail";
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { inferTrackerShapeId } from "@shared/tracker-shapes";
 // THE fitness semantic layer: what each number in a workout entry MEANS, and
@@ -4512,82 +4513,38 @@ type DynamicTab = {
   icon: any;
 };
 
-function generateDynamicTabs(tracker: Tracker): DynamicTab[] {
+function generateDynamicTabs(tracker: Tracker, model: TrackerModel, allTrackers: Tracker[]): DynamicTab[] {
   const tabs: DynamicTab[] = [{ id: "overview", label: "Overview", icon: BarChart2 }];
   const entries = tracker.entries;
-  const numericFields = tracker.fields.filter(f => f.type === "number");
-  const spec = detectSpecialization(tracker);
-  const cat = tracker.category.toLowerCase();
-  const name = tracker.name.toLowerCase();
+  const isMedication = detectSpecialization(tracker) === "medication";
 
-  // Trends tab: show when enough data
-  if (entries.length >= 5) {
+  // Trends: as soon as there are two days of numbers. With fewer than four the
+  // tab says so and draws dots, rather than hiding until the fifth entry.
+  if (!isMedication && model.numericFields.length > 0 && model.points.length >= 2) {
     tabs.push({ id: "trends", label: "Trends", icon: ChartLine });
   }
 
-  // Breakdown tab: for multi-field trackers (nutrition, BP, exercise)
-  const isNutrition = cat === "nutrition" || name.includes("nutrition") || name.includes("food") || name.includes("diet");
-  const isBP = spec === "bloodpressure";
-  const isExercise = spec === "running" || cat === "fitness";
-  const isSleep = spec === "sleep";
-  if ((isNutrition || isBP || isExercise || isSleep) && entries.length >= 2) {
+  if (!isMedication && entries.length >= 2) {
     tabs.push({ id: "breakdown", label: "Breakdown", icon: PieChartIcon });
   }
 
-  // Correlations: 2+ numeric fields with enough data
-  if (numericFields.length >= 2 && entries.length >= 5) {
+  // Correlations: something to compare against — a second measure here, or
+  // another tracker with data.
+  const others = allTrackers.some((t) => t.id !== tracker.id && (t.entries?.length ?? 0) >= 2);
+  if (!isMedication && entries.length >= 3 && (model.numericFields.length >= 2 || (model.numericFields.length >= 1 && others))) {
     tabs.push({ id: "correlations", label: "Correlations", icon: Brain });
   }
 
-  // History always shows
   if (entries.length > 0) {
     tabs.push({ id: "history", label: "History", icon: ListChecks });
   }
 
-  // Insights: when enough data for pattern detection
-  if (entries.length >= 3) {
+  if (!isMedication && entries.length >= 3) {
     tabs.push({ id: "insights", label: "Insights", icon: Lightbulb });
   }
 
-  // Goals tab always shows
   tabs.push({ id: "goals", label: "Goals", icon: Target });
-
   return tabs;
-}
-
-// -- Helper: compute stats for a numeric field over entries
-function computeFieldStats(entries: TrackerEntry[], field: string) {
-  const nums = entries.map(e => typeof e.values[field] === "number" ? e.values[field] as number : NaN).filter(n => !isNaN(n));
-  if (nums.length === 0) return null;
-  const latest = nums[nums.length - 1];
-  const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
-  const min = Math.min(...nums);
-  const max = Math.max(...nums);
-  // Trend: compare last 25% avg to first 25% avg
-  const q = Math.max(1, Math.floor(nums.length / 4));
-  const recentAvg = nums.slice(-q).reduce((a, b) => a + b, 0) / q;
-  const earlyAvg = nums.slice(0, q).reduce((a, b) => a + b, 0) / q;
-  const trendPct = earlyAvg !== 0 ? ((recentAvg - earlyAvg) / earlyAvg) * 100 : 0;
-  return { latest, avg, min, max, trendPct, count: nums.length };
-}
-
-// -- Helper: compute 7-day moving average
-function movingAverage(entries: TrackerEntry[], field: string, window = 7): { date: string; value: number; ma: number | null }[] {
-  const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  const result: { date: string; value: number; ma: number | null }[] = [];
-  for (let i = 0; i < sorted.length; i++) {
-    const val = typeof sorted[i].values[field] === "number" ? sorted[i].values[field] as number : NaN;
-    if (isNaN(val)) continue;
-    const windowEntries = sorted.slice(Math.max(0, i - window + 1), i + 1);
-    const windowNums = windowEntries.map(e => typeof e.values[field] === "number" ? e.values[field] as number : NaN).filter(n => !isNaN(n));
-    const ma = windowNums.length >= Math.min(3, window) ? windowNums.reduce((a, b) => a + b, 0) / windowNums.length : null;
-    result.push({
-      date: new Date(sorted[i].timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-      value: val,
-      ma,
-    });
-  }
-  return result;
 }
 
 // -- Helper: compute logging streak
@@ -4614,668 +4571,6 @@ function computeStreak(entries: TrackerEntry[]): number {
   return streak;
 }
 
-// -- Overview Tab
-// Dynamic KPI cards derived from the tracker's metric kind (the presentation
-// engine). Additive metrics (water, calories, miles) summarize as a daily
-// TOTAL; measurements (weight, heart rate, glucose) as latest + range.
-function computeDynamicKpis(
-  entries: TrackerEntry[],
-  primaryField: string,
-  pres: TrackerPresentation,
-  timeRange: TimeRange,
-): { label: string; value: string; sub: string }[] {
-  const unit = pres.unit || "";
-  const fmt = (n: number) => {
-    const r = Math.round(n * 100) / 100;
-    return unit === "$" ? `$${r.toLocaleString()}` : `${r.toLocaleString()}`;
-  };
-  const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  const nums = sorted.map(e => Number(e.values?.[primaryField])).filter(v => !isNaN(v) && isFinite(v));
-  if (nums.length === 0) return [];
-  const rangeSub = timeRange === "all" ? "all time" : timeRange;
-
-  if (pres.metricKind === "additive") {
-    const byDay = new Map<string, number>();
-    for (const e of sorted) {
-      const v = Number(e.values?.[primaryField]);
-      if (!isFinite(v)) continue;
-      const k = new Date(e.timestamp).toLocaleDateString("en-CA");
-      byDay.set(k, (byDay.get(k) || 0) + v);
-    }
-    const totals = [...byDay.values()];
-    const total = totals.reduce((a, b) => a + b, 0);
-    const days = byDay.size || 1;
-    return [
-      { label: "Total", value: fmt(total), sub: unit || rangeSub },
-      { label: "Avg / day", value: fmt(total / days), sub: unit || rangeSub },
-      { label: "Peak", value: fmt(Math.max(...totals)), sub: `${unit || "day"} max` },
-      { label: "Days logged", value: String(byDay.size), sub: rangeSub },
-    ];
-  }
-  // measurement / categorical / dual / unknown → latest reading + range
-  return [
-    { label: "Latest", value: fmt(nums[nums.length - 1]), sub: unit },
-    { label: "Average", value: fmt(nums.reduce((a, b) => a + b, 0) / nums.length), sub: unit || rangeSub },
-    { label: "Low", value: fmt(Math.min(...nums)), sub: unit },
-    { label: "High", value: fmt(Math.max(...nums)), sub: unit },
-  ];
-}
-
-// Phase 3: per-metric-kind accent colour so each tracker reads as its own thing.
-const KIND_ACCENT: Record<string, string> = {
-  additive: "text-cyan-500",
-  measurement: "text-violet-500",
-  dual: "text-rose-500",
-  adherence: "text-red-500",
-  categorical: "text-amber-500",
-  unknown: "text-foreground",
-};
-
-// Phase 4: one-line, kind-aware insight summarising the data.
-function dynamicOverviewInsight(entries: TrackerEntry[], primaryField: string, pres: TrackerPresentation): string {
-  const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  const nums = sorted.map(e => Number(e.values?.[primaryField])).filter(v => !isNaN(v) && isFinite(v));
-  if (nums.length === 0) return "";
-  const u = pres.unit ? ` ${pres.unit}` : "";
-  const round = (n: number) => (n % 1 === 0 ? n : Math.round(n * 10) / 10);
-  if (pres.metricKind === "additive") {
-    const byDay = new Map<string, number>();
-    for (const e of sorted) { const v = Number(e.values?.[primaryField]); if (!isFinite(v)) continue; const k = new Date(e.timestamp).toLocaleDateString("en-CA"); byDay.set(k, (byDay.get(k) || 0) + v); }
-    const total = [...byDay.values()].reduce((a, b) => a + b, 0);
-    const days = byDay.size || 1;
-    return `Averaging ${round(total / days)}${u} per day across ${days} day${days === 1 ? "" : "s"}.`;
-  }
-  if (nums.length < 2) return `First reading: ${round(nums[0])}${u}.`;
-  const q = Math.max(1, Math.floor(nums.length / 4));
-  const recent = nums.slice(-q).reduce((a, b) => a + b, 0) / q;
-  const early = nums.slice(0, q).reduce((a, b) => a + b, 0) / q;
-  const diff = early !== 0 ? ((recent - early) / early) * 100 : 0;
-  const dir = Math.abs(diff) < 2 ? "holding steady" : diff > 0 ? `up ${round(Math.abs(diff))}%` : `down ${round(Math.abs(diff))}%`;
-  return `Latest ${round(nums[nums.length - 1])}${u} · ${dir} vs earlier.`;
-}
-
-// Daily-total bar chart for additive metrics (water/calories/miles/minutes).
-function AdditiveDailyBars({ entries, primaryField, unit, goalValue }: { entries: TrackerEntry[]; primaryField: string; unit?: string; goalValue?: number }) {
-  const byDay = new Map<string, number>();
-  for (const e of entries) {
-    const v = Number(e.values?.[primaryField]);
-    if (!isFinite(v)) continue;
-    byDay.set(new Date(e.timestamp).toLocaleDateString("en-CA"), (byDay.get(new Date(e.timestamp).toLocaleDateString("en-CA")) || 0) + v);
-  }
-  const data = [...byDay.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([k, v]) => ({ date: new Date(k + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }), value: Math.round(v * 100) / 100 }));
-  if (data.length === 0) {
-    return (
-      <div className="h-[200px] flex flex-col items-center justify-center text-center rounded-lg border border-dashed border-border/60 bg-muted/20">
-        <BarChart2 className="h-7 w-7 text-muted-foreground/30 mb-2" />
-        <p className="text-sm text-muted-foreground">No numeric data yet — tap “+ Add” to log one.</p>
-      </div>
-    );
-  }
-  return (
-    <ResponsiveContainer width="100%" height={200}>
-      <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} vertical={false} />
-        <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
-        <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={36} tickFormatter={(v) => `${v}${unit ? ` ${unit}` : ""}`} />
-        <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => [`${v}${unit ? ` ${unit}` : ""}`, "Daily total"]} />
-        {typeof goalValue === "number" && goalValue > 0 && (
-          <ReferenceLine y={goalValue} stroke={CHART_COLORS.gold} strokeDasharray="4 4" label={{ value: "Goal", position: "right", fontSize: 10, fill: CHART_COLORS.gold }} />
-        )}
-        <Bar dataKey="value" fill={CHART_COLORS.primary} radius={[3, 3, 0, 0] as any} />
-      </BarChart>
-    </ResponsiveContainer>
-  );
-}
-
-function OverviewTabContent({ tracker, primaryField }: { tracker: Tracker; primaryField: string }) {
-  const [timeRange, setTimeRange] = useState<TimeRange>("30d");
-  const specialization = detectSpecialization(tracker);
-  // Dynamic presentation spec — drives KPI cards, chart style, units by metric
-  // kind (additive/measurement/dual/…) instead of one-size-fits-all.
-  const pres = classifyTrackerPresentation(tracker as any);
-  const filtered = filterEntriesByRange(tracker.entries, timeRange);
-  // Force Recharts to remount when data changes (ResponsiveContainer caching issue)
-  const chartKey = `${tracker.id}-${tracker.entries.length}-${timeRange}`;
-  const stats = computeFieldStats(filtered, primaryField);
-  const streak = computeStreak(tracker.entries);
-  const dynamicKpis = computeDynamicKpis(filtered, primaryField, pres, timeRange);
-  // Additive standard trackers (hydration, calories, steps…) render daily-total
-  // bars; everything else keeps its line/specialized chart.
-  const useAdditiveBars = specialization === "standard" && pres.metricKind === "additive";
-
-  // Goal ring — only when the user actually created a goal for this tracker.
-  const { data: overviewGoals = [] } = useQuery<Goal[]>({ queryKey: goalsQueryKey([]) });
-  const trackerGoal = overviewGoals.find((g) => g && g.trackerId === tracker.id && g.status === "active" && typeof g.target === "number");
-  const goalProgress = (() => {
-    if (!trackerGoal || !pres.primaryField || trackerGoal.target <= 0) return null;
-    const fld = pres.primaryField;
-    let current = 0;
-    let scope = "latest";
-    if (pres.metricKind === "additive") {
-      const todayKey = new Date().toLocaleDateString("en-CA");
-      current = tracker.entries
-        .filter((e) => new Date(e.timestamp).toLocaleDateString("en-CA") === todayKey)
-        .reduce((s, e) => { const v = Number(e.values?.[fld]); return s + (isFinite(v) ? v : 0); }, 0);
-      scope = "today";
-    } else {
-      const sorted = [...filtered].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      const nums = sorted.map((e) => Number(e.values?.[fld])).filter((v) => isFinite(v));
-      current = nums.length ? nums[nums.length - 1] : 0;
-    }
-    const pct = Math.max(0, Math.min(100, Math.round((current / trackerGoal.target) * 100)));
-    return { current, target: trackerGoal.target, pct, scope, unit: trackerGoal.unit || pres.unit, met: current >= trackerGoal.target };
-  })();
-
-  const timeRangeBtns: { label: string; value: TimeRange }[] = [
-    { label: "7d", value: "7d" },
-    { label: "30d", value: "30d" },
-    { label: "90d", value: "90d" },
-    { label: "All", value: "all" },
-  ];
-
-  // Medication trackers get their own specialized view
-  if (specialization === 'medication') return <MedicationOverview tracker={tracker} />;
-
-  return (
-    <div className="space-y-4">
-      {/* KPI Row — dynamic by metric kind (Phase 1), accent-coloured (Phase 3) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        {dynamicKpis.length > 0 ? (
-          dynamicKpis.map((k, i) => (
-            <div key={i} className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="micro-label text-muted-foreground truncate">{k.label}</p>
-              <p className={`text-lg font-bold tabular-nums truncate ${i === 0 ? (KIND_ACCENT[pres.metricKind] || "text-foreground") : ""}`} title={k.value}>{k.value}</p>
-              <p className="text-xs text-muted-foreground truncate">{k.sub}</p>
-            </div>
-          ))
-        ) : (
-          <div className="col-span-2 sm:col-span-4 bg-muted/30 rounded-lg p-3 text-center text-xs text-muted-foreground">
-            No numeric data yet — log an entry to see summaries.
-          </div>
-        )}
-      </div>
-
-      {/* Phase 4: dynamic, kind-aware insight line */}
-      {dynamicKpis.length > 0 && (() => {
-        const insight = dynamicOverviewInsight(filtered, primaryField, pres);
-        return insight ? (
-          <div className={`text-xs rounded-md px-3 py-2 bg-muted/40 flex items-center gap-1.5`}>
-            <span className={KIND_ACCENT[pres.metricKind] || "text-primary"}>●</span>
-            <span className="text-muted-foreground">{insight}</span>
-          </div>
-        ) : null;
-      })()}
-
-      {/* Goal ring/progress — only when a real goal exists for this tracker */}
-      {goalProgress && (
-        <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="micro-label text-muted-foreground">Goal · {goalProgress.scope}</span>
-            <span className={`text-xs font-bold ${goalProgress.met ? "text-emerald-500" : "text-primary"}`}>
-              {goalProgress.met ? "✓ Goal met" : `${goalProgress.pct}%`}
-            </span>
-          </div>
-          <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all ${goalProgress.met ? "bg-emerald-500" : "bg-primary"}`}
-              style={{ width: `${goalProgress.pct}%` }}
-            />
-          </div>
-          <p className="text-[11px] text-muted-foreground mt-1.5">
-            {Math.round(goalProgress.current * 10) / 10}{goalProgress.unit ? ` ${goalProgress.unit}` : ""} of {goalProgress.target}{goalProgress.unit ? ` ${goalProgress.unit}` : ""} goal
-            {!goalProgress.met && goalProgress.target > goalProgress.current ? ` · ${Math.round((goalProgress.target - goalProgress.current) * 10) / 10} to go` : ""}
-          </p>
-        </div>
-      )}
-
-      {/* Time range selector */}
-      <div className="flex items-center gap-1">
-        {timeRangeBtns.map(btn => (
-          <button key={btn.value}
-            className={`px-2.5 py-0.5 rounded text-xs-loose font-medium transition-colors ${timeRange === btn.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
-            onClick={() => setTimeRange(btn.value)}>
-            {btn.label}
-          </button>
-        ))}
-        <span className="text-xs text-muted-foreground ml-2">{filtered.length} entries</span>
-      </div>
-
-      {/* Chart */}
-      {filtered.length > 0 ? (
-        <div className="h-[200px]" key={chartKey}>
-          {specialization === "weight" && <WeightDetailChart entries={filtered} primaryField={primaryField} unit={tracker.unit} />}
-          {specialization === "bloodpressure" && <BloodPressureDetailChart entries={filtered} />}
-          {specialization === "sleep" && <SleepDetailChart entries={filtered} primaryField={primaryField} />}
-          {specialization === "running" && <RunningDetailChart entries={filtered} primaryField={primaryField} />}
-          {specialization === "standard" && (useAdditiveBars
-            ? <AdditiveDailyBars entries={filtered} primaryField={primaryField} unit={pres.unit} goalValue={trackerGoal?.target} />
-            : <StandardDetailChart entries={filtered} primaryField={primaryField} unit={pres.unit || tracker.unit} goalValue={trackerGoal?.target} />)}
-        </div>
-      ) : (
-        <div className="text-center py-8">
-          <BarChart2 className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">No entries in this time range</p>
-        </div>
-      )}
-
-      {/* Stats summary */}
-      {filtered.length > 0 && (
-        <StatsRow entries={filtered} primaryField={primaryField} unit={tracker.unit} isBP={specialization === "bloodpressure"} />
-      )}
-    </div>
-  );
-}
-
-// -- Trends Tab
-function TrendsTabContent({ tracker, primaryField }: { tracker: Tracker; primaryField: string }) {
-  const maData = useMemo(() => movingAverage(tracker.entries, primaryField, 7), [tracker.entries, primaryField]);
-
-  // Period comparison
-  const now = Date.now();
-  const thisWeek = tracker.entries.filter(e => now - new Date(e.timestamp).getTime() < 7 * 86400000);
-  const lastWeek = tracker.entries.filter(e => {
-    const diff = now - new Date(e.timestamp).getTime();
-    return diff >= 7 * 86400000 && diff < 14 * 86400000;
-  });
-  const thisWeekAvg = (() => {
-    const nums = thisWeek.map(e => typeof e.values[primaryField] === "number" ? e.values[primaryField] as number : NaN).filter(n => !isNaN(n));
-    return nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
-  })();
-  const lastWeekAvg = (() => {
-    const nums = lastWeek.map(e => typeof e.values[primaryField] === "number" ? e.values[primaryField] as number : NaN).filter(n => !isNaN(n));
-    return nums.length > 0 ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
-  })();
-  const weekDiff = thisWeekAvg != null && lastWeekAvg != null && lastWeekAvg !== 0
-    ? ((thisWeekAvg - lastWeekAvg) / lastWeekAvg * 100) : null;
-
-  return (
-    <div className="space-y-4">
-      {/* Period comparison */}
-      {thisWeekAvg != null && lastWeekAvg != null && (
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-muted/50 rounded-lg p-3">
-            <p className="text-xs text-muted-foreground uppercase">This Week Avg</p>
-            <p className="text-lg font-bold tabular-nums">{thisWeekAvg.toFixed(1)} <span className="text-xs font-normal text-muted-foreground">{tracker.unit || ""}</span></p>
-            <p className="text-xs text-muted-foreground">{thisWeek.length} entries</p>
-          </div>
-          <div className="bg-muted/50 rounded-lg p-3">
-            <p className="text-xs text-muted-foreground uppercase">Last Week Avg</p>
-            <p className="text-lg font-bold tabular-nums">{lastWeekAvg.toFixed(1)} <span className="text-xs font-normal text-muted-foreground">{tracker.unit || ""}</span></p>
-            <p className="text-xs text-muted-foreground">{lastWeek.length} entries</p>
-          </div>
-        </div>
-      )}
-      {weekDiff != null && (
-        <div className={`text-xs rounded-md px-3 py-2 ${weekDiff > 0 ? "bg-orange-500/10 text-orange-600" : weekDiff < 0 ? "bg-green-500/10 text-green-600" : "bg-muted text-muted-foreground"}`}>
-          {Math.abs(weekDiff) < 1 ? "Holding steady week-over-week" :
-           `${weekDiff > 0 ? "Up" : "Down"} ${Math.abs(weekDiff).toFixed(1)}% from last week`}
-        </div>
-      )}
-
-      {/* Moving average chart */}
-      <div>
-        <p className="text-xs font-medium text-muted-foreground mb-2">7-Day Moving Average</p>
-        <div className="h-[220px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={maData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" allowDuplicatedCategory={false} />
-              <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={40} domain={["auto", "auto"]} />
-              <Tooltip contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
-              <Bar dataKey="value" fill={CHART_COLORS.light} radius={[2, 2, 0, 0]} name="Value" />
-              <Line dataKey="ma" stroke={CHART_COLORS.primary} strokeWidth={2.5} dot={false} name="7d Avg" />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* Trend analysis text */}
-      {(() => {
-        const allStats = computeFieldStats(tracker.entries, primaryField);
-        if (!allStats) return null;
-        return (
-          <div className="text-xs text-muted-foreground space-y-1 bg-muted/30 rounded-md p-3">
-            <p>Range: {allStats.min.toFixed(1)} – {allStats.max.toFixed(1)} {tracker.unit || ""} across {allStats.count} readings</p>
-            <p>Overall trend: {allStats.trendPct > 1 ? `increasing (+${allStats.trendPct.toFixed(1)}%)` : allStats.trendPct < -1 ? `decreasing (${allStats.trendPct.toFixed(1)}%)` : "stable"}</p>
-          </div>
-        );
-      })()}
-    </div>
-  );
-}
-
-// -- Breakdown Tab (nutrition macros, BP distribution, etc.)
-function BreakdownTabContent({ tracker }: { tracker: Tracker }) {
-  const spec = detectSpecialization(tracker);
-  const cat = tracker.category.toLowerCase();
-  const name = tracker.name.toLowerCase();
-  const isNutrition = cat === "nutrition" || name.includes("nutrition") || name.includes("food") || name.includes("diet");
-  const entries = tracker.entries;
-
-  if (isNutrition) {
-    // Macros breakdown
-    const macroTotals = entries.reduce((acc, e) => {
-      acc.protein += (typeof e.values.protein === "number" ? e.values.protein : 0);
-      acc.carbs += (typeof e.values.carbs === "number" ? e.values.carbs : 0);
-      acc.fat += (typeof e.values.fat === "number" ? e.values.fat : 0);
-      acc.sugar += (typeof e.values.sugar === "number" ? e.values.sugar : 0);
-      acc.fiber += (typeof e.values.fiber === "number" ? e.values.fiber : 0);
-      acc.calories += (typeof e.values.calories === "number" ? e.values.calories : 0);
-      return acc;
-    }, { protein: 0, carbs: 0, fat: 0, sugar: 0, fiber: 0, calories: 0 });
-    const macroTotal = macroTotals.protein + macroTotals.carbs + macroTotals.fat;
-    const pieData = [
-      { name: "Protein", value: macroTotals.protein, color: CHART_COLORS.primary },
-      { name: "Carbs", value: macroTotals.carbs, color: CHART_COLORS.gold },
-      { name: "Fat", value: macroTotals.fat, color: CHART_COLORS.secondary },
-    ].filter(d => d.value > 0);
-
-    // Daily calorie chart
-    const dailyCals = entries.reduce((acc: Record<string, number>, e) => {
-      const d = new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-      acc[d] = (acc[d] || 0) + (typeof e.values.calories === "number" ? e.values.calories : 0);
-      return acc;
-    }, {});
-    const calData = Object.entries(dailyCals).map(([date, cal]) => ({ date, calories: Math.round(cal) }));
-
-    return (
-      <div className="space-y-5">
-        {/* Macro averages */}
-        <div className="grid grid-cols-3 gap-2">
-          <div className="bg-muted/50 rounded-lg p-3 text-center">
-            <p className="text-xs text-muted-foreground uppercase">Avg Protein</p>
-            <p className="text-base font-bold tabular-nums">{entries.length > 0 ? (macroTotals.protein / entries.length).toFixed(0) : 0}g</p>
-          </div>
-          <div className="bg-muted/50 rounded-lg p-3 text-center">
-            <p className="text-xs text-muted-foreground uppercase">Avg Carbs</p>
-            <p className="text-base font-bold tabular-nums">{entries.length > 0 ? (macroTotals.carbs / entries.length).toFixed(0) : 0}g</p>
-          </div>
-          <div className="bg-muted/50 rounded-lg p-3 text-center">
-            <p className="text-xs text-muted-foreground uppercase">Avg Fat</p>
-            <p className="text-base font-bold tabular-nums">{entries.length > 0 ? (macroTotals.fat / entries.length).toFixed(0) : 0}g</p>
-          </div>
-        </div>
-        {macroTotals.sugar > 0 && (
-          <div className="grid grid-cols-2 gap-2">
-            <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-xs text-muted-foreground uppercase">Total Sugar</p>
-              <p className="text-base font-bold tabular-nums">{macroTotals.sugar.toFixed(0)}g</p>
-            </div>
-            <div className="bg-muted/50 rounded-lg p-3 text-center">
-              <p className="text-xs text-muted-foreground uppercase">Total Fiber</p>
-              <p className="text-base font-bold tabular-nums">{macroTotals.fiber.toFixed(0)}g</p>
-            </div>
-          </div>
-        )}
-
-        {/* Macro distribution pie */}
-        {pieData.length > 0 && (
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-2">Macro Distribution</p>
-            <div className="h-[180px] flex items-center justify-center">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={3}
-                    label={({ name, value }) => `${name}: ${macroTotal > 0 ? Math.round(value / macroTotal * 100) : 0}%`}>
-                    {pieData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                  </Pie>
-                  <Tooltip formatter={(value: number) => `${value.toFixed(0)}g`} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        )}
-
-        {/* Daily calories bar */}
-        {calData.length > 1 && (
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-2">Daily Calories</p>
-            <div className="h-[160px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={calData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" allowDuplicatedCategory={false} />
-                  <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={40} />
-                  <Tooltip contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
-                  <Bar dataKey="calories" fill={CHART_COLORS.primary} radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (spec === "bloodpressure") {
-    // BP category distribution
-    const categories = entries.map(e => e.computed?.bloodPressureCategory || "unknown").filter(c => c !== "unknown");
-    const catCounts = categories.reduce((acc: Record<string, number>, c) => { acc[c] = (acc[c] || 0) + 1; return acc; }, {});
-    const catColors: Record<string, string> = { normal: CHART_COLORS.primary, elevated: CHART_COLORS.gold, high_stage1: CHART_COLORS.secondary, high_stage2: CHART_COLORS.warning, crisis: "#dc2626" };
-    const bpPieData = Object.entries(catCounts).map(([name, value]) => ({
-      name: name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()),
-      value,
-      color: catColors[name] || CHART_COLORS.tertiary,
-    }));
-
-    // Sys vs Dia comparison
-    const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-    const bpLineData = sorted.slice(-20).map(e => ({
-      date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-      systolic: typeof e.values.systolic === "number" ? e.values.systolic : null,
-      diastolic: typeof e.values.diastolic === "number" ? e.values.diastolic : null,
-    }));
-
-    return (
-      <div className="space-y-5">
-        {bpPieData.length > 0 && (
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-2">BP Category Distribution</p>
-            <div className="h-[180px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={bpPieData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={3}
-                    label={({ name, value }) => `${name}: ${value}`}>
-                    {bpPieData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        )}
-        {bpLineData.length > 1 && (
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-2">Systolic vs Diastolic</p>
-            <div className="h-[200px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={bpLineData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" allowDuplicatedCategory={false} />
-                  <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={40} />
-                  <Tooltip contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
-                  <Line type="monotone" dataKey="systolic" stroke={CHART_COLORS.secondary} strokeWidth={2} dot={{ r: 3 }} name="Systolic" />
-                  <Line type="monotone" dataKey="diastolic" stroke={CHART_COLORS.primary} strokeWidth={2} dot={{ r: 3 }} name="Diastolic" />
-                  <Legend />
-                  <ReferenceLine y={120} stroke={CHART_COLORS.gold} strokeDasharray="5 5" label={{ value: "Normal", fontSize: 10 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (spec === "sleep") {
-    // Sleep quality distribution
-    const qualities = entries.map(e => e.computed?.sleepQuality || "unknown").filter(q => q !== "unknown");
-    const qCounts = qualities.reduce((acc: Record<string, number>, q) => { acc[q] = (acc[q] || 0) + 1; return acc; }, {});
-    const qColors: Record<string, string> = { excellent: CHART_COLORS.primary, good: CHART_COLORS.tertiary, fair: CHART_COLORS.gold, poor: CHART_COLORS.secondary };
-    const qPieData = Object.entries(qCounts).map(([name, value]) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), value, color: qColors[name] || CHART_COLORS.tertiary }));
-
-    return (
-      <div className="space-y-5">
-        {qPieData.length > 0 && (
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-2">Sleep Quality Distribution</p>
-            <div className="h-[180px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={qPieData} cx="50%" cy="50%" innerRadius={45} outerRadius={75} dataKey="value" paddingAngle={3}
-                    label={({ name, value }) => `${name}: ${value}`}>
-                    {qPieData.map((d, i) => <Cell key={i} fill={d.color} />)}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (spec === "running" || cat === "fitness") {
-    const sorted = [...entries].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-    const runData = sorted.slice(-20).map(e => ({
-      date: new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-      distance: typeof e.values.distance === "number" ? e.values.distance : null,
-      caloriesBurned: typeof e.values.caloriesBurned === "number" ? e.values.caloriesBurned : (e.computed?.caloriesBurned || null),
-    }));
-
-    return (
-      <div className="space-y-5">
-        {runData.length > 1 && (
-          <div>
-            <p className="text-xs font-medium text-muted-foreground mb-2">Distance vs Calories Burned</p>
-            <div className="h-[220px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={runData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} interval="preserveStartEnd" allowDuplicatedCategory={false} />
-                  <YAxis yAxisId="left" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={35} />
-                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={35} />
-                  <Tooltip contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
-                  <Bar yAxisId="right" dataKey="caloriesBurned" fill={CHART_COLORS.light} radius={[2, 2, 0, 0]} name="Calories" />
-                  <Line yAxisId="left" type="monotone" dataKey="distance" stroke={CHART_COLORS.primary} strokeWidth={2} dot={{ r: 3 }} name="Distance" />
-                  <Legend />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Generic multi-field breakdown
-  const numericFields = tracker.fields.filter(f => f.type === "number");
-  if (numericFields.length >= 2) {
-    const fieldStats = numericFields.map(f => {
-      const s = computeFieldStats(entries, f.name);
-      return { field: f.name, ...s };
-    }).filter(s => s.count != null && s.count > 0);
-
-    return (
-      <div className="space-y-3">
-        <p className="text-xs font-medium text-muted-foreground">Field Averages</p>
-        <div className="grid grid-cols-2 gap-2">
-          {fieldStats.map(s => (
-            <div key={s.field} className="bg-muted/50 rounded-lg p-3">
-              <p className="text-xs text-muted-foreground uppercase">{s.field}</p>
-              <p className="text-base font-bold tabular-nums">{s.avg?.toFixed(1)}</p>
-              <p className="text-xs text-muted-foreground">min: {s.min?.toFixed(1)} / max: {s.max?.toFixed(1)}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return <p className="text-sm text-muted-foreground">No breakdown data available for this tracker type.</p>;
-}
-
-// -- Correlations Tab
-function CorrelationsTabContent({ tracker }: { tracker: Tracker }) {
-  const numericFields = tracker.fields.filter(f => f.type === "number");
-  const [fieldA, setFieldA] = useState(numericFields[0]?.name || "");
-  const [fieldB, setFieldB] = useState(numericFields[1]?.name || "");
-
-  const scatterData = tracker.entries.map(e => {
-    const a = typeof e.values[fieldA] === "number" ? e.values[fieldA] as number : null;
-    const b = typeof e.values[fieldB] === "number" ? e.values[fieldB] as number : null;
-    return a != null && b != null ? { x: a, y: b } : null;
-  }).filter(Boolean) as { x: number; y: number }[];
-
-  // Simple correlation coefficient
-  const corr = (() => {
-    if (scatterData.length < 3) return null;
-    const n = scatterData.length;
-    const sumX = scatterData.reduce((s, d) => s + d.x, 0);
-    const sumY = scatterData.reduce((s, d) => s + d.y, 0);
-    const sumXY = scatterData.reduce((s, d) => s + d.x * d.y, 0);
-    const sumX2 = scatterData.reduce((s, d) => s + d.x * d.x, 0);
-    const sumY2 = scatterData.reduce((s, d) => s + d.y * d.y, 0);
-    const num = n * sumXY - sumX * sumY;
-    const den = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
-    return den === 0 ? 0 : num / den;
-  })();
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2 flex-wrap">
-        <Select value={fieldA} onValueChange={setFieldA}>
-          <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {numericFields.map(f => <SelectItem key={f.name} value={f.name}>{trackerFieldLabel(f)}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <span className="text-xs text-muted-foreground">vs</span>
-        <Select value={fieldB} onValueChange={setFieldB}>
-          <SelectTrigger className="w-[120px] h-8 text-xs"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {numericFields.map(f => <SelectItem key={f.name} value={f.name}>{trackerFieldLabel(f)}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {corr != null && (
-        <div className="text-xs bg-muted/30 rounded-md p-3">
-          Correlation: <span className="font-bold tabular-nums">{corr.toFixed(3)}</span>
-          {" — "}
-          {Math.abs(corr) > 0.7 ? "Strong" : Math.abs(corr) > 0.4 ? "Moderate" : Math.abs(corr) > 0.2 ? "Weak" : "No"}
-          {corr > 0.2 ? " positive" : corr < -0.2 ? " negative" : ""} relationship
-        </div>
-      )}
-
-      {scatterData.length > 0 ? (
-        <div className="h-[220px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <ScatterChart>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-              <XAxis dataKey="x" name={fieldA} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }}
-                label={{ value: fieldA, position: "bottom", fontSize: 10, fill: "hsl(var(--muted-foreground))" }} />
-              <YAxis dataKey="y" name={fieldB} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} width={40}
-                label={{ value: fieldB, angle: -90, position: "insideLeft", fontSize: 10, fill: "hsl(var(--muted-foreground))" }} />
-              <Tooltip cursor={{ strokeDasharray: "3 3" }}
-                contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8 }} />
-              <Scatter data={scatterData} fill={CHART_COLORS.primary} />
-            </ScatterChart>
-          </ResponsiveContainer>
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground text-center py-8">Not enough matching data points</p>
-      )}
-    </div>
-  );
-}
-
-// One row in the History list. Shows the polished read-only summary; tapping it
-// (anywhere but the trash) swaps to the shared EntryEditor so the user can edit
-// values, delete fields, or add new fields — full CRUD on every entry.
 function HistoryEntryRow({
   entry,
   tracker,
@@ -5515,85 +4810,6 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
   );
 }
 
-// -- Insights Tab (client-side pattern detection)
-function InsightsTabContent({ tracker, primaryField }: { tracker: Tracker; primaryField: string }) {
-  const insights = useMemo(() => {
-    const result: { icon: string; text: string; type: "positive" | "neutral" | "warning" }[] = [];
-    const entries = tracker.entries;
-    const streak = computeStreak(entries);
-    const stats = computeFieldStats(entries, primaryField);
-
-    // Streak insight
-    if (streak >= 3) {
-      result.push({ icon: "🔥", text: `You've logged ${streak} days in a row. Keep it up.`, type: "positive" });
-    } else if (streak === 0 && entries.length > 0) {
-      result.push({ icon: "⏰", text: `You haven't logged today. Last entry was ${new Date(entries[entries.length - 1].timestamp).toLocaleDateString()}.`, type: "warning" });
-    }
-
-    // Trend insight
-    if (stats && Math.abs(stats.trendPct) > 3) {
-      const dir = stats.trendPct > 0 ? "increasing" : "decreasing";
-      result.push({ icon: stats.trendPct > 0 ? "📈" : "📉", text: `${tracker.name} has been ${dir} by ${Math.abs(stats.trendPct).toFixed(1)}% overall.`, type: "neutral" });
-    }
-
-    // Best/worst
-    if (stats && stats.count >= 5) {
-      const sorted = [...entries].sort((a, b) => {
-        const av = typeof a.values[primaryField] === "number" ? a.values[primaryField] as number : -Infinity;
-        const bv = typeof b.values[primaryField] === "number" ? b.values[primaryField] as number : -Infinity;
-        return bv - av;
-      });
-      const best = sorted[0];
-      if (best) {
-        result.push({ icon: "🏆", text: `Best reading: ${best.values[primaryField]} ${tracker.unit || ""} on ${new Date(best.timestamp).toLocaleDateString()}.`, type: "positive" });
-      }
-    }
-
-    // Frequency insight
-    if (entries.length >= 7) {
-      const first = new Date(entries[0].timestamp).getTime();
-      const last = new Date(entries[entries.length - 1].timestamp).getTime();
-      const weeks = Math.max(1, (last - first) / (7 * 86400000));
-      const perWeek = entries.length / weeks;
-      result.push({ icon: "📅", text: `You log this tracker ~${perWeek.toFixed(1)} times per week on average.`, type: "neutral" });
-    }
-
-    // Anomaly detection
-    if (stats && stats.count >= 7) {
-      const nums = entries.map(e => typeof e.values[primaryField] === "number" ? e.values[primaryField] as number : NaN).filter(n => !isNaN(n));
-      const stdDev = Math.sqrt(nums.reduce((sum, n) => sum + Math.pow(n - stats.avg, 2), 0) / nums.length);
-      const recentOutliers = entries.slice(-10).filter(e => {
-        const v = typeof e.values[primaryField] === "number" ? e.values[primaryField] as number : NaN;
-        return !isNaN(v) && Math.abs(v - stats.avg) > 2 * stdDev;
-      });
-      if (recentOutliers.length > 0) {
-        const o = recentOutliers[0];
-        result.push({ icon: "⚠️", text: `Unusual reading on ${new Date(o.timestamp).toLocaleDateString()}: ${o.values[primaryField]} ${tracker.unit || ""} (${Math.abs((o.values[primaryField] as number) - stats.avg).toFixed(1)} away from average).`, type: "warning" });
-      }
-    }
-
-    // Entry count
-    result.push({ icon: "📊", text: `${entries.length} total entries since ${entries.length > 0 ? new Date(entries[0].timestamp).toLocaleDateString() : "never"}.`, type: "neutral" });
-
-    return result;
-  }, [tracker, primaryField]);
-
-  return (
-    <div className="space-y-2">
-      {insights.map((insight, idx) => (
-        <div key={idx} className={`flex items-start gap-3 p-3 rounded-lg border ${
-          insight.type === "positive" ? "bg-green-500/5 border-green-500/20" :
-          insight.type === "warning" ? "bg-orange-500/5 border-orange-500/20" :
-          "bg-muted/30 border-border/50"
-        }`}>
-          <span className="text-base">{insight.icon}</span>
-          <p className="text-sm">{insight.text}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // -- Goals Tab Content (inside tracker detail)
 function GoalsTabContent({ tracker }: { tracker: Tracker }) {
   // Canonical key shared with dashboard.tsx GoalsSection — see
@@ -5751,10 +4967,12 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
 // -- Main TrackerDetailDialog
 function TrackerDetailDialog({
   tracker,
+  allTrackers,
   open,
   onClose,
 }: {
   tracker: Tracker | null;
+  allTrackers: Tracker[];
   open: boolean;
   onClose: () => void;
 }) {
@@ -5768,6 +4986,13 @@ function TrackerDetailDialog({
   });
 
   const [isRenaming, setIsRenaming] = useState(false);
+  // One model per tracker feeds every tab (components/tracker-detail/model.ts),
+  // so Overview, Trends and Insights can't disagree about a number.
+  const { data: detailGoals } = useQuery<Goal[]>({ queryKey: goalsQueryKey([]) });
+  const model = useMemo(() => (tracker ? buildTrackerModel(tracker, detailGoals) : null), [tracker, detailGoals]);
+  const [activeTab, setActiveTab] = useState("overview");
+  const trackerKey = tracker?.id;
+  useEffect(() => { setActiveTab("overview"); }, [trackerKey]);
 
   const renameMutation = useMutation({
     mutationFn: async ({ name }: { name: string }) => {
@@ -5813,37 +5038,43 @@ function TrackerDetailDialog({
     },
   });
 
-  if (!tracker) return null;
+  if (!tracker || !model) return null;
 
-  const primaryField = tracker.fields.find((f) => f.isPrimary)?.name || tracker.fields.find((f) => f.type === "number")?.name || tracker.fields[0]?.name || "value";
-  const tabs = generateDynamicTabs(tracker);
+  const primaryField = model.field || tracker.fields.find((f) => f.type === "number")?.name || tracker.fields[0]?.name || "value";
+  const tabs = generateDynamicTabs(tracker, model, allTrackers);
+  const theme = model.theme;
+  const ThemeIcon = theme.icon;
+  const tabIds = new Set(tabs.map((t) => t.id));
+  const currentTab = tabIds.has(activeTab) ? activeTab : "overview";
 
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => { if (!v) { setAddEntryOpen(false); setDeleteTrackerOpen(false); onClose(); } }}>
-        <DialogContent className="max-w-2xl h-[90dvh] max-h-[90dvh] flex flex-col p-0 overflow-hidden" data-testid="tracker-detail-dialog">
+        <DialogContent className="td-scope max-w-2xl h-[90dvh] max-h-[90dvh] flex flex-col p-0 overflow-hidden" style={themeVars(theme)} data-testid="tracker-detail-dialog" data-identity={theme.identity}>
           {/* ── Header ── */}
-          <div className="px-5 pt-5 pb-3 pr-12 border-b shrink-0">
-            <div className="flex items-center justify-between">
-              <div className="min-w-0">
-                <DialogTitle className="text-base font-semibold truncate">
+          <div className="td-header px-5 pt-5 pb-3 pr-12 border-b border-border/60 shrink-0">
+            <div className="flex items-center justify-between gap-3">
+              <span className="medallion" aria-hidden="true"><ThemeIcon className="h-5 w-5" strokeWidth={2.1} /></span>
+              <div className="min-w-0 flex-1">
+                <DialogTitle className="text-lg font-bold tracking-tight truncate">
                   <EditableTitle
                     value={cleanTrackerName(tracker.name, allProfiles, tracker.linkedProfiles)}
                     onSave={(newName) => renameMutation.mutateAsync({ name: newName })}
                     editing={isRenaming}
                     onEditingChange={setIsRenaming}
-                    className="text-base font-semibold"
+                    className="text-lg font-bold tracking-tight"
                   />
                 </DialogTitle>
                 <DialogDescription className="text-xs mt-0.5">
                   {tracker.entries.length} {tracker.entries.length === 1 ? "entry" : "entries"}
-                  {tracker.unit ? ` · ${tracker.unit}` : ""}
+                  {model.field ? ` · ${model.label}${model.unit && model.unit !== "$" ? ` (${model.unit})` : ""}` : ""}
                   {tracker.category ? ` · ${tracker.category}` : ""}
                 </DialogDescription>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                <Button size="sm" onClick={() => setAddEntryOpen(true)} data-testid="button-add-entry-detail" className="h-7 text-xs">
-                  <Plus className="w-3 h-3 mr-1" /> Add
+                <Button size="sm" onClick={() => setAddEntryOpen(true)} data-testid="button-add-entry-detail" className="h-8 rounded-full px-3.5 text-xs font-semibold text-white border-0 shadow-md"
+                  style={{ background: `linear-gradient(135deg, hsl(${theme.hs} 46%), hsl(${theme.hs2} 46%))` }}>
+                  <Plus className="w-3.5 h-3.5 mr-1" /> Add
                 </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -5871,15 +5102,15 @@ function TrackerDetailDialog({
               and the bar scrolled away; on iOS the long History list then
               wouldn't scroll back up. One scroller, flex-bounded, nothing
               nested inside it. */}
-          <Tabs defaultValue="overview" className="flex-1 min-h-0 flex flex-col">
-              <div className="px-5 pt-2 shrink-0 bg-background border-b border-border/50">
-                <div className="overflow-x-auto -mx-1 px-1 pb-1" style={{ WebkitOverflowScrolling: "touch" }}>
-                  <TabsList className="inline-flex h-8 w-max gap-0.5 p-0.5 bg-muted/50">
+          <Tabs value={currentTab} onValueChange={setActiveTab} className="flex-1 min-h-0 flex flex-col">
+              <div className="px-4 pt-2.5 pb-2 shrink-0 bg-background/70 backdrop-blur border-b border-border/50">
+                <div className="overflow-x-auto -mx-1 px-1" style={{ WebkitOverflowScrolling: "touch" }}>
+                  <TabsList className="td-seg h-auto w-max">
                     {tabs.map(tab => {
                       const Icon = tab.icon;
                       return (
-                        <TabsTrigger key={tab.id} value={tab.id} className="text-xs-loose px-2.5 py-1 h-7 gap-1 data-[state=active]:bg-background" data-testid={`tab-${tab.id}`}>
-                          <Icon className="w-3 h-3" />
+                        <TabsTrigger key={tab.id} value={tab.id} className="td-seg-item" data-testid={`tab-${tab.id}`}>
+                          <Icon className="w-3.5 h-3.5" />
                           {tab.label}
                         </TabsTrigger>
                       );
@@ -5888,24 +5119,26 @@ function TrackerDetailDialog({
                 </div>
               </div>
 
-              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y px-5 py-4" style={{ WebkitOverflowScrolling: "touch" }} data-testid="tracker-detail-scroll">
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y px-4 sm:px-5 py-4" style={{ WebkitOverflowScrolling: "touch" }} data-testid="tracker-detail-scroll">
                 <TabsContent value="overview" className="mt-0">
-                  <OverviewTabContent tracker={tracker} primaryField={primaryField} />
+                  {detectSpecialization(tracker) === "medication"
+                    ? <MedicationOverview tracker={tracker} />
+                    : <OverviewTab model={model} onNavigate={setActiveTab} />}
                 </TabsContent>
                 <TabsContent value="trends" className="mt-0">
-                  <TrendsTabContent tracker={tracker} primaryField={primaryField} />
+                  <TrendsTab model={model} />
                 </TabsContent>
                 <TabsContent value="breakdown" className="mt-0">
-                  <BreakdownTabContent tracker={tracker} />
+                  <BreakdownTab model={model} />
                 </TabsContent>
                 <TabsContent value="correlations" className="mt-0">
-                  <CorrelationsTabContent tracker={tracker} />
+                  <CorrelationsTab model={model} allTrackers={allTrackers} />
                 </TabsContent>
                 <TabsContent value="history" className="mt-0">
                   <HistoryTabContent tracker={tracker} primaryField={primaryField} profiles={allProfiles} />
                 </TabsContent>
                 <TabsContent value="insights" className="mt-0">
-                  <InsightsTabContent tracker={tracker} primaryField={primaryField} />
+                  <InsightsTab model={model} />
                 </TabsContent>
                 <TabsContent value="goals" className="mt-0">
                   <GoalsTabContent tracker={tracker} />
@@ -8486,6 +7719,7 @@ export default function TrackersPage() {
       {/* Tracker detail dialog */}
       <TrackerDetailDialog
         tracker={selectedTracker}
+        allTrackers={trackers || []}
         open={!!selectedTracker}
         onClose={() => setSelectedTrackerId(null)}
       />

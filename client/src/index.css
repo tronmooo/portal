@@ -995,6 +995,109 @@ button, a, [role="button"], .card-lift {
 }
 .medallion-sm { width: 2rem; height: 2rem; border-radius: 9999px; }
 
+/* ── Tracker detail popup (components/tracker-detail) ─────────────────────────
+   Each tracker kind sets --td-hs / --td-hs2 ("H S%") on .td-scope; lightness
+   comes from --td-l so one palette reads on both themes: deeper on the light
+   surface, brighter on the dark one. Motion is transform/opacity only and the
+   global reduced-motion rule collapses it. */
+.td-scope { --td-l: 41%; }
+.dark .td-scope { --td-l: 63%; }
+
+.td-header {
+  background:
+    radial-gradient(90% 140% at 0% 0%, hsl(var(--td-hs) var(--td-l) / 0.16) 0%, transparent 60%),
+    radial-gradient(70% 120% at 100% 0%, hsl(var(--td-hs2) var(--td-l) / 0.12) 0%, transparent 65%);
+}
+
+.td-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.5rem;
+  border: 1px solid hsl(var(--td-hs) var(--td-l) / 0.28);
+  background:
+    radial-gradient(120% 130% at 0% 0%, hsl(var(--td-hs) var(--td-l) / 0.20) 0%, transparent 55%),
+    radial-gradient(110% 120% at 100% 100%, hsl(var(--td-hs2) var(--td-l) / 0.16) 0%, transparent 60%),
+    linear-gradient(180deg, hsl(var(--card)) 0%, hsl(var(--card) / 0.82) 100%);
+  box-shadow:
+    0 1px 2px hsl(0 0% 0% / 0.05),
+    0 18px 40px -22px hsl(var(--td-hs) var(--td-l) / 0.65);
+}
+.td-hero::after {
+  content: "";
+  position: absolute;
+  top: -40%;
+  right: -18%;
+  width: 60%;
+  aspect-ratio: 1;
+  border-radius: 9999px;
+  background: radial-gradient(circle, hsl(var(--td-hs2) var(--td-l) / 0.22) 0%, transparent 70%);
+  pointer-events: none;
+}
+.dark .td-hero { box-shadow: 0 1px 2px hsl(0 0% 0% / 0.4), 0 22px 48px -24px hsl(var(--td-hs) var(--td-l) / 0.55), inset 0 1px 0 hsl(0 0% 100% / 0.05); }
+
+.td-gradient-text {
+  background-image: linear-gradient(115deg, hsl(var(--td-hs) var(--td-l)) 0%, hsl(var(--td-hs2) var(--td-l)) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Segmented control: tab strip, range picker, metric chips. */
+.td-seg {
+  display: inline-flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 9999px;
+  background: hsl(var(--muted) / 0.6);
+  box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.5);
+}
+.dark .td-seg { background: hsl(var(--foreground) / 0.05); }
+.td-seg-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+  border-radius: 9999px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+.td-seg-item:hover { color: hsl(var(--foreground)); }
+.td-seg-item:focus-visible { outline: none; box-shadow: 0 0 0 2px hsl(var(--ring) / 0.6); }
+.td-seg-item[aria-pressed="true"],
+.td-seg-item[aria-selected="true"],
+.td-seg-item[data-state="active"] {
+  color: hsl(var(--foreground));
+  background: linear-gradient(135deg, hsl(var(--td-hs) var(--td-l) / 0.24) 0%, hsl(var(--td-hs2) var(--td-l) / 0.16) 100%);
+  box-shadow: inset 0 0 0 1px hsl(var(--td-hs) var(--td-l) / 0.38), 0 4px 12px -6px hsl(var(--td-hs) var(--td-l) / 0.6);
+}
+
+@keyframes td-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+.td-rise {
+  animation: td-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+
+.td-heat-cell { border-radius: 3px; transition: transform 0.15s ease; }
+@media (hover: hover) and (pointer: fine) { .td-heat-cell:hover { transform: scale(1.25); } }
+
+.td-meter { height: 0.5rem; border-radius: 9999px; background: hsl(var(--muted)); overflow: hidden; }
+.dark .td-meter { background: hsl(var(--foreground) / 0.08); }
+.td-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transform-origin: left;
+  animation: td-grow 0.7s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+@keyframes td-grow { from { transform: scaleX(0); } }
+
 /* Entrance: bubbles rise into place, staggered by --i. */
 @keyframes bubble-in {
   from { opacity: 0; transform: translateY(10px) scale(0.985); }

@@ -10,6 +10,7 @@
 
 import { classifyMetric } from "./chart-data";
 import { resolveTrackerUnit, isAdherenceTracker } from "./tracker-units";
+import { pickPrimaryField } from "./tracker-analytics";
 
 export type MetricKind =
   | "additive"     // sum over a period: water, calories, miles, minutes, $ spent
@@ -32,6 +33,7 @@ export interface TrackerLike {
   category?: string;
   unit?: string | null;
   fields?: Array<{ name: string; type?: string; unit?: string; isPrimary?: boolean }>;
+  entries?: Array<{ timestamp: string; values: Record<string, unknown> }>;
 }
 
 export interface TrackerPresentation {
@@ -64,15 +66,12 @@ function isDual(t: TrackerLike): boolean {
   return /blood\s*pressure|(^|\s)bp(\s|$)/.test(n);
 }
 
-// Pick the primary numeric field: declared primary → first numeric → first.
+// Pick the primary numeric field — the one shared rule (tracker-analytics), so
+// the headline, the chart and the KPI cards all describe the same number.
 function pickPrimary(t: TrackerLike): { name: string | null; type?: string } {
-  const fields = t.fields || [];
-  const primary = fields.find((f) => f.isPrimary && (f.type === "number" || f.type === undefined));
-  if (primary) return { name: primary.name, type: primary.type };
-  const numeric = fields.find((f) => f.type === "number");
-  if (numeric) return { name: numeric.name, type: numeric.type };
-  const first = fields.find((f) => f.name && f.name.toLowerCase() !== "_notes" && f.name.toLowerCase() !== "notes");
-  return { name: first?.name ?? null, type: first?.type };
+  const name = pickPrimaryField(t as any);
+  const f = (t.fields || []).find((x) => x.name === name);
+  return { name, type: f?.type };
 }
 
 export function classifyTrackerPresentation(t: TrackerLike): TrackerPresentation {
