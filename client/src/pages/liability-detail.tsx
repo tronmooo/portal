@@ -113,7 +113,9 @@ import {
 } from "@shared/liability-calc";
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
-import { readAnnualRate, readBalance, readMonthlyPayment } from "@shared/liability-fields";
+import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw } from "@shared/liability-fields";
+import { payoffMissingFields } from "@shared/liability-payoff";
+import { PayoffOutlook } from "@/components/liability/PayoffOutlook";
 import { getRecordTemporalStatus } from "@shared/temporal-status";
 import { DynamicOverview } from "@/components/overview/DynamicOverview";
 
@@ -904,6 +906,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     [terms, scheduleStart],
   );
 
+  // What the record lacks before a payoff can be drawn. Without a payment or a
+  // term the engine would assume 360 months — a guess, not this loan.
+  const payoffMissing = payoffMissingFields({
+    balance: terms.currentBalance,
+    rateRaw: readInterestRateRaw(f2),
+    monthlyPayment: terms.monthlyPayment,
+    remainingTermMonths: terms.remainingTermMonths,
+  });
+
   // Quick payment dialog
   const [paymentDialog, setPaymentDialog] = useState<{
     open: boolean;
@@ -1204,6 +1215,16 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
           {/* OVERVIEW */}
           <TabsContent value="overview" className="mt-4 space-y-4">
+            {/* Payoff outlook — remaining balance, payoff date, interest left,
+                the balance falling to zero and the principal/interest split.
+                Drawn from THIS page's summary + amortization (one schedule),
+                so it can never disagree with the KPI tiles or the table.
+                Amortizing / revolving debt only; a record missing balance,
+                rate or payment gets a one-line note instead of a guess. */}
+            {amortize && !recurringBill && (
+              <PayoffOutlook summary={summary} amortization={amortization} todayISO={todayISO} missing={payoffMissing} />
+            )}
+
             {/* AI insights card */}
             <AISummaryCard profileId={profile.id} />
 

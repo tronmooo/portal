@@ -43,6 +43,8 @@ export default defineConfig({
       'tests/liability-recurrence.test.ts',
       'tests/liability-schedule.test.ts',
       'tests/liability-billing.test.ts',
+      'tests/liability-payoff.test.ts',
+      'tests/wellness-gauge.test.ts',
       'tests/finance-accounts.test.ts',
       'tests/account-profile.dom.test.tsx',
       'tests/profile-detail-groups.test.ts',

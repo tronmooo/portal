@@ -35,6 +35,9 @@ import {
 } from "lucide-react";
 import { Medallion } from "@/components/dashboard/visuals";
 import { SectionHeading } from "@/components/ui/section-heading";
+import { AreaChart, LinearZoneGauge, type GaugeZone } from "@/components/tracker-viz";
+import { RingStack, accentScope } from "@/components/tracker-detail";
+import { referenceGauge, type ReferenceGaugeZone } from "@shared/wellness-gauge";
 import { documentIdOfSource, hoursToMinutes, anySourceConnected, type TodaySignal, type LabPanel, type LabRow, type WorkoutGroup, type WellnessScore, type SourceState } from "@shared/wellness-readout";
 
 // Shapes the Care section renders. Kept here because pages/wellness.tsx maps
@@ -57,19 +60,13 @@ const fmt = (n: number | null | undefined, dp = 0) =>
 const auto = (n: number | null | undefined) =>
   n == null || !Number.isFinite(n) ? "—" : Math.abs(n) < 10 ? fmt(n, 1) : fmt(n, 0);
 
-function Spark({ series, color }: { series: number[]; color: string }) {
-  if (!series || series.length < 2) return <div className="h-7" />;
-  const w = 120, h = 28, pad = 2;
-  const min = Math.min(...series), max = Math.max(...series), span = max - min || 1;
-  const pts = series.map((v, i) => {
-    const x = pad + (i / (series.length - 1)) * (w - pad * 2);
-    const y = h - pad - ((v - min) / span) * (h - pad * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
+/** Trend line under a Today tile — the shared tracker AreaChart, so Wellness
+ *  and the tracker cards draw a series the same way. */
+function SignalTrend({ series, color }: { series: number[]; color: string }) {
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-7" preserveAspectRatio="none" aria-hidden="true">
-      <polyline points={pts} fill="none" stroke={`hsl(${color})`} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
+    <div className="h-7" aria-hidden="true">
+      {series && series.length >= 2 ? <AreaChart values={series} color={`hsl(${color})`} height={28} /> : null}
+    </div>
   );
 }
 
@@ -130,7 +127,7 @@ function SignalTile({ signal }: { signal: TodaySignal }) {
             {signal.unit && <span className="text-[11px] text-muted-foreground">{signal.unit}</span>}
           </div>
           {signal.caption && <div className="text-[11px] text-muted-foreground mt-1">{signal.caption}</div>}
-          <div className="mt-2"><Spark series={signal.series} color={meta.tone} /></div>
+          <div className="mt-2"><SignalTrend series={signal.series} color={meta.tone} /></div>
           <div className="text-[11px] mt-1" style={{ color: good == null ? undefined : `hsl(${good ? T.green : T.amber})` }}>
             {delta == null ? "Building a 30-day baseline" : deltaText(signal, delta)}
           </div>
@@ -151,17 +148,55 @@ const LogLink = () => (
   <a href="#/trackers" className="underline underline-offset-2 hover:text-foreground" data-testid="wellness-log-cta">Log it</a>
 );
 
+/** Ring colors ("H S%", rendered through tracker-detail `tone`) — the same
+ *  hues as the Today tiles each component is scored from. */
+const SCORE_RING_HS: Record<WellnessScore["components"][number]["key"], string> = {
+  sleep: "240 60%", activity: "155 65%", recovery: "330 75%",
+};
+const SCORE_TOTAL_HS = "350 82%";
+
 function ScoreCard({ score, connected }: { score: WellnessScore; connected: boolean }) {
   const live = score.components.filter((c) => c.score != null);
+  // Outer ring is the score itself; one inner ring per component that counted.
+  // A component with no data gets no ring (an empty ring would read as a 0).
+  const rings = score.value != null && live.length > 0
+    ? [
+        { pct: score.value, hs: SCORE_TOTAL_HS, label: "Wellness score" },
+        ...live.map((c) => ({ pct: c.score as number, hs: SCORE_RING_HS[c.key], label: c.label })),
+      ]
+    : null;
   return (
-    <Card className="p-4" data-testid="wellness-score" style={{ ["--accent-hsl" as any]: T.teal }}>
-      <div className="flex items-center gap-3">
-        <Medallion icon={Sparkles} accent={T.teal} size="sm" />
-        <div>
+    <Card className="p-4" data-testid="wellness-score" style={{ ["--accent-hsl" as any]: T.pink }}>
+      <div className="flex items-center gap-4">
+        {rings ? (
+          <RingStack
+            rings={rings}
+            size={rings.length > 3 ? 116 : 104}
+            stroke={rings.length > 3 ? 8 : 9}
+            center={<>
+              <span className="metric-value text-[26px] leading-none" data-testid="wellness-score-value">{score.value}</span>
+              <span className="text-[11px] text-muted-foreground">of 100</span>
+            </>}
+          />
+        ) : (
+          <Medallion icon={Sparkles} accent={T.pink} size="sm" />
+        )}
+        <div className="min-w-0">
           <div className="micro-label text-muted-foreground">Wellness score</div>
-          <div className="metric-value text-[32px] leading-none" style={{ color: `hsl(${T.teal})` }} data-testid="wellness-score-value">
-            {score.value ?? "—"}
-          </div>
+          {rings ? (
+            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1" data-testid="wellness-score-legend">
+              {live.map((c) => (
+                <span key={c.key} className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span className="h-2 w-2 rounded-full shrink-0" style={{ background: `hsl(${SCORE_RING_HS[c.key]} 55%)` }} aria-hidden="true" />
+                  {c.label}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="metric-value text-[32px] leading-none" style={{ color: `hsl(${T.pink})` }} data-testid="wellness-score-value">
+              {score.value ?? "—"}
+            </div>
+          )}
         </div>
       </div>
       {live.length === 0 ? (
@@ -178,7 +213,7 @@ function ScoreCard({ score, connected }: { score: WellnessScore; connected: bool
           {/* Each row is the component's own 0–100 SCORE, then its share of
               the total. "Sleep 100%" used to be the share, read as the score. */}
           {live.map((c) => (
-            <div key={c.key} className="flex items-baseline justify-between gap-2 text-xs">
+            <div key={c.key} className="flex flex-wrap items-baseline justify-between gap-x-2 text-xs">
               <span className="text-muted-foreground">
                 {c.label} <span className="tabular-nums text-foreground font-medium">{c.score}</span>
                 <span className="opacity-70">/100</span>
@@ -224,6 +259,28 @@ const shortDay = (iso: string) => {
   return isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
 
+/** Zone colors — the same hues as FlagPill, so the bar and the pill agree. */
+const ZONE_TONE: Record<ReferenceGaugeZone["flag"], string> = {
+  low: T.blue, normal: T.green, elevated: T.amber, high: T.orange,
+};
+
+/**
+ * Where the value sits in its reference range. The range is the canonical
+ * metric's own (shared/wellness-gauge → wellness-canon), the one the flag pill
+ * is computed from; if the row's flag and the range ever disagree, no bar is
+ * drawn rather than a bar that contradicts the pill.
+ */
+function LabRangeGauge({ row }: { row: LabRow }) {
+  const g = referenceGauge(row.metricId, row.value);
+  if (!g || g.flag !== row.flag) return null;
+  const zones: GaugeZone[] = g.zones.map((z) => ({ to: z.to, label: z.label, color: `hsl(${ZONE_TONE[z.flag]})` }));
+  return (
+    <div className="mt-1.5" data-testid={`wellness-lab-${row.metricId}-gauge`}>
+      <LinearZoneGauge value={row.value} min={g.min} max={g.max} zones={zones} height={6} />
+    </div>
+  );
+}
+
 function LabRowView({ row }: { row: LabRow }) {
   const moved = row.previous != null && row.previous !== row.value;
   // A value read straight off a lab report has no tracker to open; the
@@ -232,28 +289,31 @@ function LabRowView({ row }: { row: LabRow }) {
   return (
     <a
       href={docId ? routeForEntity("document", docId, { hash: true }) : routeForEntity("tracker", row.trackerId, { hash: true })}
-      className="flex items-center justify-between gap-3 py-1.5 border-b border-border/40 last:border-0 hover:bg-muted/40 rounded px-1 -mx-1"
+      className="block py-2 border-b border-border/40 last:border-0 hover:bg-muted/40 rounded px-1 -mx-1"
       data-testid={`wellness-lab-${row.metricId}`}
     >
-      <div className="min-w-0">
-        <div className="text-xs font-medium flex items-center gap-1.5">
-          <span className="truncate">{row.label}</span>
-          <FlagPill row={row} />
-        </div>
-        <div className="text-[11px] text-muted-foreground">
-          {row.reference ? `Ref ${row.reference}` : ""}{row.reference && row.at ? " · " : ""}{row.at ? shortDay(row.at) : ""}
-        </div>
-      </div>
-      <div className="text-right shrink-0">
-        <div className="text-xs tabular-nums font-medium">
-          {labValue(row.value)}{row.unit ? <span className="text-muted-foreground font-normal"> {row.unit}</span> : null}
-        </div>
-        {moved && (
-          <div className="text-[11px] text-muted-foreground tabular-nums" data-testid={`wellness-lab-${row.metricId}-trend`}>
-            {labValue(row.previous)} → {labValue(row.value)}
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-medium flex items-center gap-1.5">
+            <span className="truncate">{row.label}</span>
+            <FlagPill row={row} />
           </div>
-        )}
+          <div className="text-[11px] text-muted-foreground">
+            {row.reference ? `Ref ${row.reference}` : ""}{row.reference && row.at ? " · " : ""}{row.at ? shortDay(row.at) : ""}
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-xs tabular-nums font-medium">
+            {labValue(row.value)}{row.unit ? <span className="text-muted-foreground font-normal"> {row.unit}</span> : null}
+          </div>
+          {moved && (
+            <div className="text-[11px] text-muted-foreground tabular-nums" data-testid={`wellness-lab-${row.metricId}-trend`}>
+              {labValue(row.previous)} → {labValue(row.value)}
+            </div>
+          )}
+        </div>
       </div>
+      <LabRangeGauge row={row} />
     </a>
   );
 }
@@ -315,7 +375,9 @@ export function WellnessOverview(p: WellnessOverviewProps) {
   const care = p.medications.length + p.appointments.length + p.documents.length + p.allergies.length + p.conditions.length;
 
   return (
-    <div className="space-y-4" data-testid="wellness-overview">
+    // td-scope + accentScope: the tracker-detail primitives used here (RingStack)
+    // take their lightness and accent from the scope, so they read on both themes.
+    <div className="space-y-4 td-scope" style={accentScope("350 82%", "15 88%")} data-testid="wellness-overview">
       {p.subjectName && (
         <div className="text-[11px] text-muted-foreground" data-testid="wellness-subject">
           Showing {p.subjectName}'s health data
@@ -327,7 +389,7 @@ export function WellnessOverview(p: WellnessOverviewProps) {
         <h2 className="micro-label text-muted-foreground mb-2">Today</h2>
         <div className="flex flex-wrap gap-3">
           {p.signals.map((s) => <SignalTile key={s.key} signal={s} />)}
-          <div className="min-w-[10rem] flex-1"><ScoreCard score={p.score} connected={connected} /></div>
+          <div className="basis-full min-w-0 lg:basis-auto lg:flex-1 lg:min-w-[18rem]"><ScoreCard score={p.score} connected={connected} /></div>
         </div>
       </div>
 
