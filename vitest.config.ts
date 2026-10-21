@@ -32,6 +32,7 @@ export default defineConfig({
       'tests/tracker-analytics.test.ts',
       'tests/tracker-detail-tabs.dom.test.tsx',
       'tests/journal-mood.test.ts',
+      'tests/habits-visuals.dom.test.tsx',
       'tests/dialog-touch-scroll.dom.test.tsx',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
