@@ -26,11 +26,19 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BubbleModal } from "@/components/ui/bubble-modal";
+import { EmptyState } from "@/components/ui/empty-state";
+import { TimeRangeSelector } from "@/components/ui/time-range";
+import { tonePalette } from "@/components/dashboard/visuals";
+import { habitAccent } from "@/lib/habit-visuals";
 
 // Tasks and habits are Executive-tab concepts; they take its accent so opening
 // this popup from anywhere still reads as the same part of the app.
 const TASKS_ACCENT = "262 70% 62%";
 const HABITS_ACCENT = "155 65% 45%";
+const HABIT_PERIOD_OPTIONS = [
+  { value: "today", label: "Today" }, { value: "week", label: "Week" },
+  { value: "month", label: "Month" }, { value: "year", label: "Year" },
+] as const;
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -531,7 +539,11 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   const todayTotal = overdueTasks.length + todayTasks.length + doneToday;
 
   // Priority color lines — critical adds a distinct violet above the rest.
-  const PLINE: Record<string, string> = { critical: '#9333EA', high: '#E53935', medium: '#FFA726', low: '#42A5F5' };
+  // Shared tone tokens (dashboard/visuals): red high, orange medium, blue low.
+  const PLINE: Record<string, string> = {
+    critical: `hsl(${tonePalette('ai')})`, high: `hsl(${tonePalette('critical')})`,
+    medium: `hsl(${tonePalette('warn')})`, low: `hsl(${tonePalette('info')})`,
+  };
 
   const handleAdd = (e: React.KeyboardEvent) => {
     if (e.key !== 'Enter') return;
@@ -596,7 +608,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     const expanded = expandedId === t.id;
     const onCalendar = !!t.dueDate;
     const ep = effPrio(t);
-    const pColor = PLINE[ep] || '#42A5F5';
+    const pColor = PLINE[ep] || PLINE.low;
     const subs = subtasksOf(t);
     const subDone = subs.filter((s: any) => s.done).length;
     // `dueTime` is the column; `time:` is the legacy tag rows carried before
@@ -1363,7 +1375,6 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   };
 
   const active = useMemo(() => habits.filter((h: any) => !h.archivedAt), [habits]);
-  const VIVID = ['#6C5CE7','#E84393','#E55353','#F6A623','#2ECC71','#3498DB','#E67E22','#9B59B6','#1ABC9C','#E74C3C'];
 
   // ── Derived view state for the redesigned Habits screen ──────────────────
   const dateKey = (d: Date) => d.toLocaleDateString('en-CA');
@@ -1535,16 +1546,8 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
       }
     >
         {/* Period tabs */}
-        <div>
-          <div className="flex gap-1 rounded-xl bg-muted/40 p-1">
-            {(['today', 'week', 'month', 'year'] as const).map((p) => (
-              <button key={p} onClick={() => setPeriod(p)}
-                className={`flex-1 rounded-lg py-1.5 text-xs font-semibold capitalize transition-colors ${period === p ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
-                {p}
-              </button>
-            ))}
-          </div>
-        </div>
+        <TimeRangeSelector value={period} options={HABIT_PERIOD_OPTIONS} onChange={setPeriod}
+          label="Habits period" testId="habits-popup-period" />
 
         {/* Inline add habit form — name + frequency + profile, saves on Enter/Add */}
         {addingHabit && (
@@ -1653,17 +1656,20 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
           {isLoading ? (
             <div className="space-y-2 py-2">{[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-16 rounded-2xl" />)}</div>
           ) : active.length === 0 ? (
-            <div className="py-10 text-center px-4">
-              <Flame className="h-12 w-12 text-muted-foreground/20 mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground mb-4">No habits tracked yet</p>
-              <Button onClick={() => setAddingHabit(true)}>Add your first habit</Button>
-            </div>
+            <EmptyState icon={Flame} accent={HABITS_ACCENT} label="No habits tracked yet"
+              ctaLabel="Add your first habit" onCta={() => setAddingHabit(true)} />
           ) : visible.length === 0 ? (
-            <p className="py-10 text-center text-sm text-muted-foreground">No habits in this time block yet.</p>
+            // A filter hid them — say so, and offer the way back.
+            <EmptyState icon={Clock} accent={HABITS_ACCENT} label="No habits in this time block"
+              hint={`${active.length} habit${active.length === 1 ? '' : 's'} hidden by the time filter.`}
+              ctaLabel="Show all" onCta={() => setTimeFilter('all')} />
           ) : (
             <div className="space-y-2 pt-1">
               {visible.map((h: any) => {
-                const color = (h.color && h.color !== '#4F98A3') ? h.color : VIVID[h.id.charCodeAt(0) % VIVID.length];
+                // The habit's own hue (or its palette slot) — habitAccent is the
+                // one resolver the Habits page uses, so a habit keeps its colour.
+                const hs = habitAccent(h).hs;
+                const color = `hsl(${hs} 55%)`;
                 const dayProgress = progressOn(h, today);
                 const done = dayProgress.isComplete;
                 const multi = dayProgress.required > 1;
@@ -1676,7 +1682,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                   <div key={h.id} className="bubble">
                     <div className="flex items-center gap-3 px-3 py-2.5">
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg"
-                        style={{ background: `${color}22`, border: `1px solid ${color}55` }}>
+                        style={{ background: `hsl(${hs} 55% / 0.13)`, border: `1px solid hsl(${hs} 55% / 0.33)` }}>
                         <span>{emoji}</span>
                       </div>
                       <div className="min-w-0 flex-1">

@@ -106,7 +106,9 @@ import {
 import { useShowTestData, toggleShowTestData } from "@/lib/showTestData";
 import { devToolsEnabled } from "@/lib/dev-affordances";
 import { isTestEntity } from "@shared/test-data";
-import { formatMoney, formatListDate } from "@/lib/format";
+import { formatMoney, formatMoneyCents, formatListDate } from "@/lib/format";
+import { Pill, ProgressRing, TrendArrow, tonePalette, type PillTone } from "@/components/dashboard/visuals";
+import { CATEGORY_PALETTE } from "@/components/finance/finance-visuals";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import type { DashboardStats, MoodLevel } from "@shared/schema";
 import { routeForEntity, normalizeEntityType } from "@shared/entity-routes";
@@ -194,15 +196,15 @@ function billDueLabel(bill: { daysUntil?: number | null; dueDate?: string | null
 // tile) that must agree to the dollar.
 
 
-const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; color: string; bg: string }> = {
-  amazing:   { icon: Sparkles, label: "Amazing",   color: "#6DAA45", bg: "bg-green-500/10" },
-  great:     { icon: Smile,    label: "Great",     color: "#5BAA6A", bg: "bg-emerald-500/10" },
-  good:      { icon: Smile,    label: "Good",      color: "#4F98A3", bg: "bg-teal-500/10" },
-  okay:      { icon: Meh,      label: "Okay",      color: "#8A8A7A", bg: "bg-gray-400/10" },
-  neutral:   { icon: Meh,      label: "Neutral",   color: "#797876", bg: "bg-gray-500/10" },
-  bad:       { icon: Frown,    label: "Bad",       color: "#BB653B", bg: "bg-orange-500/10" },
-  awful:     { icon: Frown,    label: "Awful",     color: "#A13544", bg: "bg-red-500/10" },
-  terrible:  { icon: Frown,    label: "Terrible",  color: "#8B1A2B", bg: "bg-red-600/10" },
+const MOOD_CONFIG: Record<MoodLevel, { icon: any; label: string; accent: string; bg: string }> = {
+  amazing:   { icon: Sparkles, label: "Amazing",   accent: "96 42% 47%", bg: "bg-green-500/10" },
+  great:     { icon: Smile,    label: "Great",     accent: "131 32% 51%", bg: "bg-emerald-500/10" },
+  good:      { icon: Smile,    label: "Good",      accent: "188 35% 47%", bg: "bg-teal-500/10" },
+  okay:      { icon: Meh,      label: "Okay",      accent: "60 6% 51%", bg: "bg-gray-400/10" },
+  neutral:   { icon: Meh,      label: "Neutral",   accent: "40 1% 47%", bg: "bg-gray-500/10" },
+  bad:       { icon: Frown,    label: "Bad",       accent: "20 52% 48%", bg: "bg-orange-500/10" },
+  awful:     { icon: Frown,    label: "Awful",     accent: "352 50% 42%", bg: "bg-red-500/10" },
+  terrible:  { icon: Frown,    label: "Terrible",  accent: "351 68% 32%", bg: "bg-red-600/10" },
 };
 
 const ACTIVITY_ICONS: Record<string, any> = {
@@ -217,6 +219,20 @@ const ACTIVITY_COLORS: Record<string, string> = {
   task_completed: "152 60% 44%",
   expense: "25 95% 53%",
 };
+
+// Status colours, from the shared tone tokens (components/dashboard/visuals):
+// red overdue / out of range, amber due soon / at risk, green done, grey calm.
+const TONE_CSS = {
+  critical: `hsl(${tonePalette("critical")})`,
+  attention: `hsl(${tonePalette("attention")})`,
+  good: `hsl(${tonePalette("good")})`,
+  neutral: `hsl(${tonePalette("neutral")})`,
+} as const;
+const toneGradient = (from: PillTone, to: PillTone) =>
+  `linear-gradient(90deg, hsl(${tonePalette(from)}), hsl(${tonePalette(to)} / 0.75))`;
+/** Spending-category colours: the Finance tab's palette (no red, so a chart
+ *  never reads as "overdue"; no income green). */
+const categoryColor = (i: number) => `hsl(${CATEGORY_PALETTE[i % CATEGORY_PALETTE.length]} 55%)`;
 
 // ─── Animated Count-Up Hook ───────────────────────────────────────────────────
 
@@ -295,73 +311,6 @@ function CollapsibleSection({
   );
 }
 
-function MiniStat({
-  icon: Icon, label, value, sub, color, onClick, trend, accent, sparkData, change,
-}: { icon: any; label: string; value: string | number; sub?: string; color?: string; onClick?: () => void; trend?: "up" | "down" | "flat"; accent?: string; sparkData?: number[]; change?: string | number }) {
-  const accentColor = accent ? `hsl(${accent})` : color;
-  return (
-    <div
-      className={`relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden card-lift ${
-        onClick ? "cursor-pointer active:scale-[0.97] transition-all hover:-translate-y-0.5 hover:shadow-md" : ""
-      }`}
-      onClick={onClick}
-      role={onClick ? "button" : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onKeyDown={onClick ? onEnterOrSpace(onClick) : undefined}
-      data-testid={`stat-card-${label.toLowerCase().replace(/\s+/g, "-")}`}
-      style={accent ? {
-        background: `linear-gradient(135deg, hsl(${accent} / 0.10) 0%, transparent 60%)`,
-      } : {}}
-    >
-      {/* Top accent strip */}
-      {accent && <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />}
-
-      {/* Sparkline background (if data provided) */}
-      {sparkData && sparkData.length > 2 && (
-        <div className="absolute bottom-0 right-0 left-0 h-8 opacity-20">
-          <svg width="100%" height="100%" viewBox={`0 0 ${sparkData.length * 10} 32`} preserveAspectRatio="none">
-            <polyline
-              points={sparkData.map((v, i) => {
-                const min = Math.min(...sparkData);
-                const max = Math.max(...sparkData);
-                const range = max - min || 1;
-                return `${i * 10},${32 - ((v - min) / range * 28 + 2)}`;
-              }).join(' ')}
-              fill="none"
-              stroke={accentColor || 'hsl(var(--primary))'}
-              strokeWidth="2"
-            />
-          </svg>
-        </div>
-      )}
-
-      <div className="flex items-start justify-between relative z-10">
-        <div className="icon-badge" style={accent ? { background: `hsl(${accent} / 0.15)` } : {}}>
-          <Icon className="h-3.5 w-3.5" style={{ color: accentColor || "hsl(var(--primary))" }} />
-        </div>
-        {change !== undefined && (
-          <span className={`text-xs font-medium ${trend === 'up' ? 'text-green-500' : trend === 'down' ? 'text-red-400' : 'text-muted-foreground'}`}>
-            {trend === 'up' ? '↑' : trend === 'down' ? '↓' : ''}{change}
-          </span>
-        )}
-      </div>
-      <div className="mt-1 relative z-10">
-        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: accentColor || "hsl(var(--foreground))" }}>{value}</span>
-      </div>
-      <p className="micro-label text-muted-foreground/70 leading-tight mt-0.5 truncate w-full relative z-10">{label}</p>
-      {sub && <p className="text-[11px] text-muted-foreground/60 leading-tight mt-0.5 truncate w-full relative z-10">{sub}</p>}
-      {/* Bottom accent dashes (matches the mockup's tile footer) */}
-      {accent && !sparkData && (
-        <div className="mt-auto flex gap-1 pt-1.5 relative z-10">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-1 flex-1 rounded-full" style={{ background: `hsl(${accent} / ${i === 0 ? 1 : 0.25})` }} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 const MD_GRID_COLS: Record<number, string> = { 2: "md:grid-cols-2", 3: "md:grid-cols-3", 4: "md:grid-cols-4", 5: "md:grid-cols-5", 6: "md:grid-cols-6" };
 
 function SkeletonGrid({ cols = 4, rows = 1, h = "h-14" }: { cols?: number; rows?: number; h?: string }) {
@@ -407,33 +356,24 @@ function ViewPageLink({ href, label = "View Full Page" }: { href: string; label?
 }
 
 // ─── Enhanced KPI Cards ──────────────────────────────────────────────────────
+// Each tile is the shared MetricCard (bubble + Medallion + micro-label), so the
+// KPI row reads like every other stat tile in the app. The tiles keep their
+// own useCountUp: it renders the first real number immediately (BUG-001)
+// where MetricCard's countTo would animate up from 0.
+
+const KPI_TILE = "min-w-0 h-full";
 
 function KPITaskCard({ count, onClick }: { count: number; onClick: () => void }) {
   const animatedCount = useCountUp(count);
   const fillPct = Math.min(100, Math.round((count / Math.max(count, 50)) * 100));
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
-      style={{ background: 'linear-gradient(135deg, hsl(262 65% 62% / 0.10) 0%, transparent 60%)' }}
-      data-testid="stat-card-open-tasks"
-      role="button" tabIndex={0} aria-label="Open tasks" onKeyDown={onEnterOrSpace(onClick)}>
-      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(262 65% 62%), transparent)' }} />
-      <div className="flex items-start justify-between relative z-10">
-        <div className="icon-badge" style={{ background: 'hsl(262 65% 62% / 0.15)' }}>
-          <ListTodo className="h-3.5 w-3.5" style={{ color: 'hsl(262 65% 62%)' }} />
-        </div>
-      </div>
-      <div className="mt-1 relative z-10">
-        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(262 65% 62%)' }}>{animatedCount}</span>
-      </div>
-      <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Open Tasks</p>
-      {/* Fill bar */}
-      <div className="mt-1.5 relative z-10">
-        <div className="h-1 rounded-full bg-muted/50 overflow-hidden">
-          <div className="h-full rounded-full transition-all duration-700" style={{ width: `${fillPct}%`, background: 'hsl(262 65% 62%)' }} />
-        </div>
-        <p className="text-[11px] text-muted-foreground/60 mt-0.5">{count} active</p>
-      </div>
-    </div>
+    <MetricCard
+      className={KPI_TILE}
+      accent="262 65% 62%" icon={ListTodo} label="Open Tasks"
+      value={String(animatedCount)}
+      progress={{ value: fillPct / 100, caption: `${count} active` }}
+      onClick={onClick} aria-label="Open tasks" testId="stat-card-open-tasks"
+    />
   );
 }
 
@@ -445,66 +385,44 @@ function KPISpendCard({ amount, trend, enhanced, onClick }: { amount: number | n
   const finSnap = enhanced?.financeSnapshot;
   const bars = finSnap?.dailySpend?.slice(-7) || Array.from({length:7}, (_,i) => i === 6 ? known * 0.3 : Math.random() * known * 0.15);
   const maxBar = Math.max(...bars, 1);
+  const accent = "43 85% 52%";
+  const billsStillDue = finSnap?.unpaidBillsThisMonth ?? finSnap?.monthlyObligationTotal ?? 0;
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
-      style={{ background: 'linear-gradient(135deg, hsl(43 85% 52% / 0.10) 0%, transparent 60%)' }}
-      data-testid="stat-card-monthly-spend"
-      role="button" tabIndex={0} aria-label="Monthly spend" onKeyDown={onEnterOrSpace(onClick)}>
-      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(43 85% 52%), transparent)' }} />
-      <div className="flex items-start justify-between relative z-10">
-        <div className="icon-badge" style={{ background: 'hsl(43 85% 52% / 0.15)' }}>
-          <DollarSign className="h-3.5 w-3.5" style={{ color: 'hsl(43 85% 52%)' }} />
+    <MetricCard
+      className={KPI_TILE}
+      accent={accent} icon={DollarSign} label="Monthly Spend"
+      // Spending up is the bad direction.
+      headerRight={<TrendArrow direction={trend} tone={trend === "up" ? "critical" : trend === "down" ? "good" : "neutral"} />}
+      value={amount == null ? "—" : formatMoneyRound(animatedAmount)}
+      // When nothing is logged yet this month, "$0" read as broken (user
+      // report on July 1). Show the recurring commitment so the number has
+      // context: expenses logged so far + bills/mo still coming.
+      sub={billsStillDue > 0 ? `+${formatMoneyRound(Number(billsStillDue))} bills still due` : undefined}
+      chart={
+        <div className="flex items-end gap-0.5 h-5" aria-hidden="true">
+          {bars.map((v: number, i: number) => (
+            <div key={i} className="flex-1 rounded-sm" style={{ height: `${Math.max(10, (v/maxBar)*100)}%`, background: i === bars.length-1 ? `hsl(${accent})` : `hsl(${accent} / 0.35)` }} />
+          ))}
         </div>
-        <span className={`text-[11px] font-semibold ${trend === 'up' ? 'text-red-400' : trend === 'down' ? 'text-green-500' : 'text-muted-foreground'}`}>
-          {trend === 'up' ? '↑' : trend === 'down' ? '↓' : '—'}
-        </span>
-      </div>
-      <div className="mt-1 relative z-10">
-        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: 'hsl(43 85% 52%)' }}>{amount == null ? "—" : `$${animatedAmount}`}</span>
-        {/* When nothing is logged yet this month, "$0" read as broken (user
-            report on July 1). Show the recurring commitment so the number has
-            context: expenses logged so far + bills/mo still coming. */}
-        {(finSnap?.unpaidBillsThisMonth ?? finSnap?.monthlyObligationTotal ?? 0) > 0 && (
-          <span className="ml-1 text-[11px] text-muted-foreground tabular-nums">+${Math.round(Number(finSnap.unpaidBillsThisMonth ?? finSnap.monthlyObligationTotal)).toLocaleString()} bills still due</span>
-        )}
-      </div>
-      <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Monthly Spend</p>
-      {/* Mini bar chart */}
-      <div className="mt-1.5 flex items-end gap-0.5 h-5 relative z-10">
-        {bars.map((v: number, i: number) => (
-          <div key={i} className="flex-1 rounded-sm" style={{ height: `${Math.max(10, (v/maxBar)*100)}%`, background: i === bars.length-1 ? 'hsl(43 85% 52%)' : 'hsl(43 85% 52% / 0.35)' }} />
-        ))}
-      </div>
-    </div>
+      }
+      onClick={onClick} aria-label="Monthly spend" testId="stat-card-monthly-spend"
+    />
   );
 }
 
 function KPIHabitsCard({ completionPct, totalHabits, onClick }: { completionPct: number; totalHabits: number; onClick: () => void }) {
-  const r = 14; const circ = 2 * Math.PI * r;
   const pct = Math.min(100, completionPct);
   const animatedPct = useCountUp(pct);
-  const dash = (pct / 100) * circ;
+  const accent = "155 60% 44%";
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
-      style={{ background: 'linear-gradient(135deg, hsl(155 60% 44% / 0.10) 0%, transparent 60%)' }}
-      data-testid="stat-card-habits-today"
-      role="button" tabIndex={0} aria-label="Habits today" onKeyDown={onEnterOrSpace(onClick)}>
-      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(155 60% 44%), transparent)' }} />
-      <div className="flex items-start justify-between gap-2 relative z-10">
-        <div>
-          <div className="text-sm font-bold metric-value tracking-tight leading-none mt-1" style={{ color: 'hsl(155 60% 44%)' }}>{animatedPct}%</div>
-          <p className="micro-label text-muted-foreground/70 mt-0.5">Habits Today</p>
-          <p className="text-[11px] text-muted-foreground/60">{totalHabits} tracked</p>
-        </div>
-        {/* Donut ring */}
-        <svg width="36" height="36" className="shrink-0 -rotate-90 mt-0.5">
-          <circle cx="18" cy="18" r={r} fill="none" stroke="hsl(var(--muted))" strokeWidth="3" />
-          <circle cx="18" cy="18" r={r} fill="none" stroke="hsl(155 60% 44%)" strokeWidth="3"
-            strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
-            style={{ transition: 'stroke-dasharray 0.8s cubic-bezier(0.34,1.56,0.64,1)' }} />
-        </svg>
-      </div>
-    </div>
+    <MetricCard
+      className={KPI_TILE}
+      accent={accent} icon={Flame} label="Habits Today"
+      value={`${animatedPct}%`}
+      sub={`${totalHabits} tracked`}
+      aside={<ProgressRing value={pct} total={100} accent={accent} size={36} stroke={3} label="" />}
+      onClick={onClick} aria-label="Habits today" testId="stat-card-habits-today"
+    />
   );
 }
 
@@ -512,29 +430,23 @@ function KPIJournalCard({ streak, mood, onClick }: { streak: number; mood: strin
   const animatedStreak = useCountUp(streak);
   const dots = Array.from({length:7}, (_,i) => i >= (7 - Math.min(streak, 7)));
   const moodConf = mood ? MOOD_CONFIG[mood as MoodLevel] : null;
+  const streakAccent = "310 50% 58%";
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border border-border/40 min-h-[62px] overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
-      style={{ background: 'linear-gradient(135deg, hsl(310 50% 58% / 0.10) 0%, transparent 60%)' }}
-      data-testid="stat-card-journal-streak"
-      role="button" tabIndex={0} aria-label="Journal streak" onKeyDown={onEnterOrSpace(onClick)}>
-      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: 'linear-gradient(90deg, hsl(310 50% 58%), transparent)' }} />
-      <div className="flex items-start justify-between relative z-10">
-        <div className="icon-badge" style={{ background: 'hsl(310 50% 58% / 0.15)' }}>
-          <BookHeart className="h-3.5 w-3.5" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }} />
+    <MetricCard
+      className={KPI_TILE}
+      // Today's mood tints the tile; the streak dots keep the journal colour.
+      accent={moodConf?.accent || streakAccent} icon={BookHeart} label="Journal Streak"
+      value={`${animatedStreak}d`}
+      sub={streak > 0 ? `${streak}-day streak!` : "Keep it going!"}
+      chart={
+        <div className="flex gap-0.5" aria-hidden="true">
+          {dots.map((filled, i) => (
+            <div key={i} className="flex-1 h-1.5 rounded-full" style={{ background: filled ? `hsl(${streakAccent})` : 'hsl(var(--muted))' }} />
+          ))}
         </div>
-      </div>
-      <div className="mt-1 relative z-10">
-        <span className="text-sm font-bold metric-value tracking-tight leading-none" style={{ color: moodConf?.color || 'hsl(310 50% 58%)' }}>{animatedStreak}d</span>
-      </div>
-      <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Journal Streak</p>
-      <p className="text-[11px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{streak > 0 ? `${streak}-day streak!` : "Keep it going!"}</p>
-      {/* 7-day dots */}
-      <div className="flex gap-0.5 mt-1.5 relative z-10">
-        {dots.map((filled, i) => (
-          <div key={i} className="flex-1 h-1.5 rounded-full" style={{ background: filled ? `hsl(310 50% 58%)` : 'hsl(var(--muted))' }} />
-        ))}
-      </div>
-    </div>
+      }
+      onClick={onClick} aria-label="Journal streak" testId="stat-card-journal-streak"
+    />
   );
 }
 
@@ -545,42 +457,27 @@ function KPIDocsCard({ docs, onClick }: { docs: any[]; onClick: () => void }) {
   const count = (docs || []).length;
   // Color discipline: red ONLY for genuinely overdue documents. The calm/empty
   // state is blue (all-clear) — the popup is where the user takes action.
-  const accent = isUrgent ? '0 72% 52%' : '205 90% 58%';
+  const accent = isUrgent ? tonePalette("critical") : tonePalette("info");
   return (
-    <div onClick={onClick} className="relative flex flex-col p-1.5 rounded-xl border overflow-hidden cursor-pointer card-lift active:scale-[0.97] transition-all pressable"
-      style={{ background: `linear-gradient(135deg, hsl(${accent} / 0.12) 0%, transparent 60%)`, borderColor: isUrgent ? 'hsl(0 72% 52% / 0.4)' : 'hsl(var(--border) / 0.4)' }}
-      data-testid="stat-card-expiring-docs"
-      role="button" tabIndex={0} aria-label="Expiring documents" onKeyDown={onEnterOrSpace(onClick)}>
-      <div className="absolute top-0 left-0 right-0 h-[2px] rounded-t-xl" style={{ background: `linear-gradient(90deg, hsl(${accent}), transparent)` }} />
-      <div className="flex items-start justify-between relative z-10">
-        <div className="icon-badge" style={{ background: `hsl(${accent} / 0.15)` }}>
-          <FileWarning className="h-3.5 w-3.5" style={{ color: `hsl(${accent})` }} />
-        </div>
-        {isUrgent && <span className="text-[11px] font-bold text-red-500 bg-red-500/10 px-1 py-0.5 rounded">{expiredCount} EXPIRED</span>}
-      </div>
-      <div className="mt-1 relative z-10">
-        <span className="text-sm font-bold metric-value tracking-tight leading-none tabular-nums" style={{ color: `hsl(${accent})` }}>{(docs || []).length}</span>
-      </div>
-      <p className="micro-label text-muted-foreground/70 mt-0.5 relative z-10">Expiring Docs</p>
-      {count === 0 ? (
-        <p className="text-[11px] mt-0.5 relative z-10 truncate flex items-center gap-1" style={{ color: `hsl(${accent})` }}>
-          <CheckCircle2 className="h-2.5 w-2.5" /> You're all set!
-        </p>
+    <MetricCard
+      className={KPI_TILE}
+      accent={accent} icon={FileWarning} label="Expiring Docs"
+      value={String(count)}
+      sub={count === 0 ? (
+        <span className="flex items-center gap-1" style={{ color: `hsl(${accent})` }}>
+          <CheckCircle2 className="h-3 w-3" /> You're all set!
+        </span>
       ) : mostOverdue ? (
-        <p className="text-[11px] text-red-500 mt-0.5 relative z-10 truncate tabular-nums">
+        <span className="tabular-nums" style={{ color: `hsl(${tonePalette("critical")})` }}>
           Tap to snooze · {Math.abs(mostOverdue.daysUntil)}d overdue
-        </p>
-      ) : (
-        <p className="text-[11px] text-muted-foreground/60 mt-0.5 relative z-10 truncate">{summarizeDocumentUrgency(docs).label}</p>
-      )}
-      {isUrgent && (
-        <div className="mt-1.5 relative z-10">
-          <div className="h-1 rounded-full overflow-hidden" style={{ background: 'hsl(0 72% 52% / 0.2)' }}>
-            <div className="h-full rounded-full" style={{ width: `${Math.min(100, (expiredCount / Math.max(docs.length, 1)) * 100)}%`, background: 'hsl(0 72% 52%)' }} />
-          </div>
-        </div>
-      )}
-    </div>
+        </span>
+      ) : summarizeDocumentUrgency(docs).label}
+      progress={isUrgent ? { value: expiredCount / Math.max(docs.length, 1) } : undefined}
+      // In the footer, not the header: on a half-width phone tile a header
+      // badge squeezed the label down to a few letters.
+      footer={isUrgent ? <Pill tone="critical">{expiredCount} EXPIRED</Pill> : undefined}
+      onClick={onClick} aria-label="Expiring documents" testId="stat-card-expiring-docs"
+    />
   );
 }
 
@@ -1188,7 +1085,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
   return (
     <>
       <div className="bubble backdrop-blur-sm px-2 py-2" data-testid="section-kpis">
-        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-1.5">
           <KPITaskCard count={safeStats.activeTasks} onClick={() => setPopup("tasks")} />
           {/* Bug fix: prefer financeSnapshot.totalMonthlySpend (same source as the drilldown popup)
                over stats.monthlySpend (/api/stats) so the KPI card and popup show identical totals. */}
@@ -1202,10 +1099,10 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
           {(() => {
             const billCount = enhanced?.financeSnapshot?.upcomingBills?.length ?? safeStats.upcomingObligations;
             return (
-              <MiniStat accent="43 75% 50%" icon={CreditCard} label="Bills Due"
-                value={billCount}
+              <MetricCard className="min-w-0 h-full" accent="43 75% 50%" icon={CreditCard} label="Bills Due"
+                value={String(billCount)}
                 sub={billCount > 0 ? "Due soon" : "All clear"}
-                onClick={() => setPopup("bills")} />
+                onClick={() => setPopup("bills")} testId="stat-card-bills-due" />
             );
           })()}
           <KPIDocsCard docs={visibleDocs} onClick={() => setPopup("docs")} />
@@ -1241,7 +1138,6 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
             const now = new Date();
             const dayOfMonth = now.getDate();
             const avgPerDay = dayOfMonth > 0 ? total / dayOfMonth : 0;
-            const SPEND_COLORS = ["#06b6d4","#8b5cf6","#f59e0b","#10b981","#ef4444","#3b82f6","#f97316","#ec4899","#84cc16","#6366f1"];
             const topCategory = categories[0];
             return (
               <div className="space-y-2 py-1">
@@ -1279,7 +1175,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                           stroke="none"
                         >
                           {categories.map(([cat], i) => (
-                            <Cell key={cat} fill={SPEND_COLORS[i % SPEND_COLORS.length]} />
+                            <Cell key={cat} fill={categoryColor(i)} />
                           ))}
                         </Pie>
                         <Tooltip
@@ -1310,7 +1206,7 @@ function KPISection({ stats, enhanced, filterIds = [], filterMode = "everyone", 
                   {categories.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No expenses this month</p>}
                   {categories.map(([cat, amt], i) => {
                     const pct = total > 0 ? Math.round(((amt as number) / total) * 100) : 0;
-                    const color = SPEND_COLORS[i % SPEND_COLORS.length];
+                    const color = categoryColor(i);
                     return (
                       <div key={cat} className="space-y-1">
                         <div className="flex items-center justify-between">
@@ -2135,7 +2031,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
       items.push({
         id: t.id, title: t.title,
         detail: `${days} day${days !== 1 ? "s" : ""} overdue`,
-        sourceType: "task", accentColor: "#ef4444",
+        sourceType: "task", accentColor: TONE_CSS.critical,
         sortKey: -days,
       });
     }
@@ -2149,7 +2045,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
       items.push({
         id: t.id, title: t.title,
         detail: label,
-        sourceType: "task", accentColor: "#f59e0b",
+        sourceType: "task", accentColor: TONE_CSS.attention,
         sortKey: diff + 1000,
       });
     }
@@ -2160,7 +2056,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
       items.push({
         id: b.id, title: b.name,
         detail: `${label}${b.amount ? ` · ${formatMoney(b.amount)}` : ""}`,
-        sourceType: "bill", accentColor: "#f59e0b",
+        sourceType: "bill", accentColor: TONE_CSS.attention,
         sortKey: b.daysUntil + 1000,
       });
     }
@@ -2212,7 +2108,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
             </SheetTitle>
             <SheetDescription className="text-xs">
               {(() => {
-                const overdueCt = allItems.filter(i => i.accentColor === '#ef4444').length;
+                const overdueCt = allItems.filter(i => i.accentColor === TONE_CSS.critical).length;
                 const soonCt = totalCount - overdueCt;
                 const taskCt = allItems.filter(i => i.sourceType === 'task').length;
                 const billCt = allItems.filter(i => i.sourceType === 'bill').length;
@@ -2231,7 +2127,7 @@ function ActionRequiredSection({ stats, enhanced, profileId }: { stats: Dashboar
           {totalCount > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-3 pb-2 border-b">
               {(() => {
-                const overdueCt = allItems.filter(i => i.accentColor === '#ef4444').length;
+                const overdueCt = allItems.filter(i => i.accentColor === TONE_CSS.critical).length;
                 const soonCt = totalCount - overdueCt;
                 return (
                   <>
@@ -2524,8 +2420,8 @@ function HealthSection({ data }: { data: any[] }) {
             const name = item.name?.toLowerCase() || '';
             const val = item.latestValue;
             if (name.includes('blood') || name.includes('bp')) {
-              if (val > 140 || val < 90) statusColor = '#ef4444';
-              else if (val > 130) statusColor = '#f59e0b';
+              if (val > 140 || val < 90) statusColor = TONE_CSS.critical;
+              else if (val > 130) statusColor = TONE_CSS.attention;
             }
             const ItemIcon = theme.icon;
             // Mini sparkline from recent entries (7 points)
@@ -2630,7 +2526,7 @@ onDismiss: (key: string) => void;
 }) {
   return (
     <div className={`flex items-center gap-1 py-[5px] border-l-2 pl-1.5 pr-0.5 rounded-r-lg transition-colors ${
-      accentColor === '#ef4444' ? 'bg-red-500/5 hover:bg-red-500/8' : 'bg-amber-500/5 hover:bg-amber-500/8'
+      accentColor === TONE_CSS.critical ? 'bg-red-500/5 hover:bg-red-500/8' : 'bg-amber-500/5 hover:bg-amber-500/8'
     }`} style={{ borderLeftColor: accentColor }}>
       <span className="text-xs font-medium truncate flex-1 leading-tight">{title}</span>
       <span className="text-xs-tight text-muted-foreground shrink-0 tabular-nums">{detail}</span>
@@ -2818,18 +2714,18 @@ function ObligationsSection({ data }: { data: any[] }) {
             return (
               <div className="mb-2">
                 <div className="flex h-2 rounded-full overflow-hidden gap-px bg-muted/30">
-                  {wk > 0 && <div style={{width:`${(wk/total)*100}%`,background:'#f59e0b'}} className="rounded-l-full transition-all" />}
+                  {wk > 0 && <div style={{width:`${(wk/total)*100}%`,background:TONE_CSS.attention}} className="rounded-l-full transition-all" />}
                   {mn > 0 && <div style={{width:`${(mn/total)*100}%`,background:'hsl(var(--muted-foreground) / 0.35)'}} className="rounded-r-full transition-all" />}
                 </div>
                 <div className="flex gap-3 mt-1">
-                  {wk > 0 && <span className="text-[11px] text-amber-500 font-medium">● Week ${wk.toFixed(0)}</span>}
-                  {mn > 0 && <span className="text-[11px] text-muted-foreground">● Month ${mn.toFixed(0)}</span>}
+                  {wk > 0 && <span className="text-[11px] text-amber-500 font-medium">● Week {formatMoneyRound(wk)}</span>}
+                  {mn > 0 && <span className="text-[11px] text-muted-foreground">● Month {formatMoneyRound(mn)}</span>}
                 </div>
               </div>
             );
           })()}
-          <BillGroup title="Due This Week" bills={thisWeekBills} color="#f59e0b" onSelectBill={setSelectedBill} />
-          <BillGroup title="Due This Month" bills={thisMonthBills} color="#6b7280" onSelectBill={setSelectedBill} />
+          <BillGroup title="Due This Week" bills={thisWeekBills} color={TONE_CSS.attention} onSelectBill={setSelectedBill} />
+          <BillGroup title="Due This Month" bills={thisMonthBills} color={TONE_CSS.neutral} onSelectBill={setSelectedBill} />
         </div>
         <ViewPageLink href="/bills" label="View all bills" />
       </CollapsibleSection>
@@ -2977,14 +2873,14 @@ function GoalProgressBar({ goal }: { goal: GoalItem }) {
               style={{
                 width: `${pct}%`,
                 background: isCompleted
-                  ? 'linear-gradient(90deg, #10b981, #34d399)'
+                  ? toneGradient('good', 'good')
                   : isAtRisk
-                  ? 'linear-gradient(90deg, #f59e0b, #ef4444)'
+                  ? toneGradient('attention', 'critical')
                   : `linear-gradient(90deg, hsl(188 70% 48%), hsl(155 60% 44%))`,
               }} />
             {isAtRisk && pct > 0 && (
               <div className="absolute inset-0 rounded-full animate-pulse opacity-30"
-                style={{ background: 'linear-gradient(90deg, #f59e0b, #ef4444)', width: `${pct}%` }} />
+                style={{ background: toneGradient('attention', 'critical'), width: `${pct}%` }} />
             )}
           </div>
         );
@@ -3173,9 +3069,9 @@ export function GoalsSection({ profileId, profileIds = [] }: { profileId?: strin
                         <div className="h-full rounded-full transition-all duration-700"
                           style={{
                             width: `${pct}%`,
-                            background: isOverdue ? 'linear-gradient(90deg,#ef4444,#dc2626)' :
-                              isAtRisk ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' :
-                              isReadyToComplete ? 'linear-gradient(90deg,#10b981,#34d399)' :
+                            background: isOverdue ? toneGradient('critical', 'critical') :
+                              isAtRisk ? toneGradient('attention', 'attention') :
+                              isReadyToComplete ? toneGradient('good', 'good') :
                               'linear-gradient(90deg,hsl(188 70% 48%),hsl(155 60% 44%))'
                           }} />
                       </div>
@@ -3988,21 +3884,19 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
           const catData = Object.entries(byCategory)
             .sort(([,a],[,b]) => b-a).slice(0,8)
             .map(([name,value]) => ({name, value}));
-          // Color discipline: amber occupies the primary spending slot (since
-          // spending = amber). Red is intentionally omitted from the palette so
-          // the chart never accidentally signals "overdue".
-          const COLORS = ["#f59e0b","#06b6d4","#8b5cf6","#10b981","#3b82f6","#f97316","#ec4899","#84cc16"];
+          // Color discipline: the Finance category palette omits red, so the
+          // chart never accidentally signals "overdue".
           const total = catData.reduce((s, c) => s + c.value, 0);
           return (
             <div className="mb-3">
               <ResponsiveContainer width="100%" height={160}>
                 <PieChart>
                   <Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={60} paddingAngle={2}>
-                    {catData.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
+                    {catData.map((_,i) => <Cell key={i} fill={categoryColor(i)} />)}
                   </Pie>
                   <Tooltip
                     contentStyle={{background:'hsl(var(--card))',border:'1px solid hsl(var(--border))',borderRadius:'8px',fontSize:'11px'}}
-                    formatter={(v:any, name:any) => [`$${Number(v).toFixed(2)}`, name]}
+                    formatter={(v:any, name:any) => [formatMoneyCents(Number(v)), name]}
                   />
                 </PieChart>
               </ResponsiveContainer>
@@ -4012,7 +3906,7 @@ function FinanceWidget({ data, stats, filterIds = [], filterMode = "everyone", a
                   const pct = total > 0 ? Math.round((c.value / total) * 100) : 0;
                   return (
                     <div key={c.name} className="flex items-center gap-1.5 min-w-0">
-                      <span className="h-2 w-2 rounded-full shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
+                      <span className="h-2 w-2 rounded-full shrink-0" style={{ background: categoryColor(i) }} />
                       <span className="text-[11px] capitalize truncate flex-1">{c.name}</span>
                       <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">{pct}%</span>
                     </div>

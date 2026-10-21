@@ -39,6 +39,9 @@ import { isTestEntity } from "@shared/test-data";
 import { useShowTestData } from "@/lib/showTestData";
 import { netWorthView } from "@/lib/net-worth-view";
 import { EmptyState } from "@/components/ui/empty-state";
+import { TimeRangeSelector } from "@/components/ui/time-range";
+import { CATEGORY_PALETTE, OTHER_HS } from "@/components/finance/finance-visuals";
+import { formatMoneyRound } from "@/lib/format";
 import { BubbleModal } from "@/components/ui/bubble-modal";
 
 // P1.2 remediation: the asset/liability value resolvers are imported from
@@ -485,7 +488,15 @@ function EntityList({
 // SPENDING BREAKDOWN (rendered at the top of the Budget popup)
 // ═════════════════════════════════════════════════════════════════════════════
 
-const SPEND_COLORS = ["#8b5cf6", "#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#a855f7", "#06b6d4", "#ec4899", "#84cc16", "#94a3b8"];
+// Category colours come from the Finance tab's palette ("H S%" pairs), so a
+// category reads the same colour here as on the Finance donut. "Other" is grey.
+const spendHs = (i: number) => CATEGORY_PALETTE[i % CATEGORY_PALETTE.length];
+const spendColor = (hs: string, alpha?: number) => alpha == null ? `hsl(${hs} 55%)` : `hsl(${hs} 55% / ${alpha})`;
+const SPEND_PERIOD_OPTIONS = [
+  { value: "month", label: "This Month" },
+  { value: "lastMonth", label: "Last Month" },
+  { value: "year", label: "This Year" },
+] as const;
 
 function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
   const [period, setPeriod] = useState<"month" | "lastMonth" | "year">("month");
@@ -529,28 +540,22 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
     return { rows, total, txns, dailyAvg, trendPct, perDay: days > 0 ? txns / days : 0 };
   }, [expenses, period, ymNow, ymLast, yearNow]);
 
-  const donutData = view.rows.slice(0, 8).map(([name, value], i) => ({ name, value, color: SPEND_COLORS[i % SPEND_COLORS.length] }));
+  const donutData = view.rows.slice(0, 8).map(([name, value], i) => ({ name, value, color: spendColor(spendHs(i)) }));
   const otherTotal = view.rows.slice(8).reduce((s, [, v]) => s + v, 0);
-  if (otherTotal > 0) donutData.push({ name: "Other", value: otherTotal, color: SPEND_COLORS[9] });
+  if (otherTotal > 0) donutData.push({ name: "Other", value: otherTotal, color: spendColor(OTHER_HS) });
   const periodSub = period === "month" ? "This month" : period === "lastMonth" ? "Last month" : `${yearNow}`;
 
   return (
     <div className="p-3 space-y-3 border-b border-border">
       {/* Period tabs */}
-      <div className="flex gap-1 rounded-xl bg-muted/50 p-1">
-        {([["month", "This Month"], ["lastMonth", "Last Month"], ["year", "This Year"]] as const).map(([k, l]) => (
-          <button key={k} type="button" onClick={() => setPeriod(k)}
-            className={`flex-1 rounded-lg py-1.5 text-[11px] font-semibold transition-colors ${period === k ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-            {l}
-          </button>
-        ))}
-      </div>
+      <TimeRangeSelector value={period} options={SPEND_PERIOD_OPTIONS} onChange={setPeriod}
+        label="Spending period" testId="spend-breakdown-period" />
 
       {/* Summary stat cards */}
       <div className="grid grid-cols-3 gap-2">
         <div className="bubble p-2.5">
           <p className="text-[11px] text-muted-foreground">Total Spent</p>
-          <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.total)}</p>
+          <p className="text-base font-bold tabular-nums leading-tight">{formatMoneyRound(view.total)}</p>
           {view.trendPct != null && (
             <p className={`text-[11px] font-medium tabular-nums ${view.trendPct > 0 ? "text-red-500" : "text-green-500"}`}>
               {view.trendPct > 0 ? "▲" : "▼"} {Math.abs(view.trendPct)}% vs last
@@ -559,7 +564,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
         </div>
         <div className="bubble p-2.5">
           <p className="text-[11px] text-muted-foreground">Daily Average</p>
-          <p className="text-base font-bold tabular-nums leading-tight">${fmt(view.dailyAvg)}</p>
+          <p className="text-base font-bold tabular-nums leading-tight">{formatMoneyRound(view.dailyAvg)}</p>
         </div>
         <div className="bubble p-2.5">
           <p className="text-[11px] text-muted-foreground">Transactions</p>
@@ -582,7 +587,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-[13px] font-bold tabular-nums leading-none">${fmt(view.total)}</span>
+                <span className="text-[13px] font-bold tabular-nums leading-none">{formatMoneyRound(view.total)}</span>
                 <span className="micro-label text-muted-foreground mt-0.5">{periodSub}</span>
               </div>
             </div>
@@ -594,7 +599,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
                     <span className="h-2 w-2 rounded-full shrink-0" style={{ background: d.color }} />
                     <span className="capitalize truncate flex-1">{d.name}</span>
                     <span className="tabular-nums text-muted-foreground shrink-0">{pct}%</span>
-                    <span className="tabular-nums font-medium shrink-0 w-14 text-right">${fmt(d.value)}</span>
+                    <span className="tabular-nums font-medium shrink-0 w-14 text-right">{formatMoneyRound(d.value)}</span>
                   </div>
                 );
               })}
@@ -602,7 +607,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
           </div>
         </div>
       ) : (
-        <p className="text-xs text-muted-foreground text-center py-4">No spending recorded {periodSub.toLowerCase()}.</p>
+        <EmptyState icon={Wallet} label={`No spending recorded ${periodSub.toLowerCase()}.`} className="py-4" />
       )}
 
       {/* Category details with bars */}
@@ -612,16 +617,17 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
           <div className="rounded-xl border border-border divide-y divide-border/60">
             {view.rows.map(([cat, amt], i) => {
               const pct = view.total > 0 ? Math.round((amt / view.total) * 100) : 0;
-              const color = SPEND_COLORS[i % SPEND_COLORS.length];
+              const hs = spendHs(i);
+              const color = spendColor(hs);
               return (
                 <div key={cat} className="flex items-center gap-2.5 px-3 py-2">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: `${color}22` }}>
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ background: spendColor(hs, 0.13) }}>
                     <span className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <p className="text-xs font-medium capitalize truncate">{cat}</p>
-                      <p className="text-xs font-semibold tabular-nums shrink-0">${fmt(amt)}</p>
+                      <p className="text-xs font-semibold tabular-nums shrink-0">{formatMoneyRound(amt)}</p>
                     </div>
                     <p className="text-[11px] text-muted-foreground">{pct}% of total</p>
                     <div className="mt-1 h-1 rounded-full bg-muted/60 overflow-hidden">

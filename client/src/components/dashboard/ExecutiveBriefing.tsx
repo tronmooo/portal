@@ -67,6 +67,7 @@ import { computeHealthScore } from "@/lib/tracker-health";
 import { hashNavigate } from "@/lib/hashNavigate";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { BubbleModal } from "@/components/ui/bubble-modal";
+import { EmptyState } from "@/components/ui/empty-state";
 import { ProgressRing, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
 import type { DashboardStats } from "@shared/schema";
@@ -200,11 +201,13 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
 
 /** An empty card still fills its cell — the message centres in the space
  *  rather than sitting at the top with a black void under it. */
-function CardEmpty({ children }: { children: ReactNode }) {
+function CardEmpty({ children, accent, icon, tone }: {
+  children: string; accent?: string; icon?: LucideIcon; tone?: PillTone;
+}) {
   return (
-    <p className="flex-1 flex items-center justify-center text-center text-[12px] text-muted-foreground py-2">
-      {children}
-    </p>
+    <div className="flex-1 flex items-center justify-center">
+      <EmptyState label={children} icon={icon} tone={tone} accent={tone ? undefined : accent} className="py-2 gap-1.5" />
+    </div>
   );
 }
 
@@ -1405,7 +1408,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 </div>
               </div>
               {sortedPending.length === 0 ? (
-                <CardEmpty>{doneToday > 0 ? "Everything done — nice work." : "No open tasks."}</CardEmpty>
+                <CardEmpty icon={CheckCircle2} accent={CARD_ACCENTS.tasks} tone={doneToday > 0 ? "good" : undefined}>{doneToday > 0 ? "Everything done — nice work." : "No open tasks."}</CardEmpty>
               ) : (
                 <div className="space-y-1.5">
                   {sortedPending.slice(0, 4).map((t: any) => {
@@ -1464,7 +1467,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 )}
               </div>
               {eventsToday.length === 0 ? (
-                <CardEmpty>Nothing scheduled today.</CardEmpty>
+                <CardEmpty icon={CalendarDays} accent={CARD_ACCENTS.schedule}>Nothing scheduled today.</CardEmpty>
               ) : (
                 <div className="space-y-1.5">
                   {eventsToday.slice(0, 5).map((e: any, idx: number) => {
@@ -1518,7 +1521,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </p>
                 )}
                 {importantDates.length === 0 ? (
-                  <CardEmpty>No birthdays or expirations in the next 45 days.</CardEmpty>
+                  <CardEmpty icon={CalendarDays} accent={CARD_ACCENTS.schedule}>No birthdays or expirations in the next 45 days.</CardEmpty>
                 ) : (
                   <div className="space-y-1.5 mt-2">
                     <ExpandableRows id="important-dates" count={importantDates.length} cap={5}>
@@ -1540,7 +1543,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               headerRight={<ViewLink label="View habits" accent={CARD_ACCENTS.habits} onClick={() => setPopup("habits")} testId="exec-view-habits" />}
             >
               {habitsDueToday.length === 0 ? (
-                <CardEmpty>No habits scheduled today.</CardEmpty>
+                <CardEmpty icon={Flame} accent={CARD_ACCENTS.habits}>No habits scheduled today.</CardEmpty>
               ) : (
                 <div className="flex items-start gap-4">
                   <div className="shrink-0 flex flex-col items-center gap-1.5">
@@ -1679,7 +1682,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => setPopup("docs")} testId="exec-view-documents" />}
             >
               {visibleDocs.length === 0 ? (
-                <CardEmpty>Nothing expiring soon.</CardEmpty>
+                <CardEmpty icon={FileText} tone="good">Nothing expiring soon.</CardEmpty>
               ) : (
                 <div className="flex items-start gap-4">
                   <div className="shrink-0 flex flex-col items-center">
@@ -1739,7 +1742,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               headerRight={<ViewLink label="View wellness" accent={CARD_ACCENTS.wellness} onClick={() => setPopup("wellness:score")} testId="exec-view-wellness" />}
             >
               {!hasWellness && latestVitals.length === 0 ? (
-                <CardEmpty>{wellnessEmptyCopy}</CardEmpty>
+                <CardEmpty icon={Heart} accent={CARD_ACCENTS.wellness}>{wellnessEmptyCopy}</CardEmpty>
               ) : (
                 <>
                   {!hasWellness && (
@@ -1797,7 +1800,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               headerRight={<ViewLink label="View all upcoming" accent={CARD_ACCENTS.upcoming} onClick={() => setPopup("upcoming")} testId="exec-view-upcoming" />}
             >
               {upcomingPreview.length === 0 ? (
-                <CardEmpty>
+                <CardEmpty icon={Clock} accent={CARD_ACCENTS.upcoming}>
                   {importantDates.length > 0
                     ? "Nothing else coming up — your dates are under Schedule."
                     : "Nothing coming up in the next few weeks."}
@@ -1823,7 +1826,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             accent={CARD_ACCENTS.activity} index={10} className="mt-3"
           >
             {activityItems.length === 0 ? (
-              <CardEmpty>No recent activity yet — anything you (or the assistant) log shows up here.</CardEmpty>
+              <CardEmpty icon={History} accent={CARD_ACCENTS.activity}>
+                {/* A profile filter can hide every row — never say "yet" then. */}
+                {mode === "selected" && ids.length > 0
+                  ? "No recent activity for the selected profiles."
+                  : "No recent activity yet — anything you (or the assistant) log shows up here."}
+              </CardEmpty>
             ) : (
               <div className="space-y-1.5">
                 <ExpandableRows id="activity" count={activityItems.length} cap={6} moreLabel={`Show all (${activityItems.length})`}>
