@@ -45,4 +45,52 @@ describe("popups stay scrollable", () => {
     expect(block.match(/overflow-y-auto/g)?.length).toBe(1);
     expect(block).toMatch(/min-h-0 overflow-y-auto overscroll-contain/);
   });
+
+  // 2026-10-20 owner report (iPhone), after the redesign: "it won't let me
+  // scroll up and down in each of the trackers". Radix's scroll lock
+  // (react-remove-scroll) cancels a touchmove whose first sample is more
+  // sideways than down when nothing scrolls sideways — and iOS then drops the
+  // whole swipe. Fixed in lib/touch-scroll.ts; these pin the pieces.
+  describe("tracker popup on iOS", () => {
+    const src = readFileSync(join(ROOT, "pages/trackers.tsx"), "utf8");
+    const start = src.indexOf('data-testid="tracker-detail-dialog"');
+    const block = src.slice(src.lastIndexOf("<DialogContent", start), src.indexOf("Add Entry sub-dialog", start));
+
+    it("its scroller keeps touch swipes away from the dialog's scroll lock", () => {
+      expect(block).toMatch(/<div ref=\{scrollRef\}[^>]*data-testid="tracker-detail-scroll"/);
+      expect(src).toContain("const scrollRef = useNativeTouchScroll<HTMLDivElement>()");
+      const helper = readFileSync(join(ROOT, "lib/touch-scroll.ts"), "utf8");
+      expect(helper).toMatch(/addEventListener\("touchmove", stop, \{ passive: true \}\)/);
+    });
+
+    it("does not restrict the scroller's touch-action", () => {
+      expect(block).not.toMatch(/touch-pan-y/);
+    });
+
+    it("is sized by .td-dialog with a vh fallback and safe-area insets", () => {
+      expect(block).toMatch(/className="[^"]*\btd-dialog\b/);
+      expect(block).not.toMatch(/\bh-\[\d+dvh\]/);
+      const css = readFileSync(join(ROOT, "index.css"), "utf8");
+      const rule = css.slice(css.indexOf(".td-dialog {"), css.indexOf("}", css.indexOf(".td-dialog {")));
+      expect(rule).toMatch(/height: calc\(100vh/);
+      expect(rule).toMatch(/100dvh - env\(safe-area-inset-top/);
+    });
+
+    it("every sideways strip inside the popup also hides vertical overflow", () => {
+      // overflow-x:auto computes overflow-y:auto too; a strip a pixel taller
+      // than its box then grabs vertical swipes on iOS.
+      const files = [
+        ...readdirSync(join(ROOT, "components/tracker-detail")).map((f) => join(ROOT, "components/tracker-detail", f)),
+      ];
+      const offenders: string[] = [];
+      const check = (text: string, name: string) => text.split("\n").forEach((line, i) => {
+        if (/overflow-x-auto/.test(line) && !/overflow-y-hidden/.test(line)) offenders.push(`${name}:${i + 1}`);
+      });
+      check(block, "trackers.tsx(popup)");
+      const history = src.slice(src.indexOf("function HistoryTabContent"), src.indexOf("function GoalsTabContent"));
+      check(history, "trackers.tsx(HistoryTabContent)");
+      for (const f of files) check(readFileSync(f, "utf8"), f);
+      expect(offenders).toEqual([]);
+    });
+  });
 });

@@ -235,7 +235,7 @@ export function Segmented<T extends string>({ value, options, onChange, label, t
   testId?: string;
 }) {
   return (
-    <div className="max-w-full overflow-x-auto -mx-1 px-1" data-testid={testId}>
+    <div className="max-w-full overflow-x-auto overflow-y-hidden scrollbar-hide -mx-1 px-1 py-0.5" data-testid={testId}>
       <div className="td-seg" role="group" aria-label={label}>
         {options.map((o) => (
           <button

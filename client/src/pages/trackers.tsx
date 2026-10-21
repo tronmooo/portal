@@ -71,6 +71,7 @@ import {
 } from "@shared/fitness-metrics";
 import { trackerFieldLabel, humanizeFieldName } from "@shared/field-label";
 import EditableTitle from "@/components/EditableTitle";
+import { useNativeTouchScroll } from "@/lib/touch-scroll";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
@@ -4687,7 +4688,7 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
         <span className="text-xs text-muted-foreground">({filtered.length})</span>
         {/* Profile filter chips */}
         {hasMultipleProfiles && profiles && (
-          <div className="flex items-center gap-1 overflow-x-auto flex-nowrap max-w-[60vw] scrollbar-hide" style={{ WebkitOverflowScrolling: 'touch' }}>
+          <div className="flex items-center gap-1 overflow-x-auto overflow-y-hidden flex-nowrap max-w-[60vw] scrollbar-hide">
             <button onClick={() => setProfileFilter("all")}
               className={`px-2 py-0.5 rounded text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${profileFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               All
@@ -4991,6 +4992,7 @@ function TrackerDetailDialog({
   const { data: detailGoals } = useQuery<Goal[]>({ queryKey: goalsQueryKey([]) });
   const model = useMemo(() => (tracker ? buildTrackerModel(tracker, detailGoals) : null), [tracker, detailGoals]);
   const [activeTab, setActiveTab] = useState("overview");
+  const scrollRef = useNativeTouchScroll<HTMLDivElement>();
   const trackerKey = tracker?.id;
   useEffect(() => { setActiveTab("overview"); }, [trackerKey]);
 
@@ -5050,11 +5052,11 @@ function TrackerDetailDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => { if (!v) { setAddEntryOpen(false); setDeleteTrackerOpen(false); onClose(); } }}>
-        <DialogContent className="td-scope max-w-2xl h-[90dvh] max-h-[90dvh] flex flex-col p-0 overflow-hidden" style={themeVars(theme)} data-testid="tracker-detail-dialog" data-identity={theme.identity}>
+        <DialogContent className="td-scope td-dialog max-w-2xl flex flex-col gap-0 p-0 overflow-hidden" style={themeVars(theme)} data-testid="tracker-detail-dialog" data-identity={theme.identity}>
           {/* ── Header ── */}
-          <div className="td-header px-5 pt-5 pb-3 pr-12 border-b border-border/60 shrink-0">
-            <div className="flex items-center justify-between gap-3">
-              <span className="medallion" aria-hidden="true"><ThemeIcon className="h-5 w-5" strokeWidth={2.1} /></span>
+          <div className="td-header px-4 sm:px-5 pt-3.5 pb-2.5 pr-12 border-b border-border/60 shrink-0">
+            <div className="flex items-center justify-between gap-2.5">
+              <span className="medallion medallion-sm" aria-hidden="true"><ThemeIcon className="h-4 w-4" strokeWidth={2.2} /></span>
               <div className="min-w-0 flex-1">
                 <DialogTitle className="text-lg font-bold tracking-tight truncate">
                   <EditableTitle
@@ -5065,7 +5067,7 @@ function TrackerDetailDialog({
                     className="text-lg font-bold tracking-tight"
                   />
                 </DialogTitle>
-                <DialogDescription className="text-xs mt-0.5">
+                <DialogDescription className="text-xs truncate">
                   {tracker.entries.length} {tracker.entries.length === 1 ? "entry" : "entries"}
                   {model.field ? ` · ${model.label}${model.unit && model.unit !== "$" ? ` (${model.unit})` : ""}` : ""}
                   {tracker.category ? ` · ${tracker.category}` : ""}
@@ -5103,8 +5105,8 @@ function TrackerDetailDialog({
               wouldn't scroll back up. One scroller, flex-bounded, nothing
               nested inside it. */}
           <Tabs value={currentTab} onValueChange={setActiveTab} className="flex-1 min-h-0 flex flex-col">
-              <div className="px-4 pt-2.5 pb-2 shrink-0 bg-background/70 backdrop-blur border-b border-border/50">
-                <div className="overflow-x-auto -mx-1 px-1" style={{ WebkitOverflowScrolling: "touch" }}>
+              <div className="px-4 py-2 shrink-0 border-b border-border/50">
+                <div className="overflow-x-auto overflow-y-hidden -mx-1 px-1 scrollbar-hide">
                   <TabsList className="td-seg h-auto w-max">
                     {tabs.map(tab => {
                       const Icon = tab.icon;
@@ -5119,7 +5121,7 @@ function TrackerDetailDialog({
                 </div>
               </div>
 
-              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y px-4 sm:px-5 py-4" style={{ WebkitOverflowScrolling: "touch" }} data-testid="tracker-detail-scroll">
+              <div ref={scrollRef} className="td-scroll flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-5 pt-4" data-testid="tracker-detail-scroll">
                 <TabsContent value="overview" className="mt-0">
                   {detectSpecialization(tracker) === "medication"
                     ? <MedicationOverview tracker={tracker} />

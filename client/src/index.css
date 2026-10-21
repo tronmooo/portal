@@ -1003,6 +1003,18 @@ button, a, [role="button"], .card-lift {
 .td-scope { --td-l: 41%; }
 .dark .td-scope { --td-l: 63%; }
 
+/* The tracker popup's size. Lives in CSS rather than h-[…] classes because
+   it needs fallbacks twMerge would collapse: vh for iOS < 15.4 (no dvh — the
+   popup grew past the screen and nothing scrolled), then dvh minus the safe
+   areas so the bottom never sits under the home indicator in the iOS app. */
+.td-dialog {
+  height: calc(100vh - 2rem);
+  max-height: calc(100vh - 2rem);
+  height: min(90dvh, calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 1.5rem));
+  max-height: min(90dvh, calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 1.5rem));
+}
+.td-scroll { padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px)); }
+
 .td-header {
   background:
     radial-gradient(90% 140% at 0% 0%, hsl(var(--td-hs) var(--td-l) / 0.16) 0%, transparent 60%),
