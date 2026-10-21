@@ -28,13 +28,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BubbleModal } from "@/components/ui/bubble-modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TimeRangeSelector } from "@/components/ui/time-range";
+import { ActiveFilterNotice } from "@/components/ActiveFilterNotice";
 import { tonePalette } from "@/components/dashboard/visuals";
 import { habitAccent } from "@/lib/habit-visuals";
+import { iconByName } from "@/lib/icon-map";
+import { RingStack, tone } from "@/components/tracker-detail";
 
 // Tasks and habits are Executive-tab concepts; they take its accent so opening
 // this popup from anywhere still reads as the same part of the app.
 const TASKS_ACCENT = "262 70% 62%";
 const HABITS_ACCENT = "155 65% 45%";
+// The same accents as "H S%" pairs, for tone()/RingStack (lightness follows
+// the popup's light/dark --td-l).
+const TASKS_HS = "262 70%";
+const HABITS_HS = "155 65%";
 const HABIT_PERIOD_OPTIONS = [
   { value: "today", label: "Today" }, { value: "week", label: "Week" },
   { value: "month", label: "Month" }, { value: "year", label: "Year" },
@@ -51,6 +58,9 @@ import {
   CheckCircle2, ChevronDown, ChevronUp, ChevronsUpDown, Clock, FileText, Flag,
   Flame, ListChecks, ListTodo, Pause, Play, Plus, Repeat, SkipForward,
   Sparkles, Tag as TagIcon, Target, Timer, Trash2, X,
+  Sun, Sunrise, Sunset, Moon, Brain, PenLine, Droplets, Dumbbell, Footprints,
+  BookOpen, Apple, Pill, Music, StretchHorizontal, Star, Infinity as InfinityIcon,
+  type LucideIcon,
 } from "lucide-react";
 
 // Same short-date formatter the dashboard page uses (kept local — 2 lines).
@@ -433,7 +443,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       const next = nextRecurOccurrence(t.dueDate, rule);
       if (seriesEnded(rule, next)) {
         toggleMutation.mutate({ id: t.id, status: "done" });
-        toast({ title: "Series complete 🎉" });
+        toast({ title: "Series complete" });
       } else {
         const tags = recurrenceToTags({ ...rule, done: rule.done + 1 }, t.tags || []);
         updateMutation.mutate({ id: t.id, patch: { dueDate: next || t.dueDate, tags } });
@@ -537,6 +547,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   // ("13/55 done today" beside the Executive tab's "5 completed today").
   const doneToday = useMemo(() => tasks.filter((t: any) => isDoneToday(t, todayStr, BROWSER_TIMEZONE)).length, [tasks, todayStr]);
   const todayTotal = overdueTasks.length + todayTasks.length + doneToday;
+  const todayPct = todayTotal ? Math.round((doneToday / todayTotal) * 100) : 0;
 
   // Priority color lines — critical adds a distinct violet above the rest.
   // Shared tone tokens (dashboard/visuals): red high, orange medium, blue low.
@@ -621,8 +632,15 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     const [newSub, setNewSub] = useState("");
     const [newTag, setNewTag] = useState("");
     return (
+    // A pill row inside the popup's bubble (the Executive tab's row shape),
+    // not a flat bordered card. State is an inset ring rather than a border
+    // swap: the popup's accent while open, red while overdue.
     <div
-      className={`rounded-xl border transition-all ${dimmed ? 'opacity-50 border-border/30 bg-card/40' : expanded ? 'border-emerald-500/50 bg-card shadow-[0_0_0_1px_rgba(16,185,129,0.35),0_4px_20px_-6px_rgba(16,185,129,0.25)]' : overdue ? 'border-red-500/40 bg-card/60 hover:bg-card' : 'border-border/50 bg-card/60 hover:border-border hover:bg-card'}`}
+      className={`bubble-row ${dimmed ? 'opacity-60' : ''}`}
+      style={dimmed ? undefined
+        : expanded ? { boxShadow: 'inset 0 0 0 1px hsl(var(--accent-hsl) / 0.5), 0 6px 20px -10px hsl(var(--accent-hsl) / 0.6)' }
+        : overdue ? { boxShadow: `inset 0 0 0 1px hsl(${tonePalette('critical')} / 0.35)` }
+        : undefined}
       data-testid={`task-card-${t.id}`}
     >
       <div className="flex items-start gap-2.5 p-3">
@@ -632,7 +650,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           className="shrink-0 min-w-[36px] min-h-[36px] flex items-center justify-center touch-manipulation -m-1"
           aria-label={dimmed ? "Mark as not done" : "Mark as done"}
         >
-          <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${dimmed ? 'bg-emerald-500/15 border-emerald-500/40' : expanded ? 'border-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'border-muted-foreground/40 hover:border-emerald-500'}`}>
+          <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${dimmed ? 'bg-emerald-500/15 border-emerald-500/40' : expanded ? 'border-emerald-500' : 'border-muted-foreground/40 hover:border-emerald-500'}`}>
             {(dimmed || expanded) && <Check className={`h-3.5 w-3.5 ${dimmed ? 'text-emerald-500/60' : 'text-emerald-500'}`} strokeWidth={3} />}
           </div>
         </button>
@@ -640,7 +658,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
         <button className="flex-1 min-w-0 text-left" onClick={() => setExpandedId(expanded ? null : t.id)} data-testid={`task-row-${t.id}`} aria-expanded={expanded}>
           <div className="flex items-center gap-1.5">
             {!dimmed && <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: pColor }} title={ep} />}
-            <p className={`text-[15px] font-medium ${dimmed ? 'line-through text-muted-foreground' : 'text-foreground'} truncate`}>{t.title}</p>
+            <p className={`text-[14px] font-semibold leading-snug ${dimmed ? 'line-through text-muted-foreground' : 'text-foreground'} truncate`}>{t.title}</p>
           </div>
           {!dimmed && (
             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
@@ -930,20 +948,29 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
         </div>
       }
     >
-        {/* Today's progress */}
-        <div className="flex items-center gap-2">
-          <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-            <div className="h-full bg-emerald-500 transition-all" style={{ width: `${todayTotal ? Math.round((doneToday / todayTotal) * 100) : 0}%` }} />
+        {/* Today's progress — the tracker popups' ring, in the popup's accent. */}
+        <div className="bubble flex items-center gap-3 p-3" data-testid="tasks-today-progress">
+          <RingStack size={52} stroke={6}
+            rings={[{ pct: todayPct, hs: TASKS_HS, label: "Done today" }]}
+            center={<span className="text-[12px] font-bold tabular-nums">{todayPct}%</span>} />
+          <div className="min-w-0">
+            <p className="text-[14px] font-semibold tabular-nums leading-snug">{doneToday} of {todayTotal} done</p>
+            <p className="text-[11px] text-muted-foreground">
+              {todayTotal === 0 ? "Nothing due today" : doneToday >= todayTotal ? "All caught up for today" : `${todayTotal - doneToday} left for today`}
+            </p>
           </div>
-          <span className="text-[11px] text-muted-foreground tabular-nums">{doneToday}/{todayTotal} done today</span>
         </div>
 
         {/* Tabs — Today / One-time / Recurring / Upcoming + sort. The strip
             WRAPS: a hidden horizontal scroll clipped the last tab to "Upco…"
             on phone widths with no affordance (QA 2026-09-18 F-05). */}
-        <div className="flex flex-wrap items-center gap-1 py-1 -mx-1 px-1">
+        <div className="flex flex-wrap items-center gap-2 py-1">
+          {/* The shared segmented control (td-seg), which takes the popup's
+              accent. Wraps rather than scrolls; the radius drops from a pill
+              to a rounded box so a wrapped second line still reads as one. */}
+          <div className="td-seg flex flex-wrap max-w-full" role="tablist" aria-label="Task views" style={{ borderRadius: "1.1rem" }}>
           {([
-            { key: "today", label: "Today", icon: Flame },
+            { key: "today", label: "Today", icon: Sun },
             { key: "onetime", label: "One-time", icon: ListTodo },
             { key: "recurring", label: "Recurring", icon: Repeat },
             { key: "upcoming", label: "Upcoming", icon: CalendarDays },
@@ -953,15 +980,20 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
             return (
               <button
                 key={key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                aria-pressed={active}
                 onClick={() => { setTab(key); setExpandedId(null); }}
                 data-testid={`task-tab-${key}`}
-                className={`inline-flex items-center gap-1.5 text-[13px] font-medium px-3 py-1.5 rounded-lg whitespace-nowrap shrink-0 transition-colors ${active ? 'bg-foreground text-background' : 'text-muted-foreground hover:bg-muted/60'}`}
+                className="td-seg-item shrink-0"
               >
                 <Icon className="h-3.5 w-3.5" />{label}
                 <span className={`tabular-nums text-[11px] ${active ? 'opacity-70' : 'opacity-50'}`}>({count})</span>
               </button>
             );
           })}
+          </div>
           <div className="ml-auto shrink-0">
             <button
               onClick={() => setSortBy(s => s === "smart" ? "priority" : s === "priority" ? "due" : "smart")}
@@ -1031,7 +1063,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     {composer.kind === "recurring" ? (
                       <select value={composer.recurrence} onChange={e => setComposer(c => ({ ...c, recurrence: e.target.value }))}
                         className="text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none" data-testid="composer-recurrence">
-                        {RECUR_PRESETS.filter(o => o.value).map(o => <option key={o.value} value={o.value}>{`🔁 ${o.label}`}</option>)}
+                        {RECUR_PRESETS.filter(o => o.value).map(o => <option key={o.value} value={o.value}>{`Repeats: ${o.label}`}</option>)}
                       </select>
                     ) : (
                       <div className="text-xs text-muted-foreground/60 border border-dashed border-border rounded-lg px-2 py-1.5" data-testid="composer-no-repeat">No repeat</div>
@@ -1064,7 +1096,8 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
               {/* ── Lists — smart sections per tab ── */}
               {tab === "today" ? (
                 (overdueTasks.length + todayTasks.length + unscheduledTasks.length) === 0 && !composer.open ? (
-                  <div className="text-center py-10 text-sm text-muted-foreground">Nothing for today 🎉</div>
+                  <EmptyState icon={CheckCircle2} tone="good" label="You're clear for today"
+                    hint="Nothing overdue and nothing due today." />
                 ) : (
                   <div className="space-y-4">
                     {overdueTasks.length > 0 && (
@@ -1089,7 +1122,8 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 )
               ) : tab === "onetime" ? (
                 oneTimeSections.length === 0 && !composer.open ? (
-                  <div className="text-center py-10 text-sm text-muted-foreground">No one-time tasks — tap + to add one</div>
+                  <EmptyState icon={ListTodo} accent={TASKS_ACCENT} label="No one-time tasks"
+                    hint="To-dos you do once and are finished with land here." />
                 ) : (
                   <div className="space-y-4">
                     {oneTimeSections.map((s) => (
@@ -1102,13 +1136,15 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 )
               ) : tab === "recurring" ? (
                 recurringTasks.length === 0 && !composer.open ? (
-                  <div className="text-center py-10 text-sm text-muted-foreground">No recurring tasks — tap + to add one</div>
+                  <EmptyState icon={Repeat} accent={TASKS_ACCENT} label="No recurring tasks"
+                    hint="Chores that come back on a schedule land here." />
                 ) : (
                   <div className="space-y-2">{recurringTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
                 )
               ) : (
                 upcomingSections.length === 0 && !composer.open ? (
-                  <div className="text-center py-10 text-sm text-muted-foreground">Nothing upcoming</div>
+                  <EmptyState icon={CalendarDays} tone="good" label="Nothing scheduled ahead"
+                    hint="Dated one-time tasks after today show up here." />
                 ) : (
                   <div className="space-y-4">
                     {upcomingSections.map((s) => (
@@ -1439,8 +1475,13 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
   };
   // Human label for a habit's scheduled slot, shown on each row.
   const TOD_LABEL: Record<string, string> = {
-    morning: '☀️ Morning', afternoon: '🌤️ Afternoon', evening: '🌆 Evening',
-    bedtime: '🌙 Bedtime', anytime: 'Anytime',
+    morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening',
+    bedtime: 'Bedtime', anytime: 'Anytime',
+  };
+  // One glyph per slot, shared by the filter strip, the add form and the
+  // schedule editor (lucide, not emoji — emoji render differently per OS).
+  const SLOT_ICON: Record<string, LucideIcon> = {
+    morning: Sunrise, afternoon: Sun, evening: Sunset, night: Moon, bedtime: Moon, anytime: InfinityIcon,
   };
   const fmtTime = (t?: string) => {
     if (!t || !/^\d{2}:\d{2}$/.test(t)) return '';
@@ -1449,28 +1490,32 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     return `${h}:${m} ${ampm}`;
   };
   const schedLabel = (h: any): string | null => {
-    if (h.scheduledTime && /^\d{2}:\d{2}$/.test(h.scheduledTime)) return `⏰ ${fmtTime(h.scheduledTime)}`;
+    if (h.scheduledTime && /^\d{2}:\d{2}$/.test(h.scheduledTime)) return fmtTime(h.scheduledTime);
     if (h.timeOfDay) return TOD_LABEL[h.timeOfDay] || null;
     return null;
   };
-  const getEmoji = (name: string) => {
+  // A habit's glyph: its stored icon when that names a known lucide icon
+  // (the Habits page stores names like "Droplets"), else a guess from the
+  // name, else the habits concept icon. Same keyword table the emoji used.
+  const guessHabitIcon = (name: string): LucideIcon => {
     const n = (name || '').toLowerCase();
-    if (n.includes('meditat') || n.includes('mindful')) return '🧘';
-    if (n.includes('journal') || n.includes('write') || n.includes('diary')) return '📝';
-    if (n.includes('water') || n.includes('hydrat')) return '💧';
-    if (n.includes('run') || n.includes('jog')) return '🏃';
-    if (n.includes('exercise') || n.includes('workout') || n.includes('gym') || n.includes('lift')) return '💪';
-    if (n.includes('walk') || n.includes('step')) return '👣';
-    if (n.includes('read') || n.includes('book')) return '📚';
-    if (n.includes('sleep') || n.includes('bed')) return '😴';
-    if (n.includes('eat') || n.includes('food') || n.includes('meal') || n.includes('sugar')) return '🥗';
-    if (n.includes('vitamin') || n.includes('pill') || n.includes('medication') || n.includes('medicine')) return '💊';
-    if (n.includes('teeth') || n.includes('brush') || n.includes('dental')) return '🦷';
-    if (n.includes('guitar') || n.includes('music') || n.includes('piano') || n.includes('practic')) return '🎸';
-    if (n.includes('wake') || n.includes('morning')) return '☀️';
-    if (n.includes('stretch') || n.includes('yoga')) return '🤸';
-    return '⭐';
+    if (n.includes('meditat') || n.includes('mindful')) return Brain;
+    if (n.includes('journal') || n.includes('write') || n.includes('diary')) return PenLine;
+    if (n.includes('water') || n.includes('hydrat')) return Droplets;
+    if (n.includes('run') || n.includes('jog')) return Footprints;
+    if (n.includes('exercise') || n.includes('workout') || n.includes('gym') || n.includes('lift')) return Dumbbell;
+    if (n.includes('walk') || n.includes('step')) return Footprints;
+    if (n.includes('read') || n.includes('book')) return BookOpen;
+    if (n.includes('sleep') || n.includes('bed')) return Moon;
+    if (n.includes('eat') || n.includes('food') || n.includes('meal') || n.includes('sugar')) return Apple;
+    if (n.includes('vitamin') || n.includes('pill') || n.includes('medication') || n.includes('medicine')) return Pill;
+    if (n.includes('teeth') || n.includes('brush') || n.includes('dental')) return Sparkles;
+    if (n.includes('guitar') || n.includes('music') || n.includes('piano') || n.includes('practic')) return Music;
+    if (n.includes('wake') || n.includes('morning')) return Sunrise;
+    if (n.includes('stretch') || n.includes('yoga')) return StretchHorizontal;
+    return Star;
   };
+  const habitIconOf = (h: any): LucideIcon => iconByName(h.icon, guessHabitIcon(h.name));
   // Row order is FROZEN for the life of the open popup (2026-07-29 tester
   // report: sorting by live streak re-ordered the list mid-tap, so rapid
   // toggles landed on the wrong habit — same failure mode as the bills PAY
@@ -1520,10 +1565,9 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
     { Icon: ListChecks, color: '205 90% 58%', value: checkinsInWindow, label: period === 'today' ? 'Check-ins today' : 'Check-ins' },
   ];
   const TIME_FILTERS = [
-    { key: 'all', label: 'All' }, { key: 'morning', label: '☀️ Morning' },
-    { key: 'afternoon', label: 'Afternoon' }, { key: 'evening', label: 'Evening' }, { key: 'night', label: '🌙 Night' },
+    { key: 'all', label: 'All' }, { key: 'morning', label: 'Morning' },
+    { key: 'afternoon', label: 'Afternoon' }, { key: 'evening', label: 'Evening' }, { key: 'night', label: 'Night' },
   ] as const;
-  const ringR = 26, ringC = 2 * Math.PI * ringR;
 
   return (
     // A SIXTH header design lived here: a centre-aligned title flanked by a
@@ -1597,14 +1641,19 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
               <p className="micro-label text-muted-foreground/70 mb-1 flex items-center gap-1">
                 <Clock className="h-3 w-3" /> When?
               </p>
-              <div className="flex flex-wrap gap-1.5">
-                {(['anytime', 'morning', 'afternoon', 'evening', 'bedtime'] as const).map((slot) => (
-                  <button key={slot} type="button" onClick={() => setNewHabitTimeOfDay(slot)}
-                    data-testid={`new-habit-tod-${slot}`}
-                    className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize transition-colors ${newHabitTimeOfDay === slot ? 'bg-primary text-primary-foreground' : 'bg-muted/50 text-muted-foreground hover:bg-muted'}`}>
-                    {slot === 'bedtime' ? 'Bedtime' : slot}
-                  </button>
-                ))}
+              <div className="td-seg flex flex-wrap max-w-full" style={{ borderRadius: '1.1rem' }}>
+                {(['anytime', 'morning', 'afternoon', 'evening', 'bedtime'] as const).map((slot) => {
+                  const SlotIcon = SLOT_ICON[slot];
+                  return (
+                    <button key={slot} type="button" onClick={() => setNewHabitTimeOfDay(slot)}
+                      aria-pressed={newHabitTimeOfDay === slot}
+                      data-testid={`new-habit-tod-${slot}`}
+                      className="td-seg-item capitalize">
+                      <SlotIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                      {slot === 'bedtime' ? 'Bedtime' : slot}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1613,18 +1662,14 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
         {/* Summary: overall ring + stat chips */}
         <div className="pt-3">
           <div className="bubble flex items-center gap-3 p-3">
-            <div className="relative shrink-0" style={{ width: 64, height: 64 }}>
-              <svg width="64" height="64" className="-rotate-90">
-                <circle cx="32" cy="32" r={ringR} fill="none" stroke="hsl(var(--muted))" strokeWidth="6" />
-                <circle cx="32" cy="32" r={ringR} fill="none" stroke="hsl(262 70% 60%)" strokeWidth="6" strokeLinecap="round"
-                  strokeDasharray={`${(overallPct / 100) * ringC} ${ringC}`}
-                  style={{ transition: 'stroke-dasharray 0.7s cubic-bezier(0.34,1.56,0.64,1)' }} />
-              </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
+            {/* The tracker popups' ring, in the habits accent — the same
+                green the Habits page summary uses. */}
+            <RingStack size={68} stroke={7}
+              rings={[{ pct: overallPct, hs: HABITS_HS, label: 'Overall' }]}
+              center={<>
                 <span className="text-sm font-bold tabular-nums leading-none">{overallPct}%</span>
                 <span className="micro-label text-muted-foreground mt-0.5">Overall</span>
-              </div>
-            </div>
+              </>} />
             <div className="grid flex-1 grid-cols-2 gap-x-2 gap-y-2.5">
               {STAT_CHIPS.map(({ Icon, color, value, label }) => (
                 <div key={label} className="flex items-center gap-1.5">
@@ -1641,13 +1686,19 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
 
         {/* Time-of-day filter chips */}
         <div className="pt-2.5 pb-1">
-          <div className="flex flex-wrap gap-1.5">
-            {TIME_FILTERS.map((f) => (
-              <button key={f.key} onClick={() => setTimeFilter(f.key)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${timeFilter === f.key ? 'bg-primary text-primary-foreground' : 'bg-muted/50 text-muted-foreground hover:bg-muted'}`}>
-                {f.label}
-              </button>
-            ))}
+          <div className="td-seg flex flex-wrap max-w-full" role="group" aria-label="Filter habits by time of day" style={{ borderRadius: '1.1rem' }}>
+            {TIME_FILTERS.map((f) => {
+              const SlotIcon = f.key === 'all' ? null : SLOT_ICON[f.key];
+              return (
+                <button key={f.key} type="button" onClick={() => setTimeFilter(f.key)}
+                  aria-pressed={timeFilter === f.key}
+                  data-testid={`habits-time-filter-${f.key}`}
+                  className="td-seg-item">
+                  {SlotIcon && <SlotIcon className="h-3.5 w-3.5" aria-hidden="true" />}
+                  {f.label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1665,26 +1716,36 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
               ctaLabel="Show all" onCta={() => setTimeFilter('all')} />
           ) : (
             <div className="space-y-2 pt-1">
+              {/* Some habits hidden by the time filter — say so, never let a
+                  short list pass for the whole account. */}
+              {timeFilter !== 'all' && (
+                <ActiveFilterNotice shown={visible.length} total={active.length}
+                  noun={{ one: 'habit', many: 'habits' }}
+                  labels={[TIME_FILTERS.find((f) => f.key === timeFilter)?.label || timeFilter]}
+                  onClear={() => setTimeFilter('all')} testId="habits-time-filter-notice" />
+              )}
               {visible.map((h: any) => {
                 // The habit's own hue (or its palette slot) — habitAccent is the
                 // one resolver the Habits page uses, so a habit keeps its colour.
                 const hs = habitAccent(h).hs;
-                const color = `hsl(${hs} 55%)`;
+                // tone() takes lightness from the popup's --td-l, so the habit's
+                // colour reads on both themes (the Habits page does the same).
+                const color = tone(hs);
+                const HabitIcon = habitIconOf(h);
                 const dayProgress = progressOn(h, today);
                 const done = dayProgress.isComplete;
                 const multi = dayProgress.required > 1;
                 const streak = h.currentStreak || 0;
-                const emoji = h.icon || getEmoji(h.name);
                 const freqLabel = (h.targetPerDay || 1) > 1 ? `${h.targetPerDay}× daily` : (h.frequency === 'weekly' ? 'Weekly' : 'Daily');
                 const sLabel = schedLabel(h);
                 const editing = editingScheduleId === h.id;
                 return (
                   <div key={h.id} className="bubble">
                     <div className="flex items-center gap-3 px-3 py-2.5">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg"
-                        style={{ background: `hsl(${hs} 55% / 0.13)`, border: `1px solid hsl(${hs} 55% / 0.33)` }}>
-                        <span>{emoji}</span>
-                      </div>
+                      <span className="medallion" aria-hidden="true"
+                        style={{ width: 40, height: 40, ["--accent-hsl" as any]: `${hs} 50%` }}>
+                        <HabitIcon className="h-[18px] w-[18px]" style={{ color }} />
+                      </span>
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-semibold truncate">{h.name}</p>
                         <p className="text-[11px] text-muted-foreground truncate">
@@ -1725,17 +1786,21 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                         )}
                         {/* The last 7 days: filled only when the whole day's
                             target was met, half-lit when it was started. */}
-                        <div className="mt-1.5 flex gap-1">
+                        {/* Drawn as heatmap cells in the habit's own colour:
+                            full when done, a lighter tint when started, a faint
+                            wash when scheduled but missed, plain otherwise. */}
+                        <div className="mt-1.5 flex gap-[3px]" aria-label="Last 7 days">
                           {last7.map((dk) => {
                             const p = progressOn(h, dk);
                             return (
-                              <span key={dk} className="h-2 w-2 rounded-full" title={`${dk} — ${p.isScheduled ? p.label : 'not scheduled'}`}
+                              <span key={dk} className="td-heat-cell block h-2.5 w-2.5" title={`${dk} — ${p.isScheduled ? p.label : 'not scheduled'}`}
                                 style={{
-                                  background: p.isComplete ? 'hsl(155 60% 48%)' : 'hsl(var(--muted))',
-                                  // A started-but-unfinished day is neither a
-                                  // success nor a blank — show it as partial.
-                                  opacity: !p.isComplete && p.isPartial ? 0.95 : 1,
-                                  boxShadow: !p.isComplete && p.isPartial ? 'inset 0 0 0 2px hsl(155 60% 48%)' : undefined,
+                                  background: p.isComplete ? color
+                                    // A started-but-unfinished day is neither a
+                                    // success nor a blank — show it as partial.
+                                    : p.isPartial ? tone(hs, 0.45)
+                                    : p.isScheduled ? tone(hs, 0.12)
+                                    : 'hsl(var(--muted) / 0.6)',
                                 }} />
                             );
                           })}
@@ -1748,8 +1813,9 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                           <Clock className="h-3.5 w-3.5" />
                         </button>
                         <span className="flex items-center gap-0.5 text-[11px] font-semibold tabular-nums leading-none"
-                          style={{ color: streak > 0 ? 'hsl(28 90% 55%)' : 'hsl(var(--muted-foreground))' }}>
-                          {streak} {streak > 0 ? '🔥' : ''}
+                          style={{ color: streak > 0 ? color : 'hsl(var(--muted-foreground))' }}>
+                          {streak}
+                          {streak > 0 && <Flame className="h-3 w-3" aria-hidden="true" />}
                         </span>
                         <span className="micro-label text-muted-foreground/70 leading-none">day streak</span>
                         <button onClick={() => toggleToday(h)} disabled={togglePending}
@@ -1758,8 +1824,8 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                           style={{ minWidth: 40, minHeight: 40 }}>
                           <div className="flex h-7 w-7 items-center justify-center rounded-full border-2 transition-all"
                             style={{
-                              background: done ? 'hsl(262 70% 58%)' : 'transparent',
-                              borderColor: done || dayProgress.isPartial ? 'hsl(262 70% 58%)' : 'hsl(var(--muted-foreground) / 0.5)',
+                              background: done ? color : 'transparent',
+                              borderColor: done || dayProgress.isPartial ? color : 'hsl(var(--muted-foreground) / 0.5)',
                             }}>
                             {done
                               ? <Check className="h-4 w-4 text-white" strokeWidth={3} />
@@ -1771,7 +1837,7 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                                      would overflow the 28px circle, so past 9 the
                                      count alone carries it — the dots above have
                                      the full picture either way. */
-                                  <span className="text-[11px] font-bold tabular-nums leading-none" style={{ color: 'hsl(262 70% 58%)' }}>
+                                  <span className="text-[11px] font-bold tabular-nums leading-none" style={{ color }}>
                                     {dayProgress.required >= 10 ? dayProgress.completed : `${dayProgress.completed}/${dayProgress.required}`}
                                   </span>
                                 )
@@ -1791,17 +1857,20 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
                             <Check className="h-3 w-3" /> Done
                           </button>
                         </div>
-                        <div className="flex flex-wrap gap-1.5">
+                        <div className="td-seg flex flex-wrap max-w-full" style={{ borderRadius: '1.1rem' }}>
                           {(['anytime', 'morning', 'afternoon', 'evening', 'bedtime'] as const).map((slot) => {
                             const activeSlot = (h.timeOfDay || 'anytime') === slot && !h.scheduledTime;
+                            const SlotIcon = SLOT_ICON[slot];
                             return (
                               <button key={slot} type="button"
                                 // Apply the slot and collapse the editor — picking a
                                 // named slot is a complete edit, so close right away.
                                 onClick={() => { setHabitSchedule(h, slot, null); setEditingScheduleId(null); }}
                                 disabled={updateHabitMutation.isPending}
+                                aria-pressed={activeSlot}
                                 data-testid={`habit-tod-${slot}-${h.id}`}
-                                className={`rounded-full px-2.5 py-1 text-xs font-medium capitalize transition-colors ${activeSlot ? 'bg-primary text-primary-foreground' : 'bg-muted/50 text-muted-foreground hover:bg-muted'}`}>
+                                className="td-seg-item capitalize disabled:opacity-50">
+                                <SlotIcon className="h-3.5 w-3.5" aria-hidden="true" />
                                 {slot === 'bedtime' ? 'Bedtime' : slot}
                               </button>
                             );
@@ -1836,11 +1905,16 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
 
         {/* Motivational footer */}
         <div className="pt-1">
-          <div className="bubble flex items-center gap-3 px-4 py-3" style={{ ["--accent-hsl" as any]: "262 70% 62%" }}>
-            <Sparkles className="h-5 w-5 shrink-0" style={{ color: 'hsl(262 70% 62%)' }} />
+          {/* Shaped like the tracker popups' InsightCard: bubble + small
+              medallion + micro-label, in the habits accent. */}
+          <div className="bubble flex items-start gap-3 p-3.5" style={{ ["--accent-hsl" as any]: HABITS_ACCENT }} data-testid="habits-popup-insight">
+            <span className="medallion medallion-sm" aria-hidden="true">
+              <Sparkles className="h-4 w-4" />
+            </span>
             <div className="min-w-0">
-              <p className="text-sm font-semibold">Small habits, big changes.</p>
-              <p className="text-xs text-muted-foreground">
+              <p className="micro-label" style={{ color: tone(HABITS_HS) }}>Momentum</p>
+              <p className="text-sm font-semibold leading-snug mt-0.5">Small habits, big changes.</p>
+              <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
                 {active.length === 0 ? 'Add your first habit to begin.'
                   : overallPct >= 80 ? "You're doing great!"
                   : overallPct > 0 ? 'Keep it up!'
