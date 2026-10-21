@@ -100,3 +100,17 @@ export function themeVars(theme: TrackerTheme): React.CSSProperties {
     ["--accent-hsl" as any]: accentTriple(theme.hs),
   };
 }
+
+/**
+ * Accent scope for screens outside a tracker (Habits, Finance, Wellness …):
+ * put `className="td-scope"` and `style={accentScope(hs, hs2)}` on a wrapper
+ * and every tracker-detail primitive inside (HeroMetric, StatTile,
+ * CalendarHeatmap, RingStack, TimeRangeSelector) picks up those colors.
+ */
+export function accentScope(hs: string, hs2: string = hs): React.CSSProperties {
+  return {
+    ["--td-hs" as any]: hs,
+    ["--td-hs2" as any]: hs2,
+    ["--accent-hsl" as any]: accentTriple(hs),
+  };
+}
