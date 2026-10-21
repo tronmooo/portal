@@ -124,7 +124,7 @@ export function TrendChart({
           </defs>
           <CartesianGrid strokeDasharray="2 6" stroke="hsl(var(--border))" vertical={false} />
           <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
-          <YAxis tick={axisTick} tickLine={false} axisLine={false} width={yTickFormatter ? 58 : 44} tickFormatter={yTickFormatter ?? fmtTick}
+          <YAxis tick={axisTick} tickLine={false} axisLine={false} width={yTickFormatter ? 58 : unit === "$" ? 54 : 44} tickFormatter={yTickFormatter ?? fmtTick}
             domain={yDomain ?? (mode === "sum" ? [0, "auto"] : ["auto", "auto"])} allowDecimals={false} />
           <Tooltip content={<ChartTooltip unit={unit} mode={mode} valueLabel={valueLabel} />} cursor={{ fill: "hsl(var(--muted) / 0.5)", stroke: "hsl(var(--border))" }} />
           {typeof goal === "number" && goal > 0 && (
