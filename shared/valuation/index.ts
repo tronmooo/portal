@@ -4,3 +4,4 @@ export * from "./planner";
 export * from "./internal-evidence";
 export * from "./engine";
 export * from "./freshness";
+export * from "./comparables";

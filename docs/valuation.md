@@ -17,9 +17,11 @@ Valuation Strategy Planner shared/valuation/planner.ts      methods from EVIDENC
                                                             transaction/trajectory, description → live comps,
                                                             income → capitalization, history → trend…)
         ↓
-Evidence providers         server/valuation/providers/*     market-quote (public quote API), live-search
-                                                            (existing Perplexity/Anthropic appraiser),
-                                                            internal (shared/valuation/internal-evidence.ts)
+Evidence providers         server/valuation/providers/*     market-quote (public quote API),
+                                                            market-research (itemized web research: Claude
+                                                            web search + OpenAI web search, VIN decode),
+                                                            live-search (one-shot Perplexity appraiser,
+                                                            a cross-check), internal (internal-evidence.ts)
         ↓
 Valuation Engine           shared/valuation/engine.ts       weight = method × reliability × relevance × decay
 Confidence / Range Engine                                   blend, dispersion, honest confidence, no false precision
@@ -79,6 +81,37 @@ planning could not classify/plan the asset confidently, and its answer
 symbol) is cached by the asset's structural signature. It returns hints, never
 a value. The live-search appraiser (Perplexity → Anthropic fallback) is one
 evidence provider among others, weighed by the engine like any other source.
+
+## Market research (how the number is found)
+
+The research step works the way a person does in ChatGPT: give the model the
+whole description and let it run several searches across the sources that
+price THAT kind of thing (pricing guides, completed sales, instant offers,
+listings, AVMs). It records every concrete price it read with its type
+(`sold`, `guide`, `offer`, `listing`…) and basis (`private_party`,
+`dealer_retail`, `trade_in`…). It never chooses the value.
+
+Code does the pricing (`shared/valuation/comparables.ts`, `engine.ts`):
+
+* **One basis.** Every price is restated as fair market value: what it would
+  sell for between private parties. Dealer retail ×0.90, trade-in/wholesale
+  ×1.15/1.12, an asking price ×0.95 more.
+* **Pooled, not stacked.** Comparables become one estimate: weighted median,
+  anything more than 35% from it set aside, the middle half as the band.
+  With three or more comps, the one-shot live-search figure is halved to a
+  cross-check.
+* **Sanity ceiling.** When research says the item depreciates and found its
+  price new, the estimate is capped there.
+* **Exact identity.** A VIN (field or notes) is decoded through NHTSA vPIC;
+  the decoded trim/drivetrain go to research and fill empty or "unknown"
+  fields.
+
+Researchers run when their key is set (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`;
+turn one off with `VALUATION_RESEARCH_CLAUDE=0` / `VALUATION_RESEARCH_OPENAI=0`).
+Models: `VALUATION_RESEARCH_MODEL` (default `claude-sonnet-4-6`),
+`VALUATION_RESEARCH_OPENAI_MODEL` (default `gpt-5`). The refresh and lookup
+routes run on the 300s AI function (`vercel.json`) because research takes
+tens of seconds; it is always background work, never on the open path.
 
 ## Adding a source
 

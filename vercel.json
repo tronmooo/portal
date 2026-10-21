@@ -33,6 +33,14 @@
       "destination": "/api/ai"
     },
     {
+      "source": "/api/profiles/:id/valuation/refresh",
+      "destination": "/api/ai"
+    },
+    {
+      "source": "/api/profiles/:id/lookup-value",
+      "destination": "/api/ai"
+    },
+    {
       "source": "/api/:path*",
       "destination": "/api"
     },

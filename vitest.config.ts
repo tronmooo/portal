@@ -186,6 +186,7 @@ export default defineConfig({
       'tests/valuation-service.test.ts',
       'tests/valuation-routes.test.ts',
       'tests/valuation-sweep.test.ts',
+      'tests/valuation-market-research.test.ts',
       'tests/use-asset-valuation.dom.test.tsx',
       'tests/valuation-sweep-e2e.dom.test.tsx',
       'tests/confirm-extraction-save.test.ts',
