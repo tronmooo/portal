@@ -282,6 +282,8 @@ describe("Executive Dashboard · due and expiring documents", () => {
     expect(dateRuleVerbs("due")[0]).toBe("Due");
     expect(dateRuleVerbs("renewal")[0]).toBe("Renews");
     expect(dateRuleVerbs("due")[1]).toBe("Was due");
+    // A missed renewal must not read as a done one ("Renewed 4 days ago").
+    expect(dateRuleVerbs("renewal")[1]).toBe("Renewal was due");
   });
 
   it("drops out of the window once the date is far enough away", () => {

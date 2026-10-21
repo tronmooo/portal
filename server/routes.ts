@@ -60,7 +60,7 @@ import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rena
 import { checkProfileDelete } from "@shared/profile-delete";
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { cascadeHabitRename } from "./habit-rename-cascade";
-import { normalizeEntityDateFields, impossibleCalendarDays, isRealCalendarDay, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, markSupersededDocumentRules, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, type DateRule } from "@shared/date-rules";
+import { normalizeEntityDateFields, impossibleCalendarDays, isRealCalendarDay, classifyDateField, normalizeFieldKey, bareDateOf, rulesFromAll, rulesFromDocuments, markSupersededDocumentRules, rulesFromSeries, dedupeRules, daysBetweenISO, isDocumentAttentionRule, ruleTypeLabel, CALENDAR_OPT_OUT_KEY, documentExpirationDate, DOC_UPCOMING_WINDOW_DAYS, type DateRule } from "@shared/date-rules";
 import { markOccurrence as markRecurringOccurrence, pruneOccurrenceTags as pruneRecurringOccurrenceTags, setSeriesFlag as setRecurringSeriesFlag } from "@shared/recurring-dates";
 import type { CalendarDateDecision } from "@shared/extraction-calendar";
 import { itemsClaimedByActions, documentDateOptOuts, type ProposedAction } from "@shared/extraction-actions";
@@ -10991,9 +10991,12 @@ Match on meaning, not just substring — "car bill" should match an auto-loan ob
             overdueTaskCount: openTasks.filter((t: any) => (dayDelta(t.dueDate) ?? 1) < 0).length,
             tasksDueTodayCount: openTasks.filter((t: any) => dayDelta(t.dueDate) === 0).length,
             overdueObligationCount: activeObs.filter((o: any) => (dayDelta(o.nextDueDate) ?? 1) < 0).length,
+            // `expirationDate` is never stored on a document — the date lives
+            // in its extracted fields — so read it the way the rest of the app
+            // does, over the same 45-day window the Executive tab lists.
             expiringDocCount: documents.filter((d: any) => {
-              const du = dayDelta(d.expirationDate);
-              return du != null && du >= 0 && du <= 30;
+              const du = dayDelta(d.expirationDate || documentExpirationDate(d));
+              return du != null && du >= 0 && du <= DOC_UPCOMING_WINDOW_DAYS;
             }).length,
             habitCount: habits.length,
             medicationCount: meds.length,
@@ -11051,7 +11054,7 @@ Focus on:
 - documents not linked to any profile → link them (only if unlinkedDocCount > 0)
 - recurring vendors in recentExpenses with no matching obligation → add as subscription
 - empty trackers → archive or use (only if emptyTrackerCount > 0)
-- overdue tasks or obligations, and documents expiring within 30 days
+- overdue tasks or obligations, and documents expiring within ${DOC_UPCOMING_WINDOW_DAYS} days
 - medications with no dose logged today, and readings flagged out of range
 - duplicate-looking profile types
 - missing essential profiles (self has no income/account)

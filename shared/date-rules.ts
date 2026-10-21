@@ -578,7 +578,9 @@ function inferSubtype(key: string, ctx: string): string | undefined {
 const VERB: Partial<Record<DateRuleType, [string, string]>> = {
   // [future, past]
   expiration: ["Expires", "Expired"],
-  renewal: ["Renews", "Renewed"],
+  // Past: the renewal was DUE. "Renewed 4 days ago" read as done, on an
+  // alert that exists because it has not been done.
+  renewal: ["Renews", "Renewal was due"],
   due: ["Due", "Was due"],
   deadline: ["Due", "Was due"],
   cancellation: ["Cancels", "Cancelled"],

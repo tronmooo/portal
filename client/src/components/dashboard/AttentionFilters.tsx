@@ -9,8 +9,8 @@
 // the account rather than the device.
 
 import { useEffect, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { DEFAULT_ATTENTION_CONFIG, type AttentionConfig, type AttentionTier } from "@shared/attention";
 
 export const ATTENTION_PREFS_KEY = "attention_prefs";
@@ -34,6 +34,9 @@ export function parseAttentionPrefs(raw: string | null | undefined): AttentionCo
 }
 
 export function useAttentionPrefs(enabled = true) {
+  // The client this tree renders with (one and the same in the app; a test's
+  // own client in a test), so the write-through lands where the reader looks.
+  const queryClient = useQueryClient();
   const { data } = useQuery<AttentionConfig>({
     queryKey: QUERY_KEY,
     enabled,
@@ -56,25 +59,6 @@ export function useAttentionPrefs(enabled = true) {
     prefs: data ?? DEFAULT_ATTENTION_CONFIG,
     setPrefs: (next: AttentionConfig) => save.mutate(next),
   };
-}
-
-function Toggle({ label, on, onChange, testId }: {
-  label: string; on: boolean; onChange: (v: boolean) => void; testId: string;
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={on}
-      onClick={() => onChange(!on)}
-      data-testid={testId}
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium transition-colors ${
-        on ? "border-primary/50 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted"
-      }`}
-    >
-      <span className={`w-1.5 h-1.5 rounded-full ${on ? "bg-primary" : "bg-muted-foreground/40"}`} />
-      {label}
-    </button>
-  );
 }
 
 function DayPicker({ label, value, options, onChange, testId }: {
@@ -123,25 +107,15 @@ export function AttentionFilters({ prefs, onChange }: {
 
   return (
     <div className="mb-2 bubble px-3 py-2.5 space-y-2.5" data-testid="attention-filters">
-      <div>
-        <p className="micro-label text-muted-foreground mb-1.5">Show</p>
-        <div className="flex flex-wrap gap-1.5">
-          <Toggle label="Tasks" on={draft.includeTasks} onChange={v => set({ includeTasks: v })} testId="attention-toggle-tasks" />
-          <Toggle label="Habits" on={draft.includeHabits} onChange={v => set({ includeHabits: v })} testId="attention-toggle-habits" />
-          <Toggle label="Today's events" on={draft.includeEvents} onChange={v => set({ includeEvents: v })} testId="attention-toggle-events" />
-          <Toggle label="Birthdays" on={draft.includeBirthdays} onChange={v => set({ includeBirthdays: v })} testId="attention-toggle-birthdays" />
-        </div>
-      </div>
-
+      {/* 2026-10-21: Needs Attention is documents, renewals and deadlines —
+          bills and tasks have their own cards — so the old Tasks / Habits /
+          Today's events / Birthdays switches and the bill and task windows had
+          nothing left to change. What
+          remains is how far ahead to look and how urgent a row must be. */}
       <div className="space-y-1.5">
-        <DayPicker label="Documents" value={draft.docsWithinDays} options={[7, 14, 30, 45, 60, 90]} onChange={v => set({ docsWithinDays: v })} testId="attention-days-docs" />
-        <DayPicker label="Bills" value={draft.billsWithinDays} options={[7, 14, 30, 60]} onChange={v => set({ billsWithinDays: v })} testId="attention-days-bills" />
-        <DayPicker label="Tasks" value={draft.tasksWithinDays} options={[1, 3, 7, 14, 30]} onChange={v => set({ tasksWithinDays: v })} testId="attention-days-tasks" />
-      </div>
-
-      <div>
-        <p className="micro-label text-muted-foreground mb-1.5">Urgency</p>
-        <div className="flex flex-wrap gap-1.5">
+        <p className="micro-label text-muted-foreground">Needs Attention</p>
+        <DayPicker label="Look ahead" value={draft.docsWithinDays} options={[7, 14, 30, 45, 60, 90]} onChange={v => set({ docsWithinDays: v })} testId="attention-days-docs" />
+        <div className="flex flex-wrap gap-1.5 pt-0.5">
           {TIERS.map(t => (
             <button
               key={t.key}

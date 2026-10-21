@@ -141,6 +141,7 @@ export default defineConfig({
       'tests/due-label.test.ts',
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
+      'tests/executive-attention.test.ts',
       'tests/modal-history.test.tsx',
       'tests/wellness-metrics.test.ts',
       'tests/wellness-overview.test.tsx',

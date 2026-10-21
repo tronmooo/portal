@@ -78,11 +78,17 @@ describe("F-44 Generate AI advice", () => {
     expect(attention.contains(advice)).toBe(true);
     for (const s of SERVER_RESPONSE.suggestions) expect(advice.textContent).toContain(s.title);
     expect(advice.textContent).toContain("It is filed under general.");
-    // The force fetch happened once, with the scope on the query string.
-    const calls = fetchStub.mock.calls.filter((c: any[]) => String(c[0]).includes("ai-suggestions"));
-    expect(calls).toHaveLength(1);
-    expect(String(calls[0][0])).toContain("force=true");
-    expect(String(calls[0][0])).toContain("profileIds=p1");
+    // One fetch, with the scope on the query string. The first ask may use
+    // the server's 30-minute cache (it is keyed on a data fingerprint)…
+    const calls = () => fetchStub.mock.calls.filter((c: any[]) => String(c[0]).includes("ai-suggestions"));
+    expect(calls()).toHaveLength(1);
+    expect(String(calls()[0][0])).not.toContain("force=true");
+    expect(String(calls()[0][0])).toContain("profileIds=p1");
+    // …and "Refresh" on advice already shown forces a new answer.
+    fireEvent.click(screen.getByTestId("exec-recommendations-generate"));
+    await waitFor(() => expect(calls()).toHaveLength(2));
+    expect(String(calls()[1][0])).toContain("force=true");
+    expect(String(calls()[1][0])).toContain("profileIds=p1");
   });
 
   it("says so when the request fails, and offers Retry", async () => {

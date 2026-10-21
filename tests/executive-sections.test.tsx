@@ -85,9 +85,12 @@ describe("WeeklySummarySection", () => {
 // Documents | Wellness | Upcoming) with Recent Activity full-width at the
 // bottom. Records are still routed by shared/executive-sections.ts, so the
 // duplication the 2026-07-29 report showed (a task under both "Overdue tasks"
-// and "Alerts") cannot come back — with ONE deliberate exception: an expiring
-// document appears under Needs Attention (urgency) AND Documents (inventory),
-// exactly as the reference mock draws it.
+// and "Alerts") cannot come back.
+//
+// 2026-10-21: Needs Attention is documents, renewals and deadlines. Bills live
+// in the Money card (overdue first, two-tap Pay), overdue tasks in the Tasks
+// card, and the Documents card is the library (counts + recently added) — so
+// an expiring document is listed once, under Needs Attention.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("ExecutiveBriefing", () => {
   const enhancedWith = (over: any = {}) => ({
@@ -137,27 +140,106 @@ describe("ExecutiveBriefing", () => {
     }
   });
 
-  it("puts an overdue bill in Needs Attention with its amount", async () => {
+  it("keeps bills out of Needs Attention: an overdue bill leads the Money card instead", async () => {
     await mount(enhancedWith());
     const attn = screen.getByTestId("exec-card-attention");
-    expect(attn.textContent).toContain("Phone");
-    expect(attn.textContent).toContain("$87 overdue");
+    expect(attn.textContent).toContain("Documents, renewals & deadlines");
+    expect(attn.textContent).not.toContain("Phone");
+    expect(screen.queryByTestId("exec-item-bill:b1")).toBeNull();
+    const money = screen.getByTestId("exec-card-money");
+    const row = screen.getByTestId("exec-money-bill-b1");
+    expect(money.contains(row)).toBe(true);
+    expect(row.textContent).toContain("Phone");
+    expect(row.textContent).toContain("2d overdue");
+    expect(money.textContent).toContain("1 overdue");
   });
 
-  it("shows an expiring document under Needs Attention AND in the Documents card", async () => {
+  it("lists an expiring document once — under Needs Attention — and the Documents card counts it", async () => {
     await mount(enhancedWith());
-    // Inventory: the Documents card, with its expiry countdown.
+    const attn = screen.getByTestId("exec-card-attention");
+    expect(attn.textContent).toContain("Passport");
+    // Grouped by urgency: 12 days out is "This month".
+    expect(screen.getByTestId("exec-attention-band-month")).toBeTruthy();
+    // The Documents card is the library now: counts, not a second list.
     const docs = screen.getByTestId("exec-card-documents");
-    expect(docs.textContent).toContain("Passport");
-    expect(docs.textContent).toContain("Expires in 12 days");
-    // Urgency: the same document surfaces in Needs Attention, as in the mock.
-    expect(screen.getByTestId("exec-card-attention").textContent).toContain("Passport");
+    expect(docs.textContent).not.toContain("Passport");
+    expect(screen.getByTestId("exec-docs-count-soon").textContent).toContain("1");
+    expect(screen.getByTestId("exec-docs-count-expired").textContent).toContain("0");
+  });
+
+  it("shows the most recently added documents in the Documents card", async () => {
+    stubRoutes({
+      "/api/documents": [{ id: "dr1", name: "Lease agreement", type: "lease", createdAt: new Date().toISOString() }],
+    });
+    await mount(enhancedWith());
+    await waitFor(() => expect(screen.getByTestId("exec-docs-recent-dr1").textContent).toContain("Lease agreement"));
+  });
+
+  it("keeps overdue tasks and bill alerts out of Needs Attention", async () => {
+    const past = (() => { const d = new Date(); d.setDate(d.getDate() - 3); return d.toLocaleDateString("en-CA"); })();
+    stubRoutes({
+      "/api/tasks": [
+        { id: "t-late", title: "Renew gym badge", status: "open", dueDate: past },
+        { id: "t-later", title: "Someday thing", status: "open" },
+      ],
+      "/api/notifications": [
+        { id: "n-bill", type: "bill_due", title: "Water bill overdue", severity: "critical", entityType: "obligation", entityId: "ob-x" },
+        { id: "n-custom", type: "custom", title: "Call the insurer about the claim", severity: "warning" },
+      ],
+    });
+    await mount(enhancedWith());
+    await waitFor(() => expect(screen.getByTestId("exec-card-tasks").textContent).toContain("Renew gym badge"));
+    const attn = screen.getByTestId("exec-card-attention").textContent || "";
+    expect(attn).not.toContain("Renew gym badge");
+    expect(attn).not.toContain("Water bill overdue");
+    // A real alert that isn't about a bill or task still belongs here.
+    await waitFor(() => expect(screen.getByTestId("exec-card-attention").textContent).toContain("Call the insurer"));
+    // The Tasks card lists the overdue task first, marked overdue.
+    const tasks = screen.getByTestId("exec-card-tasks").textContent || "";
+    expect(tasks.indexOf("Renew gym badge")).toBeLessThan(tasks.indexOf("Someday thing"));
+    expect(tasks).toContain("Overdue");
+  });
+
+  it("never names an event that already happened today as Next Important", async () => {
+    const inDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
+    stubRoutes({
+      "/api/calendar/timeline": [
+        // 00:00 has passed by the time this runs (it counts as past from 00:01).
+        { id: "ev-am", type: "event", title: "Midnight check", date: inDays(0), time: "00:00", sourceId: "ev-am", linkedProfiles: [] },
+        { id: "ev-later", type: "event", title: "Dentist visit", date: inDays(2), time: "10:00", sourceId: "ev-later", linkedProfiles: [] },
+      ],
+    });
+    await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+    await waitFor(() => expect(screen.getByTestId("exec-kpi-next").textContent).toContain("Dentist visit"));
+    expect(screen.getByTestId("exec-kpi-next").textContent).not.toContain("Midnight check");
+  });
+
+  it("shows each record in exactly one place on the tab", async () => {
+    stubRoutes({
+      "/api/calendar/timeline": [
+        { id: "ev-b1", type: "event", title: "Mom's Birthday", date: (() => { const d = new Date(); d.setDate(d.getDate() + 3); return d.toLocaleDateString("en-CA"); })(),
+          allDay: true, sourceId: "ev-b1", linkedProfiles: [], meta: { kind: "birthday", recurrence: "yearly" } },
+      ],
+    });
+    await mount(enhancedWith({
+      financeSnapshot: { upcomingBills: [
+        { id: "b1", name: "Phone", amount: 86.5, daysUntil: -2, status: "overdue" },
+        { id: "b2", name: "Internet", amount: 60, daysUntil: 4, status: "upcoming" },
+      ] },
+    }));
+    await waitFor(() => expect(screen.getByTestId("exec-important-dates").textContent).toContain("Mom's Birthday"));
+    const ids = Array.from(document.querySelectorAll("[data-testid^='exec-item-'], [data-testid^='exec-money-bill-']"))
+      .map((el) => el.getAttribute("data-testid")!.replace(/^exec-money-bill-/, "exec-item-bill:"));
+    expect(ids.length).toBeGreaterThan(0);
+    expect(new Set(ids).size).toBe(ids.length);
+    // The upcoming bill is Money's, not also the Upcoming card's.
+    expect(screen.getByTestId("exec-card-upcoming").textContent).not.toContain("Internet");
   });
 
   it("opens the Bills popup — stats, filters, expandable rows — from a bill row", async () => {
     await mount(enhancedWith());
     // Tapping a bill row anywhere on the tab opens the Bills drill-down.
-    fireEvent.click(screen.getByTestId("exec-item-bill:b1"));
+    fireEvent.click(screen.getByTestId("exec-money-bill-b1"));
     expect(await screen.findByTestId("bills-popup")).toBeTruthy();
     // The mock's four headline stats.
     for (const id of ["bills-stat-total", "bills-stat-soon", "bills-stat-overdue", "bills-stat-paid"]) {
@@ -209,10 +291,12 @@ describe("ExecutiveBriefing", () => {
     // Different amounts ($2,500 vs $300) are NOT collapsed — user must reconcile.
     expect(all).toContain("rent the 1st");
     expect(all).toContain("$300");
-    // Overdue ones sit under Needs Attention; the merely-upcoming one under
-    // Money's "Bills Due Soon".
-    expect(screen.getByTestId("exec-card-attention").textContent).toContain("rent the 1st");
-    expect(screen.getByTestId("exec-card-money").textContent).toContain("$300");
+    // Every bill — overdue first — sits in the Money card; none in Needs Attention.
+    const money = screen.getByTestId("exec-card-money").textContent || "";
+    expect(money).toContain("rent the 1st");
+    expect(money).toContain("$300");
+    expect(money.indexOf("rent the 1st")).toBeLessThan(money.indexOf("$300"));
+    expect(screen.getByTestId("exec-card-attention").textContent).not.toContain("rent the 1st");
   });
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -303,7 +387,7 @@ describe("ExecutiveBriefing", () => {
       return d.toLocaleDateString("en-CA");
     };
 
-    it("lists birthdays and expirations together, soonest first, inside Schedule", async () => {
+    it("lists birthdays and occasions, soonest first, inside Schedule — expirations are Needs Attention's", async () => {
       stubRoutes({
         "/api/calendar/timeline": [
           { id: "ev-b2", type: "event", title: "Dad's Birthday", date: soon(20), allDay: true,
@@ -315,11 +399,12 @@ describe("ExecutiveBriefing", () => {
       await mount(enhancedWith());
       const block = await screen.findByTestId("exec-important-dates");
       await waitFor(() => expect(block.textContent).toContain("Mom's Birthday"));
-      // Expirations belong here too — "when things are about to expire".
-      expect(block.textContent).toContain("Passport");
+      // Expirations moved to Needs Attention (2026-10-21) — listed once.
+      expect(block.textContent).not.toContain("Passport");
+      expect(screen.getByTestId("exec-card-attention").textContent).toContain("Passport");
       expect(block.textContent).toContain("Dad's Birthday");
-      // Soonest first: Mom (3d) before Passport (12d) before Dad (20d).
-      const order = ["Mom's Birthday", "Passport", "Dad's Birthday"]
+      // Soonest first: Mom (3d) before Dad (20d).
+      const order = ["Mom's Birthday", "Dad's Birthday"]
         .map((t) => block.textContent!.indexOf(t));
       expect(order).toEqual([...order].sort((a, b) => a - b));
       // It sits in the Schedule card, not in a card of its own.
@@ -337,17 +422,20 @@ describe("ExecutiveBriefing", () => {
       });
       await mount(enhancedWith());
       await waitFor(() => {
-        // Mom (3d) is inside the week; Passport (12d) and Dad (20d) are not.
+        // Mom (3d) is inside the week; Dad (20d) is not.
         expect(screen.getByTestId("exec-important-dates-note").textContent)
-          .toBe("1 in the next 7 days · 2 more within 45");
+          .toBe("1 in the next 7 days · 1 more within 45");
       });
     });
 
     it("is present and explains itself when there is nothing coming up", async () => {
       await mount(enhancedWith({ expiringDocuments: [] }));
       const block = await screen.findByTestId("exec-important-dates");
-      expect(block.textContent).toContain("Important dates");
-      expect(block.textContent).toContain("No birthdays or expirations in the next 45 days.");
+      expect(block.textContent).toContain("Dates to remember");
+      // One empty state for the whole card, not one per block.
+      expect(block.textContent).toContain("Nothing today, and no birthdays or occasions in the next 45 days.");
+      expect(screen.queryByTestId("exec-schedule-empty")).toBeNull();
+      expect(screen.getByTestId("exec-card-schedule").textContent).not.toContain("Nothing scheduled today.");
     });
 
     it("does not also render the same date in the Upcoming card", async () => {
@@ -493,7 +581,7 @@ describe("ExecutiveBriefing", () => {
 
     it("Bills — a bill row opens Bills, and Bills only", async () => {
       await mount(enhancedWith());
-      fireEvent.click(screen.getByTestId("exec-item-bill:b1"));
+      fireEvent.click(screen.getByTestId("exec-money-bill-b1"));
       expect(await screen.findByTestId("bills-popup")).toBeTruthy();
       expect(screen.queryByTestId("upcoming-popup")).toBeNull();
     });
@@ -509,14 +597,18 @@ describe("ExecutiveBriefing", () => {
     });
   });
 
-  it("opens the filters and lets a whole source be switched off", async () => {
+  it("opens the filters, and the urgency setting applies to documents", async () => {
+    stubRoutes({ "/api/preferences/attention_prefs": { value: null } });
     await mount(enhancedWith());
+    expect(screen.getByTestId("exec-card-attention").textContent).toContain("Passport");
     expect(screen.queryByTestId("attention-filters")).toBeNull();
     fireEvent.click(screen.getByTestId("attention-filters-toggle"));
     expect(screen.getByTestId("attention-filters")).toBeTruthy();
-    const habits = screen.getByTestId("attention-toggle-habits");
-    expect(habits.getAttribute("aria-checked")).toBe("true");
-    fireEvent.click(habits);
-    expect(screen.getByTestId("attention-toggle-habits").getAttribute("aria-checked")).toBe("false");
+    // The switches that no longer change this card are gone.
+    expect(screen.queryByTestId("attention-toggle-habits")).toBeNull();
+    // "Immediate only" hides a passport 12 days out — it used to stay.
+    fireEvent.click(screen.getByTestId("attention-tier-immediate"));
+    await waitFor(() => expect(screen.getByTestId("exec-card-attention").textContent).not.toContain("Passport"));
+    expect(screen.getByTestId("attention-tier-immediate").getAttribute("aria-pressed")).toBe("true");
   });
 });

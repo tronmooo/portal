@@ -79,6 +79,7 @@ import type { AttentionItem } from "@shared/attention";
 // is what once produced "Lawn care ($40) due in -29d".
 import { dayLabel } from "@shared/now-rank";
 import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-dates";
+import { selectAttentionRows, attentionBand, ATTENTION_BANDS } from "@shared/executive-attention";
 import { buildExecutiveSections, normalizeAiSuggestions, type AiSuggestion, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
@@ -658,6 +659,21 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     staleTime: 5 * 60_000,
   });
 
+  // The Documents card's library view: the three most recently added
+  // documents plus the total (X-Total-Count). Metadata only — the list route
+  // never ships file bodies. A failure stays an error (Rule 7).
+  const { data: recentDocsRes, isError: recentDocsError } = useQuery<{ rows: any[]; total: number | null }>({
+    queryKey: ["/api/documents", mode, ...ids, "exec-recent"],
+    enabled: ready,
+    queryFn: async () => {
+      const r = await apiRequest("GET", `/api/documents?limit=3${param ? `&${param.slice(1)}` : ""}`);
+      const rows = await r.json();
+      const total = Number(r.headers.get("X-Total-Count"));
+      return { rows: Array.isArray(rows) ? rows : [], total: Number.isFinite(total) && total > 0 ? total : null };
+    },
+    staleTime: 60_000,
+  });
+
   const { prefs, setPrefs } = useAttentionPrefs(ready);
 
   // "Hide test data" (default) — same shared detector the finance surfaces use.
@@ -708,8 +724,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     enabled: false,
     retry: false,
     staleTime: Infinity,
-    queryFn: async () => {
-      const r = await apiRequest("GET", `/api/dashboard/ai-suggestions?force=true${param ? `&${param.slice(1)}` : ""}`);
+    // The first ask may use the server's 30-minute cache (keyed on a data
+    // fingerprint, so a change to the data still recomputes); "Refresh" on
+    // advice already shown forces a new answer.
+    queryFn: async ({ client, queryKey }) => {
+      const force = client.getQueryData(queryKey) != null;
+      const qs = [force ? "force=true" : "", param ? param.slice(1) : ""].filter(Boolean).join("&");
+      const r = await apiRequest("GET", `/api/dashboard/ai-suggestions${qs ? `?${qs}` : ""}`);
       return normalizeAiSuggestions(await r.json());
     },
   });
@@ -752,16 +773,20 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
     [sectionInput, prefs]);
   const secItems = (id: ExecSectionId): AttentionItem[] => sections.find(s => s.id === id)?.items ?? [];
 
-  // NEEDS ATTENTION = what is on fire now: everything overdue or alerting
-  // (immediate), health items due today (a dose is not tomorrow's problem),
-  // and documents expiring soon — the mock shows expirations here AND in the
-  // Documents card, and that is deliberate: one is urgency, one is inventory.
-  const attentionItems = useMemo(() => {
-    const urgentHealth = secItems("health").filter(i => (i.daysUntil ?? 0) <= 0);
-    const rows = [...secItems("immediate"), ...urgentHealth, ...secItems("documents")];
-    return rows.slice().sort((a, b) => (a.daysUntil ?? -999) - (b.daysUntil ?? -999));
+  // NEEDS ATTENTION = documents, renewals and deadlines (2026-10-21: "except
+  // for bills due, I want it to be more like documents that are about to
+  // expire and more important stuff"). Bills live in the Money card and
+  // overdue tasks in the Tasks card, both overdue-first; what is left here is
+  // what is easy to forget and costly to miss: expiring/expired documents,
+  // renewals, deadlines, a goal past due, a dose not taken, a reading out of
+  // range, an alert about one of those. The rule is shared/executive-attention.
+  const attentionItems = useMemo(
+    () => selectAttentionRows(
+      { immediate: secItems("immediate"), health: secItems("health"), documents: secItems("documents") },
+      prefs.minTier,
+    ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sections]);
+    [sections, prefs.minTier]);
 
   // UPCOMING = everything dated from tomorrow on, across every domain, soonest
   // first. Records were already claimed once by the router, so nothing here
@@ -798,7 +823,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const importantDates = useMemo(() => {
     const rows: AttentionItem[] = [];
     const seen = new Set<string>();
-    for (const i of [...secItems("importantDates"), ...secItems("documents")]) {
+    // Occasions only — birthdays, anniversaries, holidays. Expirations and
+    // renewals are Needs Attention's now, so a passport isn't listed twice.
+    for (const i of secItems("importantDates")) {
       if ((i.daysUntil ?? -1) < 0 || seen.has(i.key)) continue;
       seen.add(i.key);
       rows.push(i);
@@ -812,10 +839,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // `data-testid` on the screen and asked the user to read the same date
   // twice. "View all upcoming" still opens the complete list — a "view all"
   // showing more than its preview is the point of it.
+  //
+  // 2026-10-21: and nothing another card on this tab already shows — Needs
+  // Attention's documents, the Money card's bills (Money + the Bills popup are
+  // where bills live). What is left is "what else is coming": appointments,
+  // events, tasks, goal deadlines.
   const upcomingPreview = useMemo(() => {
-    const shown = new Set(importantDates.map((i) => i.key));
-    return upcomingItems.filter((i) => !shown.has(i.key));
-  }, [upcomingItems, importantDates]);
+    const shown = new Set([...importantDates, ...attentionItems].map((i) => i.key));
+    return upcomingItems.filter((i) => !shown.has(i.key) && i.kind !== "bill" && i.kind !== "document");
+  }, [upcomingItems, importantDates, attentionItems]);
 
   // How the list splits, so the week you have to act on is legible without
   // reading every row's date. Mirrors the Important Dates subtitle the
@@ -834,7 +866,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // attention and would otherwise render twice.
   const nextImportantItem = useMemo(() => {
     const from: ExecSectionId[] = ["today", "bills", "upcoming", "importantDates", "documents", "health"];
-    const rows = from.flatMap(id => secItems(id)).filter(i => (i.daysUntil ?? 0) >= 0);
+    // An event earlier today whose time has passed is not "next" — the
+    // sections engine marks it tier "soon" ("9:00 AM · passed").
+    const rows = from.flatMap(id => secItems(id))
+      .filter(i => (i.daysUntil ?? 0) >= 0)
+      .filter(i => !(i.kind === "event" && i.daysUntil === 0 && i.tier !== "immediate" && /passed/.test(i.reason)));
     return rows.slice().sort((a, b) => (a.daysUntil ?? 99) - (b.daysUntil ?? 99))[0] ?? null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sections]);
@@ -919,9 +955,15 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // window the Finance BILLS DUE tile and the Upcoming card show, overdue
   // first. A private 21-day filter here said "Nothing due in 3 weeks" while
   // the Finance tab counted one bill due in 27 days (F-54).
-  // Overdue bills already sit under Needs Attention on this same page, so
-  // the Money card shows the not-yet-due part of the list (never twice).
-  const billsDueSoon = selectUpcomingBills(allBills as any[]).filter((b: any) => b.daysUntil >= 0);
+  // 2026-10-21: bills left Needs Attention, so the Money card lists the WHOLE
+  // window — overdue first, in red, with the two-tap Pay — not just the
+  // not-yet-due part.
+  const billsDueSoon = selectUpcomingBills(allBills as any[])
+    .slice()
+    .sort((a: any, b: any) => (a.daysUntil ?? 0) - (b.daysUntil ?? 0));
+  const overdueBillCount = billsDueSoon.filter((b: any) => (b.daysUntil ?? 0) < 0).length;
+  const billItemFor = (id: string): AttentionItem | undefined =>
+    [...secItems("immediate"), ...secItems("bills")].find((i) => i.kind === "bill" && i.sourceKey === `obligation:${id}`);
 
   // Documents
   // Grouped to ONE CARD PER RECORD PER DAY so this card, its count and the
@@ -1332,6 +1374,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 </div>
               }
             >
+              <p className="text-[11px] text-muted-foreground -mt-1.5 mb-2" data-testid="exec-attention-scope">
+                Documents, renewals &amp; deadlines
+              </p>
               {filtersOpen && <div className="mb-2"><AttentionFilters prefs={prefs} onChange={setPrefs} /></div>}
               {/* AI advice renders HERE, next to the button that asked for it —
                   not in a separate card at the foot of the grid, where a user
@@ -1411,17 +1456,34 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   <PartyPopper className="h-6 w-6 mx-auto mb-1.5" style={{ color: "hsl(155 60% 45%)" }} aria-hidden="true" />
                   <p className="text-sm font-bold">You're all caught up</p>
                   <p className="text-[12px] text-muted-foreground mt-0.5">
-                    Nothing overdue, nothing expiring soon.
+                    Nothing expiring or due — documents and renewals look good.
                   </p>
                 </div>
               ) : (
                 <div className="space-y-1.5">
                   <ExpandableRows id="attention" count={attentionItems.length} cap={4}>
-                    {attentionItems.map((i) => (
-                      <ItemRow key={i.key} item={i}
-                        busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
-                        onAction={onAction} onOpen={openItem} />
-                    ))}
+                    {attentionItems.map((i, n) => {
+                      // A coloured band header over the first row of each
+                      // urgency group (overdue / this week / this month /
+                      // later), so the list reads without parsing every date.
+                      const band = attentionBand(i);
+                      const head = n === 0 || attentionBand(attentionItems[n - 1]) !== band
+                        ? ATTENTION_BANDS.find((b) => b.id === band)! : null;
+                      return (
+                        <div key={i.key} className="space-y-1.5">
+                          {head && (
+                            <p className={`micro-label flex items-center gap-1.5 ${n > 0 ? "pt-1.5" : ""}`}
+                              style={{ color: `hsl(${head.hs} 55%)` }} data-testid={`exec-attention-band-${band}`}>
+                              <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: `hsl(${head.hs} 55%)` }} aria-hidden="true" />
+                              {head.label}
+                            </p>
+                          )}
+                          <ItemRow item={i}
+                            busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
+                            onAction={onAction} onOpen={openItem} />
+                        </div>
+                      );
+                    })}
                   </ExpandableRows>
                 </div>
               )}
@@ -1507,7 +1569,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 )}
               </div>
               {eventsToday.length === 0 ? (
-                <CardEmpty icon={CalendarDays} accent={CARD_ACCENTS.schedule}>Nothing scheduled today.</CardEmpty>
+                // One empty state per card: when "Dates to remember" below is
+                // empty too, its message covers both.
+                importantDates.length > 0 && (
+                  <p className="text-[12px] text-muted-foreground" data-testid="exec-schedule-empty">Nothing scheduled today.</p>
+                )
               ) : (
                 <div className="space-y-1.5">
                   {eventsToday.slice(0, 5).map((e: any, idx: number) => {
@@ -1531,15 +1597,16 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 </div>
               )}
 
-              {/* ── Important dates ─────────────────────────────────────────
-                  Birthdays, anniversaries and occasions, plus everything
-                  about to expire — with the DATE and the countdown, so a
-                  birthday is never a surprise. Always rendered, empty
+              {/* ── Dates to remember ───────────────────────────────────────
+                  Birthdays, anniversaries and occasions — with the DATE and
+                  the countdown, so a birthday is never a surprise.
+                  Expirations moved to Needs Attention (2026-10-21) so a
+                  passport isn't listed twice. Always rendered, empty
                   included: a block that appears only when it has contents is
                   a block nobody knows to look for. */}
               <div className="mt-3 pt-3 border-t border-border/60" data-testid="exec-important-dates">
                 <div className="flex items-center justify-between gap-2">
-                  <p className="micro-label text-muted-foreground">Important dates</p>
+                  <p className="micro-label text-muted-foreground">Dates to remember</p>
                   <ViewLink
                     label="View all dates"
                     accent={CARD_ACCENTS.schedule}
@@ -1553,7 +1620,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </p>
                 )}
                 {importantDates.length === 0 ? (
-                  <CardEmpty icon={CalendarDays} accent={CARD_ACCENTS.schedule}>No birthdays or expirations in the next 45 days.</CardEmpty>
+                  <CardEmpty icon={CalendarDays} accent={CARD_ACCENTS.schedule}>
+                    {eventsToday.length === 0
+                      ? "Nothing today, and no birthdays or occasions in the next 45 days."
+                      : "No birthdays or occasions in the next 45 days."}
+                  </CardEmpty>
                 ) : (
                   <div className="space-y-1.5 mt-2">
                     {/* Capped at 3 so Schedule stays level with its row partner; the
@@ -1677,29 +1748,46 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   </div>
                 ))}
               </div>
-              <p className="micro-label text-muted-foreground mt-3 mb-1.5">Bills Due Soon</p>
+              <p className="micro-label text-muted-foreground mt-3 mb-1.5">
+                Bills{overdueBillCount > 0 && <span className="text-red-500"> · {overdueBillCount} overdue</span>}
+              </p>
               {billsDueSoon.length === 0 ? (
                 <p className="text-[12px] text-muted-foreground">{UPCOMING_BILLS_EMPTY_COPY}.</p>
               ) : (
                 <div className="space-y-1.5">
                   {billsDueSoon.slice(0, 3).map((b: any) => {
                     const hsl = tonePalette(toneForDays(b.daysUntil));
+                    const overdue = (b.daysUntil ?? 0) < 0;
+                    // The routed row for this bill carries its Pay action (two
+                    // taps, autopay → none) — the same onAction path the
+                    // attention list used, so paying behaves identically.
+                    const item = billItemFor(b.id);
                     return (
-                      <button
+                      <div
                         key={b.id}
-                        type="button"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setPopup("bills")}
-                        className="bubble-row w-full flex items-center gap-2.5 px-2.5 py-2 min-w-0 text-left"
+                        onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("bills"); } }}
+                        className="bubble-row w-full flex items-center gap-2.5 px-2.5 py-2 min-w-0 text-left cursor-pointer"
                         style={{ ["--accent-hsl" as any]: hsl }}
                         data-testid={`exec-money-bill-${b.id}`}
                       >
                         <RowIcon icon={Receipt} hsl={hsl} />
                         <span className="flex-1 min-w-0">
                           <span className="block text-[13px] font-semibold leading-tight truncate">{b.name}</span>
-                          <span className="block text-[11px] text-muted-foreground truncate mt-0.5">Due {fmtShortDate(dateFromDays(b.daysUntil))}</span>
+                          <span className={`block text-[11px] truncate mt-0.5 ${overdue ? "text-red-500 font-semibold" : "text-muted-foreground"}`}>
+                            {overdue ? `${Math.abs(b.daysUntil)}d overdue · was due ${fmtShortDate(dateFromDays(b.daysUntil))}`
+                              : b.daysUntil === 0 ? "Due today" : `Due ${fmtShortDate(dateFromDays(b.daysUntil))}`}
+                          </span>
                         </span>
-                        <span className="shrink-0 text-[13px] font-bold tabular-nums">{formatMoney(Number(b.amount || 0))}</span>
-                      </button>
+                        <span className="shrink-0 text-[13px] font-bold tabular-nums" style={overdue ? { color: `hsl(${hsl})` } : undefined}>
+                          {formatMoney(Number(b.amount || 0))}
+                        </span>
+                        {item && item.action?.kind === "pay" && (
+                          <ActionButton item={item} busy={busyKeys.has(item.key)} armed={armedKey === item.key} onAction={onAction} />
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -1715,49 +1803,56 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               accent={CARD_ACCENTS.documents} index={6}
               headerRight={<ViewLink label="View documents" accent={CARD_ACCENTS.documents} onClick={() => setPopup("docs")} testId="exec-view-documents" />}
             >
-              {visibleDocs.length === 0 ? (
-                <CardEmpty icon={FileText} tone="good">Nothing expiring soon.</CardEmpty>
-              ) : (
-                <div className="flex items-start gap-4">
-                  <div className="shrink-0 flex flex-col items-center">
-                    <ProgressRing
-                      value={docsSoonCount} total={Math.max(visibleDocs.length, 1)}
-                      accent={CARD_ACCENTS.documents} size={72} stroke={6}
-                      label={String(docsSoonCount)} sublabel="expiring"
-                    />
-                    <p className="text-[11px] text-muted-foreground mt-1.5 text-center max-w-[6rem]" data-testid="exec-docs-caption">
-                      {docsUrgency.label || "soon"}
+              {/* 2026-10-21: the expiring LIST lives in Needs Attention now, so
+                  this card is the library: how the documents stand (counts)
+                  and what was added lately — no row repeated from above. */}
+              <div className="grid grid-cols-3 gap-2" data-testid="exec-docs-counts">
+                {([
+                  { key: "expired", label: "Expired", n: docsUrgency.expired, hs: "0 72% 58%" },
+                  { key: "soon", label: "Expiring", n: docsSoonCount, hs: "25 90% 56%" },
+                  { key: "total", label: "In library", n: recentDocsRes?.total ?? (recentDocsRes ? recentDocsRes.rows.length : null), hs: CARD_ACCENTS.documents },
+                ] as const).map((c) => (
+                  <button key={c.key} type="button" onClick={() => setPopup("docs")}
+                    className="bubble-row px-2.5 py-2 text-left" style={{ ["--accent-hsl" as any]: c.hs }}
+                    data-testid={`exec-docs-count-${c.key}`}>
+                    <p className="micro-label text-muted-foreground truncate">{c.label}</p>
+                    <p className="text-xl font-extrabold tabular-nums mt-0.5"
+                      style={{ color: c.n ? `hsl(${c.hs})` : undefined }}>
+                      {c.n == null ? (recentDocsError ? "—" : loadingDots) : c.n}
                     </p>
-                  </div>
-                  <div className="flex-1 min-w-0 space-y-1.5">
-                    {visibleDocs.slice(0, 4).map((d: any) => {
-                      const name = d.documentName || d.name || d.fieldName || "Document";
-                      const tone = tonePalette(toneForDays(d.daysUntil));
-                      // One row per RULE, not per record — a person with both a
-                      // passport and a licence expiring renders two, and keying
-                      // on the shared source-entity id gave them the same key.
-                      return (
-                        <div key={d.ruleId || d.documentId || d.id}
-                          role="button" tabIndex={0}
-                          onClick={() => setPopup("docs")}
-                          onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("docs"); } }}
-                          className="bubble-row flex items-center gap-2.5 px-2.5 py-2 cursor-pointer"
-                          style={{ ["--accent-hsl" as any]: CARD_ACCENTS.documents }}
-                        >
-                          <RowIcon icon={FileText} hsl={tone} size="sm" />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[13px] font-semibold leading-tight truncate">{name}</p>
-                            <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-                              {d.daysUntil < 0 ? `Expired ${Math.abs(d.daysUntil)}d ago` : d.daysUntil === 0 ? "Expires today" : `Expires in ${d.daysUntil} days`}
-                            </p>
-                          </div>
-                          <span className="shrink-0 text-[12px] font-bold tabular-nums" style={{ color: `hsl(${tone})` }}>
-                            {fmtShortDate(dateFromDays(d.daysUntil))}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1.5" data-testid="exec-docs-caption">
+                {visibleDocs.length === 0 ? "Nothing expiring in the next 90 days." : (docsUrgency.label || "") + " · listed under Needs Attention"}
+              </p>
+              <p className="micro-label text-muted-foreground mt-3 mb-1.5">Recently added</p>
+              {recentDocsError ? (
+                <p className="text-[12px] text-muted-foreground" data-testid="exec-docs-recent-error">Couldn't load recent documents.</p>
+              ) : !recentDocsRes ? (
+                <p className="text-[12px] text-muted-foreground">{loadingDots}</p>
+              ) : recentDocsRes.rows.length === 0 ? (
+                <CardEmpty icon={FileText} tone="good">No documents yet.</CardEmpty>
+              ) : (
+                <div className="space-y-1.5" data-testid="exec-docs-recent">
+                  {recentDocsRes.rows.slice(0, 3).map((d: any) => (
+                    <div key={d.id}
+                      role="button" tabIndex={0}
+                      onClick={() => setPopup("docs")}
+                      onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); setPopup("docs"); } }}
+                      className="bubble-row flex items-center gap-2.5 px-2.5 py-2 cursor-pointer"
+                      style={{ ["--accent-hsl" as any]: CARD_ACCENTS.documents }}
+                      data-testid={`exec-docs-recent-${d.id}`}
+                    >
+                      <RowIcon icon={FileText} hsl={CARD_ACCENTS.documents} size="sm" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-semibold leading-tight truncate">{d.name || d.title || "Document"}</p>
+                        <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+                          {[d.type ? String(d.type).replace(/_/g, " ") : null, d.createdAt ? `added ${relativeTimeShort(d.createdAt)}` : null].filter(Boolean).join(" · ")}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </ExecCard>
