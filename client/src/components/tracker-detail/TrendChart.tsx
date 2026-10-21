@@ -33,6 +33,11 @@ export interface TrendChartProps {
   onSelectDay?: (day: string) => void;
   /** Bars above the goal draw in this color ("H S%"). */
   overGoalHs?: string;
+  /** Y-axis labels for scales that aren't plain numbers (mood 1–8 → "Good"). */
+  yTickFormatter?: (v: number) => string;
+  yDomain?: [number, number];
+  /** Tooltip text for a value; defaults to value + unit. */
+  valueLabel?: (v: number) => string;
 }
 
 interface Row {
@@ -43,7 +48,7 @@ interface Row {
   ma: number | null;
 }
 
-function ChartTooltip({ active, payload, unit, mode }: any) {
+function ChartTooltip({ active, payload, unit, mode, valueLabel }: any) {
   if (!active || !payload?.length) return null;
   const row: Row = payload[0].payload;
   if (row.value == null) return null;
@@ -51,7 +56,7 @@ function ChartTooltip({ active, payload, unit, mode }: any) {
     <div className="surface-panel bg-popover px-3 py-2 text-xs">
       <p className="font-semibold">{dayLabel(row.day, { weekday: "short", month: "short", day: "numeric" })}</p>
       <p className="mt-0.5 tabular-nums">
-        <span className="font-bold text-sm">{withUnit(row.value, unit)}</span>
+        <span className="font-bold text-sm">{valueLabel ? valueLabel(row.value) : withUnit(row.value, unit)}</span>
         {mode === "sum" && <span className="text-muted-foreground"> total</span>}
       </p>
       <p className="text-muted-foreground">{row.entries} {row.entries === 1 ? "entry" : "entries"}</p>
@@ -62,6 +67,7 @@ function ChartTooltip({ active, payload, unit, mode }: any) {
 
 export function TrendChart({
   points, mode, unit, fromDay, toDay, movingAvg, goal, hs, height = 220, selectedDay, onSelectDay, overGoalHs,
+  yTickFormatter, yDomain, valueLabel,
 }: TrendChartProps) {
   const gid = useId().replace(/:/g, "");
   const color = hs ? tone(hs) : tone("var(--td-hs)");
@@ -118,9 +124,9 @@ export function TrendChart({
           </defs>
           <CartesianGrid strokeDasharray="2 6" stroke="hsl(var(--border))" vertical={false} />
           <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
-          <YAxis tick={axisTick} tickLine={false} axisLine={false} width={44} tickFormatter={fmtTick}
-            domain={mode === "sum" ? [0, "auto"] : ["auto", "auto"]} allowDecimals={false} />
-          <Tooltip content={<ChartTooltip unit={unit} mode={mode} />} cursor={{ fill: "hsl(var(--muted) / 0.5)", stroke: "hsl(var(--border))" }} />
+          <YAxis tick={axisTick} tickLine={false} axisLine={false} width={yTickFormatter ? 58 : 44} tickFormatter={yTickFormatter ?? fmtTick}
+            domain={yDomain ?? (mode === "sum" ? [0, "auto"] : ["auto", "auto"])} allowDecimals={false} />
+          <Tooltip content={<ChartTooltip unit={unit} mode={mode} valueLabel={valueLabel} />} cursor={{ fill: "hsl(var(--muted) / 0.5)", stroke: "hsl(var(--border))" }} />
           {typeof goal === "number" && goal > 0 && (
             <ReferenceLine y={goal} stroke={tone("40 92%")} strokeDasharray="5 5" ifOverflow="extendDomain"
               label={{ value: `Goal ${withUnit(goal, unit)}`, position: "insideTopRight", fontSize: 11, fill: tone("40 92%") }} />

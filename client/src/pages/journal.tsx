@@ -31,6 +31,9 @@ const JOURNAL_ACCENT = "262 70% 62%";
 import { Link } from "wouter";
 import type { JournalEntry, MoodLevel, Profile } from "@shared/schema";
 import { detectMoodFromText } from "@shared/mood-detect";
+import { moodSeries, moodSummary, moodScore, moodForScore } from "@shared/journal-mood";
+import { TrendChart, SectionTitle, CoverageNote, accentScope, tone } from "@/components/tracker-detail";
+import { TimeRangeSelector } from "@/components/ui/time-range";
 import { useState, useEffect, useRef } from "react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -178,6 +181,53 @@ function JournalCard({ entry, onEdit }: { entry: JournalEntry; onEdit: (e: Journ
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// Mood over time — the moods already stamped on entries, on a 1–8 scale
+// (shared/journal-mood.ts). Hidden until there are 3 days with a mood.
+const MOOD_HS: Record<MoodLevel, string> = {
+  amazing: "152 62%", great: "160 55%", good: "185 55%", okay: "45 20%", neutral: "40 8%",
+  bad: "25 75%", awful: "350 65%", terrible: "350 75%",
+};
+type MoodRange = "30d" | "90d" | "all";
+
+function JournalMoodTrend({ entries }: { entries: JournalEntry[] }) {
+  const [range, setRange] = useState<MoodRange>("30d");
+  const today = getUserToday(BROWSER_TIMEZONE);
+  const from = range === "all" ? null : tzAddDays(today, range === "30d" ? -29 : -89);
+  const all = moodSeries(entries as any);
+  if (all.length < 3) return null;
+  const pts = moodSeries(entries as any, from, today);
+  const s = moodSummary(pts);
+  const avgCfg = s.averageMood ? MOOD_CONFIG[s.averageMood] : null;
+  const label = (v: number) => MOOD_CONFIG[moodForScore(v)]?.label ?? "";
+  return (
+    <section className="td-scope bubble td-rise p-4 space-y-3" style={accentScope("262 70%", "185 60%")} data-testid="journal-mood-trend">
+      <SectionTitle title="Mood over time" hint="How each day ended · days without an entry are left out"
+        aside={<TimeRangeSelector value={range} onChange={setRange} label="Mood time frame"
+          options={[{ value: "30d", label: "30D" }, { value: "90d", label: "90D" }, { value: "all", label: "All" }]} />} />
+      {pts.length === 0 ? (
+        <CoverageNote>No moods logged in this time frame — {all.length} days in total. Try All.</CoverageNote>
+      ) : (
+        <>
+          <div className="flex items-center gap-4">
+            <div>
+              <p className="micro-label text-muted-foreground">Typical day</p>
+              <p className="text-2xl metric-value" style={{ color: avgCfg?.color }}>{avgCfg?.label ?? "—"}</p>
+              <p className="text-[11px] text-muted-foreground">{s.goodShare}% of {s.days} days good or better</p>
+            </div>
+            <div className="flex-1 min-w-0 flex h-3 overflow-hidden rounded-full">
+              {[...s.distribution].sort((a, b) => moodScore(b.mood)! - moodScore(a.mood)!).map((d) => (
+                <span key={d.mood} title={`${MOOD_CONFIG[d.mood].label}: ${d.days} days`} style={{ width: `${d.share}%`, background: tone(MOOD_HS[d.mood]) }} />
+              ))}
+            </div>
+          </div>
+          <TrendChart points={pts} mode="last" unit="" fromDay={from} toDay={today} height={170}
+            yDomain={[1, 8]} yTickFormatter={label} valueLabel={label} />
+        </>
+      )}
+    </section>
   );
 }
 
@@ -498,6 +548,8 @@ export default function JournalPage() {
           );
         })}
       </div>
+
+      <JournalMoodTrend entries={entries} />
 
       {/* Create form — guided 5-minute template OR free-form editor */}
       {showCreate && (
