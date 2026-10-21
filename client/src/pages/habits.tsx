@@ -631,12 +631,12 @@ export default function HabitsPage() {
                 ]}
                 center={<>
                   <span className="text-lg font-bold tabular-nums" data-testid="text-habits-today-pct">{summary.rollup.percent}%</span>
-                  <span className="text-[11px] text-muted-foreground">today</span>
+                  <span className="text-[11px] text-muted-foreground">of check-ins</span>
                 </>}
               />
               {/* Which ring is which — outer: today's check-ins, inner: the period. */}
               <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground" aria-hidden="true">
-                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ background: tone("var(--td-hs)") }} />Today</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ background: tone("var(--td-hs)") }} />Check-ins today</span>
                 <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ background: tone("var(--td-hs2)") }} />{rangeLabel}</span>
               </div>
             </div>}
