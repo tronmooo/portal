@@ -48,6 +48,9 @@ import {
   getDefaultMetricDefinition,
 } from "@shared/tracker-metric-definition";
 import { classifyTrackerPresentation } from "@shared/tracker-presentation";
+import { trackerTheme, accentTriple, tone } from "@/components/tracker-detail/theme";
+import { RingStack } from "@/components/tracker-detail/primitives";
+import { pickPrimaryField, dayModeFor, readNumber } from "@shared/tracker-analytics";
 import { buildTrackerModel, themeVars, periodFor, PERIOD_OPTIONS, OverviewTab, TrendsTab, BreakdownTab, CorrelationsTab, InsightsTab, type TrackerModel } from "@/components/tracker-detail";
 import { TimeRangeSelector } from "@/components/ui/time-range";
 import type { RangeKey } from "@shared/tracker-analytics";
@@ -79,7 +82,7 @@ import EditableTitle from "@/components/EditableTitle";
 import { useNativeTouchScroll } from "@/lib/touch-scroll";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
 import { useHubChrome } from "@/components/hub/hub-context";
-import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, KIND_EMOJI, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
+import { RadialGauge, RingProgress, LinearZoneGauge, ChecklistMini, MultiMetricBars, AreaChart as TrendArea, ZoneAreaChart, WeekdayBars, type GaugeZone, type PanelMetric } from "@/components/tracker-viz";
 import { summarizeTrackerToday, occurrenceNoun, shortAgo, isLabValueTracker, averagePerDay } from "@shared/tracker-summary";
 import { classifyBloodPressure } from "@shared/blood-pressure";
 import { isRestingHeartRateReading } from "@shared/wellness-canon";
@@ -201,7 +204,7 @@ import {
   Music,
   Bike,
 } from "lucide-react";
-import { useState, useRef, useEffect, useMemo } from "react";
+import { Fragment, useState, useRef, useEffect, useMemo } from "react";
 
 // Keyboard activation helper for non-<button> clickable elements (a11y):
 // makes Enter/Space behave like a click on role="button" divs.
@@ -2385,10 +2388,10 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
   const todayKey = new Date().toLocaleDateString("en-CA");
 
   // Helpers scoped to this tracker
-  const primaryField =
-    tracker.fields.find(f => f.isPrimary)?.name ||
-    tracker.fields.find(f => f.type === "number")?.name ||
-    tracker.fields[0]?.name || "value";
+  // The shared rule (shared/tracker-analytics): a serving count marked
+  // primary by the chat's first key ("quantity") yields to calories etc., so
+  // the card headlines the same number as the popup.
+  const primaryField = pickPrimaryField(tracker) || "value";
   const primaryUnit = inferUnit(tracker,
     primaryField,
     tracker.fields.find(f => f.name === primaryField)?.unit);
@@ -3159,9 +3162,12 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   const summaryLine = summary.shape === "dose" || summary.shape === "occurrence" || summary.shape === "additive"
     ? summary.line
     : (insight.subline ? "" : summary.line);
-  const catAccent = getCategoryAccent(tracker.category);
+  // Same identity as the detail popup (components/tracker-detail/theme.ts):
+  // Nutrition is amber/coral on the card and in the popup, Sleep indigo, …
+  const cardTheme = trackerTheme(tracker);
+  const catAccent = accentTriple(cardTheme.hs);
   const ac = `hsl(${catAccent})`;
-  const Icon = iconForKind(insight.iconKind);
+  const Icon = cardTheme.icon;
   const entries = tracker.entries || [];
   const lastEntry = entries.length ? [...entries].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0] : undefined;
   const timeAgo = lastEntry ? timeAgoShort(lastEntry.timestamp) : null;
@@ -3172,7 +3178,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
   // Pick a kind-appropriate visual (gauge / ring / radial / sparkline).
   const primaryNum = (() => {
     if (!lastEntry) return null;
-    const pf = tracker.fields?.[0]?.name;
+    const pf = pickPrimaryField(tracker);
     if (pf && typeof (lastEntry.values as any)[pf] === "number") return { field: pf, num: (lastEntry.values as any)[pf] as number };
     const found = findAnyNumericValue(lastEntry.values);
     return found ? { field: found.key, num: found.num } : null;
@@ -3219,7 +3225,6 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       <span className="text-[11px] font-medium text-muted-foreground">{x.unit}</span>
     </span>
   ));
-  const kindEmoji = KIND_EMOJI[insight.iconKind];
   // Sports / fitness trends get the layered "effort zone" area look.
   const useZoneArea = insight.kind === "running" || insight.kind === "walking" || tracker.category === "fitness";
   // Score cards (radial) can show their other numeric sub-fields as mini bars
@@ -3284,28 +3289,25 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
       // what kept this card looking flat while the rest of the app moved.
       // QA 2026-09-18 BUG-27: h-full so every card fills its grid cell and a
       // row's cards share one height (the wrapper cell below is h-full too).
-      className="bubble bubble-interactive overflow-hidden cursor-pointer flex flex-col relative pressable h-full"
+      className="td-scope bubble bubble-interactive overflow-hidden cursor-pointer flex flex-col relative pressable h-full"
       // minHeight, not height: a strength headline wraps to three lines on a
       // narrow two-column grid, and a hard height cropped the weekday bars and
       // ran the footer under them. The card keeps its floor so a row still
       // reads as a ladder, and grows only when it has to.
-      style={{ ["--accent-hsl" as any]: catAccent, minHeight: cardHeight }}
+      style={{ ...themeVars(cardTheme), minHeight: cardHeight }}
       onClick={() => onOpenDetail?.(tracker.id)}
       role="button"
       tabIndex={0}
       aria-label={`Open tracker: ${tracker.name}`}
       onKeyDown={onEnterOrSpace(() => onOpenDetail?.(tracker.id))}
     >
-      {/* Faint oversized kind glyph for personality (coffee / heart / pill …). */}
-      {kindEmoji && (
-        <span aria-hidden className="pointer-events-none absolute -top-1 right-1 select-none" style={{ fontSize: 44, opacity: 0.08, lineHeight: 1 }}>
-          {kindEmoji}
-        </span>
-      )}
+      {/* Faint oversized kind icon + a soft accent glow for personality. */}
+      <Icon aria-hidden className="pointer-events-none absolute -top-2 -right-2 h-16 w-16 select-none" style={{ color: ac, opacity: 0.07 }} strokeWidth={1.6} />
+      <span aria-hidden className="pointer-events-none absolute -top-10 -left-10 h-28 w-28 rounded-full" style={{ background: `radial-gradient(circle, hsl(${cardTheme.hs2} 55% / 0.16), transparent 70%)` }} />
       {/* Header: icon + title */}
       <div className="relative px-3 pt-2.5 pb-1 flex items-center gap-2">
-        <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
-          <Icon className="h-3.5 w-3.5" />
+        <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: `linear-gradient(145deg, hsl(${catAccent} / 0.30), hsl(${cardTheme.hs2} 52% / 0.12))`, color: ac, boxShadow: `0 2px 10px -4px hsl(${catAccent} / 0.6)` }}>
+          <Icon className="h-3.5 w-3.5" strokeWidth={2.2} />
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-foreground truncate leading-tight">
@@ -3349,7 +3351,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
             ) : (
               <>
                 {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
-                  <span className="text-[11px] font-semibold flex items-center gap-0.5" style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}>
+                  <span className="text-[11px] font-semibold flex items-center gap-0.5" style={{ color: insight.trendDir === "up" ? tone("152 62%") : insight.trendDir === "down" ? tone("350 75%") : "hsl(var(--muted-foreground))" }}>
                     {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
                     {Math.abs(Math.round(insight.trendPct))}%
                   </span>
@@ -3381,7 +3383,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
         /* Activity/duration: latest value + weekly session bars + week stats. */
         <>
           <div className="px-3 pt-1 flex items-baseline gap-x-1 gap-y-0.5 shrink-0 flex-wrap">
-            <span className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`} style={{ color: ac }}>
+            <span className={`td-gradient-text leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`}>
               {insight.bigPrimary}
             </span>
             {insight.bigUnit && <span className="text-[11px] font-medium text-muted-foreground">{insight.bigUnit}</span>}
@@ -3418,8 +3420,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
                 readable; the body below shrinks to absorb the extra line. */}
             <div className="flex items-baseline gap-x-1 gap-y-0.5 min-w-0 flex-wrap">
               <span
-                className={`leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`}
-                style={{ color: ac }}
+                className={`td-gradient-text leading-none font-black tabular-nums ${importance === "compact" ? "text-[22px]" : "text-[28px]"}`}
               >
                 {insight.bigPrimary}
               </span>
@@ -3430,7 +3431,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
               {insight.trendPct != null && Math.abs(insight.trendPct) >= 2 && (
                 <span
                   className="ml-1 text-[11px] font-semibold flex items-center gap-0.5"
-                  style={{ color: insight.trendDir === "up" ? "#16a34a" : insight.trendDir === "down" ? "#dc2626" : "hsl(var(--muted-foreground))" }}
+                  style={{ color: insight.trendDir === "up" ? tone("152 62%") : insight.trendDir === "down" ? tone("350 75%") : "hsl(var(--muted-foreground))" }}
                 >
                   {insight.trendDir === "up" ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
                   {Math.abs(Math.round(insight.trendPct))}%
@@ -3466,7 +3467,7 @@ function TrackerCard({ tracker, onDelete, onOpenDetail, sizeOverride, hideProfil
                   : <TrendArea values={insight.sparkValues} color={ac} height={importance === "large" ? 58 : importance === "compact" ? 34 : 46} />}
               </div>
             ) : visual.type === "spark" && insight.hasData ? (
-              <div className="px-3 pb-2"><div className="w-full h-px bg-gradient-to-r from-transparent via-muted-foreground/20 to-transparent" /></div>
+              <p className="px-3 pb-2 text-[11px] text-muted-foreground">Log another day to see a trend line here.</p>
             ) : null}
           </div>
         </>
@@ -3858,9 +3859,11 @@ const TRACKER_TEMPLATES: TrackerTemplate[] = [
 function TrackerCardPreview({ name, category, unit, fields, sample }: {
   name: string; category: string; unit: string; fields: FieldDraft[]; sample: number;
 }) {
-  const catAccent = getCategoryAccent(category);
+  // The preview wears the same identity the saved tracker will.
+  const cardTheme = trackerTheme({ name, category, fields: fields.map((f) => ({ name: f.name })) });
+  const catAccent = accentTriple(cardTheme.hs);
   const ac = `hsl(${catAccent})`;
-  const Icon = iconForKind("activity");
+  const Icon = cardTheme.icon;
   const primaryField = fields.find(f => f.name.trim() && (f.type === "number" || f.type === "duration"))?.name.trim() || fields[0]?.name.trim() || "value";
   const fakeTracker = { name: name || "New Tracker", category, unit, fields: fields.map(f => ({ name: f.name, type: f.type, unit: f.unit })) } as any;
   const fakeInsight = { kind: "generic", progressPct: null } as unknown as TrackerInsight;
@@ -3875,8 +3878,8 @@ function TrackerCardPreview({ name, category, unit, fields, sample }: {
       style={{ ["--accent-hsl" as any]: catAccent, height: 150 }}
     >
       <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
-        <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0" style={{ backgroundColor: `hsl(${catAccent} / 0.2)`, color: ac }}>
-          <Icon className="h-3.5 w-3.5" />
+        <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: `linear-gradient(145deg, hsl(${catAccent} / 0.30), hsl(${cardTheme.hs2} 52% / 0.12))`, color: ac, boxShadow: `0 2px 10px -4px hsl(${catAccent} / 0.6)` }}>
+          <Icon className="h-3.5 w-3.5" strokeWidth={2.2} />
         </div>
         <p className="text-[13px] font-semibold text-foreground truncate leading-tight flex-1">{name || "New Tracker"}</p>
       </div>
@@ -4600,7 +4603,7 @@ function HistoryEntryRow({
 
   return (
     <div
-      className="group flex items-center justify-between py-2 px-3 bubble hover:bg-muted/30 transition-colors text-sm gap-2 cursor-pointer pressable"
+      className="group flex items-center justify-between py-2.5 px-3.5 bubble-row transition-colors text-sm gap-2 cursor-pointer pressable"
       data-testid={`entry-row-${entry.id}`}
       role="button"
       tabIndex={0}
@@ -4609,9 +4612,9 @@ function HistoryEntryRow({
       title="Tap to edit, add, or remove fields"
     >
       <div className="flex items-center gap-2 min-w-0 flex-wrap flex-1">
-        <span className="font-mono font-semibold tabular-nums text-sm">{displayVal}</span>
+        <span className="font-semibold tabular-nums text-sm" style={{ color: tone("var(--td-hs)") }}>{displayVal}</span>
         {delta != null && delta !== 0 && (
-          <span className={`text-xs font-medium tabular-nums ${delta < 0 ? "text-green-600" : "text-orange-500"}`}>
+          <span className="text-xs font-medium tabular-nums text-muted-foreground">
             {delta > 0 ? "+" : ""}{delta.toFixed(1)}
           </span>
         )}
@@ -4623,14 +4626,10 @@ function HistoryEntryRow({
         )}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
-        <div className="text-right">
-          <span className="text-xs text-muted-foreground tabular-nums block">
-            {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-          </span>
-          <span className="text-xs-tight text-muted-foreground/70 tabular-nums block">
-            {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-          </span>
-        </div>
+        {/* The day is the group header above; the row carries the time. */}
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {new Date(entry.timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+        </span>
         {/* Explicit button (not a hover-revealed icon): real <button> elements
             register on the FIRST tap on iOS, where a hover-styled div often
             needs two taps. */}
@@ -4686,6 +4685,25 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
   const profileIdsInEntries = [...new Set(sortedEntries.map(e => (e as any).forProfile).filter(Boolean))];
   const hasMultipleProfiles = profileIdsInEntries.length > 0;
 
+  // Day groups: a header per calendar day with that day's entry count and,
+  // for totals (calories, water, miles), the day's sum of the primary field.
+  const dayOf = (ts: string) => new Date(ts).toLocaleDateString("en-CA");
+  const sumsByDay = dayModeFor(tracker, primaryField) === "sum";
+  const dayStats = new Map<string, { n: number; total: number; hasNum: boolean }>();
+  for (const e of filtered) {
+    const d = dayOf(e.timestamp);
+    const st = dayStats.get(d) || { n: 0, total: 0, hasNum: false };
+    st.n++;
+    const v = readNumber(e, primaryField);
+    if (v != null) { st.total += v; st.hasNum = true; }
+    dayStats.set(d, st);
+  }
+  const todayKey = new Date().toLocaleDateString("en-CA");
+  const yesterdayKey = new Date(Date.now() - 86400000).toLocaleDateString("en-CA");
+  const dayHeading = (d: string) => d === todayKey ? "Today" : d === yesterdayKey ? "Yesterday"
+    : new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const historyUnit = resolveTrackerUnit(tracker as any, primaryField);
+
   return (
     <div className="space-y-3">
       {/* Filter bar */}
@@ -4710,19 +4728,12 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
           </div>
         )}
         <div className="flex-1" />
-        <div className="flex items-center gap-1">
-          {(["all", "7d", "30d", "90d"] as const).map(range => (
-            <button key={range}
-              onClick={() => setDateFilter(range)}
-              className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${dateFilter === range ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
-              {range === "all" ? "All" : range}
-            </button>
-          ))}
-        </div>
+        <TimeRangeSelector value={dateFilter} onChange={setDateFilter} label="History time frame" testId="history-range"
+          options={[{ value: "all", label: "All" }, { value: "7d", label: "7D" }, { value: "30d", label: "30D" }, { value: "90d", label: "90D" }]} />
       </div>
       {sortedEntries.length > 5 && (
         <input type="text" placeholder="Search entries..." value={search} onChange={e => setSearch(e.target.value)}
-          className="w-full h-7 px-2.5 rounded-md border border-border bg-background text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          className="w-full h-9 px-3.5 rounded-full border border-border/70 bg-muted/40 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
           data-testid="entry-search-input" />
       )}
 
@@ -4731,7 +4742,11 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
         {filtered.length === 0 ? (
           <div className="text-center py-8">
             <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">{search ? "No matching entries" : "No entries yet"}</p>
+            <p className="text-sm text-muted-foreground">
+              {search ? "No matching entries"
+                : sortedEntries.length > 0 ? `No entries in this time frame — ${sortedEntries.length} in total. Try All.`
+                : "No entries yet"}
+            </p>
           </div>
         ) : filtered.map((entry, idx) => {
           const notes = entry.values["_notes"] as string | undefined;
@@ -4795,20 +4810,35 @@ function HistoryTabContent({ tracker, primaryField, profiles }: { tracker: Track
           const nextAny = nextFallback ? nextFallback.num : (typeof nextDeclared === "number" ? nextDeclared : null);
           // Only diff same-unit values: comparing this row's duration against
           // the next row's miles produced garbage deltas like "+58.0".
-          const delta = typeof val === "number" && typeof nextAny === "number" && effectivePrimKey === nextKey
+          // A change between rows means something for readings (weight −0.4),
+          // not for totals: one meal minus the previous meal is noise.
+          const delta = !sumsByDay && typeof val === "number" && typeof nextAny === "number" && effectivePrimKey === nextKey
             ? val - nextAny
             : null;
 
+          const thisDay = dayOf(entry.timestamp);
+          const newDay = idx === 0 || dayOf(filtered[idx - 1].timestamp) !== thisDay;
+          const st = dayStats.get(thisDay);
           return (
-            <HistoryEntryRow
-              key={entry.id}
-              entry={entry}
-              tracker={tracker}
-              displayVal={displayVal}
-              delta={delta}
-              secondaryText={!isBPEntry && secondaryVals.length > 0 ? secondaryVals.map(([k, v]) => `${k}: ${v}`).join(", ") : ""}
-              noteText={notes || entry.notes || ""}
-            />
+            <Fragment key={entry.id}>
+              {newDay && st && (
+                <div className={`flex items-baseline justify-between px-1 ${idx === 0 ? "" : "pt-3"}`} data-testid="history-day-header">
+                  <span className="text-sm font-semibold">{dayHeading(thisDay)}</span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {st.n} {st.n === 1 ? "entry" : "entries"}
+                    {sumsByDay && st.hasNum && st.n > 1 ? ` · ${Math.round(st.total * 100) / 100}${historyUnit ? ` ${historyUnit}` : ""} total` : ""}
+                  </span>
+                </div>
+              )}
+              <HistoryEntryRow
+                entry={entry}
+                tracker={tracker}
+                displayVal={displayVal}
+                delta={delta}
+                secondaryText={!isBPEntry && secondaryVals.length > 0 ? secondaryVals.map(([k, v]) => `${humanizeFieldName(k)}: ${v}`).join(" · ") : ""}
+                noteText={notes || entry.notes || ""}
+              />
+            </Fragment>
           );
         })}
       </div>
@@ -4907,14 +4937,17 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
   };
 
   return (
-    <div className="px-5 py-4 space-y-4">
+    <div className="space-y-3">
       {trackerGoals.length === 0 && !creating ? (
-        <div className="text-center py-6">
-          <Target className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">No goals for this tracker yet</p>
-          <Button size="sm" variant="outline" className="mt-3 h-8 text-xs" onClick={openCreate} data-testid="btn-create-tracker-goal">
-            <Target className="h-3 w-3 mr-1" /> Create Goal
-          </Button>
+        <div className="td-hero td-rise p-5 text-center">
+          <div className="relative z-[1]">
+            <span className="medallion mx-auto" aria-hidden="true"><Target className="h-5 w-5" /></span>
+            <p className="text-sm font-semibold mt-3">Set a goal for {tracker.name}</p>
+            <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">A target turns the Overview into a progress ring and shows which days you hit it.</p>
+            <Button size="sm" variant="outline" className="mt-4 h-9 rounded-full px-4 text-xs font-semibold" onClick={openCreate} data-testid="btn-create-tracker-goal">
+              <Target className="h-3.5 w-3.5 mr-1" /> Create Goal
+            </Button>
+          </div>
         </div>
       ) : (
         <>
@@ -4922,20 +4955,26 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
             const pct = g.target > 0 ? Math.min(100, Math.round((g.current / g.target) * 100)) : 0;
             const daysLeft = daysUntilISO(g.deadline, tzUserToday(TRACKER_TZ));
             return (
-              <div key={g.id} role="button" tabIndex={0} aria-label={`Edit goal: ${g.title}`} className="rounded-lg border p-3 space-y-2 cursor-pointer hover:bg-muted/30 transition-colors pressable" onClick={() => openEdit(g)} onKeyDown={onEnterOrSpace(() => openEdit(g))} data-testid={`tracker-goal-${g.id}`}>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{g.title}</span>
-                  <Badge variant={g.status === "completed" ? "default" : "secondary"} className="text-xs capitalize">{g.status}</Badge>
-                </div>
-                <Progress value={pct} className="h-2" />
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{g.current} / {g.target} {g.unit} ({pct}%)</span>
-                  {daysLeft != null && daysLeft > 0 && <span>{daysLeft} days left</span>}
+              <div key={g.id} role="button" tabIndex={0} aria-label={`Edit goal: ${g.title}`} className="bubble bubble-interactive td-rise p-4 flex items-center gap-4 cursor-pointer pressable" onClick={() => openEdit(g)} onKeyDown={onEnterOrSpace(() => openEdit(g))} data-testid={`tracker-goal-${g.id}`}>
+                <RingStack size={76} stroke={8} rings={[{ pct, hs: g.status === "completed" ? "152 62%" : "var(--td-hs)", label: g.title }]}
+                  center={<span className="text-sm metric-value">{pct}%</span>} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-semibold truncate">{g.title}</span>
+                    <Badge variant={g.status === "completed" ? "default" : "secondary"} className="text-xs capitalize shrink-0">{g.status}</Badge>
+                  </div>
+                  <p className="text-lg metric-value mt-1 tabular-nums">
+                    {g.current}<span className="text-sm text-muted-foreground font-medium"> / {g.target} {g.unit}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {g.status === "completed" ? "Reached" : g.target > g.current ? `${Math.round((g.target - g.current) * 100) / 100} ${g.unit} to go` : "Target passed"}
+                    {daysLeft != null && daysLeft > 0 ? ` · ${daysLeft} days left` : ""}
+                  </p>
                 </div>
               </div>
             );
           })}
-          <Button size="sm" variant="outline" className="w-full h-8 text-xs" onClick={openCreate} data-testid="btn-add-tracker-goal">
+          <Button size="sm" variant="outline" className="w-full h-9 rounded-full text-xs font-semibold" onClick={openCreate} data-testid="btn-add-tracker-goal">
             <Plus className="h-3 w-3 mr-1" /> Add Goal
           </Button>
         </>
@@ -4943,8 +4982,8 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
 
       {/* Create/Edit Goal inline form */}
       {(creating || editGoal) && (
-        <div className="rounded-lg border p-3 space-y-3 bg-muted/20">
-          <p className="text-xs font-medium">{editGoal ? "Edit Goal" : "New Goal"}</p>
+        <div className="bubble p-4 space-y-3">
+          <p className="text-sm font-semibold">{editGoal ? "Edit Goal" : "New Goal"}</p>
           <Input value={formTitle} onChange={e => setFormTitle(e.target.value)} placeholder="Goal title" className="h-8 text-sm" data-testid="input-tracker-goal-title" />
           <div className="grid grid-cols-3 gap-2">
             <Input type="number" value={formTarget} onChange={e => setFormTarget(e.target.value)} placeholder="Target" className="h-8 text-sm" data-testid="input-tracker-goal-target" />
