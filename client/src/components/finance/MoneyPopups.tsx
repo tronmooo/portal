@@ -22,9 +22,11 @@ import { parseDate } from "@/lib/dates";
 //
 // Pure presentation: every number arrives as a prop from finance.tsx, which
 // already owns the queries — no fetching here, so these stay jsdom-testable.
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { BubbleModal, PopupHero } from "@/components/ui/bubble-modal";
+import { StatTile } from "@/components/tracker-detail";
+import { formatMoneyRound } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import {
   ComposedChart, Bar, Area, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer,
@@ -83,6 +85,13 @@ export function CashFlowWaterfallPopup({
   ];
   const X = (i: number) => 16 + i * 82;
   const W = 56;
+  // Tap (touch) or hover (pointer) a column to read it out in words.
+  const [activeCol, setActiveCol] = useState<number | null>(null);
+  const colName = (label: string) => label.charAt(0) + label.slice(1).toLowerCase();
+  const colText = (c: typeof cols[number]) => {
+    const share = cashIn > 0 && c.label !== "IN" ? ` · ${Math.round((Math.abs(c.value) / cashIn) * 100)}% of money in` : "";
+    return `${colName(c.label)} ${c.sign}${formatMoneyRound(Math.abs(c.value))}${share}`;
+  };
 
   const topIncomes = useMemo(() => (incomes || [])
     .map((i: any) => ({ id: i.id, label: i.name || i.source || i.category || "Income", monthly: toMonthlyAmount(Number(i.amount) || 0, i.frequency) }))
@@ -110,56 +119,73 @@ export function CashFlowWaterfallPopup({
             {cols.map((c, i) => {
               const top = y(c.to), bottom = y(c.from);
               const h = Math.max(3, bottom - top);
+              const dim = activeCol != null && activeCol !== i;
               return (
-                <g key={c.label}>
-                  <rect x={X(i)} y={top} width={W} height={h} rx="5" fill={c.color} fillOpacity="0.85" />
-                  <text x={X(i) + W / 2} y={top - 6} textAnchor="middle" style={{ fontSize: 10, fontWeight: 700 }} className="fill-foreground">
+                <g key={c.label}
+                  role="button" tabIndex={0} aria-label={colText(c)} aria-pressed={activeCol === i}
+                  className="cursor-pointer outline-none" style={{ opacity: dim ? 0.45 : 1, transition: "opacity 0.15s ease" }}
+                  onClick={() => setActiveCol(i)}
+                  onMouseEnter={() => setActiveCol(i)} onMouseLeave={() => setActiveCol(null)}
+                  onFocus={() => setActiveCol(i)} onBlur={() => setActiveCol(null)}
+                  data-testid={`waterfall-col-${c.label.toLowerCase()}`}>
+                  <title>{colText(c)}</title>
+                  {/* Full-height hit area so a thin column is still easy to tap. */}
+                  <rect x={X(i) - 6} y={TOP - 18} width={W + 12} height={H + 40} fill="transparent" />
+                  <rect x={X(i)} y={top} width={W} height={h} rx="5" fill={c.color} fillOpacity={activeCol === i ? 1 : 0.85} />
+                  <text x={X(i) + W / 2} y={top - 6} textAnchor="middle" style={{ fontSize: 11, fontWeight: 700 }} className="fill-foreground">
                     {c.sign}${fmt(c.value)}
                   </text>
-                  <text x={X(i) + W / 2} y={BASE + 14} textAnchor="middle" style={{ fontSize: 8, letterSpacing: 1 }} className="fill-muted-foreground">
+                  <text x={X(i) + W / 2} y={BASE + 15} textAnchor="middle" style={{ fontSize: 11, letterSpacing: 0.4 }} className="fill-muted-foreground">
                     {c.label}
                   </text>
                 </g>
               );
             })}
           </svg>
+          <p className="mt-1 text-center text-[11px] tabular-nums min-h-[1rem]" aria-live="polite" data-testid="waterfall-readout">
+            {activeCol != null
+              ? <span className="font-semibold">{colText(cols[activeCol])}</span>
+              : <span className="text-muted-foreground">Tap a column for details</span>}
+          </p>
         </div>
 
         {/* Money in / money out side-by-side */}
         <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/5 p-3">
-            <div className="flex items-center gap-1.5 mb-2">
-              <ArrowDownToLine className="h-3.5 w-3.5 text-emerald-500" />
-              <span className="micro-label text-emerald-500">Money in</span>
+          <div className="min-w-0 space-y-2">
+            <StatTile label="Money in" value={formatMoneyRound(cashIn)} basis={`received · ${monthLabel} to date`}
+              icon={ArrowDownToLine} hs="155 65%" i={0} />
+            <div className="px-1">
+              <p className="micro-label text-muted-foreground mb-1.5">Sources · per month</p>
+              {topIncomes.length === 0 ? <p className="text-[11px] text-muted-foreground">No income sources</p> : (
+                <ul className="space-y-1.5">
+                  {topIncomes.map((i) => (
+                    <li key={i.id} className="flex items-baseline justify-between gap-2 text-xs">
+                      <span className="truncate">{i.label}</span>
+                      <span className="tabular-nums font-semibold text-emerald-600 dark:text-emerald-400 shrink-0">{formatMoneyRound(i.monthly)}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
-            {topIncomes.length === 0 ? <p className="text-[11px] text-muted-foreground">No income sources</p> : (
+          </div>
+          <div className="min-w-0 space-y-2">
+            <StatTile label="Money out" value={formatMoneyRound(cashOut)} basis={`recurring + one-time · ${monthLabel}`}
+              icon={ArrowUpFromLine} hs="0 72%" i={1} />
+            <div className="px-1">
+              <p className="micro-label text-muted-foreground mb-1.5">Where it went · {monthLabel}</p>
               <ul className="space-y-1.5">
-                {topIncomes.map((i) => (
-                  <li key={i.id} className="flex items-baseline justify-between gap-2 text-xs">
-                    <span className="truncate">{i.label}</span>
-                    <span className="tabular-nums font-semibold text-emerald-500 shrink-0">${fmt(i.monthly)}</span>
+                <li className="flex items-baseline justify-between gap-2 text-xs">
+                  <span className="truncate flex items-center gap-1"><RefreshCw className="h-3 w-3 text-muted-foreground" /> Recurring</span>
+                  <span className="tabular-nums font-semibold text-red-600 dark:text-red-400 shrink-0">{formatMoneyRound(recurringOut)}</span>
+                </li>
+                {topCats.map((c) => (
+                  <li key={c.name} className="flex items-baseline justify-between gap-2 text-xs">
+                    <span className="truncate capitalize">{c.name}</span>
+                    <span className="tabular-nums font-semibold text-red-600 dark:text-red-400 shrink-0">{formatMoneyRound(c.amt)}</span>
                   </li>
                 ))}
               </ul>
-            )}
-          </div>
-          <div className="rounded-2xl border border-red-500/25 bg-red-500/5 p-3">
-            <div className="flex items-center gap-1.5 mb-2">
-              <ArrowUpFromLine className="h-3.5 w-3.5 text-red-500" />
-              <span className="micro-label text-red-500">Money out</span>
             </div>
-            <ul className="space-y-1.5">
-              <li className="flex items-baseline justify-between gap-2 text-xs">
-                <span className="truncate flex items-center gap-1"><RefreshCw className="h-3 w-3 text-muted-foreground" /> Recurring</span>
-                <span className="tabular-nums font-semibold text-red-500 shrink-0">${fmt(recurringOut)}</span>
-              </li>
-              {topCats.map((c) => (
-                <li key={c.name} className="flex items-baseline justify-between gap-2 text-xs">
-                  <span className="truncate capitalize">{c.name}</span>
-                  <span className="tabular-nums font-semibold text-red-500 shrink-0">${fmt(c.amt)}</span>
-                </li>
-              ))}
-            </ul>
           </div>
         </div>
 

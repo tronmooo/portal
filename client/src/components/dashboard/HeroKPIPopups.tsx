@@ -29,7 +29,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Wallet, TrendingUp, TrendingDown, PieChart as PieChartIcon, Plus, Pencil, Trash2,
   CreditCard, Building2, Car, Banknote, RefreshCw, Receipt, ChevronRight, Loader2,
@@ -43,6 +42,8 @@ import { TimeRangeSelector } from "@/components/ui/time-range";
 import { CATEGORY_PALETTE, OTHER_HS } from "@/components/finance/finance-visuals";
 import { formatMoneyRound } from "@/lib/format";
 import { BubbleModal } from "@/components/ui/bubble-modal";
+import { TrendChart, DeltaChip } from "@/components/tracker-detail";
+import { dayLabel, daysBetween, shiftDay, type DayPoint } from "@shared/tracker-analytics";
 
 // P1.2 remediation: the asset/liability value resolvers are imported from
 // @shared/asset-value (the single source of truth) instead of the hand-copied
@@ -299,13 +300,21 @@ export function NetWorthPopup({
   );
   const { assets, liabilities, totalAssets: displayTotalA, totalLiabilities: displayTotalL, netWorth } = sheet;
 
-  // Trend series (oldest→newest), pinned to the live net worth at the end.
-  const nwSeries = useMemo(() => {
+  // Trend series (oldest→newest, one point per snapshot day), pinned to the
+  // live net worth at the end so the chart lands on the headline number.
+  const nwPoints = useMemo<DayPoint[]>(() => {
     const rows = Array.isArray(nwHistory) ? [...nwHistory] : [];
     rows.sort((a, b) => String(a.snapshotDate).localeCompare(String(b.snapshotDate)));
-    const pts = rows.map((r: any) => Number(r.netWorth) || 0);
-    if (pts.length === 0) return [netWorth];
-    pts[pts.length - 1] = netWorth;
+    const pts: DayPoint[] = [];
+    for (const r of rows) {
+      const day = String(r?.snapshotDate || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      const value = Number(r.netWorth) || 0;
+      const prev = pts[pts.length - 1];
+      if (prev && prev.day === day) { prev.value = value; continue; }
+      pts.push({ day, label: dayLabel(day), value, entries: 1, entryIds: [] });
+    }
+    if (pts.length > 0) pts[pts.length - 1] = { ...pts[pts.length - 1], value: netWorth };
     return pts;
   }, [nwHistory, netWorth]);
   // ONE month-over-month rule (shared/net-worth-change), same as the Finance
@@ -315,14 +324,22 @@ export function NetWorthPopup({
     const c = netWorthChange(Array.isArray(nwHistory) ? nwHistory : [], netWorth, undefined, snap?.netWorthBaseline ?? null);
     return c ? { pct: c.pct, up: c.up, delta: c.delta ?? 0, monthly: c.monthly, baselineDate: c.baselineDate } : null;
   }, [nwHistory, netWorth, snap?.netWorthBaseline]);
-  const nwPath = useMemo(() => {
-    const s = nwSeries.length >= 2 ? nwSeries : null;
-    if (!s) return null;
-    const min = Math.min(...s), max = Math.max(...s), span = (max - min) || 1;
-    const W = 280, H = 40;
-    return s.map((v, i) => `${i === 0 ? "M" : "L"}${((i / (s.length - 1)) * W).toFixed(1)},${(H - ((v - min) / span) * H + 2).toFixed(1)}`).join(" ");
-  }, [nwSeries]);
+
+  // Time frame over the history already fetched (lookbackDays=120). A range is
+  // offered only when the data spans past it — a "1Y" button over four months
+  // of snapshots would just repeat "All".
+  const [nwRange, setNwRange] = useState<NwRange>("all");
+  const nwSpan = nwPoints.length >= 2 ? daysBetween(nwPoints[0].day, nwPoints[nwPoints.length - 1].day) : 0;
+  const nwRangeOptions = useMemo(
+    () => [...NW_RANGES.filter((r) => nwSpan > r.days), { value: "all" as NwRange, label: "All", days: Infinity }],
+    [nwSpan],
+  );
+  const activeRange = nwRangeOptions.find((r) => r.value === nwRange) ?? nwRangeOptions[nwRangeOptions.length - 1];
+  const nwFrom = activeRange.value !== "all" && nwPoints.length > 0 ? shiftDay(nwPoints[nwPoints.length - 1].day, -activeRange.days) : null;
+  const nwShown = useMemo(() => (nwFrom ? nwPoints.filter((p) => p.day >= nwFrom) : nwPoints), [nwPoints, nwFrom]);
+
   const ratio = displayTotalA > 0 ? Math.min(100, Math.round((displayTotalL / displayTotalA) * 100)) : 0;
+  const [tab, setTab] = useState<"assets" | "liabilities">("assets");
 
   return (
     <MetricPopupShell
@@ -332,78 +349,109 @@ export function NetWorthPopup({
       iconColor="hsl(155 60% 44%)"
       title="Net Worth"
       description={`${assets.length} asset${assets.length !== 1 ? "s" : ""} · ${liabilities.length} liabilit${liabilities.length !== 1 ? "ies" : "y"}`}
-      total={`$${fmt(netWorth)}`}
+      total={formatMoneyRound(netWorth)}
       testId="popup-net-worth"
     >
       {isLoading ? (
-        <div className="px-4 py-10 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+        <div className="py-10 flex justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
       ) : (
         <>
         {/* Trend + summary */}
-        <div className="px-4 pt-3 pb-2 border-b border-border">
-          <div className="flex items-center justify-between">
-            <div>
+        <section className="bubble p-3" data-testid="nw-trend">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
               <p className="micro-label text-muted-foreground">Net worth</p>
-              <p className="text-xl font-bold tabular-nums leading-tight" style={{ color: netWorth < 0 ? "hsl(0 80% 60%)" : "hsl(155 60% 44%)" }}>
-                {netWorth < 0 ? "-" : ""}${fmt(Math.abs(netWorth))}
+              <p className="metric-value text-2xl leading-tight mt-0.5" style={{ color: netWorth < 0 ? "hsl(0 80% 60%)" : "hsl(155 60% 44%)" }}>
+                {formatMoneyRound(netWorth)}
               </p>
             </div>
             {nwTrend && (
-              <div className="text-right" title={`Change since the start of the selected period (${nwSeries.length} days of snapshots)`}>
-                <p className="text-[11px] font-semibold tabular-nums" style={{ color: nwTrend.up ? "hsl(155 60% 44%)" : "hsl(0 80% 60%)" }}>
-                  {nwTrend.up ? "▲" : "▼"} {nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : `$${fmt(Math.abs(nwTrend.delta))}`}
+              <div className="text-right shrink-0" title={`Change since ${nwTrend.monthly ? "a month ago" : nwTrend.baselineDate || "the first snapshot"}`}>
+                {nwTrend.pct != null && (
+                  <DeltaChip pct={Math.round(nwTrend.pct * 10) / 10} good={nwTrend.up} />
+                )}
+                <p className="text-[11px] text-muted-foreground mt-1 tabular-nums">
+                  {nwTrend.delta >= 0 ? "+" : "−"}{formatMoneyRound(Math.abs(nwTrend.delta))} {nwTrend.monthly ? "this month" : `since ${nwTrend.baselineDate || "first snapshot"}`}
                 </p>
-                <p className="text-[11px] text-muted-foreground">{nwTrend.delta >= 0 ? "+" : "−"}${fmt(Math.abs(nwTrend.delta))} {nwTrend.monthly ? "this month" : `since ${nwTrend.baselineDate || "first snapshot"}`}</p>
               </div>
             )}
           </div>
-          {nwPath && (
-            <svg viewBox="0 0 280 44" className="mt-1.5 h-10 w-full" preserveAspectRatio="none">
-              <path d={nwPath} fill="none" stroke={`hsl(${nwTrend && !nwTrend.up ? "0 80% 60%" : "155 60% 44%"})`} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+          {nwPoints.length >= 2 && (
+            <div className="mt-3">
+              {nwRangeOptions.length > 1 && (
+                <TimeRangeSelector
+                  value={activeRange.value}
+                  options={nwRangeOptions}
+                  onChange={setNwRange}
+                  label="Net worth time frame"
+                  testId="nw-trend-range"
+                  className="mb-2"
+                />
+              )}
+              <TrendChart
+                points={nwShown}
+                mode="last"
+                unit="$"
+                fromDay={nwFrom}
+                height={150}
+                hs={nwTrend && !nwTrend.up ? "0 80%" : undefined}
+              />
+            </div>
           )}
           {/* Assets vs liabilities split bar */}
-          <div className="mt-1.5">
+          <div className="mt-3">
             <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
               <div style={{ width: `${100 - ratio}%`, background: "hsl(155 60% 44%)" }} />
               <div style={{ width: `${ratio}%`, background: "hsl(270 80% 65%)" }} />
             </div>
-            <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
-              <span><span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(155 60% 44%)" }} /> Assets ${fmt(displayTotalA)}</span>
-              <span>Liab ${fmt(displayTotalL)} <span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(270 80% 65%)" }} /></span>
+            <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted-foreground tabular-nums">
+              <span><span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(155 60% 44%)" }} /> Assets {formatMoneyRound(displayTotalA)}</span>
+              <span>Liabilities {formatMoneyRound(displayTotalL)} <span className="inline-block h-2 w-2 rounded-full align-middle" style={{ background: "hsl(270 80% 65%)" }} /></span>
             </div>
           </div>
+        </section>
+        <div className="td-seg w-full" role="tablist" aria-label="Net worth breakdown">
+          {([
+            { value: "assets" as const, label: "Assets", total: displayTotalA },
+            { value: "liabilities" as const, label: "Liabilities", total: displayTotalL },
+          ]).map((t) => (
+            <button
+              key={t.value}
+              type="button"
+              role="tab"
+              id={`nw-tab-${t.value}`}
+              aria-selected={tab === t.value}
+              aria-controls={`nw-panel-${t.value}`}
+              className="td-seg-item flex-1 justify-center"
+              onClick={() => setTab(t.value)}
+            >
+              {t.label} <span className="font-normal text-muted-foreground tabular-nums">{formatMoneyRound(t.total)}</span>
+            </button>
+          ))}
         </div>
-        <Tabs defaultValue="assets" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 rounded-none border-b">
-            <TabsTrigger value="assets" className="text-xs">
-              Assets <span className="ml-1.5 text-muted-foreground tabular-nums">${fmt(displayTotalA)}</span>
-            </TabsTrigger>
-            <TabsTrigger value="liabilities" className="text-xs">
-              Liabilities <span className="ml-1.5 text-muted-foreground tabular-nums">${fmt(displayTotalL)}</span>
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="assets" className="m-0">
+        <div role="tabpanel" id={`nw-panel-${tab}`} aria-labelledby={`nw-tab-${tab}`}>
+          {tab === "assets" ? (
             <EntityList
               items={assets}
               total={displayTotalA}
+              accent="155 60% 44%"
               emptyLabel="No assets yet"
               addLabel="Add asset"
               onAdd={() => setAddKind("asset")}
               onOpen={(p) => go(`/profiles/${p.id}`)}
             />
-          </TabsContent>
-          <TabsContent value="liabilities" className="m-0">
+          ) : (
             <EntityList
               items={liabilities}
               total={displayTotalL}
+              accent="270 80% 65%"
               emptyLabel="No liabilities yet"
               addLabel="Add liability"
               onAdd={() => setAddKind("liability")}
               onOpen={(p) => go(`/profiles/${p.id}`)}
             />
-          </TabsContent>
-        </Tabs>
+          )}
+        </div>
         </>
       )}
       {addKind && (
@@ -418,11 +466,20 @@ export function NetWorthPopup({
   );
 }
 
+type NwRange = "30d" | "90d" | "1y" | "all";
+const NW_RANGES: ReadonlyArray<{ value: NwRange; label: string; days: number }> = [
+  { value: "30d", label: "30D", days: 30 },
+  { value: "90d", label: "90D", days: 90 },
+  { value: "1y", label: "1Y", days: 365 },
+];
+
 function EntityList({
-  items, total, emptyLabel, addLabel, onAdd, onOpen,
+  items, total, accent, emptyLabel, addLabel, onAdd, onOpen,
 }: {
   items: any[];
   total: number;
+  /** "H S% L%" — the medallion and share-bar colour for this side of the sheet. */
+  accent: string;
   emptyLabel: string;
   addLabel: string;
   onAdd: () => void;
@@ -434,8 +491,8 @@ function EntityList({
   // User request: list assets/liabilities alphabetically by name (was value-desc).
   const sortedItems = [...items].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
   return (
-    <div className="divide-y divide-border/60">
-      {sortedItems.map((p) => {
+    <div className="space-y-1.5">
+      {sortedItems.map((p, i) => {
         const Icon = iconForProfile(p.type);
         // BUG-NW-2 fix (2026-06-03): row value is the ownership-share-adjusted
         // amount from the server breakdown (the popup no longer multiplies a
@@ -444,34 +501,40 @@ function EntityList({
         // not "% of total" — the old formula produced 200% on a 50%-owned home.
         const rowValue = Number(p.value ?? p._value ?? 0);
         const sharePct = Number.isFinite(Number(p.share)) ? Math.round(Number(p.share)) : 100;
+        // The bar is this row's slice of the tab total (the tab's own figure).
+        const ofTotal = total > 0 ? Math.max(0, Math.min(100, (rowValue / total) * 100)) : 0;
         return (
           <button
             key={p.id}
             type="button"
             onClick={() => onOpen(p)}
-            className="w-full px-4 py-2.5 flex items-center gap-3 hover:bg-muted/40 text-left transition-colors"
+            className="bubble-row pressable td-rise w-full px-3 py-2.5 flex items-center gap-3 text-left"
+            style={{ ["--i" as any]: Math.min(i, 8), ["--accent-hsl" as any]: accent }}
             data-testid={`entity-row-${p.id}`}
           >
-            <div className="rounded-md p-1.5 bg-muted/60 shrink-0">
-              <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-            </div>
+            <span className="medallion medallion-sm" aria-hidden="true">
+              <Icon className="h-4 w-4" />
+            </span>
             <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium truncate">{p.name}</p>
-              <p className="text-[11px] text-muted-foreground capitalize">{p.type}</p>
+              <div className="flex items-baseline justify-between gap-2">
+                <p className="text-[13px] font-semibold leading-tight truncate">{p.name}</p>
+                <p className="text-[13px] font-semibold tabular-nums shrink-0">{formatMoneyRound(rowValue)}</p>
+              </div>
+              <div className="td-meter mt-1.5" style={{ height: 4 }} aria-hidden="true">
+                <span style={{ width: `${ofTotal > 0 ? Math.max(2, ofTotal) : 0}%`, background: `hsl(${accent})` }} />
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-muted-foreground tabular-nums">
+                <span className="capitalize truncate">{p.type}{sharePct < 100 ? ` · ${sharePct}% owned` : ""}</span>
+                <span className="shrink-0">{Math.round(ofTotal)}% of total</span>
+              </div>
             </div>
-            <div className="text-right shrink-0">
-              <p className="text-xs font-semibold tabular-nums">${fmt(rowValue)}</p>
-              <p className="text-[11px] text-muted-foreground tabular-nums">{sharePct < 100 ? `${sharePct}% owned` : ""}</p>
-            </div>
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" aria-hidden="true" />
           </button>
         );
       })}
-      <div className="px-4 py-2 border-t border-border bg-muted/20">
-        <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-7" onClick={onAdd} data-testid="button-entity-add">
-          <Plus className="h-3 w-3 mr-1.5" /> {addLabel}
-        </Button>
-      </div>
+      <Button size="sm" variant="ghost" className="w-full justify-start text-xs h-8 rounded-full" onClick={onAdd} data-testid="button-entity-add">
+        <Plus className="h-3 w-3 mr-1.5" /> {addLabel}
+      </Button>
     </div>
   );
 }
