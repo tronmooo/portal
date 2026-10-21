@@ -1,18 +1,10 @@
 import { useLocation } from "wouter";
-import { MessageSquare, LayoutDashboard, Archive, Calendar } from "lucide-react";
 import { isHubLocationForNav } from "@/components/hub/hub-routes";
 import {
   preloadNavigationChunk,
   prefetchNavigationTarget,
 } from "@/lib/navigation-prefetch";
-
-// Hub consolidation (2026-07): Linked merged into the Dashboard hub (4 tabs).
-const TABS = [
-  { label: "Chat",      href: "/chat",      icon: MessageSquare,  accent: "188 50% 52%" },
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
-  { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
-  { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
-];
+import { NAV_TABS as TABS } from "@/lib/nav-tabs";
 
 export function MobileBottomNav() {
   const [location, navigate] = useLocation();
@@ -50,7 +42,9 @@ export function MobileBottomNav() {
               style={{
                 WebkitTapHighlightColor: "transparent",
                 touchAction: "manipulation",
-                ...(isActive ? { background: `hsl(${tab.accent} / 0.13)`, color } : { color: "hsl(var(--muted-foreground))" }),
+                ...(isActive
+                  ? { background: `linear-gradient(160deg, hsl(${tab.accent} / 0.20), hsl(${tab.accent} / 0.07))`, boxShadow: `inset 0 0 0 1px hsl(${tab.accent} / 0.28)`, color }
+                  : { color: "hsl(var(--muted-foreground))" }),
               }}
               data-testid={`mobile-nav-${tab.label.toLowerCase()}`}
               aria-current={isActive ? "page" : undefined}

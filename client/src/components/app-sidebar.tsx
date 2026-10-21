@@ -10,7 +10,8 @@ import {
   SidebarHeader,
   SidebarFooter,
 } from "@/components/ui/sidebar";
-import { MessageSquare, LayoutDashboard, Archive, Settings, Calendar, Circle } from "lucide-react";
+import { Settings, Circle } from "lucide-react";
+import { NAV_TABS } from "@/lib/nav-tabs";
 import { useAuth } from "@/lib/auth";
 import { isHubLocationForNav } from "@/components/hub/hub-routes";
 import {
@@ -20,14 +21,8 @@ import {
 
 // Hub consolidation (2026-07): the Linked tab merged into the Dashboard hub —
 // its content lives on the hub's Trackers/Assets/Liabilities/Documents chips.
-// All old routes (/linked, /trackers, /profiles, ...) still work and light up
-// the Dashboard item via isHubLocationForNav.
-const NAV_ITEMS = [
-  { label: "Chat",      href: "/chat",      icon: MessageSquare,  accent: "188 55% 50%" },
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard,accent: "262 65% 62%" },
-  { label: "Calendar",  href: "/calendar",  icon: Calendar,       accent: "215 70% 58%" },
-  { label: "Artifacts", href: "/artifacts", icon: Archive,        accent: "310 45% 58%" },
-];
+// The tab list itself is shared with the mobile bar (lib/nav-tabs.ts).
+const NAV_ITEMS = NAV_TABS;
 
 export function AppSidebar() {
   const [location, navigate] = useLocation();
