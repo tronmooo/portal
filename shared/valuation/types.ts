@@ -311,5 +311,7 @@ export interface ValuationSnapshot {
 }
 
 /** Bump when the engine's math changes in a way that should re-value stored records. */
-export const VALUATION_MODEL_VERSION = "valuation-v1";
+// v2: itemized market research (comparables pooled by robust median, priced
+// on a fair-market basis) — every stored estimate is re-valued on next open.
+export const VALUATION_MODEL_VERSION = "valuation-v2";
 export const DEFAULT_CURRENCY = "USD";

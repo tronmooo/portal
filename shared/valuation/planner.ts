@@ -156,9 +156,11 @@ export function planValuation(ctx: ValuationContext, now: Date = new Date()): Va
       rationale: ctx.identifiers.address ? "Specific address — AVMs and nearby sales"
         : ctx.identifiers.vin ? "VIN present — exact-vehicle pricing"
         : "Description specific enough for live listing/comparable search",
-      providers: ["live-search"], evidenceKinds: ["live_market_search", "comparable", "model_estimate"],
+      providers: ["market-research", "live-search"], evidenceKinds: ["live_market_search", "comparable", "model_estimate"],
     });
-    providers.push("live-search");
+    // Itemized research (every price it read, on a stated basis) first; the
+    // one-shot blended search is the cross-check.
+    providers.push("market-research", "live-search");
     marketFreshnessMs = Math.min(marketFreshnessMs ?? Infinity, volatilityFreshnessMs(ctx));
     rationale.push("Live market search applies");
   }

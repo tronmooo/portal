@@ -16,6 +16,7 @@ import type {
   ValuationContext, ValuationEvidence, ValuationPlan, ValuationRecord,
 } from "./types";
 import { DEFAULT_CURRENCY, VALUATION_MODEL_VERSION } from "./types";
+import { COMPARABLE_OUTLIER_SPREAD, poolComparables } from "./comparables";
 
 /** Below this total weight no number is defensible. */
 export const MIN_TOTAL_WEIGHT = 0.08;
@@ -146,6 +147,50 @@ export function computeValuation(
     for (let i = usable.length - 1; i >= 0; i--) if (usable[i].e.kind === "prior_valuation") usable.splice(i, 1);
   }
 
+  // COMPARABLES ARE POOLED, NOT STACKED. Research returns many itemized
+  // observations (sold listings, guide figures, offers). Counted one by one,
+  // ten of them would drown a verified user value or an appraisal, and one
+  // mislabeled listing would drag the mean. They are pooled into ONE estimate
+  // the way an appraiser reads a page of comps: weighted median, outliers set
+  // aside, the middle half as the band. More agreeing comps earn more weight,
+  // up to a cap.
+  const poolFactors: string[] = [];
+  let pooledCv: number | null = null;
+  let pooledTypes = 0;
+  const compRows = usable.filter(u => u.e.kind === "comparable");
+  if (compRows.length >= 2) {
+    const pooled = poolComparables(compRows.map(u => ({ value: u.e.value!, weight: u.w })));
+    if (pooled) {
+      const kept = pooled.kept.map(i => compRows[i]);
+      const keptW = kept.reduce((s, u) => s + u.w, 0);
+      const maxW = Math.max(...kept.map(u => u.w));
+      const w = Math.min(1.2, maxW * (1 + 0.15 * (kept.length - 1)));
+      const decay = kept.reduce((s, u) => s + u.w * u.decay, 0) / keptW;
+      pooledCv = kept.length >= 3 ? pooled.cv : null;
+      pooledTypes = new Set(kept.map(u => String((u.e.raw as any)?.type ?? u.e.source))).size;
+      const newest = kept.map(u => u.e.observedAt).sort().pop()!;
+      for (let i = usable.length - 1; i >= 0; i--) if (usable[i].e.kind === "comparable") usable.splice(i, 1);
+      usable.push({
+        e: {
+          id: "comparables:pooled", kind: "comparable", source: `Market comparables (${kept.length})`,
+          provider: kept[0].e.provider, observedAt: newest, fetchedAt: newest,
+          value: pooled.value, low: pooled.low, high: pooled.high, currency: kept[0].e.currency,
+          reliability: 1, relevance: 1, halfLifeMs: kept[0].e.halfLifeMs,
+          note: `median of ${kept.length}; middle half ${money(pooled.low)}–${money(pooled.high)}`,
+        },
+        w, decay, method: "comparable_market_analysis",
+        low: Math.min(pooled.low, pooled.value * 0.97), high: Math.max(pooled.high, pooled.value * 1.03),
+      });
+      if (pooled.dropped.length) {
+        poolFactors.push(`Set aside ${pooled.dropped.length} comparable${pooled.dropped.length === 1 ? "" : "s"} more than ${Math.round(COMPARABLE_OUTLIER_SPREAD * 100)}% from the median`);
+      }
+      // With three or more itemized comps on the table, a single blended
+      // figure from another search is a cross-check, not a peer: it is the
+      // same market read with less shown work.
+      if (kept.length >= 3) for (const u of usable) if (u.e.kind === "live_market_search") u.w *= 0.5;
+    }
+  }
+
   const totalW = usable.reduce((s, u) => s + u.w, 0);
   if (usable.length === 0 || totalW < MIN_TOTAL_WEIGHT) {
     rec.status = "insufficient_data";
@@ -160,7 +205,7 @@ export function computeValuation(
     return rec;
   }
 
-  const value = usable.reduce((s, u) => s + u.w * u.e.value!, 0) / totalW;
+  let value = usable.reduce((s, u) => s + u.w * u.e.value!, 0) / totalW;
   // Agreement is judged among the DIRECT observations (market, user, appraisal,
   // transaction). An indirect anchor — a purchase price projected with an
   // unknown drift — still nudges the blend by its small weight, but it must
@@ -181,10 +226,22 @@ export function computeValuation(
 
   // ── Confidence ──
   const weightScore = Math.min(1, totalW / 1.2);
-  const agreement = agreementCount >= 2 ? Math.max(0, 1 - cv / CONFLICT_CV) : 0.7;
-  const diversity = Math.min(1, kinds.size / 2);
+  // Pooled comparables carry their own agreement: three sold prices within a
+  // few percent of each other ARE agreement, even with no second method.
+  const agreement = agreementCount >= 2 ? Math.max(0, 1 - cv / CONFLICT_CV)
+    : pooledCv != null ? Math.max(0.4, 1 - pooledCv / (2 * CONFLICT_CV)) : 0.7;
+  const diversity = Math.min(1, (kinds.size + Math.max(0, pooledTypes - 1)) / 2);
   let confidence = weightScore * 0.45 + agreement * 0.3 + freshness * 0.15 + diversity * 0.1;
-  const factors: string[] = [];
+  const factors: string[] = [...poolFactors];
+  // A thing that loses value with use is not worth more than it costs new.
+  // An estimate above that ceiling means the evidence priced a different
+  // (newer / higher-spec) item; cap it and say so.
+  const ceiling = newPriceCeiling(evidence);
+  if (ceiling && value > ceiling * 1.02) {
+    value = ceiling;
+    confidence = Math.min(confidence, 0.45);
+    factors.push(`Capped at its price new (${money(ceiling)}) — the evidence priced a newer or higher-spec item`);
+  }
   const onlyWeak = usable.every(u => WEAK_ALONE.has(u.e.kind));
   if (onlyWeak) { confidence = Math.min(confidence, 0.4); factors.push("Only indirect evidence (no market observation or verified value)"); }
   const conflict = agreementCount >= 2 && cv > CONFLICT_CV;
@@ -227,6 +284,15 @@ export function computeValuation(
   rec.missingInfo = [...new Set([...evidenceMissing(evidence), ...(ctx.understanding?.missingInfo || []), ...deterministicMissingInfo(ctx)])].slice(0, 8);
   rec.marketDataAsOf = externalObserved.length ? externalObserved[externalObserved.length - 1] : null;
   return rec;
+}
+
+/** Price new of a depreciating item, from research evidence that flagged it as one. */
+function newPriceCeiling(evidence: ValuationEvidence[]): number | null {
+  for (const e of evidence) {
+    const raw = e.raw as any;
+    if (raw && raw.depreciates === true && typeof raw.newPrice === "number" && raw.newPrice > 0) return raw.newPrice;
+  }
+  return null;
 }
 
 function evidenceMissing(evidence: ValuationEvidence[]): string[] {
