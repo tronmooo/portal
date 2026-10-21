@@ -39,7 +39,7 @@ export function accentTriple(hs: string): string {
 
 const THEMES: Record<TrackerIdentity, Omit<TrackerTheme, "identity">> = {
   nutrition:    { hs: "24 92%",  hs2: "350 82%", icon: Apple,      palette: ["199 85%", "38 92%", "346 80%", "152 62%", "275 65%", "24 92%"] },
-  fitness:      { hs: "152 68%", hs2: "190 80%", icon: Activity,   palette: ["152 68%", "190 80%", "84 65%", "38 92%", "262 70%", "330 70%"] },
+  fitness:      { hs: "88 62%",  hs2: "168 70%", icon: Activity,   palette: ["88 62%", "168 70%", "200 80%", "38 92%", "262 70%", "330 70%"] },
   sleep:        { hs: "248 75%", hs2: "280 70%", icon: Moon,       palette: ["248 75%", "280 70%", "205 80%", "320 60%", "190 70%", "40 85%"] },
   body:         { hs: "198 88%", hs2: "225 82%", icon: Scale,      palette: ["198 88%", "225 82%", "170 65%", "260 70%", "38 90%", "340 75%"] },
   heart:        { hs: "350 82%", hs2: "15 88%",  icon: HeartPulse, palette: ["350 82%", "205 80%", "38 90%", "15 88%", "152 60%", "270 65%"] },

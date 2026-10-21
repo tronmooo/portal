@@ -304,6 +304,11 @@ export const TRACKER_CATEGORY_LABEL: Record<string, string> = {
 // legacy palette only for categories the central system doesn't yet cover.
 import { categoryTheme as _categoryTheme } from "@/lib/category-theme";
 export function getCategoryAccent(category: string): string {
+  // The tracker identities (components/tracker-detail/theme.ts) are the one
+  // palette for trackers: a category chip, its cards and their popups share
+  // a colour. Categories with no identity keep the legacy palette.
+  const identity = trackerTheme({ category });
+  if (identity.identity !== "custom") return accentTriple(identity.hs);
   const direct = TRACKER_CATEGORY_ACCENT[category?.toLowerCase()];
   if (direct) return direct;
   return _categoryTheme(category).hsl;
@@ -325,9 +330,9 @@ const CANONICAL_GROUPS: Record<string, {
   connectedGroups?: string[]; // groups this one shares data relationships with
 }> = {
   "Health":             { icon: HeartPulse, accent: "173 60% 44%", description: "Vitals, sleep, nutrition, mental", order: 1, connectedGroups: ["Fitness"] },
-  "Fitness":            { icon: Dumbbell,   accent: "25 85% 55%",  description: "Exercise, workouts, performance",  order: 2, connectedGroups: ["Health"] },
+  "Fitness":            { icon: Dumbbell,   accent: "88 62% 46%",  description: "Exercise, workouts, performance",  order: 2, connectedGroups: ["Health"] },
   "Finance":            { icon: TrendingUp, accent: "43 85% 52%",  description: "Spending, saving, investing",       order: 3 },
-  "Habits & Routines":  { icon: Flame,      accent: "155 60% 44%", description: "Daily habits and routines",         order: 4, connectedGroups: ["Health", "Fitness"] },
+  "Habits & Routines":  { icon: Flame,      accent: "265 70% 60%", description: "Daily habits and routines",         order: 4, connectedGroups: ["Health", "Fitness"] },
   "Productivity":       { icon: Target,     accent: "262 65% 62%", description: "Work, learning, focus",             order: 5 },
   "Medication":         { icon: Pill,       accent: "340 70% 55%", description: "Medications, supplements, prescriptions", order: 0 },
   "Mental & Wellness":  { icon: Brain,      accent: "280 60% 55%", description: "Mood, meditation, anxiety, stress",  order: 4.5 },
