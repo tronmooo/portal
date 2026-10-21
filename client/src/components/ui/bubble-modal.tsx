@@ -11,6 +11,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { ArrowRight, type LucideIcon } from "lucide-react";
 import { Link } from "wouter";
 import { Medallion } from "@/components/dashboard/visuals";
+import { useNativeTouchScroll } from "@/lib/touch-scroll";
+
+/** "155 65% 45%" → { --td-hs: "155 65%" … } so tracker-detail pieces inside
+ *  (TimeRangeSelector, StatTile, TrendChart) take the popup's own colour. */
+function accentVars(accent: string): React.CSSProperties {
+  const hs = accent.trim().split(/\s+/).slice(0, 2).join(" ");
+  return { ["--td-hs" as any]: hs, ["--td-hs2" as any]: hs, ["--accent-hsl" as any]: accent };
+}
 
 export function BubbleModal({
   open, onClose, title, subtitle, icon, accent, count, children,
@@ -36,17 +44,21 @@ export function BubbleModal({
   width?: "sm" | "md" | "lg";
   testId?: string;
 }) {
+  // iOS: Radix's scroll lock cancels slightly-diagonal swipes; the body
+  // scroller keeps them (lib/touch-scroll.ts — the tracker popup fix).
+  const scrollRef = useNativeTouchScroll<HTMLDivElement>();
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent
-        className={`${width === "sm" ? "max-w-sm" : width === "lg" ? "max-w-lg" : "max-w-md"} max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden`}
+        className={`td-scope bm-dialog ${width === "sm" ? "max-w-sm" : width === "lg" ? "max-w-lg" : "max-w-md"} flex flex-col gap-0 p-0 overflow-hidden`}
+        style={accentVars(accent)}
         data-testid={testId}
       >
-        <DialogHeader className="shrink-0 px-4 pt-4 pb-3 text-left space-y-0">
+        <DialogHeader className="td-header shrink-0 px-4 pt-4 pb-3 pr-12 text-left space-y-0 border-b border-border/60">
           <div className="flex items-center gap-3">
-            <Medallion icon={icon} accent={accent} />
+            <Medallion icon={icon} accent={accent} size="sm" />
             <div className="min-w-0 flex-1">
-              <DialogTitle className="flex items-center gap-2 text-base font-bold tracking-tight">
+              <DialogTitle className="flex items-center gap-2 text-lg font-bold tracking-tight">
                 <span className="truncate">{title}</span>
                 {typeof count === "number" && count > 0 && (
                   <span
@@ -61,11 +73,11 @@ export function BubbleModal({
                 ? <DialogDescription className="text-[12px] mt-0.5">{subtitle}</DialogDescription>
                 : <DialogDescription className="sr-only">{title}</DialogDescription>}
             </div>
-            {headerRight && <div className="shrink-0 text-right pr-6">{headerRight}</div>}
+            {headerRight && <div className="shrink-0 text-right">{headerRight}</div>}
           </div>
         </DialogHeader>
 
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-2">
+        <div ref={scrollRef} className="bm-scroll flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pt-3 space-y-2" data-testid={testId ? `${testId}-scroll` : undefined}>
           {children}
         </div>
 

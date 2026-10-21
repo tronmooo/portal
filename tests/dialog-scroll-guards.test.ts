@@ -93,4 +93,22 @@ describe("popups stay scrollable", () => {
       expect(offenders).toEqual([]);
     });
   });
+
+  // Every hub popup (Executive, Finance, Wellness …) renders through
+  // BubbleModal; it carries the same iOS fix as the tracker popup.
+  describe("BubbleModal on iOS", () => {
+    const src = readFileSync(join(ROOT, "components/ui/bubble-modal.tsx"), "utf8");
+    it("its body scroller keeps touch swipes away from the dialog's scroll lock", () => {
+      expect(src).toContain("const scrollRef = useNativeTouchScroll<HTMLDivElement>()");
+      expect(src).toMatch(/<div ref=\{scrollRef\} className="bm-scroll[^"]*overflow-y-auto overscroll-contain/);
+    });
+    it("is sized by .bm-dialog (vh fallback, dvh, safe areas), never a bare vh class", () => {
+      expect(src).toMatch(/className=\{`td-scope bm-dialog /);
+      expect(src).not.toMatch(/max-h-\[\d+vh\]/);
+      const css = readFileSync(join(ROOT, "index.css"), "utf8");
+      const rule = css.slice(css.indexOf(".bm-dialog {"), css.indexOf("}", css.indexOf(".bm-dialog {")));
+      expect(rule).toMatch(/max-height: calc\(100vh/);
+      expect(rule).toMatch(/100dvh - env\(safe-area-inset-top/);
+    });
+  });
 });

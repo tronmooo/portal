@@ -1015,6 +1015,15 @@ button, a, [role="button"], .card-lift {
 }
 .td-scroll { padding-bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px)); }
 
+/* BubbleModal (components/ui/bubble-modal.tsx) — every hub popup. Sized to
+   content up to the visible screen: vh fallback first, then dvh minus the
+   safe areas (iOS < 15.4 has no dvh; the iOS app has a home indicator). */
+.bm-dialog {
+  max-height: calc(100vh - 2rem);
+  max-height: min(88dvh, calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 1.5rem));
+}
+.bm-scroll { padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); }
+
 .td-header {
   background:
     radial-gradient(90% 140% at 0% 0%, hsl(var(--td-hs) var(--td-l) / 0.16) 0%, transparent 60%),
