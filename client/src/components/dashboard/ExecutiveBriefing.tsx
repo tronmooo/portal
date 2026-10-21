@@ -39,7 +39,8 @@ import {
   CheckSquare, Heart, History, TrendingUp, TrendingDown, CircleDollarSign,
   Receipt, FileText, Target, ListTodo, PartyPopper, CheckCircle2,
   Footprints, Moon, Activity as ActivityIcon, Droplets, Dumbbell, BookOpen,
-  Brain, Apple, Pill as PillIcon, type LucideIcon,
+  Brain, Apple, Pill as PillIcon, HeartPulse, Scale, Thermometer, Smile, Wallet,
+  ArrowDownLeft, ArrowUpRight, type LucideIcon,
 } from "lucide-react";
 import { BubbleSkeleton } from "@/components/ui/skeleton";
 // DRILL IN PLACE, WITH THE CANONICAL POPUP (user rule 2026-08-13).
@@ -68,7 +69,9 @@ import { hashNavigate } from "@/lib/hashNavigate";
 import { useHubChrome } from "@/components/hub/hub-context";
 import { BubbleModal } from "@/components/ui/bubble-modal";
 import { EmptyState } from "@/components/ui/empty-state";
-import { ProgressRing, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
+import { ProgressRing, Medallion, toneForDays, tonePalette, type PillTone } from "@/components/dashboard/visuals";
+import { DeltaChip } from "@/components/tracker-detail/primitives";
+import { formatMoney, formatMoneyRound } from "@/lib/format";
 import { AttentionFilters, useAttentionPrefs } from "@/components/dashboard/AttentionFilters";
 import type { DashboardStats } from "@shared/schema";
 import type { AttentionItem } from "@shared/attention";
@@ -92,25 +95,29 @@ type PopupKind =
   | `wellness:${WellnessPopupKind}`
   | null;
 
-// Card identity colours, matched to the reference mock and to the accents the
-// rest of the app already uses (red overdue, blue tasks, purple calendar,
-// green money/habits, yellow documents, rose wellness, teal activity).
+// Card identity colours — one per card, no two cards sharing a hue, and each
+// matched to the accent its own popup or page already uses: purple tasks (the
+// Tasks popup), violet habits (the trackers' habit group), blue schedule (the
+// icon vocabulary's "dates"), green money, yellow documents, rose wellness,
+// indigo upcoming, teal activity, red overdue.
 const CARD_ACCENTS = {
   attention: "0 72% 58%",
-  tasks:     "217 91% 65%",
-  schedule:  "262 70% 62%",
-  habits:    "155 65% 45%",
+  tasks:     "262 70% 62%",
+  schedule:  "213 90% 62%",
+  habits:    "265 70% 60%",
   money:     "155 65% 45%",
   documents: "43 96% 53%",
   wellness:  "350 85% 62%",
-  upcoming:  "217 91% 65%",
+  upcoming:  "239 70% 64%",
   activity:  "173 60% 44%",
   recommendations: "280 75% 62%",
 } as const;
 
 // ── Small formatting helpers ─────────────────────────────────────────────────
 
-const fmtUSD = (n: number) => `$${Math.round(n).toLocaleString()}`;
+// Whole-dollar amounts for the card summaries — the shared formatter, so this
+// tab rounds exactly the way the hub strip and Finance tab do.
+const fmtUSD = formatMoneyRound;
 
 function dateFromDays(du: number): Date {
   const d = new Date();
@@ -187,8 +194,8 @@ function ExecCard({ id, icon: Icon, title, accent, headerRight, children, classN
     >
       <div className="flex items-center justify-between gap-2 mb-3 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <Icon className="h-4 w-4 shrink-0" style={{ color: `hsl(${accent})` }} strokeWidth={2.2} aria-hidden="true" />
-          <h3 className="text-[11px] font-extrabold tracking-[0.14em] uppercase truncate" style={{ color: `hsl(${accent})` }}>
+          <Medallion icon={Icon} accent={accent} size="sm" />
+          <h3 className="micro-label truncate" style={{ color: `hsl(${accent})` }}>
             {title}
           </h3>
         </div>
@@ -233,20 +240,48 @@ export function ExpandableRows({ id, count, cap = 4, moreLabel, children }: {
     <>
       {visible}
       {hidden > 0 && (
-        <button
-          onClick={() => setShowAll(true)}
-          className="w-full flex items-center gap-1 pt-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
-          data-testid={`exec-more-${id}`}
-        >
+        <FooterLink onClick={() => setShowAll(true)} testId={`exec-more-${id}`}>
           {moreLabel ?? `View all (${count})`}
-          <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
+        </FooterLink>
       )}
     </>
   );
 }
 
+/** The one footer-link treatment on this tab: an expander ("View all (N)",
+ *  "2 more habits") or a link to a DIFFERENT place than the card's header
+ *  ViewLink. A footer that repeats the header's destination is noise — the
+ *  header link is the card's "view all". */
+function FooterLink({ onClick, testId, children }: {
+  onClick: () => void; testId?: string; children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full flex items-center gap-1 pt-1.5 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
+      data-testid={testId}
+    >
+      {children}
+      <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+    </button>
+  );
+}
+
 // ── Rows ─────────────────────────────────────────────────────────────────────
+
+/** The tinted icon square every row on this tab leads with (ItemRow's). */
+function RowIcon({ icon: Icon, hsl, size = "md" }: { icon: LucideIcon; hsl: string; size?: "md" | "sm" }) {
+  return (
+    <span
+      className={`${size === "sm" ? "h-7 w-7" : "h-8 w-8"} rounded-lg flex items-center justify-center shrink-0`}
+      style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})` }}
+      aria-hidden="true"
+    >
+      <Icon className={size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4"} strokeWidth={2.1} />
+    </span>
+  );
+}
 
 const KIND_ICON: Record<string, LucideIcon> = {
   bill: Receipt,
@@ -334,13 +369,7 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
       data-testid={`exec-item-${item.key}`}
       title={item.title}
     >
-      <span
-        className="h-8 w-8 rounded-lg flex items-center justify-center shrink-0"
-        style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})` }}
-        aria-hidden="true"
-      >
-        <Icon className="h-4 w-4" strokeWidth={2.1} />
-      </span>
+      <RowIcon icon={Icon} hsl={hsl} />
       <div className="flex-1 min-w-0">
         <p className="text-[13px] font-semibold leading-tight flex items-center gap-1.5 min-w-0">
           <span className="truncate min-w-0">{titleMain}</span>
@@ -430,7 +459,8 @@ function UpcomingPopup({ open, onClose, items, onAction, onOpenItem, busyKeys, a
 // refetches, so a cached number is visibly not-yet-confirmed.
 function OverviewCell({ icon: Icon, accent, label, value, sub, subClass, onClick, testId, revalidating = false, error = false }: {
   icon: LucideIcon; accent: string; label: string; value: string;
-  sub?: string; subClass?: string; onClick: () => void; testId: string;
+  /** A string, or a node such as a DeltaChip for the month-over-month move. */
+  sub?: ReactNode; subClass?: string; onClick: () => void; testId: string;
   revalidating?: boolean; error?: boolean;
 }) {
   const shownValue = error ? "—" : value;
@@ -443,22 +473,19 @@ function OverviewCell({ icon: Icon, accent, label, value, sub, subClass, onClick
       data-revalidating={revalidating || undefined}
       data-error={error || undefined}
       title={revalidating ? "Updating…" : undefined}
-      className={`flex items-center gap-3 min-w-0 text-left touch-hit transition-opacity duration-200 ${revalidating ? "opacity-70" : ""}`}
+      className={`bubble-row flex items-center gap-2.5 min-w-0 px-2.5 py-2.5 text-left touch-hit transition-opacity duration-200 ${revalidating ? "opacity-70" : ""}`}
+      style={{ ["--accent-hsl" as any]: accent }}
     >
-      <span
-        className="h-10 w-10 rounded-xl flex items-center justify-center shrink-0"
-        style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}
-        aria-hidden="true"
-      >
-        <Icon className="h-5 w-5" strokeWidth={2.2} />
-      </span>
-      <span className="min-w-0">
+      <Medallion icon={Icon} accent={accent} size="sm" />
+      <span className="min-w-0 flex-1">
         <span className="block micro-label text-muted-foreground truncate">
           {label}
           {revalidating && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-primary/70 animate-pulse align-middle" aria-label="Updating" />}
         </span>
-        <span className="block text-lg font-extrabold leading-tight truncate">{shownValue}</span>
-        {shownSub && <span className={`block text-[11px] truncate ${shownSubClass || "text-muted-foreground"}`}>{shownSub}</span>}
+        <span className="block metric-value text-xl leading-tight truncate mt-0.5">{shownValue}</span>
+        {shownSub != null && shownSub !== "" && (
+          <span className={`flex items-center min-w-0 mt-0.5 text-[11px] truncate ${shownSubClass || "text-muted-foreground"}`}>{shownSub}</span>
+        )}
       </span>
     </button>
   );
@@ -498,6 +525,11 @@ const HABIT_ICONS: Array<[RegExp, LucideIcon]> = [
   [/sleep|bed/i, Moon],
   [/walk|steps|hike/i, Footprints],
 ];
+const VITAL_ICONS: Record<string, LucideIcon> = {
+  bp: HeartPulse, sys: HeartPulse, hr: HeartPulse, rhr: HeartPulse,
+  weight: Scale, bmi: Scale, glucose: Droplets, chol: Droplets,
+  temp: Thermometer, mood: Smile,
+};
 const habitIcon = (name: string): LucideIcon =>
   HABIT_ICONS.find(([re]) => re.test(name))?.[1] ?? Flame;
 
@@ -1163,12 +1195,20 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const nwValue = netWorth == null ? loadingDots : `${netWorth < 0 ? "-" : ""}${fmtUSD(Math.abs(netWorth))}`;
   // A delta measured from a snapshot younger than 30 days is not "this
   // month" — it is labelled by the day it is measured from (F-10).
-  const nwSub = nwTrend
+  // The move renders as the app's shared DeltaChip (the same chip the Finance
+  // and tracker screens use) rather than a hand-typed arrow; a dollar-only
+  // delta (no percentage baseline) keeps a plain signed amount.
+  const nwSub: ReactNode = nwTrend
     // QA 2026-09-18: a history that began this month is not a month of growth
     // — the shared rule labels it "since Sep 3" / "since first entry".
     ? (nwTrend.pct == null && nwTrend.delta == null
       ? "no change yet"
-      : `${nwTrend.up ? "↑" : "↓"} ${nwTrend.pct != null ? `${Math.abs(nwTrend.pct).toFixed(1)}%` : fmtUSD(Math.abs(nwTrend.delta ?? 0))} ${nwTrend.label}`)
+      : nwTrend.pct != null
+        ? <DeltaChip
+            pct={Number((nwTrend.up ? Math.abs(nwTrend.pct) : -Math.abs(nwTrend.pct)).toFixed(1))}
+            good={nwTrend.up}
+            label={nwTrend.label} />
+        : `${nwTrend.up ? "+" : "-"}${fmtUSD(Math.abs(nwTrend.delta ?? 0))} ${nwTrend.label}`)
     : "this month";
   const cfValue = cashFlow == null ? loadingDots : `${cashFlow >= 0 ? "+" : "-"}${fmtUSD(Math.abs(cashFlow))}`;
   const nextDate = nextImportant?.daysUntil != null ? dateFromDays(nextImportant.daysUntil) : null;
@@ -1179,7 +1219,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           forever. If any feeding query is still unresolved after 12s, surface
           a Retry that cancels wedged requests and refetches what's on screen. */}
       {briefStuck && (
-        <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2" data-testid="brief-stuck-banner">
+        <div className="bubble-row mb-2 flex items-center justify-between gap-2 px-3 py-2" data-testid="brief-stuck-banner">
           <span className="text-xs text-muted-foreground">Some sections are taking too long to load.</span>
           <button
             className="text-xs font-medium text-primary hover:underline shrink-0"
@@ -1195,7 +1235,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           same three numbers. Embedded, this bar keeps only what the strip
           does not carry — the next important item. */}
       <div
-        className={`bubble bubble-enter mb-3 p-3.5 sm:p-4 grid gap-3 ${hubEmbedded ? "grid-cols-1" : "grid-cols-2 lg:grid-cols-4"}`}
+        className={`bubble bubble-enter mb-3 p-2.5 sm:p-3 grid gap-2 ${hubEmbedded ? "grid-cols-1" : "grid-cols-2 lg:grid-cols-4"}`}
         style={{ ["--accent-hsl" as any]: "240 5% 55%", ["--i" as any]: 0 }}
         data-testid="exec-overview"
       >
@@ -1205,7 +1245,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           label="Net Worth"
           value={nwValue}
           sub={netWorth == null ? undefined : nwSub}
-          subClass={nwTrend ? (nwTrend.up ? "text-emerald-500" : "text-red-500") : undefined}
+          subClass={nwTrend && nwTrend.pct == null && nwTrend.delta != null ? (nwTrend.up ? "text-emerald-500" : "text-red-500") : undefined}
           onClick={() => setPopup("networth")}
           testId="exec-kpi-networth"
           error={enhancedError && snap == null}
@@ -1297,13 +1337,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   not in a separate card at the foot of the grid, where a user
                   watching this card never saw it arrive (F-44 / BUG-06). */}
               {(adviceLoading || adviceError || (recommendations && !adviceHidden)) && (
-                <div className="mb-2 rounded-lg border border-border/60 px-2.5 py-2"
-                  style={{ ["--accent-hsl" as any]: CARD_ACCENTS.recommendations }}
+                <div className="mb-3 rounded-2xl px-2.5 py-2.5"
+                  style={{ ["--accent-hsl" as any]: CARD_ACCENTS.recommendations, background: `hsl(${CARD_ACCENTS.recommendations} / 0.08)` }}
                   data-testid="exec-card-recommendations" aria-live="polite">
-                  <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="flex items-center justify-between gap-2 mb-2">
                     <div className="flex items-center gap-1.5">
-                      <Sparkles className="h-3 w-3" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }} aria-hidden="true" />
-                      <span className="text-[11px] font-extrabold tracking-[0.14em] uppercase" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }}>
+                      <Sparkles className="h-3.5 w-3.5" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }} aria-hidden="true" />
+                      <span className="micro-label" style={{ color: `hsl(${CARD_ACCENTS.recommendations})` }}>
                         AI advice
                       </span>
                     </div>
@@ -1455,11 +1495,11 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
             >
               <div className="flex items-start gap-3 mb-3">
                 <div className="shrink-0">
-                  <p className="metric-value text-3xl" style={{ color: `hsl(${CARD_ACCENTS.schedule})` }}>{eventsToday.length}</p>
+                  <p className="metric-value text-2xl" style={{ color: `hsl(${CARD_ACCENTS.schedule})` }}>{eventsToday.length}</p>
                   <p className="text-[11px] text-muted-foreground">{eventsToday.length === 1 ? "event today" : "events today"}</p>
                 </div>
                 {nextUp && (
-                  <div className="flex-1 min-w-0 rounded-lg px-2.5 py-2" style={{ background: `hsl(${CARD_ACCENTS.schedule} / 0.10)` }}>
+                  <div className="flex-1 min-w-0 rounded-2xl px-2.5 py-2" style={{ background: `hsl(${CARD_ACCENTS.schedule} / 0.10)` }}>
                     <p className="micro-label text-muted-foreground">Next up</p>
                     <p className="text-[13px] font-semibold truncate" style={{ color: `hsl(${CARD_ACCENTS.schedule})` }}>{nextUp.title}</p>
                     {nextUp.time && <p className="text-[11px] text-muted-foreground mt-0.5">{timeLabel12h(nextUp.time)}</p>}
@@ -1488,14 +1528,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       </div>
                     );
                   })}
-                  <button
-                    onClick={() => setPopup("events")}
-                    className="w-full flex items-center gap-1 pt-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
-                    data-testid="exec-view-fullday"
-                  >
-                    View full day
-                    <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
                 </div>
               )}
 
@@ -1524,7 +1556,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                   <CardEmpty icon={CalendarDays} accent={CARD_ACCENTS.schedule}>No birthdays or expirations in the next 45 days.</CardEmpty>
                 ) : (
                   <div className="space-y-1.5 mt-2">
-                    <ExpandableRows id="important-dates" count={importantDates.length} cap={5}>
+                    {/* Capped at 3 so Schedule stays level with its row partner; the
+                        expander and "View all dates" carry the rest. */}
+                    <ExpandableRows id="important-dates" count={importantDates.length} cap={3}>
                       {importantDates.map((i) => (
                         <ItemRow key={i.key} item={i}
                           busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
@@ -1572,13 +1606,13 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                             checkinHabit.mutateAsync(h.id).catch(() => {}).finally(() => markBusy(`habit:${h.id}`, false));
                           }}
                           disabled={busy}
-                          className="bubble-row w-full flex items-center gap-2 px-2 py-1.5 text-left disabled:opacity-60"
+                          className="bubble-row w-full flex items-center gap-2.5 px-2.5 py-2 text-left disabled:opacity-60"
                           style={{ ["--accent-hsl" as any]: CARD_ACCENTS.habits }}
                           data-testid={`exec-habit-checkin-${h.id}`}
                           aria-label={done ? `${h.name} — done today` : `Check in ${h.name}`}
                         >
-                          <HIcon className="h-3.5 w-3.5 shrink-0" style={{ color: `hsl(${CARD_ACCENTS.habits})` }} aria-hidden="true" />
-                          <span className="text-[12px] font-medium truncate flex-1">{h.name}</span>
+                          <RowIcon icon={HIcon} hsl={CARD_ACCENTS.habits} size="sm" />
+                          <span className="text-[13px] font-semibold leading-tight truncate flex-1">{h.name}</span>
                           {hp.required > 1 ? (
                             <>
                               <span className="h-1.5 w-8 rounded-full bg-muted overflow-hidden shrink-0" aria-hidden="true">
@@ -1601,14 +1635,9 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                       );
                     })}
                     {habitsDueToday.length > HABIT_CARD_LIMIT && (
-                      <button
-                        onClick={() => setPopup("habits")}
-                        className="w-full flex items-center gap-1 px-2 pt-1 text-[11px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
-                        data-testid="exec-habits-more"
-                      >
+                      <FooterLink onClick={() => setPopup("habits")} testId="exec-habits-more">
                         {habitsDueToday.length - HABIT_CARD_LIMIT} more habit{habitsDueToday.length - HABIT_CARD_LIMIT === 1 ? "" : "s"} today
-                        <ChevronRight className="h-3 w-3" aria-hidden="true" />
-                      </button>
+                      </FooterLink>
                     )}
                   </div>
                 </div>
@@ -1623,56 +1652,61 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
               // not an expansion of this card.
               headerRight={<ViewLink label="Open finances" accent={CARD_ACCENTS.money} onClick={() => go("/dashboard/finance")} testId="exec-view-finances" />}
             >
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="micro-label text-muted-foreground mb-1.5">This Month</p>
-                  <div className="space-y-1.5 text-[13px]">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-muted-foreground">Income</span>
-                      <span className="font-bold tabular-nums text-emerald-500">{enhanced === undefined ? loadingDots : fmtUSD(monthlyIncome)}</span>
+              {/* Two stacked lists of the tab's one row style. Side-by-side
+                  columns left ~165px per column at phone width — too narrow
+                  for an icon, a label and an amount. */}
+              <p className="micro-label text-muted-foreground mb-1.5">This Month</p>
+              <div className="space-y-1.5">
+                {([
+                  { key: "income", icon: ArrowDownLeft, label: "Income", sub: "Coming in this month",
+                    value: enhanced === undefined ? loadingDots : fmtUSD(monthlyIncome), hsl: "155 65% 45%", cls: "text-emerald-500" },
+                  { key: "expenses", icon: ArrowUpRight, label: "Expenses", sub: "Spending + bills still owed",
+                    value: monthlyExpenses == null ? loadingDots : fmtUSD(monthlyExpenses), hsl: "0 72% 58%", cls: "text-red-500" },
+                  { key: "cashflow", icon: Wallet, label: "Cash Flow", sub: "Income minus expenses",
+                    value: cfValue, hsl: cashFlow != null && cashFlow < 0 ? "0 72% 58%" : "155 65% 45%",
+                    cls: cashFlow != null && cashFlow < 0 ? "text-red-500" : "text-emerald-500" },
+                ] as const).map((r) => (
+                  <div key={r.key} className="bubble-row flex items-center gap-2.5 px-2.5 py-2"
+                    style={{ ["--accent-hsl" as any]: r.hsl }}>
+                    <RowIcon icon={r.icon} hsl={r.hsl} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] font-semibold leading-tight truncate">{r.label}</p>
+                      <p className="text-[11px] text-muted-foreground truncate mt-0.5">{r.sub}</p>
                     </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-muted-foreground">Expenses</span>
-                      <span className="font-bold tabular-nums text-red-500">{monthlyExpenses == null ? loadingDots : fmtUSD(monthlyExpenses)}</span>
-                    </div>
-                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/40">
-                      <span className="text-muted-foreground">Cash Flow</span>
-                      <span className={`font-bold tabular-nums ${cashFlow != null && cashFlow < 0 ? "text-red-500" : "text-emerald-500"}`}>{cfValue}</span>
-                    </div>
+                    <span className={`shrink-0 text-[13px] font-bold tabular-nums ${r.cls}`}>{r.value}</span>
                   </div>
-                </div>
-                <div>
-                  <p className="micro-label text-muted-foreground mb-1.5">Bills Due Soon</p>
-                  {billsDueSoon.length === 0 ? (
-                    <p className="text-[12px] text-muted-foreground">{UPCOMING_BILLS_EMPTY_COPY}.</p>
-                  ) : (
-                    <div className="space-y-1.5 text-[13px]">
-                      {billsDueSoon.slice(0, 3).map((b: any) => (
-                        <button
-                          key={b.id}
-                          onClick={() => setPopup("bills")}
-                          className="w-full flex items-center justify-between gap-2 min-w-0 text-left rounded-md hover:bg-muted/30 transition-colors"
-                          data-testid={`exec-money-bill-${b.id}`}
-                        >
-                          <span className="min-w-0">
-                            <span className="block truncate">{b.name}</span>
-                            <span className="block text-[11px] text-muted-foreground">{fmtShortDate(dateFromDays(b.daysUntil))}</span>
-                          </span>
-                          <span className="shrink-0 font-bold tabular-nums">${Number(b.amount || 0).toLocaleString(undefined, { minimumFractionDigits: Number(b.amount) % 1 ? 2 : 0 })}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  <button
-                    onClick={() => setPopup("bills")}
-                    className="flex items-center gap-1 pt-2 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
-                    data-testid="exec-view-bills"
-                  >
-                    View all bills
-                    <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
-                </div>
+                ))}
               </div>
+              <p className="micro-label text-muted-foreground mt-3 mb-1.5">Bills Due Soon</p>
+              {billsDueSoon.length === 0 ? (
+                <p className="text-[12px] text-muted-foreground">{UPCOMING_BILLS_EMPTY_COPY}.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {billsDueSoon.slice(0, 3).map((b: any) => {
+                    const hsl = tonePalette(toneForDays(b.daysUntil));
+                    return (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() => setPopup("bills")}
+                        className="bubble-row w-full flex items-center gap-2.5 px-2.5 py-2 min-w-0 text-left"
+                        style={{ ["--accent-hsl" as any]: hsl }}
+                        data-testid={`exec-money-bill-${b.id}`}
+                      >
+                        <RowIcon icon={Receipt} hsl={hsl} />
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-[13px] font-semibold leading-tight truncate">{b.name}</span>
+                          <span className="block text-[11px] text-muted-foreground truncate mt-0.5">Due {fmtShortDate(dateFromDays(b.daysUntil))}</span>
+                        </span>
+                        <span className="shrink-0 text-[13px] font-bold tabular-nums">{formatMoney(Number(b.amount || 0))}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {/* A different place than the header's "Open finances": the
+                  Bills panel, over this tab. */}
+              <FooterLink onClick={() => setPopup("bills")} testId="exec-view-bills">View all bills</FooterLink>
             </ExecCard>
 
             {/* ── Documents ────────────────────────────────────────────────── */}
@@ -1710,6 +1744,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                           className="bubble-row flex items-center gap-2.5 px-2.5 py-2 cursor-pointer"
                           style={{ ["--accent-hsl" as any]: CARD_ACCENTS.documents }}
                         >
+                          <RowIcon icon={FileText} hsl={tone} size="sm" />
                           <div className="flex-1 min-w-0">
                             <p className="text-[13px] font-semibold leading-tight truncate">{name}</p>
                             <p className="text-[11px] text-muted-foreground truncate mt-0.5">
@@ -1722,14 +1757,6 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                         </div>
                       );
                     })}
-                    <button
-                      onClick={() => setPopup("docs")}
-                      className="w-full flex items-center gap-1 pt-1 text-[12px] font-semibold text-muted-foreground hover:text-foreground transition-colors"
-                      data-testid="exec-view-all-documents"
-                    >
-                      View all documents
-                      <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
-                    </button>
                   </div>
                 </div>
               )}
@@ -1751,17 +1778,19 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                     </p>
                   )}
                   {latestVitals.length > 0 && (
-                    <div className={`space-y-1 ${hasWellness ? "mb-2" : ""}`} data-testid="exec-wellness-vitals">
+                    <div className={`space-y-1.5 ${hasWellness ? "mb-2" : ""}`} data-testid="exec-wellness-vitals">
                       {latestVitals.slice(0, 4).map((r) => (
                         <button key={r.key} type="button"
                           onClick={() => setPopup("wellness:score")}
-                          className="w-full flex items-center justify-between gap-2 rounded-md px-1 py-0.5 text-[12px] hover:bg-muted/30 transition-colors text-left"
+                          className="bubble-row w-full flex items-center gap-2.5 px-2.5 py-2 text-left"
+                          style={{ ["--accent-hsl" as any]: CARD_ACCENTS.wellness }}
                           data-testid={`exec-wellness-vital-${r.key}`}>
-                          <span className="text-muted-foreground truncate">{r.label}</span>
-                          <span className="shrink-0 font-semibold tabular-nums">
-                            {r.value}
-                            {r.at && <span className="ml-1.5 font-normal text-muted-foreground">{relTime(r.at)}</span>}
+                          <RowIcon icon={VITAL_ICONS[r.key] ?? ActivityIcon} hsl={CARD_ACCENTS.wellness} size="sm" />
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-[13px] font-semibold leading-tight truncate">{r.label}</span>
+                            {r.at && <span className="block text-[11px] text-muted-foreground truncate mt-0.5">{relTime(r.at)}</span>}
                           </span>
+                          <span className="shrink-0 text-[13px] font-bold tabular-nums">{r.value}</span>
                         </button>
                       ))}
                     </div>
