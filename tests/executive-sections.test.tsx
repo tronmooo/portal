@@ -6,7 +6,7 @@
 // actually exercise the new sections with live React + providers.
 import React from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Router } from "wouter";
 import { QuickActionsSection, WeeklySummarySection } from "../client/src/pages/dashboard";
@@ -212,6 +212,35 @@ describe("ExecutiveBriefing", () => {
     await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
     await waitFor(() => expect(screen.getByTestId("exec-kpi-next").textContent).toContain("Dentist visit"));
     expect(screen.getByTestId("exec-kpi-next").textContent).not.toContain("Midnight check");
+  });
+
+  it("Upcoming: tasks within 30 days, a filter by kind, and a tap lands on that task", async () => {
+    const inDays = (n: number) => { const d = new Date(); d.setDate(d.getDate() + n); return d.toLocaleDateString("en-CA"); };
+    stubRoutes({
+      "/api/tasks": [
+        { id: "t-soon", title: "Submit expense report", status: "todo", dueDate: inDays(3), tags: [] },
+        // 9 days out: counted under the Tasks popup's Upcoming tab, and it
+        // used to be missing here (the panel only looked 7 days ahead).
+        { id: "t-far", title: "Book flights for June", status: "todo", dueDate: inDays(9), tags: [] },
+      ],
+      "/api/calendar/timeline": [
+        { id: "ev-1", type: "event", title: "Team offsite", date: inDays(5), time: "09:00", sourceId: "ev-1", linkedProfiles: [] },
+      ],
+    });
+    await mount({ financeSnapshot: { upcomingBills: [] }, expiringDocuments: [] });
+    fireEvent.click(screen.getByTestId("exec-view-upcoming"));
+    const dlg = await screen.findByTestId("upcoming-popup");
+    await waitFor(() => expect(dlg.textContent).toContain("Book flights for June"));
+    expect(dlg.textContent).toContain("Team offsite");
+    // Filter to tasks only.
+    fireEvent.click(screen.getByTestId("upcoming-filter-tasks"));
+    expect(screen.getByTestId("upcoming-popup").textContent).not.toContain("Team offsite");
+    expect(screen.getByTestId("upcoming-popup").textContent).toContain("Submit expense report");
+    // Tapping a task opens Tasks on the Upcoming tab with that task open.
+    fireEvent.click(within(screen.getByTestId("upcoming-popup")).getByTestId("exec-item-task:t-far"));
+    await screen.findByTestId("popup-tasks");
+    await waitFor(() => expect(screen.getByTestId("task-detail-t-far")).toBeTruthy());
+    expect(screen.getByTestId("task-tab-upcoming").getAttribute("aria-selected")).toBe("true");
   });
 
   it("shows each record in exactly one place on the tab", async () => {

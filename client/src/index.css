@@ -1022,6 +1022,10 @@ button, a, [role="button"], .card-lift {
   max-height: calc(100vh - 2rem);
   max-height: min(88dvh, calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 1.5rem));
 }
+.bm-dialog-tall {
+  height: calc(100vh - 2rem);
+  height: min(88dvh, calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 1.5rem));
+}
 .bm-scroll { padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); }
 
 .td-header {

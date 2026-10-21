@@ -34,6 +34,10 @@ import { isMedicationTracker, computeMissedDoses } from "./medication-doses";
 import { parseRecurringMeta, kindDef, type RecurringKind } from "./recurring-dates";
 import { routeForEntity, normalizeEntityType } from "./entity-routes";
 
+
+/** How far ahead the Upcoming card and panel look, for events, tasks and goal deadlines. */
+export const UPCOMING_WINDOW_DAYS = 30;
+
 export type ExecSectionId =
   | "immediate" | "today" | "habits" | "bills" | "upcoming"
   | "importantDates" | "documents" | "health" | "activity" | "insights"
@@ -81,7 +85,7 @@ const TITLES: Record<ExecSectionId, string> = {
   today: "Today's Agenda",
   habits: "Habits Due Today",
   bills: "Bills & Financial Obligations",
-  upcoming: "Upcoming · Next 7 Days",
+  upcoming: "Upcoming · Next 30 Days",
   importantDates: "Important Dates",
   documents: "Documents & Expirations",
   health: "Health",
@@ -638,11 +642,14 @@ export function buildExecutiveSections(
       action: { kind: "complete", label: "Complete" },
     });
   }
-  // ── §5 Upcoming · Next 7 Days ──────────────────────────────────────────────
+  // ── §5 Upcoming · Next 30 Days ─────────────────────────────────────────────
+  // 2026-10-21: was 7 days, so a task due in 9 days was counted under the
+  // Tasks popup's Upcoming tab and missing from the Executive Upcoming panel —
+  // the same word, two answers. One window now: UPCOMING_WINDOW_DAYS.
   for (const e of input.events || []) {
     if (!e?.id || (e.type && e.type !== "event")) continue;
     const du = daysBetween(today, e.date);
-    if (du == null || du < 1 || du > 7) continue;
+    if (du == null || du < 1 || du > UPCOMING_WINDOW_DAYS) continue;
     cand.upcoming.push({
       key: `event:${e.id}`, sourceKey: eventClaimKey(e), kind: "event",
       title: e.title || "Event",
@@ -654,7 +661,7 @@ export function buildExecutiveSections(
   for (const t of input.tasks || []) {
     if (!t?.id || t.status === "done") continue;
     const du = daysBetween(today, t.dueDate);
-    if (du == null || du < 1 || du > 7) continue;
+    if (du == null || du < 1 || du > UPCOMING_WINDOW_DAYS) continue;
     cand.upcoming.push({
       key: `task:${t.id}`, sourceKey: `task:${t.id}`, kind: "task",
       title: t.title || "Task", reason: `Due ${dayLabel(du)}`,
@@ -667,7 +674,7 @@ export function buildExecutiveSections(
     const status = String(g.status || "").toLowerCase();
     if (status === "completed" || status === "abandoned") continue;
     const du = daysBetween(today, g.deadline);
-    if (du == null || du < 0 || du > 7) continue;
+    if (du == null || du < 0 || du > UPCOMING_WINDOW_DAYS) continue;
     const pct = Number(g.target) > 0 ? ((Number(g.current) || 0) / Number(g.target)) * 100 : 0;
     cand.upcoming.push({
       key: `goal:${g.id}`, sourceKey: `goal:${g.id}`, kind: "goal",

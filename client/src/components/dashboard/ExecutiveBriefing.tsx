@@ -79,7 +79,7 @@ import type { AttentionItem } from "@shared/attention";
 // is what once produced "Lawn care ($40) due in -29d".
 import { dayLabel } from "@shared/now-rank";
 import { groupDocumentDates, summarizeDocumentUrgency } from "@shared/document-dates";
-import { selectAttentionRows, attentionBand, ATTENTION_BANDS } from "@shared/executive-attention";
+import { selectAttentionRows, attentionHeading, ATTENTION_HEADINGS } from "@shared/executive-attention";
 import { buildExecutiveSections, normalizeAiSuggestions, type AiSuggestion, type ExecSectionId } from "@shared/executive-sections";
 import { isHabitDueOn, isHabitDoneOn } from "@shared/habit-schedule";
 import { habitDayProgress, habitsDayRollup } from "@shared/habit-progress";
@@ -409,44 +409,88 @@ function ItemRow({ item, busyKeys, armedKey, leavingKeys, onAction, onOpen }: {
 // IS the first row of this list (soonest-first), so this is where its record
 // lives. Giving it a separate-but-identical panel would be exactly the
 // duplicate-interface problem this pass exists to remove.
+type UpcomingFilter = "all" | "tasks" | "events" | "bills" | "other";
+const upcomingCategory = (i: AttentionItem): Exclude<UpcomingFilter, "all"> =>
+  i.kind === "task" ? "tasks" : i.kind === "event" ? "events" : i.kind === "bill" ? "bills" : "other";
+
 function UpcomingPopup({ open, onClose, items, onAction, onOpenItem, busyKeys, armedKey, leavingKeys }: {
   open: boolean; onClose: () => void; items: AttentionItem[];
   onAction: (i: AttentionItem) => void;
   onOpenItem: (i: AttentionItem) => void;
   busyKeys?: Set<string>; armedKey?: string | null; leavingKeys?: Set<string>;
 }) {
-  // Grouped by the day they fall on, so a week reads as a week.
-  const groups: Array<{ label: string; rows: AttentionItem[] }> = [];
-  for (const i of items) {
+  // 2026-10-21 redo: a filter by kind (the panel mixes tasks, events, bills,
+  // renewals and goal deadlines over 30 days — "show me just my tasks" was
+  // a scroll), the week at a glance on top, and real day headers.
+  const [filter, setFilter] = useState<UpcomingFilter>("all");
+  useEffect(() => { if (open) setFilter("all"); }, [open]);
+  const counts = useMemo(() => {
+    const c: Record<UpcomingFilter, number> = { all: items.length, tasks: 0, events: 0, bills: 0, other: 0 };
+    for (const i of items) c[upcomingCategory(i)]++;
+    return c;
+  }, [items]);
+  const shown = filter === "all" ? items : items.filter((i) => upcomingCategory(i) === filter);
+  const thisWeek = items.filter((i) => (i.daysUntil ?? 99) <= 7).length;
+
+  // Tomorrow and the rest of this week get a header per DAY (a week reads as
+  // a week); further out folds into Next week / Later this month / Later.
+  const groups: Array<{ key: string; label: string; sub?: string; rows: AttentionItem[] }> = [];
+  for (const i of shown) {
     const du = i.daysUntil ?? 0;
+    const date = dateFromDays(du);
+    const key = du <= 7 ? `d${du}` : du <= 14 ? "next" : du <= 31 ? "month" : "later";
     const label = du === 1 ? "Tomorrow"
-      : du <= 7 ? "This week"
+      : du <= 7 ? date.toLocaleDateString(undefined, { weekday: "long" })
       : du <= 14 ? "Next week"
-      : du <= 31 ? "This month"
+      : du <= 31 ? "Later this month"
       : "Later";
-    const g = groups.find(x => x.label === label);
-    if (g) g.rows.push(i); else groups.push({ label, rows: [i] });
+    const sub = du <= 7 ? date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : undefined;
+    const g = groups.find((x) => x.key === key);
+    if (g) g.rows.push(i); else groups.push({ key, label, sub, rows: [i] });
   }
+  const FILTERS: Array<{ id: UpcomingFilter; label: string }> = [
+    { id: "all", label: "All" }, { id: "tasks", label: "Tasks" }, { id: "events", label: "Events" },
+    { id: "bills", label: "Bills" }, { id: "other", label: "Other" },
+  ];
   return (
     <BubbleModal
       open={open} onClose={onClose} title="Upcoming" icon={Clock}
       accent={CARD_ACCENTS.upcoming} count={items.length}
-      subtitle="Everything coming up — dates, bills, renewals and deadlines"
-      testId="upcoming-popup" width="lg"
+      subtitle={items.length === 0 ? "The next 30 days"
+        : `${thisWeek} this week · ${items.length} in the next 30 days`}
+      testId="upcoming-popup" width="lg" tall
     >
+      {items.length > 0 && (
+        <div className="td-seg flex flex-wrap w-full" role="tablist" aria-label="Show" style={{ borderRadius: "1.1rem" }}
+          data-testid="upcoming-filters">
+          {FILTERS.filter((f) => f.id === "all" || counts[f.id] > 0).map((f) => (
+            <button key={f.id} type="button" role="tab" aria-selected={filter === f.id} aria-pressed={filter === f.id}
+              onClick={() => setFilter(f.id)} data-testid={`upcoming-filter-${f.id}`}
+              className="td-seg-item flex-1 justify-center px-1.5 min-w-0">
+              {f.label}<span className="tabular-nums text-[11px] opacity-60">{counts[f.id]}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {items.length === 0 ? (
-        <p className="text-[13px] text-muted-foreground py-6 text-center">Nothing coming up.</p>
-      ) : groups.map(g => (
-        <div key={g.label}>
-          <p className="micro-label text-muted-foreground px-1 pt-2 pb-1">{g.label} · {g.rows.length}</p>
+        <EmptyState label="Nothing coming up in the next 30 days." icon={Clock} accent={CARD_ACCENTS.upcoming} className="py-8" />
+      ) : shown.length === 0 ? (
+        <p className="text-[13px] text-muted-foreground py-6 text-center">Nothing of this kind coming up.</p>
+      ) : groups.map((g) => (
+        <section key={g.key} data-testid={`upcoming-group-${g.key}`}>
+          <p className="px-1 pt-2 pb-1 flex items-baseline gap-1.5">
+            <span className="micro-label" style={{ color: `hsl(${CARD_ACCENTS.upcoming})` }}>{g.label}</span>
+            {g.sub && <span className="text-[11px] text-muted-foreground">{g.sub}</span>}
+            <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{g.rows.length}</span>
+          </p>
           <div className="space-y-1.5">
-            {g.rows.map(i => (
+            {g.rows.map((i) => (
               <ItemRow key={i.key} item={i}
                 busyKeys={busyKeys} armedKey={armedKey} leavingKeys={leavingKeys}
                 onAction={onAction} onOpen={onOpenItem} />
             ))}
           </div>
-        </div>
+        </section>
       ))}
     </BubbleModal>
   );
@@ -565,6 +609,8 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   const go = (path: string) => { if (path.includes("?")) hashNavigate(path); else navigate(path); };
   const { toast } = useToast();
   const [popup, setPopup] = useState<PopupKind>(null);
+  // The task a tapped row asked the Tasks popup to open at (see openItem).
+  const [taskFocus, setTaskFocus] = useState<{ id: string; tab: "today" | "upcoming" } | null>(null);
   // Which item's money-moving button is armed for the confirming second tap.
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
@@ -1216,7 +1262,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
   // record itself, never to a generic page.
   const openItem = (item: AttentionItem) => {
     switch (item.kind) {
-      case "task": setPopup("tasks"); return;
+      case "task":
+        // Land on THIS task: the tab it is listed under, expanded. Opening on
+        // Today showed a list a task due Friday isn't in.
+        setTaskFocus({ id: idOf(item), tab: (item.daysUntil ?? 0) > 0 ? "upcoming" : "today" });
+        setPopup("tasks");
+        return;
       case "habit": setPopup("habits"); return;
       case "bill": setPopup("bills"); return;
       case "event": setPopup("events"); return;
@@ -1463,12 +1514,12 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                 <div className="space-y-1.5">
                   <ExpandableRows id="attention" count={attentionItems.length} cap={4}>
                     {attentionItems.map((i, n) => {
-                      // A coloured band header over the first row of each
-                      // urgency group (overdue / this week / this month /
-                      // later), so the list reads without parsing every date.
-                      const band = attentionBand(i);
-                      const head = n === 0 || attentionBand(attentionItems[n - 1]) !== band
-                        ? ATTENTION_BANDS.find((b) => b.id === band)! : null;
+                      // A coloured header over the first row of each group:
+                      // expirations by urgency (expired / this week / this
+                      // month / later) first, then "Also needs attention".
+                      const band = attentionHeading(i);
+                      const head = n === 0 || attentionHeading(attentionItems[n - 1]) !== band
+                        ? ATTENTION_HEADINGS[band] : null;
                       return (
                         <div key={i.key} className="space-y-1.5">
                           {head && (
@@ -1538,7 +1589,7 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
                           aria-label={`Complete ${t.title}`}
                           data-testid={`exec-task-complete-${t.id}`}
                         />
-                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setPopup("tasks")}>
+                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => { setTaskFocus({ id: t.id, tab: du != null && du > 0 ? "upcoming" : "today" }); setPopup("tasks"); }}>
                           <p className="text-[13px] font-semibold leading-tight truncate">{t.title}</p>
                           <p className={`text-[11px] truncate mt-0.5 ${du != null && du < 0 ? "text-red-500" : "text-muted-foreground"}`}>{sub}</p>
                         </div>
@@ -1985,7 +2036,10 @@ export function ExecutiveBriefing({ filterMode, filterIds, stats, enhanced, read
           CashFlowView is the Finance tab's waterfall, and the wellness popups
           are the Wellness tab's own. Nothing here is built twice, and closing
           any of them leaves the tab exactly where it was. */}
-      {popup === "tasks" && <TasksPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
+      {popup === "tasks" && (
+        <TasksPopup open onClose={() => { setPopup(null); setTaskFocus(null); }} filterMode={mode} filterIds={ids}
+          initialTab={taskFocus?.tab ?? "today"} focusTaskId={taskFocus?.id ?? null} />
+      )}
       {popup === "habits" && <HabitsPopup open onClose={() => setPopup(null)} filterMode={mode} filterIds={ids} />}
       {popup === "bills" && <BillsPopup open onClose={() => setPopup(null)} bills={allBills} />}
       {popup === "events" && <EventsPopup open onClose={() => setPopup(null)} items={timeline} todayStr={todayStr} />}

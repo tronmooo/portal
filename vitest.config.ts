@@ -142,6 +142,7 @@ export default defineConfig({
       'tests/profile-field-canon.test.ts',
       'tests/executive-sections.test.tsx',
       'tests/executive-attention.test.ts',
+      'tests/tasks-popup-focus.dom.test.tsx',
       'tests/modal-history.test.tsx',
       'tests/wellness-metrics.test.ts',
       'tests/wellness-overview.test.tsx',

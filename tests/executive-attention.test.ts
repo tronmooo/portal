@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { selectAttentionRows, belongsInAttention, attentionBand, groupAttentionRows } from "../shared/executive-attention";
+import { selectAttentionRows, belongsInAttention, attentionBand, groupAttentionRows, attentionHeading, isExpiryItem } from "../shared/executive-attention";
 import type { AttentionItem } from "../shared/attention";
 
 const item = (o: Partial<AttentionItem> & Pick<AttentionItem, "key" | "kind">): AttentionItem => ({
@@ -25,7 +25,21 @@ describe("Needs Attention: documents, renewals and deadlines — not bills or ta
       ],
       documents: [item({ key: "doc:r1", kind: "document", daysUntil: 12 })],
     });
-    expect(rows.map((r) => r.key)).toEqual(["doc:r0", "goal:g1", "med:o1", "alert:n3", "doc:r1"]);
+    // Expirations and renewals (documents, and the profile renewal alert)
+    // lead; then health and goals — each group soonest first.
+    expect(rows.map((r) => r.key)).toEqual(["doc:r0", "alert:n3", "doc:r1", "goal:g1", "med:o1"]);
+  });
+
+  it("puts an expiration above a sooner non-expiry item (2026-10-21)", () => {
+    const rows = selectAttentionRows({
+      immediate: [item({ key: "goal:late", kind: "goal", daysUntil: -9, tier: "immediate" })],
+      health: [item({ key: "med:now", kind: "reminder", sourceKey: "obligation:m", daysUntil: 0, tier: "immediate" })],
+      documents: [item({ key: "doc:passport", kind: "document", sourceKey: "rule:p", daysUntil: 40 })],
+    });
+    expect(rows.map((r) => r.key)).toEqual(["doc:passport", "goal:late", "med:now"]);
+    expect(rows.map((r) => attentionHeading(r))).toEqual(["later", "other", "other"]);
+    expect(isExpiryItem(item({ key: "a", kind: "alert", sourceKey: "rule:x" }))).toBe(true);
+    expect(isExpiryItem(item({ key: "a", kind: "alert", sourceKey: "notification:x" }))).toBe(false);
   });
 
   it("applies the urgency setting to documents too", () => {

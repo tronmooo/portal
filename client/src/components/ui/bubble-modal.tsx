@@ -22,7 +22,7 @@ function accentVars(accent: string): React.CSSProperties {
 
 export function BubbleModal({
   open, onClose, title, subtitle, icon, accent, count, children,
-  headerRight, footer, footerLabel, footerHref, onFooter, width = "md", testId,
+  headerRight, footer, footerLabel, footerHref, onFooter, width = "md", testId, tall = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -43,6 +43,9 @@ export function BubbleModal({
   /** Wider panel for popups carrying a chart plus a table. */
   width?: "sm" | "md" | "lg";
   testId?: string;
+  /** Hold the full height whatever the content, so switching a tab or filter
+   *  inside the popup doesn't make it jump. */
+  tall?: boolean;
 }) {
   // iOS: Radix's scroll lock cancels slightly-diagonal swipes; the body
   // scroller keeps them (lib/touch-scroll.ts — the tracker popup fix).
@@ -50,7 +53,7 @@ export function BubbleModal({
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <DialogContent
-        className={`td-scope bm-dialog ${width === "sm" ? "max-w-sm" : width === "lg" ? "max-w-lg" : "max-w-md"} flex flex-col gap-0 p-0 overflow-hidden`}
+        className={`td-scope bm-dialog ${tall ? "bm-dialog-tall " : ""}${width === "sm" ? "max-w-sm" : width === "lg" ? "max-w-lg" : "max-w-md"} flex flex-col gap-0 p-0 overflow-hidden`}
         style={accentVars(accent)}
         data-testid={testId}
       >

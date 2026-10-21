@@ -75,21 +75,53 @@ function fmtDate(d: string): string {
   return new Date(`${String(d ?? "").slice(0, 10)}T00:00:00`)
     .toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
+/** "14:00" → "2:00 PM". */
+function fmtClock(t: string): string {
+  const v = String(t || "").slice(0, 5);
+  if (!/^\d{2}:\d{2}$/.test(v)) return v;
+  const [h, m] = v.split(":").map(Number);
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
+}
 // ─── Tasks Popup ──────────────────────────────────────────────────────────────
 
 // U1 fix forward declaration: TasksPopup uses a confirmation AlertDialog before
 // permanently deleting a completed task. State held inside the component.
-export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone" }: { open: boolean; onClose: () => void; filterIds?: string[]; filterMode?: string }) {
+export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyone", initialTab = "today", focusTaskId = null }: {
+  open: boolean; onClose: () => void; filterIds?: string[]; filterMode?: string;
+  /** The tab to open on — the Upcoming panel opens Tasks on "upcoming". */
+  initialTab?: "today" | "onetime" | "recurring" | "upcoming";
+  /** Open with this task expanded and scrolled into view: tapping a task
+   *  anywhere else lands on THAT task, not on a list it isn't in. */
+  focusTaskId?: string | null;
+}) {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [addingTo, setAddingTo] = useState<string | null>(null);
   // Which task is expanded into the detail/edit panel.
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Per-row UI state (see renderTaskRow): which rows show Advanced options,
+  // and the half-typed subtask / tag in each.
+  const [advIds, setAdvIds] = useState<Set<string>>(new Set());
+  const [subDrafts, setSubDrafts] = useState<Record<string, string>>({});
+  const [tagDrafts, setTagDrafts] = useState<Record<string, string>>({});
   // Active tab — organizes tasks the way a task manager does. "One-time" and
   // "Recurring" are the two kinds a task can be, and they get separate homes:
   // a to-do you do once and are finished with is not a schedule.
-  const [tab, setTab] = useState<"today" | "onetime" | "recurring" | "upcoming">("today");
+  const [tab, setTab] = useState<"today" | "onetime" | "recurring" | "upcoming">(initialTab);
+  useEffect(() => {
+    if (!open) return;
+    setTab(initialTab);
+    if (!focusTaskId) return;
+    setExpandedId(focusTaskId);
+    // Bring it into view once the dialog has laid out.
+    const t = setTimeout(() => {
+      document.querySelector(`[data-testid="task-card-${typeof CSS !== "undefined" && CSS.escape ? CSS.escape(focusTaskId) : focusTaskId}"]`)
+        ?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+    }, 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialTab, focusTaskId]);
   // Rich add-task composer. `kind` is the task's category — one-time (done once
   // and finished) or recurring (a standing schedule). One-time is the default
   // and the common case; picking it keeps `recurrence` empty, which is what
@@ -613,7 +645,27 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
   ];
   const CATEGORY_OPTS = ["", "home", "work", "health", "finance", "errands", "family", "auto"];
 
-  const TaskRow = ({ t, dimmed = false }: { t: any; dimmed?: boolean }) => {
+  // A task's due date in words: "Overdue 2d", "Today · 2:00 PM", "Tomorrow",
+  // "Fri", "Oct 24" — what you'd say out loud, not a raw date to decode.
+  const dueWords = (t: any): { text: string; tone: "late" | "today" | "soon" | "later" } | null => {
+    if (!t.dueDate) return null;
+    const d = String(t.dueDate).slice(0, 10);
+    const diff = Math.round((new Date(d + "T12:00:00").getTime() - new Date(todayStr + "T12:00:00").getTime()) / 86400000);
+    const time = t.dueTime || metaOf(t, "time:");
+    const clock = time ? ` · ${fmtClock(time)}` : "";
+    if (diff < 0) return { text: `Overdue ${-diff}d`, tone: "late" };
+    if (diff === 0) return { text: `Today${clock}`, tone: "today" };
+    if (diff === 1) return { text: `Tomorrow${clock}`, tone: "soon" };
+    if (diff < 7) return { text: `${new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" })}${clock}`, tone: "soon" };
+    return { text: `${fmtDate(d)}${clock}`, tone: "later" };
+  };
+
+  // A render function, not a component: declared inside the popup, a
+  // `<TaskRow>` was a NEW component type on every render, so any refresh (a
+  // refetch, a save, a toast) unmounted every row — a half-typed subtask or
+  // tag vanished, "Advanced options" snapped shut and the keyboard dropped
+  // focus. The per-row state lives up here, keyed by task id.
+  const renderTaskRow = (t: any, dimmed = false) => {
     const rule = ruleOf(t);
     const recurring = !!rule.freq;
     const expanded = expandedId === t.id;
@@ -628,14 +680,23 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
     const cat = metaOf(t, "cat:");
     const est = metaOf(t, "est:");
     const overdue = !dimmed && t.dueDate && t.dueDate < todayStr;
-    const [adv, setAdv] = useState(false);
-    const [newSub, setNewSub] = useState("");
-    const [newTag, setNewTag] = useState("");
+    const adv = advIds.has(t.id);
+    const setAdv = (f: (a: boolean) => boolean) => setAdvIds((prev) => {
+      const next = new Set(prev);
+      if (f(prev.has(t.id))) next.add(t.id); else next.delete(t.id);
+      return next;
+    });
+    const newSub = subDrafts[t.id] || "";
+    const setNewSub = (v: string) => setSubDrafts((d) => ({ ...d, [t.id]: v }));
+    const newTag = tagDrafts[t.id] || "";
+    const setNewTag = (v: string) => setTagDrafts((d) => ({ ...d, [t.id]: v }));
+    const due = dueWords(t);
     return (
     // A pill row inside the popup's bubble (the Executive tab's row shape),
     // not a flat bordered card. State is an inset ring rather than a border
     // swap: the popup's accent while open, red while overdue.
     <div
+      key={t.id}
       className={`bubble-row ${dimmed ? 'opacity-60' : ''}`}
       style={dimmed ? undefined
         : expanded ? { boxShadow: 'inset 0 0 0 1px hsl(var(--accent-hsl) / 0.5), 0 6px 20px -10px hsl(var(--accent-hsl) / 0.6)' }
@@ -663,7 +724,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           {!dimmed && (
             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
               {ep === 'critical' && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-violet-500/15 text-violet-500 font-semibold">Critical</span>}
-              {overdue && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-red-500/15 text-red-500 font-semibold">Overdue</span>}
+
               {/* The task's kind, always stated. A schedule says how often it
                   comes back; a one-time task says it doesn't — silence used to
                   be the only marker, which is how six one-offs sat under
@@ -671,7 +732,16 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
               {recurring
                 ? <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-emerald-500/12 text-emerald-600 dark:text-emerald-400" data-testid={`task-kind-recurring-${t.id}`}><Repeat className="h-2.5 w-2.5" />{rule.paused ? 'Paused' : humanSummary(rule, t.dueDate)}</span>
                 : <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground" data-testid={`task-kind-onetime-${t.id}`}><ListTodo className="h-2.5 w-2.5" />One-time</span>}
-              {t.dueDate && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><Calendar className="h-2.5 w-2.5" />{fmtDate(t.dueDate)}{dTime ? ` · ${dTime}` : ''}</span>}
+              {due && (
+                <span className={`inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md font-semibold ${
+                  due.tone === "late" ? "bg-red-500/15 text-red-500"
+                  : due.tone === "today" ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                  : due.tone === "soon" ? "bg-sky-500/12 text-sky-600 dark:text-sky-400"
+                  : "bg-muted text-muted-foreground"}`}
+                  title={fmtDate(t.dueDate)} data-testid={`task-due-${t.id}`}>
+                  <Calendar className="h-2.5 w-2.5" />{due.text}
+                </span>
+              )}
               {cat && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-sky-500/12 text-sky-600 dark:text-sky-400 capitalize"><TagIcon className="h-2.5 w-2.5" />{cat}</span>}
               {metaOf(t, "remind:") && <Bell className="h-3 w-3 text-amber-500" />}
               {subs.length > 0 && <span className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground"><ListChecks className="h-2.5 w-2.5" />{subDone}/{subs.length}</span>}
@@ -930,7 +1000,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       open={open}
       onClose={() => { onClose(); setAddingTo(null); setNewTaskTitle(""); setExpandedId(null); setTab("today"); setComposer(emptyComposer); setShowCompleted(false); }}
       title="Tasks" icon={CheckCircle2} accent={TASKS_ACCENT} count={pendingAll.length}
-      testId="popup-tasks"
+      testId="popup-tasks" tall
       footer={
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
@@ -949,17 +1019,32 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
       }
     >
         {/* Today's progress — the tracker popups' ring, in the popup's accent. */}
-        <div className="bubble flex items-center gap-3 p-3" data-testid="tasks-today-progress">
-          <RingStack size={52} stroke={6}
-            rings={[{ pct: todayPct, hs: TASKS_HS, label: "Done today" }]}
-            center={<span className="text-[12px] font-bold tabular-nums">{todayPct}%</span>} />
-          <div className="min-w-0">
-            <p className="text-[14px] font-semibold tabular-nums leading-snug">{doneToday} of {todayTotal} done</p>
-            <p className="text-[11px] text-muted-foreground">
-              {todayTotal === 0 ? "Nothing due today" : doneToday >= todayTotal ? "All caught up for today" : `${todayTotal - doneToday} left for today`}
-            </p>
-          </div>
+        {/* Where things stand, in one compact row — each tile is also the way
+            to that list. Replaces a 52px ring that said one number. */}
+        <div className="grid grid-cols-4 gap-1.5" data-testid="tasks-today-progress">
+          {([
+            { key: "overdue", label: "Overdue", n: overdueTasks.length, hs: "0 72% 58%", go: "today" as const },
+            { key: "today", label: "Today", n: todayTasks.length, hs: "38 92% 50%", go: "today" as const },
+            { key: "upcoming", label: "Upcoming", n: upcomingPending.length, hs: "205 85% 55%", go: "upcoming" as const },
+            { key: "done", label: "Done today", n: doneToday, hs: "155 65% 45%", go: null },
+          ]).map((c) => (
+            <button key={c.key} type="button"
+              onClick={() => { if (c.go) { setTab(c.go); setExpandedId(null); } else setShowCompleted(true); }}
+              className="bubble-row px-2 py-1.5 text-left min-w-0" style={{ ["--accent-hsl" as any]: c.hs }}
+              data-testid={`tasks-stat-${c.key}`}>
+              <p className="text-[11px] text-muted-foreground truncate">{c.label}</p>
+              <p className="text-lg font-extrabold tabular-nums leading-tight" style={{ color: c.n ? `hsl(${c.hs})` : undefined }}>{c.n}</p>
+            </button>
+          ))}
         </div>
+        {todayTotal > 0 && (
+          <div className="flex items-center gap-2 px-0.5" aria-label={`${doneToday} of ${todayTotal} done today`}>
+            <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+              <div className="h-full rounded-full transition-all" style={{ width: `${todayPct}%`, background: `hsl(${TASKS_ACCENT})` }} />
+            </div>
+            <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">{doneToday} of {todayTotal} done today</span>
+          </div>
+        )}
 
         {/* Tabs — Today / One-time / Recurring / Upcoming + sort. The strip
             WRAPS: a hidden horizontal scroll clipped the last tab to "Upco…"
@@ -968,7 +1053,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           {/* The shared segmented control (td-seg), which takes the popup's
               accent. Wraps rather than scrolls; the radius drops from a pill
               to a rounded box so a wrapped second line still reads as one. */}
-          <div className="td-seg flex flex-wrap max-w-full" role="tablist" aria-label="Task views" style={{ borderRadius: "1.1rem" }}>
+          <div className="td-seg flex flex-wrap w-full max-w-full" role="tablist" aria-label="Task views" style={{ borderRadius: "1.1rem" }}>
           {([
             { key: "today", label: "Today", icon: Sun },
             { key: "onetime", label: "One-time", icon: ListTodo },
@@ -986,9 +1071,11 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 aria-pressed={active}
                 onClick={() => { setTab(key); setExpandedId(null); }}
                 data-testid={`task-tab-${key}`}
-                className="td-seg-item shrink-0"
+                // Four equal tabs on one line at phone width; the icons come
+                // back where there's room.
+                className="td-seg-item flex-1 justify-center px-1.5 min-w-0"
               >
-                <Icon className="h-3.5 w-3.5" />{label}
+                <Icon className="h-3.5 w-3.5 hidden sm:inline" />{label}
                 <span className={`tabular-nums text-[11px] ${active ? 'opacity-70' : 'opacity-50'}`}>({count})</span>
               </button>
             );
@@ -1103,19 +1190,19 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     {overdueTasks.length > 0 && (
                       <div data-testid="section-overdue">
                         <div className="micro-label flex items-center gap-1.5 px-1 mb-1.5 text-red-500"><AlertTriangle className="h-3 w-3" />Overdue ({overdueTasks.length})</div>
-                        <div className="space-y-2">{overdueTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                        <div className="space-y-2">{overdueTasks.map((t: any) => renderTaskRow(t))}</div>
                       </div>
                     )}
                     {todayTasks.length > 0 && (
                       <div data-testid="section-today">
                         {overdueTasks.length > 0 && <div className="micro-label px-1 mb-1.5 text-muted-foreground">Today</div>}
-                        <div className="space-y-2">{todayTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                        <div className="space-y-2">{todayTasks.map((t: any) => renderTaskRow(t))}</div>
                       </div>
                     )}
                     {unscheduledTasks.length > 0 && (
                       <div data-testid="section-unscheduled">
                         <div className="micro-label px-1 mb-1.5 text-muted-foreground">Unscheduled ({unscheduledTasks.length}) · no due date</div>
-                        <div className="space-y-2">{unscheduledTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                        <div className="space-y-2">{unscheduledTasks.map((t: any) => renderTaskRow(t))}</div>
                       </div>
                     )}
                   </div>
@@ -1129,7 +1216,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     {oneTimeSections.map((s) => (
                       <div key={s.key} data-testid={`section-${s.key}`}>
                         <div className={`micro-label px-1 mb-1.5 ${s.key === "onetime-overdue" ? "text-red-500" : "text-muted-foreground"}`}>{s.label} ({s.items.length})</div>
-                        <div className="space-y-2">{s.items.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                        <div className="space-y-2">{s.items.map((t: any) => renderTaskRow(t))}</div>
                       </div>
                     ))}
                   </div>
@@ -1139,7 +1226,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                   <EmptyState icon={Repeat} accent={TASKS_ACCENT} label="No recurring tasks"
                     hint="Chores that come back on a schedule land here." />
                 ) : (
-                  <div className="space-y-2">{recurringTasks.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                  <div className="space-y-2">{recurringTasks.map((t: any) => renderTaskRow(t))}</div>
                 )
               ) : (
                 upcomingSections.length === 0 && !composer.open ? (
@@ -1150,7 +1237,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     {upcomingSections.map((s) => (
                       <div key={s.key} data-testid={`section-${s.key}`}>
                         <div className="micro-label px-1 mb-1.5 text-muted-foreground">{s.label} ({s.items.length})</div>
-                        <div className="space-y-2">{s.items.map((t: any) => <TaskRow key={t.id} t={t} />)}</div>
+                        <div className="space-y-2">{s.items.map((t: any) => renderTaskRow(t))}</div>
                       </div>
                     ))}
                   </div>
@@ -1165,7 +1252,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                     <span className="inline-flex items-center gap-1.5"><CheckCircle2 className="h-3.5 w-3.5" />Completed ({done.length})</span>
                     {showCompleted ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                   </button>
-                  {showCompleted && <div className="space-y-2 mt-1">{done.map((t: any) => <TaskRow key={t.id} t={t} dimmed />)}</div>}
+                  {showCompleted && <div className="space-y-2 mt-1">{done.map((t: any) => renderTaskRow(t, true))}</div>}
                 </div>
               )}
             </div>

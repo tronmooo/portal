@@ -41,10 +41,22 @@ export interface AttentionSections {
 }
 
 /**
- * The card's rows, most urgent first: past-due before today before later, and
- * undated alerts at the very top (an alert is happening now). `minTier` is the
- * user's Urgency filter — it now applies to documents too, which it silently
- * did not before.
+ * Expirations and renewals — a document's date, a registration, a policy end,
+ * or an alert raised about one (`rule:` / `document:` / `profile:` sources).
+ * 2026-10-21: "expiration things like that are more important — those should
+ * be at the top", so these lead the card, whatever else is dated sooner.
+ */
+export function isExpiryItem(i: Pick<AttentionItem, "kind" | "sourceKey">): boolean {
+  if (i.kind === "document") return true;
+  return i.kind === "alert" && /^(rule|document|profile):/.test(i.sourceKey || "");
+}
+
+/**
+ * The card's rows: expirations and renewals first, then everything else
+ * (health, goals, other alerts); each group most urgent first — past-due
+ * before today before later, undated alerts at the top of their group (an
+ * alert is happening now). `minTier` is the user's Urgency filter, and it
+ * applies to documents too.
  */
 export function selectAttentionRows(s: AttentionSections, minTier: AttentionTier = "upcoming"): AttentionItem[] {
   const urgentHealth = s.health.filter((i) => (i.daysUntil ?? 0) <= 0);
@@ -57,7 +69,28 @@ export function selectAttentionRows(s: AttentionSections, minTier: AttentionTier
     seen.add(i.key);
     rows.push(i);
   }
-  return rows.sort((a, b) => (a.daysUntil ?? -999) - (b.daysUntil ?? -999));
+  return rows.sort((a, b) =>
+    (isExpiryItem(a) ? 0 : 1) - (isExpiryItem(b) ? 0 : 1) ||
+    (a.daysUntil ?? -999) - (b.daysUntil ?? -999));
+}
+
+/**
+ * The heading a row sits under. Expirations are split by urgency (expired /
+ * this week / this month / later); everything else shares one heading below
+ * them, so a dose or a goal never lands between two passports.
+ */
+export type AttentionHeading = AttentionBand | "other";
+
+export const ATTENTION_HEADINGS: Record<AttentionHeading, { label: string; hs: string }> = {
+  overdue: { label: "Expired · overdue", hs: "0 72%" },
+  week: { label: "Expiring this week", hs: "25 90%" },
+  month: { label: "Expiring this month", hs: "43 96%" },
+  later: { label: "Expiring later", hs: "213 90%" },
+  other: { label: "Also needs attention", hs: "262 70%" },
+};
+
+export function attentionHeading(i: Pick<AttentionItem, "kind" | "sourceKey" | "daysUntil">): AttentionHeading {
+  return isExpiryItem(i) ? attentionBand(i) : "other";
 }
 
 export type AttentionBand = "overdue" | "week" | "month" | "later";
