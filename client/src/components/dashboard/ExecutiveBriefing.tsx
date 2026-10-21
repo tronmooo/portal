@@ -97,14 +97,14 @@ type PopupKind =
 
 // Card identity colours — one per card, no two cards sharing a hue, and each
 // matched to the accent its own popup or page already uses: purple tasks (the
-// Tasks popup), violet habits (the trackers' habit group), blue schedule (the
+// Tasks popup), flame-orange habits (the streak flame), blue schedule (the
 // icon vocabulary's "dates"), green money, yellow documents, rose wellness,
 // indigo upcoming, teal activity, red overdue.
 const CARD_ACCENTS = {
   attention: "0 72% 58%",
   tasks:     "262 70% 62%",
   schedule:  "213 90% 62%",
-  habits:    "265 70% 60%",
+  habits:    "25 90% 56%",
   money:     "155 65% 45%",
   documents: "43 96% 53%",
   wellness:  "350 85% 62%",
