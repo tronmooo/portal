@@ -50,7 +50,7 @@ import {
 import { classifyTrackerPresentation } from "@shared/tracker-presentation";
 import { trackerTheme, accentTriple, tone } from "@/components/tracker-detail/theme";
 import { RingStack } from "@/components/tracker-detail/primitives";
-import { pickPrimaryField, dayModeFor, readNumber } from "@shared/tracker-analytics";
+import { pickPrimaryField, dayModeFor, readNumber, dailySeries } from "@shared/tracker-analytics";
 import { buildTrackerModel, themeVars, periodFor, PERIOD_OPTIONS, OverviewTab, TrendsTab, BreakdownTab, CorrelationsTab, InsightsTab, type TrackerModel } from "@/components/tracker-detail";
 import { TimeRangeSelector } from "@/components/ui/time-range";
 import type { RangeKey } from "@shared/tracker-analytics";
@@ -2315,7 +2315,7 @@ const NO_FITNESS_CTX: CalorieContext = Object.freeze({});
 // data changes, so a stale entry can never be served.
 const INSIGHT_MEMO = new WeakMap<object, Map<string, TrackerInsight>>();
 
-function buildTrackerInsight(tracker: Tracker, goals: Goal[] = [], fitnessCtx: CalorieContext = NO_FITNESS_CTX): TrackerInsight {
+export function buildTrackerInsight(tracker: Tracker, goals: Goal[] = [], fitnessCtx: CalorieContext = NO_FITNESS_CTX): TrackerInsight {
   const memoKey = `${goals.length}|${fitnessCtx.bodyWeightKg ?? ""}|${fitnessCtx.ownerLabel ?? ""}|${fitnessCtx.ageYears ?? ""}|${fitnessCtx.sex ?? ""}`;
   let byKey = INSIGHT_MEMO.get(tracker as object);
   const hit = byKey?.get(memoKey);
@@ -2402,7 +2402,12 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
     tracker.fields.find(f => f.name === primaryField)?.unit);
   const numericValues = entries.map(e => Number(e.values?.[primaryField]))
     .filter(v => !isNaN(v) && isFinite(v));
-  const sparkValues = numericValues.slice(0, 14).reverse(); // oldest→newest
+  // Totals (calories, water, miles) chart one point per DAY — per-entry
+  // points made a 0-cal Coke Zero logged after a 364-cal breakfast look like
+  // the day crashed to zero. Readings (weight, BP) keep one point per entry.
+  const sparkValues = dayModeFor(tracker, primaryField) === "sum"
+    ? dailySeries(entries, primaryField, { mode: "sum", tz: TRACKER_TZ }).slice(-14).map((p) => p.value)
+    : numericValues.slice(0, 14).reverse(); // oldest→newest
   const last7 = entries.filter(e => new Date(e.timestamp).getTime() >= sevenAgo);
   const prev7 = entries.filter(e => {
     const t = new Date(e.timestamp).getTime();
@@ -2660,11 +2665,22 @@ function buildTrackerInsightCore(tracker: Tracker, goals: Goal[] = [], fitnessCt
     // 2026-09-18 F-34).
     const calorieField = (["calories", "kcal", "value"] as const).find((k) => pickNum(last.values, k) != null) ?? primaryField;
     const avg = averagePerDay(entries, (e) => pickNum(e.values ?? undefined, calorieField));
+    // The headline is the DAY's total, not the newest entry: one chat message
+    // ("cereal with 2 cups of milk, drank a Coke Zero") logs two entries a
+    // millisecond apart, and the card used to show the Coke Zero's 0 cal over
+    // the cereal's 364 (owner report 2026-10-20). Today if anything was logged
+    // today, otherwise the last day that was.
+    const dayOf = (e: TrackerEntry) => new Date(e.timestamp).toLocaleDateString("en-CA");
+    const headlineDay = dayOf(last);
+    const dayEntries = entries.filter((e) => dayOf(e) === headlineDay);
+    const dayTotal = dayEntries.reduce((sum, e) => sum + (pickNum(e.values ?? undefined, calorieField) ?? 0), 0);
+    const isToday = headlineDay === todayKey;
+    const dayWord = isToday ? "today" : `on ${new Date(`${headlineDay}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
     const subline = avg != null ? `Avg ${fmtNum(avg, 0)} cal / day` : "";
-    const insight = `${fmtNum(cals, 0)} cal logged.${avg != null ? ` Average is ${fmtNum(avg, 0)} cal a day.` : ""}`;
+    const insight = `${fmtNum(dayTotal, 0)} cal ${dayWord} across ${dayEntries.length} ${dayEntries.length === 1 ? "entry" : "entries"}.${avg != null ? ` Average is ${fmtNum(avg, 0)} cal a day.` : ""}`;
     return {
       hasData: true, kind, importance, iconKind,
-      bigPrimary: fmtNum(cals, 0), bigUnit: "cal",
+      bigPrimary: fmtNum(dayTotal, 0), bigUnit: isToday ? "cal today" : "cal",
       subline, insight, progressPct: null, statusBadge: freshness,
       sparkValues, trendPct, trendDir,
     };
