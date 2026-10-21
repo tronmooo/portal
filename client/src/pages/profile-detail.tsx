@@ -11775,6 +11775,19 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
   );
 }
 
+/** A linked-records request failed — say so, never "No linked …" (sync rule 7). */
+function LinkedLoadError({ what, onRetry }: { what: string; onRetry: () => void }) {
+  return (
+    <div className="bubble p-4 flex items-center gap-3" role="alert" data-testid="linked-load-error">
+      <AlertCircle className="h-5 w-5 text-destructive shrink-0" />
+      <p className="text-sm flex-1">Couldn't load {what}. Your records are unchanged.</p>
+      <Button size="sm" variant="outline" className="h-8" onClick={onRetry}>
+        <RefreshCw className="h-3.5 w-3.5 mr-1" /> Retry
+      </Button>
+    </div>
+  );
+}
+
 function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profileType: string }) {
   const { toast } = useToast();
   const isLiability = profileType === "liability" || profileType === "loan";
@@ -11796,7 +11809,7 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
   const { data: liveProfiles = [] } = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   const liveById = new Map<string, any>(liveProfiles.map((p: any) => [p.id, p]));
 
-  const { data: rawItems = [], refetch } = useQuery<any[]>({
+  const { data: rawItems = [], refetch, isError: assetsFailed } = useQuery<any[]>({
     queryKey: ["/api/rel-assets", profileType, profileId],
     queryFn: async () => {
       if (isLiability) {
@@ -11962,7 +11975,10 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
           </Button>
         </div>
       )}
-      {items.length === 0 ? (
+      {/* Rule 7: a failed request is not an empty list. */}
+      {assetsFailed && items.length === 0 ? (
+        <LinkedLoadError what="linked assets" onRetry={() => refetch()} />
+      ) : items.length === 0 ? (
         <EmptyState
           icon={Package}
           label="No linked assets"
@@ -12024,7 +12040,7 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
   const [pickerPendingId, setPickerPendingId] = useState<string | null>(null);
   const [pickerPct, setPickerPct] = useState("100");
 
-  const { data: items = [], refetch } = useQuery<any[]>({
+  const { data: items = [], refetch, isError: liabilitiesFailed } = useQuery<any[]>({
     queryKey: ["/api/rel-liabilities", profileType, profileId],
     queryFn: async () => {
       if (isPerson) {
@@ -12097,7 +12113,9 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
           </Button>
         </div>
       )}
-      {items.length === 0 ? (
+      {liabilitiesFailed && items.length === 0 ? (
+        <LinkedLoadError what="linked liabilities" onRetry={() => refetch()} />
+      ) : items.length === 0 ? (
         <EmptyState icon={CreditCard} label="No linked liabilities" />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

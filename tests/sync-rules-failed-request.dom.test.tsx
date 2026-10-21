@@ -117,3 +117,11 @@ describe("static guard: no query function turns a failure into empty data", () =
     expect(offenders.filter(o => !o.startsWith("pages/dashboard.tsx"))).toEqual([]);
   });
 });
+
+describe("profile detail: a failed linked-records request is not 'No linked …'", () => {
+  it("both linked tabs render an error with Retry when their query fails", () => {
+    const src = fs.readFileSync(path.resolve(__dirname, "../client/src/pages/profile-detail.tsx"), "utf8");
+    expect(src).toMatch(/assetsFailed && items\.length === 0 \? \(\s*<LinkedLoadError what="linked assets"/);
+    expect(src).toMatch(/liabilitiesFailed && items\.length === 0 \? \(\s*<LinkedLoadError what="linked liabilities"/);
+  });
+});
