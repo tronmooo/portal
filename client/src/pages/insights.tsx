@@ -16,6 +16,7 @@ import {
   FileText, Camera, Sparkles, Loader2, RefreshCw, Wallet,
 } from "lucide-react";
 import { PageContainer, PageHeader } from "@/components/ui/page-shell";
+import { tone } from "@/components/tracker-detail";
 
 // AI-derived content is purple across the app (Executive insights, the wellness
 // AI card, the finance alerts panel).
@@ -53,11 +54,7 @@ const CATEGORY_MAP: Record<string, string> = {
   other: "general",
 };
 
-function severityColor(sev: string) {
-  if (sev === "high") return "text-red-600 dark:text-red-400 border-red-500/30 bg-red-500/10";
-  if (sev === "medium") return "text-orange-600 dark:text-orange-400 border-orange-500/30 bg-orange-500/10";
-  return "text-blue-600 dark:text-blue-400 border-blue-500/30 bg-blue-500/10";
-}
+const SEVERITY_HS: Record<Anomaly["severity"], string> = { high: "350 78%", medium: "25 90%", low: "210 80%" };
 
 function categoryIcon(cat: string) {
   if (cat === "spending" || cat === "budget") return TrendingUp;
@@ -327,20 +324,48 @@ export default function InsightsPage() {
                 Nothing unusual right now. Spending, budgets, and tracker activity all look normal.
               </div>
             ) : (
-              <div className="space-y-2">
-                {anomalies.map((a) => {
+              <div className="space-y-3">
+                {/* Severity summary — how much needs attention at a glance. */}
+                <div className="grid grid-cols-3 gap-2">
+                  {(["high", "medium", "low"] as const).map((sev) => {
+                    const n = anomalies.filter((x) => x.severity === sev).length;
+                    return (
+                      <div key={sev} className="bubble-row px-3 py-2 text-center" style={{ opacity: n ? 1 : 0.55 }}>
+                        <p className="text-xl metric-value" style={{ color: tone(SEVERITY_HS[sev]) }}>{n}</p>
+                        <p className="micro-label text-muted-foreground">{sev === "high" ? "Urgent" : sev === "medium" ? "Watch" : "FYI"}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+                {anomalies.map((a, i) => {
                   const Icon = categoryIcon(a.category);
+                  const hs = SEVERITY_HS[a.severity];
+                  const pct = typeof a.vsBaseline === "number" && Number.isFinite(a.vsBaseline) ? Math.round(a.vsBaseline) : null;
                   return (
                     <div
                       key={a.id}
-                      className={`rounded-lg border px-3 py-2 ${severityColor(a.severity)}`}
+                      className="bubble td-rise p-3.5"
+                      style={{ ["--i" as any]: i, ["--accent-hsl" as any]: `${hs} 50%` }}
                       data-testid={`anomaly-${a.id}`}
                     >
-                      <div className="flex items-start gap-2">
-                        <Icon className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                        <div className="flex-1">
-                          <div className="font-medium text-sm">{a.title}</div>
-                          <div className="text-xs opacity-80">{a.detail}</div>
+                      <div className="flex items-start gap-3">
+                        <span className="medallion medallion-sm" aria-hidden="true"><Icon className="h-4 w-4" /></span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="micro-label" style={{ color: tone(hs) }}>{a.category}</span>
+                            {pct != null && (
+                              <span className="text-xs font-semibold tabular-nums" style={{ color: tone(hs) }}>
+                                {pct > 0 ? "+" : ""}{pct}% vs usual
+                              </span>
+                            )}
+                          </div>
+                          <div className="font-semibold text-sm mt-0.5">{a.title}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{a.detail}</div>
+                          {pct != null && (
+                            <div className="td-meter mt-2">
+                              <span style={{ width: `${Math.min(100, Math.abs(pct))}%`, background: `linear-gradient(90deg, ${tone(hs)}, ${tone(hs, 0.6)})` }} />
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
