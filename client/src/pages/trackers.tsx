@@ -48,7 +48,12 @@ import {
   getDefaultMetricDefinition,
 } from "@shared/tracker-metric-definition";
 import { classifyTrackerPresentation } from "@shared/tracker-presentation";
-import { buildTrackerModel, themeVars, OverviewTab, TrendsTab, BreakdownTab, CorrelationsTab, InsightsTab, type TrackerModel } from "@/components/tracker-detail";
+import { buildTrackerModel, themeVars, periodFor, PERIOD_OPTIONS, OverviewTab, TrendsTab, BreakdownTab, CorrelationsTab, InsightsTab, type TrackerModel } from "@/components/tracker-detail";
+import { TimeRangeSelector } from "@/components/ui/time-range";
+import type { RangeKey } from "@shared/tracker-analytics";
+
+/** Time frame last picked per tracker in this visit (memory only). */
+const TRACKER_PERIOD_MEMORY = new Map<string, RangeKey>();
 import { resolveTrackerUnit } from "@shared/tracker-units";
 import { inferTrackerShapeId } from "@shared/tracker-shapes";
 // THE fitness semantic layer: what each number in a workout entry MEANS, and
@@ -4993,8 +4998,16 @@ function TrackerDetailDialog({
   const model = useMemo(() => (tracker ? buildTrackerModel(tracker, detailGoals) : null), [tracker, detailGoals]);
   const [activeTab, setActiveTab] = useState("overview");
   const scrollRef = useNativeTouchScroll<HTMLDivElement>();
+  // The popup's time frame — one choice drives Overview, Trends and
+  // Breakdown, remembered per tracker for this visit (memory only: a time
+  // frame never hides records anywhere else).
+  const [periodKey, setPeriodKeyState] = useState<RangeKey>(() => (tracker && TRACKER_PERIOD_MEMORY.get(tracker.id)) || "30d");
+  const setPeriodKey = (k: RangeKey) => { setPeriodKeyState(k); if (tracker) TRACKER_PERIOD_MEMORY.set(tracker.id, k); };
   const trackerKey = tracker?.id;
-  useEffect(() => { setActiveTab("overview"); }, [trackerKey]);
+  useEffect(() => {
+    setActiveTab("overview");
+    setPeriodKeyState((trackerKey && TRACKER_PERIOD_MEMORY.get(trackerKey)) || "30d");
+  }, [trackerKey]);
 
   const renameMutation = useMutation({
     mutationFn: async ({ name }: { name: string }) => {
@@ -5048,6 +5061,8 @@ function TrackerDetailDialog({
   const ThemeIcon = theme.icon;
   const tabIds = new Set(tabs.map((t) => t.id));
   const currentTab = tabIds.has(activeTab) ? activeTab : "overview";
+  const period = periodFor(periodKey, model);
+  const showPeriod = ["overview", "trends", "breakdown"].includes(currentTab) && detectSpecialization(tracker) !== "medication" && tracker.entries.length > 0;
 
   return (
     <>
@@ -5119,19 +5134,23 @@ function TrackerDetailDialog({
                     })}
                   </TabsList>
                 </div>
+                {showPeriod && (
+                  <TimeRangeSelector value={periodKey} onChange={setPeriodKey} options={PERIOD_OPTIONS}
+                    label="Time frame" className="mt-2 -mx-1 px-1" testId="td-period" />
+                )}
               </div>
 
               <div ref={scrollRef} className="td-scroll flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-5 pt-4" data-testid="tracker-detail-scroll">
                 <TabsContent value="overview" className="mt-0">
                   {detectSpecialization(tracker) === "medication"
                     ? <MedicationOverview tracker={tracker} />
-                    : <OverviewTab model={model} onNavigate={setActiveTab} />}
+                    : <OverviewTab model={model} period={period} onNavigate={setActiveTab} />}
                 </TabsContent>
                 <TabsContent value="trends" className="mt-0">
-                  <TrendsTab model={model} />
+                  <TrendsTab model={model} period={period} />
                 </TabsContent>
                 <TabsContent value="breakdown" className="mt-0">
-                  <BreakdownTab model={model} />
+                  <BreakdownTab model={model} period={period} />
                 </TabsContent>
                 <TabsContent value="correlations" className="mt-0">
                   <CorrelationsTab model={model} allTrackers={allTrackers} />

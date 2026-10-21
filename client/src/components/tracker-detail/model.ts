@@ -9,7 +9,8 @@ import { classifyTrackerPresentation, type TrackerPresentation } from "@shared/t
 import {
   pickPrimaryField, dailySeries, dayModeFor, polarityFor, fieldLabel, fieldUnit,
   numericFieldsWithData, dayKeyOf, dedupeEntries, dayLabel,
-  type DayPoint, type DayMode, type Polarity, type AnalyticsField,
+  rangeStartDay, daysBetween,
+  type DayPoint, type DayMode, type Polarity, type AnalyticsField, type RangeKey,
 } from "@shared/tracker-analytics";
 import { trackerTheme, type TrackerTheme } from "./theme";
 
@@ -99,3 +100,40 @@ export function buildTrackerModel(tracker: Tracker, goals: Goal[] | undefined, n
 export function useTrackerModel(tracker: Tracker, goals: Goal[] | undefined): TrackerModel {
   return useMemo(() => buildTrackerModel(tracker, goals), [tracker, goals]);
 }
+
+// ── The popup's time frame ───────────────────────────────────────────────────
+
+export interface Period {
+  key: RangeKey;
+  /** First day in the window, or null for all time. */
+  from: string | null;
+  to: string;
+  /** Calendar days in the window (for "all", since the first logged day). */
+  days: number;
+  /** "last 30 days", "all time" — for sentences. */
+  name: string;
+  /** "30d", "all time" — for compact labels. */
+  short: string;
+  /** "30-day", "all-time" — for "vs 30-day avg". */
+  adj: string;
+}
+
+const PERIOD_TEXT: Record<RangeKey, { name: string; short: string; adj: string }> = {
+  "7d": { name: "last 7 days", short: "7d", adj: "7-day" },
+  "30d": { name: "last 30 days", short: "30d", adj: "30-day" },
+  "90d": { name: "last 90 days", short: "90d", adj: "90-day" },
+  "1y": { name: "last 12 months", short: "1y", adj: "12-month" },
+  all: { name: "all time", short: "all time", adj: "all-time" },
+};
+
+export function periodFor(key: RangeKey, model: Pick<TrackerModel, "today" | "points" | "activityDays">): Period {
+  const from = rangeStartDay(key, model.today);
+  const first = [model.points[0]?.day, model.activityDays[0]?.day].filter(Boolean).sort()[0] as string | undefined;
+  const days = from ? daysBetween(from, model.today) + 1 : first ? daysBetween(first, model.today) + 1 : 1;
+  return { key, from, to: model.today, days, ...PERIOD_TEXT[key] };
+}
+
+export const PERIOD_OPTIONS: Array<{ value: RangeKey; label: string }> = [
+  { value: "7d", label: "7D" }, { value: "30d", label: "30D" }, { value: "90d", label: "90D" },
+  { value: "1y", label: "1Y" }, { value: "all", label: "All" },
+];

@@ -1083,8 +1083,8 @@ button, a, [role="button"], .card-lift {
 .td-seg-item[aria-selected="true"],
 .td-seg-item[data-state="active"] {
   color: hsl(var(--foreground));
-  background: linear-gradient(135deg, hsl(var(--td-hs) var(--td-l) / 0.24) 0%, hsl(var(--td-hs2) var(--td-l) / 0.16) 100%);
-  box-shadow: inset 0 0 0 1px hsl(var(--td-hs) var(--td-l) / 0.38), 0 4px 12px -6px hsl(var(--td-hs) var(--td-l) / 0.6);
+  background: linear-gradient(135deg, hsl(var(--td-hs, 183 70%) var(--td-l, 45%) / 0.24) 0%, hsl(var(--td-hs2, 200 70%) var(--td-l, 45%) / 0.16) 100%);
+  box-shadow: inset 0 0 0 1px hsl(var(--td-hs, 183 70%) var(--td-l, 45%) / 0.38), 0 4px 12px -6px hsl(var(--td-hs, 183 70%) var(--td-l, 45%) / 0.6);
 }
 
 @keyframes td-rise {

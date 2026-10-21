@@ -10,18 +10,16 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { Flame, Beef, Wheat, Droplet, Leaf, Candy, PieChart as PieIcon } from "lucide-react";
 import {
   dailySeries, filterSeries, macroSummary, topContributors, readNumber, dayKeyOf, shiftDay,
-  fieldLabel, fieldUnit, dayModeFor, periodStats, mean, type AnalyticsEntry, type DayPoint,
+  fieldLabel, fieldUnit, dayModeFor, periodStats, mean, dayLabel, type AnalyticsEntry, type DayPoint,
 } from "@shared/tracker-analytics";
 import { classifyBloodPressure, type BloodPressureCategory } from "@shared/blood-pressure";
-import type { TrackerModel } from "./model";
+import type { TrackerModel, Period } from "./model";
 import { MACRO_HS, tone } from "./theme";
 import {
   SectionTitle, Segmented, StatTile, CoverageNote, MeterRow, TrackerEmptyState, fmtNum, withUnit,
 } from "./primitives";
 import { TrendChart } from "./TrendChart";
 
-type BRange = "30d" | "90d" | "all";
-const BR_DAYS: Record<Exclude<BRange, "all">, number> = { "30d": 30, "90d": 90 };
 
 const TEXT_LABEL_KEYS = ["meal", "item", "food", "name", "description", "activityType", "activity", "exercise", "workout", "type", "category", "merchant"];
 
@@ -44,12 +42,11 @@ function categoryField(model: TrackerModel, entries: AnalyticsEntry[]): string |
   return null;
 }
 
-export function BreakdownTab({ model }: { model: TrackerModel }) {
+export function BreakdownTab({ model, period }: { model: TrackerModel; period: Period }) {
   const { today, theme, tracker } = model;
   const lastDay = model.activityDays[model.activityDays.length - 1]?.day;
-  const [range, setRange] = useState<BRange>(lastDay && lastDay >= shiftDay(today, -29) ? "30d" : "all");
-  const from = range === "all" ? null : shiftDay(today, -(BR_DAYS[range] - 1));
-  const rangeName = range === "all" ? "all time" : `last ${BR_DAYS[range]} days`;
+  const from = period.from;
+  const rangeName = period.name;
   const entries = useMemo(
     () => model.entries.filter((e) => !from || dayKeyOf(e.timestamp, model.tz) >= from),
     [model.entries, from, model.tz],
@@ -58,7 +55,7 @@ export function BreakdownTab({ model }: { model: TrackerModel }) {
   const body: JSX.Element[] = [];
 
   if (entries.length === 0) {
-    body.push(<CoverageNote key="none">Nothing logged in the {rangeName}. Try a longer range.</CoverageNote>);
+    body.push(<CoverageNote key="none">Nothing logged in the {rangeName}{lastDay ? ` — last entry ${dayLabel(lastDay)}` : ""}. Try a longer time frame.</CoverageNote>);
   } else if (model.isNutrition) {
     body.push(<NutritionBreakdown key="nut" model={model} entries={entries} from={from} rangeName={rangeName} />);
   } else if (model.isDual) {
@@ -80,8 +77,6 @@ export function BreakdownTab({ model }: { model: TrackerModel }) {
 
   return (
     <div className="space-y-4" data-testid="td-breakdown">
-      <Segmented label="Range" value={range} onChange={setRange} testId="td-breakdown-range"
-        options={[{ value: "30d", label: "30D" }, { value: "90d", label: "90D" }, { value: "all", label: "All" }]} />
       {body.length > 0 ? body : (
         <TrackerEmptyState icon={PieIcon} title="Not much to break down yet"
           body={`Breakdowns appear when ${tracker.name} has categories (like a type or meal) or several numbers per entry, or after a week of logging.`}

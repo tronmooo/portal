@@ -3,41 +3,45 @@
 // card (macro rings, BP zones), consistency heatmap, a trend preview, the two
 // most useful insights and the latest entries.
 
-import { useState } from "react";
 import {
   CalendarDays, CalendarCheck, Flame, Trophy, Gauge, Hash, ChevronRight, TrendingUp, Clock,
 } from "lucide-react";
 import {
   periodStats, shiftDay, filterSeries, currentStreak, longestStreak, macroSummary,
-  readNumber, dayLabel, dayKeyOf, MIN_TREND_DAYS,
+  readNumber, dayLabel, dayKeyOf, daysBetween, MIN_TREND_DAYS,
 } from "@shared/tracker-analytics";
 import { classifyBloodPressure } from "@shared/blood-pressure";
-import type { TrackerModel } from "./model";
+import type { TrackerModel, Period } from "./model";
 import { MACRO_HS, tone } from "./theme";
 import {
   HeroMetric, StatTile, DeltaChip, SectionTitle, InsightCard, CoverageNote, RingStack,
-  CalendarHeatmap, TrackerEmptyState, Segmented, fmtNum, withUnit,
+  CalendarHeatmap, TrackerEmptyState, fmtNum, withUnit,
 } from "./primitives";
 import { TrendChart } from "./TrendChart";
 import { useTrackerInsights } from "./InsightsTab";
 
-type PreviewRange = "7d" | "30d" | "90d";
-const PREVIEW_DAYS: Record<PreviewRange, number> = { "7d": 7, "30d": 30, "90d": 90 };
+// Heatmap depth follows the period, capped so cells stay tappable on a phone.
+const HEAT_WEEKS: Record<Period["key"], number> = { "7d": 12, "30d": 12, "90d": 16, "1y": 26, all: 26 };
 
-export function OverviewTab({ model, onNavigate }: { model: TrackerModel; onNavigate: (tab: string) => void }) {
+export function OverviewTab({ model, period, onNavigate }: { model: TrackerModel; period: Period; onNavigate: (tab: string) => void }) {
   const { theme, points, today, unit, mode, polarity, field, goal, entries } = model;
-  const [range, setRange] = useState<PreviewRange>("30d");
 
-  const from30 = shiftDay(today, -29);
-  const s30 = periodStats(points, from30, today);
-  const s7 = periodStats(points, shiftDay(today, -6), today);
+  const pFrom = period.from;
+  const sP = periodStats(points, pFrom, today);
   const loggedDays = (field ? points : model.activityDays).map((p) => p.day);
   const streak = currentStreak(loggedDays, today);
   const best = longestStreak(loggedDays);
   const insights = useTrackerInsights(model);
 
   const last = points[points.length - 1] ?? null;
-  const spark = filterSeries(points, shiftDay(today, -29), today).map((p) => p.value);
+  const spark = filterSeries(points, pFrom, today).map((p) => p.value);
+  const heatWeeks = HEAT_WEEKS[period.key];
+  // "Days logged" counts from whichever is later: the period's start or the
+  // first entry — 30 days logged since tracking began 60 days ago is 30/60,
+  // not 30/365.
+  const firstDay = (field ? points : model.activityDays)[0]?.day;
+  const denom = Math.min(period.days, firstDay ? daysBetween(firstDay, today) + 1 : period.days);
+  const denomNote = denom < period.days && firstDay ? `since ${dayLabel(firstDay)}` : period.name;
 
   // ── Hero ───────────────────────────────────────────────────────────────────
   let hero: JSX.Element;
@@ -62,16 +66,16 @@ export function OverviewTab({ model, onNavigate }: { model: TrackerModel; onNavi
   } else if (mode === "sum") {
     const isToday = last?.day === today;
     const heroVal = last?.value ?? null;
-    const avg = s30.perDay;
-    const pct = heroVal != null && avg && s30.loggedDays >= 3 ? Math.round(((heroVal - avg) / Math.abs(avg)) * 100) : null;
+    const avg = sP.perDay;
+    const pct = heroVal != null && avg && sP.loggedDays >= 3 ? Math.round(((heroVal - avg) / Math.abs(avg)) * 100) : null;
     const good = pct == null || polarity === "neutral" ? null : (pct > 0) === (polarity === "higher");
     const goalPct = goal && heroVal != null ? Math.round((heroVal / goal.target) * 100) : null;
     hero = (
       <HeroMetric icon={theme.icon}
         eyebrow={isToday ? `Today · ${model.label}` : last ? `Last logged · ${last.label}` : model.label}
         value={heroVal} unit={unit}
-        delta={pct != null ? <DeltaChip pct={pct} good={good} label="vs 30-day avg" /> : undefined}
-        caption={last ? `${last.entries} ${last.entries === 1 ? "entry" : "entries"}${avg != null && s30.loggedDays > 1 ? ` · avg ${withUnit(avg, unit)} per logged day` : ""}` : undefined}
+        delta={pct != null ? <DeltaChip pct={pct} good={good} label={`vs ${period.adj} avg`} /> : undefined}
+        caption={last ? `${last.entries} ${last.entries === 1 ? "entry" : "entries"}${avg != null && sP.loggedDays > 1 ? ` · avg ${withUnit(avg, unit)} per logged day` : ""}` : undefined}
         spark={spark}
         side={goalPct != null ? (
           <RingStack size={92} stroke={9} rings={[{ pct: Math.min(100, goalPct), hs: goal!.direction === "atMost" && goalPct > 100 ? "350 80%" : theme.hs, label: "Goal" }]}
@@ -81,23 +85,23 @@ export function OverviewTab({ model, onNavigate }: { model: TrackerModel; onNavi
   } else {
     // Body measurements are about change over time (weight lost since a month
     // ago); other readings — sleep, mood, glucose — about today vs normal.
-    const first30 = filterSeries(points, from30, today)[0];
+    const firstInP = filterSeries(points, pFrom, today)[0];
     const overTime = theme.identity === "body";
-    const base = overTime ? (first30 && last && first30.day !== last.day ? first30.value : null) : (s30.loggedDays >= 3 ? s30.perDay : null);
+    const base = overTime ? (firstInP && last && firstInP.day !== last.day ? firstInP.value : null) : (sP.loggedDays >= 3 ? sP.perDay : null);
     const change = last && base != null ? last.value - base : null;
     const pct = change != null && base ? Math.round((change / Math.abs(base)) * 1000) / 10 : null;
     const good = pct == null || polarity === "neutral"
       ? (goal && change != null ? (goal.direction === "atMost" ? change < 0 : change > 0) : null)
       : (pct > 0) === (polarity === "higher");
     const deltaLabel = change == null ? "" : overTime
-      ? `${change > 0 ? "+" : change < 0 ? "−" : "±"}${withUnit(Math.abs(change), unit)} in 30 days`
-      : "vs 30-day avg";
+      ? `${change > 0 ? "+" : change < 0 ? "−" : "±"}${withUnit(Math.abs(change), unit)} · ${period.name}`
+      : `vs ${period.adj} avg`;
     hero = (
       <HeroMetric icon={theme.icon}
         eyebrow={last ? `Latest · ${last.label}` : model.label}
         value={last?.value ?? null} unit={unit}
         delta={pct != null ? <DeltaChip pct={pct} good={good} label={deltaLabel} /> : undefined}
-        caption={goal ? `Goal ${withUnit(goal.target, unit)} · ${withUnit(Math.abs(goal.target - (last?.value ?? 0)), unit)} to go` : s30.loggedDays > 1 ? `30-day avg ${withUnit(s30.perDay, unit)}` : undefined}
+        caption={goal ? `Goal ${withUnit(goal.target, unit)} · ${withUnit(Math.abs(goal.target - (last?.value ?? 0)), unit)} to go` : sP.loggedDays > 1 ? `${period.adj} avg ${withUnit(sP.perDay, unit)}` : undefined}
         spark={spark} />
     );
   }
@@ -106,7 +110,7 @@ export function OverviewTab({ model, onNavigate }: { model: TrackerModel; onNavi
   const tiles: JSX.Element[] = [];
   if (field && points.length > 0) {
     if (model.isDual) {
-      const recent = entries.filter((e) => dayKeyOf(e.timestamp, model.tz) >= from30);
+      const recent = entries.filter((e) => !pFrom || dayKeyOf(e.timestamp, model.tz) >= pFrom);
       const sysVals = recent.map((e) => readNumber(e, "systolic")).filter((v): v is number => v != null);
       const diaVals = recent.map((e) => readNumber(e, "diastolic")).filter((v): v is number => v != null);
       const avg = (xs: number[]) => xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
@@ -115,41 +119,40 @@ export function OverviewTab({ model, onNavigate }: { model: TrackerModel; onNavi
         return s != null && d != null && classifyBloodPressure(s, d).category === "normal";
       }).length;
       tiles.push(
-        <StatTile key="avg" i={0} icon={Gauge} label="Average" value={avg(sysVals) != null ? `${avg(sysVals)}/${avg(diaVals)}` : "—"} basis="mmHg · last 30 days" />,
-        <StatTile key="normal" i={1} icon={CalendarCheck} label="In normal range" value={recent.length ? `${Math.round((normal / recent.length) * 100)}%` : "—"} basis={`${normal} of ${recent.length} readings · 30d`} hs="152 62%" />,
+        <StatTile key="avg" i={0} icon={Gauge} label="Average" value={avg(sysVals) != null ? `${avg(sysVals)}/${avg(diaVals)}` : "—"} basis={`mmHg · ${period.name}`} />,
+        <StatTile key="normal" i={1} icon={CalendarCheck} label="In normal range" value={recent.length ? `${Math.round((normal / recent.length) * 100)}%` : "—"} basis={`${normal} of ${recent.length} readings · ${period.short}`} hs="152 62%" />,
       );
     } else if (mode === "sum" && points.length <= 1) {
       tiles.push(
-        <StatTile key="week" i={0} icon={CalendarDays} label="This week" value={withUnit(s7.total, unit)} basis={`total · ${s7.loggedDays} of 7 days logged`} />,
-        <StatTile key="days" i={1} icon={Flame} label="Days logged" value={`${s30.loggedDays}/30`} basis="last 30 days" hs="15 88%" />,
+        <StatTile key="total" i={0} icon={CalendarDays} label="Total" value={withUnit(sP.total, unit)} basis={period.name} />,
+        <StatTile key="days" i={1} icon={Flame} label="Days logged" value={`${sP.loggedDays}/${denom}`} basis={denomNote} hs="15 88%" />,
       );
     } else if (mode === "sum") {
       tiles.push(
-        <StatTile key="week" i={0} icon={CalendarDays} label="This week" value={withUnit(s7.total, unit)} basis={`total · ${s7.loggedDays} of 7 days logged`} />,
-        <StatTile key="avg" i={1} icon={Gauge} label="Per logged day" value={withUnit(s30.perDay, unit)} basis={`average · last 30 days`} hs={theme.hs2} />,
-        <StatTile key="best" i={2} icon={Trophy} label="Best day" value={withUnit(s30.high?.value, unit)} basis={s30.high ? `${s30.high.label} · last 30 days` : "last 30 days"} hs="40 92%" />,
-        <StatTile key="days" i={3} icon={Flame} label="Days logged" value={`${s30.loggedDays}/30`} basis={streak > 1 ? `${streak}-day streak` : "last 30 days"} hs="15 88%" />,
+        <StatTile key="total" i={0} icon={CalendarDays} label="Total" value={withUnit(sP.total, unit)} basis={period.name} />,
+        <StatTile key="avg" i={1} icon={Gauge} label="Per logged day" value={withUnit(sP.perDay, unit)} basis={`average · ${period.name}`} hs={theme.hs2} />,
+        <StatTile key="best" i={2} icon={Trophy} label="Best day" value={withUnit(sP.high?.value, unit)} basis={sP.high ? `${sP.high.label} · ${period.short}` : period.name} hs="40 92%" />,
+        <StatTile key="days" i={3} icon={Flame} label="Days logged" value={`${sP.loggedDays}/${denom}`} basis={streak > 1 ? `${streak}-day streak` : denomNote} hs="15 88%" />,
       );
     } else {
       tiles.push(
-        <StatTile key="avg" i={0} icon={Gauge} label="Average" value={withUnit(s30.perDay, unit)} basis="per reading day · 30d" />,
-        <StatTile key="range" i={1} icon={TrendingUp} label="Range" value={s30.low && s30.high ? `${fmtNum(s30.low.value)}–${fmtNum(s30.high.value)}` : "—"} basis={`${unit ? `${unit} · ` : ""}low to high · 30d`} hs={theme.hs2} />,
-        <StatTile key="n" i={2} icon={Hash} label="Readings" value={String(s30.entries)} basis={`on ${s30.loggedDays} days · 30d`} hs="40 92%" />,
+        <StatTile key="avg" i={0} icon={Gauge} label="Average" value={withUnit(sP.perDay, unit)} basis={`per reading day · ${period.short}`} />,
+        <StatTile key="range" i={1} icon={TrendingUp} label="Range" value={sP.low && sP.high ? `${fmtNum(sP.low.value)}–${fmtNum(sP.high.value)}` : "—"} basis={`${unit ? `${unit} · ` : ""}low to high · ${period.short}`} hs={theme.hs2} />,
+        <StatTile key="n" i={2} icon={Hash} label="Readings" value={String(sP.entries)} basis={`on ${sP.loggedDays} days · ${period.short}`} hs="40 92%" />,
         <StatTile key="streak" i={3} icon={Flame} label="Streak" value={`${streak} ${streak === 1 ? "day" : "days"}`} basis={`longest ${best} ${best === 1 ? "day" : "days"}`} hs="15 88%" />,
       );
     }
   } else if (entries.length > 0) {
     tiles.push(
-      <StatTile key="days" i={0} icon={CalendarCheck} label="Days logged" value={`${filterSeries(model.activityDays, from30, today).length}/30`} basis="last 30 days" />,
+      <StatTile key="days" i={0} icon={CalendarCheck} label="Days logged" value={`${filterSeries(model.activityDays, pFrom, today).length}/${denom}`} basis={denomNote} />,
       <StatTile key="streak" i={1} icon={Flame} label="Streak" value={`${streak} ${streak === 1 ? "day" : "days"}`} basis={`longest ${best} ${best === 1 ? "day" : "days"}`} hs="15 88%" />,
     );
   }
 
   // ── Nutrition macros ───────────────────────────────────────────────────────
-  const macros = model.isNutrition ? macroSummary(entries, model.tz, from30, today) : null;
+  const macros = model.isNutrition ? macroSummary(entries, model.tz, pFrom, today) : null;
 
-  const previewFrom = shiftDay(today, -(PREVIEW_DAYS[range] - 1));
-  const preview = filterSeries(points, previewFrom, today);
+  const preview = filterSeries(points, pFrom, today);
   const recent = [...entries].slice(-4).reverse();
 
   return (
@@ -162,7 +165,7 @@ export function OverviewTab({ model, onNavigate }: { model: TrackerModel; onNavi
 
       {macros && macros.energyShare && (
         <section className="bubble td-rise p-4" style={{ ["--i" as any]: 2 }} data-testid="td-macros">
-          <SectionTitle title="Macro balance" hint={`Share of energy · per logged day · last 30 days (${macros.loggedDays} ${macros.loggedDays === 1 ? "day" : "days"})`} />
+          <SectionTitle title="Macro balance" hint={`Share of energy · per logged day · ${period.name} (${macros.loggedDays} ${macros.loggedDays === 1 ? "day" : "days"})`} />
           <div className="flex items-center gap-5">
             <RingStack
               rings={[
@@ -194,14 +197,12 @@ export function OverviewTab({ model, onNavigate }: { model: TrackerModel; onNavi
         <section className="bubble td-rise p-4" style={{ ["--i" as any]: 3 }}>
           <SectionTitle
             title={mode === "sum" ? `Daily ${model.label.toLowerCase()}` : model.label}
-            hint={mode === "sum" ? "Total per day — days with nothing logged are left blank" : "Last reading each day"}
-            aside={<Segmented label="Preview range" value={range} onChange={setRange}
-              options={[{ value: "7d", label: "7D" }, { value: "30d", label: "30D" }, { value: "90d", label: "90D" }]} />} />
+            hint={`${mode === "sum" ? "Total per day — blank days had nothing logged" : "Last reading each day"} · ${period.name}`} />
           {preview.length > 0 ? (
-            <TrendChart points={preview} mode={mode} unit={unit} fromDay={previewFrom} toDay={today} height={180}
+            <TrendChart points={preview} mode={mode} unit={unit} fromDay={pFrom} toDay={today} height={190}
               goal={goal?.target ?? null} />
           ) : (
-            <CoverageNote>Nothing logged in the last {PREVIEW_DAYS[range]} days. Last entry: {last?.label}.</CoverageNote>
+            <CoverageNote>Nothing logged in the {period.name}. Last entry: {last?.label}. Try a longer time frame.</CoverageNote>
           )}
           {points.length >= MIN_TREND_DAYS && (
             <button type="button" onClick={() => onNavigate("trends")} className="mt-2 inline-flex items-center gap-1 text-xs font-semibold" style={{ color: tone("var(--td-hs)") }}>
@@ -213,8 +214,8 @@ export function OverviewTab({ model, onNavigate }: { model: TrackerModel; onNavi
 
       {(field ? points : model.activityDays).length > 0 && (
         <section className="bubble td-rise p-4" style={{ ["--i" as any]: 4 }} data-testid="td-consistency">
-          <SectionTitle title="Consistency" hint={`${filterSeries(field ? points : model.activityDays, shiftDay(today, -111), today).length} logged days in the last 16 weeks`} />
-          <CalendarHeatmap points={field ? points : model.activityDays} today={today} unit={field ? unit : "entries"} />
+          <SectionTitle title="Consistency" hint={`${filterSeries(field ? points : model.activityDays, shiftDay(today, -(heatWeeks * 7 - 1)), today).length} logged days in the last ${heatWeeks} weeks`} />
+          <CalendarHeatmap points={field ? points : model.activityDays} today={today} weeks={heatWeeks} unit={field ? unit : "entries"} />
         </section>
       )}
 

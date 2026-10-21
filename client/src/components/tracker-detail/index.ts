@@ -1,4 +1,4 @@
-export { useTrackerModel, buildTrackerModel, type TrackerModel } from "./model";
+export { useTrackerModel, buildTrackerModel, periodFor, PERIOD_OPTIONS, type TrackerModel, type Period } from "./model";
 export { trackerTheme, themeVars, type TrackerTheme } from "./theme";
 export { OverviewTab } from "./OverviewTab";
 export { TrendsTab } from "./TrendsTab";

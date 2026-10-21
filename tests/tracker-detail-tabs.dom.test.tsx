@@ -11,7 +11,7 @@ import { render, screen, cleanup, within } from "@testing-library/react";
 import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
 import type { Tracker } from "../shared/schema";
 import {
-  buildTrackerModel, OverviewTab, TrendsTab, BreakdownTab, CorrelationsTab, InsightsTab,
+  buildTrackerModel, periodFor, OverviewTab, TrendsTab, BreakdownTab, CorrelationsTab, InsightsTab,
 } from "../client/src/components/tracker-detail";
 
 beforeAll(() => {
@@ -60,27 +60,28 @@ const goals: any[] = [];
 const qc = new QueryClient();
 const wrap = (el: React.ReactElement) => render(<QueryClientProvider client={qc}>{el}</QueryClientProvider>);
 const model = (t: Tracker) => buildTrackerModel(t, goals, NOW, TZ);
+const per = (m: ReturnType<typeof model>, k: Parameters<typeof periodFor>[0] = "30d") => periodFor(k, m);
 
 describe("Nutrition — the screenshot bugs", () => {
   it("charts calories, never the serving count", () => {
     const m = model(nutrition);
     expect(m.field).toBe("calories");
-    wrap(<TrendsTab model={m} />);
+    wrap(<TrendsTab model={m} period={per(m)} />);
     const chips = screen.getByTestId("td-metric-chips");
     expect(within(chips).queryByText("Quantity")).toBeNull();
     expect(within(chips).getByText("Calories")).toBeTruthy();
   });
 
   it("says a trend needs more days instead of calling one reading 'stable'", () => {
-    wrap(<TrendsTab model={model(nutrition)} />);
+    wrap(<TrendsTab model={model(nutrition)} period={per(model(nutrition))} />);
     // range defaults to 30 days; nothing logged in it
     expect(screen.getByTestId("td-verdict").textContent).toMatch(/Not enough days for a trend yet/);
     expect(screen.queryByText(/stable/i)).toBeNull();
   });
 
   it("labels macro tiles per LOGGED DAY and flags the entry with no calories", () => {
-    wrap(<BreakdownTab model={model(nutrition)} />);
-    // last entry is 57 days old → breakdown opens on All time
+    const m = model(nutrition);
+    wrap(<BreakdownTab model={m} period={per(m, "all")} />);
     const tiles = screen.getByTestId("td-nutrition-tiles");
     expect(tiles.textContent).toMatch(/per logged day · all time/);
     // 3 logged days: protein (60+40+20)/3 = 40 g — per entry it would have read 30 g
@@ -102,7 +103,7 @@ describe("every tab renders for every kind of tracker", () => {
     it(`${t.name}`, () => {
       const m = model(t);
       for (const Tab of [OverviewTab, TrendsTab, BreakdownTab, InsightsTab] as any[]) {
-        const { unmount } = wrap(<Tab model={m} onNavigate={() => {}} />);
+        const { unmount } = wrap(<Tab model={m} period={per(m)} onNavigate={() => {}} />);
         unmount();
       }
       const { unmount } = wrap(<CorrelationsTab model={m} allTrackers={all} />);
@@ -116,25 +117,39 @@ describe("every tab renders for every kind of tracker", () => {
   });
 
   it("Weight overview leads with the latest reading and its 30-day change", () => {
-    wrap(<OverviewTab model={model(weight)} onNavigate={() => {}} />);
+    wrap(<OverviewTab model={model(weight)} period={per(model(weight))} onNavigate={() => {}} />);
     expect(screen.getByTestId("td-hero-value").textContent).toBe("184.5");
-    expect(screen.getByTestId("td-hero").textContent).toMatch(/in 30 days/);
+    expect(screen.getByTestId("td-hero").textContent).toMatch(/−5\.5 lbs · last 30 days/);
   });
 
   it("Spending money goes through the shared money format", () => {
-    wrap(<OverviewTab model={model(spending)} onNavigate={() => {}} />);
+    wrap(<OverviewTab model={model(spending)} period={per(model(spending))} onNavigate={() => {}} />);
     expect(screen.getByTestId("td-hero-value").textContent).toBe("$10");
-    expect(screen.getAllByText("$138.25").length).toBeGreaterThan(0); // this-week total, cents kept
+    expect(screen.getAllByText("$207").length).toBeGreaterThan(0); // 30-day total, whole dollars drop ".00"
   });
 
   it("Blood pressure shows the paired reading, not one number", () => {
-    wrap(<OverviewTab model={model(bp)} onNavigate={() => {}} />);
+    wrap(<OverviewTab model={model(bp)} period={per(model(bp))} onNavigate={() => {}} />);
     expect(screen.getByTestId("td-hero-value").textContent).toBe("118/76");
   });
 
   it("a tracker with no numbers still gets consistency, not a broken chart", () => {
-    wrap(<OverviewTab model={model(journal)} onNavigate={() => {}} />);
+    wrap(<OverviewTab model={model(journal)} period={per(model(journal))} onNavigate={() => {}} />);
     expect(screen.getByTestId("td-consistency")).toBeTruthy();
     expect(screen.queryByTestId("td-trend-chart")).toBeNull();
+  });
+
+  it("one time frame drives the overview tiles and their labels", () => {
+    const m = model(spending); // 9 days of spending, today back to 8 days ago
+    const { unmount } = wrap(<OverviewTab model={m} period={per(m, "7d")} onNavigate={() => {}} />);
+    let text = document.body.textContent || "";
+    expect(text).toMatch(/7\/7/);           // days logged in the last 7 days
+    expect(text).toMatch(/last 7 days/);
+    unmount();
+    wrap(<OverviewTab model={m} period={per(m, "all")} onNavigate={() => {}} />);
+    text = document.body.textContent || "";
+    expect(text).toMatch(/9\/9/);           // since the first logged day
+    expect(text).toMatch(/all time/);
+    expect(text).not.toMatch(/last 7 days/);
   });
 });

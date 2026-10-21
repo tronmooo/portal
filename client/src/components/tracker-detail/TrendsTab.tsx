@@ -10,23 +10,18 @@ import {
   periodStats, trendVerdict, rollingMean, shiftDay, daysBetween, RANGE_DAYS, MIN_TREND_DAYS,
   MIN_MOVING_AVG_DAYS, type RangeKey,
 } from "@shared/tracker-analytics";
-import type { TrackerModel } from "./model";
+import type { TrackerModel, Period } from "./model";
 import { tone } from "./theme";
 import {
   SectionTitle, Segmented, StatTile, CoverageNote, TrackerEmptyState, DeltaChip, withUnit, fmtNum,
 } from "./primitives";
 import { TrendChart } from "./TrendChart";
 
-const RANGES: Array<{ value: RangeKey; label: string }> = [
-  { value: "7d", label: "7D" }, { value: "30d", label: "30D" }, { value: "90d", label: "90D" },
-  { value: "1y", label: "1Y" }, { value: "all", label: "All" },
-];
-
-export function TrendsTab({ model }: { model: TrackerModel }) {
+export function TrendsTab({ model, period }: { model: TrackerModel; period: Period }) {
   const { tracker, today, theme } = model;
   const fields = model.numericFields;
   const [field, setField] = useState<string>(model.field && fields.some((f) => f.name === model.field) ? model.field : fields[0]?.name ?? "");
-  const [range, setRange] = useState<RangeKey>("30d");
+  const range = period.key;
 
   const mode = field ? dayModeFor(tracker, field) : "sum";
   const unit = field ? fieldUnit(tracker, field) : "";
@@ -51,7 +46,7 @@ export function TrendsTab({ model }: { model: TrackerModel }) {
   const ma = pts.length >= MIN_MOVING_AVG_DAYS ? rollingMean(pts) : undefined;
   const isPrimary = field === model.field;
   const goal = isPrimary ? model.goal?.target ?? null : null;
-  const rangeName = range === "all" ? "all time" : `last ${days} days`;
+  const rangeName = period.name;
 
   const VerdictIcon = verdict.status === "rising" ? ArrowUpRight : verdict.status === "falling" ? ArrowDownRight : Minus;
   const verdictHs = verdict.tone === "good" ? "152 65%" : verdict.tone === "bad" ? "350 78%" : theme.hs;
@@ -62,7 +57,6 @@ export function TrendsTab({ model }: { model: TrackerModel }) {
         <Segmented label="Metric" value={field} onChange={setField} testId="td-metric-chips"
           options={fields.map((f) => ({ value: f.name, label: fieldLabel(tracker, f.name) }))} />
       )}
-      <Segmented label="Range" value={range} onChange={setRange} options={RANGES} testId="td-range" />
 
       {/* Verdict */}
       <section className="td-hero td-rise p-4" data-testid="td-verdict">
@@ -103,7 +97,7 @@ export function TrendsTab({ model }: { model: TrackerModel }) {
         {pts.length > 0 ? (
           <TrendChart points={pts} mode={mode} unit={unit} fromDay={from} toDay={today} movingAvg={ma} goal={goal} height={240} />
         ) : (
-          <CoverageNote>Nothing logged in the {rangeName}. Try a longer range.</CoverageNote>
+          <CoverageNote>Nothing logged in the {rangeName}. Try a longer time frame.</CoverageNote>
         )}
         {pts.length > 0 && pts.length < MIN_TREND_DAYS && (
           <div className="mt-2"><CoverageNote>Showing individual days as dots — {MIN_TREND_DAYS} logged days are needed before a line is meaningful.</CoverageNote></div>
@@ -135,8 +129,8 @@ export function TrendsTab({ model }: { model: TrackerModel }) {
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 [&>*:last-child]:col-span-2 sm:[&>*:last-child]:col-span-1">
           <StatTile i={3} icon={Trophy} label={mode === "sum" ? "Highest day" : "Highest"} value={withUnit(cur.high.value, unit)} basis={cur.high.label} hs="40 92%" />
           <StatTile i={4} icon={TrendingDown} label={mode === "sum" ? "Lowest day" : "Lowest"} value={withUnit(cur.low.value, unit)} basis={cur.low.label} hs={theme.hs2} />
-          <StatTile i={5} icon={CalendarRange} label="Coverage" value={cur.spanDays ? `${cur.loggedDays}/${cur.spanDays}` : `${cur.loggedDays}`}
-            basis={cur.spanDays ? "days logged" : `days since ${all[0].label}`} />
+          <StatTile i={5} icon={CalendarRange} label="Coverage" value={`${cur.loggedDays}/${Math.min(period.days, daysBetween(all[0].day, today) + 1)}`}
+            basis={period.days > daysBetween(all[0].day, today) + 1 ? `days logged since ${all[0].label}` : "days logged"} />
         </div>
       )}
 
