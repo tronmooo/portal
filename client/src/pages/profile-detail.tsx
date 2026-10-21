@@ -5083,8 +5083,11 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
   const monthlyObligations = obligations.reduce((sum, ob) => sum + toMonthlyAmount(ob.amount || 0, ob.frequency), 0);
   const monthlyBurn = monthlyObligations + avgPerMonth;
 
+  // Sync rule 1: the balance comes from the one resolver every other screen
+  // uses (currentBalance, nested finance/loan spellings …); the hand-picked
+  // three fields here missed currentBalance and disagreed with the liability page.
   const outstanding =
-    Number(profile.fields.remainingBalance || profile.fields.loanBalance || profile.fields.balance || 0) ||
+    resolveLiabilityBalance(profile) ||
     obligations.reduce((sum, ob) => sum + (ob.amount || 0), 0);
 
   // ── category breakdown (top 5 by total spend) ─────────────────────
@@ -8732,25 +8735,30 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
   });
   const { confirm: confirmClearLoan, isArmed: isClearLoanArmed } = useConfirmArm();
 
-  // Wave 13: Paid-to-date stats. If a startDate is set, infer how many months
-  // have elapsed and split the schedule into paid vs remaining.
+  // Paid to date vs remaining. The schedule above starts at TODAY's balance
+  // and the next due date (shared/liability-derived), so every row is a
+  // payment still to make. The old code sliced off "months since the loan
+  // started" as if those rows were already paid — on a loan started a year
+  // ago it said "33 months left" while the schedule had 45 payments left.
+  // Now: remaining = the whole schedule; paid = original amount − balance
+  // (principal only — interest already paid isn't on record, so it isn't
+  // invented).
+  const originalAmount = firstNum(
+    f.originalAmount, f.original_amount, fin.originalAmount, fin.original_amount, ln.originalAmount, ln.original_amount,
+  );
   const monthsElapsed = (() => {
     const start = parseDate(startDate);
     if (!start) return 0;
     const now = new Date();
-    const months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
-    return Math.max(0, Math.min(schedule.length, months));
+    return Math.max(0, (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth()));
   })();
-  const paidSlice = schedule.slice(0, monthsElapsed);
-  const remainingSlice = schedule.slice(monthsElapsed);
-  const principalPaid = paidSlice.reduce((s, r) => s + r.principal, 0);
-  const interestPaid = paidSlice.reduce((s, r) => s + r.interest, 0);
-  const totalPaid = principalPaid + interestPaid;
+  const remainingSlice = schedule;
+  const principalPaid = originalAmount > loanBalance ? originalAmount - loanBalance : 0;
   const principalRemaining = remainingSlice.reduce((s, r) => s + r.principal, 0);
   const interestRemaining = remainingSlice.reduce((s, r) => s + r.interest, 0);
-  const remainingBalanceComputed = remainingSlice.length > 0 ? remainingSlice[0].balance + remainingSlice[0].principal : loanBalance;
-  // THE percent-paid formula (shared/liability-calc), over the schedule's opening balance.
-  const percentPaid = payoffProgressPct(loanBalance, Math.max(0, loanBalance - principalPaid));
+  const remainingBalanceComputed = loanBalance;
+  // THE percent-paid formula (shared/liability-calc), over the original amount.
+  const percentPaid = originalAmount > loanBalance ? payoffProgressPct(originalAmount, loanBalance) : 0;
 
   // Linked obligations (existing payments)
   const linkedObs = obligations.filter((o: any) =>
@@ -8970,30 +8978,23 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
         </div>
       )}
 
-      {/* Wave 13: Paid-to-date breakdown — only when we have a start date */}
-      {schedule.length > 0 && monthsElapsed > 0 && (
-        <Card className="p-4">
+      {/* Paid to date — principal paid since the original amount; what's left comes from the schedule. */}
+      {schedule.length > 0 && principalPaid > 0 && (
+        <Card className="p-4" data-testid="loan-paid-to-date">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-semibold">Paid to Date</h3>
-            <span className="text-[11px] text-muted-foreground">{monthsElapsed} of {schedule.length} months</span>
+            <span className="text-[11px] text-muted-foreground">
+              {monthsElapsed > 0 ? `since ${fmtMonthYear(startDate) ?? "the start"} · ` : ""}{schedule.length} payments left
+            </span>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl border border-border/50 p-3">
-              <p className="text-[11px] text-muted-foreground">Total paid</p>
-              <p className="text-base font-bold tabular-nums">{formatCurrency(totalPaid)}</p>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-                <div>
-                  <span style={{ color: tone("43 85%") }}>● Principal</span>
-                  <p className="font-semibold tabular-nums">{formatCurrency(principalPaid)}</p>
-                </div>
-                <div>
-                  <span style={{ color: tone("350 75%") }}>● Interest</span>
-                  <p className="font-semibold tabular-nums">{formatCurrency(interestPaid)}</p>
-                </div>
-              </div>
+            <div className="bubble-row p-3">
+              <p className="text-[11px] text-muted-foreground">Principal paid</p>
+              <p className="text-base font-bold tabular-nums" style={{ color: tone("43 85%") }}>{formatCurrency(principalPaid)}</p>
+              <p className="text-[11px] text-muted-foreground mt-1">of {formatCurrency(originalAmount)} borrowed</p>
             </div>
-            <div className="rounded-xl border border-border/50 p-3">
-              <p className="text-[11px] text-muted-foreground">Remaining</p>
+            <div className="bubble-row p-3">
+              <p className="text-[11px] text-muted-foreground">Still to pay</p>
               <p className="text-base font-bold tabular-nums">{formatCurrency(principalRemaining + interestRemaining)}</p>
               <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                 <div>
@@ -9242,8 +9243,10 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
                         <tr key="sep"><td colSpan={6} className="text-center py-2 text-muted-foreground">… {schedule.length - 15} more months …</td></tr>
                       );
                     }
-                    const isPaid = row.month <= monthsElapsed;
-                    const isCurrent = row.month === monthsElapsed + 1;
+                    // Every row is a future payment (the schedule starts today);
+                    // the first one is the next due.
+                    const isPaid = false;
+                    const isCurrent = row.month === 1;
                     const dateStr = startDateObj ? (() => {
                       const d = new Date(startDateObj.getTime());
                       d.setMonth(d.getMonth() + row.month);

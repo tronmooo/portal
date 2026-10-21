@@ -32,6 +32,8 @@ export default defineConfig({
       'tests/tracker-analytics.test.ts',
       'tests/tracker-detail-tabs.dom.test.tsx',
       'tests/journal-mood.test.ts',
+      'tests/tracker-card-calories.dom.test.tsx',
+      'tests/profile-loan-sync.test.ts',
       'tests/habits-visuals.dom.test.tsx',
       'tests/dialog-touch-scroll.dom.test.tsx',
       'tests/liability-calc.test.ts',
