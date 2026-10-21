@@ -3,7 +3,14 @@ import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField, previewUnrenderable } from "@/lib/field-display";
 import { enumOptionsForField, humanizeEnumValue, isDateFieldKey, toDateInputValue } from "@shared/field-label";
-import { formatMoney, formatFullDate, parseLocalDate } from "@/lib/format";
+import { formatMoney, formatMoneyRound, formatFullDate, parseLocalDate } from "@/lib/format";
+import { HeroMetric, StatTile, SectionTitle, MeterRow, CoverageNote, accentScope, tone, trackerTheme } from "@/components/tracker-detail";
+import { EmptyState } from "@/components/ui/empty-state";
+import { CategoryBreakdown, PeriodBars, FINANCE_HS, rankSlices, axisDollars } from "@/components/finance/finance-visuals";
+import { PayoffOutlook } from "@/components/liability/PayoffOutlook";
+import { payoffMissingFields } from "@shared/liability-payoff";
+import { loanStoredTermMonths } from "@shared/loan-facts";
+import { useConfirmArm } from "@/hooks/useConfirmArm";
 // Phase 1–9 asset rebuild (2026-05-26): all new pieces live in this module so
 // profile-detail stays under control. The legacy ChildAssetsCard /
 // ValueRollupCard / MaintenanceCard below still exist and are still used for
@@ -294,7 +301,7 @@ import { systemFieldEntries } from "@shared/system-fields";
 import { devToolsEnabled } from "@/lib/dev-affordances";
 import { allocatePayment } from "@shared/liability-calc";
 import { deriveLiabilityMetrics, deriveLiabilityAmortization, simulateExtraPayment, payoffProgressPct } from "@shared/liability-derived";
-import { readBalance, readInterestRatePct, readMonthlyPayment } from "@shared/liability-fields";
+import { readBalance, readInterestRatePct, readMonthlyPayment, readInterestRateRaw } from "@shared/liability-fields";
 import { calculateStreak } from "@shared/streak";
 import { getUserToday, toLocalDateStr, addDays as tzAddDays } from "@shared/timezone";
 import { toMonthlyAmount } from "@shared/obligation-windows";
@@ -3173,7 +3180,7 @@ function formatFieldDisplayValue(fieldKey: string, raw: string): string {
   const isNum = raw.trim() !== "" && isFinite(num) && /\d/.test(raw) && /^[$\s]*-?[\d,]+(\.\d+)?\s*$/.test(raw.trim());
   if (/^(year|vehicleyear|modelyear|caryear|yearbuilt)$/.test(k)) return String(raw);
   if (isNum && /(price|value|premium|deductible|balance|amount|cost|payment|limit|debits|credits|worth|valuation)/.test(k)) {
-    return `$${num.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    return formatMoney(num);
   }
   if (isNum && /(mileage|odometer)/.test(k)) {
     return `${num.toLocaleString()} mi`;
@@ -3718,8 +3725,11 @@ function StaticInfoTab({
                 onClick={() => toggleSection(group.title)}
               >
                 <span className="flex items-center gap-2 min-w-0">
-                  <GroupIcon className={`h-3.5 w-3.5 shrink-0 ${meta.cls}`} />
-                  <span className="text-xs font-semibold truncate">{group.title}</span>
+                  <span className={`h-6 w-6 rounded-lg flex items-center justify-center shrink-0 ${meta.cls}`}
+                    style={{ background: "color-mix(in srgb, currentColor 13%, transparent)" }} aria-hidden="true">
+                    <GroupIcon className="h-3.5 w-3.5" />
+                  </span>
+                  <span className="text-[13px] font-semibold truncate">{group.title}</span>
                   {filledCount > 0 && (
                     <span className="text-[11px] px-1.5 py-0 rounded-full bg-muted text-muted-foreground tabular-nums shrink-0">{filledCount}</span>
                   )}
@@ -4308,11 +4318,7 @@ function ProductivityHubTab({
         <SectionHeader id="routines" icon={RefreshCw} color={C.routines} label="Routines" />
         {open.routines && (
           <Card>
-            <CardContent className="py-6 text-center">
-              <RefreshCw className="h-6 w-6 text-muted-foreground/30 mx-auto mb-2" />
-              <p className="text-xs text-muted-foreground">Multi-step routines tied to this profile will appear here.</p>
-              <p className="text-[11px] text-muted-foreground/70 mt-1">Ask Portol in chat to create one.</p>
-            </CardContent>
+            <EmptyState icon={RefreshCw} label="No routines for this profile" hint="Multi-step routines tied to this profile appear here. Ask Portol in chat to create one." className="py-6" />
           </Card>
         )}
       </section>
@@ -4364,11 +4370,7 @@ const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }:
   if (!habits || habits.length === 0) {
     return (
       <Card>
-        <CardContent className="py-8 text-center">
-          <Flame className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">No habits linked to {profileName}</p>
-          <p className="text-xs text-muted-foreground mt-1">Create a habit on the Habits page and link it to this profile</p>
-        </CardContent>
+        <EmptyState icon={Flame} label={`No habits linked to ${profileName}`} hint="Create a habit on the Habits page and link it to this profile." accent="265 75% 55%" />
       </Card>
     );
   }
@@ -4904,7 +4906,12 @@ function DocumentsTab({
 // FINANCES TAB — Universal with type-specific enrichments
 // ============================================================
 
-function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail; profileId: string; onChanged: () => void }) {
+function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }: {
+  profile: ProfileDetail; profileId: string; onChanged: () => void;
+  /** The Money tab mounts LoanTab directly above, which already draws the
+   *  payoff outlook and calculator for the same loan — don't draw them twice. */
+  hideLoanSections?: boolean;
+}) {
   // ── state ──────────────────────────────────────────────────────
   const { toast } = useToast();
   const [, financesSetLocation] = useLocation();
@@ -5027,8 +5034,6 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     "transport", "travel", "utilities", "vehicle",
   ];
 
-  const CHART_COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
-
   // ── summary calculations ────────────────────────────────────────
   // While the capped embed is all we have, the server's exact owned-sum keeps
   // the headline right; once the full list lands the local reduce is exact.
@@ -5097,8 +5102,13 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       .map(([cat, v]) => ({ category: cat, total: v.total, count: v.count }))
       .sort((a, b) => b.total - a.total);
   }, [expenses]);
-  const topCategories = categoryBreakdown.slice(0, 5);
-  const topCategoryMax = topCategories[0]?.total || 1;
+  // One category view (donut + ranked meters) instead of two cards that each
+  // drew the same breakdown. The slices are these same rows, ranked; the
+  // tail past six folds into "Other" (finance-visuals rankSlices).
+  const categorySlices = useMemo(
+    () => rankSlices(categoryBreakdown.map((c) => ({ key: c.category, label: c.category, amount: c.total, count: c.count })), { max: 6 }),
+    [categoryBreakdown],
+  );
 
   // ── loan / amortization — ONE engine (shared/liability-derived, Rule 12) ──
   // The private amortization loop and closed-form term that used to live here
@@ -5123,21 +5133,10 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
     });
   })();
   const derivedTerm = amortRows.length;
-  const totalInterest = loanAmortization?.totalInterest ?? 0;
   const fmtPayoffMonth = (iso: string | null | undefined) =>
     iso ? (parseLocalDate(iso) ?? new Date(iso)).toLocaleDateString(undefined, { month: "short", year: "numeric" }) : null;
-  const payoffDate = fmtPayoffMonth(loanMetrics?.payoffDate);
-
-  // Amortization chart — sample every N months so chart is not too dense
-  const amortChartSample = amortRows.filter((_, i) => {
-    const step = Math.max(1, Math.floor(amortRows.length / 24));
-    return i % step === 0 || i === amortRows.length - 1;
-  }).map(r => ({
-    month: r.month,
-    balance: Math.round(r.balance),
-    cumPrincipal: Math.round(r.cumPrincipal),
-    cumInterest: Math.round(r.cumInterest),
-  }));
+  // The balance chart, payoff date and interest left are drawn by
+  // PayoffOutlook (below) from loanMetrics.summary + loanAmortization.
 
   // ── payoff simulator — the same engine (shared/liability-derived) ─────────
   const extraSimShared = isLoan && loanPrincipal > 0 ? simulateExtraPayment(loanFields, loanTodayISO, extraPayment, { typeKey: loanTypeKey, row: profile as any }) : null;
@@ -5147,15 +5146,14 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
   const interestSaved = extraSimShared?.interestSaved ?? 0;
   const newPayoffDate = fmtPayoffMonth(extraSimShared?.payoffDate);
 
-  // ── spending by category ───────────────────────────────────────
-  const categoryTotals: Record<string, number> = {};
-  for (const exp of expenses) {
-    const cat = exp.category || "general";
-    categoryTotals[cat] = (categoryTotals[cat] || 0) + (exp.amount || 0);
-  }
-  const pieData = Object.entries(categoryTotals)
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, value]) => ({ name, value }));
+  // The payoff outlook reads the SAME summary and schedule computed above
+  // (loanMetrics.summary / loanAmortization) — nothing is recomputed for it.
+  const loanPayoffMissing = isLoan ? payoffMissingFields({
+    balance: loanPrincipal,
+    rateRaw: readInterestRateRaw(loanFields),
+    monthlyPayment: loanMonthlyPayment,
+    remainingTermMonths: loanStoredTermMonths(loanFields),
+  }) : [];
 
   // ── investment ─────────────────────────────────────────────────
   const performanceHistory: any[] = Array.isArray(profile.fields.performanceHistory) ? profile.fields.performanceHistory : [];
@@ -5283,7 +5281,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
 
   // ── render ─────────────────────────────────────────────────────
   return (
-    <div className="space-y-4">
+    <div className="td-scope space-y-4" style={accentScope(FINANCE_HS.accent, FINANCE_HS.accent2)} data-testid="finances-tab">
 
       {/* SECTION 0 removed (June 2026): the Financial Overview card
           (Net Worth hero + Assets/Liabilities/Shared Liabilities/Monthly
@@ -5292,33 +5290,24 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
           LinkedLiabilitiesTab. FinancesTab is now expenses-only. */}
 
       {/* ═══════════════════════════════════════════════════════ */}
-      {/* SECTION 1 — Summary stat cards                         */}
+      {/* SECTION 1 — Hero + summary tiles                        */}
+      {/* The same four figures as before; "This month" leads,    */}
+      {/* with the monthly totals behind it as a sparkline.       */}
       {/* ═══════════════════════════════════════════════════════ */}
-      <div className="grid grid-cols-2 gap-3">
-        <Card>
-          <CardContent className="p-4">
-            <p className="micro-label text-muted-foreground mb-1">Total Spent</p>
-            <p className="text-xl font-bold tabular-nums text-foreground">{formatCurrency(totalSpent)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="micro-label text-muted-foreground mb-1">This Month</p>
-            <p className="text-xl font-bold tabular-nums text-foreground">{formatCurrency(thisMonth)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="micro-label text-muted-foreground mb-1">Monthly Burn</p>
-            <p className="text-xl font-bold tabular-nums text-amber-600 dark:text-amber-400">{formatCurrency(monthlyBurn)}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-4">
-            <p className="micro-label text-muted-foreground mb-1">Outstanding</p>
-            <p className="text-xl font-bold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(outstanding)}</p>
-          </CardContent>
-        </Card>
+      <HeroMetric
+        icon={Wallet}
+        eyebrow="Spent this month"
+        value={Math.round(thisMonth * 100) / 100}
+        unit="$"
+        caption={monthKeyLabel(currentMonthKey, { month: "long", year: "numeric" })}
+        spark={monthlyBarData.length >= 2 ? monthlyBarData.map((m) => m.amount) : undefined}
+      />
+      <div className="grid grid-cols-2 gap-2.5">
+        <StatTile label="Total Spent" value={formatCurrency(totalSpent)} icon={DollarSign} hs={FINANCE_HS.accent} basis="All logged expenses" />
+        <StatTile label="Monthly Burn" value={formatCurrency(monthlyBurn)} icon={TrendingUp} hs="38 90%" basis="Bills + average spend" i={1} />
+        <StatTile label="Outstanding" value={formatCurrency(outstanding)} icon={CreditCard} hs={FINANCE_HS.expense} i={2} />
+        <StatTile label="Avg / Month" value={formatCurrency(avgPerMonth)} icon={BarChart2} hs={FINANCE_HS.net}
+          basis={sortedMonths.length > 0 ? `over ${sortedMonths.length} month${sortedMonths.length === 1 ? "" : "s"}` : undefined} i={3} />
       </div>
 
       {/* ═══════════════════════════════════════════════════════ */}
@@ -5389,37 +5378,33 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       {/* ═══════════════════════════════════════════════════════ */}
       {/* SECTION 2a — By Category                                */}
       {/* ═══════════════════════════════════════════════════════ */}
-      {sortedExpenses.length > 0 && topCategories.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <BarChart2 className="h-4 w-4 text-muted-foreground" /> By Category
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 space-y-2.5">
-            {topCategories.map((cat, idx) => {
-              const pct = topCategoryMax > 0 ? (cat.total / topCategoryMax) * 100 : 0;
-              const color = CHART_COLORS[idx % CHART_COLORS.length];
-              return (
-                <div key={cat.category} data-testid={`row-category-${cat.category}`}>
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <span className="text-xs font-medium truncate">{cat.category}</span>
-                      <span className="text-[11px] text-muted-foreground shrink-0">({cat.count})</span>
-                    </div>
-                    <span className="text-xs font-bold tabular-nums shrink-0 ml-2">{formatCurrency(cat.total)}</span>
-                  </div>
-                  <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all"
-                      style={{ width: `${pct}%`, backgroundColor: color }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </CardContent>
-        </Card>
+      {sortedExpenses.length > 0 && categorySlices.slices.length > 0 && (
+        <div className="bubble p-3.5 sm:p-4" data-testid="finances-by-category">
+          <SectionTitle title="By Category" hint={`${categoryBreakdown.length} ${categoryBreakdown.length === 1 ? "category" : "categories"} · ${formatCurrency(categorySlices.total)}`} />
+          <CategoryBreakdown
+            slices={categorySlices.slices.map((sl) => ({ ...sl, label: sl.isOther ? sl.label : sl.label.charAt(0).toUpperCase() + sl.label.slice(1) }))}
+            total={categorySlices.total}
+            format={formatMoneyRound}
+            centerLabel="Spent"
+            rowTestId={(key) => `row-category-${key}`}
+          />
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* SECTION 2a′ — Monthly Spending Trend (bar chart)        */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      {!isLoan && !isInvestment && monthlyBarData.length >= 2 && (
+        <div className="bubble p-3.5 sm:p-4" data-testid="finances-monthly-spending">
+          <SectionTitle title="Monthly Spending" hint={`Last ${monthlyBarData.length} months with spending`} />
+          <PeriodBars
+            data={monthlyBarData.map((m) => ({ label: m.month, value: m.amount }))}
+            hs={FINANCE_HS.accent}
+            format={formatCurrency}
+            compact={axisDollars}
+            height={160}
+          />
+        </div>
       )}
 
       {/* ═══════════════════════════════════════════════════════ */}
@@ -5439,10 +5424,15 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
               </div>
             </CardHeader>
             <CardContent className="pt-0">
-              <div className="py-8 text-center">
-                <DollarSign className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-                <p className="text-sm text-muted-foreground">No expenses yet. Add one or tell the AI.</p>
-              </div>
+              {/* No filter narrows this list (ownership is structural), so an
+                  empty list really is "nothing logged". */}
+              <EmptyState
+                icon={Receipt}
+                label="No expenses logged"
+                hint="Add one here, or tell the AI what you spent."
+                accent={`${FINANCE_HS.accent} 45%`}
+                testId="finances-expenses-empty"
+              />
             </CardContent>
           </>
         ) : (
@@ -5588,7 +5578,7 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
         </CardHeader>
         <CardContent className="pt-0">
           {obligations.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">No recurring bills</p>
+            <EmptyState icon={CreditCard} label="No recurring bills" hint="Subscriptions and bills linked to this profile show here." className="py-5" testId="finances-bills-empty" />
           ) : (
             <div className="divide-y divide-border">
               {obligations.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(ob => {
@@ -5645,77 +5635,18 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
       {/* ═══════════════════════════════════════════════════════ */}
       {/* SECTION 4 — Loan Amortization (loans only)             */}
       {/* ═══════════════════════════════════════════════════════ */}
-      {isLoan && loanPrincipal > 0 && loanRate > 0 && derivedTerm > 0 && (
-        <Card className="border-orange-500/30">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-muted-foreground" /> Loan Amortization
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Key stats row */}
-            <div className="grid grid-cols-3 gap-3">
-              <div className="text-center">
-                <p className="text-xs-loose text-muted-foreground mb-1">Monthly Payment</p>
-                <p className="text-lg font-bold tabular-nums text-orange-600 dark:text-orange-400">
-                  {amortRows.length > 0 ? formatCurrency(amortRows[0].payment) : "—"}
-                </p>
-              </div>
-              <div className="text-center">
-                <p className="text-xs-loose text-muted-foreground mb-1">Total Interest</p>
-                <p className="text-lg font-bold tabular-nums text-red-600 dark:text-red-400">{formatCurrency(totalInterest)}</p>
-              </div>
-              <div className="text-center">
-                <p className="text-xs-loose text-muted-foreground mb-1">Payoff Date</p>
-                <p className="text-base font-bold text-foreground">{payoffDate || "—"}</p>
-              </div>
-            </div>
-
-            {/* Area chart: balance / cumulative principal / cumulative interest */}
-            {amortChartSample.length > 1 && (
-              <div>
-                <p className="text-xs-loose text-muted-foreground mb-2">Balance &amp; Cumulative Paid Over Time</p>
-                <ResponsiveContainer width="100%" height={180}>
-                  <AreaChart data={amortChartSample} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="gradBalance" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.02} />
-                      </linearGradient>
-                      <linearGradient id="gradPrincipal" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
-                      </linearGradient>
-                      <linearGradient id="gradInterest" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#ef4444" stopOpacity={0.35} />
-                        <stop offset="95%" stopColor="#ef4444" stopOpacity={0.02} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                    <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} label={{ value: "Month", position: "insideBottom", offset: -2, fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
-                    <Tooltip
-                      contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                      formatter={(val: number, name: string) => [formatCurrency(val), name === "balance" ? "Remaining Balance" : name === "cumPrincipal" ? "Principal Paid" : "Interest Paid"]}
-                    />
-                    <Area type="monotone" dataKey="balance" stroke="#3b82f6" strokeWidth={2} fill="url(#gradBalance)" />
-                    <Area type="monotone" dataKey="cumPrincipal" stroke="#10b981" strokeWidth={2} fill="url(#gradPrincipal)" />
-                    <Area type="monotone" dataKey="cumInterest" stroke="#ef4444" strokeWidth={2} fill="url(#gradInterest)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-                <div className="flex items-center gap-4 justify-center mt-1">
-                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-blue-500 inline-block" /><span className="text-xs-loose text-muted-foreground">Remaining Balance</span></div>
-                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500 inline-block" /><span className="text-xs-loose text-muted-foreground">Principal Paid</span></div>
-                  <div className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-red-500 inline-block" /><span className="text-xs-loose text-muted-foreground">Interest Paid</span></div>
-                </div>
-              </div>
-            )}
-
-            {/* Collapsible amortization table */}
-            {amortRows.length > 0 && (
-              <div>
+      {!hideLoanSections && isLoan && loanPrincipal > 0 && loanRate > 0 && derivedTerm > 0 && (
+        <div className="space-y-3" data-testid="finances-loan-amortization">
+          {/* The same payoff view as the liability detail page, fed this
+              tab's own summary + schedule (shared/liability-derived). */}
+          {loanMetrics && loanAmortization && (
+            <PayoffOutlook summary={loanMetrics.summary} amortization={loanAmortization} todayISO={loanTodayISO} missing={loanPayoffMissing} />
+          )}
+          {/* Collapsible amortization table */}
+          {amortRows.length > 0 && (
+            <div className="bubble p-3.5 sm:p-4" data-testid="finances-amortization-schedule">
                 <button
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  className="flex items-center gap-1.5 text-sm font-semibold hover:text-foreground transition-colors"
                   onClick={() => setAmortTableOpen(!amortTableOpen)}
                 >
                   {amortTableOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -5747,8 +5678,8 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                             <tr key={row.month} className={i >= 12 ? "text-muted-foreground" : ""}>
                               <td className="py-1.5 pr-3">{row.month}</td>
                               <td className="text-right py-1.5 pr-3">{formatCurrency(row.payment)}</td>
-                              <td className="text-right py-1.5 pr-3 text-green-600">{formatCurrency(row.principal)}</td>
-                              <td className="text-right py-1.5 pr-3 text-red-500">{formatCurrency(row.interest)}</td>
+                              <td className="text-right py-1.5 pr-3" style={{ color: tone("43 85%") }}>{formatCurrency(row.principal)}</td>
+                              <td className="text-right py-1.5 pr-3" style={{ color: tone("350 75%") }}>{formatCurrency(row.interest)}</td>
                               <td className="text-right py-1.5">{formatCurrency(row.balance)}</td>
                             </tr>
                           )
@@ -5757,27 +5688,21 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                     </table>
                   </div>
                 )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+            </div>
+          )}
+        </div>
       )}
 
       {/* ═══════════════════════════════════════════════════════ */}
       {/* SECTION 5 — Payoff Simulator (loans only)              */}
       {/* ═══════════════════════════════════════════════════════ */}
-      {isLoan && loanPrincipal > 0 && loanRate > 0 && baseSim.months > 0 && (
-        <Card className="border-blue-500/30">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <TrendingDown className="h-4 w-4 text-muted-foreground" /> Payoff Simulator
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+      {!hideLoanSections && isLoan && loanPrincipal > 0 && loanRate > 0 && baseSim.months > 0 && (
+        <div className="bubble p-3.5 sm:p-4" data-testid="finances-payoff-simulator">
+          <SectionTitle title="Payoff Simulator" hint="What an extra payment each month would change" />
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-muted-foreground">Extra monthly payment</span>
-                <span className="text-sm font-bold tabular-nums text-blue-600">${extraPayment}/mo</span>
+                <span className="text-sm font-bold tabular-nums" style={{ color: tone("var(--td-hs)") }}>{formatMoneyRound(extraPayment)}/mo</span>
               </div>
               <Slider
                 min={0}
@@ -5787,127 +5712,40 @@ function FinancesTab({ profile, profileId, onChanged }: { profile: ProfileDetail
                 onValueChange={([v]) => setExtraPayment(v)}
                 className="mb-3"
               />
-              <div className="grid grid-cols-3 gap-3 mt-2">
-                <div className="text-center p-3 rounded-lg bg-muted/50">
-                  <p className="text-xs-loose text-muted-foreground mb-1">New Payoff</p>
-                  <p className="text-sm font-bold text-foreground">{newPayoffDate || "—"}</p>
-                </div>
-                <div className="text-center p-3 rounded-lg bg-green-500/10">
-                  <p className="text-xs-loose text-muted-foreground mb-1">Months Saved</p>
-                  <p className="text-sm font-bold text-green-600">{monthsSaved}</p>
-                </div>
-                <div className="text-center p-3 rounded-lg bg-green-500/10">
-                  <p className="text-xs-loose text-muted-foreground mb-1">Interest Saved</p>
-                  <p className="text-sm font-bold text-green-600">{formatCurrency(interestSaved)}</p>
-                </div>
+              <div className="grid grid-cols-3 gap-2 mt-2">
+                <StatTile label="New Payoff" value={<span className="text-sm">{newPayoffDate || "—"}</span>} />
+                <StatTile label="Months Saved" value={monthsSaved} hs="152 62%" i={1} />
+                <StatTile label="Interest Saved" value={<span className="text-sm">{formatMoneyRound(interestSaved)}</span>} hs="152 62%" i={2} />
               </div>
             </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════ */}
-      {/* SECTION 6 — Spending by Category (non-loan profiles)   */}
-      {/* ═══════════════════════════════════════════════════════ */}
-      {!isLoan && pieData.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <BarChart2 className="h-4 w-4 text-muted-foreground" /> Spending by Category
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col sm:flex-row items-center gap-4">
-              <ResponsiveContainer width={180} height={180}>
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={80}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {pieData.map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                    formatter={(val: number) => [formatCurrency(val)]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="flex-1 space-y-1.5 w-full">
-                {pieData.map((item, index) => (
-                  <div key={item.name} className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="h-2.5 w-2.5 rounded-full shrink-0"
-                        style={{ background: CHART_COLORS[index % CHART_COLORS.length] }}
-                      />
-                      <span className="text-xs capitalize text-muted-foreground">{item.name}</span>
-                    </div>
-                    <span className="text-xs font-semibold tabular-nums">{formatCurrency(item.value)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════ */}
-      {/* SECTION 7 — Monthly Spending Trend (bar chart)          */}
-      {/* ═══════════════════════════════════════════════════════ */}
-      {!isLoan && !isInvestment && monthlyBarData.length >= 2 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <BarChart2 className="h-4 w-4 text-muted-foreground" /> Monthly Spending
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={140}>
-              <BarChart data={monthlyBarData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval={monthlyBarData.length > 6 ? 1 : 0} />
-                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} width={38} tickFormatter={v => `$${v >= 1000 ? (v/1000).toFixed(0)+'k' : v}`} />
-                <Tooltip
-                  contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
-                  formatter={(val: number) => [formatCurrency(val), "Spent"]}
-                />
-                <Bar dataKey="amount" fill="hsl(var(--primary))" radius={[3, 3, 0, 0]} maxBarSize={32} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
+        </div>
       )}
 
       {/* Investment performance chart (preserved) */}
       {isInvestment && perfChartData.length > 1 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-muted-foreground" /> Performance History
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={140}>
-              <LineChart data={perfChartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+        <div className="bubble p-3.5 sm:p-4" data-testid="finances-performance">
+          <SectionTitle title="Performance History" hint={`${perfChartData.length} recorded values`} />
+          <div className="h-[160px] -mx-1">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={perfChartData} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="perfFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={tone("var(--td-hs)")} stopOpacity={0.4} />
+                    <stop offset="100%" stopColor={tone("var(--td-hs2)")} stopOpacity={0.03} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="2 6" stroke="hsl(var(--border))" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={16} />
+                <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={48} tickFormatter={axisDollars} domain={["auto", "auto"]} />
                 <Tooltip
-                  contentStyle={{ fontSize: 12, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 6 }}
+                  contentStyle={{ fontSize: 12, background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 10 }}
                   formatter={(val: number) => [formatCurrency(val), "Balance"]}
                 />
-                <Line type="monotone" dataKey="value" stroke="#20808D" strokeWidth={2} dot={false} />
-              </LineChart>
+                <Area type="monotone" dataKey="value" stroke={tone("var(--td-hs)")} strokeWidth={2.25} fill="url(#perfFill)" dot={false} />
+              </AreaChart>
             </ResponsiveContainer>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
 
       {/* ═══════════════════════════════════════════════════════ */}
@@ -6306,7 +6144,7 @@ function TrackerCard_Profile({
         {chartData.length >= 2 && (
           <ResponsiveContainer width="100%" height={60}>
             <LineChart data={chartData} margin={{ top: 2, right: 2, left: 0, bottom: 2 }}>
-              <Line type="monotone" dataKey="val" stroke="#20808D" strokeWidth={1.5} dot={false} />
+              <Line type="monotone" dataKey="val" stroke={tone(trackerTheme(tracker as any).hs)} strokeWidth={2} dot={false} />
               <Tooltip
                 contentStyle={{ fontSize: 11, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 4 }}
                 labelFormatter={(_, payload) => payload?.[0]?.payload?.date || ""}
@@ -6699,8 +6537,35 @@ function TrackersTab({
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const toggleGroup = (k: string) => setOpenGroups(s => ({ ...s, [k]: !s[k] }));
 
+  // Summary strip: counts read straight off the trackers' own entries, by
+  // calendar day in the user's zone (the same day key the cards group by).
+  const trackerSummary = useMemo(() => {
+    const today = getUserToday(BROWSER_TIMEZONE);
+    const weekStart = tzAddDays(today, -6);
+    let week = 0;
+    let loggedToday = 0;
+    for (const t of trackers as any[]) {
+      let hitToday = false;
+      for (const e of (t.entries || [])) {
+        if (!e?.timestamp) continue;
+        const d = localDayOfTimestamp(e.timestamp);
+        if (d >= weekStart && d <= today) week++;
+        if (d === today) hitToday = true;
+      }
+      if (hitToday) loggedToday++;
+    }
+    return { week, loggedToday };
+  }, [trackers]);
+
   return (
     <div className="space-y-3">
+      {trackers.length > 0 && (
+        <div className="td-scope grid grid-cols-3 gap-2" style={accentScope("190 75%", "245 70%")} data-testid="trackers-summary">
+          <StatTile label="Trackers" value={trackers.length} icon={Activity} hs="190 75%" />
+          <StatTile label="Entries · 7d" value={trackerSummary.week} icon={BarChart2} hs="245 70%" i={1} />
+          <StatTile label="Today" value={`${trackerSummary.loggedToday}/${trackers.length}`} icon={CheckCircle2} hs="152 62%" basis="logged" i={2} />
+        </div>
+      )}
       {/* Action buttons — "+ New Tracker" removed 2026-05-21 (chat-only).
           "Link Existing" stays because it only attaches an already-created
           tracker to this profile (no creation happens). */}
@@ -6714,11 +6579,7 @@ function TrackersTab({
 
       {trackers.length === 0 ? (
         <Card>
-          <CardContent className="py-12 text-center">
-            <Activity className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-            <p className="text-sm font-medium text-muted-foreground">No linked trackers</p>
-            <p className="text-xs text-muted-foreground mt-1">Ask Portol in chat to create one, then link it here.</p>
-          </CardContent>
+          <EmptyState icon={Activity} label="No linked trackers" hint="Ask Portol in chat to create one, then link it here." accent="190 75% 50%" className="py-10" />
         </Card>
       ) : (
         grouped.map(group => {
@@ -7875,10 +7736,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
   if (timeline.length === 0) {
     return (
       <Card>
-        <CardContent className="py-8 text-center">
-          <Clock className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">No activity yet</p>
-        </CardContent>
+        <EmptyState icon={Clock} label="No activity yet" hint="Changes, links and uploads on this profile show up here." />
       </Card>
     );
   }
@@ -8087,11 +7945,7 @@ function TasksTab({
 
       {tasks.length === 0 && (
         <Card>
-          <CardContent className="py-12 text-center">
-            <ListTodo className="h-10 w-10 text-muted-foreground/30 mx-auto mb-3" />
-            <p className="text-sm font-medium text-muted-foreground">No linked tasks</p>
-            <p className="text-xs text-muted-foreground mt-1">Add a task above or use chat</p>
-          </CardContent>
+          <EmptyState icon={ListTodo} label="No linked tasks" hint="Add a task above or use chat." accent="215 82% 55%" className="py-10" />
         </Card>
       )}
 
@@ -8859,11 +8713,24 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
 
   const totalInterest = schedule.reduce((s, r) => s + r.interest, 0);
   const totalCost = loanBalance + totalInterest;
-  const payoffDate = schedule.length > 0 ? (() => {
-    const d = new Date(startDate || new Date());
-    d.setMonth(d.getMonth() + schedule.length);
-    return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
-  })() : null;
+  // The schedule starts at the next due date (shared/liability-derived), so
+  // its own payoffDate is the payoff — the old `startDate + rows` counted the
+  // remaining rows from the loan's ORIGIN and disagreed with the chart below.
+  const fmtMonthYear = (iso: string | null | undefined) => {
+    const d = iso ? parseLocalDate(iso) : null;
+    return d ? d.toLocaleDateString("en-US", { month: "short", year: "numeric" }) : null;
+  };
+  const payoffDate = schedule.length > 0 ? fmtMonthYear(loanTabAmort?.payoffDate) : null;
+  // PayoffOutlook's inputs: the summary for these SAME terms and start date,
+  // beside the schedule above — nothing recomputed.
+  const loanTabSummary = loanTabAmort ? deriveLiabilityMetrics(loanTabTerms, loanTabToday, { typeKey: loanTabTypeKey, row: profile }).summary : null;
+  const loanTabMissing = payoffMissingFields({
+    balance: loanBalance,
+    rateRaw: interestRate,
+    monthlyPayment,
+    remainingTermMonths: termMonths,
+  });
+  const { confirm: confirmClearLoan, isArmed: isClearLoanArmed } = useConfirmArm();
 
   // Wave 13: Paid-to-date stats. If a startDate is set, infer how many months
   // have elapsed and split the schedule into paid vs remaining.
@@ -9068,59 +8935,39 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
               }} data-testid="button-edit-loan">
                 <Pencil className="h-3 w-3" /> Edit
               </Button>
-              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-destructive hover:text-destructive" onClick={() => clearLoanMutation.mutate()} disabled={clearLoanMutation.isPending} data-testid="button-clear-loan">
-                <Trash2 className="h-3 w-3" /> {clearLoanMutation.isPending ? "Clearing..." : "Clear"}
+              <Button size="sm" variant="ghost" className={`h-7 text-xs gap-1 text-destructive hover:text-destructive ${isClearLoanArmed("loan") ? "bg-destructive/10" : ""}`} onClick={() => confirmClearLoan("loan", () => clearLoanMutation.mutate())} disabled={clearLoanMutation.isPending} data-testid="button-clear-loan">
+                <Trash2 className="h-3 w-3" /> {clearLoanMutation.isPending ? "Clearing..." : isClearLoanArmed("loan") ? "Tap again to clear" : "Clear"}
               </Button>
             </div>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <Card className="p-3 text-center">
-              <p className="text-xs text-muted-foreground">Balance</p>
-              <p className="text-sm font-bold tabular-nums">{formatCurrency(loanBalance)}</p>
-            </Card>
-            <Card className="p-3 text-center">
-              <p className="text-xs text-muted-foreground">Rate</p>
-              <p className="text-sm font-bold tabular-nums">{interestRate}%</p>
-            </Card>
-            <Card className="p-3 text-center">
-              <p className="text-xs text-muted-foreground">Monthly</p>
-              <p className="text-sm font-bold tabular-nums">{formatCurrency(monthlyPayment)}</p>
-            </Card>
-            <Card className="p-3 text-center">
-              <p className="text-xs text-muted-foreground">Payoff</p>
-              <p className="text-sm font-bold tabular-nums">{payoffDate || "—"}</p>
-            </Card>
+          <div className="td-scope grid grid-cols-2 md:grid-cols-4 gap-2" style={accentScope("43 85%", "25 85%")} data-testid="loan-summary-tiles">
+            <StatTile label="Balance" value={formatCurrency(loanBalance)} icon={Wallet} hs="43 85%" basis={lender || undefined} />
+            <StatTile label="Rate" value={`${interestRate}%`} icon={TrendingUp} hs="350 75%" basis="APR" i={1} />
+            <StatTile label="Monthly" value={formatCurrency(monthlyPayment)} icon={Calendar} hs="205 80%" i={2} />
+            <StatTile label="Payoff" value={payoffDate || "—"} icon={Target} hs="152 62%" basis={schedule.length > 0 ? `${schedule.length} payments left` : undefined} i={3} />
           </div>
         </>
       )}
 
       {/* Payoff Summary */}
       {schedule.length > 0 && (
-        <Card className="p-4">
-          <h3 className="text-xs font-semibold mb-2">Payoff Summary</h3>
-          <div className="grid grid-cols-3 gap-3 text-center">
-            <div>
-              <p className="text-xs text-muted-foreground">Total Interest</p>
-              <p className="text-sm font-bold text-red-400">{formatCurrency(totalInterest)}</p>
+        <div className="td-scope bubble p-3.5 sm:p-4" style={accentScope("43 85%", "25 85%")} data-testid="loan-payoff-summary">
+          <SectionTitle title="Payoff Summary" hint={`${remainingSlice.length} months left`} />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="min-w-0">
+              <p className="micro-label text-muted-foreground">Total Interest</p>
+              <p className="text-base metric-value tabular-nums truncate" style={{ color: tone("350 75%") }}>{formatCurrency(totalInterest)}</p>
             </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Total Cost</p>
-              <p className="text-sm font-bold">{formatCurrency(totalCost)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Months Left</p>
-              <p className="text-sm font-bold">{remainingSlice.length}</p>
+            <div className="min-w-0">
+              <p className="micro-label text-muted-foreground">Total Cost</p>
+              <p className="text-base metric-value tabular-nums truncate">{formatCurrency(totalCost)}</p>
             </div>
           </div>
           {/* Progress bar — uses principal paid so far */}
           <div className="mt-3">
-            <div className="flex justify-between text-xs text-muted-foreground mb-1">
-              <span>Paid off</span>
-              <span>{percentPaid > 0 ? `${percentPaid.toFixed(1)}%` : "—"}</span>
-            </div>
-            <Progress value={percentPaid} className="h-2" />
+            <MeterRow label="Paid off" value={percentPaid > 0 ? `${percentPaid.toFixed(1)}%` : "—"} pct={percentPaid} hs="152 62%" />
           </div>
-        </Card>
+        </div>
       )}
 
       {/* Wave 13: Paid-to-date breakdown — only when we have a start date */}
@@ -9136,11 +8983,11 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
               <p className="text-base font-bold tabular-nums">{formatCurrency(totalPaid)}</p>
               <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                 <div>
-                  <span className="text-green-500">● Principal</span>
+                  <span style={{ color: tone("43 85%") }}>● Principal</span>
                   <p className="font-semibold tabular-nums">{formatCurrency(principalPaid)}</p>
                 </div>
                 <div>
-                  <span className="text-red-400">● Interest</span>
+                  <span style={{ color: tone("350 75%") }}>● Interest</span>
                   <p className="font-semibold tabular-nums">{formatCurrency(interestPaid)}</p>
                 </div>
               </div>
@@ -9150,11 +8997,11 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
               <p className="text-base font-bold tabular-nums">{formatCurrency(principalRemaining + interestRemaining)}</p>
               <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                 <div>
-                  <span className="text-green-500">● Principal</span>
+                  <span style={{ color: tone("43 85%") }}>● Principal</span>
                   <p className="font-semibold tabular-nums">{formatCurrency(principalRemaining)}</p>
                 </div>
                 <div>
-                  <span className="text-red-400">● Interest</span>
+                  <span style={{ color: tone("350 75%") }}>● Interest</span>
                   <p className="font-semibold tabular-nums">{formatCurrency(interestRemaining)}</p>
                 </div>
               </div>
@@ -9284,123 +9131,74 @@ function LoanTab({ profile, obligations, hideEmptyEditor }: { profile: any; obli
             principal: Math.round(r.principal),
             interest: Math.round(r.interest),
           }));
-        const pieData2 = [
-          { name: 'Principal', value: Math.round(loanBalance) },
-          { name: 'Total Interest', value: Math.round(totalInterest) },
-        ];
-        const COLORS2 = ['#10b981', '#ef4444'];
+        const PRINCIPAL_HS = "43 85%";
+        const INTEREST_HS = "350 75%";
         return (
           <>
-            {/* Balance paydown + P/I split */}
-            <Card className="p-4">
-              <h3 className="text-xs font-semibold mb-3">Balance Paydown</h3>
-              <ResponsiveContainer width="100%" height={160}>
-                <AreaChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="lgBal" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
-                  <Tooltip
-                    contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }}
-                    formatter={(v: any) => [`$${Number(v).toLocaleString()}`, 'Balance']}
-                  />
-                  <Area type="monotone" dataKey="balance" stroke="#3b82f6" fill="url(#lgBal)" strokeWidth={2} name="Balance" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </Card>
+            {/* Balance until payoff + where the rest goes — the liability
+                page's own view, over this tab's schedule. */}
+            {loanTabSummary && loanTabAmort && (
+              <PayoffOutlook summary={loanTabSummary} amortization={loanTabAmort} todayISO={loanTabToday} missing={loanTabMissing} />
+            )}
 
             {/* Principal vs Interest per payment stacked bar */}
-            <Card className="p-4">
-              <h3 className="text-xs font-semibold mb-1">Principal vs Interest Per Payment</h3>
-              <p className="text-[11px] text-muted-foreground mb-3">Green = principal paid · Red = interest charged</p>
-              <ResponsiveContainer width="100%" height={120}>
-                <BarChart data={chartData} margin={{ top: 2, right: 4, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} tickFormatter={v => `$${v}`} />
-                  <Tooltip
-                    contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }}
-                    formatter={(v: any, n: string) => [`$${Number(v).toFixed(0)}`, n]}
-                  />
-                  <Legend wrapperStyle={{ fontSize: '11px' }} />
-                  <Bar dataKey="principal" name="Principal" fill="#10b981" stackId="a" radius={[0,0,0,0]} />
-                  <Bar dataKey="interest" name="Interest" fill="#ef4444" stackId="a" radius={[3,3,0,0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
-
-            {/* Principal vs Total Interest donut */}
-            <Card className="p-4">
-              <div className="flex items-center gap-4">
-                <ResponsiveContainer width={120} height={120}>
-                  <PieChart>
-                    <Pie data={pieData2} cx="50%" cy="50%" innerRadius={30} outerRadius={50} paddingAngle={3} dataKey="value">
-                      {pieData2.map((_, i) => <Cell key={i} fill={COLORS2[i % COLORS2.length]} />)}
-                    </Pie>
-                    <Tooltip contentStyle={{ background: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px', fontSize: '11px' }} formatter={(v: any) => `$${Number(v).toLocaleString()}`} />
-                  </PieChart>
+            <div className="td-scope bubble p-3.5 sm:p-4" style={accentScope(PRINCIPAL_HS, "25 85%")} data-testid="loan-pi-chart">
+              <SectionTitle title="Principal vs Interest Per Payment" hint="Each payment, split into what it pays down and what it costs" />
+              <div className="h-[140px] -mx-1">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData} margin={{ top: 2, right: 4, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="2 6" stroke="hsl(var(--border))" vertical={false} />
+                    <XAxis dataKey="month" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} minTickGap={12} />
+                    <YAxis tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} width={44} tickFormatter={axisDollars} />
+                    <Tooltip
+                      cursor={{ fill: "hsl(var(--muted) / 0.5)" }}
+                      contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', borderRadius: 10, fontSize: 12 }}
+                      labelFormatter={(m: any) => `Payment ${m}`}
+                      formatter={(v: any, n: string) => [formatMoneyRound(Number(v)), n]}
+                    />
+                    <Bar dataKey="principal" name="Principal" fill={tone(PRINCIPAL_HS)} stackId="a" radius={[0, 0, 2, 2]} isAnimationActive={false} />
+                    <Bar dataKey="interest" name="Interest" fill={tone(INTEREST_HS)} stackId="a" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                  </BarChart>
                 </ResponsiveContainer>
-                <div className="space-y-2">
-                  <div>
-                    <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-sm bg-green-500 shrink-0" /><span className="text-xs">Principal</span></div>
-                    <p className="text-sm font-bold tabular-nums ml-4">{formatCurrency(loanBalance)}</p>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-sm bg-red-500 shrink-0" /><span className="text-xs">Total Interest</span></div>
-                    <p className="text-sm font-bold tabular-nums text-red-400 ml-4">{formatCurrency(totalInterest)}</p>
-                  </div>
-                  <div className="pt-1 border-t border-border/40">
-                    <p className="text-xs text-muted-foreground">Total Cost</p>
-                    <p className="text-sm font-bold tabular-nums">{formatCurrency(totalCost)}</p>
-                  </div>
-                </div>
               </div>
-            </Card>
+              <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground">
+                <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: tone(PRINCIPAL_HS) }} />Principal</span>
+                <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: tone(INTEREST_HS) }} />Interest</span>
+              </div>
+            </div>
 
             {/* Extra Payment Calculator */}
             {loanBalance > 0 && interestRate > 0 && (() => {
               // The same simulator the asset page and the detail page run (shared/liability-derived).
               function simPayoff(extra: number) {
                 const sim = simulateExtraPayment(loanTabTerms, loanTabToday, extra, { typeKey: loanTabTypeKey, row: profile });
-                return { months: sim.months, totInt: sim.totalInterest };
+                return { months: sim.months, totInt: sim.totalInterest, payoffDate: sim.payoffDate };
               }
               const base = simPayoff(0);
               const extra = simPayoff(extraPmt);
               const saved = Math.max(0, base.months - extra.months);
               const intSaved = Math.max(0, base.totInt - extra.totInt);
               return (
-                <Card className="p-4">
-                  <h3 className="text-xs font-semibold mb-3">Payoff Calculator</h3>
+                <div className="td-scope bubble p-3.5 sm:p-4" style={accentScope("152 62%", "178 70%")} data-testid="loan-payoff-calculator">
+                  <SectionTitle title="Payoff Calculator" hint="What paying a little more each month would save" />
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs text-muted-foreground">Extra monthly payment</span>
-                      <span className="text-sm font-bold text-primary">${extraPmt}/mo</span>
+                      <span className="text-sm font-bold tabular-nums" style={{ color: tone("var(--td-hs)") }}>{formatMoneyRound(extraPmt)}/mo</span>
                     </div>
                     <input
                       type="range" min={0} max={Math.round(monthlyPayment || 500)} step={25}
                       value={extraPmt}
                       onChange={e => setExtraPmt(Number(e.target.value))}
-                      className="w-full accent-primary"
+                      className="w-full"
+                      style={{ accentColor: tone("var(--td-hs)") }}
                     />
-                    <div className="grid grid-cols-2 gap-3 pt-1">
-                      <div className="rounded-xl bg-green-500/8 border border-green-500/20 p-3 text-center">
-                        <p className="text-[11px] text-muted-foreground mb-1">Months saved</p>
-                        <p className="text-xl font-bold text-green-500">{saved}</p>
-                        <p className="text-[11px] text-muted-foreground">Pay off {extra.months > 0 ? (() => { const d = new Date(new Date(startDate || new Date()).getTime()); d.setMonth(d.getMonth() + extra.months); return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }); })() : '—'}</p>
-                      </div>
-                      <div className="rounded-xl bg-red-500/8 border border-red-500/20 p-3 text-center">
-                        <p className="text-[11px] text-muted-foreground mb-1">Interest saved</p>
-                        <p className="text-lg font-bold text-red-400">{formatCurrency(intSaved)}</p>
-                        <p className="text-[11px] text-muted-foreground">Total left: {formatCurrency(extra.totInt)}</p>
-                      </div>
+                    <div className="grid grid-cols-2 gap-2.5 pt-1">
+                      <StatTile label="Months saved" value={saved} hs="152 62%" basis={`Pay off ${extra.months > 0 ? (fmtMonthYear(extra.payoffDate) ?? '—') : '—'}`} />
+                      <StatTile label="Interest saved" value={formatCurrency(intSaved)} hs="152 62%" basis={`Total left: ${formatCurrency(extra.totInt)}`} i={1} />
                     </div>
                   </div>
-                </Card>
+                </div>
               );
             })()}
           </>
@@ -10971,6 +10769,18 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
   const paymentHistory = (profile.relatedExpenses || []).filter((e: any) =>
     (e.category || "").toLowerCase().includes("payment")
   ).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  // Payment history as monthly bars: the same rows the list below shows,
+  // summed per calendar month, oldest first, last 12 months that had one.
+  const paymentTotal = paymentHistory.reduce((s: number, p: any) => s + (Number(p.amount) || 0), 0);
+  const paymentMonths = (() => {
+    const by: Record<string, number> = {};
+    for (const p of paymentHistory) {
+      const k = monthKeyOf(p.date);
+      if (k) by[k] = (by[k] || 0) + (Number(p.amount) || 0);
+    }
+    return Object.keys(by).sort().slice(-12).map((k) => ({ label: monthKeyLabel(k, { month: "short" }), value: by[k] }));
+  })();
+  const { confirm: confirmDeletePayment, isArmed: isDeletePaymentArmed } = useConfirmArm();
 
   const [showRecord, setShowRecord] = useState(false);
   const [payAmt, setPayAmt] = useState("");
@@ -11012,7 +10822,22 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
   });
 
   return (
-    <div className="space-y-3" data-testid="payments-tab">
+    <div className="td-scope space-y-3" style={accentScope("43 85%", "25 85%")} data-testid="payments-tab">
+      {paymentHistory.length > 0 && (
+        <HeroMetric
+          icon={Receipt}
+          eyebrow="Total paid"
+          value={Math.round(paymentTotal * 100) / 100}
+          unit="$"
+          caption={`${paymentHistory.length} payment${paymentHistory.length === 1 ? "" : "s"} · last on ${formatFullDate(paymentHistory[0].date)}`}
+        />
+      )}
+      {paymentMonths.length >= 2 && (
+        <div className="bubble p-3.5 sm:p-4" data-testid="payments-history-chart">
+          <SectionTitle title="Paid per month" hint={`${paymentMonths.length} months with a payment`} />
+          <PeriodBars data={paymentMonths} hs="43 85%" format={formatCurrency} compact={axisDollars} height={150} />
+        </div>
+      )}
       <Card>
         <CardContent className="pt-4 pb-3">
           <p className="micro-label text-muted-foreground mb-3">Payment Info</p>
@@ -11037,23 +10862,46 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
           </div>
         </CardContent>
       </Card>
-      {paymentHistory.length > 0 && (
+      {paymentHistory.length > 0 ? (
         <Card>
           <CardContent className="pt-4 pb-3">
             <p className="micro-label text-muted-foreground mb-2">Payment History</p>
             <div className="divide-y divide-border/30">
-              {paymentHistory.slice(0, 10).map((p: any) => (
-                <div key={p.id} className="group flex justify-between items-center py-1.5">
-                  <span className="text-xs text-muted-foreground">{formatFullDate(p.date)}</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium tabular-nums">{p.amount ? formatCurrency(Number(p.amount)) : "—"}</span>
-                    <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deletePayMutation.mutate(p.id)} aria-label="Delete payment" data-testid={`button-delete-payment-${p.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+              {paymentHistory.slice(0, 10).map((p: any) => {
+                // Destructive: first tap arms, second deletes (useConfirmArm).
+                const armed = isDeletePaymentArmed(p.id);
+                return (
+                <div key={p.id} className="group flex justify-between items-center py-2">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: tone("var(--td-hs)") }} aria-hidden="true" />
+                    <span className="text-xs text-muted-foreground truncate">{formatFullDate(p.date)}</span>
+                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-sm font-semibold tabular-nums">{p.amount ? formatCurrency(Number(p.amount)) : "—"}</span>
+                    <button
+                      className={armed ? "text-[11px] font-semibold text-destructive px-1.5 py-0.5 rounded-md bg-destructive/10" : "opacity-60 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"}
+                      onClick={() => confirmDeletePayment(p.id, () => deletePayMutation.mutate(p.id))}
+                      aria-label={armed ? "Tap again to delete payment" : "Delete payment"}
+                      data-testid={`button-delete-payment-${p.id}`}
+                    >
+                      {armed ? "Delete?" : <Trash2 className="h-3 w-3 text-destructive" />}
+                    </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </CardContent>
         </Card>
+      ) : (
+        <EmptyState
+          icon={Receipt}
+          label="No payments recorded"
+          hint="Record one above and it shows up here and in your expenses."
+          accent="43 85% 52%"
+          className="bubble"
+          testId="payments-history-empty"
+        />
       )}
     </div>
   );
@@ -11898,10 +11746,7 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
         </div>
         {liabsOpen && (
           liabilities.length === 0 ? (
-            <div className="text-center py-10" data-testid="linked-liabilities-empty">
-              <Wallet className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">No liabilities</p>
-            </div>
+            <EmptyState icon={Wallet} label="No liabilities" hint="Nothing owed is linked to this person." tone="good" testId="linked-liabilities-empty" />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {liabilities
@@ -12118,15 +11963,12 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
         </div>
       )}
       {items.length === 0 ? (
-        <div className="text-center py-10" data-testid="linked-assets-empty">
-          <Package className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">No linked assets</p>
-          {isPerson && (
-            <p className="text-xs text-muted-foreground/70 mt-1">
-              Tap “Link Asset” above to attach an existing vehicle, property, or investment.
-            </p>
-          )}
-        </div>
+        <EmptyState
+          icon={Package}
+          label="No linked assets"
+          hint={isPerson ? "Tap “Link Asset” above to attach an existing vehicle, property, or investment." : undefined}
+          testId="linked-assets-empty"
+        />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {items.map((item: any, i: number) => (
@@ -12256,10 +12098,7 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
         </div>
       )}
       {items.length === 0 ? (
-        <div className="text-center py-10">
-          <CreditCard className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">No linked liabilities</p>
-        </div>
+        <EmptyState icon={CreditCard} label="No linked liabilities" />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {items.map((item: any, i: number) => (
@@ -12970,13 +12809,7 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
             {currentNotes}
           </div>
         ) : (
-          <div className="rounded-lg border border-dashed p-8 text-center">
-            <FileText className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">No notes yet</p>
-            <Button size="sm" variant="outline" className="mt-3 h-7 text-xs gap-1" onClick={() => setIsEditing(true)}>
-              <Pencil className="h-3 w-3" /> Add Notes
-            </Button>
-          </div>
+          <EmptyState icon={FileText} label="No notes yet" hint="Anything worth remembering about this profile." ctaLabel="Add Notes" onCta={() => setIsEditing(true)} className="rounded-lg border border-dashed" />
         )}
       </CardContent>
     </Card>
@@ -13715,11 +13548,7 @@ export default function ProfileDetailPage() {
                     <TrackersTab trackers={ownTrackers} profileId={profile.id} onChanged={handleSaved} />
                   ) : (
                     <Card>
-                      <CardContent className="py-8 text-center">
-                        <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-                        <p className="text-sm text-muted-foreground">No trackers yet</p>
-                        <p className="text-xs text-muted-foreground mt-1">Create trackers via chat, then link them here</p>
-                      </CardContent>
+                      <EmptyState icon={Activity} label="No trackers yet" hint="Create trackers via chat, then link them here." accent="190 75% 50%" />
                     </Card>
                   )}
                 </TabsContent>
@@ -13765,21 +13594,17 @@ export default function ProfileDetailPage() {
                       type FeedItem = { date: string; type: string; title: string; subtitle?: string; color: string };
                       const feed: FeedItem[] = [];
                       for (const t of (profile.relatedTasks || [])) {
-                        feed.push({ date: t.dueDate || (t as any).createdAt || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });
+                        feed.push({ date: t.dueDate || (t as any).createdAt || '', type: 'task', title: t.title, subtitle: t.status, color: tone('265 72%') });
                       }
                       for (const ev of (profile.relatedEvents || [])) {
-                        feed.push({ date: (ev as any).date || '', type: 'event', title: (ev as any).title, subtitle: (ev as any).time, color: '#3b82f6' });
+                        feed.push({ date: (ev as any).date || '', type: 'event', title: (ev as any).title, subtitle: (ev as any).time, color: tone('205 80%') });
                       }
                       for (const e of (profile.relatedExpenses || [])) {
-                        feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `$${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
+                        feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: formatCurrency(Number(e.amount) || 0), color: tone('38 92%') });
                       }
                       if (feed.length === 0) {
                         return (
-                          <div className="text-center py-10 rounded-xl border border-dashed border-border/60 bg-muted/10">
-                            <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-                            <p className="text-sm text-muted-foreground">No activity yet</p>
-                            <p className="text-xs text-muted-foreground/70 mt-0.5">Linked tasks, events, and expenses will appear here</p>
-                          </div>
+                          <EmptyState icon={Activity} label="No activity yet" hint="Linked tasks, events, and expenses will appear here." className="rounded-xl border border-dashed border-border/60" />
                         );
                       }
                       const upcoming: FeedItem[] = [];
@@ -13872,11 +13697,7 @@ export default function ProfileDetailPage() {
                     <TrackersTab trackers={ownTrackers} profileId={profile.id} onChanged={handleSaved} />
                   ) : (
                     <Card>
-                      <CardContent className="py-8 text-center">
-                        <Activity className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-                        <p className="text-sm text-muted-foreground">No trackers linked to this profile</p>
-                        <p className="text-xs text-muted-foreground mt-1">Create trackers via chat or the Linked page, then link them here</p>
-                      </CardContent>
+                      <EmptyState icon={Activity} label="No trackers linked to this profile" hint="Create trackers via chat or the Linked page, then link them here." accent="190 75% 50%" />
                     </Card>
                   )}
                 </TabsContent>
@@ -13979,7 +13800,7 @@ export default function ProfileDetailPage() {
                       </section>
                       <section>
                         <h3 className="micro-label text-muted-foreground mb-3 px-0.5">Bills &amp; expenses</h3>
-                        <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} />
+                        <FinancesTab profile={profile} profileId={profile.id} onChanged={handleSaved} hideLoanSections />
                       </section>
                     </>
                   )}
@@ -14058,23 +13879,20 @@ export default function ProfileDetailPage() {
                     const feed: Array<{date: string; type: string; title: string; subtitle?: string; color: string}> = [];
                     
                     for (const e of (profile.relatedExpenses || [])) {
-                      feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: `$${Number(e.amount).toFixed(2)}`, color: '#f59e0b' });
+                      feed.push({ date: e.date || (e as any).createdAt || '', type: 'expense', title: e.description || 'Expense', subtitle: formatCurrency(Number(e.amount) || 0), color: tone('38 92%') });
                     }
                     for (const t of (profile.relatedTasks || [])) {
-                      feed.push({ date: (t as any).createdAt || t.dueDate || '', type: 'task', title: t.title, subtitle: t.status, color: '#8b5cf6' });
+                      feed.push({ date: (t as any).createdAt || t.dueDate || '', type: 'task', title: t.title, subtitle: t.status, color: tone('265 72%') });
                     }
                     for (const ev of (profile.relatedEvents || [])) {
-                      feed.push({ date: (ev as any).date || '', type: 'event', title: (ev as any).title, subtitle: (ev as any).time, color: '#3b82f6' });
+                      feed.push({ date: (ev as any).date || '', type: 'event', title: (ev as any).title, subtitle: (ev as any).time, color: tone('205 80%') });
                     }
                     
                     feed.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
                     
                     if (feed.length === 0) {
                       return (
-                        <div className="text-center py-8">
-                          <Activity className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
-                          <p className="text-xs text-muted-foreground">No activity yet</p>
-                        </div>
+                        <EmptyState icon={Activity} label="No activity yet" hint="Linked tasks and events will appear here." />
                       );
                     }
                     
