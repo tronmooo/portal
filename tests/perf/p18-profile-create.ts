@@ -19,6 +19,6 @@ if (person) { await page.click(`[data-testid=${person}]`); console.log("dialog a
 }
 // rapid filter changes on finance
 await goto(ctx, "/finance", "finance"); ctx.mark(); await page.evaluate(() => { (window as any).__lt = []; }); const t1 = T();
-for (const v of ["month", "30d", "year", "all", "month", "all"]) { await page.click("[data-testid=select-expense-range]"); await page.waitForTimeout(80); await page.locator("[role=option]", { hasText: new RegExp(v === "30d" ? "30" : v, "i") }).first().click().catch(() => page.keyboard.press("Escape")); await page.waitForTimeout(120); }
+for (const v of ["month", "30d", "year", "all", "month", "all"]) { await page.click(`[data-testid=select-expense-range-${v}]`); await page.waitForTimeout(200); }
 console.log(`rapid range changes wall ${T() - t1}ms`); report(ctx, "rapid range filter"); await perf(ctx, "rapid filters");
 await ctx.browser.close();

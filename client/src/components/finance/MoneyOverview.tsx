@@ -11,7 +11,7 @@ import { formatMoney, formatMoneyRound, metricValueSize } from "@/lib/format";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, Cell,
+  ComposedChart, Bar, Line, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, CartesianGrid, ReferenceLine,
 } from "recharts";
 import {
   ShoppingCart, Utensils, Car, HeartPulse, Home, Zap, Film, CreditCard, Package,
@@ -22,7 +22,10 @@ import { dayLabel } from "@shared/now-rank";
 import { categoryLabel } from "@shared/category-canon";
 import { UPCOMING_BILL_WINDOW_DAYS, UPCOMING_BILLS_EMPTY_COPY, selectUpcomingBills } from "@shared/obligation-windows";
 import { savingsRatePct } from "@shared/expense-ledger";
-import { Medallion } from "@/components/dashboard/visuals";
+import { Medallion, MiniBars } from "@/components/dashboard/visuals";
+import { AreaChart } from "@/components/tracker-viz";
+import { accentScope, tone } from "@/components/tracker-detail";
+import { CategoryBreakdown, FINANCE_HS, rankSlices, axisDollars } from "./finance-visuals";
 import { SectionHeading } from "@/components/ui/section-heading";
 
 export interface MoneyBill {
@@ -41,42 +44,10 @@ const money2 = formatMoneyRound;
 // totals above them share ONE formatter so a column visually sums).
 const moneyExact = formatMoney;
 
-function Sparkline({ series }: { series: number[] }) {
-  if (!series || series.length < 2) return null;
-  const w = 240, h = 44, pad = 3;
-  const min = Math.min(...series), max = Math.max(...series);
-  const span = max - min || 1;
-  const pts = series.map((v, i) => {
-    const x = pad + (i / (series.length - 1)) * (w - pad * 2);
-    const y = h - pad - ((v - min) / span) * (h - pad * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-  const up = series[series.length - 1] >= series[0];
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-11" preserveAspectRatio="none" aria-hidden="true">
-      <polyline points={pts} fill="none" stroke={up ? "hsl(155 60% 48%)" : "hsl(0 70% 55%)"} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function budgetTone(pct: number): { bar: string; text: string; ring: string } {
   if (pct > 100) return { bar: "bg-red-500", text: "text-red-500", ring: "border-red-500/40 bg-red-500/5" };
   if (pct >= 85) return { bar: "bg-amber-500", text: "text-amber-500", ring: "border-amber-500/40 bg-amber-500/5" };
   return { bar: "bg-emerald-500", text: "text-emerald-500", ring: "border-emerald-500/30 bg-emerald-500/5" };
-}
-
-// Mini bar chart for KPI cards (spend / income / bills) — matches the
-// reference's per-card mini charts.
-function MiniBars({ series, color }: { series: number[]; color: string }) {
-  if (!series || series.length === 0) return null;
-  const max = Math.max(...series, 1);
-  return (
-    <div className="flex items-end gap-[2px] h-8 mt-1.5" aria-hidden="true">
-      {series.map((v, i) => (
-        <div key={i} className="flex-1 rounded-[1px]" style={{ height: `${Math.max(8, (v / max) * 100)}%`, background: `hsl(${color} / ${0.45 + 0.55 * (v / max)})` }} />
-      ))}
-    </div>
-  );
 }
 
 // One compact KPI card: label, big value, trend %, mini chart, color, click.
@@ -115,9 +86,13 @@ function KpiCard({ label, value, icon, trend, tone, trendTone, series, chartKind
         style={{ color: `hsl(${color})`, fontSize: `${metricValueSize(value)}px` }}>{value}</div>
       {trend && <div className="text-[11px] font-semibold mt-1" style={{ color: `hsl(${trendColor})` }}>{trend}</div>}
       {sub && <div className="text-[11px] text-muted-foreground mt-1 break-words line-clamp-2" title={sub}>{sub}</div>}
+      {/* The shared mini charts (dashboard MiniBars, tracker-viz AreaChart) —
+          this card used to carry its own copies of both. A line rising over
+          the period is green, a falling one red. */}
       {hasChart && (chartKind === "bars"
-        ? <MiniBars series={series!} color={color} />
-        : <div className="mt-2"><Sparkline series={series!} /></div>)}
+        ? <MiniBars values={series!} accent={color} height={32} className="mt-2" />
+        : <div className="mt-2 -mx-1"><AreaChart values={series!} height={40}
+            color={series![series!.length - 1] >= series![0] ? "hsl(155 60% 45%)" : "hsl(0 72% 55%)"} /></div>)}
     </button>
   );
 }
@@ -248,17 +223,18 @@ export function MoneyOverview(props: {
   // and the dashboard MONEY card all render this selection (F-54).
   const bills = selectUpcomingBills(props.bills);
   const billsTotal = bills.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-  // Sorted category breakdown with % of total spend.
-  const catTotal = Object.values(spendByCategory).reduce((s, v) => s + (Number(v) || 0), 0) || 1;
-  const categories = Object.entries(spendByCategory)
-    .map(([name, amt]) => ({ name, amount: Number(amt) || 0, pct: (Number(amt) || 0) / catTotal }))
-    .filter(c => c.amount > 0)
-    .sort((a, b) => b.amount - a.amount)
-    .slice(0, 8);
-  const CAT_COLORS = ["199 89% 60%", "155 65% 45%", "38 96% 54%", "262 80% 66%", "330 80% 62%", "173 60% 44%", "0 72% 58%", "240 10% 60%"];
+  // Ranked category slices with their share of spend. Past seven categories
+  // the tail folds into one "Other" slice — it used to be cut off at eight
+  // with nothing saying the rest existed.
+  const { slices: categories, total: catTotal } = rankSlices(
+    Object.entries(spendByCategory).map(([name, amt]) => ({ key: name, label: categoryLabel(name), amount: Number(amt) || 0 })),
+    { max: 8 },
+  );
 
   return (
-    <div className="space-y-3" data-testid="money-overview">
+    // .td-scope + the Finance accent: the tracker-popup look (tone() lightness,
+    // segmented controls, meters) for every visual inside.
+    <div className="td-scope space-y-3" style={accentScope(FINANCE_HS.accent, FINANCE_HS.accent2)} data-testid="money-overview">
       {/* Top KPI cards — each opens a drill-down popup or filters. */}
       <div className="flex flex-wrap gap-2">
         <KpiCard label="Net Worth" icon={Wallet} value={money(netWorth)} tone={netWorth < 0 ? "neg" : "pos"}
@@ -311,22 +287,12 @@ export function MoneyOverview(props: {
             <EmptyState tone="good" icon={PieChart} label="Nothing spent yet this month"
               hint="Categories appear here as expenses come in." />
           ) : (
-            <div className="space-y-1.5">
-              {categories.map((c, i) => (
-                <button key={c.name} onClick={() => onCategoryClick?.(c.name)}
-                  className="w-full text-left group" data-testid={`money-cat-${c.name}`}>
-                  <div className="flex items-baseline gap-2 text-xs">
-                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: `hsl(${CAT_COLORS[i % CAT_COLORS.length]})` }} />
-                    <span className="truncate group-hover:text-foreground">{categoryLabel(c.name)}</span>
-                    <span className="ml-auto tabular-nums font-semibold">{money(c.amount)}</span>
-                    <span className="tabular-nums text-muted-foreground w-10 text-right">{(c.pct * 100).toFixed(1)}%</span>
-                  </div>
-                  <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full" style={{ width: `${Math.min(100, c.pct * 100)}%`, background: `hsl(${CAT_COLORS[i % CAT_COLORS.length]})` }} />
-                  </div>
-                </button>
-              ))}
-            </div>
+            <CategoryBreakdown
+              slices={categories} total={catTotal} format={money} centerLabel={`Spent · ${monthLabel}`}
+              onSelect={onCategoryClick ? (key) => onCategoryClick(key) : undefined}
+              rowTestId={(key) => `money-cat-${key}`}
+              selectHint={onCategoryClick ? "Tap a category to filter your expenses" : undefined}
+            />
           )}
         </Card>
       </div>
@@ -337,26 +303,42 @@ export function MoneyOverview(props: {
           <SectionHeading title="Cash Flow Trend" icon={BarChart3} accent="199 89% 60%"
             meta={
             <span className="flex items-center gap-3 text-[11px] text-muted-foreground">
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500" />In</span>
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500" />Out</span>
-              <span className="flex items-center gap-1"><span className="w-3 h-[2px] bg-sky-400" />Net</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: tone(FINANCE_HS.income) }} />In</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: tone(FINANCE_HS.expense) }} />Out</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-[2px]" style={{ background: tone(FINANCE_HS.net) }} />Net</span>
             </span>
             }
           />
-          <div className="h-48 w-full">
+          {/* Income vs spending per month with the net as a line: did each month
+              end ahead? The latest month is still in progress. */}
+          <div className="h-52 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={trendData} margin={{ top: 6, right: 4, left: -18, bottom: 0 }}>
-                <XAxis dataKey="month" tick={{ fontSize: 10 }} axisLine={false} tickLine={false} stroke="hsl(var(--muted-foreground))" />
-                <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} stroke="hsl(var(--muted-foreground))"
-                  tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v))} />
+              <ComposedChart data={trendData} margin={{ top: 6, right: 4, left: -10, bottom: 0 }} barGap={2}>
+                <defs>
+                  <linearGradient id="mo-in" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={tone(FINANCE_HS.income)} stopOpacity={0.95} />
+                    <stop offset="100%" stopColor={tone(FINANCE_HS.income)} stopOpacity={0.5} />
+                  </linearGradient>
+                  <linearGradient id="mo-out" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={tone(FINANCE_HS.expense)} stopOpacity={0.95} />
+                    <stop offset="100%" stopColor={tone(FINANCE_HS.expense)} stopOpacity={0.5} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} stroke="hsl(var(--muted-foreground))" />
+                <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false} stroke="hsl(var(--muted-foreground))" width={44}
+                  tickFormatter={axisDollars} />
+                <ReferenceLine y={0} stroke="hsl(var(--border))" />
                 <RTooltip
-                  contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
+                  cursor={{ fill: "hsl(var(--muted) / 0.5)" }}
+                  contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 10, fontSize: 12 }}
                   formatter={(v: number, n: string) => [money(Number(v)), n]} />
                 {/* No entrance animation: a re-render on scroll replayed the
                     bars growing from zero, so the chart flickered (F-64). */}
-                <Bar dataKey="inflow" name="In" fill="hsl(155 60% 45%)" radius={[2, 2, 0, 0]} maxBarSize={22} isAnimationActive={false} />
-                <Bar dataKey="outflow" name="Out" fill="hsl(0 72% 58%)" radius={[2, 2, 0, 0]} maxBarSize={22} isAnimationActive={false} />
-                <Line dataKey="net" name="Net" type="monotone" stroke="hsl(199 89% 60%)" strokeWidth={2} dot={{ r: 2 }} isAnimationActive={false} />
+                <Bar dataKey="inflow" name="In" fill="url(#mo-in)" radius={[5, 5, 1, 1]} maxBarSize={20} isAnimationActive={false} />
+                <Bar dataKey="outflow" name="Out" fill="url(#mo-out)" radius={[5, 5, 1, 1]} maxBarSize={20} isAnimationActive={false} />
+                <Line dataKey="net" name="Net" type="monotone" stroke={tone(FINANCE_HS.net)} strokeWidth={2.5}
+                  dot={{ r: 3, strokeWidth: 0, fill: tone(FINANCE_HS.net) }} activeDot={{ r: 4 }} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>

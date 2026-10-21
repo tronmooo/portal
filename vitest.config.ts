@@ -99,6 +99,7 @@ export default defineConfig({
       'tests/field-label.test.ts',
       'tests/profile-fields.test.ts',
       'tests/money-overview.test.tsx',
+      'tests/finance-visuals.test.ts',
       'tests/money-popups.test.tsx',
       'tests/entity-classify.test.ts',
       'tests/recurring-dates.test.ts',

@@ -51,7 +51,7 @@ import { Link } from "wouter";
 import { isNetWorthLiabilityProfile, resolveLiabilityBalance } from "@shared/asset-value";
 import { isAmortizable } from "@shared/liability-types";
 import { resolveAnnualRate } from "@shared/liability-calc";
-import { sumExpenses, spendByCategory, savingsRatePct } from "@shared/expense-ledger";
+import { sumExpenses, spendByCategory, savingsRatePct, monthlySpend } from "@shared/expense-ledger";
 import { loanPayoff, loanStoredTermMonths } from "@shared/loan-facts";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { ActiveFilterNotice } from "@/components/ActiveFilterNotice";
@@ -68,16 +68,23 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  Cell,
+  CartesianGrid,
 } from "recharts";
+import { TimeRangeSelector } from "@/components/ui/time-range";
+import { accentScope, tone, SectionTitle } from "@/components/tracker-detail";
+import { CategoryBreakdown, FINANCE_HS, rankSlices, trendMonths, periodLabel, axisDollars } from "@/components/finance/finance-visuals";
 
-const categoryColors: Record<string, string> = {
-  food: "hsl(var(--chart-1))",
-  pet: "hsl(var(--chart-4))",
-  transport: "hsl(var(--chart-2))",
-  health: "hsl(var(--chart-3))",
-  entertainment: "hsl(var(--chart-5))",
-  general: "hsl(var(--primary))",
+// The Expenses card's date range. A view of the list held in page state —
+// never persisted (rule 4), and named in the ActiveFilterNotice when it hides rows.
+type ExpenseRange = "all" | "month" | "30d" | "year";
+const EXPENSE_RANGE_OPTIONS: ReadonlyArray<{ value: ExpenseRange; label: string }> = [
+  { value: "all", label: "All time" },
+  { value: "month", label: "This month" },
+  { value: "30d", label: "30 days" },
+  { value: "year", label: "This year" },
+];
+const EXPENSE_RANGE_LABEL: Record<ExpenseRange, string> = {
+  all: "All time", month: "This month", "30d": "Last 30 days", year: "This year",
 };
 
 // ONE expense vocabulary for this page: shared/category-canon's
@@ -210,7 +217,7 @@ export default function FinancePage() {
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortBy, setSortBy] = useState<ExpenseSort>(() => { try { return (localStorage.getItem("portol_exp_sort") as ExpenseSort) || "date-desc"; } catch { return "date-desc"; } });
-  const [dateRange, setDateRange] = useState<"all" | "month" | "30d" | "year">("all");
+  const [dateRange, setDateRange] = useState<ExpenseRange>("all");
   useEffect(() => { try { localStorage.removeItem("portol_exp_cat"); localStorage.removeItem("portol_exp_range"); } catch {} }, []);
   useEffect(() => { try { localStorage.setItem("portol_exp_sort", sortBy); } catch {} }, [sortBy]);
   const [addOpen, setAddOpen] = useState(false);
@@ -1004,7 +1011,20 @@ export default function FinancePage() {
   // Canonical keys, so a row saved as "automotive" and one saved as "vehicle"
   // are one bar rather than two.
   const byCategory = useMemo(() => spendByCategory(filtered, { keyOf: canonicalExpenseCategory }), [filtered]);
-  const chartData = useMemo(() => Object.entries(byCategory).map(([name, amount]) => ({ name: categoryLabel(name), amount: Number(amount.toFixed(2)) })).sort((a, b) => a.name.localeCompare(b.name)), [byCategory]);
+  // Donut slices: the same canonical buckets, ranked, the tail folded into "Other".
+  const categorySlices = useMemo(() => rankSlices(
+    Object.entries(byCategory).map(([key, amount]) => ({ key, label: categoryLabel(key), amount })),
+    { max: 7 },
+  ), [byCategory]);
+  // Spending per month for the same filtered set — each bucket summed by the
+  // ONE ledger calc (shared/expense-ledger monthlySpend).
+  const monthlyData = useMemo(() => trendMonths(dateRange, localTodayISO())
+    .map((ym) => ({ key: ym, label: periodLabel(ym), amount: Math.round(monthlySpend(filtered, ym) * 100) / 100 })), [filtered, dateRange]);
+  const activeExpenseFilters = [
+    ...(filterCategory !== "all" ? [categoryLabel(filterCategory as any)] : []),
+    ...(dateRange !== "all" ? [EXPENSE_RANGE_LABEL[dateRange]] : []),
+    ...(searchQuery.trim() ? [`"${searchQuery.trim()}"`] : []),
+  ];
   // The filter offers the canonical buckets actually present in the data — so
   // every option it lists is one the Add and Edit forms can also produce.
   const categories = useMemo(
@@ -1485,35 +1505,58 @@ export default function FinancePage() {
         );
       })()}
 
-      {chartData.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">Spending by Category</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData}>
-                  <XAxis dataKey="name" tick={{ fontSize: 12 }} className="capitalize" />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `$${v}`} />
-                  <Tooltip
-                    formatter={(v: number) => [`$${v.toFixed(2)}`, "Amount"]}
-                    contentStyle={{
-                      background: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px",
-                      fontSize: "12px",
-                    }}
-                  />
-                  <Bar dataKey="amount" radius={[6, 6, 0, 0]} isAnimationActive={false}>
-                    {chartData.map((entry) => (
-                      <Cell key={entry.name} fill={categoryColors[entry.name] || categoryColors.general} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
+      {/* Spending by category for exactly the rows the Expenses list shows:
+          a donut + ranked meters, then the same set by month. The header names
+          every active filter, so a narrowed chart never passes for "all". */}
+      {categorySlices.slices.length > 0 && (
+        <Card className="p-4" data-testid="expense-category-chart">
+          <div className="td-scope space-y-4" style={accentScope(FINANCE_HS.accent, FINANCE_HS.accent2)}>
+            <SectionTitle
+              title="Spending by Category"
+              hint={`${formatMoney(total)} · ${activeExpenseFilters.length > 0 ? activeExpenseFilters.join(" · ") : "All time"} · manual ledger`}
+            />
+            <CategoryBreakdown
+              slices={categorySlices.slices}
+              total={categorySlices.total}
+              format={formatMoney}
+              centerLabel="Spent"
+              onSelect={(key) => { setFilterCategory(key); }}
+              rowTestId={(key) => `expense-cat-${key}`}
+              selectHint={filterCategory === "all" ? "Tap a category to filter the list below" : undefined}
+              testId="expense-category-breakdown"
+            />
+            {monthlyData.some((m) => m.amount > 0) && (
+              <div data-testid="expense-month-chart">
+                <p className="micro-label text-muted-foreground mb-1.5">By month</p>
+                <div className="h-40">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={monthlyData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="exp-month" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={tone(FINANCE_HS.expense)} stopOpacity={0.95} />
+                          <stop offset="100%" stopColor={tone(FINANCE_HS.expense)} stopOpacity={0.45} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
+                      <XAxis dataKey="label" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} stroke="hsl(var(--muted-foreground))" />
+                      <YAxis tick={{ fontSize: 11 }} axisLine={false} tickLine={false} width={44} stroke="hsl(var(--muted-foreground))" tickFormatter={axisDollars} />
+                      <Tooltip
+                        cursor={{ fill: "hsl(var(--muted) / 0.5)" }}
+                        formatter={(v: number) => [formatMoney(Number(v)), "Spent"]}
+                        contentStyle={{
+                          background: "hsl(var(--popover))",
+                          border: "1px solid hsl(var(--border))",
+                          borderRadius: "10px",
+                          fontSize: "12px",
+                        }}
+                      />
+                      <Bar dataKey="amount" fill="url(#exp-month)" radius={[6, 6, 2, 2]} maxBarSize={28} isAnimationActive={false} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+          </div>
         </Card>
       )}
 
@@ -1541,7 +1584,7 @@ export default function FinancePage() {
                           {parent && <span className="text-xs text-muted-foreground truncate">{parent.name}</span>}
                         </div>
                       </div>
-                      {cost > 0 && <span className="text-sm font-semibold tabular-nums shrink-0">${cost.toFixed(2)}</span>}
+                      {cost > 0 && <span className="text-sm font-semibold tabular-nums shrink-0">{formatMoney(cost)}</span>}
                     </div>
                   </Link>
                 );
@@ -1587,6 +1630,17 @@ export default function FinancePage() {
               <Plus className="h-3.5 w-3.5 mr-1" /> Add Expense
             </Button>
           </div>
+          {/* Date range: the shared segmented time-frame control. */}
+          <div className="td-scope flex items-center gap-2 min-w-0" style={accentScope(FINANCE_HS.accent, FINANCE_HS.accent2)}>
+            <CalendarDays className="h-3.5 w-3.5 text-muted-foreground shrink-0" aria-hidden="true" />
+            <TimeRangeSelector
+              value={dateRange}
+              options={EXPENSE_RANGE_OPTIONS}
+              onChange={setDateRange}
+              label="Expense date range"
+              testId="select-expense-range"
+            />
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative flex-1 min-w-[160px]">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
@@ -1624,18 +1678,6 @@ export default function FinancePage() {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={dateRange} onValueChange={(v) => setDateRange(v as typeof dateRange)}>
-              <SelectTrigger className="flex-1 min-w-[120px] sm:w-[130px] sm:flex-none h-8 text-xs" data-testid="select-expense-range">
-                <CalendarDays className="h-3 w-3 mr-1" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All time</SelectItem>
-                <SelectItem value="month">This month</SelectItem>
-                <SelectItem value="30d">Last 30 days</SelectItem>
-                <SelectItem value="year">This year</SelectItem>
-              </SelectContent>
-            </Select>
             <Select value={sortBy} onValueChange={(v) => setSortBy(v as typeof sortBy)}>
               <SelectTrigger className="flex-1 min-w-[130px] sm:w-[150px] sm:flex-none h-8 text-xs" data-testid="select-expense-sort">
                 <ArrowUpDown className="h-3 w-3 mr-1" />
@@ -1663,11 +1705,7 @@ export default function FinancePage() {
                     shown={filtered.length}
                     total={profileFiltered.length}
                     noun={{ one: "expense", many: "expenses" }}
-                    labels={[
-                      ...(filterCategory !== "all" ? [categoryLabel(filterCategory as any)] : []),
-                      ...(dateRange !== "all" ? [dateRange === "month" ? "This month" : dateRange === "30d" ? "Last 30 days" : "This year"] : []),
-                      ...(searchQuery.trim() ? [`"${searchQuery.trim()}"`] : []),
-                    ]}
+                    labels={activeExpenseFilters}
                     onClear={() => { setFilterCategory("all"); setDateRange("all"); setSearchQuery(""); }}
                     testId="expenses-active-filter"
                   />
