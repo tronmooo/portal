@@ -128,6 +128,12 @@ export function stableStringify(v: unknown): string {
   return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify((v as any)[k])}`).join(",")}}`;
 }
 
+const PLACEHOLDER_RE = /^(unknown|unk|n\/?a|tbd|not sure|\?+|-+)$/i;
+/** A stored value that only says the fact is unknown. */
+export function isPlaceholderValue(v: unknown): boolean {
+  return typeof v === "string" && PLACEHOLDER_RE.test(v.trim());
+}
+
 function normalizeScalar(v: unknown): string | number | boolean | null {
   if (v == null) return null;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -135,6 +141,10 @@ function normalizeScalar(v: unknown): string | number | boolean | null {
   if (typeof v === "string") {
     const s = v.trim().replace(/\s+/g, " ");
     if (!s) return null;
+    // "unknown" / "n/a" is the absence of a fact, not a fact: kept, it would
+    // block the research from filling the real value (a VIN-decoded trim)
+    // and be sent to the market as if it described the thing.
+    if (PLACEHOLDER_RE.test(s)) return null;
     // A numeric string is the same fact as the number.
     if (/^-?\$?[\d,]+(\.\d+)?$/.test(s)) { const n = parseMoney(s); if (Number.isFinite(n)) return n; }
     return s.length > 160 ? s.slice(0, 160) : s;

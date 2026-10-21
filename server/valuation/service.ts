@@ -37,6 +37,7 @@ import {
   errorRecord,
   isAutoValuationEnabled,
   isEstimatorOwnedValue,
+  isPlaceholderValue,
   planValuation,
   scheduleNextRefresh,
   VALUATION_MODEL_VERSION,
@@ -50,7 +51,11 @@ import { runProviders } from "./providers/registry";
 import { loadCachedUnderstanding, resolveUnderstanding } from "./understanding";
 import { MS_PER_HOUR } from "@shared/valuation/planner";
 
-export const VALUATION_LOCK_TTL_MS = 90_000;
+// Itemized market research runs several web searches; the lock outlives the
+// whole provider budget so a second open joins the run instead of starting one.
+export const VALUATION_LOCK_TTL_MS = 180_000;
+/** Wall-clock budget for all providers together (the refresh routes run on the 300s AI function). */
+export const VALUATION_PROVIDER_BUDGET_MS = 120_000;
 export function valuationLockName(profileId: string): string { return `valuation:${profileId}`; }
 
 /** Profiles the valuation system values: owned things (the Assets tab set). */
@@ -255,7 +260,9 @@ function specFillsFrom(evidence: ValuationRecord["evidence"], fields: Record<str
     if (!specs || typeof specs !== "object") continue;
     for (const [k, v] of Object.entries(specs)) {
       const existing = fields?.[k];
-      if (existing === undefined || existing === null || String(existing).trim() === "") out[k] = v;
+      // Empty, or a stored "unknown": the decoded/researched fact replaces the placeholder.
+      if (k in out) continue;
+      if (existing === undefined || existing === null || String(existing).trim() === "" || isPlaceholderValue(existing)) out[k] = v;
     }
   }
   return out;
@@ -348,7 +355,7 @@ export async function refreshValuation(
 
     const internal = deriveInternalEvidence(ctx, plan, now);
     const external = plan.needsExternal
-      ? await trace.measure("providers", () => runProviders(ctx, plan, now, { overallTimeoutMs: opts.providerBudgetMs ?? 40_000 }))
+      ? await trace.measure("providers", () => runProviders(ctx, plan, now, { overallTimeoutMs: opts.providerBudgetMs ?? VALUATION_PROVIDER_BUDGET_MS }))
       : { evidence: [], failures: {}, succeeded: [], elapsedMs: 0 };
     trace.set("providers", plan.providers.join(","));
     const evidence = [...internal, ...external.evidence];

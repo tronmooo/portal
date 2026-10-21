@@ -124,6 +124,9 @@ async function throwIfResNotOk(res: Response) {
 const DEFAULT_TIMEOUT_MS = 60000; // 60s timeout — long enough for document file fetches (base64 PDFs/images can be MBs) but bounded so a truly hung request can't freeze the UI forever
 const DOC_TIMEOUT_MS = 90000; // 90s for document binary fetches — file_data can be very large
 const CHAT_TIMEOUT_MS = 170000; // 170s for chat — heavy multi-action queries make several AI rounds. Server function budget (vercel.json maxDuration) is 300s, so the client waits comfortably longer than a typical heavy request instead of aborting at the old 120s while the server was still working.
+// Valuation refresh / Look up value: itemized market research runs several web
+// searches on the 300s AI function (vercel.json rewrites these two routes).
+const VALUATION_TIMEOUT_MS = 150000;
 const SEARCH_TIMEOUT_MS = 15000; // 15s for ⌘K search — must fail fast with an error state, never spin for the full 60s default.
 
 export async function apiRequest(
@@ -136,6 +139,7 @@ export async function apiRequest(
     // Search must fail fast: a spinner that hangs for the full 60s default reads
     // as "search is broken". 15s is well beyond a healthy query yet bounded.
     : (url.includes('/api/search')) ? SEARCH_TIMEOUT_MS
+    : (/\/api\/profiles\/[^/]+\/(valuation\/refresh|lookup-value)/.test(url)) ? VALUATION_TIMEOUT_MS
     : DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);

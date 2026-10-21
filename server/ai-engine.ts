@@ -627,7 +627,10 @@ async function perplexityValuation(
   const propertyHint = profile.type === "property"
     ? `\nThis is a specific residential address: look up the automated valuation estimates for the EXACT address (Zillow Zestimate, Redfin Estimate, Realtor.com, Homes.com), drop the single farthest outlier, and center your value and band on the remaining cluster. Also read the property's own listing/AVM pages for its specifications (square footage, bed/bath count, lot size, year built, prior sale) and check recent comparable sales in the immediate neighborhood — report the specs you find in "specs" and the URLs in "sources".`
     : "";
-  const userMsg = `Determine the current US market resale value of the ${profile.type} described below. Search current listings and pricing sources (eBay, Swappa, KBB, Edmunds, Zillow, CARFAX, etc.).${propertyHint}\n\n${dossier}\n\n${VALUATION_RESPONSE_SPEC}`;
+  // The value asked for is FAIR MARKET VALUE — what it would actually sell for
+  // between private parties. Asked for a "resale value", the model quoted
+  // dealer asking prices (a 2021 CR-V at 69k miles came back at $28,500).
+  const userMsg = `Determine the current US fair market value of the ${profile.type} described below: the price it would actually sell for today between a willing private buyer and seller (for a vehicle, the private-party value for its exact trim and mileage — NOT a dealer's retail asking price; asking prices run above sale prices). Search pricing guides, completed sales and current listings (KBB, Edmunds, eBay sold, Swappa, Zillow, CARFAX, etc.).${propertyHint}\n\n${dossier}\n\n${VALUATION_RESPONSE_SPEC}`;
   // sonar-pro has materially better retrieval than base sonar for exact-item
   // lookups (it finds the property's own listing pages with sqft/beds/lot,
   // where base sonar often stops at metro-level numbers). Falls back to base
