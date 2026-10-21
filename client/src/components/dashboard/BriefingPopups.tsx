@@ -29,6 +29,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { QuickAddDialog } from "@/components/dashboard/quick-add/QuickAddDialog";
+import { StatTile } from "@/components/tracker-detail";
+import { EmptyState } from "@/components/ui/empty-state";
 import { formatMoney } from "@/lib/format";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useShowTestData } from "@/lib/showTestData";
@@ -133,9 +135,21 @@ function PopupShell({ open, onClose, title, icon, accent, count, subtitle, foote
   );
 }
 
-const EmptyNote = ({ label }: { label: string }) => (
-  <p className="text-xs text-muted-foreground py-4 text-center">{label}</p>
-);
+/** Label/value detail rows — two columns at a readable 12px, one fact per row. */
+type DetailRow = [React.ReactNode, React.ReactNode, string?] | false | null | undefined | "";
+function DetailRows({ rows }: { rows: DetailRow[] }) {
+  const shown = rows.filter(Boolean) as Array<[React.ReactNode, React.ReactNode, string?]>;
+  return (
+    <dl className="divide-y divide-border/30">
+      {shown.map(([label, value, valueCls], i) => (
+        <div key={i} className="flex items-baseline justify-between gap-3 py-1.5 text-[12px]">
+          <dt className="text-muted-foreground shrink-0">{label}</dt>
+          <dd className={`text-right min-w-0 break-words ${valueCls ?? "text-foreground"}`}>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 /** Tiny labelled chip for type/category/status metadata. */
 function Chip({ children, tone }: { children: React.ReactNode; tone?: "neg" | "warn" | "pos" | "muted" }) {
@@ -146,34 +160,42 @@ function Chip({ children, tone }: { children: React.ReactNode; tone?: "neg" | "w
   return <span className={`inline-flex items-center gap-0.5 text-[11px] px-1.5 py-px rounded-full font-medium ${cls}`}>{children}</span>;
 }
 
-/** Small bordered action button used in expanded cards. */
+/** Pill action button for expanded cards, tinted with the popup's accent
+ *  (--td-hs, set by BubbleModal and by BillsView); `danger` is always red. */
 function ActionBtn({ label, icon: Icon, onClick, danger, disabled, testId }: {
   label: string; icon?: any; onClick: () => void; danger?: boolean; disabled?: boolean; testId?: string;
 }) {
+  const style: React.CSSProperties = danger
+    ? { background: "hsl(0 72% 55% / 0.12)", color: "hsl(0 72% 55%)" }
+    : { background: "hsl(var(--td-hs, 155 65%) var(--td-l, 45%) / 0.14)", color: "hsl(var(--td-hs, 155 65%) var(--td-l, 45%))" };
   return (
-    <button onClick={onClick} disabled={disabled} data-testid={testId}
-      className={`inline-flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md border transition-colors disabled:opacity-50 ${
-        danger ? "border-red-500/40 text-red-500 hover:bg-red-500/10" : "border-border hover:bg-muted"}`}>
-      {Icon && <Icon className="h-3 w-3" />}{label}
+    <button type="button" onClick={onClick} disabled={disabled} data-testid={testId} style={style}
+      className="pressable inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-semibold whitespace-nowrap transition-[filter,opacity] hover:brightness-110 disabled:opacity-50">
+      {Icon && <Icon className="h-3.5 w-3.5" />}{label}
     </button>
   );
 }
 
-/** Expandable detail card: dense summary row; tap to reveal detail + actions. */
+/** Urgency colours shared by the document cards and their band headers. */
+const URGENCY_HSL = { red: "0 72% 58%", amber: "38 92% 50%", none: "215 16% 52%" } as const;
+
+/** Expandable detail card: a bubble-row with an urgency accent on its left
+ *  edge (via --accent-hsl); tap to reveal detail + actions. */
 function ExpandCard({ summary, urgentBorder, children, testId }: {
   summary: React.ReactNode; urgentBorder?: "red" | "amber"; children?: React.ReactNode; testId?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const border = urgentBorder === "red" ? "border-l-red-500" : urgentBorder === "amber" ? "border-l-amber-500" : "border-l-transparent";
+  const accent = URGENCY_HSL[urgentBorder ?? "none"];
   return (
-    <div className={`mb-1 rounded-md border border-border/40 border-l-2 ${border} bg-card/50`} data-testid={testId}>
-      <button onClick={() => setOpen(o => !o)} className="w-full text-left px-2.5 py-2 hover:bg-muted/30 rounded-md">
+    <div className="bubble-row relative overflow-hidden mb-1.5" style={{ ["--accent-hsl" as any]: accent }} data-testid={testId}>
+      <span aria-hidden="true" className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r-full" style={{ background: "hsl(var(--accent-hsl))" }} />
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={children ? open : undefined} className="w-full text-left pl-4 pr-3 py-2.5">
         <div className="flex items-start gap-2">
           <div className="flex-1 min-w-0">{summary}</div>
-          {children && <ChevronDown className={`h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />}
+          {children && <ChevronDown className={`h-4 w-4 mt-0.5 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />}
         </div>
       </button>
-      {open && children && <div className="px-2.5 pb-2 pt-0.5 border-t border-border/30">{children}</div>}
+      {open && children && <div className="pl-4 pr-3 pb-3 border-t border-border/30">{children}</div>}
     </div>
   );
 }
@@ -221,28 +243,22 @@ function billVisual(name: any, category: any): { Icon: LucideIcon; hsl: string }
   return hit ? { Icon: hit[1], hsl: hit[2] } : { Icon: Receipt, hsl: "155 65% 45%" };
 }
 
-/** One of the four headline tiles at the top of the popup. */
-function BillStat({ icon: Icon, accent, label, value, sub, testId }: {
-  icon: LucideIcon; accent: string; label: string; value: string; sub: string; testId?: string;
+/** One of the four headline tiles — the tracker popup's StatTile, so the Bills
+ *  header reads like every other drill-down. `accent` is "H S% L%"; StatTile
+ *  takes the "H S%" part and supplies its own theme-aware lightness. */
+function BillStat({ icon, accent, label, value, sub, testId, i }: {
+  icon: LucideIcon; accent: string; label: string; value: string; sub: string; testId?: string; i?: number;
 }) {
+  const hs = accent.trim().split(/\s+/).slice(0, 2).join(" ");
   return (
-    <div className="bubble px-2.5 py-2.5" style={{ ["--accent-hsl" as any]: accent }} data-testid={testId}>
-      <span
-        className="inline-flex h-8 w-8 items-center justify-center rounded-full mb-1.5"
-        style={{ background: `hsl(${accent} / 0.15)`, color: `hsl(${accent})` }}
-        aria-hidden="true"
-      >
-        <Icon className="h-4 w-4" strokeWidth={2.2} />
-      </span>
-      <p className="text-[11px] text-muted-foreground leading-tight">{label}</p>
-      <p className="text-[15px] font-extrabold tabular-nums leading-tight" style={{ color: `hsl(${accent})` }}>{value}</p>
-      <p className="text-[11px] text-muted-foreground leading-tight mt-0.5">{sub}</p>
+    <div className="min-w-0" data-testid={testId}>
+      <StatTile label={label} value={value} basis={sub} icon={icon} hs={hs} i={i} />
     </div>
   );
 }
 
-/** The mock's right-hand status column: a tone badge over a small caption. */
-function BillStatus({ status, daysUntil, paidDate }: { status: string; daysUntil: number | null; paidDate?: string }) {
+/** A bill's status: a tone badge plus a short caption ("in 4 days"). */
+function billStatus(status: string, daysUntil: number | null, paidDate?: string): { label: string; tone: string; sub: string } {
   let label = "Upcoming", tone = "bg-muted text-muted-foreground", sub = "";
   if (status === "paid") {
     label = "Paid"; tone = "bg-emerald-500/15 text-emerald-500";
@@ -259,12 +275,7 @@ function BillStatus({ status, daysUntil, paidDate }: { status: string; daysUntil
   } else if (daysUntil != null) {
     sub = `in ${daysUntil} days`;
   }
-  return (
-    <div className="flex flex-col items-end gap-0.5 shrink-0 w-[86px]">
-      <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${tone}`}>{label}</span>
-      {sub && <span className={`text-[11px] ${label === "Overdue" ? "text-red-500" : "text-muted-foreground"}`}>{sub}</span>}
-    </div>
-  );
+  return { label, tone, sub };
 }
 
 type BillFilter = "all" | "soon" | "overdue" | "paid";
@@ -418,58 +429,56 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
       while (c && c <= end && remaining < 500) { remaining++; c = addFrequency(c, freq); }
     }
     return (
-      <div className="px-3 pb-2.5 pt-1 border-t border-border/30 space-y-1.5 text-[11px]">
-        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 pt-1 text-muted-foreground">
-          <span>Category</span><span className="text-foreground capitalize">{b.category || full.category || "general"}</span>
-          <span>Frequency</span><span className="text-foreground">{FREQ_LABEL[freq] || freq}</span>
-          <span>Status</span>
-          <span className="text-foreground">
-            {b.status === "paid" ? `Paid ${fmtDate(b.paidDate)}`
+      <div className="px-3 pb-3 pt-1 border-t border-border/30 space-y-3">
+        <DetailRows rows={[
+          ["Category", b.category || full.category || "general", "text-foreground capitalize"],
+          ["Frequency", FREQ_LABEL[freq] || freq],
+          ["Status",
+            b.status === "paid" ? `Paid ${fmtDate(b.paidDate)}`
               : b.status === "overdue" ? "Overdue — payment missed"
-              : b.daysUntil === 0 ? "Due today" : "Scheduled"}
-          </span>
-          {due && (<><span>{b.status === "paid" ? "Next due" : "Due date"}</span><span className="text-foreground">{fmtDate(due)}</span></>)}
-          {b.autopay && (<><span>Autopay</span><span className="text-emerald-500">on</span></>)}
-          {full.status === "paused" && (<><span>Series</span><span className="text-amber-500">paused</span></>)}
-          {ownerNames && (<><span>Owner</span><span className="text-foreground">{ownerNames}</span></>)}
-          {remaining !== null && (<><span>Payments left</span><span className="text-foreground">{remaining} (ends {fmtDate(full.recurrenceEnd)})</span></>)}
-          {assetName && (<><span>Linked asset</span><span className="text-foreground">{assetName}</span></>)}
-          {liabilityName && (<><span>Linked liability</span><span className="text-foreground">{liabilityName}</span></>)}
-        </div>
+              : b.daysUntil === 0 ? "Due today" : "Scheduled",
+            b.status === "overdue" ? "text-red-500" : undefined],
+          due && [b.status === "paid" ? "Next due" : "Due date", fmtDate(due)],
+          b.autopay && ["Autopay", "on", "text-emerald-500"],
+          full.status === "paused" && ["Series", "paused", "text-amber-500"],
+          ownerNames && ["Owner", ownerNames],
+          remaining !== null && ["Payments left", `${remaining} (ends ${fmtDate(full.recurrenceEnd)})`],
+          assetName && ["Linked asset", assetName],
+          liabilityName && ["Linked liability", liabilityName],
+        ]} />
         {upcoming.length > 0 && (
           <div>
             <p className="micro-label text-muted-foreground mb-0.5">Upcoming</p>
-            {upcoming.map(d => <div key={d} className="flex justify-between"><span>{fmtDate(d)}</span><span className="tabular-nums">${Number(b.amount).toLocaleString()}</span></div>)}
+            <DetailRows rows={upcoming.map(d => [fmtDate(d), <span className="tabular-nums">{money(Number(b.amount) || 0)}</span>] as DetailRow)} />
           </div>
         )}
         <div>
           <p className="micro-label text-muted-foreground mb-0.5">Payment history</p>
-          {payments.length === 0 ? <p className="text-muted-foreground">No payments recorded yet.</p> :
-            payments.slice(0, 6).map((p: any) => (
-              <div key={p.id} className="flex justify-between">
-                <span>{fmtDate(p.date)}{p.method ? ` · ${p.method}` : ""}</span>
-                <span className="tabular-nums text-emerald-600 dark:text-emerald-400">${Number(p.amount).toLocaleString()}</span>
-              </div>
-            ))}
+          {payments.length === 0 ? <p className="text-[12px] text-muted-foreground py-1.5">No payments recorded yet.</p> :
+            <DetailRows rows={payments.slice(0, 6).map((p: any) => [
+              `${fmtDate(p.date)}${p.method ? ` · ${p.method}` : ""}`,
+              <span className="tabular-nums">{money(Number(p.amount) || 0)}</span>,
+              "text-emerald-600 dark:text-emerald-400",
+            ] as DetailRow)} />}
         </div>
         {editId === b.id ? (
-          <div className="flex items-center gap-1.5 pt-1">
+          <div className="flex items-center flex-wrap gap-2">
             <input type="number" value={editAmount} onChange={e => setEditAmount(e.target.value)} placeholder="Amount"
-              className="w-20 h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`bill-edit-amount-${b.id}`} />
+              className="w-24 h-8 px-2.5 rounded-full border border-border bg-background text-xs" data-testid={`bill-edit-amount-${b.id}`} />
             <input type="date" value={editDue} onChange={e => setEditDue(e.target.value)}
-              className="h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`bill-edit-due-${b.id}`} />
+              className="h-8 px-2.5 rounded-full border border-border bg-background text-xs" data-testid={`bill-edit-due-${b.id}`} />
             <ActionBtn label="Save" icon={Check} disabled={editBill.isPending} testId={`bill-edit-save-${b.id}`}
               onClick={() => editBill.mutate({ id: b.id, ...(editAmount ? { amount: Number(editAmount) } : {}), ...(editDue ? { nextDueDate: editDue } : {}) })} />
             <ActionBtn label="Cancel" onClick={() => setEditId(null)} />
           </div>
         ) : confirmDeleteId === b.id ? (
-          <div className="flex items-center gap-1.5 pt-1">
-            <span className="text-red-500">Delete "{b.name}" and stop tracking it?</span>
+          <div className="flex items-center flex-wrap gap-2">
+            <span className="text-[12px] text-red-500 w-full">Delete "{b.name}" and stop tracking it?</span>
             <ActionBtn label="Delete" icon={Trash2} danger disabled={deleteBill.isPending} onClick={() => deleteBill.mutate(b.id)} testId={`bill-delete-confirm-${b.id}`} />
             <ActionBtn label="Keep" onClick={() => setConfirmDeleteId(null)} />
           </div>
         ) : (
-          <div className="flex items-center flex-wrap gap-1.5 pt-1">
+          <div className="flex items-center flex-wrap gap-2">
             {b.status !== "paid" && (
               <ActionBtn label="Mark as paid" icon={Check} disabled={payBill.isPending} onClick={() => payBill.mutate(b.id)} testId={`popup-pay-${b.id}`} />
             )}
@@ -485,52 +494,76 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
   };
 
   return (
-    <div className="space-y-2" data-testid="bills-view">
-      {/* The four headline stats from the mock. */}
+    <div
+      className="space-y-3"
+      data-testid="bills-view"
+      // The Bills accent for the segmented filter and the action pills, so the
+      // full-page route (no BubbleModal scope around it) matches the popup.
+      style={{ ["--td-hs" as any]: "155 65%", ["--td-hs2" as any]: "155 65%" }}
+    >
+      {/* The four headline stats. */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <BillStat icon={CircleDollarSign} accent="155 65% 45%" label="Total Due" value={money(totalDue)} sub="This Month" testId="bills-stat-total" />
-          <BillStat icon={CalendarDays} accent="262 70% 62%" label="Due Soon" value={money(sum(soonRows))} sub="Next 7 Days" testId="bills-stat-soon" />
-          <BillStat icon={AlertTriangle} accent="25 95% 58%" label="Overdue" value={money(sum(overdueRows))} sub={`${overdueRows.length} Bill${overdueRows.length === 1 ? "" : "s"}`} testId="bills-stat-overdue" />
-          <BillStat icon={CheckCircle2} accent="217 91% 65%" label="Paid" value={money(paidTotal)} sub="This Month" testId="bills-stat-paid" />
+          <BillStat i={0} icon={CircleDollarSign} accent="155 65% 45%" label="Total Due" value={money(totalDue)} sub="This Month" testId="bills-stat-total" />
+          <BillStat i={1} icon={CalendarDays} accent="262 70% 62%" label="Due Soon" value={money(sum(soonRows))} sub="Next 7 Days" testId="bills-stat-soon" />
+          <BillStat i={2} icon={AlertTriangle} accent="25 95% 58%" label="Overdue" value={money(sum(overdueRows))} sub={`${overdueRows.length} Bill${overdueRows.length === 1 ? "" : "s"}`} testId="bills-stat-overdue" />
+          <BillStat i={3} icon={CheckCircle2} accent="217 91% 65%" label="Paid" value={money(paidTotal)} sub="This Month" testId="bills-stat-paid" />
         </div>
 
-        {/* Filter chips. */}
-        <div className="flex items-center gap-1.5 flex-wrap pt-1">
-          {FILTERS.map(f => (
-            <button
-              key={f.id}
-              onClick={() => setFilter(f.id)}
-              data-testid={`bills-filter-${f.id}`}
-              aria-pressed={filter === f.id}
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold transition-colors ${
-                filter === f.id ? "bg-emerald-500/15 text-emerald-500" : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-              }`}
-            >
-              {f.label}
-              {typeof f.count === "number" && f.count > 0 && (
-                <span className={`rounded-full px-1.5 py-px text-[11px] font-bold tabular-nums ${
-                  f.id === "overdue" ? "bg-red-500/20 text-red-500" : f.id === "soon" ? "bg-violet-500/20 text-violet-400" : "bg-muted text-muted-foreground"
-                }`}>{f.count}</span>
-              )}
-            </button>
-          ))}
+        {/* Filter — the shared segmented control, in the popup's accent. */}
+        <div className="max-w-full overflow-x-auto overflow-y-hidden scrollbar-hide">
+          <div className="td-seg" role="group" aria-label="Filter bills">
+            {FILTERS.map(f => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFilter(f.id)}
+                data-testid={`bills-filter-${f.id}`}
+                aria-pressed={filter === f.id}
+                className="td-seg-item"
+              >
+                {f.label}
+                {typeof f.count === "number" && f.count > 0 && (
+                  <span className={`rounded-full px-1.5 py-px text-[11px] font-bold tabular-nums ${
+                    f.id === "overdue" ? "bg-red-500/20 text-red-500" : f.id === "soon" ? "bg-violet-500/20 text-violet-400" : "bg-muted text-muted-foreground"
+                  }`}>{f.count}</span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Rows — tap to expand into the full detail card. */}
         {visible.length === 0 ? (
-          <EmptyNote label={filter === "paid" ? "Nothing paid yet this month." : filter === "overdue" ? "Nothing overdue — nice." : "No bills in this view."} />
+          filter === "all" ? (
+            <EmptyState icon={Receipt} accent="155 65% 45%" label="No bills in the next 30 days"
+              hint="Add a bill to see what's due and when." ctaLabel="Add a bill" onCta={() => setAddOpen(true)} />
+          ) : (
+            // A filter hid the rows — say which one, and offer the way back.
+            <EmptyState
+              icon={filter === "paid" ? CheckCircle2 : filter === "overdue" ? AlertTriangle : CalendarDays}
+              tone={filter === "paid" ? "neutral" : "good"}
+              label={filter === "paid" ? "Nothing paid yet this month" : filter === "overdue" ? "Nothing overdue" : "Nothing due in the next 7 days"}
+              hint={rows.length > 0 ? `${rows.length} bill${rows.length === 1 ? "" : "s"} in All Bills.` : undefined}
+              ctaLabel={rows.length > 0 ? "Show all bills" : undefined}
+              onCta={() => setFilter("all")}
+            />
+          )
         ) : (
           <div className="bubble divide-y divide-border/30 overflow-hidden" style={{ ["--accent-hsl" as any]: "155 65% 45%" }}>
             {visible.map((b: any) => {
               const { Icon, hsl } = billVisual(b.name, b.category || obById.get(b.id)?.category);
               const rowOpen = expandedId === `${filter}:${b.id}`;
               const due = String(b.dueDate || obById.get(b.id)?.nextDueDate || "").slice(0, 10);
+              const st = billStatus(b.status, b.daysUntil, b.paidDate);
+              const when = b.status === "paid" ? "" : due ? fmtDate(due) : "";
+              const caption = [st.sub, when].filter(Boolean).join(" · ");
               return (
                 <div key={`${filter}:${b.id}`} data-testid={`bill-card-${b.id}`} data-record-id={b.id}>
                   <button
+                    type="button"
                     onClick={() => setExpandedId(rowOpen ? null : `${filter}:${b.id}`)}
                     aria-expanded={rowOpen}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors"
+                    className="w-full flex items-center gap-3 px-3 py-3 text-left hover:bg-muted/30 transition-colors"
                     data-testid={`bill-row-${b.id}`}
                   >
                     <span
@@ -541,18 +574,17 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
                       <Icon className="h-[18px] w-[18px]" strokeWidth={2.1} />
                     </span>
                     <span className="flex-1 min-w-0">
-                      <span className="block text-[14px] font-semibold leading-tight truncate">{b.name}</span>
-                      <span className="block text-[11px] text-muted-foreground capitalize truncate mt-0.5">
-                        {b.category || obById.get(b.id)?.category || obById.get(b.id)?.kind || "bill"}
+                      <span className="flex items-baseline gap-2">
+                        <span className="flex-1 min-w-0 text-[14px] font-semibold leading-tight truncate">{b.name}</span>
+                        <span className="shrink-0 text-[14px] font-bold tabular-nums leading-tight">{money(Number(b.amount) || 0)}</span>
+                      </span>
+                      <span className="mt-1 flex items-center gap-1.5 min-w-0">
+                        <span className={`shrink-0 rounded-full px-2 py-px text-[11px] font-semibold ${st.tone}`}>{st.label}</span>
+                        {caption && (
+                          <span className={`text-[12px] truncate ${st.label === "Overdue" ? "text-red-500" : "text-muted-foreground"}`}>{caption}</span>
+                        )}
                       </span>
                     </span>
-                    <span className="text-right shrink-0">
-                      <span className="block text-[14px] font-bold tabular-nums">{money(Number(b.amount) || 0)}</span>
-                      <span className={`block text-[11px] mt-0.5 ${b.status === "overdue" ? "text-red-500" : "text-muted-foreground"}`}>
-                        {b.status === "paid" ? fmtDate(b.paidDate) : due ? fmtDate(due) : ""}
-                      </span>
-                    </span>
-                    <BillStatus status={b.status} daysUntil={b.daysUntil} paidDate={b.paidDate} />
                     <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${rowOpen ? "rotate-180" : ""}`} aria-hidden="true" />
                   </button>
                   {rowOpen && renderDetail(b)}
@@ -713,14 +745,16 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
       <ExpandCard key={rowKey(d)} urgentBorder={urgent} testId={`doc-card-${rowKey(d)}`}
         summary={
           <div>
-            <div className="flex items-baseline gap-2">
-              {d.daysUntil < 0 ? <AlertTriangle className="h-3.5 w-3.5 text-red-500 shrink-0 self-center" /> : <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0 self-center" />}
-              <span className="text-xs font-semibold truncate">{name}</span>
-              <span className={`ml-auto text-[11px] font-medium shrink-0 tabular-nums ${d.daysUntil < 0 ? "text-red-500" : d.daysUntil <= 30 ? "text-amber-500" : "text-muted-foreground"}`}>
+            <div className="flex items-center gap-2">
+              {d.daysUntil < 0
+                ? <AlertTriangle className="h-4 w-4 shrink-0" style={{ color: "hsl(var(--accent-hsl))" }} aria-hidden="true" />
+                : <FileText className="h-4 w-4 shrink-0" style={{ color: "hsl(var(--accent-hsl))" }} aria-hidden="true" />}
+              <span className="flex-1 min-w-0 text-[13px] font-semibold truncate">{name}</span>
+              <span className={`text-[12px] font-semibold shrink-0 tabular-nums ${d.daysUntil < 0 ? "text-red-500" : d.daysUntil <= 30 ? "text-amber-500" : "text-muted-foreground"}`}>
                 {expiryLabel(d.daysUntil, d.ruleType)}
               </span>
             </div>
-            <div className="flex items-center flex-wrap gap-1 mt-1">
+            <div className="flex items-center flex-wrap gap-1 mt-1.5 pl-6">
               {typesLabel && <Chip>{typesLabel}</Chip>}
               {type && <Chip>{type}</Chip>}
               {ownerNames && <Chip><User className="h-2.5 w-2.5" />{ownerNames}</Chip>}
@@ -730,23 +764,23 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
             </div>
           </div>
         }>
-        <div className="space-y-1.5 text-[11px] pt-1">
-          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-muted-foreground">
-            <span>Field</span><span className="text-foreground capitalize">{fieldLabel}</span>
-            <span>Type</span><span className="text-foreground capitalize">{String(d.ruleType || "expiration").replace(/_/g, " ")}</span>
-            <span>Exact date</span><span className="text-foreground">{fmtDate(d.expirationDate)}</span>
-            <span>Days remaining</span><span className="text-foreground tabular-nums">{d.daysUntil >= 0 ? d.daysUntil : `${Math.abs(d.daysUntil)} past`}</span>
-          </div>
+        <div className="space-y-2.5 pt-1">
+          <DetailRows rows={[
+            ["Field", fieldLabel, "text-foreground capitalize"],
+            ["Type", String(d.ruleType || "expiration").replace(/_/g, " "), "text-foreground capitalize"],
+            ["Exact date", fmtDate(d.expirationDate)],
+            ["Days remaining", d.daysUntil >= 0 ? d.daysUntil : `${Math.abs(d.daysUntil)} past`, "text-foreground tabular-nums"],
+          ]} />
           {renewId === rowKey(d) ? (
-            <div className="flex items-center gap-1.5 pt-1">
+            <div className="flex items-center flex-wrap gap-2">
               <input type="date" value={renewDate} onChange={e => setRenewDate(e.target.value)}
-                className="h-7 px-1.5 rounded border border-border bg-background text-xs" data-testid={`doc-renew-date-${rowKey(d)}`} />
+                className="h-8 px-2.5 rounded-full border border-border bg-background text-xs" data-testid={`doc-renew-date-${rowKey(d)}`} />
               <ActionBtn label="Save new date" icon={Check} disabled={renew.isPending || !renewDate}
                 onClick={() => renew.mutate({ row: d, newDate: renewDate })} testId={`doc-renew-save-${rowKey(d)}`} />
               <ActionBtn label="Cancel" onClick={() => setRenewId(null)} />
             </div>
           ) : (
-            <div className="flex items-center flex-wrap gap-1.5 pt-1">
+            <div className="flex items-center flex-wrap gap-2">
               {/* This list is no longer documents-only: an expiration can be
                   carried by a PROFILE (a passport typed onto a person), and
                   `/documents/<profileId>` is not a page. The row carries the
@@ -791,14 +825,31 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
           <ActionBtn label="Clear all · 30d" icon={BellOff} onClick={dismissAll} testId="doc-dismiss-all" />
         </div>
       )}
-      {visible.length === 0 ? <EmptyNote label="Nothing due or expiring in the next 90 days." /> : bands.map(band => band.rows.length === 0 ? null : (
-        <div key={band.key}>
-          <div className={`micro-label px-1 pt-2 pb-1 ${band.tone === "neg" ? "text-red-500" : band.tone === "warn" ? "text-amber-500" : "text-muted-foreground"}`}>
-            {band.label} · {band.rows.length}
+      {visible.length === 0 ? (
+        // Dismissed alerts are hidden, not gone — say so instead of reading
+        // as an empty account.
+        <EmptyState icon={CheckCircle2} tone="good" label="You're clear for the next 90 days"
+          hint={(docs || []).length > 0
+            ? `${(docs || []).length} dismissed date${(docs || []).length === 1 ? " is" : "s are"} hidden for now.`
+            : "Nothing due or expiring in the next 90 days."} />
+      ) : bands.map(band => {
+        if (band.rows.length === 0) return null;
+        const hsl = band.tone === "neg" ? URGENCY_HSL.red : band.tone === "warn" ? URGENCY_HSL.amber : URGENCY_HSL.none;
+        return (
+          <div key={band.key}>
+            <div className="flex items-center gap-1.5 px-1 pt-3 pb-1.5">
+              <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: `hsl(${hsl})` }} />
+              <span className={`micro-label truncate ${band.tone === "neg" ? "text-red-500" : band.tone === "warn" ? "text-amber-500" : "text-muted-foreground"}`}>
+                {band.label}
+              </span>
+              <span className="ml-auto rounded-full px-1.5 py-px text-[11px] font-bold tabular-nums" style={{ background: `hsl(${hsl} / 0.15)`, color: `hsl(${hsl})` }}>
+                {band.rows.length}
+              </span>
+            </div>
+            {band.rows.map(renderRow)}
           </div>
-          {band.rows.map(renderRow)}
-        </div>
-      ))}
+        );
+      })}
     </PopupShell>
   );
 }
@@ -810,10 +861,17 @@ export function EventsPopup({ open, onClose, items, todayStr, title = "Calendar 
   const owners = useOwnerNames();
   const days = useMemo(() => {
     const buckets: Array<{ day: string; date: string; items: any[] }> = [];
+    const tomorrowStr = (() => {
+      const t = new Date(todayStr + "T00:00:00");
+      if (isNaN(t.getTime())) return "";
+      t.setDate(t.getDate() + 1);
+      return t.toLocaleDateString("en-CA");
+    })();
     for (const item of items || []) {
       const d = String(item.date || "").slice(0, 10);
       if (!d) continue;
-      const label = d === todayStr ? "Today" : new Date(d + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      const label = d === todayStr ? "Today" : d === tomorrowStr ? "Tomorrow"
+        : new Date(d + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
       const bucket = buckets.find(b => b.day === label);
       if (bucket) bucket.items.push(item);
       else buckets.push({ day: label, date: d, items: [item] });
@@ -826,34 +884,45 @@ export function EventsPopup({ open, onClose, items, todayStr, title = "Calendar 
       accent="239 84% 67%" count={(items || []).length}
       subtitle={(items || []).length ? "Events, tasks and bills on your combined calendar" : undefined}
       footerLabel="Open Calendar" footerHref="/calendar">
-      {days.length === 0 ? <EmptyNote label="Nothing scheduled." /> : days.map(d => (
-        <div key={d.day}>
-          <div className="flex items-baseline px-1 pt-2 pb-0.5">
-            <span className="micro-label text-muted-foreground">{d.day}</span>
-            <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{daysAway(d.date) === 0 ? "" : `in ${daysAway(d.date)}d`}</span>
+      {days.length === 0 ? (
+        <EmptyState icon={CalendarDays} accent="239 84% 67%" label="Nothing scheduled"
+          hint="Events, tasks and bills with a date show up here." />
+      ) : days.map(d => {
+        const away = daysAway(d.date);
+        return (
+        <div key={d.day} className="pb-1">
+          <div className="flex items-baseline gap-2 px-1 pt-3 pb-1.5">
+            <span className={`text-[13px] font-semibold ${away === 0 ? "" : "text-foreground"}`} style={away === 0 ? { color: "hsl(239 84% 67%)" } : undefined}>{d.day}</span>
+            {away > 1 && <span className="text-[12px] text-muted-foreground tabular-nums">in {away}d</span>}
+            <span className="ml-auto rounded-full bg-muted px-1.5 py-px text-[11px] font-bold tabular-nums text-muted-foreground"
+              aria-label={`${d.items.length} item${d.items.length === 1 ? "" : "s"}`}>{d.items.length}</span>
           </div>
+          <div className="space-y-1.5">
           {d.items.map((i: any) => {
             const ownerNames = owners.names(i.linkedProfiles, false);
             const urgent = i.type === "bill" || i.type === "obligation";
+            const hasChips = (i.type && i.type !== "event") || (i.category && i.category !== "general") || i.location || ownerNames;
             return (
-              <div key={i.id} className="mb-1 rounded-md border border-border/40 bg-card/50 px-2.5 py-1.5">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-[11px] uppercase text-muted-foreground w-14 shrink-0 truncate">{i.time || (i.allDay ? "all day" : "")}</span>
-                  <span className={`text-xs truncate ${urgent ? "text-red-500 font-medium" : ""}`}>{i.title}</span>
+              <div key={i.id} className="bubble-row px-3 py-2.5">
+                <div className="flex items-baseline gap-3">
+                  <span className="text-[12px] tabular-nums text-muted-foreground w-16 shrink-0 truncate">{i.time || (i.allDay ? "All day" : "")}</span>
+                  <span className={`text-[13px] min-w-0 truncate ${urgent ? "text-red-500 font-semibold" : "font-medium"}`}>{i.title}</span>
                 </div>
-                <div className="flex items-center flex-wrap gap-1 mt-0.5 pl-16">
+                {hasChips && <div className="flex items-center flex-wrap gap-1 mt-1 pl-[76px]">
                   {i.type && i.type !== "event" && <Chip tone={urgent ? "neg" : "muted"}>{i.type}</Chip>}
                   {/* QA 2026-09-18: a task's category is "task" too — one
                       chip, not "task task". */}
                   {i.category && i.category !== "general" && String(i.category).toLowerCase() !== String(i.type || "").toLowerCase() && <Chip>{i.category}</Chip>}
                   {i.location && <Chip><MapPin className="h-2.5 w-2.5" />{i.location}</Chip>}
                   {ownerNames && <Chip><User className="h-2.5 w-2.5" />{ownerNames}</Chip>}
-                </div>
+                </div>}
               </div>
             );
           })}
+          </div>
         </div>
-      ))}
+        );
+      })}
     </PopupShell>
   );
 }
