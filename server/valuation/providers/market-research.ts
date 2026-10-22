@@ -117,7 +117,7 @@ export function extractJson(text: string): unknown {
 // ── Researchers ─────────────────────────────────────────────────────────────
 
 /** Once one researcher has answered, the others get this long to finish. */
-export const RESEARCH_GRACE_MS = Number(process.env.VALUATION_RESEARCH_GRACE_MS) || 25_000;
+export const RESEARCH_GRACE_MS = Number(process.env.VALUATION_RESEARCH_GRACE_MS) || 40_000;
 
 interface ResearcherRun { name: string; ms: number; text: string | null; error: string | null }
 
@@ -194,6 +194,9 @@ const openAiResearcher: Researcher = async (brief, { signal, region }) => {
       model,
       instructions: RESEARCH_SYSTEM,
       input: brief,
+      // Research is search-and-transcribe, not deep reasoning: low effort keeps
+      // it inside the window (at the default it never answered in time).
+      reasoning: { effort: process.env.VALUATION_RESEARCH_OPENAI_EFFORT || "low" },
       tools: [{ type: "web_search", user_location: { type: "approximate", country: "US", ...(region ? { region } : {}) } }],
     }),
   });

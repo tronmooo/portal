@@ -257,9 +257,23 @@ describe("live-check fixes", () => {
       { price: 3700, type: "sold", basis: "fair_market", source: "eBay", date: "2026-05-01" },
       { price: 3750, type: "sold", basis: "fair_market", source: "eBay", date: "2026-05-03" },
       { price: 3800, type: "sold", basis: "fair_market", source: "eBay", date: "2026-05-04" },
+      // Dealers always ask above the metal: what makes the melt figure credible.
+      { price: 4450, type: "listing", basis: "dealer_retail", source: "APMEX", similarity: 0.3 },
     ]), { now: NOW, refreshReason: "user_requested" });
     expect(rec.value).toBe(4120); // $4,119 at four-figure precision
     expect(rec.factors.some(f => /melt/.test(f))).toBe(true);
+  });
+
+  it("a melt figure above every market price is ignored, not used as a floor", () => {
+    const ctx = buildValuationContext({ profile: { id: "g2", name: "American Gold Eagle 1 oz", type: "asset", fields: { brand: "US Mint", model: "American Gold Eagle", year: 2023 } } }, NOW);
+    const rec = computeValuation(ctx, planValuation(ctx, NOW), ev([
+      { price: 4636, type: "melt", basis: "fair_market", source: "misread spot" },
+      { price: 4070, type: "offer", basis: "fair_market", source: "Money Metals buyback" },
+      { price: 4150, type: "sold", basis: "fair_market", source: "eBay" },
+      { price: 4475, type: "listing", basis: "fair_market", source: "JM Bullion" },
+    ]), { now: NOW, refreshReason: "user_requested" });
+    expect(rec.value!).toBeLessThan(4400);
+    expect(rec.factors.some(f => /melt/.test(f))).toBe(false);
   });
 
   it("rounds small values in whole cents", () => {

@@ -239,8 +239,13 @@ export function computeValuation(
   // (newer / higher-spec) item; cap it and say so.
   const ceiling = newPriceCeiling(evidence);
   // Intrinsic value is a floor: a gold coin is worth at least its gold.
+  // A melt figure above every price the market actually asks is a misread
+  // (live check: "melt $4,636" beside dealer asks topping out at $4,475), not a floor.
   const melts = evidence.filter(x => x.kind === "comparable" && (x.raw as any)?.type === "melt" && (x.value ?? 0) > 0).map(x => x.value!).sort((a, b) => a - b);
-  const floor = melts.length ? melts[Math.floor(melts.length / 2)] : null;
+  const marketAsks = evidence.filter(x => x.kind === "comparable" && (x.raw as any)?.type !== "melt")
+    .map(x => Number((x.raw as any)?.observedPrice ?? x.value)).filter(n => n > 0);
+  const meltMid = melts.length ? melts[Math.floor(melts.length / 2)] : null;
+  const floor = meltMid != null && (marketAsks.length === 0 || meltMid <= Math.max(...marketAsks)) ? meltMid : null;
   if (floor && value < floor) {
     value = floor;
     factors.push(`Raised to its material (melt) value of ${money(floor)} — it cannot sell for less`);
