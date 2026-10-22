@@ -4,12 +4,12 @@
 // on file. Research now records every price it read on a stated basis; code
 // restates each as fair market value, pools them (median, outliers set aside)
 // and treats the one-shot figure as a cross-check.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "fs";
 import { MemStorage } from "../server/storage";
 import { refreshValuation } from "../server/valuation/service";
 import { setEvidenceProvidersForTest } from "../server/valuation/providers/registry";
-import { marketResearchProvider, setResearchersForTest, extractJson, researchBrief, runResearchers } from "../server/valuation/providers/market-research";
+import { marketResearchProvider, setResearchersForTest, extractJson, researchBrief, runResearchers, configuredResearchers } from "../server/valuation/providers/market-research";
 import { decodeVin, findVin, isValidVin, setVinDecoderForTest } from "../server/valuation/vin-decode";
 import type { EvidenceProvider } from "../server/valuation/providers/types";
 import {
@@ -299,5 +299,28 @@ describe("live-check fixes", () => {
     expect(runs[0]).toMatchObject({ name: "Fast", error: null, text: "{}" });
     expect(runs[1].name).toBe("Slow");
     expect(runs[1].error).toMatch(/timed out/);
+  });
+});
+
+describe("OpenAI researcher", () => {
+  afterEach(() => { vi.unstubAllGlobals(); delete process.env.OPENAI_API_KEY; setResearchersForTest(null); });
+
+  it("asks the same conversation for the JSON when the research came back as prose", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    delete process.env.ANTHROPIC_API_KEY;
+    const bodies: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: any) => {
+      const body = JSON.parse(init.body);
+      bodies.push(body);
+      const text = body.previous_response_id ? JSON.stringify({ observations: [{ price: 4100, type: "sold", basis: "fair_market", source: "eBay" }] }) : "Gold Eagles sell around spot.";
+      return new Response(JSON.stringify({ id: "resp_1", output_text: text }), { status: 200 });
+    }));
+    const researchers = configuredResearchers();
+    expect(researchers.map(r => r[0])).toEqual(["OpenAI web research"]);
+    const out = await researchers[0][1]("brief", { signal: new AbortController().signal, region: null });
+    expect(normalizeResearch(extractJson(out)).observations).toHaveLength(1);
+    expect(bodies[0].tools[0].type).toBe("web_search");
+    expect(bodies[1]).toMatchObject({ previous_response_id: "resp_1" });
+    expect(bodies[1].tools).toBeUndefined();
   });
 });

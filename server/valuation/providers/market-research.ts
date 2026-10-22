@@ -202,12 +202,30 @@ const openAiResearcher: Researcher = async (brief, { signal, region }) => {
   });
   if (!res.ok) throw new Error(`OpenAI research ${res.status}: ${(await res.text().catch(() => "")).slice(0, 160)}`);
   const json: any = await res.json();
-  if (typeof json.output_text === "string" && json.output_text) return json.output_text;
-  return (json.output || [])
+  const text = openAiText(json);
+  if (extractJson(text) || !json.id) return text;
+  // Live check: on a gold coin it answered in prose after its searches. Ask
+  // the same conversation (no new searches) for the JSON it was told to give.
+  const again = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    signal,
+    headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model, previous_response_id: json.id, reasoning: { effort: "low" },
+      input: "Now return ONLY the JSON object in the required shape, with every price you found. No prose.",
+    }),
+  });
+  if (!again.ok) return text;
+  return openAiText(await again.json()) || text;
+};
+
+function openAiText(json: any): string {
+  if (typeof json?.output_text === "string" && json.output_text) return json.output_text;
+  return (json?.output || [])
     .filter((o: any) => o.type === "message")
     .flatMap((o: any) => (o.content || []).filter((c: any) => c.type === "output_text").map((c: any) => c.text))
     .join("\n");
-};
+}
 
 /** The researchers configured in this environment, by name. */
 export function configuredResearchers(): Array<[string, Researcher]> {
