@@ -51,6 +51,8 @@ export interface MarketObservation {
   similarity: number;
   /** "2021 CR-V EX AWD, 71k mi, Tampa FL — listed by dealer". */
   details: string;
+  /** Whether the PRICED item is new, used or refurbished, when the page said. */
+  itemCondition: "new" | "used" | "refurbished" | null;
 }
 
 const TYPES: ObservationType[] = ["sold", "listing", "guide", "avm", "offer", "appraisal", "melt"];
@@ -131,6 +133,7 @@ export function normalizeResearch(raw: unknown): ResearchResult {
       price, type, basis, source, url, date,
       similarity: sim == null ? 0.6 : Math.max(0, Math.min(1, sim)),
       details: str(o.details, 200) || "",
+      itemCondition: o.itemCondition === "new" || o.itemCondition === "used" || o.itemCondition === "refurbished" ? o.itemCondition : null,
     });
   }
   const specs: Record<string, string | number> = {};
@@ -150,6 +153,23 @@ export function normalizeResearch(raw: unknown): ResearchResult {
     depreciates: r.depreciates === true ? true : r.depreciates === false ? false : null,
     missing: Array.isArray(r.missing) ? r.missing.filter((s: unknown) => typeof s === "string" && s.trim()).map((s: string) => s.trim().slice(0, 100)).slice(0, 5) : [],
   };
+}
+
+/**
+ * A used thing is not priced by what a NEW one costs. Research found a store
+ * selling the same fridge new for $1,799 and counted it as a comparable for a
+ * five-year-old one (live check 2026-10-22: $1,770). Unless the asset itself
+ * is new, a price for a new unit becomes a price-new reference instead.
+ */
+export function excludeNewUnits(observations: MarketObservation[], assetIsNew: boolean): MarketObservation[] {
+  if (assetIsNew) return observations;
+  return observations.map(o => o.itemCondition === "new" && o.type !== "melt" ? { ...o, basis: "new_retail" as const } : o);
+}
+
+/** Is the owned asset itself new (unused, sealed, bought within weeks)? */
+export function isAssetNew(condition: string | null, ageYears: number | null): boolean {
+  if (condition && /\b(new|sealed|unopened|nib|bnib|unused)\b/i.test(condition) && !/like[ -]?new|used|open/i.test(condition)) return true;
+  return ageYears != null && ageYears < 0.1;
 }
 
 /** The observation's price restated as fair market value, or null when it is not a comparable (a new price). */

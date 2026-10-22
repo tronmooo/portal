@@ -24,7 +24,7 @@
 import type { ValuationContext, ValuationEvidence } from "@shared/valuation/types";
 import { DEFAULT_CURRENCY } from "@shared/valuation/types";
 import { MS_PER_DAY } from "@shared/obligation-windows";
-import { normalizeResearch, observationsToEvidence, type ResearchResult } from "@shared/valuation/comparables";
+import { excludeNewUnits, isAssetNew, normalizeResearch, observationsToEvidence, type ResearchResult } from "@shared/valuation/comparables";
 import { getAnthropicClient } from "../../anthropic-client";
 import { logger } from "../../logger";
 import { decodeVin, findVin } from "../vin-decode";
@@ -50,13 +50,14 @@ How to research (do all of it):
    - Equipment and tools: Machinery Trader, IronPlanet / auction results, eBay sold. Instruments: Reverb price guide and sold listings. Bikes: Bicycle Blue Book.
    - Furniture, appliances, household goods: eBay sold, Facebook Marketplace / Craigslist asking prices, and the current new price.
 3. Run several searches across DIFFERENT source types (a guide or estimate, completed sales, instant offers, current listings). Prefer completed sales and pricing guides over asking prices. Prefer the exact spec, nearby location and recent dates.
-4. Record every concrete price you actually read on a page. Never invent, interpolate or estimate a price yourself. If a guide gives several values (trade-in, private party, dealer retail), record each separately with its basis.
+4. Mark every price with "itemCondition": is the priced unit new, used or refurbished? A store selling the model brand-new is "new" — record it (it tells us the price new) but look for USED prices for a used asset. For metals and bullion, record the current melt value (spot × metal weight) as type "melt".
+5. Record every concrete price you actually read on a page. Never invent, interpolate or estimate a price yourself. If a guide gives several values (trade-in, private party, dealer retail), record each separately with its basis.
 
 Respond with ONLY one JSON object, no markdown:
 {
   "identity": "<one line: what this item exactly is>",
   "observations": [
-    {"price": <number USD>, "type": "sold|listing|guide|avm|offer|appraisal|melt", "basis": "fair_market|private_party|dealer_retail|trade_in|wholesale", "source": "<site or publisher>", "url": "<page url>", "date": "<YYYY-MM-DD if shown, else null>", "similarity": <0..1 how closely the priced item matches THIS one: exact spec+condition+usage = 1, same model different spec/usage ≈ 0.6, merely similar ≈ 0.3>, "details": "<the priced item's spec, mileage/usage, condition, location>"}
+    {"price": <number USD>, "type": "sold|listing|guide|avm|offer|appraisal|melt", "basis": "fair_market|private_party|dealer_retail|trade_in|wholesale", "source": "<site or publisher>", "url": "<page url>", "date": "<YYYY-MM-DD if shown, else null>", "itemCondition": "new|used|refurbished", "similarity": <0..1 how closely the priced item matches THIS one: exact spec+condition+usage = 1, same model different spec/usage ≈ 0.6, merely similar ≈ 0.3>, "details": "<the priced item's spec, mileage/usage, condition, location>"}
   ],
   "newPrice": <price of this exact item new (MSRP/retail) if you found it, else null>,
   "depreciates": <true if this kind of item loses value with age and use (vehicles, electronics, appliances), false if it typically holds or gains value (real estate, gold, many collectibles), null if unsure>,
@@ -114,6 +115,48 @@ export function extractJson(text: string): unknown {
 }
 
 // ── Researchers ─────────────────────────────────────────────────────────────
+
+/** Once one researcher has answered, the others get this long to finish. */
+export const RESEARCH_GRACE_MS = Number(process.env.VALUATION_RESEARCH_GRACE_MS) || 25_000;
+
+interface ResearcherRun { name: string; ms: number; text: string | null; error: string | null }
+
+/**
+ * Run every researcher in parallel, each on its own abort signal. The first
+ * success starts a grace window; whoever has not answered by its end is
+ * abandoned (recorded as timed out), so one slow source cannot hold the
+ * whole valuation to the provider's full budget.
+ */
+export async function runResearchers(
+  researchers: Array<[string, Researcher]>,
+  brief: string,
+  opts: { signal: AbortSignal; region: string | null; graceMs: number },
+): Promise<ResearcherRun[]> {
+  const started = Date.now();
+  const controllers = researchers.map(() => new AbortController());
+  const onParentAbort = () => controllers.forEach(c => c.abort());
+  opts.signal.addEventListener("abort", onParentAbort, { once: true });
+  let graceTimer: ReturnType<typeof setTimeout> | null = null;
+  const out = await Promise.all(researchers.map(async ([name, r], i) => {
+    const c = controllers[i];
+    const aborted = new Promise<never>((_, reject) => c.signal.addEventListener("abort", () => reject(new Error(
+      opts.signal.aborted ? "timed out (provider budget)" : `timed out (${Math.round(opts.graceMs / 1000)}s after another researcher answered)`,
+    )), { once: true }));
+    try {
+      const text = await Promise.race([r(brief, { signal: c.signal, region: opts.region }), aborted]);
+      if (!graceTimer) {
+        graceTimer = setTimeout(() => controllers.forEach((o, j) => j !== i && o.abort()), opts.graceMs);
+        (graceTimer as any).unref?.();
+      }
+      return { name, ms: Date.now() - started, text, error: null };
+    } catch (err: any) {
+      return { name, ms: Date.now() - started, text: null, error: String(err?.message || err).slice(0, 160) };
+    }
+  }));
+  if (graceTimer) clearTimeout(graceTimer);
+  opts.signal.removeEventListener("abort", onParentAbort);
+  return out;
+}
 
 export type Researcher = (brief: string, opts: { signal: AbortSignal; region: string | null }) => Promise<string>;
 
@@ -196,16 +239,23 @@ export const marketResearchProvider: EvidenceProvider = {
     const region = regionOf(ctx);
 
     const researchers = configuredResearchers();
-    const settled = await Promise.allSettled(researchers.map(([, r]) => r(brief, { signal: run.signal, region })));
+    const runs = await runResearchers(researchers, brief, { signal: run.signal, region, graceMs: RESEARCH_GRACE_MS });
     const results: Array<{ name: string; result: ResearchResult }> = [];
     const errors: string[] = [];
-    settled.forEach((s, i) => {
-      const name = researchers[i][0];
-      if (s.status === "rejected") { errors.push(`${name}: ${String(s.reason?.message || s.reason).slice(0, 120)}`); return; }
-      const parsed = extractJson(s.value);
-      if (!parsed) { errors.push(`${name}: no JSON in response`); return; }
-      results.push({ name, result: normalizeResearch(parsed) });
-    });
+    const assetIsNew = isAssetNew(ctx.condition, ctx.ageYears);
+    for (const r of runs) {
+      if (r.error != null) { errors.push(`${r.name}: ${r.error}`); continue; }
+      const parsed = extractJson(r.text!);
+      if (!parsed) { errors.push(`${r.name}: no JSON in response`); r.error = "no JSON in response"; continue; }
+      const result = normalizeResearch(parsed);
+      result.observations = excludeNewUnits(result.observations, assetIsNew);
+      // A new unit's price the model did not put in newPrice still tells us the price new.
+      if (result.newPrice == null) {
+        const news = result.observations.filter(o => o.basis === "new_retail").map(o => o.price).sort((a, b) => a - b);
+        if (news.length) result.newPrice = news[Math.floor(news.length / 2)];
+      }
+      results.push({ name: r.name, result });
+    }
     if (results.length === 0) throw new Error(errors.join("; ") || "market research returned nothing");
     if (errors.length) logger.warn("valuation", `market research partial for ${ctx.profileId}: ${errors.join("; ")}`);
 
@@ -246,6 +296,8 @@ export const marketResearchProvider: EvidenceProvider = {
         missing: [...new Set(results.flatMap(r => r.result.missing))].slice(0, 5),
         sources: [...new Set(results.flatMap(r => r.result.observations.map(o => o.url).filter((u): u is string => !!u)))].slice(0, 8),
         vinDecoded: Object.keys(decoded).length > 0,
+        // How each researcher did — the record shows it without log access.
+        researchers: runs.map(r => ({ name: r.name, ms: r.ms, ok: r.error == null, error: r.error, prices: results.find(x => x.name === r.name)?.result.observations.length ?? 0 })),
       },
     });
     return evidence;

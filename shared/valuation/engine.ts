@@ -50,7 +50,8 @@ export function confidenceLabel(c: number): "high" | "medium" | "low" | "none" {
 export function roundValue(v: number): number {
   const abs = Math.abs(v);
   const step = abs >= 1_000_000 ? 1000 : abs >= 100_000 ? 500 : abs >= 10_000 ? 100 : abs >= 1_000 ? 10 : abs >= 100 ? 1 : 0.01;
-  return Math.round(v / step) * step;
+  // Cents are rounded in integer cents: 78.07 / 0.01 * 0.01 is 78.07000000000001.
+  return step < 1 ? Math.round(v * 100) / 100 : Math.round(v / step) * step;
 }
 
 function money(n: number): string { return `$${Math.round(n).toLocaleString()}`; }
@@ -237,6 +238,13 @@ export function computeValuation(
   // An estimate above that ceiling means the evidence priced a different
   // (newer / higher-spec) item; cap it and say so.
   const ceiling = newPriceCeiling(evidence);
+  // Intrinsic value is a floor: a gold coin is worth at least its gold.
+  const melts = evidence.filter(x => x.kind === "comparable" && (x.raw as any)?.type === "melt" && (x.value ?? 0) > 0).map(x => x.value!).sort((a, b) => a - b);
+  const floor = melts.length ? melts[Math.floor(melts.length / 2)] : null;
+  if (floor && value < floor) {
+    value = floor;
+    factors.push(`Raised to its material (melt) value of ${money(floor)} — it cannot sell for less`);
+  }
   if (ceiling && value > ceiling * 1.02) {
     value = ceiling;
     confidence = Math.min(confidence, 0.45);
@@ -248,6 +256,11 @@ export function computeValuation(
   if (conflict) { confidence = Math.min(confidence, 0.4); factors.push(`Sources disagree by ~${Math.round(cv * 100)}% — range widened`); }
   if (ctx.sparse) { confidence = Math.min(confidence, 0.5); factors.push("Sparse asset details limit precision"); }
   if (externalCount === 0 && plan.needsExternal) { confidence = Math.min(confidence, 0.55); factors.push("No current market evidence was available for this run"); }
+  // Market evidence alone — however much of it agrees — is still an estimate
+  // of what a buyer would pay. Only a verified figure (a live quote, the
+  // owner's own number, an appraisal) earns the top of the scale.
+  const verified = kinds.has("market_quote") || kinds.has("user_value") || kinds.has("document_appraisal") || kinds.has("transaction");
+  if (!verified) confidence = Math.min(confidence, 0.9);
   confidence = Math.max(0.05, Math.min(0.97, confidence));
 
   // ── Range: evidence bands, widened by disagreement, then by low confidence ──

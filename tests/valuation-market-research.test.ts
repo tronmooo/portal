@@ -9,12 +9,12 @@ import { readFileSync } from "fs";
 import { MemStorage } from "../server/storage";
 import { refreshValuation } from "../server/valuation/service";
 import { setEvidenceProvidersForTest } from "../server/valuation/providers/registry";
-import { marketResearchProvider, setResearchersForTest, extractJson, researchBrief } from "../server/valuation/providers/market-research";
+import { marketResearchProvider, setResearchersForTest, extractJson, researchBrief, runResearchers } from "../server/valuation/providers/market-research";
 import { decodeVin, findVin, isValidVin, setVinDecoderForTest } from "../server/valuation/vin-decode";
 import type { EvidenceProvider } from "../server/valuation/providers/types";
 import {
-  buildValuationContext, computeValuation, fairMarketEquivalent, normalizeResearch, observationsToEvidence,
-  planValuation, poolComparables,
+  buildValuationContext, computeValuation, excludeNewUnits, fairMarketEquivalent, isAssetNew, normalizeResearch, observationsToEvidence,
+  planValuation, poolComparables, roundValue,
 } from "@shared/valuation";
 import type { ValuationEvidence } from "@shared/valuation/types";
 
@@ -223,5 +223,67 @@ describe("plumbing", () => {
       expect(idx(src)).toBeLessThan(idx("/api/:path*"));
     }
     expect(vercel.functions["api/ai.js"].maxDuration).toBeGreaterThanOrEqual(150);
+  });
+});
+
+// Live check on the smoke account (2026-10-22) found three wrong answers.
+describe("live-check fixes", () => {
+  const ev = (raw: any[]) => observationsToEvidence(normalizeResearch({ observations: raw }).observations, { now: NOW, halfLifeMs: 180 * DAY, provider: "market-research" });
+
+  it("a five-year-old fridge is not priced by stores selling it new", () => {
+    const research = normalizeResearch({ observations: [
+      { price: 1799, type: "listing", basis: "dealer_retail", source: "Home Depot", itemCondition: "new" },
+      { price: 1999, type: "listing", basis: "dealer_retail", source: "Best Buy", itemCondition: "new" },
+      { price: 650, type: "sold", basis: "private_party", source: "eBay", itemCondition: "used" },
+      { price: 700, type: "listing", basis: "private_party", source: "Facebook Marketplace", itemCondition: "used" },
+      { price: 800, type: "listing", basis: "private_party", source: "Craigslist", itemCondition: "used" },
+    ] });
+    expect(isAssetNew("good", 5)).toBe(false);
+    expect(isAssetNew("new in box", null)).toBe(true);
+    expect(isAssetNew("like new", 2)).toBe(false);
+    const obs = excludeNewUnits(research.observations, false);
+    const ctx = buildValuationContext({ profile: { id: "f", name: "Samsung fridge", type: "asset", fields: { brand: "Samsung", model: "RF28T5001SR", year: 2021 } } }, NOW);
+    const rec = computeValuation(ctx, planValuation(ctx, NOW), observationsToEvidence(obs, { now: NOW, halfLifeMs: 180 * DAY, provider: "market-research" }), { now: NOW, refreshReason: "user_requested" });
+    expect(rec.value!).toBeGreaterThan(550);
+    expect(rec.value!).toBeLessThan(800);
+    // A new asset keeps new-unit prices as its comparables.
+    expect(excludeNewUnits(research.observations, true)[0].basis).toBe("dealer_retail");
+  });
+
+  it("bullion is never valued below its melt value", () => {
+    const ctx = buildValuationContext({ profile: { id: "g", name: "American Gold Eagle 1 oz", type: "asset", fields: { brand: "US Mint", model: "American Gold Eagle", year: 2023 } } }, NOW);
+    const rec = computeValuation(ctx, planValuation(ctx, NOW), ev([
+      { price: 4119, type: "melt", basis: "fair_market", source: "Kitco spot" },
+      { price: 3700, type: "sold", basis: "fair_market", source: "eBay", date: "2026-05-01" },
+      { price: 3750, type: "sold", basis: "fair_market", source: "eBay", date: "2026-05-03" },
+      { price: 3800, type: "sold", basis: "fair_market", source: "eBay", date: "2026-05-04" },
+    ]), { now: NOW, refreshReason: "user_requested" });
+    expect(rec.value).toBe(4120); // $4,119 at four-figure precision
+    expect(rec.factors.some(f => /melt/.test(f))).toBe(true);
+  });
+
+  it("rounds small values in whole cents", () => {
+    expect(roundValue(78.07)).toBe(78.07);
+    expect(String(roundValue(78.0712))).toBe("78.07");
+  });
+
+  it("market evidence alone never claims more than 90% confidence", () => {
+    const ctx = buildValuationContext({ profile: { id: "r", name: "Fender Player Stratocaster", type: "asset", fields: { brand: "Fender", model: "Player Stratocaster", year: 2021 } } }, NOW);
+    const rec = computeValuation(ctx, planValuation(ctx, NOW), ev(
+      [550, 555, 558, 560, 562, 565].map(price => ({ price, type: "sold", basis: "fair_market", source: "Reverb", similarity: 1 })),
+    ), { now: NOW, refreshReason: "user_requested" });
+    expect(rec.confidence).toBeLessThanOrEqual(0.9);
+  });
+
+  it("a slow researcher is abandoned shortly after another answers, and the record says so", async () => {
+    const t0 = Date.now();
+    const runs = await runResearchers([
+      ["Fast", async () => "{}"],
+      ["Slow", (_b, { signal }) => new Promise<string>((res, rej) => { const t = setTimeout(() => res("{}"), 10_000); signal.addEventListener("abort", () => { clearTimeout(t); rej(new Error("aborted")); }); })],
+    ], "brief", { signal: new AbortController().signal, region: null, graceMs: 50 });
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(runs[0]).toMatchObject({ name: "Fast", error: null, text: "{}" });
+    expect(runs[1].name).toBe("Slow");
+    expect(runs[1].error).toMatch(/timed out/);
   });
 });
