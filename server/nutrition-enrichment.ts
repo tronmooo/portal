@@ -54,7 +54,7 @@ import {
   type QuantityNormalization,
   type Specificity,
 } from "@shared/nutrition-enrichment";
-import { NUTRITION_DB, lookupNutritionDb, resolveServings, type NutritionDbItem } from "@shared/nutrition-db";
+import { NUTRITION_DB, lookupNutritionDb, nutritionCandidates, phraseNamesDbItem, resolveServings, type NutritionDbItem } from "@shared/nutrition-db";
 import { ITEM_ENRICHMENT_PREF_KEY } from "@shared/item-identity";
 import { getAnthropicClient } from "./anthropic-client";
 import { logger } from "./logger";
@@ -434,6 +434,11 @@ interface Phrase {
 const hasQuantity = (q: ReturnType<typeof normalizeQuantity>) =>
   q.amount != null || q.count != null || q.ml != null || q.grams != null || q.packageFraction != null;
 
+/** Does the user's segment name a reference food the item text does not name at all? */
+function namesAnotherFood(segment: string, itemText: string): boolean {
+  return nutritionCandidates(segment, 10).some((m) => !phraseNamesDbItem(m.item, itemText));
+}
+
 /**
  * Pair each component phrase of the item with the user's wording for how
  * much. "Oatmeal + 2% milk" as the item, "1 packet of Quaker oatmeal with 1
@@ -456,6 +461,12 @@ export function componentPhrases(item: string, message: string): Phrase[] {
     const userWords = best ? best.seg : (msgParts.length === 1 ? msgParts[0] : "");
     const q = userWords ? normalizeQuantity(userWords) : null;
     const userQuantityStated = haveMessage ? !!(q && hasQuantity(q)) : undefined;
+    // A segment that also names a DIFFERENT food is not this food's wording:
+    // "banana watermelon 2 bagels" did not split, and read as the bagels'
+    // words it resolved to the banana row (2 Bagels saved as 105 kcal of
+    // banana). Such a segment says nothing reliable about this item; the
+    // item's own text does.
+    if (best && namesAnotherFood(userWords, text)) return { text, quantityText: text, userQuantityStated };
     // The user's own wording for how much wins over the agent's: "I just
     // drank one Coke zero" logged as "Coke Zero (12 oz)" resolves from "one"
     // (a can, size assumed), not from the 12 oz the agent inferred. Only when

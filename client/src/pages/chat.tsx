@@ -66,7 +66,7 @@ import { isDuplicateResend, type LastSend } from "@shared/chat-progress";
 import { ThinkingBubble } from "@/components/chat/ThinkingBubble";
 import { NutritionEnrichmentCard } from "@/components/chat/NutritionEnrichmentCard";
 import { ItemEnrichmentCard } from "@/components/chat/ItemEnrichmentCard";
-import { runPendingEnrichment, type NutritionEnrichmentCardData } from "@/lib/nutrition-enrichment";
+import { runPendingEnrichment, withEntryValues, type NutritionEnrichmentCardData } from "@/lib/nutrition-enrichment";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -2479,16 +2479,10 @@ const MessageRow = memo(function MessageRow({
         {msg.enrichments && msg.enrichments.length > 0 && (
           <div className="mt-2 space-y-1.5">
             {msg.enrichments.map((card: any) => {
+              // A choice or a portion edit changed the record: the
+              // confirmation card shows the record, so it follows.
               const onChange = (next: any) => setMessages((prev) => prev.map((m) => m.id === msg.id
-                ? {
-                  ...m,
-                  enrichments: (m.enrichments || []).map((x) => (x.entryId === next.entryId ? next : x)),
-                  // A choice or a portion edit changed the record: the
-                  // confirmation card shows the record, so it follows.
-                  results: Array.isArray(m.results) && next?.record?.values
-                    ? m.results.map((r: any) => (r && r.id === next.entryId ? { ...r, values: next.record.values } : r))
-                    : m.results,
-                }
+                ? withEntryValues({ ...m, enrichments: (m.enrichments || []).map((x) => (x.entryId === next.entryId ? next : x)) }, next.entryId, next?.record?.values)
                 : m));
               return card?.enrichment?.components
                 ? <NutritionEnrichmentCard key={card.entryId} data={card} onChange={onChange} />
@@ -3185,10 +3179,8 @@ export default function ChatPage() {
           // The confirmation card above shows the record as the turn saved it;
           // once the lookup refined that same record, show the refined values
           // there too, so the two never disagree.
-          const results = Array.isArray(m.results) && card.status === "applied" && card.record?.values
-            ? m.results.map((r: any) => (r && r.id === card.entryId ? { ...r, values: card.record.values } : r))
-            : m.results;
-          return { ...m, enrichments: [...rest, card], results };
+          const next = { ...m, enrichments: [...rest, card] };
+          return card.status === "applied" ? withEntryValues(next, card.entryId, card.record?.values) : next;
         }));
       });
     }

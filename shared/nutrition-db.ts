@@ -690,6 +690,17 @@ export function lookupNutritionAlias(normalizedPhrase: string): NutritionDbMatch
   return best;
 }
 
+/**
+ * Does `phrase` name this row's food at all — any word of any of its match
+ * alternatives or aliases? "Oatmeal" names the Quaker oatmeal row; "2 Bagels"
+ * does not name the banana row.
+ */
+export function phraseNamesDbItem(item: NutritionDbItem, phrase: string): boolean {
+  const hay = normalizeQuery(phrase);
+  if (item.match.some((alt) => alt.some((w) => hasWord(hay, w)))) return true;
+  return (item.aliases || []).some((a) => normalizeQuery(a).trim().split(" ").some((w) => w && hasWord(hay, w)));
+}
+
 /** The candidates a phrase could mean, best first — for an "is this ambiguous?" check or a picker. */
 export function nutritionCandidates(phrase: string, limit = 5): NutritionDbMatch[] {
   const hay = normalizeQuery(phrase);

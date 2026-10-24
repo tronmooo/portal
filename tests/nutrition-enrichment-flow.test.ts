@@ -490,3 +490,56 @@ describe("external product data mapping", () => {
     expect(phrases.map((p) => p.quantityText)).toEqual(["1 packet of Quaker oatmeal", "1 cup of 2% milk"]);
   });
 });
+
+describe("one message, several foods: each entry is refined from its own food only", () => {
+  // Screenshot regression 2026-10-24: "banana watermelon 2 bagels" was logged
+  // as three entries. The message did not split, so the whole sentence was
+  // read as the bagels' wording, and the reference matched "banana" in it:
+  // the 2 Bagels entry (500 kcal in the chat card) was overwritten with a
+  // medium banana's 105 kcal in the History tab.
+  it("the 2 Bagels entry never takes the banana row from the same sentence", async () => {
+    const message = "banana watermelon 2 bagels";
+    expect(componentPhrases("2 Bagels", message).map((p) => p.quantityText)).toEqual(["2 Bagels"]);
+
+    const bagels = await logFood({ item: "2 Bagels", calories: 500, protein: 18, carbs: 98, fat: 3 });
+    const out = await enrichNutritionEntry(storage, {
+      entryId: bagels.id, message, mode: "auto",
+      deps: { productLookup: async () => null, modelEstimate: async () => null, now: () => NOW },
+    });
+    const names = ((out.enrichment as any)?.components || []).map((c: any) => String(c.name));
+    expect(names.some((n: string) => /banana/i.test(n))).toBe(false);
+    const stored = (await storage.getTrackerEntry(bagels.id))!.values;
+    expect(stored.item).toBe("2 Bagels");
+    expect(stored.calories).toBe(500);
+    expect(stored.carbs).toBe(98);
+  });
+
+  it("the banana entry from that sentence still resolves to the banana row", async () => {
+    const banana = await logFood({ item: "Banana", calories: 105 });
+    const out = await enrichNutritionEntry(storage, { entryId: banana.id, message: "banana watermelon 2 bagels", mode: "auto", deps: offline });
+    expect(((out.enrichment as any)?.components || []).map((c: any) => c.name)).toEqual(["Banana, medium"]);
+  });
+
+  it("a brand in the user's words still pairs with the agent's generic item", () => {
+    expect(componentPhrases("Oatmeal", "1 packet of Quaker oatmeal").map((p) => p.quantityText)).toEqual(["1 packet of Quaker oatmeal"]);
+  });
+});
+
+describe("the chat confirmation card follows the stored entry", () => {
+  it("a refinement patches the card (actions) and the result row with the entry's values", async () => {
+    const { withEntryValues } = await import("../client/src/lib/nutrition-enrichment");
+    const msg = {
+      actions: [
+        { type: "log_entry", data: { _entityId: "e1", values: { item: "2 Bagels", calories: 500 } } },
+        { type: "log_entry", data: { _entityId: "e2", values: { item: "Banana", calories: 105 } } },
+      ],
+      results: [{ id: "e1", values: { item: "2 Bagels", calories: 500 } }],
+    };
+    const next = withEntryValues(msg, "e1", { item: "2 Bagels", calories: 540 });
+    expect(next.actions[0].data.values.calories).toBe(540);
+    expect(next.actions[0].data._entityId).toBe("e1");
+    expect(next.actions[1].data.values.calories).toBe(105);
+    expect(next.results[0].values.calories).toBe(540);
+    expect(withEntryValues(msg, "e1", null)).toBe(msg);
+  });
+});

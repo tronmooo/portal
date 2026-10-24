@@ -157,3 +157,23 @@ export async function rescaleEntry(data: NutritionEnrichmentCardData, factor: nu
   const enrichment = out?.entry?.computed?.nutrition as NutritionEnrichment | undefined;
   return { ...data, status: enrichment?.status || data.status, enrichment: enrichment || data.enrichment, record: out?.entry || data.record };
 }
+
+/**
+ * The chat message after a refinement, choice or portion edit changed an
+ * entry: the confirmation card (an `action`, keyed by `_entityId`) and the
+ * result row (keyed by `id`) both show the record, so both take the stored
+ * values. Patching only `results` left the card saying "2 Bagels · 500 kcal"
+ * while the entry held other numbers.
+ */
+export function withEntryValues<M extends { results?: any[]; actions?: any[] }>(m: M, entryId: string, values: Record<string, any> | null | undefined): M {
+  if (!values || !entryId) return m;
+  return {
+    ...m,
+    results: Array.isArray(m.results)
+      ? m.results.map((r: any) => (r && r.id === entryId ? { ...r, values } : r))
+      : m.results,
+    actions: Array.isArray(m.actions)
+      ? m.actions.map((a: any) => (a?.data?._entityId === entryId ? { ...a, data: { ...a.data, values } } : a))
+      : m.actions,
+  };
+}
