@@ -124,6 +124,7 @@ describe("createTracker duplicate-key backstop reads past the request memo", () 
           }
           return Promise.resolve({ error: null });
         },
+        select: () => ({ eq: () => ({ is: async () => ({ data: rows.map((r) => ({ id: r.id, name: r.name, linked_profiles: r.linkedProfiles })), error: null }) }) }),
       }),
     };
     const storage: any = Object.create(SupabaseStorage.prototype);

@@ -94,17 +94,21 @@ function makeStorageDup(opts: {
 }) {
   const captured: { inserts: any[] } = { inserts: [] };
   const committedNames = new Set(opts.existing.map((t) => t.name.toLowerCase()));
+  const committedRows: any[] = [];
   const client: any = {
     from: (table: string) => ({
       insert: (row: any) => {
         if (table !== "trackers") return Promise.resolve({ error: null });
         captured.inserts.push(row);
         if (opts.enforceUnique && committedNames.has(String(row.name).toLowerCase())) {
-          return Promise.resolve({ error: { code: "23505", message: `duplicate key value violates unique constraint "idx_trackers_name_user"` } });
+          return Promise.resolve({ error: { code: "23505", message: `duplicate key value violates unique constraint "idx_trackers_name_owner"` } });
         }
         committedNames.add(String(row.name).toLowerCase());
+        committedRows.push(row);
         return Promise.resolve({ error: null });
       },
+      // The backstop's index-mirror lookup: select(...).eq(user_id).is(deleted_at)
+      select: () => ({ eq: () => ({ is: async () => ({ data: committedRows.map((r) => ({ id: r.id, name: r.name, linked_profiles: r.linked_profiles })), error: null }) }) }),
     }),
   };
   const storage: any = Object.create(SupabaseStorage.prototype);
@@ -115,7 +119,10 @@ function makeStorageDup(opts: {
   storage.getProfile = async (id: string) => opts.profiles?.[id] ?? null;
   storage.linkProfileTo = async () => undefined;
   storage.logActivity = () => undefined;
-  storage.getTracker = async () => ({ id: "new", name: captured.inserts[captured.inserts.length - 1]?.name, fields: [], entries: [] });
+  storage.getTracker = async (id: string) => {
+    const row = committedRows.find((r) => r.id === id);
+    return row ? { id: row.id, name: row.name, linkedProfiles: row.linked_profiles, fields: [], entries: [] } : undefined;
+  };
   return { storage, captured };
 }
 
@@ -162,18 +169,22 @@ describe("createTracker — per-profile name disambiguation (dup-key fix)", () =
     expect(t.name).toBe("Calories - Bob");
   });
 
-  it("backstops a residual collision with a unique suffix instead of throwing", async () => {
-    // getTrackers is stubbed empty so the pre-check can't catch it, but the DB
-    // still rejects the bare name — the insert must retry with a unique suffix.
-    const { storage } = makeStorageDup({
+  it("a collision the pre-check missed REUSES the colliding tracker — never a suffixed duplicate", async () => {
+    // CONTRACT CHANGE (2026-11-09, "Heart Rate 42c7"): this test used to
+    // require a "Running xxxx" second tracker for the same owner. That is the
+    // duplicate the user sees. getTrackers is stubbed empty so the pre-check
+    // can't catch it; the DB rejects the bare name; the backstop must return
+    // the row that blocked it.
+    const { storage, captured } = makeStorageDup({
       existing: [],
       profiles: { "bill-1": { id: "bill-1", name: "Bill" } },
       enforceUnique: true,
     });
-    await storage.createTracker({ name: "Running", category: "fitness", fields: [], linkedProfiles: ["bill-1"] } as any); // commits "Running" at the DB
-    const t = await storage.createTracker({ name: "Running", category: "fitness", fields: [], linkedProfiles: ["bill-1"] } as any);
-    expect(t.name).not.toBe("Running");
-    expect(t.name.startsWith("Running")).toBe(true);
+    const first = await storage.createTracker({ name: "Running", category: "fitness", fields: [], linkedProfiles: ["bill-1"] } as any);
+    const second = await storage.createTracker({ name: "Running", category: "fitness", fields: [], linkedProfiles: ["bill-1"] } as any);
+    expect(second.id).toBe(first.id);
+    expect(second.name).toBe("Running");
+    expect(captured.inserts.map((r) => r.name)).toEqual(["Running", "Running"]);
   });
 });
 
