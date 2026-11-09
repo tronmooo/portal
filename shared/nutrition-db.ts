@@ -861,9 +861,17 @@ function resolveServingsRaw(item: NutritionDbItem, qty: QuantityNormalization, p
       // word is an assumption, so it costs confidence. When the row's serving
       // is a MEASURE ("one Coke Zero" → a 12 fl oz can) the size of each one
       // is the app's assumption too — the user said how many, not how big.
+      //
+      // A count of a MEASURED serving is that many servings: "2 coffees" of
+      // an 8 fl oz row is two cups, not 2 ÷ 8 = ¼ cup. Regression
+      // (2026-11-09): "2 cups of coffee" logged 1 kcal, 24 mg caffeine and a
+      // 2 oz Hydration entry. A discrete row ("3 cookies" per serving)
+      // divides the count by its serving amount, and so does a gram-weighed
+      // row, where the count is closer to grams than to whole servings.
       const conf: EnrichmentConfidence = size === 1 ? "exact" : "medium";
       const measured = isMeasureUnit(s.unit);
-      return { servings: (qty.count / s.amount) * size, confidence: conf, method: `${qty.count} × ${s.label}${size !== 1 ? ` × ${size} (size)` : ""}${measured ? " (size assumed)" : ""}`, assumed: measured };
+      const perServing = measured && s.unit.toLowerCase().trim() !== "g" ? 1 : s.amount;
+      return { servings: (qty.count / perServing) * size, confidence: conf, method: `${qty.count} × ${s.label}${size !== 1 ? ` × ${size} (size)` : ""}${measured ? " (size assumed)" : ""}`, assumed: measured };
     }
     // "a bowl of Cheerios": a container word the row does not list — the
     // container's assumed volume/mass could not be applied above.

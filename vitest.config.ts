@@ -37,6 +37,7 @@ export default defineConfig({
       'tests/habits-visuals.dom.test.tsx',
       'tests/dialog-touch-scroll.dom.test.tsx',
       'tests/clipboard-copy.dom.test.tsx',
+      'tests/tracker-hero-countup.dom.test.tsx',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
       'tests/expense-view.test.ts',

@@ -338,6 +338,22 @@ describe("linked measurements and portion edits", () => {
     const celsius = linkedMeasurementsFor(enrichmentFor([dbComponent("Celsius Peach Vibe")]));
     expect(celsius.find((l) => l.nutrient === "caffeine")?.value).toBe(200);
   });
+  it("'2 coffees' is two cups — fluid, caffeine and the Hydration link are not ¼ cup", () => {
+    // Regression 2026-11-09: count 2 ÷ the row's 8 fl oz = 0.25 servings →
+    // 1 kcal, 24 mg caffeine and a stray 2 oz Hydration entry.
+    const coffee = dbComponent("coffee", "2 coffees");
+    expect(coffee.servings).toBe(2);
+    const links = linkedMeasurementsFor(enrichmentFor([coffee]));
+    const fluid = links.find((l) => l.nutrient === "fluidMl")!;
+    expect(fluid.value).toBe(474);
+    expect(fluid.toFieldValue(fluid.value)).toBeCloseTo(16, 0);
+    expect(links.find((l) => l.nutrient === "caffeine")?.value).toBe(190);
+    // A discrete row still divides: one cookie of a 3-cookie serving is ⅓.
+    const oreo = lookupNutritionDb("Oreo");
+    if (oreo && !["fl oz", "cup", "can", "serving", "g"].includes(oreo.item.serving.unit) && oreo.item.serving.amount > 1) {
+      expect(dbComponent("Oreo", "1 Oreo").servings).toBeCloseTo(1 / oreo.item.serving.amount, 2);
+    }
+  });
   it("'actually I only ate half' halves components, totals, user values and linked rows — no second entry", () => {
     const e = enrichmentFor([dbComponent("Big Mac"), dbComponent("medium fries")]);
     const withUser = { ...e, ...applyUserProvided(e.totals, { calories: 900 }, NOW), userValues: { calories: 900 } };

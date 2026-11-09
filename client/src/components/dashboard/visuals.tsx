@@ -46,39 +46,63 @@ export function Medallion({ icon: Icon, accent, size = "lg", className = "" }: {
  * Uses requestAnimationFrame rather than a spring library, and bails straight
  * to the final value when the user has asked for reduced motion — an animated
  * count is exactly the kind of thing that rule exists for.
+ *
+ * The animation is decoration; the number is data. Regression (2026-11-09):
+ * tracker "Today" headlines read "2 min" for a 75-minute day and "40 kcal"
+ * for 351 — the count had started and the browser stopped delivering frames
+ * (an embedded browser pane, a background or occluded window, a screen
+ * recorder), so it froze mid-count. A timer now lands the true value when
+ * the animation should have finished, whether or not frames arrived, and a
+ * hidden page skips the animation entirely.
  */
 export function CountUp({ value, className, style, duration = 650 }: {
   value: number; className?: string; style?: React.CSSProperties; duration?: number;
 }) {
-  const [shown, setShown] = useState(() => (prefersReducedMotion() ? value : 0));
-  const fromRef = useRef(0);
+  const skipAnimation = () => prefersReducedMotion() || (typeof document !== "undefined" && document.hidden);
+  const [shown, setShown] = useState(() => (skipAnimation() ? value : 0));
+  const fromRef = useRef(shown);
   const rafRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (prefersReducedMotion()) { setShown(value); return; }
+    if (skipAnimation()) { fromRef.current = value; setShown(value); return; }
     const from = fromRef.current;
     const delta = value - from;
-    if (delta === 0) return;
+    if (delta === 0) { setShown(value); return; }
+    let done = false;
+    const land = () => {
+      if (done) return;
+      done = true;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      fromRef.current = value;
+      setShown(value);
+    };
     // Take the clock from the first frame rather than from performance.now():
     // the rAF timestamp is not guaranteed to share an origin with it, and when
     // they disagree the elapsed fraction goes negative and the number flies off
     // to nonsense before snapping back.
     let start: number | null = null;
     const tick = (t: number) => {
+      if (done) return;
       if (start === null) start = t;
       const p = Math.max(0, Math.min(1, (t - start) / duration));
+      if (p >= 1) { land(); return; }
       // easeOutCubic — fast then settling, which reads as "landing" on a number.
       const eased = 1 - Math.pow(1 - p, 3);
       const next = Math.round(from + delta * eased);
+      fromRef.current = next;
       setShown(next);
-      if (p < 1) rafRef.current = requestAnimationFrame(tick);
-      else fromRef.current = value;
+      rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
-    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    // The guarantee: frames or not, the real value is on screen shortly after
+    // the animation was due to end.
+    const fallback = setTimeout(land, duration + 150);
+    return () => {
+      done = true;
+      clearTimeout(fallback);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
   }, [value, duration]);
-
-  useEffect(() => { fromRef.current = shown; }, [shown]);
 
   return <span className={className} style={style}>{shown.toLocaleString()}</span>;
 }
