@@ -2,6 +2,7 @@ import {
   valuationKey, valuationHistoryKey, readValuationRecord, readValuationHistory,
   appendValuationHistory, VALUATION_HISTORY_LIMIT, understandingKey, readUnderstanding,
 } from "./valuation/storage-codec";
+import { writeWithOptionalColumns } from "./optional-columns";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { dedupeActivityRows } from "@shared/activity-description";
 import { randomUUID, createHash } from "crypto";
@@ -1060,7 +1061,7 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createAiActionLog(entry: InsertAiActionLog): Promise<AiActionLog | undefined> {
-    const { data, error } = await this.supabase.from("ai_action_log").insert({
+    const { data, error } = await writeWithOptionalColumns<any>((row) => this.supabase.from("ai_action_log").insert(row).select().single(), {
       user_id: this.userId,
       tool: entry.tool,
       action_type: entry.actionType,
@@ -1076,7 +1077,9 @@ export class SupabaseStorage implements IStorage {
       turn_id: entry.turnId ?? null,
       request_id: entry.requestId ?? null,
       operation_id: entry.operationId ?? null,
-    }).select().single();
+    }, ["turn_id", "request_id", "operation_id"], (e) => {
+      console.error(`[ai_action_log] the operation-id columns are missing (migration 20260922 not applied): ${e.message || e.code}. Writing the ledger row without them.`);
+    });
     if (error) {
       // Rule 2: a concurrent replay of the same operation loses the unique
       // index race — the first row is the record, return it.

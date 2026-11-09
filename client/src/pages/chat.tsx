@@ -16,6 +16,8 @@ function domainForEndpoint(ep: string): any {
 }
 import { perfMark, perfMeasure, logServerTimings } from "@/lib/perf-marks";
 import { hashNavigate } from "@/lib/hashNavigate";
+import { chatNavigationRoute } from "@/lib/chat-navigation";
+import { actionCardSubject, genericActionLabel } from "@shared/chat-action-card";
 import { routeForEntity, entityTypeFromSearchRow, normalizeEntityType } from "@shared/entity-routes";
 import { stashPendingReview } from "@/lib/pending-review";
 import { stopProp } from "@/lib/event-utils";
@@ -400,6 +402,10 @@ function actionLabel(type: string, data?: any) {
       : null;
     if (noun) return `${type.startsWith("create") ? "Create" : "Update"} ${noun}`;
   }
+  // The generic buckets (update_entity, link_entities, …) name the tool that
+  // actually ran: "Merge profiles", not "Delete Entity".
+  const specific = genericActionLabel(type, data);
+  if (specific) return specific;
   return ACTION_LABELS[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -2096,14 +2102,18 @@ const MessageRow = memo(function MessageRow({
                 : '';
               const entryItem = isTrackerEntry && action.data?.values?.item
                 ? String(action.data.values.item) : '';
+              // The record the action ran on, when the tool's input names one.
+              const cardSubject = isTrackerEntry ? '' : String(actionCardSubject(action.data) || (action as any).title || '');
               const entityTitle = isTrackerEntry
                 ? (entryItem || trackerName || 'Entry')
-                : (action.data?.title || action.data?.name || action.data?.description || action.data?.content || (action as any).title || '').toUpperCase() || actionLabel(action.type, action.data).toUpperCase();
+                : cardSubject.toUpperCase() || actionLabel(action.type, action.data).toUpperCase();
+              // Under a title that names the record, say what was done to it
+              // ("Add Liability Payment · $250.00"); under a title that IS the
+              // action, don't repeat it.
+              const amountText = action.data?.amount ? `$${Number(action.data.amount).toFixed(2)}` : '';
               const entityDetails = isTrackerEntry
                 ? entryValues
-                : action.data?.amount
-                  ? `$${Number(action.data.amount).toFixed(2)}`
-                  : '';
+                : [cardSubject ? actionLabel(action.type, action.data) : '', amountText].filter(Boolean).join(' · ');
               const isArtifact = action.type === 'create_artifact' && action.data && !isUndone;
               // Where tapping the card takes you (null = not linkable).
               const cardRoute = !isUndone ? actionRoute(action.type, action.data) : null;
@@ -2161,7 +2171,7 @@ const MessageRow = memo(function MessageRow({
                         )}
                       </div>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
-                        {entityDetails || actionLabel(action.type, action.data)}
+                        {entityDetails}
                         {isUndone && ' · DELETED'}
                       </p>
                     </div>
@@ -2809,6 +2819,11 @@ export default function ChatPage() {
       perfMeasure("chat:round-trip", "chat:send");
       logServerTimings(data);
       applyChatResult(data, userMsgId, { enrich: true });
+      // The `navigate` tool: open the page the turn asked for. Live send only —
+      // a reply restored after the user already moved on (Rule 22) must not
+      // pull them somewhere else.
+      const route = chatNavigationRoute(data?.results);
+      if (route) hashNavigate(route);
     },
     onError: (err: Error, { userMsgId }) => {
       // A dropped connection ("Load failed" / timeout) does NOT mean nothing

@@ -1594,8 +1594,12 @@ async function tryFastPath(message: string, userId?: string): Promise<FastPathRe
   // A question ("did I walk the dog today?"), a first-person report ("did I
   // …" / "did we …") or a quantity ("did 20 pushups") is not an explicit
   // check-in: the model lane has the vetoes and the tracker for those.
+  // "Check off passport on the Packing checklist" ticks an ITEM ON A LIST. The
+  // lane used to match any habit sharing one word with the sentence and check
+  // that in instead — a write to a record the user never mentioned.
   const habitLaneVetoed = !!habitCheckinMatch && (
-    /\?\s*$/.test(lower)
+    /\b(?:on|from|in|off)\s+(?:my\s+|the\s+|our\s+)?(?:[\w'’&-]+\s+){0,5}(?:check\s?list|to-?do\s+list|list|note|notes|artifact|document|sheet|spreadsheet)\b/.test(lower)
+    || /\?\s*$/.test(lower)
     || /^(?:did|done|completed?)\s+(?:i|we|you|he|she|they)\b/.test(lower)
     || /^\d/.test(habitCheckinMatch[1].trim())
   );
@@ -4116,14 +4120,16 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
   },
   {
     name: "confirm_paycheck_received",
-    description: "Confirm a paycheck was received. Marks it as confirmed with the actual received date and amount.",
+    description: "Confirm an expected paycheck was received. Marks it as confirmed with the actual received date and amount. Find it by source (the employer/payer, partial match) and optionally its expected date — use for 'the Acme paycheck arrived', 'mark my paycheck received'.",
     input_schema: {
       type: "object" as const,
       properties: {
-        paycheck_id: { type: "string", description: "ID of the paycheck to confirm" },
+        source: { type: "string", description: "Who the paycheck is from (partial match)" },
+        expected_date: { type: "string", description: "Expected date (YYYY-MM-DD), only needed when several paychecks share a source" },
+        paycheck_id: { type: "string", description: "ID of the paycheck, when already known from a tool result" },
         actual_amount: { type: "number", description: "Actual amount received (if different from expected)" }
       },
-      required: ["paycheck_id"]
+      required: []
     }
   },
   {
@@ -5664,7 +5670,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
     input_schema: {
       type: "object" as const,
       properties: {
-        budgetId: { type: "string", description: "The ID of the budget to update. Find this via get_budget_summary first." },
+        budgetId: { type: "string", description: "The budget to update: its category name (e.g. 'groceries') or its ID from get_budget_summary." },
         amount: { type: "number", description: "New budget amount in dollars" },
         category: { type: "string", description: "New category name" },
         month: { type: "string", description: "Month in YYYY-MM format. Use current month if not specified." },
@@ -6308,7 +6314,7 @@ NEVER substitute a create_task when the user explicitly asks for a journal entry
 - log income: log_income(amount, source) — "I got paid $X", "received $X from Y"
 - edit income: update_income(description, changes) — "change my freelance income to $250/mo"
 - delete income: delete_income(description, amount?) — "remove that $500 income"
-- expected paycheck: log_expected_paycheck; confirm: confirm_paycheck_received; delete: delete_paycheck(source, expected_date?)
+- expected paycheck: log_expected_paycheck; confirm: confirm_paycheck_received(source, expected_date?); delete: delete_paycheck(source, expected_date?)
 - budgets: set_budget/create_budget to set, update_budget to change, delete_budget to remove
 - "copy last month's budgets" / "same budgets as last month" → copy_budgets_previous_month(month?)
 - correct a saved fact: update_memory(query, newValue) — "actually my gate code is 4321". NEVER save a second memory for a correction; update the existing one.
@@ -9772,7 +9778,30 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       return { result: r, actions: [{ type: "create", category: "paycheck", data: r }] };
     }
     case "confirm_paycheck_received": {
-      const r = await storage.confirmPaycheck(input.paycheck_id, input.actual_amount);
+      // The model rarely has the row id — paychecks are not in its snapshot —
+      // so it names the payer. That name went straight into a uuid column:
+      // 'invalid input syntax for type uuid: "Acme"' (2026-11-09 sweep).
+      const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let paycheckId = typeof input.paycheck_id === "string" && UUID.test(input.paycheck_id.trim()) ? input.paycheck_id.trim() : "";
+      if (!paycheckId) {
+        const needle = safeLC(input.source || input.paycheck_id);
+        if (!needle) return { error: "Which paycheck? Name its source (the employer or payer)." };
+        const paychecks = await storage.getPaychecks();
+        let matches = paychecks.filter((p: any) => !p.confirmed && safeLC(p.source).includes(needle));
+        if (input.expected_date && matches.length > 1) {
+          const byDate = matches.filter((p: any) => String(p.expected_date || "").slice(0, 10) === String(input.expected_date).slice(0, 10));
+          if (byDate.length > 0) matches = byDate;
+        }
+        if (matches.length === 0) {
+          const already = paychecks.find((p: any) => p.confirmed && safeLC(p.source).includes(needle));
+          return already
+            ? { error: `The ${already.source} paycheck expected ${already.expected_date} is already marked received.` }
+            : { error: `No expected paycheck found matching "${input.source || input.paycheck_id}"`, candidates: paychecks.filter((p: any) => !p.confirmed).slice(0, 5).map((p: any) => `${p.source} (${p.expected_date})`) };
+        }
+        if (matches.length > 1) return { error: `Multiple expected paychecks match "${input.source || input.paycheck_id}" — specify the expected date`, candidates: matches.slice(0, 5).map((p: any) => `${p.source} (${p.expected_date})`) };
+        paycheckId = matches[0].id;
+      }
+      const r = await storage.confirmPaycheck(paycheckId, input.actual_amount);
       return { result: r, actions: [{ type: "update", category: "paycheck", data: r }] };
     }
     case "delete_paycheck": {
@@ -14170,8 +14199,22 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       const updates: Record<string, any> = {};
       if (input.amount !== undefined) updates.amount = Number(input.amount);
       if (input.category) updates.category = input.category;
-      const ok = await storage.updateBudget(month, input.budgetId, updates);
-      if (!ok) return { error: `Budget not found with ID "${input.budgetId}" in ${month}. Use get_budget_summary to find the correct budget ID.` };
+      let budgetId = String(input.budgetId || "");
+      let ok = await storage.updateBudget(month, budgetId, updates);
+      if (!ok) {
+        // The model names the budget by its category ("education"); that is
+        // what the user calls it, so resolve it rather than refuse.
+        const wanted = safeLC(input.budgetId);
+        const byCategory = (await storage.getBudgets(month)).filter((b: any) => safeLC(b.category) === wanted);
+        if (byCategory.length === 1) {
+          budgetId = byCategory[0].id;
+          // The name identified the budget; it is not a request to rename it.
+          if (safeLC(updates.category) === wanted) delete updates.category;
+          ok = await storage.updateBudget(month, budgetId, updates);
+        }
+      }
+      if (!ok) return { error: `No budget matching "${input.budgetId}" in ${month}. Use get_budget_summary to see this month's budgets.` };
+      input = { ...input, budgetId };
       return { success: true, budgetId: input.budgetId, month, ...updates, message: `Budget updated successfully`, actions: [{ type: "update", category: "budget", data: { id: input.budgetId, month, ...updates } }] };
     }
 
@@ -14777,12 +14820,89 @@ async function buildTableSpec(input: Record<string, any>): Promise<TableSpec> {
     ];
   } else if (dataSource === "tasks") {
     const all = await storage.getTasks();
-    rows = all.filter(t => (!filters.status||t.status===filters.status)).map(t=>({title:t.title,status:t.status,priority:t.priority,dueDate:t.dueDate||"",id:t.id}));
+    // The model says "open" / "pending" / "active" / "completed"; the rows say
+    // todo / in_progress / done. An unrecognised word used to match nothing,
+    // and the table failed with "No tasks data found" for an account full of
+    // tasks.
+    const want = String(filters.status || "").toLowerCase().replace(/[^a-z]/g, "");
+    const statusOk = (st: string) => {
+      if (!want || want === "all" || want === "any") return true;
+      if (["done", "completed", "complete", "finished", "closed"].includes(want)) return st === "done";
+      if (["open", "active", "pending", "incomplete", "outstanding", "notdone", "remaining"].includes(want)) return st !== "done";
+      if (want === "inprogress") return st === "in_progress";
+      return st === want;
+    };
+    rows = all.filter(t => statusOk(String(t.status || "todo")) && (!profileId || (t.linkedProfiles || []).includes(profileId)))
+      .map(t=>({title:t.title,status:t.status,priority:t.priority,dueDate:t.dueDate||"",id:t.id}));
     if (!inputColumns?.length) columns = [{key:"title",label:"Task",align:"left"},{key:"priority",label:"Priority"},{key:"status",label:"Status"},{key:"dueDate",label:"Due",format:"date"}];
   } else if (dataSource === "habits") {
     const all = await storage.getHabits();
     rows = all.map(h=>({name:h.name,frequency:h.frequency,streak:h.currentStreak,best:h.longestStreak,id:h.id}));
     if (!inputColumns?.length) columns = [{key:"name",label:"Habit",align:"left"},{key:"frequency",label:"Frequency"},{key:"streak",label:"Streak",align:"center"},{key:"best",label:"Best",align:"center"}];
+  // The six sources below were in the tool's schema with no code behind them:
+  // every "table of my bills / goals / events / trackers / journal / profiles"
+  // failed with "No <source> data found." (2026-11-09 sweep of every chat tool).
+  } else if (dataSource === "obligations") {
+    const all = await storage.getObligations();
+    rows = all.filter((o: any) => o.status !== "cancelled" && (!profileId || (o.linkedProfiles || []).includes(profileId)))
+      .map((o: any) => ({ name:o.name, amount:Number(o.amount)||0, frequency:o.frequency||"", nextDueDate:o.nextDueDate||"", category:o.category||"", autopay:o.autopay ? "Yes" : "No", id:o.id }));
+    if (!inputColumns?.length) columns = [{key:"name",label:"Bill",align:"left"},{key:"amount",label:"Amount",format:"currency",align:"right"},{key:"frequency",label:"Frequency"},{key:"nextDueDate",label:"Next due",format:"date"}];
+  } else if (dataSource === "goals") {
+    const all = await storage.getGoals();
+    rows = all.filter((g: any) => (!filters.status || g.status === filters.status) && (!profileId || (g.linkedProfiles || []).includes(profileId)))
+      .map((g: any) => ({ title:g.title, current:Number(g.current)||0, target:Number(g.target)||0, unit:g.unit||"", progress:g.target ? Math.min(100, Math.round((Number(g.current)||0) / Number(g.target) * 100)) : 0, deadline:g.deadline||"", status:g.status||"", id:g.id }));
+    if (!inputColumns?.length) columns = [{key:"title",label:"Goal",align:"left"},{key:"current",label:"Current",format:"number",align:"right"},{key:"target",label:"Target",format:"number",align:"right"},{key:"unit",label:"Unit"},{key:"progress",label:"Progress",format:"percent",align:"right"}];
+  } else if (dataSource === "events") {
+    const all = await storage.getEvents();
+    rows = all.filter((e: any) => {
+      if (profileId && !(e.linkedProfiles || []).includes(profileId)) return false;
+      // No date range asked for → every event; otherwise from the range start on.
+      return !filters.dateRange || new Date(e.date || e.createdAt) >= since;
+    }).map((e: any) => ({ title:e.title, date:e.date||"", time:e.time||"", location:e.location||"", category:e.category||"", id:e.id }));
+    if (!inputColumns?.length) columns = [{key:"title",label:"Event",align:"left"},{key:"date",label:"Date",format:"date"},{key:"time",label:"Time"},{key:"location",label:"Location",align:"left"}];
+  } else if (dataSource === "trackers") {
+    const all = await storage.getTrackers();
+    rows = all.filter((t: any) => !profileId || (t.linkedProfiles || []).includes(profileId)).map((t: any) => {
+      const entries = Array.isArray(t.entries) ? t.entries : [];
+      const last = entries[entries.length - 1];
+      return { name:t.name, category:t.category||"", unit:t.unit||"", entries:entries.length, lastLogged:last?.timestamp ? String(last.timestamp).slice(0, 10) : "", id:t.id };
+    });
+    if (!inputColumns?.length) columns = [{key:"name",label:"Tracker",align:"left"},{key:"category",label:"Category"},{key:"entries",label:"Entries",format:"number",align:"right"},{key:"lastLogged",label:"Last logged",format:"date"}];
+  } else if (dataSource === "journal") {
+    const all = await storage.getJournalEntries();
+    rows = all.filter((j: any) => {
+      if (profileId && !(j.linkedProfiles || []).includes(profileId)) return false;
+      return !filters.dateRange || new Date(j.date || j.createdAt) >= since;
+    }).map((j: any) => ({ date:j.date||"", mood:j.mood||"", content:String(j.content||"").replace(/\s+/g, " ").slice(0, 160), id:j.id }));
+    if (!inputColumns?.length) columns = [{key:"date",label:"Date",format:"date"},{key:"mood",label:"Mood"},{key:"content",label:"Entry",align:"left"}];
+  } else if (dataSource === "profiles") {
+    const all = await storage.getProfiles();
+    rows = all.filter((p: any) => !filters.category || p.type === filters.category)
+      .map((p: any) => ({ name:p.name, type:p.type, id:p.id }));
+    if (!inputColumns?.length) columns = [{key:"name",label:"Name",align:"left"},{key:"type",label:"Type"}];
+  }
+
+  // The model writes its own column keys ("due_date", "due", "task"); a key
+  // that names no field rendered a column of dashes. Point each at the field
+  // it means, or drop it.
+  if (rows.length > 0 && columns.length > 0) {
+    const fields = Object.keys(rows[0]).filter(k => k !== "id");
+    const norm = (k: string) => String(k || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const ALIAS: Record<string, string[]> = {
+      title: ["task", "name", "event", "goal"], name: ["title", "bill", "habit", "tracker", "profile"],
+      dueDate: ["due", "duedate", "deadline", "date"], nextDueDate: ["due", "duedate", "nextdue", "date"],
+      date: ["day", "when"], amount: ["cost", "price", "total"], lastLogged: ["latest", "last", "lastentry"],
+      content: ["entry", "text", "note"], progress: ["percent", "pct"], streak: ["currentstreak"], best: ["longeststreak", "beststreak"],
+    };
+    const resolve = (key: string): string | null => {
+      if (fields.includes(key)) return key;
+      const n = norm(key);
+      return fields.find(f => norm(f) === n) || fields.find(f => (ALIAS[f] || []).includes(n)) || null;
+    };
+    const seen = new Set<string>();
+    const mapped = (columns as any[]).map(c => ({ ...c, key: resolve(String(c?.key ?? "")) }))
+      .filter(c => c.key && !seen.has(c.key) && seen.add(c.key));
+    if (mapped.length > 0) columns = mapped;
   }
 
   if (rows.length === 0) throw new Error(`No ${dataSource} data found.`);
@@ -15542,11 +15662,15 @@ function parseArtifactFromResponse(text: string, profileId: string): { chatText:
 // operations, then each is executed independently through the same
 // validate → execute → verify → ledger plumbing the loop uses. One failure
 // never aborts the rest; every operation reports its own outcome.
-function opRawLabel(toolUse: { name: string; input?: any }): string {
+export function opRawLabel(toolUse: { name: string; input?: any }): string {
   const inp = (toolUse.input || {}) as Record<string, any>;
   // `source` is an income's label ("Globex"); without it the recap read
   // "Logged income: log_income — $2000".
-  return String(inp.trackerName || inp.title || inp.description || inp.name || inp.source || toolUse.name);
+  // A journal entry has only its text: without it the recap read
+  // "Journaled: journal_entry" (2026-11-09 sweep of every chat tool).
+  const content = typeof inp.content === "string" ? inp.content.replace(/\s+/g, " ").trim() : "";
+  const excerpt = content.length > 60 ? `${content.slice(0, 57).trimEnd()}…` : content;
+  return String(inp.trackerName || inp.title || inp.description || inp.name || inp.source || excerpt || toolUse.name);
 }
 
 async function runBulkLogPath(
@@ -15860,7 +15984,9 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
   // Skip if it looks like a general query: "show me", "show my tasks", "get my tasks"
   const isDocOpen = lower.match(/^(?:open|pull up)\s+(?:up\s+)?(?:my\s+)?(.+)/) ||
     (lower.match(/^(?:view|show|find|get)\s+(?:my\s+)?(.+)/) && 
-     !lower.match(/\b(?:tasks?|expenses?|trackers?|habits?|events?|calendar|bills?|obligations?|goals?|spending|journal|mood|summary|data|stats|schedule)\b/));
+     // App surfaces are not documents. "Show me Alice's dashboard only" used
+     // to open whichever document was linked to Alice (2026-11-09 sweep).
+     !lower.match(/\b(?:tasks?|expenses?|trackers?|habits?|events?|calendar|bills?|obligations?|goals?|spending|journal|mood|summary|data|stats|schedule|dashboard|executive|sections?|scope|notifications?|budgets?|net\s+worth|charts?|graphs?)\b/));
   if (isDocOpen) {
     const searchTerm = lower.replace(/^(?:open|show|view|pull up|find|get)\s+(?:up\s+)?(?:my\s+)?/, "").trim();
     try {
@@ -16004,6 +16130,16 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
       }
       console.log(`[doc-open] requiredDocTypeTerms=${Array.from(expandedRequiredTerms).join(",")}`);
 
+      // What the request names BESIDES the person and generic document words.
+      // "Bob's documents" names nothing else, so every document of Bob's
+      // answers it; "Bob's lease" names a lease, and a document that is merely
+      // linked to Bob does not.
+      const GENERIC_DOC_WORDS = new Set(["document", "documents", "doc", "docs", "file", "files", "paper", "papers", "paperwork", "record", "records", "stuff", "everything", "all", "me", "us", "only", "just", "please", "show", "open", "view"]);
+      const targetNameTokens = new Set(profileNames.filter(p => targetProfileIds.has(p.id)).flatMap(p => p.full.split(/[^a-z0-9]+/)));
+      const requestContentWords = cleanSearch.toLowerCase().split(/\s+/)
+        .map(w => w.replace(/['’ʼʹ′]s?$/, "").replace(/[^a-z0-9]/g, ""))
+        .filter(w => w.length >= 2 && !targetNameTokens.has(w) && !otherProfileIdsByFirstName.has(w) && !GENERIC_DOC_WORDS.has(w));
+
       // Fuzzy match: search in document name, type, and extracted data
       const scored = allDocs.map(d => {
         const nameLC = d.name.toLowerCase();
@@ -16071,7 +16207,17 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
               : [];
           const linkedToTarget = docLinked.some(pid => targetProfileIds.has(pid));
           if (linkedToTarget) {
-            score += 25; // strong boost
+            // The boost ranks the named person's documents first; it does not
+            // make an unrelated document a match on its own.
+            const namesThisDoc = requestContentWords.length === 0 || requestContentWords.some(w => {
+              if (searchable.includes(w) || edText.includes(w)) return true;
+              const ws = stem(w);
+              if (ws.length >= 3 && (searchable.includes(ws) || edText.includes(ws))) return true;
+              // "license" also names a document filed as "DL".
+              return (synonymMap[w] || synonymMap[ws] || []).some(syn => searchable.includes(syn));
+            });
+            if (namesThisDoc) score += 25; // strong boost
+            else score = -1;
           } else {
             // Check if doc name itself mentions the requested person
             const nameMentionsTarget = searchable.includes(nameTokenLC);
@@ -16788,6 +16934,12 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
       return `"${d.name}" (${d.type}${linkedNames ? `, owner:${linkedNames}` : ''})${allFields ? ` {${allFields}}` : ''}`;
     }).join("; ") || "none"}`,
     `Goals: ${goals.filter(g => g.status === "active").slice(0, 15).map(g => `${g.title} (${g.current}/${g.target} ${g.unit})`).join("; ") || "none"}`,
+    // The snapshot is a partial view, and the model read its silence as
+    // absence: right after creating one it answered "I don't see any journal
+    // entry for today", "you have no notes stored", "no such checklist", "no
+    // expected paycheck", "no such domain" — without calling the tool that
+    // would have found the record (2026-11-09 sweep of every chat tool).
+    `NOT LISTED IN THIS SNAPSHOT (they are stored; this snapshot simply does not show them): journal entries, notes, artifacts (checklists, lists, documents made in chat), expected paychecks, budgets, custom domains. Never tell the user one of these does not exist because it is not shown here — call its tool (update_/delete_/append_/toggle_/duplicate_/confirm_… resolve the record by name or date) and report what the tool returns.`,
     // Journal entries intentionally EXCLUDED from context — the journal_entry tool handles all checks.
     // Including them caused the AI to hallucinate that profiles "already have entries" based on content similarity.
     // Financial intelligence — the SAME net-worth model as the dashboard
@@ -17538,6 +17690,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 ...(ownerInfo ? { _ownerName: ownerInfo.name, _ownerProfileId: ownerInfo.id, _ownerIsSelf: ownerInfo.isSelf } : {}),
                 ...((result as any)?.trackerId ? { _trackerId: (result as any).trackerId } : {}),
                 ...(previousState ? { _previousState: previousState } : {}),
+                // Which tool ran. Several tools share one action type
+                // (update_entity, link_entities, …); the card names the
+                // specific one — shared/chat-action-card.ts.
+                _tool: toolUse.name,
                 // Turn identity LAST so a tool input key can never shadow it.
                 // The client renders a card only under the message carrying
                 // the same turn id (spec items 7 + 8).

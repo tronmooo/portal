@@ -109,6 +109,27 @@ describe("classifyTurnScope — requests keep their mutation budget", () => {
   });
 });
 
+describe("classifyTurnScope — dashboard layout commands", () => {
+  // The configure_dashboard_sections tool's own examples. "Show …" opens with
+  // a read verb, so the turn was read-only and the tool was refused.
+  it("showing a SECTION on the dashboard is a change, not a question", () => {
+    for (const msg of [
+      "Show the Weekly Summary section on my dashboard",
+      "show the Finance section on my dashboard",
+      "Display the Goals section on my dashboard",
+      "please bring back the Quick Notes widget on the dashboard",
+    ]) {
+      expect(isReadOnlyTurn(msg), msg).toBe(false);
+    }
+  });
+
+  it("asking to SEE data is still a read", () => {
+    for (const msg of ["Show my tasks", "Show the weekly summary", "show me the finance section of my dashboard?", "Show me what's on my dashboard"]) {
+      expect(isReadOnlyTurn(msg), msg).toBe(true);
+    }
+  });
+});
+
 describe("readOnlyTurnViolation", () => {
   it("is a model-facing refusal with no user-facing card", () => {
     const v = readOnlyTurnViolation("log_income", "paycheck");

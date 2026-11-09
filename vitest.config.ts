@@ -217,6 +217,14 @@ export default defineConfig({
       'tests/curated-persistence.test.ts',
       'tests/model-router.test.ts',
       'tests/chat-frontdoor.test.ts',
+      // The `navigate` chat tool: its result must reach the router.
+      'tests/chat-navigation.test.ts',
+      // 2026-11-09 sweep of every chat tool: lane hijacks and table sources.
+      'tests/chat-tool-sweep-2026-11-09.test.ts',
+      // Chat action cards name the tool that ran and the record it ran on.
+      'tests/chat-action-card.test.ts',
+      // The undo ledger is written even when the id-column migration is missing.
+      'tests/ledger-missing-columns.test.ts',
       'tests/profile-edit-no-ai-regen.test.ts',
       'tests/bootstrap-seed-keys.test.ts',
       'tests/scope-prefetch-siblings.test.ts',

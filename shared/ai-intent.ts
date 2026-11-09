@@ -566,8 +566,18 @@ const ANAPHORA: RegExp[] = [
  * Deliberately whole-message: "yes, and also add a task" carries new work and
  * is not a bare confirmation, so replay detection still applies to it.
  */
-const BARE_CONFIRMATION =
-  /^(?:ok(?:ay)?|yes|yea|yeah|yep|yup|ya|sure|confirm(?:ed|ing)?|confirm\s+it|correct|right|affirmative|approved?|accept(?:ed)?|go\s+ahead|proceed|continue|do\s+it|make\s+it\s+so|sounds?\s+good|looks?\s+good|that'?s?\s+(?:right|correct|it)|perfect|exactly|please\s+do|yes\s+please|do\s+that|go\s+for\s+it)$/;
+const AGREEMENT_PHRASE =
+  "(?:ok(?:ay)?|yes|yea|yeah|yep|yup|ya|sure|confirm(?:ed|ing)?|confirm\\s+it|i\\s+confirm|correct|right|affirmative|approved?|accept(?:ed)?|go\\s+ahead|proceed|continue|do\\s+it|make\\s+it\\s+so|sounds?\\s+good|looks?\\s+good|that'?s?\\s+(?:right|correct|it|fine)|perfect|exactly|please\\s+do|please|do\\s+that|go\\s+for\\s+it|i'?\\s*a?m\\s+sure|absolutely|definitely|of\\s+course)";
+
+// One agreement, or several strung together — "yes, go ahead", "ok do it",
+// "yes, that's correct — go ahead", "yep, I'm sure". People rarely answer a
+// confirmation question with exactly one word, and until 2026-11-09 only the
+// one-phrase answers counted: "Should I delete it?" → "Yes, go ahead" was
+// refused as a replay of the earlier request. Every part must be an
+// agreement, so "yes, and also add a task" still carries new work.
+const BARE_CONFIRMATION = new RegExp(
+  `^${AGREEMENT_PHRASE}(?:[\\s,;:.!\u2014\u2013-]+(?:and\\s+)?${AGREEMENT_PHRASE})*$`,
+);
 
 export function isBareConfirmation(message: string): boolean {
   const m = lc(message).replace(/[!.…?,\s]+$/g, "").replace(/^[\s"'`]+/, "").trim();

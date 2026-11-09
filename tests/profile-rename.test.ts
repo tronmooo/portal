@@ -173,6 +173,26 @@ describe("confirming a request is not replaying it", () => {
     }
   });
 
+  it("an answer made of several agreements is still just a yes", () => {
+    // 2026-11-09 sweep of every chat tool: "Delete the task X" → "Are you
+    // sure?" → "Yes, that's correct — go ahead." was refused as a replay,
+    // because only one-phrase answers counted as a confirmation.
+    const DELETE = { title: "File the tax docs" };
+    const PRIOR = ["Delete the task File the tax docs"];
+    for (const yes of ["Yes, go ahead", "yes go ahead", "ok go ahead", "Yes, that's correct — go ahead.", "yep, confirmed", "yes, I confirm", "Yes I'm sure", "sure, do it", "that's correct, proceed", "yes please go ahead"]) {
+      expect(isBareConfirmation(yes), yes).toBe(true);
+      expect(isStaleTurnReplay(DELETE, yes, PRIOR), yes).toBe(false);
+    }
+  });
+
+  it("an agreement followed by NEW work is not a bare confirmation", () => {
+    for (const more of ["Yes, and also add a task to buy milk", "ok create a habit to walk the dog", "yes but make it Friday", "sure thing boss, log 20 pushups"]) {
+      expect(isBareConfirmation(more), more).toBe(false);
+    }
+    // …so replay detection still applies to what it names from earlier turns.
+    expect(isStaleTurnReplay({ name: "Walk the Dog" }, "Yes, and also add a task to buy milk", ["Create a habit to walk the dog"])).toBe(true);
+  });
+
   it("still blocks a genuine replay — a new request is not a confirmation", () => {
     // "Create a habit to walk the dog" two messages ago; this message is about
     // something else entirely, so re-running the habit IS replay.

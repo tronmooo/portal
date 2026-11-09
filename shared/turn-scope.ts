@@ -87,6 +87,17 @@ const PAST_INQUIRY =
 const POLITE_REQUEST =
   /^\s*(?:hey\s+|hi\s+|ok\s+|okay\s+|so\s+|and\s+|also\s+)?(?:please\s+)?(?:can|could|would|will|may)\s+(?:you|u|ya|we)\s+(?:please\s+|maybe\s+|just\s+|also\s+|go\s+ahead\s+and\s+)?(?:mind\s+)?(?!(?:show|tell|list|find|look|check|give|explain|summari[sz]e|pull\s+up|remind\s+me\s+what)\b)/;
 
+/**
+ * "Show the Finance section on my dashboard" — the dashboard's own word for
+ * un-hiding a section. It opens with a read verb, so the turn was classed
+ * read-only and configure_dashboard_sections was refused, with a reply asking
+ * the user to send the same sentence again (2026-11-09 sweep of every chat
+ * tool). A section/widget named together with the dashboard is a layout
+ * change. "Show my tasks" and "show the weekly summary" stay reads.
+ */
+const DASHBOARD_LAYOUT_REQUEST =
+  /^\s*(?:please\s+)?(?:show|display|unhide|bring\s+back|turn\s+on|enable)\s+(?:the\s+|my\s+)?[\w&' -]{2,40}?\s+(?:section|widget|panel)s?\s+(?:back\s+)?(?:on|in|to|onto)\s+(?:my\s+|the\s+)?(?:dashboard|executive)\b/;
+
 const ACTION_BACKREF = /\b(?:again|undo|redo|revert|do\s+(?:it|that|those|them|the\s+same)|make\s+(?:it|that)|try\s+(?:again|that))\b/;
 
 function classifyClause(clause: string): "read" | "write" | "neutral" {
@@ -95,6 +106,7 @@ function classifyClause(clause: string): "read" | "write" | "neutral" {
   if (isBareConfirmation(c)) return "write";
   if (isCorrection(c)) return "write";
   if (ACTION_BACKREF.test(c)) return "write";
+  if (!c.endsWith("?") && DASHBOARD_LAYOUT_REQUEST.test(c)) return "write";
   // A polite request that is not one of the "show/tell/list" shapes is a
   // request for work whenever it names a change.
   if (POLITE_REQUEST.test(c) && WRITE_VERB.test(c)) return "write";
