@@ -8817,6 +8817,10 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           const parsed = m ? parseInt(m[1], 10) : NaN;
           if (isFinite(parsed) && parsed >= 25 && parsed <= 250) hrNum = parsed;
         }
+        // The same message already carries its own Heart Rate call (the
+        // prompt asks for exactly that): the pulse is logged there, so
+        // logging it here as well would record the reading twice.
+        if ((input as any).__heartRateLoggedSeparately) hrNum = null;
         if (hrNum !== null && isBPTarget) {
           await executeTool("log_tracker_entry", {
             trackerName: "Heart Rate",
@@ -15612,6 +15616,7 @@ async function runBulkLogPath(
   const operations: OperationOutcome[] = [];
   const createdTrackers: Array<{ id: string; name: string }> = [];
   const seenEntityIds = new Set<string>();
+  const opsLogHeartRate = callsLogHeartRateSeparately(ops.map((o) => ({ name: o.tool, input: o.input })));
 
   for (let i = 0; i < ops.length && i < MAX_BULK_OPERATIONS; i++) {
     const op = ops[i];
@@ -15628,7 +15633,11 @@ async function runBulkLogPath(
         outcome.error = `Validation failed: ${validation.errors.join(". ")}`;
         continue;
       }
-      const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+      const inputWithCtx = {
+        ...validation.normalized,
+        __userMessage: userMessage,
+        ...(opsLogHeartRate ? { __heartRateLoggedSeparately: true } : {}),
+      };
       const beforeRows = await captureBeforeRows(op.tool, turnVerifyCtx);
       const rawResult = await executeTool(op.tool, inputWithCtx, userId);
       invalidateContextCache(userId);
@@ -17218,6 +17227,7 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
         return n;
       };
       const roundIndexOf = new WeakMap<object, number>();
+      const roundLogsHeartRate = callsLogHeartRateSeparately(toolUses);
       const runOne = async (toolIdx: number, toolUse: Anthropic.Messages.ToolUseBlock): Promise<void> => {
         const meta: RoundMeta = {};
         roundMeta.set(toolIdx, meta);
@@ -17383,7 +17393,11 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
           // Round-5 fabrication guard: thread the original user message so
           // create_profile (and any other guarded tool) can compare requested
           // fields against what the user actually said.
-          const inputWithCtx = { ...validation.normalized, __userMessage: userMessage };
+          const inputWithCtx = {
+            ...validation.normalized,
+            __userMessage: userMessage,
+            ...(roundLogsHeartRate ? { __heartRateLoggedSeparately: true } : {}),
+          };
           // Pre-write snapshot for update/delete tools (one list read) — gives
           // the action ledger a `before` for reapply/recreate undo plans.
           const beforeRows = READ_ONLY_TOOLS.has(toolUse.name)
@@ -18340,6 +18354,21 @@ export const READ_ONLY_TOOLS = new Set<string>([
 // Write tools whose success needs no model follow-up: the outcome IS the
 // reply. Anything that reads, previews, asks, or chains (bulk previews,
 // merges, undo, document tools) stays out so the model keeps its next round.
+/** "Heart Rate", "Resting Heart Rate", "Pulse", "HR" — the Heart Rate tracker. */
+export function isHeartRateTrackerName(name: unknown): boolean {
+  return /^(?:resting\s+)?(?:heart\s*rate|pulse|hr)(?:\s*\(?bpm\)?)?$/i.test(String(name ?? "").trim());
+}
+/** "Blood Pressure", "BP" — the Blood Pressure tracker. */
+export function isBloodPressureTrackerName(name: unknown): boolean {
+  return /blood\s*pressure|^bp$/i.test(String(name ?? "").trim());
+}
+/** Does this batch of calls log heart rate on its own? Then a Blood Pressure
+ * call in the same batch must not ALSO split a pulse out of the message, or
+ * the reading is logged twice. */
+export function callsLogHeartRateSeparately(calls: Array<{ name: string; input?: any }>): boolean {
+  return calls.some((c) => c.name === "log_tracker_entry" && isHeartRateTrackerName((c.input || {}).trackerName));
+}
+
 /**
  * Which tool calls in one model round may run concurrently. Two calls with
  * the SAME key are executed in model order; different keys run in parallel.
@@ -18358,6 +18387,11 @@ export function toolInterferenceKey(t: { id: string; name: string; input?: any }
   if (trackerish.has(t.name)) {
     const raw = String(inp.trackerName || inp.name || inp.medication || inp.drug || "").toLowerCase();
     if (!raw) return `family:tracker`;
+    // A Blood Pressure log writes a Heart Rate entry too (the pulse split-out
+    // in log_tracker_entry), so BP and Heart Rate share one key. Run in
+    // parallel, both created "Heart Rate" at once and the loser became
+    // "Heart Rate 42c7" (2026-11-09 report).
+    if (isBloodPressureTrackerName(raw) || isHeartRateTrackerName(raw)) return "tracker:cardio-vitals";
     if (["calories", "nutrition", "food", "diet", "meal"].some((a) => raw.includes(a))) return "tracker:nutrition";
     const canon = resolveCanonicalActivity(raw)?.trackerName;
     return `tracker:${trackerIdentityKey(canon || raw) || raw}`;
