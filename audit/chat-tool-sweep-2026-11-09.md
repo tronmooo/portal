@@ -32,12 +32,10 @@ first visible progress arrives at 2.3 s (median; 3.9 s p95); the full reply at
 
 ## Not fixed by this change
 
-- **Migration `20260922_ai_operation_ids_and_chat_runs.sql` is not applied to
-  production.** `ai_action_log` has no `turn_id` / `request_id` /
-  `operation_id` columns and `ai_chat_runs` does not exist. Until it is
-  applied, retried requests are not idempotent and a reply cannot be restored
-  after navigating away. (The undo ledger is written without those columns
-  from this change on.)
+- Migration `20260922_ai_operation_ids_and_chat_runs.sql` had never been
+  applied to production (`ai_action_log` had no `turn_id` / `request_id` /
+  `operation_id` columns; `ai_chat_runs` did not exist). **Applied
+  2026-11-09** after this sweep, at the owner's request.
 - `sync_calendar` cannot work on the server as written.
 - The snapshot note that stops "that record doesn't exist" answers is a prompt
   change; it was shown to work by putting the same sentence in the message,
