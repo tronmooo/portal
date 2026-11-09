@@ -97,7 +97,7 @@
     "input-otp": "^1.4.2",
     "jose": "^6.2.5",
     "jspdf": "^4.2.1",
-    "lucide-react": "^0.453.0",
+    "lucide-react": "^1.52.0",
     "memorystore": "^1.6.7",
     "mermaid": "^11.17.2",
     "nanoid": "^5.1.16",
