@@ -19,6 +19,7 @@ const db = {
   journal: [] as any[],
   paychecks: [] as any[],
   budgets: [] as any[],
+  artifacts: [] as any[],
   modelCalls: 0,
   modelRequests: [] as string[],
 };
@@ -48,6 +49,11 @@ function reseed() {
     { id: "22222222-2222-4222-8222-222222222222", source: "Side Gig", amount: 300, expected_date: "2026-11-25", confirmed: false },
   ];
   db.budgets = [{ id: "b-edu", category: "education", amount: 123 }, { id: "b-food", category: "food", amount: 400 }];
+  db.artifacts = [
+    { id: "a-pack", type: "checklist", title: "Packing", content: "passport\ncharger", items: [], tags: [], linkedProfiles: [] },
+    // A note of the user's own whose title happens to name another profile.
+    { id: "a-note", type: "note", title: "Alice Park birthday ideas", content: "A scarf.", tags: [], linkedProfiles: [SELF.id], createdAt: "2026-11-01T00:00:00Z" },
+  ];
 }
 
 vi.mock("../server/storage", () => {
@@ -67,6 +73,13 @@ vi.mock("../server/storage", () => {
     getJournalEntries: async () => db.journal,
     getPreference: async () => null,
     getPaychecks: async () => db.paychecks,
+    getDomains: async () => [{ id: "dom1", name: "Garden", description: "Plants", fields: [] }],
+    getArtifacts: async () => db.artifacts,
+    // Production's matcher: the WHOLE query must be a substring of a field.
+    search: async (q: string) => db.artifacts
+      .filter((a) => `${a.title} ${a.content}`.toLowerCase().includes(q.toLowerCase()))
+      .map((a) => ({ _type: "artifact", ...a })),
+    deleteArtifact: async (id: string) => { db.artifacts = db.artifacts.filter((a) => a.id !== id); return true; },
     // The database column is a uuid: anything else is a Postgres error.
     confirmPaycheck: async (id: string, actual?: number) => {
       if (!/^[0-9a-f-]{36}$/i.test(id)) throw new Error(`invalid input syntax for type uuid: "${id}"`);
@@ -256,9 +269,42 @@ describe("the model is told what its snapshot leaves out", () => {
     expect(withSnapshot, "the request that carries the data snapshot").toBeTruthy();
     const note = withSnapshot!.slice(withSnapshot!.indexOf("NOT LISTED IN THIS SNAPSHOT"));
     expect(withSnapshot).toContain("NOT LISTED IN THIS SNAPSHOT");
-    for (const kind of ["journal entries", "notes", "artifacts", "expected paychecks", "budgets", "custom domains"]) {
+    for (const kind of ["journal text", "notes", "artifacts", "received paychecks", "budgets"]) {
       expect(note.slice(0, 700), kind).toContain(kind);
     }
+    // What it CAN list cheaply, it lists: the prompt note alone still left
+    // "no journal entry for today" / "no such paycheck / domain" in production.
+    expect(withSnapshot).toContain("Journal: entries exist on 2026-11-09");
+    expect(withSnapshot).toContain("Expected paychecks (not yet received): Acme Corp: $2000 expected 2026-11-20");
+    expect(withSnapshot).toContain("Custom domains (1): Garden");
+    // The journal's text stays out of the snapshot.
+    expect(withSnapshot).not.toContain("Productive morning.");
     expect(note.slice(0, 700)).toMatch(/call its tool/);
+  });
+});
+
+describe("the search tool finds a record named with its kind", () => {
+  it("finds the checklist titled Packing when asked for the Packing checklist (the reported failure)", async () => {
+    const out = await executeTool("search", { query: "Packing checklist" }, "u1");
+    expect(out.map((r: any) => r.id)).toContain("a-pack");
+  });
+
+  it("finds custom domains and expected paychecks, which the corpus leaves out", async () => {
+    const domain = await executeTool("search", { query: "Garden domain" }, "u1");
+    expect(domain.map((r: any) => `${r._type}:${r.name}`)).toContain("domain:Garden");
+    const pay = await executeTool("search", { query: "Acme" }, "u1");
+    expect(pay.map((r: any) => `${r._type}:${r.source}`)).toContain("paycheck:Acme Corp");
+  });
+
+  it("still returns nothing for something that is not there", async () => {
+    expect(await executeTool("search", { query: "Zeppelin checklist" }, "u1")).toEqual([]);
+  });
+});
+
+describe("a note is not hidden by a profile guessed from its title", () => {
+  it("deletes the user's own note whose title names someone else (the reported failure)", async () => {
+    const out = await executeTool("delete_note", { title: "Alice Park birthday ideas" }, "u1");
+    expect(out?.error).toBeUndefined();
+    expect(out.id).toBe("a-note");
   });
 });

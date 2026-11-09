@@ -1103,6 +1103,55 @@ async function getCachedContextData(userId?: string): Promise<any[]> {
 }
 
 // ============================================================
+// CHAT SEARCH — the `search` tool
+// ============================================================
+
+/** Words that say what KIND of record is wanted, not which one. */
+const SEARCH_KIND_WORDS = new Set([
+  "checklist", "list", "artifact", "note", "notes", "document", "doc", "file", "domain", "tracker", "task",
+  "habit", "goal", "bill", "expense", "income", "paycheck", "budget", "entry", "journal", "event", "profile",
+  "record", "records", "item", "my", "the", "a", "an", "custom", "expected", "called", "named", "titled",
+]);
+
+/**
+ * storage.search matches the WHOLE query as one substring — right for the
+ * search palette, wrong for a model that asks for "Packing checklist" when
+ * the checklist is titled "Packing": it got nothing back and told the user
+ * the record did not exist (2026-11-09 sweep of every chat tool). When the
+ * phrase finds nothing, search again without the kind words, and include the
+ * two small tables the corpus leaves out (custom domains, expected paychecks).
+ */
+export async function chatSearch(query: string): Promise<any[]> {
+  const q = query.trim();
+  if (!q) return [];
+  let results = await storage.search(q);
+  const words = q.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const named = words.filter((w) => !SEARCH_KIND_WORDS.has(w));
+  if (results.length === 0 && named.length > 0 && named.length < words.length) {
+    results = await storage.search(named.join(" "));
+  }
+  const needle = (named.length > 0 ? named : words).join(" ");
+  const seen = new Set(results.map((r: any) => r?.id).filter(Boolean));
+  try {
+    const [domains, paychecks] = await Promise.all([
+      storage.getDomains().catch(() => [] as any[]),
+      storage.getPaychecks().catch(() => [] as any[]),
+    ]);
+    for (const d of domains as any[]) {
+      if (!seen.has(d.id) && `${d.name || ""} ${d.description || ""}`.toLowerCase().includes(needle)) {
+        results.push({ _type: "domain", id: d.id, name: d.name, description: d.description, fields: d.fields });
+      }
+    }
+    for (const p of paychecks as any[]) {
+      if (!seen.has(p.id) && String(p.source || "").toLowerCase().includes(needle)) {
+        results.push({ _type: "paycheck", id: p.id, source: p.source, amount: p.amount, expected_date: p.expected_date, confirmed: !!p.confirmed });
+      }
+    }
+  } catch { /* the extra tables never fail a search */ }
+  return results;
+}
+
+// ============================================================
 // SAFE ENTITY MATCHING — prevents wrong-entity deletes/updates
 // ============================================================
 
@@ -7474,7 +7523,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     }
 
     case "search": {
-      const results = await storage.search(input.query);
+      const results = await chatSearch(String(input.query || ""));
       // Filter by profile if specified
       if (input.forProfile) {
         const profiles = await storage.getProfiles();
@@ -12208,7 +12257,14 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     case "update_note": {
       const noteProfile = await resolveNoteProfile(input.forProfile, input.title || "");
       const candidates = await listNotes(storage, { profileId: noteProfile?.id ?? null });
-      const hit = safeMatchEntity(candidates as any[], input.title || "", (n: any) => `${n.title} ${n.content}`);
+      let hit = safeMatchEntity(candidates as any[], input.title || "", (n: any) => `${n.title} ${n.content}`);
+      // The profile is a guess read from the title. A note that search_notes
+      // had just shown was answered "Not found" because its title shared a
+      // word with another profile; look across all notes before saying so.
+      if (!hit.match && noteProfile) {
+        const everywhere = safeMatchEntity(await listNotes(storage, {}) as any[], input.title || "", (n: any) => `${n.title} ${n.content}`);
+        if (everywhere.match) hit = everywhere;
+      }
       if (!hit.match) return { error: hit.error || `No note found matching "${input.title}"`, candidates: hit.candidates };
       const updated = await updateNote(storage, hit.match.id, {
         title: input.newTitle,
@@ -12222,7 +12278,14 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
     case "delete_note": {
       const noteProfile = await resolveNoteProfile(input.forProfile, input.title || "");
       const candidates = await listNotes(storage, { profileId: noteProfile?.id ?? null });
-      const hit = safeMatchEntity(candidates as any[], input.title || "", (n: any) => `${n.title} ${n.content}`);
+      let hit = safeMatchEntity(candidates as any[], input.title || "", (n: any) => `${n.title} ${n.content}`);
+      // The profile is a guess read from the title. A note that search_notes
+      // had just shown was answered "Not found" because its title shared a
+      // word with another profile; look across all notes before saying so.
+      if (!hit.match && noteProfile) {
+        const everywhere = safeMatchEntity(await listNotes(storage, {}) as any[], input.title || "", (n: any) => `${n.title} ${n.content}`);
+        if (everywhere.match) hit = everywhere;
+      }
       if (!hit.match) return { error: hit.error || `No note found matching "${input.title}"`, candidates: hit.candidates };
       const ok = await deleteNote(storage, hit.match.id);
       return { success: ok, id: hit.match.id, title: hit.match.title, dateRuleImpact: "none — notes do not own Date Rules" };
@@ -16948,7 +17011,30 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // entry for today", "you have no notes stored", "no such checklist", "no
     // expected paycheck", "no such domain" — without calling the tool that
     // would have found the record (2026-11-09 sweep of every chat tool).
-    `NOT LISTED IN THIS SNAPSHOT (they are stored; this snapshot simply does not show them): journal entries, notes, artifacts (checklists, lists, documents made in chat), expected paychecks, budgets, custom domains. Never tell the user one of these does not exist because it is not shown here — call its tool (update_/delete_/append_/toggle_/duplicate_/confirm_… resolve the record by name or date) and report what the tool returns.`,
+    // Dates only — the text is deliberately left out (it made the model
+    // decide a new entry "already existed"). The date is what "delete /
+    // change today's entry" needs.
+    (() => {
+      const dates = Array.from(new Set((journalEntries as any[]).map((j: any) => String(j?.date || "").slice(0, 10)).filter(Boolean))).sort().reverse().slice(0, 14);
+      return dates.length
+        ? `Journal: entries exist on ${dates.join(", ")} (text not shown — use the journal tools to read, change or delete one; a new entry on a day that has one is still allowed).`
+        : "";
+    })(),
+    // Two small tables the model otherwise never sees.
+    await (async () => {
+      try {
+        const [paychecks, domains] = await Promise.all([
+          storage.getPaychecks().catch(() => [] as any[]),
+          storage.getDomains().catch(() => [] as any[]),
+        ]);
+        const pending = (paychecks as any[]).filter((p: any) => !p.confirmed).slice(0, 10);
+        return [
+          pending.length ? `Expected paychecks (not yet received): ${pending.map((p: any) => `${p.source}: $${p.amount} expected ${p.expected_date}`).join("; ")}` : "",
+          (domains as any[]).length ? `Custom domains (${(domains as any[]).length}): ${(domains as any[]).slice(0, 20).map((d: any) => d.name).join("; ")}` : "",
+        ].filter(Boolean).join("\n");
+      } catch { return ""; }
+    })(),
+    `NOT LISTED IN THIS SNAPSHOT (they are stored; this snapshot simply does not show them): journal text, notes, artifacts (checklists, lists, documents made in chat), received paychecks, budgets. Never tell the user one of these does not exist because it is not shown here — call its tool (update_/delete_/append_/toggle_/duplicate_/confirm_… resolve the record by name or date) and report what the tool returns.`,
     // Journal entries intentionally EXCLUDED from context — the journal_entry tool handles all checks.
     // Including them caused the AI to hallucinate that profiles "already have entries" based on content similarity.
     // Financial intelligence — the SAME net-worth model as the dashboard
