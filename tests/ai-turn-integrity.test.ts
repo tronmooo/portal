@@ -25,6 +25,7 @@ import {
 import {
   checkToolAgainstIntent,
   isStaleTurnReplay,
+  isStaleReplayCall,
   toolOperation,
   TOOL_INTENT_ENTITY,
   areEntitiesCompatible,
@@ -433,6 +434,24 @@ describe("old requests are not re-executed on a new turn", () => {
   it("does not flag a call with no target name", () => {
     expect(isStaleTurnReplay({}, ASSET_MSG, history)).toBe(false);
     expect(isStaleTurnReplay({ amount: 20 }, ASSET_MSG, history)).toBe(false);
+  });
+
+  it("never refuses an entry LOG as replay — every log is a new data point", () => {
+    // The reported turn: weight and basketball logged, sleep and running
+    // refused as "previously handled" because "slept"/"ran" ≠ "Sleep"/"Running"
+    // and an earlier message had mentioned both.
+    const current = "Weight 182.4, slept 7.5 hours, ran 3.2 miles in 28 minutes, and played basketball for an hour";
+    const prior = ["Log my sleep 8 hours and running 2 miles"];
+    // The stale-replay heuristic alone still matches these labels…
+    expect(isStaleTurnReplay({ trackerName: "Sleep" }, current, prior)).toBe(true);
+    expect(isStaleTurnReplay({ trackerName: "Running" }, current, prior)).toBe(true);
+    // …but the gate the engine uses never applies it to a log.
+    expect(isStaleReplayCall("log_tracker_entry", { trackerName: "Sleep" }, current, prior)).toBe(false);
+    expect(isStaleReplayCall("log_tracker_entry", { trackerName: "Running" }, current, prior)).toBe(false);
+    // A deleted-then-re-entered log is just a log.
+    expect(isStaleReplayCall("log_tracker_entry", { trackerName: "Sleep" }, "7.5 hours", prior)).toBe(false);
+    // Creates are still gated.
+    expect(isStaleReplayCall("create_habit", { name: "Walk the Dog" }, ASSET_MSG, history)).toBe(true);
   });
 
   it("does not flag a name the user never said before either", () => {

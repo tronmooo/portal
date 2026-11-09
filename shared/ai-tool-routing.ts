@@ -382,6 +382,34 @@ export function isStaleTurnReplay(
   return labelTokens.every((t) => priorTokens.has(t));
 }
 
+/**
+ * Should the turn-scope gate refuse this call as a replay of an earlier
+ * message?
+ *
+ * NEVER for an entry log. Regression (2026-11-09): "Weight 182.4, slept 7.5
+ * hours, ran 3.2 miles in 28 minutes, and played basketball for an hour"
+ * logged weight and basketball but REFUSED sleep and running as "previously
+ * handled" — the tracker names ("Sleep", "Running") are not the words the
+ * user typed ("slept", "ran"), and both words were in an earlier message. A
+ * log is a new data point every time: the user logs sleep every day, may
+ * have deleted yesterday's entry and be entering it again, and refusing it
+ * loses their data. Exact re-sends seconds apart are still caught by the
+ * log tool's own moments-ago dedup, which keeps one entry and says so.
+ *
+ * Never for an update either: a correction names a record from an earlier
+ * message by definition ("oops, it was actually $45").
+ */
+export function isStaleReplayCall(
+  toolName: string,
+  toolInput: Record<string, any> | undefined | null,
+  currentMessage: string,
+  priorUserMessages: string[],
+): boolean {
+  if (isEntryAppendTool(toolName)) return false;
+  if (toolOperation(toolName) === "update") return false;
+  return isStaleTurnReplay(toolInput, currentMessage, priorUserMessages);
+}
+
 // ── One request, one record ─────────────────────────────────────────────────
 
 /** A create this turn already performed. */
@@ -448,6 +476,11 @@ const ENTRY_APPEND_TOOLS = new Set([
   "journal_entry",
   "append_journal_entry",
 ]);
+
+/** Does this tool append an entry (a log, a dose, a payment) rather than create a record? */
+export function isEntryAppendTool(toolName: string): boolean {
+  return ENTRY_APPEND_TOOLS.has(toolName);
+}
 
 /**
  * Has this turn already created this exact thing?

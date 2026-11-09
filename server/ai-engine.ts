@@ -164,7 +164,7 @@ import { hasExplicitHabitCreateIntent, hasExplicitHabitCheckinIntent, parseCompl
 import { parseTurnIntent, parseTurnPlan, parseDailyTarget, parseDurationDays, isActionable, type ParsedIntent, type TurnIntentPlan } from "@shared/ai-intent";
 import {
   checkToolAgainstIntent,
-  isStaleTurnReplay,
+  isStaleReplayCall,
   staleReplayViolation,
   findDuplicateCreateInTurn,
   duplicateCreateViolation,
@@ -17285,7 +17285,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             // ("oops, it was actually $45"): the record is named back there
             // by definition, and the write is verified against the database
             // afterwards. Gating updates refused the correction outright.
-            if (label && toolOperation(toolUse.name) !== "update" && isStaleTurnReplay(input, userMessage, priorUserMessages)) {
+            // An entry LOG is never replay either: logging sleep again is a
+            // new night, not a duplicate (isStaleReplayCall).
+            if (label && isStaleReplayCall(toolUse.name, input, userMessage, priorUserMessages)) {
               return staleReplayViolation(toolUse.name, label);
             }
             // One request creates ONE record: a second create of the same

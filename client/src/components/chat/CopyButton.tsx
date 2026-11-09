@@ -6,7 +6,8 @@
 // is better than two.
 
 import { useState } from "react";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, X } from "lucide-react";
+import { copyText } from "@/lib/clipboard";
 
 export function CopyButton({
   value,
@@ -19,40 +20,27 @@ export function CopyButton({
   className?: string;
   iconOnly?: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
     const text = typeof value === "function" ? value() : value;
     if (!text) return;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-      }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked — silently ignore */
-    }
+    const ok = await copyText(text);
+    setState(ok ? "copied" : "failed");
+    setTimeout(() => setState("idle"), 1500);
   };
+  const copied = state === "copied";
+  const status = copied ? "Copied" : state === "failed" ? "Couldn't copy" : label;
   return (
     <button
       type="button"
       onClick={handleCopy}
       className={`inline-flex items-center gap-1 rounded-md text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors ${iconOnly ? "p-1" : "px-1.5 py-0.5"} ${className}`}
       aria-label={label}
-      title={copied ? "Copied" : label}
+      title={status}
     >
-      {copied ? <Check className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-      {!iconOnly && <span>{copied ? "Copied" : label}</span>}
+      {copied ? <Check className="h-3 w-3 text-green-500" /> : state === "failed" ? <X className="h-3 w-3 text-destructive" /> : <Copy className="h-3 w-3" />}
+      {!iconOnly && <span>{status}</span>}
     </button>
   );
 }

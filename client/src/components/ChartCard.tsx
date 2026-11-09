@@ -6,6 +6,7 @@
 import { Suspense, lazy, useState } from "react";
 import { BarChart2, ChevronDown, ChevronUp, Copy, Check, Loader2 } from "lucide-react";
 import type { ChartSpec2 } from "@/components/ChatChartRenderer";
+import { copyText } from "@/lib/clipboard";
 
 const ChatChartBody = lazy(() => import("@/components/ChatChartRenderer"));
 
@@ -46,11 +47,10 @@ export default function ChartCard({ spec, defaultOpen = true }: { spec: ChartSpe
   const h = spec.height || 260;
 
   const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(chartToMarkdown(spec));
+    if (await copyText(chartToMarkdown(spec))) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
-    } catch { /* clipboard blocked — no-op */ }
+    }
   };
 
   const conf = spec.confidence;

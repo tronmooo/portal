@@ -36,6 +36,7 @@ export default defineConfig({
       'tests/profile-loan-sync.test.ts',
       'tests/habits-visuals.dom.test.tsx',
       'tests/dialog-touch-scroll.dom.test.tsx',
+      'tests/clipboard-copy.dom.test.tsx',
       'tests/liability-calc.test.ts',
       'tests/profile-filter.test.ts',
       'tests/expense-view.test.ts',
