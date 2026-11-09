@@ -334,6 +334,7 @@ export default defineConfig({
       'tests/system-prompt-cache.test.ts',
       'tests/tool-interference-key.test.ts',
       'tests/bp-heart-rate-split.test.ts',
+      'tests/tracker-create-no-duplicates.test.ts',
       'tests/intent-plan-activity-reports.test.ts',
       'tests/no-intent-veto.test.ts',
       'tests/shared-activity-routing.test.ts',

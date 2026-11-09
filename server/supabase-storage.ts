@@ -11,6 +11,27 @@ import { formatMoneyMajor } from "@shared/money";
 import { budgetMonthOrThrow, budgetCategoryKey, upsertBudget, applyBudgetUpdate, mergeBudgetsForCopy, spendByCategory, spendByCategory as spendByCategoryOf, type BudgetEntry } from "@shared/budget-ledger";
 // One writer at a time per (user, month) within this process; see mutateBudgets.
 const budgetWriteLocks = new Map<string, Promise<void>>();
+// One createTracker at a time per (user, tracker identity) within this process.
+// Every tool path that can write a tracker (a BP log's pulse split-out, a habit
+// mirror, a medication dose, shared-activity fan-out, two parallel tool calls)
+// funnels through createTracker, so serializing HERE makes a same-name race
+// impossible no matter how the callers are scheduled. Cross-process races are
+// still caught by the unique index and resolved by reuse (see createTracker).
+const trackerCreateLocks = new Map<string, Promise<void>>();
+async function withTrackerCreateLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = trackerCreateLocks.get(key) || Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((r) => { release = r; });
+  const chain = prev.then(() => mine);
+  trackerCreateLocks.set(key, chain);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (trackerCreateLocks.get(key) === chain) trackerCreateLocks.delete(key);
+  }
+}
 import { assertEventSpan } from "@shared/event-span";
 import { searchCorpus, searchRowHref } from "@shared/search-match";
 import { canonicalExpenseCategory, canonicalObligationCategory } from "@shared/category-canon";
@@ -3281,6 +3302,35 @@ export class SupabaseStorage implements IStorage {
   }
 
   async createTracker(data: InsertTracker): Promise<Tracker> {
+    // Serialized per (user, identity); inside the lock, read trackers fresh so
+    // a create that just finished ahead of us is seen and reused.
+    return withTrackerCreateLock(`${this.userId}|${trackerIdentityKey(data.name) || String(data.name || "").toLowerCase()}`, async () => {
+      this.dropMemo("getTrackers:");
+      const tracker = await this.trackerCreateInLock(data);
+      this.dropMemo("getTrackers:");
+      return tracker;
+    });
+  }
+
+  /** The live tracker row the unique index idx_trackers_name_owner would
+   * collide with: same account, same owner (linked_profiles[0], or none),
+   * same lower(name). Mirrors the index exactly, so after a 23505 it always
+   * finds the row that blocked the insert. */
+  private async findTrackerIdByOwnerAndName(ownerId: string | null, name: string): Promise<string | null> {
+    const { data, error } = await this.supabase.from("trackers")
+      .select("id, name, linked_profiles")
+      .eq("user_id", this.userId)
+      .is("deleted_at", null);
+    if (error || !Array.isArray(data)) return null;
+    const lower = String(name).toLowerCase();
+    const row = data.find((r: any) => {
+      const owner = Array.isArray(r.linked_profiles) && r.linked_profiles.length ? String(r.linked_profiles[0]) : null;
+      return String(r.name).toLowerCase() === lower && owner === ownerId;
+    });
+    return row ? String(row.id) : null;
+  }
+
+  private async trackerCreateInLock(data: InsertTracker): Promise<Tracker> {
     // Dedup: check for an existing tracker with the same IDENTITY and the same
     // profile. Different profiles CAN have same-named trackers (e.g. "Calories"
     // for Me and "Calories - Rex" for Rex).
@@ -3293,7 +3343,6 @@ export class SupabaseStorage implements IStorage {
     // `trackerNamesMatch` — so a user who really does want "Trail Running"
     // alongside "Running" still gets two trackers.
     const existing = await this.getTrackers();
-    const requestedProfiles = (data as any).linkedProfiles || [];
     const wantedKey = trackerIdentityKey(data.name);
     // Resolve the owner FIRST: an unspecified owner means the self profile, not
     // "any owner". Matching any owner is what let one person's log land on
@@ -3386,41 +3435,21 @@ export class SupabaseStorage implements IStorage {
     };
 
     let insertErr = (await insertWithName(finalName)).error;
-    // BACKSTOP for the UNIQUE (user_id, name) constraint. A 23505 here means the
-    // pre-check missed a colliding row — almost always a CONCURRENT createTracker
-    // for the same name that committed between our getTrackers() read and our
-    // insert (the AI tool path can fire the same "log X" twice; the client can
-    // retry a timed-out request whose write actually landed).
+    // A 23505 means a live tracker with this owner + name exists that the
+    // pre-check could not see: a create in ANOTHER process committed between
+    // our read and our insert (in-process creates are serialized above), or a
+    // replica-lag read. That row IS the tracker we were asked for — reuse it.
     //
-    // The old backstop blindly suffixed and re-inserted, so every such race
-    // spawned a brand-new "Running abcd" tracker — the duplicate-insert storm on
-    // idx_trackers_name_user. Instead, make creation IDEMPOTENT: re-read and
-    // REUSE the tracker that won the race whenever it's a legitimate match for
-    // what we were asked to create. Only suffix when the surviving row genuinely
-    // belongs to a DIFFERENT profile (the real "Calories for Me vs Bob" case),
-    // never weakening the uniqueness constraint.
-    if (insertErr && /duplicate key|23505|idx_trackers_name_user|already exists/i.test(insertErr.message || insertErr.code || "")) {
-      // Re-read from the DATABASE: under the request memo getTrackers() would
-      // hand back the same list the pre-check saw — the one without the race
-      // winner — so the reuse below never matched and every race was suffixed
-      // ("Heart Rate 42c7", 2026-11-09 report).
-      this.dropMemo("getTrackers:");
-      const fresh = await this.getTrackers();
-      const wanted = new Set<string>(requestedProfiles.length ? requestedProfiles : linkedProfiles);
-      const reusable = fresh.find(t => {
-        if (!wantedKey || trackerIdentityKey(t.name) !== wantedKey) return false;
-        if (wanted.size === 0) return true; // no profile constraint → any same-name row
-        const lp = t.linkedProfiles || [];
-        return lp.some((pid: string) => wanted.has(pid));
-      });
-      if (reusable) return reusable; // race winner already created it → idempotent no-op
-      // Not a race we can reuse: under the owner-scoped index a 23505 means THIS
-      // owner already holds this name, and the only rows that fit are ones the
-      // pre-check couldn't see (a soft-deleted row, a replica lag read). Suffix
-      // ONCE with a short id — never the owner's name, which is what produced
-      // "Calories - Bob" — so the write makes progress instead of raising a raw
-      // duplicate-key error at the user.
-      insertErr = (await insertWithName(`${finalName} ${id.slice(0, 4)}`)).error;
+    // Never invent a name to make the insert succeed. The old fallback
+    // suffixed a short id ("Heart Rate 42c7", 2026-11-09 report) and handed
+    // the user a duplicate tracker; if the colliding row can't be found, fail
+    // loudly instead. Guard: tests/tracker-create-no-duplicates.test.ts.
+    if (insertErr && /duplicate key|23505|idx_trackers_name|already exists/i.test(`${insertErr.message || ""} ${insertErr.code || ""}`)) {
+      const owner = linkedProfiles.length ? String(linkedProfiles[0]) : null;
+      const winnerId = await this.findTrackerIdByOwnerAndName(owner, finalName);
+      const winner = winnerId ? await this.getTracker(winnerId) : undefined;
+      if (winner) return winner;
+      throw insertErr;
     }
     if (insertErr) throw insertErr;
     bustInsightsCacheFor(this.userId); // [P0] tracker set changed → recompute insights

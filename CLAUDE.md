@@ -88,6 +88,17 @@ green. After a push to `main`:
     `account`: its value is its balance (`isValuableProfile` in
     `server/valuation/service.ts`).
 
+11. **One tracker per owner + name.** `createTracker`
+    (`server/supabase-storage.ts`) is the only way a tracker is born. It is
+    serialized per (user, tracker identity) in-process, and a unique-index
+    collision REUSES the colliding row. Never suffix or rename a tracker to
+    get an insert through ("Heart Rate 42c7"). A tool that writes to a second
+    tracker as a side effect (BP's pulse split-out → Heart Rate) must share a
+    `toolInterferenceKey` with that tracker's own calls and must not repeat a
+    value another call in the same batch already logs.
+    *Guards:* `tests/tracker-create-no-duplicates.test.ts`,
+    `tests/bp-heart-rate-split.test.ts`.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 
