@@ -10,6 +10,7 @@
 // Pure. Pinned by tests/consistency-layer-format.test.ts.
 
 import { humanizeFieldName, humanizeEnumValue } from "../field-label";
+import { formatYearMonth } from "../date-precision";
 
 /** "home_insurance_declarations" → "Home Insurance Declarations". */
 export function humanizeLabel(raw: unknown): string {
@@ -49,6 +50,10 @@ export function formatFieldValue(key: unknown, value: unknown, pref: DateFormatP
   const k = String(key ?? "");
   if (/(date|asof|as_of|expir|due|birthday|dob)$/i.test(k) || DAY_RE.test(String(value))) {
     if (DAY_RE.test(String(value))) return formatUserDate(value, pref);
+    // A date stored at month precision ("born March 2020") reads as the
+    // month — never as an invented 1st (shared/date-precision).
+    const ym = formatYearMonth(value);
+    if (ym) return ym;
   }
   if (typeof value === "string" && /^[a-z0-9]+(?:_[a-z0-9]+)+$/.test(value)) return humanizeLabel(value);
   return String(value);

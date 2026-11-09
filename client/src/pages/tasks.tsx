@@ -12,7 +12,7 @@ const TASKS_ACCENT = "262 70% 62%";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import EditableTitle from "@/components/EditableTitle";
 import { apiRequest, queryClient, BROWSER_TIMEZONE } from "@/lib/queryClient";
-import { getUserToday, addDays as tzAddDays } from "@shared/timezone";
+import { getUserToday, addDays as tzAddDays, formatClockTime } from "@shared/timezone";
 import { taskSummaryTiles } from "@shared/task-counts";
 import { isRecurring, humanSummary, parseRecurrence, userTags } from "@shared/recurrence";
 import { isMigrationTag, isRetiredMigratedReminderTask } from "@shared/legacy-reminder-tasks";
@@ -24,6 +24,8 @@ import { passesProfileFilter } from "@shared/profile-filter";
 import { useProfileFilterCtx } from "@/hooks/useProfileFilterCtx";
 import { useRecordHighlight } from "@/hooks/useRecordHighlight";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
+import { ActiveFilterNotice, FilteredEmptyState } from "@/components/ActiveFilterNotice";
+import { setFilterEveryone, scopeLabel } from "@/lib/profileFilter";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -70,8 +72,10 @@ const PRIORITY_COLORS: Record<string, string> = {
   high: "bg-red-500/10 text-red-600 dark:text-red-400",
 };
 
+const TASK_NOUN = { one: "task", many: "tasks" };
 const PRIORITY_CYCLE = ["low", "medium", "high"];
 /** The priority a tap on the row's badge moves to: low → medium → high → low. */
+
 export function nextPriority(current: string | null | undefined): string {
   const i = PRIORITY_CYCLE.indexOf(String(current || "medium"));
   return PRIORITY_CYCLE[(i + 1) % PRIORITY_CYCLE.length];
@@ -547,6 +551,11 @@ function TaskItem({
                   {/* One formatter, shared with every other due-date surface:
                       never shifts a day, always shows a non-current year. */}
                   {task.dueDate ? (formatStoredDate(task.dueDate) || task.dueDate) : "Add date"}
+                  {/* A timed task shows its time — "remind me Friday at
+                      10am" stored 10:00 and the row used to drop it. */}
+                  {task.dueDate && formatClockTime(task.dueTime) ? (
+                    <span data-testid={`text-task-due-time-${task.id}`}>· {formatClockTime(task.dueTime)}</span>
+                  ) : null}
                 </button>
               )}
               {/* The recurrence grammar (recur:weekly, rdone:1, ranchor:31 …) lives
@@ -686,18 +695,22 @@ export default function TasksPage() {
   // the single most visible "the app forgot which profile I picked" bug. The
   // scope is read reactively from the one source of truth (useProfileScope), so
   // it updates instantly when the user changes the filter here or anywhere else.
-  const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
+  const { mode: filterMode, selectedIds: filterIds, selectedNames: filterNames } = useProfileScope();
   const [tabFilter, setTabFilter] = useState<"all" | "open" | "completed">("all");
 
-  const taskUrl = filterMode === "selected" && filterIds.length > 0
-    ? `/api/tasks?profileIds=${filterIds.join(",")}`
-    : "/api/tasks";
+  // The page always reads the WHOLE task list and applies the scope below,
+  // with the same shared rule the server uses (passesProfileFilter). Reading
+  // a server-scoped list left the page unable to tell "you have no tasks"
+  // from "your tasks belong to someone the filter excludes", so a scope left
+  // over from an earlier screen read as "Nothing on your list" (Rule 4: a
+  // filter must never look like deletion). Knowing the total lets the page
+  // say how many rows the scope hides and offer to clear it.
   const { data: tasks, isLoading, error, refetch } = useQuery<Task[]>({
-    queryKey: ["/api/tasks", filterMode, ...filterIds],
+    queryKey: ["/api/tasks", "everyone"],
     // Whole set: the route pages at 100 rows by default (server paginate()),
     // which left every task past the newest hundred off this page while the
     // dashboard tile still counted it.
-    queryFn: () => apiRequest("GET", withFullLimit(taskUrl)).then(r => r.json()),
+    queryFn: () => apiRequest("GET", withFullLimit("/api/tasks")).then(r => r.json()),
   });
 
   // Profiles are needed for the unified filter rule below (it must know which
@@ -716,16 +729,26 @@ export default function TasksPage() {
   // `undefined` until the list has arrived — the summary band reads it as
   // "no number yet", never as zero (QA 2026-09-18 F-25).
   const todayStr = getUserToday(BROWSER_TIMEZONE);
+  // A migrated reminder whose series has already ended is a closed chapter
+  // ("Take medication · until Aug 11", four times over); it is folded out
+  // of every list and count here (shared/legacy-reminder-tasks, F-29).
+  const liveTasks = useMemo<Task[] | undefined>(
+    () => (tasks ? tasks.filter(t => !isRetiredMigratedReminderTask(t, todayStr)) : undefined),
+    [tasks, todayStr],
+  );
+  const scopeActive = filterMode === "selected" && filterIds.length > 0;
   const profileFilteredTasks = useMemo<Task[] | undefined>(() => {
-    if (!tasks) return undefined;
-    // A migrated reminder whose series has already ended is a closed chapter
-    // ("Take medication · until Aug 11", four times over); it is folded out
-    // of every list and count here (shared/legacy-reminder-tasks, F-29).
-    const live = tasks.filter(t => !isRetiredMigratedReminderTask(t, todayStr));
-    if (filterMode === "everyone" || filterIds.length === 0) return live;
-    return live.filter(t => passesProfileFilter(t.linkedProfiles, scopeCtx));
-  }, [tasks, filterMode, filterIds, scopeCtx, todayStr]);
+    if (!liveTasks) return undefined;
+    if (!scopeActive) return liveTasks;
+    return liveTasks.filter(t => passesProfileFilter(t.linkedProfiles, scopeCtx));
+  }, [liveTasks, scopeActive, scopeCtx]);
   const visibleTasks = useMemo(() => profileFilteredTasks ?? [], [profileFilteredTasks]);
+  // Rule 4: what the scope hides, and the words for it. The label comes from
+  // the SAME snapshot the rows were filtered with, so the notice can never
+  // say one thing while the list does another.
+  const totalTasks = liveTasks?.length ?? 0;
+  const hiddenByScope = scopeActive ? totalTasks - visibleTasks.length : 0;
+  const scopeLabels = scopeActive ? [scopeLabel(filterNames, filterMode, filterIds.length)] : [];
   const activeTasks = useMemo(() => visibleTasks.filter(t => t.status !== "done"), [visibleTasks]);
   const completedTasks = useMemo(() => visibleTasks.filter(t => t.status === "done"), [visibleTasks]);
   // Render the lists in pages: every card is a swipeable tree with several
@@ -826,7 +849,26 @@ export default function TasksPage() {
         ))}
       </div>
 
-      {visibleTasks.length === 0 ? (
+      {hiddenByScope > 0 && visibleTasks.length > 0 && (
+        <ActiveFilterNotice
+          shown={visibleTasks.length}
+          total={totalTasks}
+          noun={TASK_NOUN}
+          labels={scopeLabels}
+          onClear={() => setFilterEveryone()}
+          testId="tasks-scope-notice"
+        />
+      )}
+
+      {visibleTasks.length === 0 && hiddenByScope > 0 ? (
+        <FilteredEmptyState
+          total={hiddenByScope}
+          noun={TASK_NOUN}
+          labels={scopeLabels}
+          onClear={() => setFilterEveryone()}
+          testId="tasks-scope-empty"
+        />
+      ) : visibleTasks.length === 0 ? (
         <EmptyState
           icon={ListTodo}
           accent={TASKS_ACCENT}

@@ -623,12 +623,26 @@ export function toggleFilterProfile(id: string, name: string) {
 // canonical "orphans belong to self" rule. Use passesProfileFilter from
 // @shared/profile-filter (with the loaded profile list) instead.
 
+/**
+ * The words for a selection — the ONE label rule the filter chip and every
+ * "filtered by …" notice use. A selection is never labelled "Everyone": a
+ * selected profile whose name isn't known yet reads "1 profile", so a chip
+ * can't claim nothing is filtered while the list below is filtered.
+ */
+export function scopeLabel(selectedNames: ReadonlyArray<string>, mode: FilterMode = "selected", count = selectedNames.length): string {
+  if (mode === "everyone" || count === 0) return "Everyone";
+  const names = selectedNames.map(n => (n || "").trim());
+  if (count === 1) return names[0] || "1 profile";
+  if (names.every(Boolean)) {
+    if (count === 2) return names.join(" & ");
+    return `${names[0]} +${count - 1}`;
+  }
+  return `${count} profiles`;
+}
+
 /** Get display label for the current filter */
 export function getFilterLabel(): string {
-  if (_state.mode === "everyone") return "Everyone";
-  if (_state.selectedNames.length === 1) return _state.selectedNames[0];
-  if (_state.selectedNames.length === 2) return _state.selectedNames.join(" & ");
-  return `${_state.selectedNames[0]} +${_state.selectedNames.length - 1}`;
+  return scopeLabel(_state.selectedNames, _state.mode, _state.selectedIds.length);
 }
 
 // P2.5: the legacy single-select compat shims getDashboardProfileFilter() /

@@ -18,6 +18,9 @@ import type { CalendarOccurrence, OccurrenceKind } from "@shared/calendar-occurr
 import { ArrowLeft, CalendarDays, Repeat } from "lucide-react";
 import { Link } from "wouter";
 
+import { ScopeFilterNotice } from "@/components/ActiveFilterNotice";
+import { scopeLabel } from "@/lib/profileFilter";
+
 export default function CalendarPage() {
   useEffect(() => { document.title = "Calendar — Portol"; }, []);
   // The calendar's person filter is LOCAL (QA 2026-09-18 F-03). It starts from
@@ -107,6 +110,18 @@ export default function CalendarPage() {
           compact
         />
       </div>
+      {/* Rule 4: a scoped calendar says so. Clearing here is the calendar's
+          own choice (F-03) — it never re-scopes the rest of the app. */}
+      {filterMode === "selected" && filterIds.length > 0 && (
+        <div className="mb-2">
+          <ScopeFilterNotice
+            label={scopeLabel((localScope ?? globalScope).selectedNames, filterMode, filterIds.length)}
+            what="tasks and events"
+            onClear={() => setLocalScope({ mode: "everyone", selectedIds: [], selectedNames: [] })}
+            testId="calendar-scope-notice"
+          />
+        </div>
+      )}
 
       {/* Calendar | Recurring & Important Dates tab toggle */}
       <div className="flex gap-1 rounded-xl bg-muted/50 p-1 mb-2" data-testid="calendar-tabs">

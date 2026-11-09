@@ -12,6 +12,8 @@ export default defineConfig({
     environment: 'node',
     include: [
       'tests/now-rank.test.ts',
+      'tests/sync-tasks-scope-notice.dom.test.tsx',
+      'tests/date-precision.test.ts',
       'tests/ai-destructive-safety.test.ts',
       'tests/schema.test.ts',
       'tests/utils.test.ts',

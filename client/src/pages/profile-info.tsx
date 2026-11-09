@@ -14,6 +14,8 @@
 // Data comes from /api/profile-bootstrap/:id under the SAME cache key the
 // detail page uses (["/api/profiles", id, "detail"]), so it's instant when
 // you've already visited the profile and edits here reflect there too.
+import { formatStoredDate } from "@/lib/dates";
+import { isBirthDateField, formatYearMonth } from "@shared/date-precision";
 import { useState, useRef, useEffect } from "react";
 import { PERSON_LIKE_TYPES } from "@shared/scope";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -480,7 +482,12 @@ function SingleProfileInfo({ id }: { id: string }) {
     // delete button, so skipping it leaves a field the user can neither read
     // nor remove — the same "why won't it let me delete them" dead end that
     // the always-visible X was added to fix. Show a preview instead.
-    const text = stringifyField(v) || previewUnrenderable(v);
+    // A birthday reads as a date, at the precision it was given: "born in
+    // March 2020" is "March 2020", never an invented March 1.
+    const asDate = isBirthDateField(d.key) && typeof v === "string"
+      ? (formatYearMonth(v) || formatStoredDate(v))
+      : "";
+    const text = asDate || stringifyField(v) || previewUnrenderable(v);
     rows.push({ key: d.key, label: d.label, value: text });
   }
   // Custom scalar fields the user (or chat) added that aren't in the identity

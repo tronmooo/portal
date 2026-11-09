@@ -74,3 +74,39 @@ export function FilteredEmptyState({ total, noun, labels, onClear, testId = "fil
     </div>
   );
 }
+
+export interface ScopeFilterNoticeProps {
+  /** Who the screen is limited to ("Max", "Me & Dana"). */
+  label: string;
+  /** What the screen lists, plural ("tasks and events"). */
+  what: string;
+  onClear: () => void;
+  testId?: string;
+}
+
+/**
+ * The profile scope, said out loud on screens that are filtered by it on the
+ * server and so cannot count what it hides: "Showing Max only — items for
+ * everyone else are hidden, not deleted · Show everyone".
+ */
+export function ScopeFilterNotice({ label, what, onClear, testId = "scope-filter-notice" }: ScopeFilterNoticeProps) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1.5 text-xs"
+      data-testid={testId}
+      role="status"
+    >
+      <span className="text-muted-foreground">
+        Showing <span className="font-medium text-foreground">{label}</span> only — {what} for anyone else are hidden, not deleted
+      </span>
+      <button
+        type="button"
+        onClick={onClear}
+        className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium text-primary hover:bg-primary/10"
+        data-testid={`${testId}-clear`}
+      >
+        <FilterX className="h-3 w-3" /> Show everyone
+      </button>
+    </div>
+  );
+}

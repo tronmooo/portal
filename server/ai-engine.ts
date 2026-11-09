@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { keepStatedBirthPrecision } from "@shared/date-precision";
 import { getAnthropicClient } from "./anthropic-client";
 import { fieldPatchBetween } from "../shared/field-patch";
 import { resolveRequestedScope, resolveProfileTypeForCreate, polishAssistantReply } from "../shared/domain";
@@ -7670,6 +7671,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (stripped.length > 0) {
           logger.info("ai", `create_profile guard: stripped fabricated fields for "${input.name}": ${stripped.join(", ")}`);
         }
+        // "born in March 2020" names a month, not March 1 — never store a
+        // day the user didn't give (shared/date-precision).
+        const monthOnly = keepStatedBirthPrecision(input.fields, userMsgRaw);
+        if (monthOnly.length > 0) {
+          logger.info("ai", `create_profile: kept month precision for ${monthOnly.join(", ")} on "${input.name}"`);
+        }
       }
       // NAME HYGIENE (2026-08-09 regression): "Create a profile for my MacBook
       // Pro m4" made TWO profiles — "MacBook Pro M4" and "my MacBook Pro m4" —
@@ -8055,6 +8062,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         ? canonicalizeProfileFields(flattenAiProfileFields(input.changes.fields), profile.fields)
         : undefined;
       const updateFlatFields = updateCanon?.fields;
+      // "Max was born in March 2020" names a month, not March 1.
+      if (updateFlatFields) keepStatedBirthPrecision(updateFlatFields, String((input as any).__userMessage || ""));
       const previousFields: Record<string, any> = {};
       if (updateFlatFields && profile.fields) {
         for (const key of Object.keys(updateFlatFields)) {

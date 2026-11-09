@@ -410,6 +410,19 @@ export function normalizeClockTime(input: unknown): string | null {
 }
 
 /**
+ * A stored clock time for people: "10:00" → "10 AM", "18:30" → "6:30 PM".
+ * Anything normalizeClockTime can't read is "" (no time shown, never a guess).
+ */
+export function formatClockTime(input: unknown): string {
+  const hm = normalizeClockTime(input);
+  if (!hm) return "";
+  const [h, m] = hm.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 || 12;
+  return m === 0 ? `${h12} ${ampm}` : `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+/**
  * Returns a formatted locale string for the system prompt / human-readable display.
  * e.g. "Tuesday, April 7, 2026 at 6:30 PM"
  */

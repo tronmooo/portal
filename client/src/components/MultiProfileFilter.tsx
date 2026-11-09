@@ -1,3 +1,4 @@
+import { useProfileScope } from "@/hooks/useProfileScope";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
@@ -12,7 +13,7 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet";
 import {
-  getProfileFilter, setFilterEveryone, setFilterSelected, toggleFilterProfile,
+  getProfileFilter, setFilterEveryone, setFilterSelected, toggleFilterProfile, scopeLabel,
   subscribeProfileFilter, refreshFilterNames,
   type FilterMode,
 } from "@/lib/profileFilter";
@@ -78,8 +79,13 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
   // mount on desktop and block ALL page clicks, making tabs unresponsive.
   const [desktopOpen, setDesktopOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [storeFilter, setFilter] = useState(getProfileFilter);
-  const filter: ProfileSelection = controlled ? value : storeFilter;
+  const [, setFilter] = useState(getProfileFilter);
+  // The chip reads the SAME snapshot every scoped list filters with
+  // (useProfileScope). A private copy synced by events could lag the store,
+  // and a chip that says "Everyone" over a filtered list makes the filter
+  // look like deletion (Rule 4).
+  const liveScope = useProfileScope();
+  const filter: ProfileSelection = controlled ? value : liveScope;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
@@ -223,14 +229,10 @@ export function MultiProfileFilter({ onChange, profileTypes, compact, hideEveryo
   // BUG-006/025: derive label from the reactive `filter` state, not from a
   // direct call into the module — the module is only re-read on event, so
   // reading on every render risked tearing between trigger button and list.
-  const label = useMemo(() => {
-    if (filter.mode === "everyone") return "Everyone";
-    const names = filter.selectedNames || [];
-    if (names.length === 1) return names[0];
-    if (names.length === 2) return names.join(" & ");
-    if (names.length > 2) return `${names[0]} +${names.length - 1}`;
-    return "Everyone";
-  }, [filter]);
+  const label = useMemo(
+    () => scopeLabel(filter.selectedNames || [], filter.mode, (filter.selectedIds || []).length),
+    [filter],
+  );
   const selectedCount = filter.selectedIds.length;
   // Tri-state for the "Everyone" master row: some (but not all-as-everyone)
   // profiles are actively selected.
