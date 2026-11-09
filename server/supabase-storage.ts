@@ -729,6 +729,11 @@ export class SupabaseStorage implements IStorage {
    * tool write (ai-engine invalidateContextCache) so read-after-write
    * verification observes the write while pre-write reads stay deduplicated. */
   clearRequestMemo(): void { this.memoCache.clear(); }
+  /** Drop memoized reads whose key starts with `prefix`. */
+  private dropMemo(prefix: string): void {
+    if (!this.memoCache) return;
+    for (const key of Array.from(this.memoCache.keys())) if (key.startsWith(prefix)) this.memoCache.delete(key);
+  }
   private memo<T>(key: string, fn: () => Promise<T>): Promise<T> {
     if (!this.memoEnabled) return fn();
     const hit = this.memoCache.get(key);
@@ -3392,6 +3397,11 @@ export class SupabaseStorage implements IStorage {
     // belongs to a DIFFERENT profile (the real "Calories for Me vs Bob" case),
     // never weakening the uniqueness constraint.
     if (insertErr && /duplicate key|23505|idx_trackers_name_user|already exists/i.test(insertErr.message || insertErr.code || "")) {
+      // Re-read from the DATABASE: under the request memo getTrackers() would
+      // hand back the same list the pre-check saw — the one without the race
+      // winner — so the reuse below never matched and every race was suffixed
+      // ("Heart Rate 42c7", 2026-11-09 report).
+      this.dropMemo("getTrackers:");
       const fresh = await this.getTrackers();
       const wanted = new Set<string>(requestedProfiles.length ? requestedProfiles : linkedProfiles);
       const reusable = fresh.find(t => {
