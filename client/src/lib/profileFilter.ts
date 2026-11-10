@@ -633,7 +633,7 @@ export function scopeLabel(selectedNames: ReadonlyArray<string>, mode: FilterMod
   if (mode === "everyone" || count === 0) return "Everyone";
   const names = selectedNames.map(n => (n || "").trim());
   if (count === 1) return names[0] || "1 profile";
-  if (names.every(Boolean)) {
+  if (names.length === count && names.every(Boolean)) {
     if (count === 2) return names.join(" & ");
     return `${names[0]} +${count - 1}`;
   }

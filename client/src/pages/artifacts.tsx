@@ -1227,14 +1227,14 @@ export default function ArtifactsPage() {
         // items that they have none is how the counts and the copy ended up
         // contradicting each other (user report 2026-08-17).
         profileFiltered.length === 0 ? (
-          <EmptyState
+          <EmptyState scope="global"
             icon={Archive}
             label="No artifacts yet"
             hint="Upload documents, write journal entries, or chat with AI to generate reports."
             testId="artifacts-empty-none"
           />
         ) : (
-          <EmptyState
+          <EmptyState scope="global"
             icon={Search}
             label="No items match these filters"
             hint={[

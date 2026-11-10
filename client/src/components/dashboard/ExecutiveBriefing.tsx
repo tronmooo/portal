@@ -214,7 +214,7 @@ function CardEmpty({ children, accent, icon, tone }: {
 }) {
   return (
     <div className="flex-1 flex items-center justify-center">
-      <EmptyState label={children} icon={icon} tone={tone} accent={tone ? undefined : accent} className="py-2 gap-1.5" />
+      <EmptyState scope="global" label={children} icon={icon} tone={tone} accent={tone ? undefined : accent} className="py-2 gap-1.5" />
     </div>
   );
 }
@@ -473,7 +473,7 @@ function UpcomingPopup({ open, onClose, items, onAction, onOpenItem, busyKeys, a
         </div>
       )}
       {items.length === 0 ? (
-        <EmptyState label="Nothing coming up in the next 30 days." icon={Clock} accent={CARD_ACCENTS.upcoming} className="py-8" />
+        <EmptyState scope="global" label="Nothing coming up in the next 30 days." icon={Clock} accent={CARD_ACCENTS.upcoming} className="py-8" />
       ) : shown.length === 0 ? (
         <p className="text-[13px] text-muted-foreground py-6 text-center">Nothing of this kind coming up.</p>
       ) : groups.map((g) => (

@@ -1695,7 +1695,7 @@ export default function FinancePage() {
         </CardHeader>
         <CardContent>
           {profileFiltered.length === 0 ? (
-            <EmptyState icon={DollarSign} label="No expenses logged yet." hint={'Try: "spent $50 on groceries"'} />
+            <EmptyState scope="global" icon={DollarSign} label="No expenses logged yet." hint={'Try: "spent $50 on groceries"'} />
           ) : (
             <div className="divide-y divide-border">
               {/* Rule 4: say what is hiding rows, and offer the way back. */}
@@ -1712,7 +1712,7 @@ export default function FinancePage() {
                 </div>
               )}
               {filtered.length === 0 && profileFiltered.length > 0 && (
-                <EmptyState icon={Filter} label="No expenses match the selected filter." />
+                <EmptyState scope="global" icon={Filter} label="No expenses match the selected filter." />
               )}
               {/* Order driven by the Sort control (defaults to newest first). */}
               {visibleExpenses.map((expense) => (

@@ -486,7 +486,7 @@ function EntityList({
   onOpen: (p: any) => void;
 }) {
   if (items.length === 0) {
-    return <EmptyState icon={Wallet} label={emptyLabel} ctaLabel={addLabel} onCta={onAdd} />;
+    return <EmptyState scope="global" icon={Wallet} label={emptyLabel} ctaLabel={addLabel} onCta={onAdd} />;
   }
   // User request: list assets/liabilities alphabetically by name (was value-desc).
   const sortedItems = [...items].sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
@@ -670,7 +670,7 @@ function SpendingBreakdown({ filterMode, filterIds }: FilterContext) {
           </div>
         </div>
       ) : (
-        <EmptyState icon={Wallet} label={`No spending recorded ${periodSub.toLowerCase()}.`} className="py-4" />
+        <EmptyState scope="global" icon={Wallet} label={`No spending recorded ${periodSub.toLowerCase()}.`} className="py-4" />
       )}
 
       {/* Category details with bars */}

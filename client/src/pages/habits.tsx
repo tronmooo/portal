@@ -598,7 +598,7 @@ export default function HabitsPage() {
           <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
         </div>
       ) : habits.length === 0 ? (
-        <EmptyState
+        <EmptyState scope="global"
           icon={Flame}
           accent={HABITS_ACCENT}
           label="No streaks going yet"

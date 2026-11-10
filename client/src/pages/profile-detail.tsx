@@ -4318,7 +4318,7 @@ function ProductivityHubTab({
         <SectionHeader id="routines" icon={RefreshCw} color={C.routines} label="Routines" />
         {open.routines && (
           <Card>
-            <EmptyState icon={RefreshCw} label="No routines for this profile" hint="Multi-step routines tied to this profile appear here. Ask Portol in chat to create one." className="py-6" />
+            <EmptyState scope="none" icon={RefreshCw} label="No routines for this profile" hint="Multi-step routines tied to this profile appear here. Ask Portol in chat to create one." className="py-6" />
           </Card>
         )}
       </section>
@@ -4370,7 +4370,7 @@ const ProfileHabitsTab = memo(function ProfileHabitsTab({ habits, profileName }:
   if (!habits || habits.length === 0) {
     return (
       <Card>
-        <EmptyState icon={Flame} label={`No habits linked to ${profileName}`} hint="Create a habit on the Habits page and link it to this profile." accent="265 75% 55%" />
+        <EmptyState scope="none" icon={Flame} label={`No habits linked to ${profileName}`} hint="Create a habit on the Habits page and link it to this profile." accent="265 75% 55%" />
       </Card>
     );
   }
@@ -5429,7 +5429,7 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
             <CardContent className="pt-0">
               {/* No filter narrows this list (ownership is structural), so an
                   empty list really is "nothing logged". */}
-              <EmptyState
+              <EmptyState scope="none"
                 icon={Receipt}
                 label="No expenses logged"
                 hint="Add one here, or tell the AI what you spent."
@@ -5581,7 +5581,7 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
         </CardHeader>
         <CardContent className="pt-0">
           {obligations.length === 0 ? (
-            <EmptyState icon={CreditCard} label="No recurring bills" hint="Subscriptions and bills linked to this profile show here." className="py-5" testId="finances-bills-empty" />
+            <EmptyState scope="none" icon={CreditCard} label="No recurring bills" hint="Subscriptions and bills linked to this profile show here." className="py-5" testId="finances-bills-empty" />
           ) : (
             <div className="divide-y divide-border">
               {obligations.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(ob => {
@@ -6582,7 +6582,7 @@ function TrackersTab({
 
       {trackers.length === 0 ? (
         <Card>
-          <EmptyState icon={Activity} label="No linked trackers" hint="Ask Portol in chat to create one, then link it here." accent="190 75% 50%" className="py-10" />
+          <EmptyState scope="none" icon={Activity} label="No linked trackers" hint="Ask Portol in chat to create one, then link it here." accent="190 75% 50%" className="py-10" />
         </Card>
       ) : (
         grouped.map(group => {
@@ -7739,7 +7739,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
   if (timeline.length === 0) {
     return (
       <Card>
-        <EmptyState icon={Clock} label="No activity yet" hint="Changes, links and uploads on this profile show up here." />
+        <EmptyState scope="none" icon={Clock} label="No activity yet" hint="Changes, links and uploads on this profile show up here." />
       </Card>
     );
   }
@@ -7948,7 +7948,7 @@ function TasksTab({
 
       {tasks.length === 0 && (
         <Card>
-          <EmptyState icon={ListTodo} label="No linked tasks" hint="Add a task above or use chat." accent="215 82% 55%" className="py-10" />
+          <EmptyState scope="none" icon={ListTodo} label="No linked tasks" hint="Add a task above or use chat." accent="215 82% 55%" className="py-10" />
         </Card>
       )}
 
@@ -10897,7 +10897,7 @@ function PaymentsTab({ profile, profileId, onChanged }: { profile: any; profileI
           </CardContent>
         </Card>
       ) : (
-        <EmptyState
+        <EmptyState scope="none"
           icon={Receipt}
           label="No payments recorded"
           hint="Record one above and it shows up here and in your expenses."
@@ -11749,7 +11749,7 @@ function PersonOwnershipSections({ profile }: { profile: any }) {
         </div>
         {liabsOpen && (
           liabilities.length === 0 ? (
-            <EmptyState icon={Wallet} label="No liabilities" hint="Nothing owed is linked to this person." tone="good" testId="linked-liabilities-empty" />
+            <EmptyState scope="none" icon={Wallet} label="No liabilities" hint="Nothing owed is linked to this person." tone="good" testId="linked-liabilities-empty" />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {liabilities
@@ -11982,7 +11982,7 @@ function LinkedAssetsTab({ profileId, profileType }: { profileId: string; profil
       {assetsFailed && items.length === 0 ? (
         <LinkedLoadError what="linked assets" onRetry={() => refetch()} />
       ) : items.length === 0 ? (
-        <EmptyState
+        <EmptyState scope="none"
           icon={Package}
           label="No linked assets"
           hint={isPerson ? "Tap “Link Asset” above to attach an existing vehicle, property, or investment." : undefined}
@@ -12119,7 +12119,7 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
       {liabilitiesFailed && items.length === 0 ? (
         <LinkedLoadError what="linked liabilities" onRetry={() => refetch()} />
       ) : items.length === 0 ? (
-        <EmptyState icon={CreditCard} label="No linked liabilities" />
+        <EmptyState scope="none" icon={CreditCard} label="No linked liabilities" />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {items.map((item: any, i: number) => (
@@ -12830,7 +12830,7 @@ function NotesTab({ profileId, currentNotes, updatedAt, onChanged }: { profileId
             {currentNotes}
           </div>
         ) : (
-          <EmptyState icon={FileText} label="No notes yet" hint="Anything worth remembering about this profile." ctaLabel="Add Notes" onCta={() => setIsEditing(true)} className="rounded-lg border border-dashed" />
+          <EmptyState scope="none" icon={FileText} label="No notes yet" hint="Anything worth remembering about this profile." ctaLabel="Add Notes" onCta={() => setIsEditing(true)} className="rounded-lg border border-dashed" />
         )}
       </CardContent>
     </Card>
@@ -13569,7 +13569,7 @@ export default function ProfileDetailPage() {
                     <TrackersTab trackers={ownTrackers} profileId={profile.id} onChanged={handleSaved} />
                   ) : (
                     <Card>
-                      <EmptyState icon={Activity} label="No trackers yet" hint="Create trackers via chat, then link them here." accent="190 75% 50%" />
+                      <EmptyState scope="none" icon={Activity} label="No trackers yet" hint="Create trackers via chat, then link them here." accent="190 75% 50%" />
                     </Card>
                   )}
                 </TabsContent>
@@ -13625,7 +13625,7 @@ export default function ProfileDetailPage() {
                       }
                       if (feed.length === 0) {
                         return (
-                          <EmptyState icon={Activity} label="No activity yet" hint="Linked tasks, events, and expenses will appear here." className="rounded-xl border border-dashed border-border/60" />
+                          <EmptyState scope="none" icon={Activity} label="No activity yet" hint="Linked tasks, events, and expenses will appear here." className="rounded-xl border border-dashed border-border/60" />
                         );
                       }
                       const upcoming: FeedItem[] = [];
@@ -13718,7 +13718,7 @@ export default function ProfileDetailPage() {
                     <TrackersTab trackers={ownTrackers} profileId={profile.id} onChanged={handleSaved} />
                   ) : (
                     <Card>
-                      <EmptyState icon={Activity} label="No trackers linked to this profile" hint="Create trackers via chat or the Linked page, then link them here." accent="190 75% 50%" />
+                      <EmptyState scope="none" icon={Activity} label="No trackers linked to this profile" hint="Create trackers via chat or the Linked page, then link them here." accent="190 75% 50%" />
                     </Card>
                   )}
                 </TabsContent>
@@ -13913,7 +13913,7 @@ export default function ProfileDetailPage() {
                     
                     if (feed.length === 0) {
                       return (
-                        <EmptyState icon={Activity} label="No activity yet" hint="Linked tasks and events will appear here." />
+                        <EmptyState scope="none" icon={Activity} label="No activity yet" hint="Linked tasks and events will appear here." />
                       );
                     }
                     

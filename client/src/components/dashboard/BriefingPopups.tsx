@@ -535,11 +535,11 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
         {/* Rows — tap to expand into the full detail card. */}
         {visible.length === 0 ? (
           filter === "all" ? (
-            <EmptyState icon={Receipt} accent="155 65% 45%" label="No bills in the next 30 days"
+            <EmptyState scope="global" icon={Receipt} accent="155 65% 45%" label="No bills in the next 30 days"
               hint="Add a bill to see what's due and when." ctaLabel="Add a bill" onCta={() => setAddOpen(true)} />
           ) : (
             // A filter hid the rows — say which one, and offer the way back.
-            <EmptyState
+            <EmptyState scope="global"
               icon={filter === "paid" ? CheckCircle2 : filter === "overdue" ? AlertTriangle : CalendarDays}
               tone={filter === "paid" ? "neutral" : "good"}
               label={filter === "paid" ? "Nothing paid yet this month" : filter === "overdue" ? "Nothing overdue" : "Nothing due in the next 7 days"}
@@ -828,7 +828,7 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
       {visible.length === 0 ? (
         // Dismissed alerts are hidden, not gone — say so instead of reading
         // as an empty account.
-        <EmptyState icon={CheckCircle2} tone="good" label="You're clear for the next 90 days"
+        <EmptyState scope="global" icon={CheckCircle2} tone="good" label="You're clear for the next 90 days"
           hint={(docs || []).length > 0
             ? `${(docs || []).length} dismissed date${(docs || []).length === 1 ? " is" : "s are"} hidden for now.`
             : "Nothing due or expiring in the next 90 days."} />
@@ -885,7 +885,7 @@ export function EventsPopup({ open, onClose, items, todayStr, title = "Calendar 
       subtitle={(items || []).length ? "Events, tasks and bills on your combined calendar" : undefined}
       footerLabel="Open Calendar" footerHref="/calendar">
       {days.length === 0 ? (
-        <EmptyState icon={CalendarDays} accent="239 84% 67%" label="Nothing scheduled"
+        <EmptyState scope="global" icon={CalendarDays} accent="239 84% 67%" label="Nothing scheduled"
           hint="Events, tasks and bills with a date show up here." />
       ) : days.map(d => {
         const away = daysAway(d.date);

@@ -12,6 +12,7 @@ export default defineConfig({
     environment: 'node',
     include: [
       'tests/now-rank.test.ts',
+      'tests/sync-rules-scope-empty-states.test.tsx',
       'tests/sync-tasks-scope-notice.dom.test.tsx',
       'tests/date-precision.test.ts',
       'tests/ai-destructive-safety.test.ts',

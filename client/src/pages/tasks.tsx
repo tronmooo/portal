@@ -869,7 +869,7 @@ export default function TasksPage() {
           testId="tasks-scope-empty"
         />
       ) : visibleTasks.length === 0 ? (
-        <EmptyState
+        <EmptyState scope="none"
           icon={ListTodo}
           accent={TASKS_ACCENT}
           label="Nothing on your list"
@@ -885,7 +885,7 @@ export default function TasksPage() {
                 Active ({activeTasks.length})
               </h2>
               {activeTasks.length === 0 ? (
-                <EmptyState icon={ListTodo} label="No active tasks" hint="All tasks are completed or create a new one." />
+                <EmptyState scope="global" icon={ListTodo} label="No active tasks" hint="All tasks are completed or create a new one." />
               ) : (
                 sortedActive.slice(0, visibleActive).map(task => (
                   <SwipeableItem
@@ -947,7 +947,7 @@ export default function TasksPage() {
                 Completed ({completedTasks.length})
               </h2>
               {completedTasks.length === 0 ? (
-                <EmptyState icon={CheckCircle2} label="No completed tasks" hint="Complete a task to see it here." />
+                <EmptyState scope="global" icon={CheckCircle2} label="No completed tasks" hint="Complete a task to see it here." />
               ) : (
                 sortedCompleted.slice(0, visibleCompleted).map(task => (
                   <SwipeableItem

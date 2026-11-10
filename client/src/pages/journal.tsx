@@ -804,7 +804,7 @@ export default function JournalPage() {
           <Button variant="outline" size="sm" className="mt-2" onClick={() => refetch()}>Retry</Button>
         </div>
       ) : entries.length === 0 ? (
-        <EmptyState icon={MessageCircle} label="No journal entries yet" hint="Start your morning journal to track your mood and gratitude." />
+        <EmptyState scope="global" icon={MessageCircle} label="No journal entries yet" hint="Start your morning journal to track your mood and gratitude." />
       ) : (
         <div className="grid gap-4">
           {/* Search across content + tags */}

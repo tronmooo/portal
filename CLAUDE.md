@@ -59,8 +59,17 @@ green. After a push to `main`:
    (`client/src/lib/view-filters.ts`, `client/src/components/ActiveFilterNotice.tsx`).
    Never persist a filter that hides rows to local/sessionStorage. Never gate
    a filter row on `options.length > 1`. Never say "No X yet" when a filter
-   hid them.
-   *Guards:* `tests/sync-asset-navigation.dom.test.tsx`, `tests/sync-rules-filters.test.ts`.
+   hid them. The app-wide **profile scope** is a filter too: a list it can
+   hide must say so. Every shared `EmptyState` in a file that reads the scope
+   declares `scope="global"` (it then names the active scope and offers "Show
+   everyone") or `scope="none"`; a page that can count what the scope hides
+   (Tasks) shows `ActiveFilterNotice`/`FilteredEmptyState`. The filter chip's
+   label comes from `scopeLabel()` over the same `useProfileScope` snapshot
+   the lists filter with — a selection is never labelled "Everyone".
+   (2026-11-09: "Nothing on your list" while a leftover selection hid the
+   user's own two tasks.)
+   *Guards:* `tests/sync-asset-navigation.dom.test.tsx`, `tests/sync-rules-filters.test.ts`,
+   `tests/sync-rules-scope-empty-states.test.tsx`, `tests/sync-tasks-scope-notice.dom.test.tsx`.
 5. **Completed actions resolve their alerts, derived from the records.**
    Alerts come from the date-rule engine (`shared/date-rules.ts`;
    `isAlertDateRule` / `isDocumentAttentionRule`). A reporting period's

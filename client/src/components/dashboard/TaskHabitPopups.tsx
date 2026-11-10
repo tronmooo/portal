@@ -1183,7 +1183,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
               {/* ── Lists — smart sections per tab ── */}
               {tab === "today" ? (
                 (overdueTasks.length + todayTasks.length + unscheduledTasks.length) === 0 && !composer.open ? (
-                  <EmptyState icon={CheckCircle2} tone="good" label="You're clear for today"
+                  <EmptyState scope="global" icon={CheckCircle2} tone="good" label="You're clear for today"
                     hint="Nothing overdue and nothing due today." />
                 ) : (
                   <div className="space-y-4">
@@ -1209,7 +1209,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 )
               ) : tab === "onetime" ? (
                 oneTimeSections.length === 0 && !composer.open ? (
-                  <EmptyState icon={ListTodo} accent={TASKS_ACCENT} label="No one-time tasks"
+                  <EmptyState scope="global" icon={ListTodo} accent={TASKS_ACCENT} label="No one-time tasks"
                     hint="To-dos you do once and are finished with land here." />
                 ) : (
                   <div className="space-y-4">
@@ -1223,14 +1223,14 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
                 )
               ) : tab === "recurring" ? (
                 recurringTasks.length === 0 && !composer.open ? (
-                  <EmptyState icon={Repeat} accent={TASKS_ACCENT} label="No recurring tasks"
+                  <EmptyState scope="global" icon={Repeat} accent={TASKS_ACCENT} label="No recurring tasks"
                     hint="Chores that come back on a schedule land here." />
                 ) : (
                   <div className="space-y-2">{recurringTasks.map((t: any) => renderTaskRow(t))}</div>
                 )
               ) : (
                 upcomingSections.length === 0 && !composer.open ? (
-                  <EmptyState icon={CalendarDays} tone="good" label="Nothing scheduled ahead"
+                  <EmptyState scope="global" icon={CalendarDays} tone="good" label="Nothing scheduled ahead"
                     hint="Dated one-time tasks after today show up here." />
                 ) : (
                   <div className="space-y-4">
@@ -1794,11 +1794,11 @@ export function HabitsPopup({ open, onClose, filterIds = [], filterMode = "every
           {isLoading ? (
             <div className="space-y-2 py-2">{[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-16 rounded-2xl" />)}</div>
           ) : active.length === 0 ? (
-            <EmptyState icon={Flame} accent={HABITS_ACCENT} label="No habits tracked yet"
+            <EmptyState scope="global" icon={Flame} accent={HABITS_ACCENT} label="No habits tracked yet"
               ctaLabel="Add your first habit" onCta={() => setAddingHabit(true)} />
           ) : visible.length === 0 ? (
             // A filter hid them — say so, and offer the way back.
-            <EmptyState icon={Clock} accent={HABITS_ACCENT} label="No habits in this time block"
+            <EmptyState scope="global" icon={Clock} accent={HABITS_ACCENT} label="No habits in this time block"
               hint={`${active.length} habit${active.length === 1 ? '' : 's'} hidden by the time filter.`}
               ctaLabel="Show all" onCta={() => setTimeFilter('all')} />
           ) : (
