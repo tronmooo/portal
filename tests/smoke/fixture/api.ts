@@ -34,13 +34,37 @@ export type ApiResponse<T = any> = {
   headers: Headers;
 };
 
-// The server enforces a rolling 60-writes/min budget per user. The suite's
-// write bursts (CRUD/guardrail files) can momentarily exceed it, and a 429 is
-// a clean rejection (nothing was written), so waiting out the window and
-// retrying is side-effect-free. Without this, gate runs failed
-// nondeterministically on the suite's own rate limiter — different files each
-// run — which is contention, not a product regression.
-const RATE_LIMIT_BACKOFFS_MS = [3_000, 8_000, 15_000, 25_000];
+// The server enforces a rolling 60-writes/min budget per user. Every gate
+// that runs against production (the pre-push contract suite, Live E2E, other
+// sessions' live sweeps) writes as the ONE smoke account, so their bursts add
+// up and a run can be rejected with 429 mid-scenario. A 429 is a clean
+// rejection (nothing was written), so waiting out the window and retrying is
+// side-effect-free. Without it a gate goes red on contention, not on a product
+// regression — Live E2E on 2026-11-09 failed 3 scenarios that passed on rerun.
+// EVERY request a production gate makes goes through fetchWithRateLimitRetry.
+// Guard: tests/live-gate-rate-limit.test.ts.
+export const RATE_LIMIT_BACKOFFS_MS = [3_000, 8_000, 15_000, 25_000];
+
+/** fetch(), retried after a 429 on the backoff schedule above. `ms` is the
+ * duration of the FINAL attempt only, so latency checks never count the
+ * time spent waiting out the rate-limit window. */
+export async function fetchWithRateLimitRetry(
+  url: string,
+  init: RequestInit,
+  backoffsMs: readonly number[] = RATE_LIMIT_BACKOFFS_MS,
+): Promise<{ response: Response; ms: number; retries: number }> {
+  for (let attempt = 0; ; attempt++) {
+    const t0 = Date.now();
+    const response = await fetch(url, init);
+    const ms = Date.now() - t0;
+    if (response.status === 429 && attempt < backoffsMs.length) {
+      await response.text().catch(() => undefined);
+      await new Promise(res => setTimeout(res, backoffsMs[attempt]));
+      continue;
+    }
+    return { response, ms, retries: attempt };
+  }
+}
 
 export async function api<T = any>(
   method: string,
@@ -49,24 +73,18 @@ export async function api<T = any>(
   opts: { token?: string } = {},
 ): Promise<ApiResponse<T>> {
   const token = opts.token ?? (await getSmokeToken());
-  for (let attempt = 0; ; attempt++) {
-    const r = await fetch(`${API_BASE}${path}`, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await r.text();
-    let parsed: any = text;
-    try { parsed = JSON.parse(text); } catch { /* leave as string */ }
-    if (r.status === 429 && attempt < RATE_LIMIT_BACKOFFS_MS.length) {
-      await new Promise(res => setTimeout(res, RATE_LIMIT_BACKOFFS_MS[attempt]));
-      continue;
-    }
-    return { status: r.status, ok: r.ok, data: parsed, headers: r.headers };
-  }
+  const { response: r } = await fetchWithRateLimitRetry(`${API_BASE}${path}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await r.text();
+  let parsed: any = text;
+  try { parsed = JSON.parse(text); } catch { /* leave as string */ }
+  return { status: r.status, ok: r.ok, data: parsed, headers: r.headers };
 }
 
 /** Convenience: assert a request succeeded. */

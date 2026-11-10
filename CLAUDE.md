@@ -32,6 +32,11 @@ green. After a push to `main`:
   checks this and opens an issue if it doesn't.
 - `Live E2E (deployed app)` then runs the scenario suite against production.
   It is green; a red run is a real regression.
+- Every production gate (Live E2E, the contract suite) writes as the one
+  smoke account, which the server limits to 60 writes/min. Gate requests go
+  through `fetchWithRateLimitRetry` (`tests/smoke/fixture/api.ts`), which
+  waits out a 429, so contention can't turn a gate red. Never call `fetch`
+  directly in a gate. *Guard:* `tests/live-gate-rate-limit.test.ts`.
 - Node version: `.nvmrc` → `package.json` `engines.node` (what Vercel builds
   with) → every workflow (`node-version-file`). Change all of them together;
   `tests/ops-guards.test.ts` enforces it.

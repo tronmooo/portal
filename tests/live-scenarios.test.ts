@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
 import { SMOKE_EMAIL, SMOKE_PASSWORD, API_BASE } from "./smoke/fixture/account";
+import { fetchWithRateLimitRetry } from "./smoke/fixture/api";
 import { budgetCategoryKey } from "../shared/budget-ledger";
 
 // The DEDICATED smoke account — the one the contract suite already mutates and
@@ -31,8 +32,9 @@ const timings: Array<{ label: string; ms: number }> = [];
 const createdProfileIds: string[] = [];
 
 async function api(method: string, path: string, body?: any, label?: string) {
-  const t0 = Date.now();
-  const r = await fetch(`${BASE}${path}`, {
+  // Shared smoke account → shared write budget: wait out a 429 instead of
+  // failing the scenario (see fetchWithRateLimitRetry).
+  const { response: r, ms, retries } = await fetchWithRateLimitRetry(`${BASE}${path}`, {
     method,
     headers: {
       "Content-Type": "application/json",
@@ -41,10 +43,9 @@ async function api(method: string, path: string, body?: any, label?: string) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const ms = Date.now() - t0;
   const tag = label || `${method} ${path.split("?")[0]}`;
   timings.push({ label: tag, ms });
-  console.log(`[timing] ${tag}: ${ms}ms (${r.status})`);
+  console.log(`[timing] ${tag}: ${ms}ms (${r.status})${retries ? ` after ${retries} rate-limit retr${retries === 1 ? "y" : "ies"}` : ""}`);
   const data = await r.json().catch(() => null);
   return { status: r.status, ok: r.ok, data, ms };
 }
