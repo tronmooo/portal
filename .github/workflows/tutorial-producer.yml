@@ -1,55 +1,63 @@
-name: Portol Cloud Tutorial Producer
+name: Portol Cloud Tutorial Studio
 on:
   workflow_dispatch:
-    inputs:
-      tutorial:
-        description: Tutorial to record
-        required: true
-        default: chat-to-trackers
-        type: choice
-        options: [chat-to-trackers]
+  schedule:
+    - cron: '0 15 * * 1'
 permissions:
   contents: read
 concurrency:
-  group: portol-tutorial-producer
+  group: portol-tutorial-studio
   cancel-in-progress: false
 jobs:
-  record:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+  produce:
+    # Scheduling is opt-in after a reviewed successful pilot. Never run PR code with secrets.
+    if: vars.TUTORIAL_STUDIO_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     environment: tutorial-production
-    env:
-      PORTOL_BASE_URL: https://portol.me
-      PORTOL_TUTORIAL_EMAIL: ${{ secrets.PORTOL_TUTORIAL_EMAIL }}
-      PORTOL_TUTORIAL_PASSWORD: ${{ secrets.PORTOL_TUTORIAL_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Check isolated account credentials
+      - name: Install isolated studio dependencies
+        run: npm ci --ignore-scripts --prefix tutorial-producer
+      - name: Validate safety guards
         run: |
-          test -n "$PORTOL_TUTORIAL_EMAIL" && test -n "$PORTOL_TUTORIAL_PASSWORD" || {
-            echo "Configure PORTOL_TUTORIAL_EMAIL and PORTOL_TUTORIAL_PASSWORD in the tutorial-production GitHub environment"
-            exit 1
-          }
-      - name: Install browser and video tooling
+          node --test tutorial-producer/tests/*.test.mjs
+          python3 tutorial-producer/tests/render_test.py
+      - name: Inventory app routes without claiming coverage
+        run: node tutorial-producer/discover.mjs
+      - name: Install capture and editing tools
         run: |
-          npm install --no-save --ignore-scripts playwright@1.56.1
-          npx playwright install --with-deps chromium
-          sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Record and verify tutorial
+          tutorial-producer/node_modules/.bin/playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Capture and verify real Chat-to-UI workflow
         run: node tutorial-producer/record.mjs
-      - name: Assemble tutorial MP4
-        if: success()
+        env:
+          PORTOL_BASE_URL: https://portol.me
+          PORTOL_TUTORIAL_EMAIL: ${{ secrets.PORTOL_TUTORIAL_EMAIL }}
+          PORTOL_TUTORIAL_PASSWORD: ${{ secrets.PORTOL_TUTORIAL_PASSWORD }}
+          PORTOL_TUTORIAL_USER_ID: ${{ secrets.PORTOL_TUTORIAL_USER_ID }}
+          PORTOL_TUTORIAL_PROFILE_ID: ${{ secrets.PORTOL_TUTORIAL_PROFILE_ID }}
+      - name: Align scenes to actual recorded frame boundaries
+        run: python3 tutorial-producer/align.py
+      - name: Estimate narration usage
+        run: node tutorial-producer/narrate.mjs --estimate
+      - name: Generate approved ElevenLabs narration
+        run: node tutorial-producer/narrate.mjs
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_APPROVED_CHARACTER_LIMIT: ${{ vars.ELEVENLABS_APPROVED_CHARACTER_LIMIT }}
+      - name: Validate edit inputs and render private MP4
         run: |
-          ffmpeg -y -i tutorial-output/raw.webm -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -movflags +faststart tutorial-output/portol-chat-to-trackers.mp4
-      - name: Save evidence and finished video
+          python3 tutorial-producer/render.py --dry-run
+          python3 tutorial-producer/render.py
+      - name: Preserve synthetic evidence and private video
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: portol-tutorial-${{ github.run_id }}
           path: tutorial-output/
           retention-days: 14
+          if-no-files-found: warn
