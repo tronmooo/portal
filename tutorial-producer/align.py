@@ -4,7 +4,7 @@ root=pathlib.Path('tutorial-output');p=root/'manifest.json';m=json.loads(p.read_
 if m['status']!='pass': raise ValueError('Only align verified captures')
 raw=root/'raw/video/raw.webm'
 colors=[(250,0,250),(0,250,0),(0,0,250),(250,250,0),(0,250,250)]
-frames=subprocess.run(['ffmpeg','-v','error','-i',str(raw),'-vf','fps=25,crop=8:8:4:4,scale=1:1,format=rgb24','-f','rawvideo','-'],capture_output=True,check=True).stdout
+frames=subprocess.run(['ffmpeg','-v','error','-i',str(raw),'-vf','fps=25,crop=8:8:20:4,scale=1:1,format=rgb24','-f','rawvideo','-'],capture_output=True,check=True).stdout
 first={}
 for i in range(0,len(frames),3):
  pixel=frames[i:i+3]

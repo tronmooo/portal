@@ -23,7 +23,7 @@ Expected: `Duration: 42 min`. Actual: `Duration: 42`. Evidence: `raw/screenshots
 ## Tooling findings
 
 - First capture failed at tracker navigation because the runner did not select its dedicated profile. Fixed by selecting and visibly confirming Tutorial Studio before chat; subsequent capture passed.
-- Wall-clock timing drifted from encoded video frames. Initial export review caught an outcome hold on a loading frame. Added frame-marker-based alignment and removed capture markers from final exports. The earlier pilot edit has manually reviewed source frame boundaries.
+- Wall-clock timing drifted from encoded video frames. Initial export review caught an outcome hold on a loading frame. Added frame-marker-based alignment and removed capture markers from final exports. The subsequent live cloud capture passed, and all five marker boundaries were detected after accounting for the app’s 15px scrollbar gutter. The delivered earlier pilot uses manually reviewed source frame boundaries.
 - Initial provisioning code called the Fetch `ok` property as a function. It was corrected, and credentials are now written privately before the signup request. An earlier synthetic signup may have created an unused account whose generated identity was not retained; no cleanup was attempted against unknown accounts. The managed dedicated account is distinct and successfully validated.
 - Descript produced a private editable draft but reported narration synchronization limits; it is not an approved final export and was never published.
 

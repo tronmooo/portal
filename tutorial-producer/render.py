@@ -44,7 +44,21 @@ def main():
         duration=max((capture_end-capture_start)/speed,audio_duration+0.5)
         crop=s.get('crop')
         view=f'crop={crop[0]}:{crop[1]}:{crop[2]}:{crop[3]},' if crop else ('crop=iw:ih-16:0:16,' if manifest.get('capture_marker') else '')
-        run(['ffmpeg','-v','error','-y','-ss',str(capture_start),'-t',str(capture_end-capture_start),'-i',str(raw),'-i',str(s['audio']),'-vf',f'setpts=PTS/{speed},'+view+'fps=30,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,tpad=stop_mode=clone:stop_duration='+str(duration),'-af','loudnorm=I=-16:TP=-1.5:LRA=11,apad','-t',str(duration),'-c:v','libx264','-preset','fast','-crf','20','-pix_fmt','yuv420p','-c:a','aac','-ar','48000','-ac','2',str(clip)])
+        segments=s.get('source_segments')
+        if segments:
+            previous=scene_start; filters=[]; total=0
+            for n,(a,b,rate) in enumerate(segments):
+                if not previous <= a < b <= scene_end or not 1 <= rate <= 2: raise ValueError('Invalid editorial source interval')
+                previous=b;total+=(b-a)/rate
+                filters.append(f'[0:v]trim=start={a}:end={b},setpts=(PTS-STARTPTS)/{rate}[s{n}]')
+            filters.append(''.join(f'[s{n}]' for n in range(len(segments)))+f'concat=n={len(segments)}:v=1:a=0[cut]')
+            intermediate=edit/f'{i:02}-source.mp4'
+            run(['ffmpeg','-v','error','-y','-i',str(raw),'-filter_complex',';'.join(filters),'-map','[cut]','-an','-c:v','libx264','-preset','fast',str(intermediate)])
+            video_source=intermediate;capture_start=0;capture_end=total;speed=1
+            duration=max(total,audio_duration+0.5)
+        else:
+            video_source=raw
+        run(['ffmpeg','-v','error','-y','-ss',str(capture_start),'-t',str(capture_end-capture_start),'-i',str(video_source),'-i',str(s['audio']),'-vf',f'setpts=PTS/{speed},'+view+'fps=30,scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,tpad=stop_mode=clone:stop_duration='+str(duration),'-af','loudnorm=I=-16:TP=-1.5:LRA=11,apad','-t',str(duration),'-c:v','libx264','-preset','fast','-crf','20','-pix_fmt','yuv420p','-c:a','aac','-ar','48000','-ac','2',str(clip)])
         # Sentence-level captions split into readable short chunks.
         words=s['narration_text'].split(); chunks=[' '.join(words[j:j+9]) for j in range(0,len(words),9)]
         for j,chunk in enumerate(chunks):
