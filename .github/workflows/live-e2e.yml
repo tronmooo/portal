@@ -32,7 +32,7 @@ jobs:
     # After a watchdog run, only when it confirmed the deploy is live.
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6

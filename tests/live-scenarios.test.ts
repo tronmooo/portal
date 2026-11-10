@@ -16,6 +16,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
 import { SMOKE_EMAIL, SMOKE_PASSWORD, API_BASE } from "./smoke/fixture/account";
 import { fetchWithRateLimitRetry } from "./smoke/fixture/api";
+import { acquireGateLock, preferenceLockIo } from "./smoke/fixture/gate-lock";
 import { budgetCategoryKey } from "../shared/budget-ledger";
 
 // The DEDICATED smoke account — the one the contract suite already mutates and
@@ -28,6 +29,7 @@ const PASSWORD = process.env.E2E_PASSWORD || SMOKE_PASSWORD;
 const RUN = `E2E${Date.now().toString(36)}`;
 
 let TOKEN = "";
+let releaseGateLock: (() => Promise<void>) | undefined;
 const timings: Array<{ label: string; ms: number }> = [];
 const createdProfileIds: string[] = [];
 
@@ -89,9 +91,16 @@ describe("live scenarios: Bob / Jane / Mike", () => {
     expect(res.ok, `signin failed: ${JSON.stringify(res.data)}`).toBe(true);
     TOKEN = res.data?.session?.access_token;
     expect(TOKEN).toBeTruthy();
-  }, 60_000);
+    // One gate at a time on this account: a contract run starting now would
+    // wipe Bob/Jane/Mike mid-scenario (gate-lock.ts).
+    releaseGateLock = await acquireGateLock(
+      preferenceLockIo((method, path, body) => api(method, path, body, "gate-lock")),
+      { gate: "live-e2e", maxWaitMs: 12 * 60_000 },
+    );
+  }, 13 * 60_000);
 
   afterAll(async () => {
+    await releaseGateLock?.();
     // Cleanup is itself the deletion-cascade test for whatever survived.
     for (const id of createdProfileIds.reverse()) {
       await api("DELETE", `/api/profiles/${id}`.replace("/api", ""), undefined, `cleanup ${id.slice(0, 8)}`).catch(() => {});

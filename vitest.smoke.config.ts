@@ -16,6 +16,8 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["tests/smoke/contracts/**/*.test.ts"],
+    // One gate at a time on the shared smoke account (gate-lock.ts).
+    globalSetup: ["tests/smoke/fixture/global-setup.ts"],
     exclude: ["**/node_modules/**", "**/dist/**"],
     // Network-bound — generous timeout per test plus an overall hook timeout
     // for the one-time seed.

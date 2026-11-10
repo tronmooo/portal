@@ -16,7 +16,7 @@ import { seed, SeedResult } from "./seed";
 import { reset } from "./reset";
 
 const LOCK_DIR = join(tmpdir(), "portol-smoke");
-const LOCK_FILE = join(LOCK_DIR, "seeded.json");
+export const LOCK_FILE = join(LOCK_DIR, "seeded.json");
 const TTL_MS = 5 * 60 * 1000; // re-seed if lock is older than 5min
 
 let cached: SeedResult | null = null;

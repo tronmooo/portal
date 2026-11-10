@@ -36,7 +36,11 @@ green. After a push to `main`:
   smoke account, which the server limits to 60 writes/min. Gate requests go
   through `fetchWithRateLimitRetry` (`tests/smoke/fixture/api.ts`), which
   waits out a 429, so contention can't turn a gate red. Never call `fetch`
-  directly in a gate. *Guard:* `tests/live-gate-rate-limit.test.ts`.
+  directly in a gate. The contract suite also WIPES the account when it
+  starts, so gate runs take turns: each holds the account's gate lock
+  (`acquireGateLock`, `tests/smoke/fixture/gate-lock.ts`) while it writes.
+  Any new script that writes as the smoke account must take it too.
+  *Guard:* `tests/live-gate-rate-limit.test.ts`.
 - Node version: `.nvmrc` → `package.json` `engines.node` (what Vercel builds
   with) → every workflow (`node-version-file`). Change all of them together;
   `tests/ops-guards.test.ts` enforces it.
