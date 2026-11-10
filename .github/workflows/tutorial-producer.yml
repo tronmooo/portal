@@ -1,0 +1,55 @@
+name: Portol Cloud Tutorial Producer
+on:
+  workflow_dispatch:
+    inputs:
+      tutorial:
+        description: Tutorial to record
+        required: true
+        default: chat-to-trackers
+        type: choice
+        options: [chat-to-trackers]
+permissions:
+  contents: read
+concurrency:
+  group: portol-tutorial-producer
+  cancel-in-progress: false
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: tutorial-production
+    env:
+      PORTOL_BASE_URL: https://portol.me
+      PORTOL_TUTORIAL_EMAIL: ${{ secrets.PORTOL_TUTORIAL_EMAIL }}
+      PORTOL_TUTORIAL_PASSWORD: ${{ secrets.PORTOL_TUTORIAL_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Check isolated account credentials
+        run: |
+          test -n "$PORTOL_TUTORIAL_EMAIL" && test -n "$PORTOL_TUTORIAL_PASSWORD" || {
+            echo "Configure PORTOL_TUTORIAL_EMAIL and PORTOL_TUTORIAL_PASSWORD in the tutorial-production GitHub environment"
+            exit 1
+          }
+      - name: Install browser and video tooling
+        run: |
+          npm install --no-save --ignore-scripts playwright@1.56.1
+          npx playwright install --with-deps chromium
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Record and verify tutorial
+        run: node tutorial-producer/record.mjs
+      - name: Assemble tutorial MP4
+        if: success()
+        run: |
+          ffmpeg -y -i tutorial-output/raw.webm -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p -movflags +faststart tutorial-output/portol-chat-to-trackers.mp4
+      - name: Save evidence and finished video
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: portol-tutorial-${{ github.run_id }}
+          path: tutorial-output/
+          retention-days: 14
