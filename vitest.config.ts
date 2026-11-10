@@ -335,6 +335,7 @@ export default defineConfig({
       // recap (2026-09-01: "ran 2 miles" logged into another profile's tracker).
       'tests/quick-log.test.ts',
       'tests/quick-log-owner-scope.test.ts',
+      'tests/log-new-tracker-for-profile.test.ts',
       'tests/system-prompt-cache.test.ts',
       'tests/tool-interference-key.test.ts',
       'tests/bp-heart-rate-split.test.ts',

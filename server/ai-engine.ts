@@ -8949,20 +8949,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           return { error: `I couldn't find a profile named '${input.forProfile}'. Which person/pet did you mean?` };
         }
       }
-      if (explicitProfile) {
-        const named = String(input.trackerName || "").toLowerCase();
-        const anyMatch = trackers.some(t => {
-          const tn = t.name.toLowerCase();
-          return tn === named
-            || trackerNameContains(t.name, named)
-            || trackerNameContains(named, t.name)
-            || trackerNamesMatch(t.name, input.trackerName);
-        });
-        if (!anyMatch) {
-          const available = trackers.slice(0, 5).map(t => t.name).join(", ") || "none yet";
-          return { error: `I couldn't find a tracker named '${input.trackerName}' for any profile. Which tracker did you mean? Available: ${available}.` };
-        }
-      }
+      // A tracker that doesn't exist yet is NOT an error, even when a profile
+      // is named ("log sleep for Bob"): it falls through to auto-create below,
+      // owned by that profile. (2026-11-10 user report: brand-new Sleep /
+      // Headache / Walking trackers came back as red "I couldn't find a
+      // tracker named 'Sleep' for any profile" failures.) A named profile that
+      // doesn't resolve is still refused above, so nothing lands on Self.
       // No forProfile: the ACTIVE profile, else self (Rule 6).
       if (!targetProfileId) targetProfileId = aiDefaultOwner(profiles)?.id;
 
