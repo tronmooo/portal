@@ -131,6 +131,7 @@ export default defineConfig({
       'tests/calendar-capabilities.test.ts',
       'tests/calendar-categories.test.ts',
       'tests/recurring-dates-page.test.tsx',
+      'tests/birthday-owner-label.dom.test.tsx',
       'tests/recurring-important-dates.test.tsx',
       'tests/recurring-scope-and-purity.test.ts',
       'tests/calendar-crud.test.ts',

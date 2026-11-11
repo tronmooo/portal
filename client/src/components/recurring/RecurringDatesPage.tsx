@@ -24,6 +24,7 @@
 // and a liability is one rule and one date, with the financial link kept as
 // metadata.
 
+import { ownerLabelForDatedItem } from "@shared/birthday-event";
 import { useMemo, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Plus, Bell, AlertTriangle } from "lucide-react";
@@ -65,8 +66,9 @@ function OccurrenceRow({
   const hsl = RULE_HSL[occ.kind];
   const done = occ.status === "done" || occ.status === "skipped";
   const meta = [KIND_LABELS[occ.kind]];
-  if (ownerName && ownerName.trim().toLowerCase() !== occ.title.trim().toLowerCase()) {
-    meta.push(ownerName);
+  const owner = ownerLabelForDatedItem(occ.title, ownerName);
+  if (owner && owner.trim().toLowerCase() !== occ.title.trim().toLowerCase()) {
+    meta.push(owner);
   }
   // Say plainly whether this date repeats, so a one-off in the Upcoming list
   // is never mistaken for a rule.

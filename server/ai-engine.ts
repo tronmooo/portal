@@ -181,7 +181,7 @@ import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/recurrence";
 import { resolveTaskActor } from "@shared/task-actor";
-import { annualLabelEvent } from "@shared/birthday-event";
+import { annualLabelEvent, profileIsNamedBy } from "@shared/birthday-event";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { detectFactQuestion, lookupStoredFact, type FactSources } from "@shared/fact-lookup";
 import { startTrace } from "./latency";
@@ -11223,8 +11223,23 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           const byTitle = label.name.length >= 2
             ? people.filter((p: any) => matchProfileByName([p], label.name))
             : [];
-          const target = (input.forProfile && matchProfileByName(people, input.forProfile))
-            || (byTitle.length === 1 ? byTitle[0] : null);
+          // The TITLE says whose birthday it is. A forProfile naming somebody
+          // else ("Jordan's birthday" with forProfile "me") filed Jordan's
+          // birthday under the account holder, and the card read "Birthday ·
+          // Bob Robertson" (user report 2026-11-11). The person the label
+          // names wins; a contradicting forProfile is dropped, never obeyed.
+          // Only the account holder is overridden: "Mom's birthday" for the
+          // profile "Linda" is a real link the names alone cannot confirm.
+          let named = input.forProfile ? matchProfileByName(people, input.forProfile) : undefined;
+          const selfProf = people.find((p: any) => p.type === "self");
+          const forSelf = (!!named && named.type === "self")
+            || (!named && /^(me|myself|i|self|mine|my)$/i.test(String(input.forProfile ?? "").trim()));
+          if (forSelf && label.name && !(selfProf && profileIsNamedBy(label.name, selfProf.name))) {
+            logger.warn("ai", `create_event: "${input.title}" names ${label.name}, not the account holder — ignoring forProfile "${input.forProfile}"`);
+            named = undefined;
+            input.forProfile = undefined;
+          }
+          const target = named || (byTitle.length === 1 ? byTitle[0] : null);
           if (target) {
             const iso = normalizeDateString(input.date) || String(input.date).slice(0, 10);
             const f: Record<string, any> = (target as any).fields || {};

@@ -13,6 +13,7 @@
 // "Mark paid", a task is "Complete", a birthday gets neither. Everything else
 // lives in the overflow menu or the detail sheet.
 
+import { ownerLabelForDatedItem } from "@shared/birthday-event";
 import {
   Cake, CalendarHeart, CreditCard, Receipt, Wallet, RefreshCw, Wrench,
   Stethoscope, Bell, CheckSquare, FileText, CalendarDays, Repeat,
@@ -72,8 +73,11 @@ function metaLine(series: CalendarSeries, ownerName?: string): string {
   const parts: string[] = [KIND_LABELS[series.kind]];
   // Don't repeat the owner when it's just the record's own name ("ChatGPT Pro
   // · ChatGPT Pro" was pure noise in the reported screenshots).
-  if (ownerName && ownerName.trim().toLowerCase() !== series.title.trim().toLowerCase()) {
-    parts.push(ownerName);
+  // "Jordan's birthday · Bob Robertson" read as Bob's birthday: a birthday
+  // that names someone else never shows the owner (shared/birthday-event).
+  const owner = ownerLabelForDatedItem(series.title, ownerName);
+  if (owner && owner.trim().toLowerCase() !== series.title.trim().toLowerCase()) {
+    parts.push(owner);
   }
   if (series.amount != null) {
     const per = series.recurrence === "monthly" ? "/month"

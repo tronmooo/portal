@@ -9,6 +9,7 @@
 // Dates, the notification bell, and the linked profile/asset pages. Checking
 // off ONE occurrence marks only that date done — the series stays live and
 // the next occurrence rolls forward automatically.
+import { ownerLabelForDatedItem } from "@shared/birthday-event";
 import { useMemo, useState } from "react";
 import { setEventOccurrence, setEventSeriesFlag } from "@/lib/event-occurrence";
 import { useQuery } from "@tanstack/react-query";
@@ -658,7 +659,9 @@ function OccurrenceRow({ occ, todayISO, profileName, onOpen }: {
 }) {
   const hsl = KIND_HSL[occ.kind] ?? "240 8% 60%";
   const Icon = OCC_ICONS[occ.kind] ?? Repeat;
-  const owner = occ.source.profileId ? profileName(occ.source.profileId) : undefined;
+  const owner = ownerLabelForDatedItem(
+    occ.title, occ.source.profileId ? profileName(occ.source.profileId) : undefined,
+  );
   const done = occ.status === "done" || occ.status === "skipped";
   return (
     <button type="button" onClick={() => onOpen(occ)}
