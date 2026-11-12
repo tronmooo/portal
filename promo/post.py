@@ -113,6 +113,8 @@ def grade(src, f):
     im = np.clip(im + (im - bl) * 0.6, 0, 1)                      # unsharp after upscale
     if f < 408:                                                    # lift the dark room a touch
         im = np.clip(im * 1.18 + 0.004, 0, 1)
+    elif f < 1008:                                                 # phone studio + wall
+        im = np.clip(im * 1.14 + 0.003, 0, 1)
     lum = im.mean(axis=2, keepdims=True)
     hi = np.clip((im - 0.55) / 0.45, 0, 1) * (lum > 0.3)
     bloom = cv2.GaussianBlur(hi, (0, 0), 14) * 0.45 + cv2.GaussianBlur(hi, (0, 0), 48) * 0.35
