@@ -204,3 +204,27 @@ describe("helpers", () => {
     expect(looksLikeTypoOf("Sarah", ["Bob", "Robert Smith"])).toBe(false);
   });
 });
+
+describe("the router never steers an unprofiled person's birthday into a question", () => {
+  // Live check 2026-11-12: "Tordexmar's birthday is October 2" was routed to
+  // "write it on the profile, do not also create an event"; with no profile
+  // the model asked instead of saving anything.
+  it("no profile → save a yearly event, don't ask, don't create a profile", async () => {
+    const { buildContentRoutingDirective } = await import("../server/ai-engine");
+    const d = String(buildContentRoutingDirective("Tordexmar's birthday is October 2", [SELF as any]));
+    expect(d).toMatch(/Tordexmar, who has NO profile/);
+    expect(d).toMatch(/create_event\(title:"🎂 Tordexmar's Birthday"/);
+    expect(d).not.toMatch(/do not also create an event/);
+    expect(d).not.toMatch(/Pass forProfile/);
+    const span = String(buildContentRoutingDirective(BOB_MSG, [SELF as any]));
+    expect(span).toMatch(/recurrenceEnd/);
+  });
+
+  it("an existing profile still gets the birthday on its record", async () => {
+    const { buildContentRoutingDirective } = await import("../server/ai-engine");
+    const d = String(buildContentRoutingDirective("Dana's birthday is March 4", [SELF as any, { id: "p-dana", name: "Dana", type: "person" }]));
+    expect(d).toMatch(/belongs to the PROFILE_FIELD record/);
+    expect(d).toMatch(/Named person\(s\): Dana/);
+    expect(d).not.toMatch(/NO profile/);
+  });
+});

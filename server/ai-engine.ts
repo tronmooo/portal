@@ -15380,12 +15380,36 @@ export function buildContentRoutingDirective(userMessage: string, profiles?: Arr
   // Structured verdicts name BOTH the destination record and the field family,
   // because "profile_field/profile_contact" and "profile_field/profile_dob" are
   // the same tool call with very different temporal consequences.
+  // A person named in the message who has NO profile (shared/profile-intent,
+  // CLAUDE.md rule 13). "Tordexmar's birthday is October 2" was routed to
+  // "write it on the profile, do not also create an event" — with no profile
+  // to write to, the model ASKED instead of saving anything (live check
+  // 2026-11-12). A mention never creates a profile and never blocks the
+  // record: such a person's birthday is a yearly event, and everything else
+  // is the user's own record with the name in its title.
+  const hasProfile = (hint: string) =>
+    (profiles || []).some((p) => matchProfileByName([p as any], hint) || profileIsNamedBy(hint, p.name));
+  const isUnprofiled = (hint: string | null | undefined): hint is string =>
+    !!hint && !/^(me|myself|i|self|my)$/i.test(hint) && !hasProfile(hint);
   const structured = plan.actions.filter((a) => isStructured(a.kind));
-  if (structured.length > 0) {
-    const parts = structured.map((a) => `"${a.clause.slice(0, 60)}" belongs to the ${a.kind.toUpperCase()} record (${a.structuredDomain})`);
+  const structuredForUnprofiled = structured.filter((a) => isUnprofiled(a.profileHint));
+  const structuredForKnown = structured.filter((a) => !isUnprofiled(a.profileHint));
+  if (structuredForKnown.length > 0) {
+    const parts = structuredForKnown.map((a) => `"${a.clause.slice(0, 60)}" belongs to the ${a.kind.toUpperCase()} record (${a.structuredDomain})`);
     lines.push(
       `[ROUTER] A typed record already owns this: ${parts.join("; ")}. ` +
       `Write it there — do NOT bury it in a note. If that record's field is a date, it is already on the calendar; do not also create an event for it.`,
+    );
+  }
+  for (const a of structuredForUnprofiled) {
+    const who = a.profileHint as string;
+    const isDob = a.structuredDomain === "profile_dob";
+    lines.push(
+      `[ROUTER] "${a.clause.slice(0, 60)}" is about ${who}, who has NO profile. Do NOT create a profile and do NOT ask whether to — ` +
+      (isDob
+        ? `save the birthday NOW as create_event(title:"🎂 ${who}'s Birthday", date:<the next occurrence>, recurrence:"yearly"${/\bfor\s+\d+\s+years?\b/i.test(userMessage) ? `, recurrenceEnd:<that many years out>` : ""}) with no forProfile.`
+        : `save what the user asked for as their own record (no forProfile), with ${who}'s name in its title.`) +
+      ` The app offers the user a profile for ${who} under your reply.`,
     );
   }
   // Replaces the create-vs-update VETO that used to sit in the tool gate.
@@ -15426,9 +15450,10 @@ export function buildContentRoutingDirective(userMessage: string, profiles?: Arr
     );
   }
 
-  const owners = Array.from(new Set(plan.actions.map((a) => a.profileHint).filter(Boolean)));
-  if (owners.length > 0) {
-    lines.push(`[ROUTER] Named person(s): ${owners.join(", ")}. Pass forProfile — do NOT default to the primary profile.`);
+  const owners = Array.from(new Set(plan.actions.map((a) => a.profileHint).filter(Boolean))) as string[];
+  const knownOwners = owners.filter((o) => !isUnprofiled(o));
+  if (knownOwners.length > 0) {
+    lines.push(`[ROUTER] Named person(s): ${knownOwners.join(", ")}. Pass forProfile — do NOT default to the primary profile.`);
   }
   return lines.length > 0 ? lines.join("\n") : null;
 }
