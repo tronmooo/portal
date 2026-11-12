@@ -719,17 +719,55 @@ export function hydrateQueryCache(): void {
     // everything else is seeded fresh. When that single bootstrap refetch
     // lands, seedDashboardCaches overwrites all dependent keys with fresh
     // rows — so staleness is bounded by one round trip, not by the blob age.
+    // ── What is allowed to be restored as FRESH ────────────────────────────
+    // "Fresh" means "do not refetch on mount", so it is only honest for data
+    // something else is about to replace. Exactly one thing refetches on every
+    // boot: the bootstrap of the CURRENT scope (App.tsx DataPrefetch), whose
+    // landing re-seeds its own dependent keys (seedDashboardCaches). So:
+    //   · that bootstrap is restored as a placeholder — invalidated, so the
+    //     prefetch really goes to the network whatever the blob's age;
+    //   · only ITS dependent keys are seeded fresh;
+    //   · every other restored entry (another scope's stats / lists / calendar)
+    //     keeps its saved timestamp and is invalidated: it still paints
+    //     instantly, and refetches when a page actually shows it.
+    // Before 2026-11-12 the restore trusted the blob: the bootstrap kept its
+    // saved timestamp (stale only after 3 min), and dependent lists were seeded
+    // fresh from whichever scope's bootstrap happened to be LAST in the blob.
+    // This app is invalidation-driven and an invalidation does not survive a
+    // reload, so "add a task, refresh" painted the pre-write list and fetched
+    // nothing — the Tasks page reads the everyone-scope list, which no boot
+    // request ever replaced (observed on production: still missing after 20 s).
     const seededAt = Date.now();
-    let bootstrapEntry: { k: any; d: any; t: number } | null = null;
+    const scope = getProfileFilterSnapshot();
+    const scopeMode = scope.mode === "selected" && scope.selectedIds.length > 0 ? "selected" : "everyone";
+    const scopeIds = scopeMode === "selected" ? scope.selectedIds.map(String) : [];
+    const isBootstrapKey = (k: unknown): k is unknown[] => Array.isArray(k) && k[0] === "/api/dashboard-bootstrap";
+    const bootstrapScope = (k: unknown[]) => ({
+      mode: String(k[1] ?? "everyone"),
+      month: k.length > 2 ? String(k[k.length - 1]) : "",
+      ids: k.slice(2, Math.max(2, k.length - 1)).map(String),
+    });
+    const currentMonth = new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
+    const isCurrentScope = (k: unknown[]) => {
+      const b = bootstrapScope(k);
+      return b.mode === scopeMode && b.month === currentMonth
+        && b.ids.length === scopeIds.length && b.ids.every((id, i) => id === scopeIds[i]);
+    };
+    const currentBootstrap = (entries as Array<{ k: any; d: any; t: number }>).find((e) => isBootstrapKey(e.k) && isCurrentScope(e.k)) || null;
+    // The keys the boot refetch will overwrite when it lands.
+    const refreshedOnBoot = new Set<string>();
+    if (currentBootstrap) {
+      const b = bootstrapScope(currentBootstrap.k);
+      for (const { key } of bootstrapSeedEntries(currentBootstrap.d, b.mode, b.ids, b.month)) refreshedOnBoot.add(JSON.stringify(key));
+    }
+    const placeholders: unknown[][] = [];
     for (const entry of entries) {
       // Only seed if no fresh data exists
       const existing = queryClient.getQueryData(entry.k as any);
       if (existing !== undefined) continue;
-      const isBootstrap = Array.isArray(entry.k) && entry.k[0] === "/api/dashboard-bootstrap";
-      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: isBootstrap ? entry.t : seededAt });
-      if (isBootstrap) {
-        bootstrapEntry = entry as { k: any; d: any; t: number };
-      }
+      const fresh = !isBootstrapKey(entry.k) && refreshedOnBoot.has(JSON.stringify(entry.k));
+      queryClient.setQueryData(entry.k as any, entry.d, { updatedAt: fresh ? seededAt : entry.t });
+      if (!fresh) placeholders.push(entry.k as unknown[]);
     }
 
     // PERF Phase 1 (extend instant-paint to every tab): the persisted bootstrap
@@ -737,23 +775,18 @@ export function hydrateQueryCache(): void {
     // (tasks, expenses, obligations, habits, goals, journal, events, documents,
     // trackers, reminders, …). Re-run the SAME seeding the dashboard does at
     // runtime so those tabs paint cached rows BEFORE React mounts, instead of
-    // skeletoning on every cold reload. This reuses bytes already in
-    // localStorage — no extra persistence cost. The bootstrap key encodes the
-    // scope it was captured under: ["/api/dashboard-bootstrap", mode, ...ids, month].
-    if (bootstrapEntry) {
-      const k = bootstrapEntry.k as unknown[];
-      const mode = String(k[1] ?? "everyone");
-      const month = k.length > 2 ? String(k[k.length - 1]) : "";
-      const ids = k.slice(2, Math.max(2, k.length - 1)).map(String);
-      // Seeded FRESH (see the block above): the stale bootstrap query is the
-      // single designated refresher; its landing re-seeds every one of these
-      // keys via seedDashboardCaches. Seeding them stale here re-created the
-      // ~20-request launch fan-out this pass exists to remove. Only fill empty
-      // slots (never clobber a fresher restore).
-      for (const { key, data } of bootstrapSeedEntries(bootstrapEntry.d, mode, ids, month)) {
+    // skeletoning on every cold reload. Only from the current scope's
+    // bootstrap — the one whose refetch replaces them (see above) — and only
+    // into empty slots (never clobber a fresher restore).
+    if (currentBootstrap) {
+      const b = bootstrapScope(currentBootstrap.k);
+      for (const { key, data } of bootstrapSeedEntries(currentBootstrap.d, b.mode, b.ids, b.month)) {
         if (queryClient.getQueryData(key as any) !== undefined) continue;
         queryClient.setQueryData(key as any, data, { updatedAt: seededAt });
       }
+    }
+    for (const k of placeholders) {
+      void queryClient.invalidateQueries({ queryKey: k as any, exact: true, refetchType: "none" });
     }
   } catch {
     // Corrupt cache — purge it rather than risk a partial/cross-user restore.

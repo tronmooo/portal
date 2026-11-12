@@ -351,6 +351,7 @@ export default defineConfig({
       'tests/server-loan-not-an-asset.test.ts',
       'tests/stats-hidden-trackers.test.ts',
       'tests/security-2026-11-12.test.ts',
+      'tests/reload-after-write-refetches.test.ts',
       'tests/confirm-icon-button.dom.test.tsx',
       'tests/chat-recap-money.test.ts',
       'tests/auth-address-after-signin.test.ts',
