@@ -351,6 +351,10 @@ export default defineConfig({
       'tests/server-loan-not-an-asset.test.ts',
       'tests/stats-hidden-trackers.test.ts',
       'tests/security-2026-11-12.test.ts',
+      'tests/journal-autosave-session.dom.test.tsx',
+      'tests/task-clear-due-date.test.ts',
+      'tests/expense-delete-refund.test.ts',
+      'tests/calendar-one-off-edit-failure.dom.test.tsx',
       // 2026-09-02 performance + integrity sweep (audit/perf-ledger-2026-09-02.md)
       'tests/query-url-from-key.test.ts',
       'tests/format-cached-formatters.test.ts',

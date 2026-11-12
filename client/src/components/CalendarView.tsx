@@ -221,7 +221,7 @@ interface EventFormData {
   linkedProfiles: string[];
 }
 
-function EventFormDialog({
+export function EventFormDialog({
   open,
   onClose,
   initial,
@@ -396,6 +396,11 @@ function EventFormDialog({
       return { prevEvents, prevTimeline, tempId };
     },
     onSuccess: () => {
+      // Only now: `onSaved` is what skips the original occurrence after a
+      // "just this date" edit. Called from handleSubmit it ran whether or not
+      // the replacement was stored, so a failed save left that date with
+      // neither the original nor the edited event.
+      onSaved?.();
       // Cache bus, as the delete path already does: it also covers
       // /api/date-rules and the bootstrap seed, and reaches other open tabs.
       void invalidateDomains("events", "dashboard");
@@ -417,7 +422,6 @@ function EventFormDialog({
     e.preventDefault();
     if (!form.title.trim() || !form.date) return;
     mutation.mutate();
-    onSaved?.();
     // Confirm INSTANTLY, matching the optimistic cache update — waiting for
     // the server roundtrip left no visible confirmation on slow links, and
     // testers retried into duplicates (2026-07-29 report). A failure still

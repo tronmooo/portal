@@ -21,6 +21,12 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { resolveAssetValue } from "@shared/asset-value";
 import { toMonthlyAmount, sumMonthIncomeToDateNow, canonicalIncomeFrequency, latePaychecks, reconcileExpectedPaychecks, paycheckStatus } from "@shared/obligation-windows";
 import { useState, useEffect, useMemo, useRef } from "react";
+import { expenseRefund } from "@shared/expense-account";
+
+// The month a new cash-flow entry defaults to: the user's month, the same one
+// the Cash Flow section lists (cfMonth). The UTC month put an entry added on
+// the last evening of a month into NEXT month, out of the list just edited.
+const localMonth = () => new Date().toLocaleDateString("en-CA", { timeZone: BROWSER_TIMEZONE }).slice(0, 7);
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { MultiProfileFilter } from "@/components/MultiProfileFilter";
@@ -178,6 +184,9 @@ export default function FinancePage() {
   const showTestData = useShowTestData();
   const accountOptions = useMemo(() => accountViews(profiles || []), [profiles]);
   const accountIdSet = useMemo(() => new Set(accountOptions.map((a) => a.id)), [accountOptions]);
+  // Deleted expenses whose amount was put back into their account — so Undo
+  // takes it out again only when the delete really returned it.
+  const refundedRef = useRef<Set<string>>(new Set());
   // "Dinner at Chili's" $100 was saved twice four minutes apart and nothing
   // noticed. An expense with the same description, amount and date as one
   // already logged is almost always a double submit, so ask before adding it.
@@ -378,7 +387,7 @@ export default function FinancePage() {
   // ── Cashflow entry state ─────────────────────────────────────────────────
   const [addCashflowOpen, setAddCashflowOpen] = useState(false);
   const [newCashflow, setNewCashflow] = useState({
-    month: new Date().toISOString().slice(0, 7),
+    month: localMonth(),
     week: "1",
     projected_income: "",
     projected_expenses: "",
@@ -2546,7 +2555,7 @@ export default function FinancePage() {
 
       {/* Add Cashflow Entry Dialog (POST /api/cashflow upserts {month, week, projected_*, actual_*}) */}
       <Dialog open={addCashflowOpen} onOpenChange={(open) => { if (!open) {
-        setNewCashflow({ month: new Date().toISOString().slice(0,7), week: "1", projected_income: "", projected_expenses: "", actual_income: "", actual_expenses: "" });
+        setNewCashflow({ month: localMonth(), week: "1", projected_income: "", projected_expenses: "", actual_income: "", actual_expenses: "" });
       } setAddCashflowOpen(open); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -2604,7 +2613,7 @@ export default function FinancePage() {
                 addCashflowMut.mutate({ ...newCashflow });
                 setAddCashflowOpen(false);
                 setNewCashflow({
-                  month: new Date().toISOString().slice(0, 7),
+                  month: localMonth(),
                   week: "1", projected_income: "", projected_expenses: "", actual_income: "", actual_expenses: "",
                 });
               }}
@@ -2682,11 +2691,17 @@ export default function FinancePage() {
                 // toast offers Undo — restore re-creates via POST /api/expenses
                 // (id/createdAt are server-generated and stripped; everything
                 // the insert schema accepts is preserved).
+                // "Paid from" took this amount out of an account when the expense
+                // was saved (Add Expense), and editing moves it back and forth.
+                // Deleting used to leave the account short for good: the spend
+                // vanished from every total while the balance stayed lower.
+                const paidFrom = expenseRefund(expense, accountIdSet);
                 if (expense) {
                   const exp: any = expense;
                   showUndoToast({
                     title: `"${exp.description}" deleted`,
-                    onUndo: () => recreateDeleted({
+                    onUndo: async () => {
+                     const restored = await recreateDeleted({
                       url: "/api/expenses",
                       body: {
                         description: exp.description,
@@ -2707,7 +2722,18 @@ export default function FinancePage() {
                       },
                       successTitle: `"${exp.description}" restored`,
                       errorTitle: "Couldn't restore expense",
-                    }),
+                     });
+                     // The restored expense is paid from the same account again.
+                     if (restored && paidFrom && refundedRef.current.has(targetId)) {
+                       refundedRef.current.delete(targetId);
+                       try {
+                         await apiRequest("POST", `/api/accounts/${paidFrom.accountId}/adjust`, { delta: -paidFrom.amount, reason: `Expense restored — ${exp.description}` });
+                         invalidateDomain("profiles");
+                       } catch (balanceErr: any) {
+                         toast({ title: "Expense restored, but the account balance didn't move", description: formatApiError(balanceErr), variant: "destructive" });
+                       }
+                     }
+                    },
                   });
                 } else {
                   toast({ title: "Expense deleted" });
@@ -2715,6 +2741,15 @@ export default function FinancePage() {
                 try {
                   await apiRequest("DELETE", `/api/expenses/${targetId}`);
                   invalidateDomain("expenses");
+                  if (paidFrom) {
+                    try {
+                      await apiRequest("POST", `/api/accounts/${paidFrom.accountId}/adjust`, { delta: paidFrom.amount, reason: `Expense deleted — ${(expense as any)?.description ?? ""}`.trim() });
+                      refundedRef.current.add(targetId);
+                      invalidateDomain("profiles");
+                    } catch (balanceErr: any) {
+                      toast({ title: "Expense deleted, but the account balance didn't move back", description: formatApiError(balanceErr), variant: "destructive" });
+                    }
+                  }
                 } catch (err: any) {
                   for (const [key, data] of prev) queryClient.setQueryData(key, data);
                   toast({ title: "Failed to delete", description: err?.message || "Unknown error", variant: "destructive" });

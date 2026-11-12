@@ -556,7 +556,7 @@ export default function HabitsPage() {
               placeholder="New habit name..."
               value={newName}
               onChange={e => setNewName(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && handleCreate()}
+              onKeyDown={e => { if (e.key === "Enter" && !e.repeat && !createMutation.isPending) handleCreate(); }}
               data-testid="input-habit-name"
               className="flex-1"
             />

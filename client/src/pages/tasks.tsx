@@ -532,7 +532,7 @@ function TaskItem({
                     const next = e.target.value;
                     if (next === (task.dueDate?.slice(0, 10) ?? "")) return;
                     setDateEditing(false);
-                    patchMutation.mutate({ dueDate: next || null });
+                    patchMutation.mutate({ dueDate: next || "" });
                   }}
                   onBlur={() => setDateEditing(false)}
                   onKeyDown={e => { if (e.key === "Escape") setDateEditing(false); }}

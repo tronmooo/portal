@@ -194,7 +194,8 @@ describe("F-30: inline row edits", () => {
     const src = require("fs").readFileSync(require("path").resolve(__dirname, "../client/src/pages/tasks.tsx"), "utf8");
     expect(src).toContain("input-task-due-inline-${task.id}");
     expect(src).toContain("btn-task-priority-${task.id}");
-    expect(src).toContain("patchMutation.mutate({ dueDate: next || null })");
+    // "" is the clear the route accepts; `null` answered 400 (tests/task-clear-due-date.test.ts).
+    expect(src).toContain('patchMutation.mutate({ dueDate: next || "" })');
   });
 });
 

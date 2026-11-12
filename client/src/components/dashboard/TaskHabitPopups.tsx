@@ -786,7 +786,7 @@ export function TasksPopup({ open, onClose, filterIds = [], filterMode = "everyo
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="micro-label font-semibold text-muted-foreground flex items-center gap-1 mb-1"><Calendar className="h-3 w-3" />Due date</label>
-              <input type="date" value={t.dueDate || ""} onChange={e => updateMutation.mutate({ id: t.id, patch: { dueDate: e.target.value || undefined } })}
+              <input type="date" value={t.dueDate || ""} onChange={e => updateMutation.mutate({ id: t.id, patch: { dueDate: e.target.value } })}
                 className="w-full text-xs bg-muted/40 border border-border rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" data-testid="task-due-date" />
             </div>
             <div>

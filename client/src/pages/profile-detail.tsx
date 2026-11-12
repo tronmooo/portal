@@ -1173,7 +1173,7 @@ function ChildAssetsCard({
                 value={childName}
                 onChange={(e) => setChildName(e.target.value)}
                 className="h-[44px] text-sm"
-                onKeyDown={(e) => { if (e.key === "Enter") createChildMut.mutate(); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.repeat && !createChildMut.isPending) createChildMut.mutate(); }}
                 data-testid="input-child-asset-name"
               />
             </div>
@@ -1204,7 +1204,7 @@ function ChildAssetsCard({
                   value={childValue}
                   onChange={(e) => setChildValue(e.target.value)}
                   className="h-[44px] text-sm pl-7"
-                  onKeyDown={(e) => { if (e.key === "Enter") createChildMut.mutate(); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.repeat && !createChildMut.isPending) createChildMut.mutate(); }}
                   data-testid="input-child-asset-value"
                 />
               </div>
@@ -5192,7 +5192,8 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
       if (!editingExpense) return;
       await apiRequest("PATCH", `/api/expenses/${editingExpense.id}`, {
         description: expDesc, amount: Number(expAmount), category: expCategory,
-        vendor: expVendor || undefined, date: expDate,
+        // "" clears it; `undefined` fell out of the JSON and the old vendor stayed.
+        vendor: expVendor.trim(), date: expDate,
       });
     },
     onSuccess: () => {

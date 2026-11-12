@@ -276,6 +276,11 @@ export default function JournalPage() {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const freeSavingRef = useRef(false);
+  // Bumped on every form reset; a save that finishes in a later session must
+  // not touch this one (see saveFreeEntry).
+  const freeSessionRef = useRef(0);
+  // The profile the current draft was created under ("" = default owner); null = no draft of ours.
+  const draftProfileRef = useRef<string | null>(null);
 
   const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ["/api/profiles"],
@@ -319,6 +324,9 @@ export default function JournalPage() {
     setSelectedProfileId(activeCreateProfileId || "");
     setEditingEntry(null);
     setFreeText(""); setFreeTags(""); setDraftId(null); setLastSavedAt(null);
+    // A new writing session: an autosave still in flight belongs to the old one.
+    freeSessionRef.current += 1;
+    draftProfileRef.current = null;
   };
 
   // Free-write save: POST once, then PATCH the same entry. `finalize` closes
@@ -332,10 +340,23 @@ export default function JournalPage() {
       return;
     }
     freeSavingRef.current = true;
+    const session = freeSessionRef.current;
     try {
       const tags = freeTags.split(",").map((s) => s.trim()).filter(Boolean);
       if (draftId) {
-        await apiRequest("PATCH", `/api/journal/${draftId}`, { content: freeText, tags, mood: mood || detectMoodFromText(freeText) });
+        // The Profile picker sits below the text, so the autosave has usually
+        // created the draft before a person is picked. The pick has to reach
+        // the entry: it was dropped, and "Entry saved" filed the entry under
+        // whoever was selected when the first autosave ran. Only for a draft
+        // this session created — an existing entry's owner is not this form's
+        // to rewrite.
+        const moveTo = !editingEntry && selectedProfileId && draftProfileRef.current !== null && selectedProfileId !== draftProfileRef.current
+          ? selectedProfileId : null;
+        await apiRequest("PATCH", `/api/journal/${draftId}`, {
+          content: freeText, tags, mood: mood || detectMoodFromText(freeText),
+          ...(moveTo ? { linkedProfiles: [moveTo] } : {}),
+        });
+        if (moveTo && session === freeSessionRef.current) draftProfileRef.current = moveTo;
       } else {
         const r = await apiRequest("POST", "/api/journal", {
           content: freeText,
@@ -346,8 +367,15 @@ export default function JournalPage() {
           ...(selectedProfileId ? { linkedProfiles: [selectedProfileId] } : {}),
         });
         const j = await r.json();
-        if (j?.id) setDraftId(j.id);
+        // Cancel (or Save) may have reset the form while this POST was in
+        // flight. Adopting its id then made the NEXT new entry PATCH — and
+        // overwrite — this one.
+        if (j?.id && session === freeSessionRef.current) {
+          setDraftId(j.id);
+          draftProfileRef.current = selectedProfileId || "";
+        }
       }
+      if (session !== freeSessionRef.current) { invalidateDomain("journal"); return; }
       setLastSavedAt(new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }));
       invalidateDomain("journal");
       if (finalize) {
@@ -489,7 +517,7 @@ export default function JournalPage() {
     onSuccess: () => {
       resetForm();
       setShowCreate(false);
-      toast({ title: "Journal entry saved", description: `Mood: ${mood}` });
+      toast({ title: "Journal entry saved", ...(mood ? { description: `Mood: ${mood}` } : {}) });
     },
     onError: (err: Error, _v: any, ctx: any) => {
       if (ctx?.prev) { for (const [key, data] of ctx.prev) queryClient.setQueryData(key, data); }

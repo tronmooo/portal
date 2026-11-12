@@ -2965,7 +2965,7 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
       {adding ? (
         <div className="rounded-lg border p-3 space-y-2" data-testid="add-nested-liability-form">
           <Input placeholder="Name (e.g. Store Card)" value={childName} onChange={(e) => setChildName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && childName.trim()) createChildMut.mutate(); }} data-testid="input-child-name" />
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.repeat && childName.trim() && !createChildMut.isPending) createChildMut.mutate(); }} data-testid="input-child-name" />
           <div className="flex gap-2">
             <Select value={childSubtype} onValueChange={setChildSubtype}>
               <SelectTrigger className="flex-1" data-testid="select-child-subtype"><SelectValue /></SelectTrigger>

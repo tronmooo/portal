@@ -7123,6 +7123,11 @@ Rules:
       clearDueTime = true;
       delete req.body.dueTime;
     }
+    // CLEARING the date. The schema's clear is "" ("Use YYYY-MM-DD" otherwise),
+    // but `null` is the natural way to say "no date" and the Tasks page's
+    // inline date field sent exactly that: removing a due date answered 400
+    // and the date came back. Both spellings clear.
+    if (req.body && req.body.dueDate === null) req.body.dueDate = "";
     {
       const parsed = insertTaskSchema.partial().safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: `Validation failed: ${JSON.stringify(parsed.error.flatten())}` });
