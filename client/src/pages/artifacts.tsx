@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { LoadFailed, useLoadFailed } from "@/components/LoadFailed";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { invalidateDomains } from "@/lib/cache-bus";
@@ -732,6 +733,8 @@ function DocumentGroup({ label, icon: Icon, items, onSelect, onTogglePin, onDele
 // ─── Main page ───────────────────────────────────────────────
 export default function ArtifactsPage() {
   useEffect(() => { document.title = "Artifacts — Portol"; }, []);
+  // Rule 7: a library that failed to load is not an empty library.
+  const libraryLoad = useLoadFailed("/api/artifacts", "/api/documents");
 
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
@@ -1226,7 +1229,9 @@ export default function ArtifactsPage() {
         // say that instead and offer the way out — telling someone with ten
         // items that they have none is how the counts and the copy ended up
         // contradicting each other (user report 2026-08-17).
-        profileFiltered.length === 0 ? (
+        libraryLoad.failed ? (
+          <LoadFailed what="your artifacts" onRetry={libraryLoad.retry} />
+        ) : profileFiltered.length === 0 ? (
           <EmptyState scope="global"
             icon={Archive}
             label="No artifacts yet"

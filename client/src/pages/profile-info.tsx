@@ -15,6 +15,7 @@
 // detail page uses (["/api/profiles", id, "detail"]), so it's instant when
 // you've already visited the profile and edits here reflect there too.
 import { formatStoredDate } from "@/lib/dates";
+import { LoadFailed, useLoadFailed } from "@/components/LoadFailed";
 import { ConfirmIconButton } from "@/components/ui/confirm-icon-button";
 import { isBirthDateField, formatYearMonth } from "@shared/date-precision";
 import { useState, useRef, useEffect } from "react";
@@ -139,6 +140,8 @@ export default function ProfileInfoPage() {
 // chat-saved facts (which are user-level, not per-profile).
 function EveryoneInfo() {
   const [, navigate] = useLocation();
+  // Rule 7: a list that failed to load is not an empty account.
+  const load = useLoadFailed("/api/profiles");
   const scope = useProfileScope();
 
   // PERF Phase 2.3 (2026-07-16): the FULL /api/profiles is heavy (select * incl.
@@ -190,8 +193,9 @@ function EveryoneInfo() {
         {people.map((p: any) => (
           <PersonSummaryCard key={p.id} profile={p} onOpen={() => navigate(`/profiles/${p.id}/info`)} />
         ))}
-        {people.length === 0 && (
-          <p className="col-span-full text-xs text-muted-foreground py-4 text-center">No people yet.</p>
+        {people.length === 0 && (load.failed
+          ? <LoadFailed className="col-span-full py-4 text-center" what="your people" onRetry={load.retry} />
+          : <p className="col-span-full text-xs text-muted-foreground py-4 text-center">No people yet.</p>
         )}
       </div>
 

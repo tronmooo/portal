@@ -5794,10 +5794,23 @@ export class SupabaseStorage implements IStorage {
     if (!linkedTrackerId) return null;
     // Fail CLOSED: any doubt means the tracker stays. (A lookup error once
     // made the `every` below vacuously true and retired a user's own tracker.)
-    const [{ data: tracker, error: tErr }, { data: entries, error: eErr }] = await Promise.all([
-      this.supabase.from("trackers").select("name, linked_habit_id").eq("id", linkedTrackerId).eq("user_id", this.userId).maybeSingle(),
+    const readTracker = (columns: string) =>
+      this.supabase.from("trackers").select(columns).eq("id", linkedTrackerId).eq("user_id", this.userId).maybeSingle();
+    const [first, { data: entries, error: eErr }] = await Promise.all([
+      readTracker("name, linked_habit_id"),
       this.supabase.from("tracker_entries").select("entry_values").eq("tracker_id", linkedTrackerId).eq("user_id", this.userId).is("deleted_at", null).limit(500),
     ]);
+    // `linked_habit_id` is an optional column (migration 20260922). Where it
+    // has not been applied the read above fails as a whole, and "fail closed"
+    // then meant NO mirror was ever recognised: every deleted habit left its
+    // tracker on the Trackers page (found on production 2026-11-12, where the
+    // column does not exist). A missing column is not doubt about the tracker
+    // — read it without the stamp, the way createTracker already writes
+    // without it, and let the entries / name decide.
+    let { data: tracker, error: tErr } = first as { data: any; error: any };
+    if (tErr && /linked_habit_id|column .* does not exist|schema cache|could not find/i.test(tErr.message || "")) {
+      ({ data: tracker, error: tErr } = (await readTracker("name")) as { data: any; error: any });
+    }
     if (tErr || eErr || !tracker) return null;
     // Rules 19/20: the RELATIONSHIP decides mirror-hood. A tracker stamped as
     // another habit's mirror is never this one's, whatever its entries say.
@@ -5811,7 +5824,10 @@ export class SupabaseStorage implements IStorage {
     // mirror created before the stamp existed — still carrying the habit's
     // name. A tracker the user made and linked, with nothing logged yet, is
     // theirs.
-    if (rows.length === 0 && stampedFor !== habitId && String(tracker.name || "").trim() !== String(habitName || "").trim()) return null;
+    // The auto-created mirror is title-cased ("stretch" → "Stretch"), so the
+    // legacy name test ignores case.
+    const sameName = String(tracker.name || "").trim().toLowerCase() === String(habitName || "").trim().toLowerCase();
+    if (rows.length === 0 && stampedFor !== habitId && !sameName) return null;
     return linkedTrackerId;
   }
 

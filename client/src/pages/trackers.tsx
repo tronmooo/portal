@@ -1,4 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
+import { LoadFailed, useLoadFailed } from "@/components/LoadFailed";
 import { ConfirmIconButton } from "@/components/ui/confirm-icon-button";
 import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
 import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
@@ -5287,6 +5288,10 @@ const PROFILE_TYPE_ICONS: Record<string, any> = {
 };
 
 export default function TrackersPage() {
+  // Rule 7: a section whose data failed to load is not an empty section.
+  const profilesLoad = useLoadFailed("/api/profiles");
+  const documentsLoad = useLoadFailed("/api/documents");
+  const trackersLoad = useLoadFailed("/api/trackers");
   // Hub consolidation (2026-07): true when rendered under the hub shell,
   // which then owns the profile switcher + section navigation.
   const hubEmbedded = useHubChrome();
@@ -6743,6 +6748,7 @@ export default function TrackersPage() {
             testId="assets-filtered-empty"
           />
         );
+        if (childProfiles.length === 0 && profilesLoad.failed) return <div className="bubble"><LoadFailed what="your assets" onRetry={profilesLoad.retry} /></div>;
         if (childProfiles.length === 0) return (
           <div className="bubble p-6 text-center" data-testid="assets-empty">
             <Star className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
@@ -6969,6 +6975,7 @@ export default function TrackersPage() {
             testId="liabilities-filtered-empty"
           />
         );
+        if (liabs.length === 0 && profilesLoad.failed) return <div className="bubble"><LoadFailed what="your liabilities" onRetry={profilesLoad.retry} /></div>;
         if (liabs.length === 0) return (
           <div className="bubble p-6 text-center" data-testid="liabilities-empty">
             <TrendingDown className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
@@ -7245,7 +7252,9 @@ export default function TrackersPage() {
             )}
           </div>
         )}
-        {(!collapsedSections.has("documents") || (hubEmbedded && sectionFilter !== "all")) && (filteredDocuments.length === 0 ? (
+        {(!collapsedSections.has("documents") || (hubEmbedded && sectionFilter !== "all")) && (filteredDocuments.length === 0 && documentsLoad.failed ? (
+          <div className="bubble"><LoadFailed what="your documents" onRetry={documentsLoad.retry} /></div>
+        ) : filteredDocuments.length === 0 ? (
           <div className="bubble p-6 text-center">
             <FileText className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
             <p className="text-sm text-muted-foreground">{allDocuments.length === 0 ? "No documents yet" : "No documents match your search"}</p>
@@ -7356,7 +7365,9 @@ export default function TrackersPage() {
       </div>}
 
       {/* Trackers Section */}
-      {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "trackers") && ((!trackers || trackers.length === 0) ? (
+      {viewMode === "cards" && (sectionFilter === "all" || sectionFilter === "trackers") && ((!trackers || trackers.length === 0) && trackersLoad.failed ? (
+        <LoadFailed className="text-center py-16" what="your trackers" onRetry={trackersLoad.retry} />
+      ) : (!trackers || trackers.length === 0) ? (
         <div className="text-center py-16">
           <Activity className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
           <p className="text-sm text-muted-foreground">No trackers yet.</p>

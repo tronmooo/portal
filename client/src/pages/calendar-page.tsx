@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import { LoadFailed, useLoadFailed } from "@/components/LoadFailed";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import CalendarView from "@/components/CalendarView";
@@ -23,6 +24,8 @@ import { scopeLabel } from "@/lib/profileFilter";
 
 export default function CalendarPage() {
   useEffect(() => { document.title = "Calendar — Portol"; }, []);
+  // Rule 7: a calendar whose items failed to load is not an empty calendar.
+  const calendarLoad = useLoadFailed("/api/calendar/timeline");
   // The calendar's person filter is LOCAL (QA 2026-09-18 F-03). It starts from
   // the active scope and follows it until the user touches the picker here;
   // from then on it is this page's own selection and never writes the global
@@ -121,6 +124,10 @@ export default function CalendarPage() {
             testId="calendar-scope-notice"
           />
         </div>
+      )}
+
+      {calendarLoad.failed && (
+        <div className="bubble mb-2"><LoadFailed what="your calendar" onRetry={calendarLoad.retry} /></div>
       )}
 
       {/* Calendar | Recurring & Important Dates tab toggle */}

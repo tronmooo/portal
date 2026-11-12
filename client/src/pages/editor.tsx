@@ -218,7 +218,7 @@ export default function EditorPage() {
   const isNew = !!matchNew || hashIsNew || !existingId;
   const newType = ((paramsNew?.type === "sheet" || hashType === "sheet") ? "sheet" : "doc") as "doc" | "sheet";
 
-  const { data: existing, isLoading: loadingExisting } = useQuery<Artifact>({
+  const { data: existing, isLoading: loadingExisting, refetch: refetchExisting } = useQuery<Artifact>({
     queryKey: ["/api/artifacts", existingId],
     queryFn: () => apiRequest("GET", `/api/artifacts/${existingId}`).then(r => r.json()),
     enabled: !!existingId && !isNew,
@@ -1107,6 +1107,22 @@ export default function EditorPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
   if (loadingExisting && !isNew) {
     return <div className="h-dvh flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
+  }
+  // The document could not be opened (deleted, a stale link, or the request
+  // failed). This used to fall through to a blank, editable "Doc · 0 words"
+  // with Save, Share and Delete wired to an id that does not exist — whatever
+  // was typed there could never be saved. Say so instead.
+  if (!isNew && existingId && !existing) {
+    return (
+      <div className="h-dvh flex flex-col items-center justify-center gap-3 px-6 text-center" data-testid="editor-not-found">
+        <p className="text-base font-semibold">This document couldn't be opened</p>
+        <p className="text-sm text-muted-foreground max-w-sm">It may have been deleted, or the app couldn't reach it. Nothing else was changed.</p>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => { void refetchExisting(); }} data-testid="editor-not-found-retry">Try again</Button>
+          <Button size="sm" onClick={() => setLocation("/artifacts")} data-testid="editor-not-found-back">Back to Artifacts</Button>
+        </div>
+      </div>
+    );
   }
 
   return (

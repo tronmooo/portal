@@ -22,6 +22,7 @@
 // Reads still ride the SAME shared TanStack Query keys as the Trackers grid and
 // the dashboard, so anything logged anywhere still shows up here.
 import { useState } from "react";
+import { LoadFailed, useLoadFailed } from "@/components/LoadFailed";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useProfileScope } from "@/hooks/useProfileScope";
 import { useHubChrome } from "@/components/hub/hub-context";
@@ -59,6 +60,8 @@ const shortDate = (v?: string | null): string | undefined => {
 
 export default function WellnessPage() {
   const embedded = useHubChrome();
+  // Rule 7: health data that failed to load is not "no measurements yet".
+  const healthLoad = useLoadFailed("/api/trackers", "/api/documents", "/api/profiles");
   const { toast } = useToast();
   const { mode: filterMode, selectedIds: filterIds } = useProfileScope();
   const profileParam = filterMode === "selected" && filterIds.length > 0 ? `?profileIds=${filterIds.join(",")}` : "";
@@ -221,25 +224,33 @@ export default function WellnessPage() {
         </div>
       )}
 
-      <WellnessOverview
-        subjectName={subject && !subjectIsSelf ? subject.name : null}
-        score={score}
-        signals={signals}
-        brief={brief}
-        aiNarrative={aiNarrative}
-        onAiBrief={() => aiBrief.mutate()}
-        aiBriefLoading={aiBrief.isPending}
-        panels={panels}
-        body={body}
-        medications={medications}
-        appointments={appointments}
-        documents={healthDocs}
-        allergies={allergies}
-        conditions={conditions}
-        workouts={workouts}
-        sources={sources}
-        duplicates={duplicates}
-      />
+      {healthLoad.failed && (
+        <div className="bubble mb-3"><LoadFailed what="your health data" onRetry={healthLoad.retry} /></div>
+      )}
+
+      {/* The cards below say "No body measurements yet" for an empty list:
+          not something to print over data that did not load. */}
+      {!healthLoad.failed && (
+        <WellnessOverview
+          subjectName={subject && !subjectIsSelf ? subject.name : null}
+          score={score}
+          signals={signals}
+          brief={brief}
+          aiNarrative={aiNarrative}
+          onAiBrief={() => aiBrief.mutate()}
+          aiBriefLoading={aiBrief.isPending}
+          panels={panels}
+          body={body}
+          medications={medications}
+          appointments={appointments}
+          documents={healthDocs}
+          allergies={allergies}
+          conditions={conditions}
+          workouts={workouts}
+          sources={sources}
+          duplicates={duplicates}
+        />
+      )}
     </div>
   );
 }

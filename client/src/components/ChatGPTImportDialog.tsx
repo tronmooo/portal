@@ -10,6 +10,7 @@
 // trusted as authoritative.
 
 import { useEffect, useState } from "react";
+import { LoadFailed, useLoadFailed } from "@/components/LoadFailed";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useProfileScope } from "@/hooks/useProfileScope";
@@ -252,7 +253,7 @@ function ActionBadge({ action }: { action: string }) {
 /** Import history + undo — embeddable in Settings. */
 export function ChatGPTImportHistory() {
   const { toast } = useToast();
-  const { data, isLoading } = useQuery<{ items: any[] }>({
+  const { data, isLoading, isError, refetch } = useQuery<{ items: any[] }>({
     queryKey: ["finance-import-history"],
     queryFn: async () => (await apiRequest("GET", "/api/finance-import/history")).json(),
   });
@@ -267,6 +268,8 @@ export function ChatGPTImportHistory() {
   });
   const items = data?.items || [];
   if (isLoading) return <p className="text-xs text-muted-foreground">Loading history…</p>;
+  // Rule 7: a history that failed to load is not "no imports".
+  if (isError && !data) return <LoadFailed compact what="your import history" onRetry={() => { void refetch(); }} />;
   if (items.length === 0) return <p className="text-xs text-muted-foreground">No imports yet.</p>;
   return (
     <div className="space-y-2" data-testid="import-history">

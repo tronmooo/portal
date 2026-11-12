@@ -5,6 +5,7 @@
 // lite endpoint the switcher and route dispatcher share, so it costs nothing
 // extra once any of them has loaded.
 import { useState, useMemo, useEffect } from "react";
+import { LoadFailed, useLoadFailed } from "@/components/LoadFailed";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -42,6 +43,8 @@ export default function ProfilesListPage() {
   const [search, setSearch] = useState("");
 
   useEffect(() => { document.title = "Profiles — Portol"; }, []);
+  // Rule 7: a list that failed to load is not an empty account.
+  const load = useLoadFailed("/api/profiles");
 
   const fullProfilesCache = queryClient.getQueryData<LiteProfile[]>(["/api/profiles"]);
   const { data: profiles, isLoading } = useQuery<LiteProfile[]>({
@@ -77,7 +80,7 @@ export default function ProfilesListPage() {
     <PageContainer testId="page-profiles-list">
       <PageHeader
         title="Profiles"
-        subtitle={`${total} ${total === 1 ? "profile" : "profiles"}`}
+        subtitle={load.failed && total === 0 ? "Couldn't load" : `${total} ${total === 1 ? "profile" : "profiles"}`}
         icon={Users}
         accent="213 90% 62%"
         actions={
@@ -97,7 +100,8 @@ export default function ProfilesListPage() {
 
       {isLoading && <BubbleSkeletonGrid count={4} rows={1} height={92} />}
 
-      {!isLoading && groups.length === 0 && (
+      {!isLoading && groups.length === 0 && load.failed && <LoadFailed what="your profiles" onRetry={load.retry} />}
+      {!isLoading && groups.length === 0 && !load.failed && (
         <p className="text-sm text-muted-foreground py-8 text-center">
           {total === 0 ? "No profiles yet." : `No profiles match "${search}".`}
         </p>

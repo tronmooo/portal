@@ -1,4 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
+import { LoadFailed, useLoadFailed } from "@/components/LoadFailed";
 import { sumMonthIncomeToDateNow } from "@shared/obligation-windows";
 import { numOrUnknown } from "@shared/num-or-unknown";
 import { localTodayISO } from "@/lib/dates";
@@ -5252,6 +5253,7 @@ function HouseholdHero({ allProfiles }: { allProfiles: any[] }) {
 // comes from the SINGLE source of truth (computeNetWorth). Clicking a card
 // switches scope to that profile's personal dashboard.
 function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
+  const profilesLoad = useLoadFailed("/api/profiles", "/api/dashboard-bootstrap");
   // BUG (QA 2026-07-25, "House: $250,000 in Finance but $500,000 in Assets"):
   // these per-person cards used to sum WHOLE asset/liability values, so a
   // 50/50 house counted $500k on both owners' cards while the Finance tab —
@@ -5280,6 +5282,8 @@ function ProfileSummaryGrid({ allProfiles }: { allProfiles: any[] }) {
   const totalPositiveNW = useMemo(() => cards.reduce((s: number, c: any) => s + Math.max(0, c.netWorth), 0), [cards]);
 
   if (cards.length === 0) {
+    // Rule 7: a list that failed to load is not an empty account.
+    if (profilesLoad.failed) return <div className="bubble -dashed"><LoadFailed what="your people" onRetry={profilesLoad.retry} /></div>;
     return (
       <div className="bubble -dashed p-6 text-center">
         <Users className="h-7 w-7 text-muted-foreground/40 mx-auto mb-2" />

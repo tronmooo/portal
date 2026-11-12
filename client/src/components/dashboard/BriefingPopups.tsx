@@ -6,6 +6,7 @@
 // in-place actions (pay/skip/edit/delete/renew/dismiss) — not just nav links.
 // TasksPopup/HabitsPopup already live in TaskHabitPopups.tsx.
 import { ownerLabelForDatedItem } from "@shared/birthday-event";
+import { LoadFailed, useLoadFailed } from "@/components/LoadFailed";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { BubbleModal } from "@/components/ui/bubble-modal";
@@ -312,6 +313,8 @@ export function dedupeBills(rows: any[]): any[] {
  */
 export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () => void }) {
   const { toast } = useToast();
+  // Rule 7: bills that failed to load are not "no bills".
+  const billsLoad = useLoadFailed("/api/dashboard-enhanced", "/api/obligations");
   const owners = useOwnerNames();
   // (navigation out of the view is the caller's business — see onViewAll)
   const scope = useProfileScope();
@@ -535,7 +538,9 @@ export function BillsView({ bills, onViewAll }: { bills?: any[]; onViewAll?: () 
 
         {/* Rows — tap to expand into the full detail card. */}
         {visible.length === 0 ? (
-          filter === "all" ? (
+          billsLoad.failed ? (
+            <LoadFailed what="your bills" onRetry={billsLoad.retry} />
+          ) : filter === "all" ? (
             <EmptyState scope="global" icon={Receipt} accent="155 65% 45%" label="No bills in the next 30 days"
               hint="Add a bill to see what's due and when." ctaLabel="Add a bill" onCta={() => setAddOpen(true)} />
           ) : (
