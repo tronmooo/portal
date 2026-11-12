@@ -181,7 +181,9 @@ import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/recurrence";
 import { resolveTaskActor } from "@shared/task-actor";
-import { annualLabelEvent, profileIsNamedBy } from "@shared/birthday-event";
+import { annualLabelEvent, profileIsNamedBy, personNamedByTitle } from "@shared/birthday-event";
+import { hasExplicitProfileCreateIntent, looksLikeTypoOf, NAMED_BEING_TYPES, type ProfileSuggestion } from "@shared/profile-intent";
+import { beginProfileSuggestions, noteProfileSuggestion, finishProfileSuggestions } from "./profile-suggestions";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { detectFactQuestion, lookupStoredFact, type FactSources } from "@shared/fact-lookup";
 import { startTrace } from "./latency";
@@ -328,13 +330,27 @@ function aiDefaultOwner<T extends { id: string; type?: string | null }>(profiles
  * must stop and ask — never write to self. "Me"/"myself"/"I" are the speaker
  * and resolve to the self profile.
  */
-function aiOwnerNotFound<T extends { id: string; type?: string | null }>(
+function aiOwnerNotFound<T extends { id: string; name?: string; type?: string | null }>(
   name: unknown,
   profiles: ReadonlyArray<T>,
+  opts: { selfOwnsMentions?: boolean } = {},
 ): { self: T } | { error: string; needsOwner: true } {
+  const self = profiles.find(p => p.type === "self");
   if (/^(me|myself|i|self|mine|my)$/i.test(String(name ?? "").trim())) {
-    const self = profiles.find(p => p.type === "self");
     if (self) return { self };
+  }
+  // Profile rules 4 + 7 (shared/profile-intent, user spec 2026-11-12): for a
+  // task, an event, an expense or an income, a person with NO profile is only
+  // MENTIONED — "Call Mike at 3", "I bought Sarah a gift", "Bob's birthday".
+  // The record is the user's and is saved under them; a profile for the
+  // person is offered, never created, and never blocks the write. A name that
+  // looks like a typo of an existing profile is still a question.
+  if (opts.selfOwnsMentions && self) {
+    const names = profiles.map(p => String(p.name || "")).filter(Boolean);
+    if (!looksLikeTypoOf(name, names)) {
+      noteProfileSuggestion(name, "person");
+      return { self };
+    }
   }
   return { error: OWNER_UNKNOWN_MESSAGE(String(name ?? "")), needsOwner: true };
 }
@@ -6594,7 +6610,8 @@ CRITICAL ROUTING RULES (NEVER VIOLATE):
 - "My blood type is X" or personal health info (allergies, height, weight, etc.) → ALWAYS update_profile on the self/Me profile with fields: { bloodType: "O+" } (or the appropriate field). NEVER use save_memory for profile-level data. Same for any profile: "Mom's blood type", "Max's breed".
 - ANY concrete personal ATTRIBUTE of a person (self or a named person) → ALWAYS update_profile on that profile with a fields entry, NEVER save_memory. This includes sizes and measurements (shoe/foot size, shirt/pant/dress/ring/hat sizes, height, weight, inseam, waist, chest), physical attributes (eye color, hair color), IDs/numbers (license, passport, SSN-last4, member numbers), and contact/identity details. Examples: "I have size 12 feet" → update_profile name:"Me" changes:{ fields:{ shoeSize: "12" } }; "my shirt size is L" → fields:{ shirtSize: "L" }; "my ring size is 9" → fields:{ ringSize: "9" }. Pick a short, clear camelCase field key that matches the attribute.
 - EXPLICIT "save to my info" — when the user says "save this to my info", "add this to my info tab", "put this in my info", "keep this in my profile", or similar → ALWAYS update_profile with a fields entry on the referenced profile (default to self/Me when unspecified). NEVER use save_memory for these; the Info tab reads profile fields.
-- "X's birthday is Y" → ALWAYS do BOTH: (1) update_profile with name: "X" and changes: { fields: { birthday: "Y" } } — if the profile doesn't exist, it will be auto-created. (2) create_event with title: "🎂 X's Birthday", date: Y (with correct year), recurrence: "yearly". Do NOT ask for confirmation. Just do it.
+- "X's birthday is Y" → create_event with title: "🎂 X's Birthday", date: the next Y, recurrence: "yearly" (and recurrenceEnd when they give a span, e.g. "for 10 years" → 10 years out). If X ALREADY HAS a profile, ALSO update_profile(name:"X", changes:{fields:{birthday:"Y"}}). If X has NO profile, do NOT create one — the birthday event is the whole answer. Do NOT ask for confirmation.
+- PERSON & PROFILE CREATION (NEVER VIOLATE): a person's or pet's name in a message is DATA, not permission to create a profile. Call create_profile(type:"person"|"pet") ONLY when the user explicitly asks ("create a profile for Bob", "add my cat Luna", "add Bob as a contact"). "Bob's birthday is…", "I bought Sarah a $50 gift", "Call Mike tomorrow at 3 PM" create the birthday / expense / task ONLY — owned by the user, no forProfile for a person who has no profile, and no profile. Never create a hidden, placeholder or temporary person. When a person with no profile was mentioned, the app itself shows "Create a profile for X?" Yes/No buttons under your reply — do not ask that question in your text and never claim a profile was created.
 - save_memory is ONLY for abstract facts/preferences, NOT for concrete data that belongs in a profile field, task, expense, or event. If a fact is a concrete attribute of a person (a size, measurement, number, physical trait, contact detail), it is profile-level data → use update_profile, not save_memory.
 - "save a note that X" / "remember that X" for a HOUSEHOLD/OBJECT fact (a door code, wifi password, locker combo, where something is stored) → create_note, NOT journal_entry and NOT save_memory. Journal entries are dated diary text; a code or reference fact is a NOTE, and when it belongs to a person or thing pass forProfile so it lands on that profile. save_memory stays for ABSTRACT preferences that belong to no profile ("I prefer window seats").
 - QUOTED CONTENT BOUNDARIES (CRITICAL for multi-action messages): when an instruction embeds quoted text ('add a journal entry saying "..."', 'create a note that says "..."'), the quoted content ENDS at the closing quotation mark. Everything AFTER the closing quote is a NEW instruction you must still execute — never absorb trailing commands into the journal/note content, and never stop processing the message after the quoted item. Re-scan the whole message and execute EVERY requested action.
@@ -6732,7 +6749,7 @@ ACTION EXAMPLES:
 - "Doctor appointment with Dr. Park on Friday" → create_event with forProfile: "Dr. James Park" (or whatever the medical profile is named) and category: "medical"
 - "Dentist appointment Tuesday" → create_event with forProfile matching the dentist's medical profile name (if one exists), category: "medical"
 - "Therapy session with Dr. Smith" → create_event with forProfile: "Dr. Smith", category: "medical"
-MEDICAL EVENTS: When the user mentions a doctor, dentist, therapist, specialist, or any healthcare provider by name ("Dr. X", "Dr. Y's office", "appointment with [provider]"), ALWAYS set forProfile to that provider's profile name and category to "medical". Check existing profiles for medical-type entries first. If no medical profile exists for the named provider, also call create_profile with type="medical" first.
+MEDICAL EVENTS: When the user mentions a doctor, dentist, therapist, specialist, or any healthcare provider by name ("Dr. X", "Dr. Y's office", "appointment with [provider]"), ALWAYS set forProfile to that provider's profile name and category to "medical". Check existing profiles for medical-type entries first. If no medical profile exists for the named provider, do NOT create one (a provider named in a message is data, not a request for a profile) — save the appointment under the user, without forProfile; the app offers the profile under your reply.
 - "What are Rex's upcoming events?" → get_summary type: "events" forProfile: "Rex"
 - "Tell me about Luna" → get_profile_data profileName: "Luna"
 
@@ -7769,6 +7786,32 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         }
       }
 
+      // PROFILE RULE 1 (shared/profile-intent, user spec 2026-11-12): a person
+      // or pet is created ONLY when the user asked for one. "Bob's birthday is
+      // September 30" minted a person named Bob because the prompt said a
+      // missing profile "will be auto-created". A mention is data: the
+      // original request is completed without a profile, and the profile is
+      // OFFERED under the reply (noteProfileSuggestion) — once per name.
+      {
+        const beingAsked = NAMED_BEING_TYPES.has(String(input.type || "person"));
+        const userMsg = String((input as any).__userMessage || "");
+        if (beingAsked && userMsg && !hasExplicitProfileCreateIntent(userMsg)) {
+          const existing = (await storage.getProfiles()).find((p: any) => profileIsNamedBy(input.name, p.name) && String(p.name).toLowerCase() === String(input.name || "").toLowerCase());
+          if (!existing) {
+            const kind = input.type === "pet" ? "pet" : input.type === "medical" ? "medical" : "person";
+            noteProfileSuggestion(input.name, kind);
+            logger.warn("ai", `create_profile guard: "${input.name}" (${kind}) was mentioned, not requested — no profile created; offering one instead`);
+            return {
+              error: `PROFILE_NOT_REQUESTED: the user did not ask for a profile for "${input.name}" — a person's name in a message is data, not a request to create a profile. ` +
+                `Do NOT create one and do NOT retry. Complete what the user asked WITHOUT it: a birthday is create_event(title:"🎂 ${input.name}'s Birthday", recurrence:"yearly", recurrenceEnd if they gave a span); a task, reminder, expense or event is saved under the user. ` +
+                `The app will offer the user a "Create a profile for ${input.name}?" button under your reply — do not ask about it yourself and do not say a profile was created.`,
+              code: "PROFILE_NOT_REQUESTED",
+              profileSuggestion: { name: input.name, type: kind },
+            };
+          }
+        }
+      }
+
       // DEDUP: Check if profile with same name already exists
       const existingProfiles = await storage.getProfiles();
       const childTypes = ["vehicle", "asset", "subscription", "loan", "investment", "account", "property"];
@@ -7999,6 +8042,27 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (!profilePayload.ok) return { error: profilePayload.error };
 
       const newProfile = await storage.createProfile(profilePayload.data);
+
+      // PROFILE RULE 8: a person created now picks up the birthday and
+      // anniversary dates already recorded for them as standalone events
+      // ("🎂 Bob's Birthday" saved before Bob had a profile). The same rows
+      // are re-owned, never copied, so nothing is duplicated.
+      if (NAMED_BEING_TYPES.has(String(newProfile.type || ""))) {
+        try {
+          const selfId = (await storage.getProfiles()).find((p: any) => p.type === "self")?.id;
+          for (const ev of await storage.getEvents()) {
+            const label = parseBirthdayLabel(ev.title);
+            if (!label || !label.name || !profileIsNamedBy(label.name, newProfile.name)) continue;
+            const owners: string[] = Array.isArray(ev.linkedProfiles) ? ev.linkedProfiles : [];
+            if (owners.includes(newProfile.id)) continue;
+            if (owners.length > 0 && !(owners.length === 1 && owners[0] === selfId)) continue;
+            await storage.updateEvent(ev.id, { linkedProfiles: [newProfile.id] } as any);
+            logger.info("ai", `create_profile: linked existing "${ev.title}" to new profile ${newProfile.name}`);
+          }
+        } catch (e: any) {
+          logger.warn("ai", `create_profile: linking existing dates failed: ${e?.message || e}`);
+        }
+      }
 
       // NW-10: do NOT auto-create a "<name> purchase" expense when an asset is
       // added. A physical item is a balance-sheet asset, not money flowing out;
@@ -8524,7 +8588,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         // Rule 6: a person the user NAMED who does not resolve is a question,
         // never a task filed under self.
         if (!target && input.forProfile) {
-          const miss = aiOwnerNotFound(input.forProfile, profiles);
+          const miss = aiOwnerNotFound(input.forProfile, profiles, { selfOwnsMentions: true });
           if ("error" in miss) return miss;
           target = miss.self;
         }
@@ -10501,6 +10565,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           if (looksLikeObjectPhrase(partyName)) {
             return { error: `NOT_A_PERSON: "${partyName}" describes a thing, not a person, so it cannot own a liability. The owner (partyName) must be a person's name — the liability itself goes in subjectName / the liability's own tool.` };
           }
+          // Profile rule 1: owning part of something does not create a person
+          // the user never asked for. Offer the profile; link once it exists.
+          if (String((input as any).__userMessage || "") && !hasExplicitProfileCreateIntent((input as any).__userMessage)) {
+            noteProfileSuggestion(partyName, "person");
+            return { error: `PROFILE_NOT_REQUESTED: "${partyName}" has no profile and the user did not ask for one. Do not create it. Tell the user the link to ${partyName} needs a profile; the app offers a "Create a profile for ${partyName}" button under your reply.`, code: "PROFILE_NOT_REQUESTED", profileSuggestion: { name: partyName, type: "person" } };
+          }
           try {
             party = await storage.createProfile({
               name: partyName,
@@ -10649,6 +10719,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           if (looksLikeObjectPhrase(partyName)) {
             return { error: `NOT_A_PERSON: "${partyName}" describes a thing, not a person, so it cannot own an asset. The owner (partyName) must be a person's name; the thing itself is the asset (assetName).` };
           }
+          // Profile rule 1: owning part of something does not create a person
+          // the user never asked for. Offer the profile; link once it exists.
+          if (String((input as any).__userMessage || "") && !hasExplicitProfileCreateIntent((input as any).__userMessage)) {
+            noteProfileSuggestion(partyName, "person");
+            return { error: `PROFILE_NOT_REQUESTED: "${partyName}" has no profile and the user did not ask for one. Do not create it. Tell the user the link to ${partyName} needs a profile; the app offers a "Create a profile for ${partyName}" button under your reply.`, code: "PROFILE_NOT_REQUESTED", profileSuggestion: { name: partyName, type: "person" } };
+          }
           try {
             party = await storage.createProfile({ name: partyName, type: "person", fields: {}, tags: [], notes: null } as any);
           } catch (e: any) { return { error: `Person "${partyName}" not found and could not be auto-created: ${e?.message || "unknown"}` }; }
@@ -10707,6 +10783,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           // skipped rather than minted as a person.
           if (looksLikeObjectPhrase(String(s.partyName))) {
             logger.warn("ai", `split_ownership: "${s.partyName}" reads as a thing, not a person — no profile created`);
+            continue;
+          }
+          if (String((input as any).__userMessage || "") && !hasExplicitProfileCreateIntent((input as any).__userMessage)) {
+            noteProfileSuggestion(s.partyName, "person");
+            logger.warn("ai", `split_ownership: "${s.partyName}" has no profile and none was requested — offered, not created`);
             continue;
           }
           try {
@@ -10895,7 +10976,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         else {
           // Rule 6: a NAMED owner that does not resolve is a question — the
           // expense is never quietly filed under self.
-          const miss = aiOwnerNotFound(input.forProfile, profiles);
+          const miss = aiOwnerNotFound(input.forProfile, profiles, { selfOwnsMentions: true });
           if ("error" in miss) return miss;
           expenseLinkedProfiles.push(miss.self.id);
         }
@@ -11289,7 +11370,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (target) eventLinkedProfiles.push(target.id);
         else {
           // Rule 6: a NAMED attendee that does not resolve is a question.
-          const miss = aiOwnerNotFound(input.forProfile, profiles);
+          const miss = aiOwnerNotFound(input.forProfile, profiles, { selfOwnsMentions: true });
           if ("error" in miss) return miss;
           eventLinkedProfiles.push(miss.self.id);
         }
@@ -11406,6 +11487,12 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       }, "event");
       if (!eventPayload.ok) return { error: eventPayload.error };
       const newEvent = await storage.createEvent(input.confirmDuplicate === true ? { ...eventPayload.data, __allowDuplicate: true } as any : eventPayload.data);
+      // A date about someone with no profile ("🎂 Bob's Birthday") offers one.
+      // finishProfileSuggestions drops names that already have a profile.
+      {
+        const subject = personNamedByTitle(input.title);
+        if (subject) noteProfileSuggestion(subject.replace(/\b\p{L}/gu, (c) => c.toUpperCase()), "person");
+      }
       markCreation(dedupUser, evtDedupKey);
       // Only auto-link if we didn't already resolve a profile pre-creation
       if (eventLinkedProfiles.length > 0) {
@@ -13984,7 +14071,7 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         if (targetP) incomeProfileId = targetP.id;
         else {
           // Rule 6: a NAMED earner that does not resolve is a question.
-          const miss = aiOwnerNotFound(input.forProfile, incomeProfiles);
+          const miss = aiOwnerNotFound(input.forProfile, incomeProfiles, { selfOwnsMentions: true });
           if ("error" in miss) return miss;
           incomeProfileId = miss.self.id;
         }
@@ -15986,6 +16073,9 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
    *  turn's reply (spec items 7 + 8). */
   turnId?: string;
   sourceMessageId?: string;
+  /** People/pets the turn mentioned that have no profile: offered under the
+   *  reply as Yes / No, never created (shared/profile-intent). */
+  profileSuggestions?: ProfileSuggestion[];
   /** Routing observability: which path/model served this reply (front door only). */
   meta?: {
     route?: string;
@@ -15995,6 +16085,8 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
     timings?: { aiMs: number; tools: Array<{ tool: string; execMs: number; verifyMs: number }> };
   };
 }> {
+  // Profile offers collected by the tools this turn (server/profile-suggestions).
+  beginProfileSuggestions();
   // ── TURN IDENTITY (spec item 7) ───────────────────────────────────────────
   // One id for this user message and everything it produces. The client sends
   // its optimistic message id as sourceMessageId; the server owns the turnId
@@ -18572,9 +18664,23 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // person (shared/domain/format) — the one door every reply leaves by.
     finalReply = polishAssistantReply(finalReply);
 
+    // "Would you also like a profile for Bob?" — offered, never created
+    // (shared/profile-intent). Once per name; names with a profile are skipped.
+    let profileSuggestions: ProfileSuggestion[] = [];
+    try {
+      profileSuggestions = await finishProfileSuggestions({
+        profiles: await storage.getProfiles(),
+        getPreference: (k) => storage.getPreference(k),
+        setPreference: (k, v) => storage.setPreference(k, v),
+      });
+    } catch (e: any) {
+      logger.warn("ai", `[profile-suggestions] skipped: ${e?.message || e}`);
+    }
+
     return {
       reply: finalReply,
       actions: allActions,
+      ...(profileSuggestions.length > 0 ? { profileSuggestions } : {}),
       results: allResults,
       documentPreview,
       documentPreviews: documentPreviews.length > 0 ? documentPreviews : undefined,

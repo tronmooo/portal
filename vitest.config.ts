@@ -134,6 +134,8 @@ export default defineConfig({
       'tests/recurring-dates-page.test.tsx',
       'tests/birthday-owner-label.dom.test.tsx',
       'tests/dated-item-owner-guard.test.ts',
+      'tests/profile-creation-rules.test.ts',
+      'tests/profile-suggestion-card.dom.test.tsx',
       'tests/recurring-important-dates.test.tsx',
       'tests/recurring-scope-and-purity.test.ts',
       'tests/calendar-crud.test.ts',
