@@ -14,20 +14,21 @@ import { shouldRetryUnbackedWriteClaim } from "../shared/ai-claim-check";
 process.env.ANTHROPIC_API_KEY = "test-key-not-used";
 
 const SELF = { id: "p-self", name: "Robert", type: "self", fields: {} };
+const JANE = { id: "p-jane", name: "Jane Doe", type: "person", fields: {} };
 const MESSAGE = "Yesterday I spent $65 at Walmart, $42 on gas, and $18 on lunch. I also earned $230 doing deliveries.";
 
 const db = {
   expenses: [] as any[],
   incomes: [] as any[],
   modelRequests: [] as any[],
-  script: [] as Array<"prose" | "tools" | "summary" | "answer">,
+  script: [] as Array<keyof typeof RESPONSES>,
 };
 
 vi.mock("../server/storage", () => {
   const uuid = (p: string, n: number) => `${p}${n}`.padEnd(8, "0") + "-0000-4000-8000-000000000000";
   const impl: Record<string, any> = {
     _timezone: "America/New_York",
-    getProfiles: async () => [SELF],
+    getProfiles: async () => [SELF, JANE],
     getSelfProfile: async () => SELF,
     getPreference: async () => null,
     getExpenses: async () => db.expenses,
@@ -68,7 +69,18 @@ const RESPONSES = {
   ]),
   summary: () => msg("end_turn", [{ type: "text", text: "Logged 3 expenses ($125) and $230 income from deliveries for yesterday." }]),
   answer: () => msg("end_turn", [{ type: "text", text: "You spent $125 yesterday." }]),
+  // Several people's expenses and several incomes, all in one round.
+  household: () => msg("tool_use", [
+    { type: "tool_use", id: "h1", name: "create_expense", input: { amount: 40, description: "Gas", category: "transportation", date: "2026-11-11" } },
+    { type: "tool_use", id: "h2", name: "create_expense", input: { amount: 25, description: "Lunch", category: "food", date: "2026-11-11", forProfile: "Jane Doe" } },
+    { type: "tool_use", id: "h3", name: "create_expense", input: { amount: 25, description: "Lunch", category: "food", date: "2026-11-11" } },
+    { type: "tool_use", id: "h4", name: "log_income", input: { amount: 500, source: "Work", date: "2026-11-11" } },
+    { type: "tool_use", id: "h5", name: "log_income", input: { amount: 300, source: "Babysitting", date: "2026-11-11", forProfile: "Jane Doe" } },
+    { type: "tool_use", id: "h6", name: "log_income", input: { amount: 230, source: "Deliveries", date: "2026-11-11" } },
+  ]),
+  householdProse: () => msg("end_turn", [{ type: "text", text: "Done! I've recorded both of your expenses, Jane's lunch, and all three incomes." }]),
 };
+const HOUSEHOLD = "Yesterday I spent $40 on gas and $25 on lunch, and Jane spent $25 on lunch. I earned $500 from work and $230 doing deliveries, and Jane earned $300 babysitting.";
 
 vi.mock("@anthropic-ai/sdk", () => ({
   default: class {
@@ -130,6 +142,33 @@ describe("a write the model claims in prose without calling a tool", () => {
     db.script = ["answer"];
     await processMessage("how much did I spend yesterday?", [], "u1");
     expect(db.modelRequests.length).toBe(1);
+  });
+});
+
+describe("several people's expenses and several incomes in one message", () => {
+  const linked = (r: any) => (r.linkedProfiles ?? r.linked_profiles ?? []) as string[];
+
+  it("saves every expense and every income, each under the right person", async () => {
+    db.script = ["household", "summary"];
+    const res = await processMessage(HOUSEHOLD, [], "u1");
+    expect(db.expenses.map((e) => e.amount)).toEqual([40, 25, 25]);
+    expect(db.incomes.map((i) => i.amount).sort((a, b) => a - b)).toEqual([230, 300, 500]);
+    // Jane's lunch is Jane's; the same lunch of the user's own is NOT merged into it.
+    const janeLunch = db.expenses.filter((e) => linked(e).includes(JANE.id));
+    expect(janeLunch.map((e) => e.amount)).toEqual([25]);
+    expect(db.expenses.filter((e) => !linked(e).includes(JANE.id)).length).toBe(2);
+    const janeIncome = db.incomes.filter((i) => linked(i).includes(JANE.id));
+    expect(janeIncome.map((i) => i.amount)).toEqual([300]);
+    expect(String(res.reply)).not.toMatch(/nothing was saved|wasn't able|couldn't/i);
+    expect((res.actions as any[]).length).toBe(6);
+  });
+
+  it("is recovered when the model first answers in prose", async () => {
+    db.script = ["householdProse", "household", "summary"];
+    const res = await processMessage(HOUSEHOLD, [], "u1");
+    expect(db.expenses.length).toBe(3);
+    expect(db.incomes.length).toBe(3);
+    expect(String(res.reply)).not.toMatch(/nothing was saved|wasn't able|couldn't/i);
   });
 });
 
