@@ -64,7 +64,8 @@ export function suggestionKey(name: unknown): string {
 export function profileSuggestionYesText(s: ProfileSuggestion): string {
   if (s.type === "pet") return `Create a pet profile for ${s.name}`;
   if (s.type === "medical") return `Create a medical provider profile for ${s.name}`;
-  return `Create a profile for ${s.name}`;
+  // Name the kind: "Create a profile for Listortor" got "a person, pet, vehicle…?" back (live check).
+  return `Create a person profile for ${s.name}`;
 }
 
 /** Edit distance with transpositions, for "is this unknown name a typo of a real one?". */

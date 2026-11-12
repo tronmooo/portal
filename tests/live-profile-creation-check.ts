@@ -6,7 +6,8 @@
 // Fresh made-up names each run, so "offered once per name" is tested from a
 // clean slate and never collides with seeded people.
 import { createRequire } from "node:module";
-import { api, expectOk } from "./smoke/fixture/api";
+import { api, getSmokeToken, fetchWithRateLimitRetry } from "./smoke/fixture/api";
+import { API_BASE } from "./smoke/fixture/account";
 import { acquireGateLock, preferenceLockIo } from "./smoke/fixture/gate-lock";
 import { LIVE_EMAIL, LIVE_PASSWORD } from "./helpers/live-account";
 
@@ -25,15 +26,30 @@ const freshName = () => {
 let failed = false;
 const check = (ok: boolean, what: string) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); if (!ok) failed = true; };
 
+// The read-your-writes token of the latest chat reply. The app sends it on
+// every read after a reply; without it another warm server instance may
+// answer from its pre-write cache for ~2s (see 1ddd1cd).
+let dataVersion: string | undefined;
 async function chat(message: string) {
   const r = await api("POST", "/chat", { message, history: [] });
   if (!r.ok) throw new Error(`chat failed ${r.status}: ${JSON.stringify(r.data).slice(0, 300)}`);
+  if (typeof (r.data as any)?.dataVersion === "string") dataVersion = (r.data as any).dataVersion;
   return r.data as any;
 }
+async function readAsApp(path: string): Promise<any[]> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${await getSmokeToken()}` };
+  if (dataVersion) headers["x-data-version"] = dataVersion;
+  const { response } = await fetchWithRateLimitRetry(`${API_BASE}${path}`, { headers });
+  if (!response.ok) throw new Error(`GET ${path}: ${response.status}`);
+  const body: any = await response.json();
+  const rows = Array.isArray(body) ? body : Array.isArray(body?.items) ? body.items : Array.isArray(body?.data) ? body.data : null;
+  if (!rows) throw new Error(`unexpected list shape for ${path}: ${JSON.stringify(body).slice(0, 200)}`);
+  return rows;
+}
 const profilesNamed = async (n: string) =>
-  (expectOk(await api("GET", "/profiles"), "profiles") as any[]).filter((p) => String(p.name).toLowerCase() === n.toLowerCase());
+  (await readAsApp("/profiles")).filter((p) => String(p.name).toLowerCase() === n.toLowerCase());
 const eventsAbout = async (n: string) =>
-  (expectOk(await api("GET", "/events"), "events") as any[]).filter((e) => new RegExp(`\\b${n}\\b`, "i").test(String(e.title)));
+  (await readAsApp("/events")).filter((e) => new RegExp(`\\b${n}\\b`, "i").test(String(e.title)));
 
 async function main() {
   const release = await acquireGateLock(preferenceLockIo((m, p, b) => api(m, p, b)), { gate: "live-profile-creation-check" });
@@ -67,7 +83,8 @@ async function main() {
     check((await profilesNamed(SARAH)).length === 0, `no profile created for ${SARAH}`);
 
     // 4. Yes: an explicit request creates the profile and picks up the birthday.
-    await chat(`Create a profile for ${BOB}`);
+    const r4 = await chat(`Create a person profile for ${BOB}`); // the Yes button's exact text
+    console.log(`reply: ${String(r4.reply).slice(0, 160)}`);
     const bob = await profilesNamed(BOB);
     check(bob.length === 1, `"Create a profile for ${BOB}" created exactly one profile`);
     const bday2 = (await eventsAbout(BOB)).filter((e) => /birthday/i.test(e.title));

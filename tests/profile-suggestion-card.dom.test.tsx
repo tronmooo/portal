@@ -18,7 +18,7 @@ describe("ProfileSuggestionCard", () => {
     expect(screen.getByText(/Would you also like to create a profile for/)).toBeTruthy();
     expect(screen.getByText("Optional")).toBeTruthy();
     fireEvent.click(screen.getByTestId("profile-suggestion-yes"));
-    expect(onYes).toHaveBeenCalledWith("Create a profile for Bob");
+    expect(onYes).toHaveBeenCalledWith("Create a person profile for Bob");
     expect(hasExplicitProfileCreateIntent(onYes.mock.calls[0][0])).toBe(true);
     expect(onNo).not.toHaveBeenCalled();
   });
