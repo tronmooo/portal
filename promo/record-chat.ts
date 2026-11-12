@@ -12,6 +12,7 @@ import { LIVE_EMAIL, LIVE_PASSWORD } from "../tests/helpers/live-account";
 
 const OUT = process.argv[2];
 const LICENSE = process.argv[3];
+const SKIP_UPLOAD = process.argv[4] === "skipupload";
 const FR = path.join(OUT, "frames");
 fs.mkdirSync(FR, { recursive: true });
 const events: any[] = [];
@@ -97,6 +98,7 @@ async function visit(page: Page, route: string, id: string, scroll = 600) {
     await page.waitForTimeout(1500);
 
     // --- documents: upload the sample license through the chat, confirm extraction
+    if (!SKIP_UPLOAD) {
     mark("upload:start");
     await page.locator('[data-testid="input-file"]').setInputFiles(LICENSE);
     await page.locator('[data-testid="attachment-panel"]').waitFor({ timeout: 20000 });
@@ -104,16 +106,13 @@ async function visit(page: Page, route: string, id: string, scroll = 600) {
     const note = page.locator('[data-testid="input-attachment-note"]');
     if (await note.count()) await note.pressSequentially("Here's my driver's license", { delay: 32 });
     await page.waitForTimeout(500);
-    const beforeUp = await page.locator('[data-testid^="message-assistant-"]').count();
     mark("upload:send");
     await page.click('[data-testid="button-send-attachment"]');
-    const review = page.locator('[data-testid="extracted-data-section"]');
-    try { await review.last().waitFor({ timeout: 150000 }); } catch { mark("upload:no-review"); }
-    await page.waitForTimeout(2500);
-    mark("upload:review", { text: (await review.last().innerText().catch(() => "")).slice(0, 800) });
-    await review.last().scrollIntoViewIfNeeded().catch(() => {});
-    await page.waitForTimeout(1500);
+    // "Extract text & save" opens the document review page with a Confirm button
     const confirm = page.getByRole("button", { name: "Confirm" });
+    try { await confirm.last().waitFor({ timeout: 150000 }); } catch { mark("upload:no-review"); }
+    await page.waitForTimeout(2500);
+    mark("upload:review", { url: page.url() });
     if (await confirm.count()) {
       await confirm.last().scrollIntoViewIfNeeded();
       await page.waitForTimeout(600);
@@ -121,8 +120,13 @@ async function visit(page: Page, route: string, id: string, scroll = 600) {
       await confirm.last().click();
       await page.waitForTimeout(6000);
     } else mark("upload:no-confirm-button");
-    mark("upload:done", await lastAssistant(page));
+    mark("upload:done", { url: page.url(), text: (await page.locator("main").innerText().catch(() => "")).slice(0, 800) });
+    await page.waitForTimeout(2500);
     save();
+    }
+    await page.goto("https://portol.me/#/chat");
+    await page.locator('[data-testid="input-chat"]').waitFor({ timeout: 30000 });
+    await page.waitForTimeout(1500);
 
     await command(page, "Show me my driver's license", "show_license", 3500);
     await command(page, "What's my license number?", "license_number");
