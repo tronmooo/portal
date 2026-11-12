@@ -12,7 +12,8 @@
  *   npx tsx scripts/verify-chat-household-money.ts
  * Takes the smoke account's gate lock while it writes.
  */
-import { api, expectOk } from "../tests/smoke/fixture/api";
+import { api, expectOk, fetchWithRateLimitRetry, getSmokeToken } from "../tests/smoke/fixture/api";
+import { API_BASE } from "../tests/smoke/fixture/account";
 import { acquireGateLock, preferenceLockIo } from "../tests/smoke/fixture/gate-lock";
 
 const T = `Zq${Math.random().toString(36).replace(/[^a-z]/g, "").slice(0, 4)}`;
@@ -35,6 +36,16 @@ const list = (d: any): any[] => {
   if (!rows) throw new Error(`unexpected list shape: ${JSON.stringify(d).slice(0, 200)}`);
   return rows;
 };
+/** A list read exactly as the app makes it after a chat reply: carrying the
+ *  reply's read-your-writes token (x-data-version), without which another
+ *  warm server instance may legitimately answer from its pre-write cache. */
+async function readAsApp(path: string, dataVersion: unknown): Promise<any[]> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${await getSmokeToken()}` };
+  if (typeof dataVersion === "string" && dataVersion) headers["x-data-version"] = dataVersion;
+  const { response } = await fetchWithRateLimitRetry(`${API_BASE}${path}`, { headers });
+  if (!response.ok) throw new Error(`GET ${path}: ${response.status}`);
+  return list(await response.json());
+}
 const linked = (r: any): string[] => r.linkedProfiles ?? r.linked_profiles ?? [];
 const sorted = (a: number[]) => [...a].sort((x, y) => x - y);
 const amounts = (rows: any[]) => sorted(rows.map((r) => Number(r.amount)));
@@ -55,10 +66,20 @@ async function main() {
       const beforeI = new Set(list(expectOk(await api("GET", "/incomes"))).map((r) => r.id));
       const res = await api("POST", "/chat", { message: c.message });
       const reply = String((res.data as any)?.reply ?? "");
-      const newE = list(expectOk(await api("GET", "/expenses"))).filter((r) => !beforeE.has(r.id));
-      const newI = list(expectOk(await api("GET", "/incomes"))).filter((r) => !beforeI.has(r.id));
-      created.expenses.push(...newE.map((r) => r.id));
-      created.incomes.push(...newI.map((r) => r.id));
+      const token = (res.data as any)?.dataVersion;
+      const newE = (await readAsApp("/expenses", token)).filter((r) => !beforeE.has(r.id));
+      const newI = (await readAsApp("/incomes", token)).filter((r) => !beforeI.has(r.id));
+      // The read right after the reply must already show the writes: the app
+      // refetches the moment the reply lands. A second read later tells a
+      // stale list apart from a missing write.
+      await new Promise((r) => setTimeout(r, 4000));
+      const laterE = list(expectOk(await api("GET", "/expenses"))).filter((r) => !beforeE.has(r.id));
+      const laterI = list(expectOk(await api("GET", "/incomes"))).filter((r) => !beforeI.has(r.id));
+      if (laterE.length !== newE.length || laterI.length !== newI.length) {
+        console.log(`  STALE READ: right after the reply ${newE.length} expenses / ${newI.length} incomes; 4s later ${laterE.length} / ${laterI.length}`);
+      }
+      for (const r of laterE) if (!created.expenses.includes(r.id)) created.expenses.push(r.id);
+      for (const r of laterI) if (!created.incomes.includes(r.id)) created.incomes.push(r.id);
 
       const checks: Array<[string, unknown, unknown]> = [
         ["HTTP status", res.status, 200],
