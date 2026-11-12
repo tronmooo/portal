@@ -78,6 +78,11 @@ const RESPONSES = {
     { type: "tool_use", id: "h5", name: "log_income", input: { amount: 300, source: "Babysitting", date: "2026-11-11", forProfile: "Jane Doe" } },
     { type: "tool_use", id: "h6", name: "log_income", input: { amount: 230, source: "Deliveries", date: "2026-11-11" } },
   ]),
+  household2: () => msg("tool_use", [
+    { type: "tool_use", id: "k1", name: "create_expense", input: { amount: 37, description: "Gas", category: "transportation", date: "2026-11-11" } },
+    { type: "tool_use", id: "k2", name: "create_expense", input: { amount: 21, description: "Lunch", category: "food", date: "2026-11-11" } },
+    { type: "tool_use", id: "k3", name: "log_income", input: { amount: 140, source: "Deliveries", date: "2026-11-11" } },
+  ]),
   householdProse: () => msg("end_turn", [{ type: "text", text: "Done! I've recorded both of your expenses, Jane's lunch, and all three incomes." }]),
 };
 const HOUSEHOLD = "Yesterday I spent $40 on gas and $25 on lunch, and Jane spent $25 on lunch. I earned $500 from work and $230 doing deliveries, and Jane earned $300 babysitting.";
@@ -161,6 +166,16 @@ describe("several people's expenses and several incomes in one message", () => {
     expect(janeIncome.map((i) => i.amount)).toEqual([300]);
     expect(String(res.reply)).not.toMatch(/nothing was saved|wasn't able|couldn't/i);
     expect((res.actions as any[]).length).toBe(6);
+  });
+
+  it("a second message a minute later with the same names but new amounts saves everything (2026-11-12 live run)", async () => {
+    db.script = ["tools", "summary"];
+    await processMessage(MESSAGE, [], "u1");
+    db.script = ["household2", "summary"];
+    const res = await processMessage("Also $37 on gas, $21 on lunch, and I earned $140 more doing deliveries yesterday.", [], "u1");
+    expect(db.expenses.map((e) => e.amount)).toEqual([65, 42, 18, 37, 21]);
+    expect(db.incomes.map((i) => i.amount)).toEqual([230, 140]);
+    expect(String(res.reply)).not.toMatch(/log it again|duplicate/i);
   });
 
   it("is recovered when the model first answers in prose", async () => {
