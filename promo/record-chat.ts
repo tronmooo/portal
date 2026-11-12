@@ -12,7 +12,8 @@ import { LIVE_EMAIL, LIVE_PASSWORD } from "../tests/helpers/live-account";
 
 const OUT = process.argv[2];
 const LICENSE = process.argv[3];
-const SKIP_UPLOAD = process.argv[4] === "skipupload";
+const SKIP_UPLOAD = process.argv[4] === "skipupload" || process.argv[4] === "retake";
+const RETAKE = process.argv[4] === "retake";
 const FR = path.join(OUT, "frames");
 fs.mkdirSync(FR, { recursive: true });
 const events: any[] = [];
@@ -128,6 +129,36 @@ async function visit(page: Page, route: string, id: string, scroll = 600) {
     await page.locator('[data-testid="input-chat"]').waitFor({ timeout: 30000 });
     await page.waitForTimeout(1500);
 
+    if (RETAKE) {
+      // Retakes with phrasings the app answers cleanly. The rent bill is set up
+      // off camera through the same chat API so "upcoming bills" has real data.
+      const r = await api("POST", "/chat", { message: "My rent is $1,850, due on the 1st of every month", history: [] });
+      mark("setup:rent", { ok: r.ok, text: JSON.stringify((r.data as any)?.response ?? "").slice(0, 300) });
+      await page.reload();
+      await page.locator('[data-testid="input-chat"]').waitFor({ timeout: 30000 });
+      await page.waitForTimeout(2000);
+      await command(page, "Show my driver's license", "show_license", 3500);
+      await command(page, "What's my driver's license number?", "license_number");
+      await command(page, "When does my driver's license expire?", "license_expiry");
+      await command(page, "Show me my upcoming bills", "bills", 2500);
+      await command(page, "I biked 5 miles, drank 32 ounces of water, spent $24 on lunch, and made $250 today", "multi", 2500);
+      for (const t of ["log_entry", "log_expense", "log_income"]) {
+        const link = page.locator(`[data-testid^="action-card-link-${t}"]`).last();
+        if (!(await link.count())) continue;
+        mark(`tap:${t}`);
+        await link.click();
+        await page.waitForTimeout(4500);
+        await page.mouse.wheel(0, 500); await page.waitForTimeout(2000);
+        mark(`tapend:${t}`, { url: page.url() });
+        await page.goBack();
+        await page.locator('[data-testid="input-chat"]').waitFor({ timeout: 30000 });
+        await page.waitForTimeout(1500);
+      }
+      await command(page, "What's coming up on my calendar?", "calendar_q", 2500);
+      await cdp.send("Page.stopScreencast");
+      mark("stop");
+      return;
+    }
     await command(page, "Show me my driver's license", "show_license", 3500);
     await command(page, "What's my license number?", "license_number");
     await command(page, "When does my license expire?", "license_expiry");
