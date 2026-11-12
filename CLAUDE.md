@@ -128,6 +128,14 @@ green. After a push to `main`:
     *Guards:* `tests/dated-item-owner-guard.test.ts`,
     `tests/birthday-owner-label.dom.test.tsx`.
 
+13. **A restored snapshot is a placeholder.** `hydrateQueryCache`
+    (`client/src/lib/queryClient.ts`) may mark restored data fresh only where
+    the boot refetch replaces it (the current scope's bootstrap fan-out).
+    Everything else paints instantly but is invalidated. An invalidation does
+    not survive a reload, so "fresh from localStorage" hid a task created
+    seconds before a refresh (2026-11-12, production).
+    *Guard:* `tests/reload-after-write-refetches.test.ts`.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 
