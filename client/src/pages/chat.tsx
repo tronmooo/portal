@@ -1332,6 +1332,8 @@ export { clearChatCache } from "@/lib/chat-cache";
 import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCache } from "@/lib/chat-cache";
 import { ChatSuggestions, ChatFollowUps } from "@/components/chat/ChatSuggestions";
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
+import { ProfileSuggestionCard } from "@/components/chat/ProfileSuggestionCard";
+import type { ProfileSuggestion } from "@shared/profile-intent";
 import { scopedKey } from "@shared/query-keys";
 import { formatLoggedValues } from "@shared/tracker-units";
 
@@ -3157,6 +3159,7 @@ export default function ChatPage() {
       operations: data.operations,
       turnId: data.turnId,
       sourceMessageId: data.sourceMessageId ?? requestId,
+      profileSuggestions: data.profileSuggestions,
       documentPreview: data.documentPreview,
       documentPreviews: data.documentPreviews,
       charts: data.charts,
@@ -3697,6 +3700,19 @@ export default function ChatPage() {
     return true;
   };
 
+  // Profile offers under the latest reply (ProfileSuggestionCard). "No" only
+  // hides the card; the server already remembers the name was offered.
+  const [dismissedProfileOffers, setDismissedProfileOffers] = useState<Set<string>>(() => new Set());
+  const profileOffers = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m: any = messages[i];
+      if (m.role !== "assistant") continue;
+      const list: ProfileSuggestion[] = Array.isArray(m.profileSuggestions) ? m.profileSuggestions : [];
+      return list.filter((s) => !dismissedProfileOffers.has(`${m.id}:${s.name}`)).map((s) => ({ s, key: `${m.id}:${s.name}` }));
+    }
+    return [];
+  }, [messages, dismissedProfileOffers]);
+
   const handleSuggestion = (s: string) => {
     composerRef.current?.setText(s);
     composerRef.current?.focus();
@@ -3918,6 +3934,18 @@ export default function ChatPage() {
           it's due). The first-load chips moved inside the scroll container as
           part of ChatSuggestions; this row is deliberately compact because
           you're mid-task by the time you see it. */}
+      {profileOffers.length > 0 && (
+        <div className="px-3 pb-2" data-testid="profile-suggestions">
+          <div className="max-w-2xl mx-auto space-y-1.5">
+            {profileOffers.map(({ s, key }) => (
+              <ProfileSuggestionCard key={key} suggestion={s}
+                onYes={(text) => { setDismissedProfileOffers((prev) => new Set(prev).add(key)); handleSend(text); }}
+                onNo={() => setDismissedProfileOffers((prev) => new Set(prev).add(key))} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {!hasAttachments && composerEmpty && messages.length > 1 && chatFollowUps.length > 0 && (
         <div className="px-3 pb-2">
           <div className="max-w-2xl mx-auto">

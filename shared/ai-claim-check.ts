@@ -262,6 +262,40 @@ export function checkClaims(input: ClaimCheckInput): ClaimCheckResult {
 }
 
 /**
+ * The model answered a write request in prose — "✅ Logged everything!", "I've
+ * added your 3 expenses" — without calling a single tool, so nothing reached
+ * the database. The chat loop gives the model ONE more round with an explicit
+ * instruction to make the tool calls, instead of ending the turn with an
+ * apology the user has to answer by retyping the message.
+ * (2026-11-12: "Yesterday I spent $65 at Walmart, $42 on gas, and $18 on
+ * lunch. I also earned $230 doing deliveries." → "I wasn't able to complete
+ * that — nothing was saved.")
+ *
+ * True only when: no tool has run this turn, the turn may write, and the
+ * reply claims a write (the same claim detection the final gate uses, so a
+ * claim the retry lets through would have been rewritten into a failure
+ * anyway). A question back to the user, an offer, or an answer is not a claim.
+ */
+export function shouldRetryUnbackedWriteClaim(input: {
+  reply: string;
+  toolCallsSoFar: number;
+  readOnlyTurn: boolean;
+}): boolean {
+  if (input.readOnlyTurn || input.toolCallsSoFar > 0) return false;
+  const reply = String(input.reply ?? "");
+  if (!reply.trim()) return false;
+  if (extractSuccessClaims(reply).length > 0) return true;
+  // "✅ All set!" / "Done!" with no verb the extractor keys on.
+  return /^\W*(?:done|all\s+set|you'?re\s+all\s+set|got\s+it\s*[—–-]\s*(?:logged|saved|added))\b/i.test(reply.trim());
+}
+
+/** The instruction sent back to the model when its reply claimed an unexecuted write. */
+export const UNBACKED_WRITE_RETRY_INSTRUCTION =
+  "[SYSTEM] Your previous reply said the request was done, but you did not call any tool, so NOTHING was saved. " +
+  "Call the tools now — one call per item the user gave (for example one create_expense per purchase and one log_income per earning), " +
+  "using the dates the user stated. Do not answer in prose until the tool calls have run.";
+
+/**
  * The honest reply to send when a claim could not be grounded. Used instead of
  * rendering success — never alongside it.
  */

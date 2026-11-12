@@ -13,8 +13,9 @@
 //            or same owner + same date + same amount + same normalized
 //            name/description. Reuse the existing row (idempotent create).
 //   medium — same owner + amount + date but a different description, or the
-//            same normalized name for the same owner created within the recent
-//            window (default 2 minutes) but on another date/amount. ASK.
+//            same normalized name and amount for the same owner created within
+//            the recent window (default 2 minutes) with no day to tell them
+//            apart. A different amount is a different purchase. ASK.
 //   low    — nothing of the sort. Create.
 //
 // Precedents this generalizes: shared/obligation-windows findDuplicatePaycheck
@@ -199,7 +200,12 @@ export function findPossibleDuplicates(
       // Ledger-shaped (expense, income, bill instalment).
       if (sameDay && sameAmt && sameName) score = 0.95;
       else if (sameDay && sameAmt) score = 0.7;
-      else if (sameName && recent && !differentDays) score = 0.6;
+      // A recent same-name row is only suspicious at the SAME amount. "$42 on
+      // gas" and "$37 on gas" are two fill-ups, not one said twice — the
+      // recency rule used to hold the second back as "log it again?", so a
+      // message listing several purchases or incomes lost the ones whose
+      // names repeated an entry from a minute earlier (2026-11-12 live run).
+      else if (sameName && sameAmt && recent && !differentDays) score = 0.6;
     } else if (dated) {
       // Date-shaped without money (event, task with a due date). Two events
       // with the same title on the same day at DIFFERENT clock times are a

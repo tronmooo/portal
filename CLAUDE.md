@@ -128,13 +128,36 @@ green. After a push to `main`:
     *Guards:* `tests/dated-item-owner-guard.test.ts`,
     `tests/birthday-owner-label.dom.test.tsx`.
 
-13. **A restored snapshot is a placeholder.** `hydrateQueryCache`
+13. **A name is data, not permission to create a profile.** A person, pet
+    or provider profile is created only when the user explicitly asks
+    (`hasExplicitProfileCreateIntent`, `shared/profile-intent.ts`;
+    `create_profile` refuses otherwise with `PROFILE_NOT_REQUESTED`). The
+    original request is completed without one: "Bob's birthday is Sep 30" is
+    a yearly event, "Call Mike at 3" a task, "I bought Sarah a gift" an
+    expense, all owned by the user. The profile is OFFERED under the reply
+    (`server/profile-suggestions.ts` → `ProfileSuggestionCard`), once per
+    name, never blocking; No writes nothing. A profile created later picks up
+    that person's existing birthday events (re-owned, not copied). Never add a
+    prompt line or tool path that auto-creates a person from a mention.
+    (2026-11-12: "Bob's birthday…" created a person named Bob.)
+    *Guards:* `tests/profile-creation-rules.test.ts`,
+    `tests/profile-suggestion-card.dom.test.tsx`.
+
+14. **A restored snapshot is a placeholder.** `hydrateQueryCache`
     (`client/src/lib/queryClient.ts`) may mark restored data fresh only where
     the boot refetch replaces it (the current scope's bootstrap fan-out).
     Everything else paints instantly but is invalidated. An invalidation does
     not survive a reload, so "fresh from localStorage" hid a task created
     seconds before a refresh (2026-11-12, production).
     *Guard:* `tests/reload-after-write-refetches.test.ts`.
+
+15. **A failed load shows "Couldn't load", never the empty state.** Rule 7
+    keeps a failure out of the cache; this keeps it off the screen. A list
+    whose query failed with nothing cached renders `LoadFailed`
+    (`client/src/components/LoadFailed.tsx`, via `useLoadFailed(endpoint…)`),
+    not "No trackers yet". (2026-11-12: with the API down on a cold start,
+    nine pages read as an empty account.)
+    *Guard:* `tests/load-failed-not-empty.dom.test.tsx`.
 
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.

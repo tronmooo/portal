@@ -11,6 +11,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/chat-unbacked-write-retry.test.ts',
       'tests/now-rank.test.ts',
       'tests/sync-rules-scope-empty-states.test.tsx',
       'tests/sync-tasks-scope-notice.dom.test.tsx',
@@ -133,6 +134,8 @@ export default defineConfig({
       'tests/recurring-dates-page.test.tsx',
       'tests/birthday-owner-label.dom.test.tsx',
       'tests/dated-item-owner-guard.test.ts',
+      'tests/profile-creation-rules.test.ts',
+      'tests/profile-suggestion-card.dom.test.tsx',
       'tests/recurring-important-dates.test.tsx',
       'tests/recurring-scope-and-purity.test.ts',
       'tests/calendar-crud.test.ts',

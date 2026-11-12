@@ -71,6 +71,15 @@ describe("findPossibleDuplicates — tiers", () => {
     expect(v.tier).toBe("low");
   });
 
+  it("a recent same-name row at a DIFFERENT amount is a second purchase, not a duplicate (2026-11-12)", () => {
+    // "$42 on gas" a minute ago, now "$37 on gas" — two fill-ups.
+    const recentGas = row({ id: "g", description: "Gas", amount: 42, date: "2026-09-21", createdAt: "2026-09-22T11:59:00Z" });
+    expect(findPossibleDuplicates({ entityType: "expense", ownerIds: [A], date: "2026-09-21", amount: 37, description: "Gas" }, [recentGas], { now: NOW }).tier).toBe("low");
+    expect(findPossibleDuplicates({ entityType: "income", ownerIds: [A], date: null, amount: 140, description: "Gas" }, [recentGas], { now: NOW }).tier).toBe("low");
+    // The same amount moments ago is still the same thing said twice.
+    expect(findPossibleDuplicates({ entityType: "expense", ownerIds: [A], date: "2026-09-21", amount: 42, description: "Gas" }, [recentGas], { now: NOW }).tier).toBe("high");
+  });
+
   it("reads snake_case rows (linked_profiles / created_at) the way it reads camelCase ones", () => {
     const v = findPossibleDuplicates(
       { entityType: "income", ownerIds: [A], date: "2026-09-22", amount: 1000, description: "Paycheck" },
