@@ -49,6 +49,16 @@ export interface OperationOutcome {
   sourceMessageId?: string;
 }
 
+/** "$42.50", "$1,200", never "$42.5": the amount the way money is written.
+ * Anything that is not a number is echoed as given rather than guessed at. */
+export function recapMoney(amount: unknown): string {
+  const n = typeof amount === "number" ? amount : Number(String(amount).replace(/[$,\s]/g, ""));
+  if (!Number.isFinite(n)) return `$${amount}`;
+  const whole = Number.isInteger(n);
+  const digits = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 });
+  return `${n < 0 ? "-" : ""}$${digits}`;
+}
+
 /** Compact "60 min, blunt, at 8:15 AM" summary of an operation's input —
  * proves in the reply that no stated detail was dropped. Values are spoken
  * with their UNIT (shared/tracker-units formatLoggedValues), never with the
@@ -56,7 +66,7 @@ export interface OperationOutcome {
 export function summarizeOpDetail(input: Record<string, any>): string {
   const values = (input?.values && typeof input.values === "object") ? input.values : {};
   const parts = formatLoggedValues(values, String(input?.trackerName || ""), { max: 4 });
-  if (input?.amount != null) parts.push(`$${input.amount}`);
+  if (input?.amount != null) parts.push(recapMoney(input.amount));
   if (input?.at) parts.push(`at ${input.at}`);
   return parts.join(", ");
 }

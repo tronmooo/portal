@@ -134,7 +134,7 @@ import { formatLoggedValues } from "../shared/tracker-units";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
-import { isTestEntity } from "../shared/test-data";
+import { isTestEntity, isTestDataRow } from "../shared/test-data";
 import { isTrackerCategoryVisible } from "../shared/hidden-tracker-categories";
 import { ownedStoragePath } from "../shared/owned-storage-path";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "../shared/obligation-windows";
@@ -8086,14 +8086,20 @@ export class SupabaseStorage implements IStorage {
     // predicate, the same default, and the same opt-in the lists honour.
     const allExpenses = expenseSourceEnh.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpenseEnh)
       && (opts?.includeTestData || !isTestEntity(e)));
-    const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles));
+    // The same rule for bills: the Bills list hides a test-patterned bill, so
+    // the cash-flow term built from bills (unpaidBillsThisMonth) and the
+    // upcoming list must not count it — Cash Flow read −$450 above a Bills
+    // page that said "$0 overdue · No bills".
+    const allObligations = rawObligations.filter(o => matchesProfileEnhanced(o.linkedProfiles)
+      && (opts?.includeTestData || !isTestEntity(o as any)));
     // Same canonical scope rule the /api/incomes and /api/paychecks routes
     // apply, so the snapshot's income total equals the lists the Finance tab
     // renders. Paychecks carry no links today, so they read as orphans and
     // fall to Self — exactly what /api/paychecks does.
     const allIncomesEnh = (rawIncomes as any[]).filter(i => matchesProfileEnhanced((i as any).linkedProfiles));
     const allPaychecksEnh = (rawPaychecks as any[]).filter(p => matchesProfileEnhanced((p as any).linkedProfiles));
-    const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles));
+    const allTasks = rawTasks.filter(t => matchesProfileEnhanced(t.linkedProfiles)
+      && (opts?.includeTestData || !isTestDataRow((t as any).title)));
     const allEvents = rawEvents.filter(e => matchesProfileEnhanced(e.linkedProfiles));
     // Filter documents by profile
     const filteredDocs = documents.filter(d => matchesProfileEnhanced(d.linkedProfiles));

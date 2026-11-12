@@ -30,7 +30,15 @@ const TEST_PATTERNS: RegExp[] = [
   /^QAMULTI[0-9]/i,               // QAMULTI389053_asset_bob_kayak
   /^QASCALE/i,
   /^W2_[0-9]/i,                   // W2_1780532176_Hsub
-  /^SMOKE[_ ]/i,
+  // The smoke fixture's OWN names (tests/smoke/fixture/seed.ts), not anything
+  // that begins with the word: `/^SMOKE[_ ]/i` also matched "Smoke detector
+  // batteries" and "Smoke alarm — replace", so a real household task vanished
+  // from the dashboard and a real expense from every total (2026-11-12).
+  /^SMOKE_/,                      // SMOKE_1780532176_expense
+  /^Smoke (Self|Spouse|Child|House|Car|Mortgage|Internet Bill|Weight|Groceries|Gas|Coffee|Test)$/,
+  /^Smoke (Task|Event): /,        // "Smoke Task: file tax docs"
+  /^Smoke Child('s)? floss/,      // "Smoke Child flossed today"
+  /^Smoke test\b/i,               // "Smoke test task"
   /^QA_TEST/i,                    // QA_TEST_Coffee
   /^QA TEST/i,                    // "QA Test Expense EDITED", "QA Test Daily Habit"
   /^EMPTYPROBE_QA/i,

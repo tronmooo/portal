@@ -117,7 +117,7 @@ describe("the Info tab can edit and delete every field it shows", () => {
   });
 
   it("keeps the remove button visible without hover", () => {
-    const at = SRC.indexOf("aria-label={`Remove ${label}`}");
+    const at = SRC.indexOf("label={`Remove ${label}`}");
     expect(at).toBeGreaterThan(-1);
     const btn = SRC.slice(Math.max(0, at - 600), at);
     expect(btn).not.toMatch(/opacity-0(?!.*sm:)/);

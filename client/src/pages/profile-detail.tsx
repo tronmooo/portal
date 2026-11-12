@@ -1,4 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
+import { ConfirmIconButton } from "@/components/ui/confirm-icon-button";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField, previewUnrenderable } from "@/lib/field-display";
@@ -9372,7 +9373,7 @@ function WarrantyTab({ profile, profileId, onChanged }: { profile: any; profileI
               <span className="text-xs">{c.description || "Claim"}</span>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium">{c.amount ? formatCurrency(Number(c.amount)) : "—"}</span>
-                <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteClaimMutation.mutate(c.id)} aria-label={`Delete claim ${c.description || ""}`.trim()} data-testid={`button-delete-claim-${c.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                <ConfirmIconButton className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onConfirm={() => deleteClaimMutation.mutate(c.id)} pending={deleteClaimMutation.isPending} label={`Delete claim ${c.description || ""}`.trim()} data-testid={`button-delete-claim-${c.id}`}><Trash2 className="h-3 w-3 text-destructive" /></ConfirmIconButton>
               </div>
             </div>
           )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No claims recorded</p>}
@@ -9458,7 +9459,7 @@ function RewardsTab({ profile, profileId, onChanged }: { profile: any; profileId
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium tabular-nums">{r.amount ? formatCurrency(Number(r.amount)) : "—"}</span>
-                <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteRedemptionMutation.mutate(r.id)} aria-label={`Delete redemption ${r.description || ""}`.trim()} data-testid={`button-delete-redemption-${r.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                <ConfirmIconButton className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onConfirm={() => deleteRedemptionMutation.mutate(r.id)} pending={deleteRedemptionMutation.isPending} label={`Delete redemption ${r.description || ""}`.trim()} data-testid={`button-delete-redemption-${r.id}`}><Trash2 className="h-3 w-3 text-destructive" /></ConfirmIconButton>
               </div>
             </div>
           )) : !showAdd && <p className="text-xs text-muted-foreground text-center py-2">No redemptions recorded</p>}
@@ -10485,9 +10486,9 @@ function CoOwnersEditor({ liabilityId, coOwners, allProfiles, onChanged }: {
                   data-testid={`input-coowner-pct-${l.id}`}
                 />
                 <span className="text-xs text-muted-foreground">%</span>
-                <button onClick={() => removeMutation.mutate(l.id)} className="text-muted-foreground hover:text-red-500" aria-label={`Remove co-owner ${person?.name || ""}`.trim()} data-testid={`button-remove-coowner-${l.id}`}>
+                <ConfirmIconButton onConfirm={() => removeMutation.mutate(l.id)} pending={removeMutation.isPending} armedText="Remove?" className="text-muted-foreground hover:text-red-500" label={`Remove co-owner ${person?.name || ""}`.trim()} data-testid={`button-remove-coowner-${l.id}`}>
                   <X className="h-3.5 w-3.5" />
-                </button>
+                </ConfirmIconButton>
               </div>
             );
           })
@@ -10580,9 +10581,9 @@ function CollateralEditor({ liabilityId, collateral, allProfiles, onChanged }: {
               <div key={l.id} className="flex items-center gap-2 py-1" data-testid={`collateral-${l.id}`}>
                 <span className="text-xs flex-1 truncate">{asset?.name || "Unknown asset"}</span>
                 <Badge variant="outline" className="text-[11px] h-5 px-1.5">{l.role || "collateral"}</Badge>
-                <button onClick={() => removeMutation.mutate(l.id)} className="text-muted-foreground hover:text-red-500" aria-label={`Remove collateral ${asset?.name || ""}`.trim()} data-testid={`button-remove-collateral-${l.id}`}>
+                <ConfirmIconButton onConfirm={() => removeMutation.mutate(l.id)} pending={removeMutation.isPending} armedText="Remove?" className="text-muted-foreground hover:text-red-500" label={`Remove collateral ${asset?.name || ""}`.trim()} data-testid={`button-remove-collateral-${l.id}`}>
                   <X className="h-3.5 w-3.5" />
-                </button>
+                </ConfirmIconButton>
               </div>
             );
           })
@@ -12425,7 +12426,7 @@ function SubscriptionBillingTab({ profile, profileId, onChanged }: { profile: Pr
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold tabular-nums">${(exp.amount || 0).toFixed(2)}</span>
-                    <button className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" onClick={() => deleteSubPayMutation.mutate(exp.id)} aria-label={`Delete payment ${exp.description || ""}`.trim()} data-testid={`button-delete-sub-payment-${exp.id}`}><Trash2 className="h-3 w-3 text-destructive" /></button>
+                    <ConfirmIconButton className="opacity-60 sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onConfirm={() => deleteSubPayMutation.mutate(exp.id)} pending={deleteSubPayMutation.isPending} label={`Delete payment ${exp.description || ""}`.trim()} data-testid={`button-delete-sub-payment-${exp.id}`}><Trash2 className="h-3 w-3 text-destructive" /></ConfirmIconButton>
                   </div>
                 </div>
               ))}

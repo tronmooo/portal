@@ -735,6 +735,15 @@ function AppRouter() {
             bare root redirects to the dashboard, which is the home surface. */}
         <Route path="/chat" component={ChatPage} />
         <Route path="/" component={RootRedirect} />
+        {/* A signed-in user is still AT the sign-in address right after they
+            sign in there (portol.me/auth is where the server sends a visitor,
+            and where sign-out leaves one). Nothing matched it, so the first
+            screen after signing in read "Page not found — /auth". */}
+        <Route path="/auth" component={RootRedirect} />
+        <Route path="/auth/:rest*" component={RootRedirect} />
+        <Route path="/login" component={RootRedirect} />
+        <Route path="/signin" component={RootRedirect} />
+        <Route path="/signup" component={RootRedirect} />
         <Route path="/dashboard" component={DashboardPage} />
         {/* The dashboard's focus modes are addressable, so a link to the
             Executive tab lands on it instead of "Page not found". */}

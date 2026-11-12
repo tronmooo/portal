@@ -8,6 +8,7 @@
  * Filter-aware. All endpoints already exist on the server.
  */
 import { useMemo, useState } from "react";
+import { ConfirmIconButton } from "@/components/ui/confirm-icon-button";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { isInScope as scopeIsInScope, selfIdsFrom, withAncestorOwnerIds } from "@shared/scope";
 import { netWorthChange } from "@shared/net-worth-change";
@@ -958,15 +959,15 @@ export function BudgetPopup({
                         >
                           <Pencil className="h-3 w-3" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteMut.mutate(b.id)}
+                        <ConfirmIconButton
+                          onConfirm={() => deleteMut.mutate(b.id)}
+                          pending={deleteMut.isPending}
                           className="p-1 rounded hover:bg-muted text-muted-foreground"
-                          aria-label="Delete"
+                          label="Delete budget"
                           data-testid={`budget-delete-${b.id}`}
                         >
                           <Trash2 className="h-3 w-3" />
-                        </button>
+                        </ConfirmIconButton>
                       </>
                     )}
                   </div>

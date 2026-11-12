@@ -1,4 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
+import { ConfirmIconButton } from "@/components/ui/confirm-icon-button";
 import { BROWSER_TIMEZONE as TRACKER_TZ } from "@/lib/queryClient";
 import { resolveLiabilityDueDate, deriveScheduleFields } from "@shared/liability-schedule";
 import { getUserToday as tzUserToday, toLocalDateStr as tzLocalDateStr } from "@shared/timezone";
@@ -4941,7 +4942,11 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
   const openEdit = (g: any) => { setEditGoal(g); setFormTitle(g.title); setFormTarget(String(g.target)); setFormUnit(g.unit); setFormDeadline(g.deadline || ""); };
 
   const handleSave = () => {
-    if (!formTitle.trim() || !formTarget) return;
+    // Say why nothing happened (the button used to be a silent no-op), and
+    // refuse a target that can never be reached: "0" and "-5" were saved.
+    if (!formTitle.trim()) { toast({ title: "Name the goal", variant: "destructive" }); return; }
+    const targetNum = Number(formTarget);
+    if (!formTarget || !Number.isFinite(targetNum) || targetNum <= 0) { toast({ title: "Enter a target above 0", variant: "destructive" }); return; }
     const payload = {
       title: formTitle.trim(), type: suggestType(), target: Number(formTarget),
       unit: formUnit || tracker.unit || "units", deadline: formDeadline || undefined,
@@ -5016,9 +5021,9 @@ function GoalsTabContent({ tracker }: { tracker: Tracker }) {
               {editGoal ? "Update" : "Create"}
             </Button>
             {editGoal && (
-              <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => deleteMutation.mutate({ id: editGoal.id, title: editGoal.title })} disabled={deleteMutation.isPending} data-testid="btn-delete-tracker-goal">
+              <ConfirmIconButton className="inline-flex h-7 items-center justify-center rounded-md bg-destructive px-2.5 text-xs text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50" armedClassName="inline-flex h-7 items-center rounded-md bg-destructive/10 px-2.5 text-xs font-semibold text-destructive" onConfirm={() => deleteMutation.mutate({ id: editGoal.id, title: editGoal.title })} pending={deleteMutation.isPending} label="Delete goal" data-testid="btn-delete-tracker-goal">
                 <Trash2 className="h-3 w-3" />
-              </Button>
+              </ConfirmIconButton>
             )}
             <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setCreating(false); setEditGoal(null); resetForm(); }}>
               Cancel

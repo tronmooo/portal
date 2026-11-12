@@ -91,7 +91,11 @@ export function QuickAddDialog({
   const [category, setCategory] = useState(kind === "income" ? "salary" : kind === "bill" ? "bill" : "general");
   const [frequency, setFrequency] = useState("monthly");
   const [vendor, setVendor] = useState("");
-  const [date, setDate] = useState(today);
+  // A task's "When" is a datetime-local field, which cannot display a bare
+  // YYYY-MM-DD: seeded with today it LOOKED empty while the task was saved as
+  // due today, and there was no way to add an undated task. What the field
+  // shows is what is saved — a task starts with no date.
+  const [date, setDate] = useState(kind === "task" ? "" : today);
   const [autopay, setAutopay] = useState(false);
   const [profileId, setProfileId] = useState(ownerProfileId);
   const [attempted, setAttempted] = useState(false);

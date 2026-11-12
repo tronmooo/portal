@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ConfirmIconButton } from "@/components/ui/confirm-icon-button";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -417,14 +418,14 @@ function OccurrenceRow({
               </span>
               <span className="flex items-center gap-1.5 shrink-0">
                 <span className="tabular-nums">{c.amount < 0 ? "−" : "+"}{usd(Math.abs(c.amount))}</span>
-                <button
-                  type="button"
+                <ConfirmIconButton
                   className="text-muted-foreground hover:text-red-500"
-                  disabled={busy}
-                  onClick={() => onAct(() => apiRequest("DELETE", `${base}/charges/${c.id}`), "Charge removed")}
+                  armedText="Remove?"
+                  pending={busy}
+                  onConfirm={() => onAct(() => apiRequest("DELETE", `${base}/charges/${c.id}`), "Charge removed")}
                   data-testid={`occ-charge-remove-${c.id}`}
-                  aria-label="Remove charge"
-                >×</button>
+                  label="Remove charge"
+                >×</ConfirmIconButton>
               </span>
             </div>
           ))}

@@ -228,6 +228,10 @@ describe("fields", () => {
     renderPage();
     await ready();
 
+    // Two taps (rule 8): the first arms the X, the second removes.
+
+    fireEvent.click(screen.getByTestId("info-remove-Phone"));
+
     fireEvent.click(screen.getByTestId("info-remove-Phone"));
     await waitFor(() => expect(wrote("PATCH", "/api/profiles/bob-1")).toBeTruthy());
     expect(wrote("PATCH", "/api/profiles/bob-1")!.body).toEqual({ fieldsToDelete: ["phone"] });
@@ -263,6 +267,10 @@ describe("fields", () => {
   it("deletes a nested-group field by identity, not by exact key", async () => {
     renderPage();
     await ready();
+
+    // Two taps (rule 8): the first arms the X, the second removes.
+
+    fireEvent.click(screen.getByTestId("info-remove-License Number"));
 
     fireEvent.click(screen.getByTestId("info-remove-License Number"));
     await waitFor(() => expect(wrote("PATCH", "/api/profiles/bob-1")).toBeTruthy());

@@ -15,6 +15,7 @@
 // detail page uses (["/api/profiles", id, "detail"]), so it's instant when
 // you've already visited the profile and edits here reflect there too.
 import { formatStoredDate } from "@/lib/dates";
+import { ConfirmIconButton } from "@/components/ui/confirm-icon-button";
 import { isBirthDateField, formatYearMonth } from "@shared/date-precision";
 import { useState, useRef, useEffect } from "react";
 import { PERSON_LIKE_TYPES } from "@shared/scope";
@@ -955,12 +956,16 @@ function FieldCell({ label, value, editable, onSave, onRemove }: {
         // and the fields looked permanently undeletable.
         // User, 2026-07-26: "Why won't it let me edit these or delete them".
         // A hit target of 24px keeps it tappable without covering the value.
-        <button
-          onClick={e => { e.stopPropagation(); onRemove(); }}
+        // Two taps: the X sits in the corner of a tap-to-edit card, one slip
+        // away from deleting the fact with no undo.
+        <ConfirmIconButton
+          onConfirm={onRemove}
           className="absolute top-0.5 right-0.5 h-6 w-6 grid place-items-center rounded-md text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 active:bg-destructive/20 transition-colors"
-          aria-label={`Remove ${label}`}
+          armedClassName="absolute top-0.5 right-0.5 text-[11px] font-semibold text-destructive px-1.5 py-0.5 rounded-md bg-destructive/10"
+          armedText="Remove?"
+          label={`Remove ${label}`}
           data-testid={`info-remove-${label}`}
-        ><X className="h-3.5 w-3.5" /></button>
+        ><X className="h-3.5 w-3.5" /></ConfirmIconButton>
       )}
     </Card>
   );

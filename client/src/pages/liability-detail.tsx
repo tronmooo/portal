@@ -1,4 +1,5 @@
 import { changedFieldsOnly } from "@shared/field-patch";
+import { ConfirmIconButton } from "@/components/ui/confirm-icon-button";
 /**
  * Dedicated profile page for liabilities (mortgage / auto loan / credit card / etc.).
  *
@@ -1981,17 +1982,18 @@ function PaymentRow({
           ) : null}
         </div>
         {expanded && onReverse ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-destructive"
-            onClick={onReverse}
-            disabled={reversing}
-            title="Reverse this payment"
+          // Reversing moves the balance back and deletes the ledger row: two taps.
+          <ConfirmIconButton
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-muted transition-colors disabled:opacity-50"
+            armedClassName="shrink-0 self-center text-[11px] font-semibold text-destructive px-2 py-1 rounded-md bg-destructive/10"
+            armedText="Reverse?"
+            onConfirm={onReverse}
+            pending={reversing}
+            label="Reverse this payment"
             data-testid={`reverse-payment-${p.id}`}
           >
             {reversing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
-          </Button>
+          </ConfirmIconButton>
         ) : null}
       </div>
     </div>
@@ -2565,9 +2567,9 @@ function AssetLinkRow({
             ))}
           </SelectContent>
         </Select>
-        <Button size="icon" variant="ghost" onClick={onDelete} data-testid="asset-link-delete" aria-label="Unlink asset">
+        <ConfirmIconButton className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md hover:bg-muted transition-colors" armedText="Unlink?" onConfirm={onDelete} data-testid="asset-link-delete" label="Unlink asset">
           <Trash2 className="w-4 h-4 text-rose-500" />
-        </Button>
+        </ConfirmIconButton>
       </div>
       <div className="flex items-center gap-3">
         <span className="text-xs text-muted-foreground w-24 shrink-0">Ownership %</span>
@@ -2829,9 +2831,9 @@ function PartyLinkRow({
             ))}
           </SelectContent>
         </Select>
-        <Button size="icon" variant="ghost" onClick={onDelete} aria-label="Remove owner" data-testid="party-link-delete">
+        <ConfirmIconButton className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md hover:bg-muted transition-colors" armedText="Remove?" onConfirm={onDelete} label="Remove owner" data-testid="party-link-delete">
           <Trash2 className="w-4 h-4 text-rose-500" />
-        </Button>
+        </ConfirmIconButton>
       </div>
       <div className="flex items-center gap-3">
         <span className="text-xs text-muted-foreground w-24 shrink-0">Ownership %</span>
