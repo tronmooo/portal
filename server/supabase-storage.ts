@@ -136,6 +136,7 @@ import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { isTestEntity } from "../shared/test-data";
 import { isTrackerCategoryVisible } from "../shared/hidden-tracker-categories";
+import { ownedStoragePath } from "../shared/owned-storage-path";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "../shared/obligation-windows";
 
 // PostgREST `.or()` filters are built by string concatenation, so a value
@@ -1456,7 +1457,7 @@ export class SupabaseStorage implements IStorage {
   private rowToDocument(r: any): Document {
     const doc: Document = {
       id: r.id, name: r.name, type: r.type, mimeType: r.mime_type,
-      fileData: r.file_data || "", storagePath: r.storage_path || undefined,
+      fileData: r.file_data || "", storagePath: ownedStoragePath(r.storage_path, this.userId),
       extractedData: r.extracted_data || {},
       linkedProfiles: r.linked_profiles || [], tags: r.tags || [],
       createdAt: r.created_at, updatedAt: r.updated_at || r.created_at,
@@ -5129,7 +5130,7 @@ export class SupabaseStorage implements IStorage {
     if (error || !data) return undefined;
     const { fileData, ...meta } = this.rowToDocument({ ...(data as any), file_data: "" });
 
-    let hasFile = !!(data as any).storage_path;
+    let hasFile = !!ownedStoragePath((data as any).storage_path, this.userId);
     if (!hasFile) {
       // Existence probe for pre-Storage rows: the filter runs in Postgres and
       // the projection is a single uuid, so no file bytes cross the wire.
@@ -5169,6 +5170,7 @@ export class SupabaseStorage implements IStorage {
         .maybeSingle();
       if (error || !data) return undefined;
       const row = data as any;
+      row.storage_path = ownedStoragePath(row.storage_path, this.userId) ?? null;
       if (row.storage_path) {
         const baseVersion = `${row.updated_at || row.created_at || ""}`;
         const wantsPreview = !!opts?.preview
@@ -5287,6 +5289,7 @@ export class SupabaseStorage implements IStorage {
     const name = row.name || "document";
 
     let buffer: Buffer | undefined;
+    row.storage_path = ownedStoragePath(row.storage_path, this.userId) ?? null;
     if (row.storage_path) {
       try {
         const { data: blob, error: dlErr } = await this.supabase.storage
@@ -5505,7 +5508,7 @@ export class SupabaseStorage implements IStorage {
       // and purge's main job is destroying a soft-deleted document's bytes.
       const { data: row } = await this.supabase.from("documents")
         .select("storage_path").eq("id", id).eq("user_id", this.userId).maybeSingle();
-      storagePathToRemove = (row as any)?.storage_path || undefined;
+      storagePathToRemove = ownedStoragePath((row as any)?.storage_path, this.userId);
     } catch { /* row lookup below still decides success */ }
     // Bytes first, then the row: a purge interrupted between the two leaves a
     // recoverable-looking row with no bytes — exactly the zombie — so remove

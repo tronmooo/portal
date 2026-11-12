@@ -718,6 +718,15 @@ export async function syncFinancialData(opts: SyncOptions): Promise<SyncResult> 
     const accountErrorsBefore = result.accountErrors.length;
 
     try {
+      // AUTHORIZATION CHECK (same rule as completeConnectionSession): the
+      // connection row is the caller's, but its holder id is a column the
+      // owner can write through Supabase directly (RLS update-own). Only sync
+      // a holder that stripe_account_holders — unique per customer, and the
+      // one trusted link — maps to THIS user; otherwise a row repointed at
+      // another customer would pull that person's accounts into this one.
+      if ((await userIdForCustomer(conn.stripe_account_holder_id)) !== userId) {
+        throw new FinanceConfigError("unknown", "Connection does not belong to the authenticated user.");
+      }
       // Which accounts belong to this connection? Ask Stripe (authoritative)
       // rather than trusting our own copy, so accounts removed at the bank are
       // seen as inactive on the very next sync.

@@ -350,6 +350,7 @@ export default defineConfig({
       'tests/audit-fixes-2026-09.test.ts',
       'tests/server-loan-not-an-asset.test.ts',
       'tests/stats-hidden-trackers.test.ts',
+      'tests/security-2026-11-12.test.ts',
       // 2026-09-02 performance + integrity sweep (audit/perf-ledger-2026-09-02.md)
       'tests/query-url-from-key.test.ts',
       'tests/format-cached-formatters.test.ts',

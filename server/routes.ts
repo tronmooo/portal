@@ -514,7 +514,11 @@ const BLOCKED_DOCUMENT_MIMES = new Set([
 function acceptableDocumentMime(mimeType: unknown): boolean {
   if (mimeType === undefined || mimeType === null) return true; // schema default applies
   if (typeof mimeType !== "string" || mimeType.length > 100) return false;
-  return !BLOCKED_DOCUMENT_MIMES.has(mimeType.trim().toLowerCase().split(";")[0]);
+  return !BLOCKED_DOCUMENT_MIMES.has(baseMime(mimeType));
+}
+/** "Text/HTML ; charset=utf-8" → "text/html": the type without parameters or padding. */
+function baseMime(mimeType: unknown): string {
+  return String(mimeType ?? "").split(";")[0].trim().toLowerCase();
 }
 
 // Simple rate limiter
@@ -2900,7 +2904,9 @@ export async function registerRoutes(
       // never written to Storage or the database — see processFileUpload.
       const discardUploadImage = discardImage === true || discardImage === "true";
       // Debug: log what we received
-      console.log(`[Upload] File: ${fileName}, MIME: ${mimeType}, base64 length: ${fileData?.length}, first 40 chars: ${fileData?.slice(0, 40)}`);
+      // No file name and no bytes: a name is personal data ("Jane Doe
+      // passport.pdf") and the first bytes are the document itself.
+      console.log(`[Upload] MIME: ${mimeType}, base64 length: ${fileData?.length}`);
       // File size validation: 10MB max (base64 is ~33% larger than binary)
       const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
       const fileSizeBytes = Math.ceil((fileData.length * 3) / 4);
@@ -8357,7 +8363,7 @@ Rules:
       "image/svg+xml",
       "application/xhtml+xml",
     ]);
-    const disposition = activeMime.has((mimeType || "").toLowerCase()) ? "attachment" : "inline";
+    const disposition = activeMime.has(baseMime(mimeType)) ? "attachment" : "inline";
     res.setHeader("Content-Disposition", `${disposition}; filename="${safeName}"`);
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'");
@@ -10163,6 +10169,8 @@ Rules:
       if (data.documents && Array.isArray(data.documents)) {
         for (const d of data.documents) {
           await tryImport("documents", d.name || "unnamed", async () => {
+            // Same rule as POST /api/documents: an import is not a way around it.
+            if (!acceptableDocumentMime(d.mimeType)) throw new Error("File type not allowed");
             const created = await storage.createDocument({ name: d.name, type: d.type, mimeType: d.mimeType, fileData: d.fileData, extractedData: d.extractedData, tags: d.tags, linkedProfiles: remap(d.linkedProfiles) } as any);
             if (d.id && created?.id) idMap.set(String(d.id), created.id);
           });
