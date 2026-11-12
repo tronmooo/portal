@@ -113,6 +113,7 @@ import {
   FileBarChart,
   Search,
   Copy,
+  AlertTriangle,
 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { CopyButton } from "@/components/chat/CopyButton";
@@ -1332,6 +1333,7 @@ export { clearChatCache } from "@/lib/chat-cache";
 import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCache } from "@/lib/chat-cache";
 import { ChatSuggestions, ChatFollowUps } from "@/components/chat/ChatSuggestions";
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
+import { FieldReceiptList, isFieldReceipt } from "@/components/chat/FieldReceiptList";
 import { ProfileSuggestionCard } from "@/components/chat/ProfileSuggestionCard";
 import type { ProfileSuggestion } from "@shared/profile-intent";
 import { scopedKey } from "@shared/query-keys";
@@ -2119,13 +2121,19 @@ const MessageRow = memo(function MessageRow({
               const isArtifact = action.type === 'create_artifact' && action.data && !isUndone;
               // Where tapping the card takes you (null = not linkable).
               const cardRoute = !isUndone ? actionRoute(action.type, action.data) : null;
+              // A receipt with an unverified line: the card is amber, never a
+              // plain green check (save → verify → confirm rule).
+              const cardReceipt = (action.data as any)?._receipt;
+              const receiptPartial = isFieldReceipt(cardReceipt) && cardReceipt.failedKeys.length > 0;
               return (
                 <div key={i} data-testid={`action-card-${action.type}-${i}`}>
                   <div
                     className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all ${
                       isUndone
                         ? "border-red-500/20 bg-red-500/5 opacity-60"
-                        : "border-green-500/25 bg-green-500/6"
+                        : receiptPartial
+                          ? "border-amber-500/30 bg-amber-500/5"
+                          : "border-green-500/25 bg-green-500/6"
                     } ${isArtifact ? 'rounded-b-none border-b-0' : ''}`}
                   >
                     {/* Status icon */}
@@ -2134,7 +2142,9 @@ const MessageRow = memo(function MessageRow({
                     }`}>
                       {isUndone
                         ? <X className="h-3.5 w-3.5 text-red-500" />
-                        : <Check className="h-3.5 w-3.5 text-green-600" />}
+                        : receiptPartial
+                          ? <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                          : <Check className="h-3.5 w-3.5 text-green-600" />}
                     </div>
                     {/* Content — tappable: opens the entity's page
                         (profile detail, its tracker, module list). */}
@@ -2296,6 +2306,14 @@ const MessageRow = memo(function MessageRow({
                       </button>
                     )}
                   </div>
+                  {/* Save receipt — one line per field, ✓ only where the
+                      database read-back confirmed it (shared/field-receipt). */}
+                  {!isUndone && isFieldReceipt((action.data as any)?._receipt) && (
+                    <FieldReceiptList
+                      receipt={(action.data as any)._receipt}
+                      onOpen={cardRoute ? () => hashNavigate(cardRoute) : undefined}
+                    />
+                  )}
                   {/* Inline entry editor — appears under the card when Edit is tapped */}
                   {isTrackerEntry && editingEntryId === entityId && (
                     <div className="mt-1 rounded-xl border border-primary/30 bg-primary/5 p-2.5 space-y-1.5" data-testid={`entry-editor-${i}`}>

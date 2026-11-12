@@ -192,6 +192,7 @@ import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTra
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange, PROFILE_TYPES } from "@shared/profile-rename";
 import { readProfileFieldValue } from "@shared/profile-field-identity";
+import { buildFieldReceipt, formatFieldReceiptText } from "@shared/field-receipt";
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel, bareDateOf } from "@shared/date-rules";
 import { isFabricatedAppointment } from "@shared/appointment-intent";
@@ -6438,6 +6439,14 @@ CONFIRMATION IS FOR DELETES (and the bulk/merge previews below) — NOTHING ELSE
 - Example success: "✅ Marked Joe's Water habit done for today (April 9). His streak is now 3 days."
 - Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
 - VERIFICATION (NEVER claim an unverified write): every write tool result carries "success". success:false means the write was read back from the database and was NOT there — the data was NOT saved. Say plainly that it failed and invite them to retry; NEVER say "logged", "saved", "done", or restate the value as if it were stored. This applies to tracker logs exactly like everything else: "logged 24 oz" on a success:false result is a lie about the user's data. Write tools also return a "verification" object; database_record_exists:false after a create/update means the same thing. After a delete, database_record_exists:false means the delete IS confirmed.
+- PROFILE/ASSET UPDATE CONFIRMATION (save → verify → confirm): update_profile returns "fieldReceipt" — built from a FRESH database read AFTER the write — and "receiptText", one line per field the user gave. Your reply MUST list every one of those lines, using the receipt's label and display value: "✓" ONLY on lines with verified:true, and for any verified:false line say plainly that THAT field did not save (name it) while the others did. Never put a ✓, "saved" or "updated" on a field the receipt does not mark verified; never drop a field the user gave. End with "Saved to: <fieldReceipt.savedTo>". Open with one specific line ("Your Honda CR-V is updated."), not a generic "Information updated." Example for "my car is white, has 35,000 miles and is AWD":
+  ✅ Your Honda CR-V is updated — saved and verified:
+  • Color: White ✓
+  • Mileage: 35,000 miles ✓
+  • Drivetrain: All-wheel drive (AWD) ✓
+  Saved to: Assets → Vehicles → Honda CR-V
+  Facts about something the user ALREADY has (their car, house, pet) go to update_profile on THAT record — check the profiles in context first and never create_profile a second car. Every stated fact gets a structured field key (color, mileage, drivetrain, vin, licensePlate, trim, …); a fact with no standard key still gets a descriptive camelCase field — never fold it into notes or drop it.
+- READING A SAVED FACT: "how many miles are on my car?" is answered from the record as it is stored NOW (the profile data in context or get_profile_data), never from what was said earlier in this chat.
 - verification.duplicate_count is DIAGNOSTIC ONLY — never mention it. Duplicates are allowed, and the user logging groceries twice does not need to be told they logged groceries before. Do NOT block, merge, delete, or narrate a "similar entry" note, and NEVER describe when an earlier entry was made ("from today", "yesterday") — the count carries no dates and guessing one states a falsehood about the user's data.
 - If verification.requested_name_matches is false, the write landed on a DIFFERENT record than the one you named. Do not describe it as the record the user asked about: say which record was actually touched, and offer to fix it.
 - Destructive BULK operations always take two turns: preview_bulk_action first (relay its counts + sample names verbatim), then execute_bulk_action({plan_id, confirm:true}) ONLY after the user explicitly confirms in their NEXT message. Never loop single delete_* calls for a "delete all …" request, and never call execute_bulk_action in the same turn as the preview.
@@ -8323,11 +8332,36 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         try { await cascadeProfileRename(storage, profile.id, renamedFrom, renamedTo); }
         catch (e) { logger.warn("ai", `Rename cascade failed for ${profile.id}: ${e}`); }
       }
+      // ----- Save → verify → confirm (owner rule, 2026-11-12) -----
+      // A FRESH read of the row, after the write, decides field by field what
+      // the chat may call saved. `updated` is what the write call returned;
+      // it is not a read of the database, so it never earns a ✓ on its own.
+      let readBack: any = null;
+      try { readBack = await storage.getProfile(profile.id); } catch { readBack = null; }
+      const fieldReceipt = buildFieldReceipt({
+        stored: readBack,
+        profileId: profile.id,
+        profileName: renamedTo || profile.name,
+        profileType: (changes.type as string) || profile.type,
+        requestedFields: updateFlatFields,
+        removedFields: removeFields,
+        requestedName: renamedTo,
+        requestedNotes: input.changes.notes,
+      });
+      if (fieldReceipt.lines.length > 0 && fieldReceipt.verifiedCount === 0) {
+        return {
+          error: `Nothing was saved to ${profile.name}: the record read back from the database does not hold ${fieldReceipt.lines.map(l => l.label).join(", ")}. Tell the user the update failed and to try again — do NOT say anything was saved.`,
+          fieldReceipt,
+        };
+      }
       // Attach revert metadata so the chat action card can render a Revert button.
       // Non-enumerable would be safer, but the action result is JSON-serialised
       // before reaching the client, so we use a plain underscore-prefixed key.
       return {
         ...(updated || {}),
+        ...(readBack ? { fields: readBack.fields, name: readBack.name } : {}),
+        fieldReceipt,
+        receiptText: formatFieldReceiptText(fieldReceipt),
         // A rename changes what EVERY list, badge and header calls this record,
         // so the card names the new name and the client refreshes everything
         // rather than the profile queries alone (see buildChatMutation).
@@ -17930,6 +17964,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 ...(ownerInfo ? { _ownerName: ownerInfo.name, _ownerProfileId: ownerInfo.id, _ownerIsSelf: ownerInfo.isSelf } : {}),
                 ...((result as any)?.trackerId ? { _trackerId: (result as any).trackerId } : {}),
                 ...(previousState ? { _previousState: previousState } : {}),
+                // Field-by-field save receipt, built from a fresh read of the
+                // record after the write (shared/field-receipt). The card
+                // shows a ✓ only on lines the read-back confirmed.
+                ...((result as any)?.fieldReceipt ? { _receipt: (result as any).fieldReceipt } : {}),
                 // Which tool ran. Several tools share one action type
                 // (update_entity, link_entities, …); the card names the
                 // specific one — shared/chat-action-card.ts.

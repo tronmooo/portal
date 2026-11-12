@@ -777,6 +777,8 @@ const NON_ROW_KEYS = new Set([
   "success", "action", "action_type", "message", "entity", "verification",
   "error", "deduped", "_verify", "_displayData", "_validationWarnings",
   "_previousState", "_renamed", "trackerId",
+  // Save-verify receipt (shared/field-receipt) — chat display, not row data.
+  "fieldReceipt", "receiptText",
 ]);
 
 /**
