@@ -48,6 +48,16 @@ describe("a birthday card never names someone else as whose birthday it is", () 
     expect(text).not.toContain("Bob Robertson");
   });
 
+  it("any date about another person ('Jordan's dentist appointment') does not show Bob either", () => {
+    const text = cardMeta("Jordan's dentist appointment", "Bob Robertson");
+    expect(text).toContain("Jordan's dentist appointment");
+    expect(text).not.toContain("Bob Robertson");
+  });
+
+  it("an ordinary event still shows its owner", () => {
+    expect(cardMeta("Calendar Review", "Bob Robertson")).toContain("Bob Robertson");
+  });
+
   it("the owner's own birthday still shows the owner", () => {
     const text = cardMeta("Bob's Birthday", "Bob Robertson");
     expect(text).toContain("Bob Robertson");

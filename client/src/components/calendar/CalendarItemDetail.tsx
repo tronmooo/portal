@@ -13,6 +13,7 @@
 // capability matrix (shared/calendar-capabilities); performing them is routed
 // by client/src/lib/calendar-mutations. This component only renders.
 
+import { ownerLabelForDatedItem } from "@shared/birthday-event";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import {
@@ -168,7 +169,9 @@ export function CalendarItemDetail({
   const Icon = KIND_ICONS[series.kind] ?? CalendarDays;
   const hsl = KIND_HSL[series.kind] ?? KIND_HSL.custom;
   const ownerId = series.source.profileId;
-  const ownerName = ownerId ? profileName?.(ownerId) : undefined;
+  // "Source: Bob Robertson" under "Jordan's birthday" names the wrong person
+  // as whose date it is (shared/birthday-event).
+  const ownerName = ownerLabelForDatedItem(series.title, ownerId ? profileName?.(ownerId) : undefined);
   const isRecurring = !!series.recurrence && series.recurrence !== "none";
 
   const run = async (action: CalendarAction, occ: CalendarOccurrence, newDate?: string) => {

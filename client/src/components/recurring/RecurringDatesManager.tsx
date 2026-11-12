@@ -475,7 +475,9 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
   const status = seriesStatus(ev, today);
   const sm = STATUS_META[status];
   const next = nextOccurrence(ev, today);
-  const owner = profiles.find((p: any) => (ev.linkedProfiles || []).includes(p.id));
+  const owner = ownerLabelForDatedItem(
+    ev.title, profiles.find((p: any) => (ev.linkedProfiles || []).includes(p.id))?.name,
+  );
   const daysUntil = next ? Math.round((new Date(`${next}T12:00:00`).getTime() - new Date(`${today}T12:00:00`).getTime()) / 86400000) : null;
 
   const setFlag = async (flag: "paused" | "archived", on: boolean, msg: string) => {
@@ -536,7 +538,7 @@ function SeriesCard({ ev, profiles, onEdit, onEditFuture, onMove, onReassign }: 
             </div>
             <p className="text-[11px] text-muted-foreground truncate">
               {humanRecurrenceLabel(ev.recurrence, ev.date)}
-              {owner ? ` · ${owner.name}` : ""}
+              {owner ? ` · ${owner}` : ""}
               {meta.remindDays != null ? ` · 🔔 ${meta.remindDays === 0 ? "day of" : `${meta.remindDays}d before`}` : ""}
             </p>
             {next && status !== "paused" && (

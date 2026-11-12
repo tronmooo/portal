@@ -117,6 +117,17 @@ green. After a push to `main`:
     *Guards:* `tests/tracker-create-no-duplicates.test.ts`,
     `tests/bp-heart-rate-split.test.ts`.
 
+12. **A date about a person never shows someone else's name.** Records with
+    no owner default to the account holder, so "Jordan's birthday" can be
+    stored under Bob. Every screen that prints an owner beside a dated item's
+    title goes through `ownerLabelForDatedItem` (`shared/birthday-event.ts`),
+    which hides the owner when the title is about another person. The chat
+    never files "<Name>'s birthday" under the account holder because the
+    model passed `forProfile: "me"`. (2026-11-11: "Jordan's birthday ·
+    Birthday · Bob Robertson".)
+    *Guards:* `tests/dated-item-owner-guard.test.ts`,
+    `tests/birthday-owner-label.dom.test.tsx`.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 

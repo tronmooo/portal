@@ -5,6 +5,7 @@
 // belongs to, its important dates, current status, related records, and REAL
 // in-place actions (pay/skip/edit/delete/renew/dismiss) — not just nav links.
 // TasksPopup/HabitsPopup already live in TaskHabitPopups.tsx.
+import { ownerLabelForDatedItem } from "@shared/birthday-event";
 import { useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { BubbleModal } from "@/components/ui/bubble-modal";
@@ -733,7 +734,9 @@ export function DocsPopup({ open, onClose, docs }: { open: boolean; onClose: () 
 
   const renderRow = (d: any) => {
     const full = docById.get(d.documentId);
-    const ownerNames = owners.names(full?.linkedProfiles);
+    const ownerNames = ownerLabelForDatedItem(
+      d.baseName || d.documentName || full?.name || d.name, owners.names(full?.linkedProfiles),
+    ) || "";
     const urgent = d.daysUntil < 0 ? "red" as const : d.daysUntil <= 30 ? "amber" as const : undefined;
     const name = d.baseName || d.documentName || full?.name || d.name || "Document";
     const type = d.documentType || full?.type;
@@ -899,7 +902,7 @@ export function EventsPopup({ open, onClose, items, todayStr, title = "Calendar 
           </div>
           <div className="space-y-1.5">
           {d.items.map((i: any) => {
-            const ownerNames = owners.names(i.linkedProfiles, false);
+            const ownerNames = ownerLabelForDatedItem(i.title, owners.names(i.linkedProfiles, false)) || "";
             const urgent = i.type === "bill" || i.type === "obligation";
             const hasChips = (i.type && i.type !== "event") || (i.category && i.category !== "general") || i.location || ownerNames;
             return (

@@ -85,14 +85,46 @@ export function personNamedByAnnualLabel(title: unknown): string | null {
   return name ? name : null;
 }
 
+// Holidays and set phrases shaped like a possessive that name nobody.
+const NOT_A_PERSON = /^(mother|father|mothers|fathers|valentine|valentines|new year|new years|st\.? patrick|patrick|today|tomorrow|tonight|yesterday|this week|next week|this month|next month|this year|next year|the|my|our|your|his|her|their|everyone|nobody|someone|somebody|kid|kids|children|parent|parents|people|world|april fool|april fools|president|presidents|veteran|veterans|womens|mens|childrens)$/i;
+
 /**
- * The owner name to print beside a dated item, or undefined to print none.
- * Undefined when the title is a birthday/anniversary of a person who is NOT
- * the owner — the owner's name there would claim the date is theirs.
+ * The person a dated item's title is ABOUT, or null.
+ *
+ *   "🎂 Jordan's birthday"           → "jordan"
+ *   "Jordan's dentist appointment"   → "jordan"
+ *   "Mary Lee's graduation"          → "mary lee"
+ *   "Mother's Day", "Today's plan"   → null
+ *   "Calendar Review"                → null
+ *
+ * A birthday/anniversary label is the strongest case (the date IS that
+ * person's); any other "<Name>'s …" is about that person too.
+ */
+export function personNamedByTitle(title: unknown): string | null {
+  const birthday = personNamedByAnnualLabel(title);
+  if (birthday) return birthday;
+  // Leading emoji / punctuation are decoration, not part of the name.
+  const t = String(title ?? "").replace(/^[^\p{L}]+/u, "").trim();
+  const m = t.match(/^(\p{Lu}[\p{L}.-]*(?:\s+\p{Lu}[\p{L}.-]*)?)['\u2019]s?\s+\S/u);
+  if (!m) return null;
+  const name = nameTokens(m[1]).join(" ");
+  if (!name || NOT_A_PERSON.test(name)) return null;
+  return name;
+}
+
+/**
+ * The owner name to print beside a dated item (an event, a recurring date, a
+ * reminder, an upcoming item), or undefined to print none.
+ *
+ * Undefined when the title is about a person who is NOT the owner: the
+ * owner's name beside "Jordan's birthday" claims the date is the owner's
+ * (user report 2026-11-11). Hiding the owner never says anything false;
+ * printing the wrong one does. Every surface that prints an owner next to a
+ * dated item's title goes through here — tests/dated-item-owner-guard.test.ts.
  */
 export function ownerLabelForDatedItem(title: unknown, ownerName: string | null | undefined): string | undefined {
   if (!ownerName || !ownerName.trim()) return undefined;
-  const named = personNamedByAnnualLabel(title);
+  const named = personNamedByTitle(title);
   if (named && !profileIsNamedBy(named, ownerName)) return undefined;
   return ownerName;
 }
