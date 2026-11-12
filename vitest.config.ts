@@ -12,7 +12,6 @@ export default defineConfig({
     environment: 'node',
     include: [
       'tests/chat-save-verify-confirm.test.ts',
-      'tests/field-receipt-card.dom.test.tsx',
       'tests/chat-unbacked-write-retry.test.ts',
       'tests/now-rank.test.ts',
       'tests/sync-rules-scope-empty-states.test.tsx',

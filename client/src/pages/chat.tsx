@@ -1333,7 +1333,7 @@ export { clearChatCache } from "@/lib/chat-cache";
 import { WELCOME_MSG, getChatCache, setChatCache, saveChatHistory, clearChatCache } from "@/lib/chat-cache";
 import { ChatSuggestions, ChatFollowUps } from "@/components/chat/ChatSuggestions";
 import { buildChatSuggestions, buildFollowUps } from "@shared/chat-suggestions";
-import { FieldReceiptList, isFieldReceipt } from "@/components/chat/FieldReceiptList";
+import { isFieldReceipt, receiptCardSummary } from "@shared/field-receipt";
 import { ProfileSuggestionCard } from "@/components/chat/ProfileSuggestionCard";
 import type { ProfileSuggestion } from "@shared/profile-intent";
 import { scopedKey } from "@shared/query-keys";
@@ -2124,7 +2124,8 @@ const MessageRow = memo(function MessageRow({
               // A receipt with an unverified line: the card is amber, never a
               // plain green check (save → verify → confirm rule).
               const cardReceipt = (action.data as any)?._receipt;
-              const receiptPartial = isFieldReceipt(cardReceipt) && cardReceipt.failedKeys.length > 0;
+              const hasReceipt = isFieldReceipt(cardReceipt) && cardReceipt.lines.length > 0;
+              const receiptPartial = hasReceipt && cardReceipt.failedKeys.length > 0;
               return (
                 <div key={i} data-testid={`action-card-${action.type}-${i}`}>
                   <div
@@ -2182,8 +2183,13 @@ const MessageRow = memo(function MessageRow({
                           </span>
                         )}
                       </div>
-                      <p className="text-[11px] text-muted-foreground mt-0.5">
-                        {entityDetails}
+                      <p
+                        className={`text-[11px] mt-0.5 ${receiptPartial && !isUndone ? 'text-amber-700 dark:text-amber-400 font-medium' : 'text-muted-foreground'}`}
+                        data-testid={hasReceipt ? `action-card-receipt-${i}` : undefined}
+                      >
+                        {/* The message above lists every field; the card
+                            says how many the database confirmed. */}
+                        {hasReceipt && !isUndone ? receiptCardSummary(cardReceipt) : entityDetails}
                         {isUndone && ' · DELETED'}
                       </p>
                     </div>
@@ -2306,14 +2312,6 @@ const MessageRow = memo(function MessageRow({
                       </button>
                     )}
                   </div>
-                  {/* Save receipt — one line per field, ✓ only where the
-                      database read-back confirmed it (shared/field-receipt). */}
-                  {!isUndone && isFieldReceipt((action.data as any)?._receipt) && (
-                    <FieldReceiptList
-                      receipt={(action.data as any)._receipt}
-                      onOpen={cardRoute ? () => hashNavigate(cardRoute) : undefined}
-                    />
-                  )}
                   {/* Inline entry editor — appears under the card when Edit is tapped */}
                   {isTrackerEntry && editingEntryId === entityId && (
                     <div className="mt-1 rounded-xl border border-primary/30 bg-primary/5 p-2.5 space-y-1.5" data-testid={`entry-editor-${i}`}>

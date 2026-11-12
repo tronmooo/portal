@@ -150,3 +150,76 @@ describe("buildFieldReceipt (pure)", () => {
     expect(receiptDisplayValue("vin", "1HGCM82633A004352")).toBe("1HGCM82633A004352");
   });
 });
+
+import { composeReceiptReply, receiptReplyBlock, receiptCardSummary } from "../shared/field-receipt";
+import { checkClaims } from "../shared/ai-claim-check";
+
+const carStored = { id: "c", name: "Honda CR-V", type: "vehicle", fields: { color: "white", mileage: 35000, drivetrain: "AWD" } };
+const fullReceipt = () => buildFieldReceipt({ stored: carStored, profileId: "c", profileName: "Honda CR-V", requestedFields: { color: "white", mileage: 35000, drivetrain: "AWD" } });
+const partialReceipt = () => buildFieldReceipt({ stored: { ...carStored, fields: { color: "white", mileage: 35000 } }, profileId: "c", profileName: "Honda CR-V", requestedFields: { color: "white", mileage: 35000, drivetrain: "AWD" } });
+
+describe("the chat message is built from the receipt", () => {
+  it("lists every field with its value, a ✓ each, and where it was saved", () => {
+    const text = receiptReplyBlock(fullReceipt());
+    expect(text).toContain("✅ **Honda CR-V updated** — saved and verified:");
+    expect(text).toContain("- **Color:** White ✓");
+    expect(text).toContain("- **Mileage:** 35,000 miles ✓");
+    expect(text).toContain("- **Drivetrain:** All-wheel drive (AWD) ✓");
+    expect(text).toContain("📍 Saved to: **Assets → Vehicles → Honda CR-V**");
+    expect(text).toContain("All three details were read back from the database");
+  });
+
+  it("a field that did not save: no ✓, named, and no all-verified line", () => {
+    const text = receiptReplyBlock(partialReceipt());
+    expect(text).toMatch(/^⚠️ \*\*Honda CR-V: 2 of 3 details saved\.\*\* One detail did not save/);
+    expect(text).toContain("- **Drivetrain:** All-wheel drive (AWD) ✗ *(not saved)*");
+    expect(text).not.toMatch(/Drivetrain[^\n]*✓/);
+    expect(text).not.toContain("read back from the database");
+  });
+
+  it("replaces the generic model line and the model's own field list, keeps everything else", () => {
+    const model = [
+      'Updated asset "Honda CR-V".',
+      "- Color: White ✓",
+      "Mileage: 35,000 miles",
+      "Saved to: Assets → Vehicles → Honda CR-V",
+      "All three details have been verified.",
+      "Your next oil change is due at 37,500 miles.",
+    ].join("\n");
+    const out = composeReceiptReply([fullReceipt()], model);
+    expect(out.startsWith("✅ **Honda CR-V updated**")).toBe(true);
+    expect(out).not.toContain('Updated asset "Honda CR-V"');
+    expect(out.match(/Color/g)).toHaveLength(1);
+    expect(out.match(/Saved to/g)).toHaveLength(1);
+    expect(out.trim().endsWith("Your next oil change is due at 37,500 miles.")).toBe(true);
+  });
+
+  it("the card line says how many the database confirmed", () => {
+    expect(receiptCardSummary(fullReceipt())).toBe("3 details saved & verified · Assets → Vehicles");
+    expect(receiptCardSummary(partialReceipt())).toBe("2 of 3 saved · Drivetrain didn't save");
+  });
+});
+
+describe("claim check: 'saved' is not 'created'", () => {
+  it("an update reply that says 'saved and verified' is not a create/update mismatch", () => {
+    const res = checkClaims({
+      reply: "✅ Your Honda CR-V is updated — saved and verified:\nSaved to: Assets → Vehicles → Honda CR-V",
+      operations: [{ tool: "update_profile", status: "ok", entityId: "c", raw: "Honda CR-V" }],
+      intentEntity: "asset", intentOperation: "update",
+    });
+    expect(res.violations).toEqual([]);
+  });
+
+  it("'created' on an update turn is still caught", () => {
+    const res = checkClaims({
+      reply: "Created your Honda CR-V.",
+      operations: [{ tool: "update_profile", status: "ok", entityId: "c", raw: "Honda CR-V" }],
+    });
+    expect(res.violations.map(v => v.mismatchType)).toContain("claimed_create_but_updated");
+  });
+
+  it("'saved' with nothing written is still an unsupported success", () => {
+    const res = checkClaims({ reply: "Saved your car's mileage.", operations: [] });
+    expect(res.unsupportedSuccess).toBe(true);
+  });
+});

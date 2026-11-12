@@ -48,9 +48,15 @@ const lc = (s: unknown) => String(s ?? "").toLowerCase();
 // Ordered longest-first so "marked complete" is not swallowed by "marked".
 const SUCCESS_VERBS: Array<{ re: RegExp; operation: IntentOperation }> = [
   { re: /\b(?:marked\s+(?:it\s+)?(?:complete|completed|done|off)|checked\s+(?:it\s+)?(?:in|off))\b/i, operation: "complete" },
-  { re: /\b(?:created|added|made|set\s+up|scheduled|logged|saved|recorded|started)\b/i, operation: "create" },
+  { re: /\b(?:created|added|made|set\s+up|scheduled|logged|recorded|started)\b/i, operation: "create" },
   { re: /\b(?:updated|changed|edited|modified|renamed|adjusted|revised)\b/i, operation: "update" },
   { re: /\b(?:deleted|removed|cleared|erased)\b/i, operation: "delete" },
+  // "Saved" is true of a create AND an update — it claims a write, but not
+  // which kind. Classed as a create it turned "✅ Your car is updated — saved
+  // and verified" into a create-claim on an update turn, and the reply was
+  // thrown away for a bare "Updated asset "Smoke Car"." (2026-11-12). Checked
+  // LAST, so a sentence that also names the operation is classed by that.
+  { re: /\bsaved\b/i, operation: "unknown" },
 ];
 
 /**

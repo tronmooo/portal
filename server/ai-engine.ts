@@ -192,7 +192,7 @@ import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTra
 import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange, PROFILE_TYPES } from "@shared/profile-rename";
 import { readProfileFieldValue } from "@shared/profile-field-identity";
-import { buildFieldReceipt, formatFieldReceiptText } from "@shared/field-receipt";
+import { buildFieldReceipt, formatFieldReceiptText, composeReceiptReply } from "@shared/field-receipt";
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel, bareDateOf } from "@shared/date-rules";
 import { isFabricatedAppointment } from "@shared/appointment-intent";
@@ -6439,12 +6439,7 @@ CONFIRMATION IS FOR DELETES (and the bulk/merge previews below) — NOTHING ELSE
 - Example success: "✅ Marked Joe's Water habit done for today (April 9). His streak is now 3 days."
 - Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
 - VERIFICATION (NEVER claim an unverified write): every write tool result carries "success". success:false means the write was read back from the database and was NOT there — the data was NOT saved. Say plainly that it failed and invite them to retry; NEVER say "logged", "saved", "done", or restate the value as if it were stored. This applies to tracker logs exactly like everything else: "logged 24 oz" on a success:false result is a lie about the user's data. Write tools also return a "verification" object; database_record_exists:false after a create/update means the same thing. After a delete, database_record_exists:false means the delete IS confirmed.
-- PROFILE/ASSET UPDATE CONFIRMATION (save → verify → confirm): update_profile returns "fieldReceipt" — built from a FRESH database read AFTER the write — and "receiptText", one line per field the user gave. Your reply MUST list every one of those lines, using the receipt's label and display value: "✓" ONLY on lines with verified:true, and for any verified:false line say plainly that THAT field did not save (name it) while the others did. Never put a ✓, "saved" or "updated" on a field the receipt does not mark verified; never drop a field the user gave. End with "Saved to: <fieldReceipt.savedTo>". Open with one specific line ("Your Honda CR-V is updated."), not a generic "Information updated." Example for "my car is white, has 35,000 miles and is AWD":
-  ✅ Your Honda CR-V is updated — saved and verified:
-  • Color: White ✓
-  • Mileage: 35,000 miles ✓
-  • Drivetrain: All-wheel drive (AWD) ✓
-  Saved to: Assets → Vehicles → Honda CR-V
+- PROFILE/ASSET UPDATE CONFIRMATION: after update_profile the server writes the confirmation itself from "fieldReceipt" (a FRESH database read after the write): a ✓/✗ line per field and where it was saved. Do NOT restate the fields, the record name or "Saved to" — it would be dropped as a duplicate. Reply with NOTHING about the update unless something else needs saying (an answer to a question in the same message, another action you took, or a field that did not save and what to do about it).
   Facts about something the user ALREADY has (their car, house, pet) go to update_profile on THAT record — check the profiles in context first and never create_profile a second car. Every stated fact gets a structured field key (color, mileage, drivetrain, vin, licensePlate, trim, …); a fact with no standard key still gets a descriptive camelCase field — never fold it into notes or drop it.
 - READING A SAVED FACT: "how many miles are on my car?" is answered from the record as it is stored NOW (the profile data in context or get_profile_data), never from what was said earlier in this chat.
 - verification.duplicate_count is DIAGNOSTIC ONLY — never mention it. Duplicates are allowed, and the user logging groceries twice does not need to be told they logged groceries before. Do NOT block, merge, delete, or narrate a "similar entry" note, and NEVER describe when an earlier entry was made ("from today", "yesterday") — the count carries no dates and guessing one states a falsehood about the user's data.
@@ -18721,6 +18716,19 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     } catch (e: any) {
       // Validation must never cost the user their reply.
       logger.warn("ai", `[claim-check] skipped: ${e?.message || e}`);
+    }
+
+    // Save → verify → confirm: a profile update's confirmation is built from
+    // its field receipt — the fresh database read after the write — so the
+    // message lists exactly what is stored, ✓ only where the read-back
+    // confirmed it, whatever wording the model chose (shared/field-receipt).
+    try {
+      const receipts = allResults
+        .map((r: any) => (r && !r.error && r.success !== false ? r.fieldReceipt : null))
+        .filter((r: any) => r && Array.isArray(r.lines) && r.lines.length > 0);
+      if (receipts.length > 0) finalReply = composeReceiptReply(receipts, finalReply || "");
+    } catch (e: any) {
+      logger.warn("ai", `[field-receipt] reply compose skipped: ${e?.message || e}`);
     }
 
     // No raw database ids and no "let me look that up" preamble reach the

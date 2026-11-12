@@ -240,3 +240,93 @@ export function formatFieldReceiptText(r: FieldReceipt): string {
   out.push(`Saved to: ${r.savedTo}`);
   return out.join("\n");
 }
+
+// ── The chat reply ───────────────────────────────────────────────────────────
+//
+// The confirmation is BUILT from the receipt, not written by the model: the
+// model's wording varies turn to turn and once (2026-11-12) the reply that
+// reached the user was a bare "Updated asset "Smoke Car"." Whatever the model
+// said about these fields is replaced by this block; anything else it said
+// (an answer, a follow-up question, another write) is kept beneath it.
+
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
+const countWord = (n: number) => NUMBER_WORDS[n] ?? String(n);
+
+/** Markdown confirmation for one receipt. */
+export function receiptReplyBlock(r: FieldReceipt): string {
+  const total = r.lines.length;
+  const failed = total - r.verifiedCount;
+  const out: string[] = [];
+  if (failed === 0) {
+    out.push(`✅ **${r.name} updated** — saved and verified:`);
+  } else {
+    out.push(`⚠️ **${r.name}: ${r.verifiedCount} of ${total} details saved.** ${failed === 1 ? "One detail" : `${countWord(failed)[0].toUpperCase()}${countWord(failed).slice(1)} details`} did not save — please try ${failed === 1 ? "it" : "them"} again.`);
+  }
+  out.push("");
+  for (const l of r.lines) {
+    if (l.op === "removed") {
+      out.push(l.verified ? `- **${l.label}:** removed ✓` : `- **${l.label}:** still on the record ✗ *(not removed)*`);
+    } else {
+      out.push(l.verified ? `- **${l.label}:** ${l.display} ✓` : `- **${l.label}:** ${l.display} ✗ *(not saved)*`);
+    }
+  }
+  out.push("");
+  out.push(`📍 Saved to: **${r.savedTo}**`);
+  if (failed === 0 && total > 1) {
+    out.push("");
+    out.push(`${total === 2 ? "Both" : `All ${countWord(total)}`} details were read back from the database after saving and match what you told me.`);
+  }
+  return out.join("\n");
+}
+
+/**
+ * The model's lines that are ABOUT these receipts — its own field list, its
+ * own "saved/updated/verified" sentence about the record, its own "Saved to" —
+ * are dropped; everything else it wrote is kept.
+ */
+function isReceiptRestatement(line: string, receipts: FieldReceipt[]): boolean {
+  const t = line.trim();
+  if (!t) return false;
+  if (/[✓✔✅]/.test(t)) return true;
+  if (/^(?:[-*•]\s*)?(?:📍\s*)?saved\s+to\b/i.test(t)) return true;
+  if (/\bverif/i.test(t)) return true;
+  const lower = t.toLowerCase().replace(/\*/g, "");
+  for (const r of receipts) {
+    for (const l of r.lines) {
+      if (lower.replace(/^[-*•]\s*/, "").startsWith(`${l.label.toLowerCase()}:`)) return true;
+    }
+    const name = r.name.toLowerCase();
+    if (name && lower.includes(name) && /\b(?:updated|saved|changed|set|added|recorded|stored|now)\b/.test(lower)) return true;
+    if (/^(?:i'?ve|i have)\s+(?:saved|updated|stored)\b/.test(lower)) return true;
+  }
+  return false;
+}
+
+export function composeReceiptReply(receipts: FieldReceipt[], modelReply: string): string {
+  const blocks = receipts.filter((r) => r.lines.length > 0).map(receiptReplyBlock);
+  if (blocks.length === 0) return modelReply;
+  const kept = String(modelReply ?? "")
+    .split("\n")
+    .filter((line) => !isReceiptRestatement(line, receipts))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  // A leftover that is only a lead-in ("Here's what I saved:") says nothing.
+  const meaningful = kept && !/^[^.!?]*:\s*$/.test(kept) ? kept : "";
+  return [blocks.join("\n\n"), meaningful].filter(Boolean).join("\n\n");
+}
+
+/** One line for the chat action card: "3 details saved & verified · Assets → Vehicles". */
+export function receiptCardSummary(r: FieldReceipt): string {
+  const total = r.lines.length;
+  const section = r.savedTo.split(" → ").slice(0, -1).join(" → ");
+  if (r.failedKeys.length === 0) {
+    return `${total} detail${total === 1 ? "" : "s"} saved & verified${section ? ` · ${section}` : ""}`;
+  }
+  const failedLabels = r.lines.filter((l) => !l.verified).map((l) => l.label).join(", ");
+  return `${r.verifiedCount} of ${total} saved · ${failedLabels} didn't save`;
+}
+
+export function isFieldReceipt(v: unknown): v is FieldReceipt {
+  return !!v && typeof v === "object" && Array.isArray((v as any).lines) && typeof (v as any).savedTo === "string" && Array.isArray((v as any).failedKeys);
+}
