@@ -135,6 +135,7 @@ import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR
 import { normalizeTrackerEntry } from "./tracker-normalize";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
 import { isTestEntity } from "../shared/test-data";
+import { isTrackerCategoryVisible } from "../shared/hidden-tracker-categories";
 import { UPCOMING_BILL_WINDOW_DAYS, toMonthlyAmount, MS_PER_DAY, isUpcomingBill, isActiveObligation, canonicalIncomeFrequency, sumBillsDueThroughMonth, sumReceivedPaychecksForMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "../shared/obligation-windows";
 
 // PostgREST `.or()` filters are built by string concatenation, so a value
@@ -7746,7 +7747,10 @@ export class SupabaseStorage implements IStorage {
     const includeTestRows = !!opts?.includeTestData;
     const keepRow = (row: any) => includeTestRows || !isTestEntity(row);
     const expenses = forEnvironment(expenseSource.filter(e => passesProfileFilter(e.linkedProfiles, filterCtxExpense) && keepRow(e)), { includeTest: includeTestRows });
-    const trackers = forEnvironment(allTrackers.filter(t => matchesProfile(t.linkedProfiles)), { includeTest: includeTestRows });
+    // Legacy money-category trackers are hidden from every tracker list
+    // (shared/hidden-tracker-categories), so they are not counted either:
+    // Settings read "9 Trackers" above a list of one.
+    const trackers = forEnvironment(allTrackers.filter(t => isTrackerCategoryVisible(t.category) && matchesProfile(t.linkedProfiles)), { includeTest: includeTestRows });
     const habits = allHabits.filter(h => matchesProfile(h.linkedProfiles || []));
     const obligations = allObligations.filter(o => matchesProfile(o.linkedProfiles) && keepRow(o));
     // Phase-fix: journal entries were the one entity not run through the
@@ -8306,7 +8310,7 @@ export class SupabaseStorage implements IStorage {
     const assetBreakdown: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
       if (!isAssetProfile(p)) continue;
-      const gross = resolveAssetValue(p.fields);
+      const gross = resolveAssetValue(p);
       if (gross <= 0) continue;
       const share = shareForAsset(p);
       if (share <= 0) continue;
@@ -8404,7 +8408,7 @@ export class SupabaseStorage implements IStorage {
             if (!isAssetProfile(p)) return s;
             const share = shareForAsset(p);
             if (share <= 0) return s;
-            return s + (resolveAssetValue(p.fields) * share / 100);
+            return s + (resolveAssetValue(p) * share / 100);
           }, 0);
         })(),
         // Liabilities: profiles carrying a loan/remaining balance (financed cars, mortgages,
@@ -8542,7 +8546,7 @@ export class SupabaseStorage implements IStorage {
       if (!fp) return true;
       return lp.includes(fp);
     };
-    const trackers = allTrackers.filter(t => matchFp(t.linkedProfiles));
+    const trackers = allTrackers.filter(t => isTrackerCategoryVisible(t.category) && matchFp(t.linkedProfiles));
     const tasks = allTasks.filter(t => matchFp(t.linkedProfiles));
     const expenses = allExpenses.filter(e => matchFp(e.linkedProfiles));
     const habits = allHabits.filter(h => matchFp(h.linkedProfiles || []));
@@ -9691,7 +9695,7 @@ export class SupabaseStorage implements IStorage {
     const assets: Array<{ id: string; name: string; type: string; grossValue: number; share: number; value: number }> = [];
     for (const p of allProfiles) {
       if (!isAssetProfile(p)) continue;
-      const gross = resolveAssetValue(p.fields);
+      const gross = resolveAssetValue(p);
       if (gross <= 0) continue;
       const share = shareForItem(p, assetLinksByAsset);
       if (share <= 0) continue;

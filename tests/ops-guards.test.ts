@@ -72,6 +72,17 @@ describe("failures are noticed without anyone looking", () => {
     expect(src).toContain("npm run audit:ci");
   });
 
+  it("an advisory cannot switch off the type check and the tests", () => {
+    // 2026-11-11: the audit ran as the first step of the one CI job, two
+    // advisories failed it, and tsc + the suite stopped running on main.
+    const src = read(".github/workflows/ci.yml");
+    const build = src.slice(src.search(/\n  build:\n/));
+    expect(build).toContain("npx tsc --noEmit");
+    expect(build).toContain("npm test");
+    expect(build).not.toContain("audit");
+    expect(build).not.toMatch(/needs:\s*\[?\s*audit/);
+  });
+
   it("Dependabot watches npm and GitHub Actions", () => {
     const src = read(".github/dependabot.yml");
     expect(src).toContain("package-ecosystem: npm");

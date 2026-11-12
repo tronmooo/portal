@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getUserToday, addDays as tzAddDays, toLocalDateStr, parseLocalDate, localDayOf, DEFAULT_TIMEZONE } from "@shared/timezone";
 import { toMonthlyAmount, isUpcomingBill, sumBillsDueThroughMonth, sumMonthlyIncomeForMonth, sumMonthIncomeToDate } from "@shared/obligation-windows";
 import { isTestEntity } from "@shared/test-data";
+import { isTrackerCategoryVisible } from "@shared/hidden-tracker-categories";
 import { searchCorpus } from "@shared/search-match";
 import { autoCheckinLinkedHabits, mirrorHabitIds, HABIT_MIRROR_KEY, HABIT_MIRROR_IDS_KEY } from "./habit-completion";
 import { sanitizeTrackerEntryValues } from "./tracker-entry-guard";
@@ -2430,7 +2431,7 @@ export class MemStorage implements IStorage {
     const keep = (row: any) => includeTestRows || !isTestEntity(row);
     const tasks = forEnvironment(allTasks.filter(t => matchesFilter((t as any).linkedProfiles) && keep(t)), { includeTest: includeTestRows });
     const expenses = forEnvironment(allExpenses.filter(e => matchesFilter((e as any).linkedProfiles) && keep(e)), { includeTest: includeTestRows });
-    const trackers = forEnvironment(allTrackers.filter(t => matchesFilter((t as any).linkedProfiles)), { includeTest: includeTestRows });
+    const trackers = forEnvironment(allTrackers.filter(t => isTrackerCategoryVisible((t as any).category) && matchesFilter((t as any).linkedProfiles)), { includeTest: includeTestRows });
     const habits = allHabits.filter(h => matchesFilter((h as any).linkedProfiles));
     const obligations = allObligations.filter(o => matchesFilter((o as any).linkedProfiles) && keep(o));
     const journalEntries = allJournal.filter(j => matchesFilter((j as any).linkedProfiles));

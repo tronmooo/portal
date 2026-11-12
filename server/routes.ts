@@ -12312,7 +12312,7 @@ No emojis. No prose outside the JSON.`,
       try {
         const p: any = await storage.getProfile(aid);
         if (p) {
-          const v = resolveAssetValue((p as any).fields);
+          const v = resolveAssetValue(p);
           assetById[aid] = { id: p.id, name: p.name, type: p.type, currentValue: v || null };
         }
       } catch {}

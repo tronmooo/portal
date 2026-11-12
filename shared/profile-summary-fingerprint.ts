@@ -11,7 +11,9 @@ import { resolveAssetValue, resolveLiabilityBalance } from "./asset-value";
 export function profileValueFingerprint(profile: any): string {
   if (!profile || typeof profile !== "object") return "";
   const fields = profile.fields && typeof profile.fields === "object" ? profile.fields : profile;
-  const asset = resolveAssetValue(fields);
+  // Hand the resolver the PROFILE when there is one: a loan's `balance` is its
+  // debt, and only the profile's type can say so.
+  const asset = resolveAssetValue(profile.fields && typeof profile.fields === "object" ? profile : fields);
   const debt = resolveLiabilityBalance(fields);
   const asOf = String(fields?.currentValueAsOf ?? fields?.valueAsOf ?? "").slice(0, 10);
   return `v${asset}|d${debt}|${asOf}`;

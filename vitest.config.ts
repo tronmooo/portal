@@ -348,6 +348,8 @@ export default defineConfig({
       'tests/shared-activity-routing.test.ts',
       'tests/shared-activity-fanout.test.ts',
       'tests/audit-fixes-2026-09.test.ts',
+      'tests/server-loan-not-an-asset.test.ts',
+      'tests/stats-hidden-trackers.test.ts',
       // 2026-09-02 performance + integrity sweep (audit/perf-ledger-2026-09-02.md)
       'tests/query-url-from-key.test.ts',
       'tests/format-cached-formatters.test.ts',
