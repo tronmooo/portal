@@ -11,6 +11,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
+      'tests/chat-unbacked-write-retry.test.ts',
       'tests/now-rank.test.ts',
       'tests/sync-rules-scope-empty-states.test.tsx',
       'tests/sync-tasks-scope-notice.dom.test.tsx',

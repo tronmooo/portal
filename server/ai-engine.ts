@@ -176,7 +176,7 @@ import {
   type TurnCreate,
 } from "@shared/ai-tool-routing";
 import { toUserFacingError, stripInternalText } from "@shared/ai-message-kinds";
-import { checkClaims, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
+import { checkClaims, shouldRetryUnbackedWriteClaim, UNBACKED_WRITE_RETRY_INSTRUCTION, honestFailureReply, groundedSummary, describeMismatch, stripStaleCapabilityClaims, type ExecutedOperation } from "@shared/ai-claim-check";
 import { recordChatFailure } from "./ai-failure-log";
 import { detectMoodFromText } from "@shared/mood-detect";
 import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/recurrence";
@@ -17320,6 +17320,8 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
     // three-tier ordering is pinned by tests/chat-timeout-envelope.test.ts.
     const WALL_CLOCK_BUDGET_MS = 90_000;
     let ranOutOfTime = false;
+    // One retry when the model claims a write without calling a tool.
+    let unbackedWriteRetried = false;
     // Envelope verification context — one per chat turn; memoizes the user's
     // profile-id set across all tool calls in the turn (see server/ai-envelope).
     const turnVerifyCtx = buildTurnVerifyContext(storage);
@@ -17438,6 +17440,25 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
 
       // If no tool calls or stop_reason is end_turn with no pending tools, we're done
       if (toolUses.length === 0 || response.stop_reason === "end_turn") {
+        // The model claimed the write in prose and never called a tool —
+        // nothing was saved. Give it one more round, told exactly that,
+        // rather than ending the turn on "nothing was saved, try again".
+        if (
+          toolUses.length === 0 &&
+          !unbackedWriteRetried &&
+          shouldRetryUnbackedWriteClaim({
+            reply: textReply,
+            toolCallsSoFar: totalToolCalls,
+            readOnlyTurn: turnScope.allowedMutations === "none",
+          })
+        ) {
+          unbackedWriteRetried = true;
+          logger.warn("ai", `[turn ${turnId.slice(0, 8)}] reply claimed a write with zero tool calls — retrying with a tool instruction. msg="${(userMessage || "").slice(0, 80)}"`);
+          messages.push({ role: "assistant", content: response.content as any });
+          messages.push({ role: "user", content: UNBACKED_WRITE_RETRY_INSTRUCTION });
+          textReply = "";
+          continue;
+        }
         break;
       }
 
