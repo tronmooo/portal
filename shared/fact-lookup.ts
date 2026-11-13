@@ -38,6 +38,7 @@
 // and be reused by the client, the server, and the tests alike.
 // ============================================================
 
+import { receiptProfileKind, receiptSavedTo } from "./field-receipt";
 import {
   buildRecallTerms,
   recallMatchScore,
@@ -101,6 +102,8 @@ export interface FactCandidate {
   score: number;
   /** Extractor confidence when the source recorded one (documents only). */
   confidence?: number;
+  /** Profile type, for profile_field answers ("vehicle", "self"…). */
+  entityType?: string;
 }
 
 export interface FactAnswer {
@@ -426,6 +429,7 @@ function collectProfileFieldCandidates(question: FactQuestion, profiles: FactPro
         entityId: String(p.id),
         fieldKey: key,
         value,
+        entityType: String(p?.type || p?.typeKey || p?.type_key || "") || undefined,
         // Hand-entered profile fields are canonical, so they outrank a
         // same-strength document hit.
         score: score + 4 + subjectBonus,
@@ -564,6 +568,16 @@ export function renderFactReply(question: FactQuestion, best: FactCandidate, con
 
   const also = corroborated > 0 ? ` It matches ${corroborated} other record${corroborated > 1 ? "s" : ""}.` : "";
 
+  // A profile field answers WHOSE value it is and where it is saved — the
+  // same place the chat said it saved it ("Your Smoke Car's color is
+  // **white** — saved in its asset profile (Assets → Vehicles → Smoke Car)").
+  if (best.source === "profile_field" && best.entityType) {
+    const t = best.entityType;
+    if (t === "self") return `Your ${label} is **${best.value}** — saved in your profile.${also}${caveat}`;
+    const owned = !["person", "pet", "medical"].includes(t);
+    const whose = owned ? `Your ${best.entityName}'s` : `${best.entityName}'s`;
+    return `${whose} ${label} is **${best.value}** — saved in ${owned ? "its" : `${best.entityName}'s`} ${receiptProfileKind(t)} (${receiptSavedTo(t, best.entityName)}).${also}${caveat}`;
+  }
   return `Your ${label} is **${best.value}** ${where}.${also}${caveat}`;
 }
 

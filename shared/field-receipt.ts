@@ -354,6 +354,8 @@ function isReceiptRestatement(line: string, receipts: FieldReceipt[]): boolean {
   if (/[✓✔✅✗❌]/.test(t)) return true;
   if (/^(?:[-*•]\s*)?(?:📍\s*)?(?:saved\s+to|find\s+it\s+in)\b/i.test(t)) return true;
   if (/\bverif/i.test(t)) return true;
+  // A bare "Done." / "All set!" after the receipt adds nothing.
+  if (/^(?:done|all\s+set|got\s+it|updated|saved|you'?re\s+all\s+set)[.!]*$/i.test(t.replace(/\*/g, ""))) return true;
   const lower = t.toLowerCase().replace(/\*/g, "");
   const claimsWrite = /\b(?:updated|saved|changed|set|added|recorded|stored|created|now)\b/.test(lower);
   if (/^(?:i'?ve|i have)\s+(?:saved|updated|stored|added|set|recorded|created)\b/.test(lower)) return true;

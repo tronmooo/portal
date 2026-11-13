@@ -288,3 +288,18 @@ describe("claim check: 'saved' is not 'created'", () => {
     expect(res.unsupportedSuccess).toBe(true);
   });
 });
+
+import { renderFactReply } from "../shared/fact-lookup";
+
+describe("follow-ups", () => {
+  it("a bare 'Done.' after the receipt is dropped", () => {
+    const out = composeReceiptReply([fullReceipt()], "Done.");
+    expect(out.trim().endsWith("they match.")).toBe(true);
+  });
+
+  it("'what color is my car?' names the record and where the value is saved", () => {
+    const q: any = { kind: "field", terms: ["color"], subject: [] };
+    const best: any = { source: "profile_field", entityName: "Smoke Car", entityId: "c", fieldKey: "color", value: "white", score: 10, entityType: "vehicle" };
+    expect(renderFactReply(q, best, [best])).toBe("Your Smoke Car's color is **white** — saved in its asset profile (Assets → Vehicles → Smoke Car).");
+  });
+});
