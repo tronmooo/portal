@@ -193,6 +193,7 @@ import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "
 import { checkProfileRename, checkProfileTypeChange, PROFILE_TYPES } from "@shared/profile-rename";
 import { readProfileFieldValue } from "@shared/profile-field-identity";
 import { buildFieldReceipt, formatFieldReceiptText, composeReceiptReply } from "@shared/field-receipt";
+import { verifyProfileWrite } from "./profile-write-verify";
 import { cascadeProfileRename } from "./profile-rename-cascade";
 import { classifyDateField, isBareExpiryStatement, parseBirthdayLabel, bareDateOf } from "@shared/date-rules";
 import { isFabricatedAppointment } from "@shared/appointment-intent";
@@ -6439,7 +6440,7 @@ CONFIRMATION IS FOR DELETES (and the bulk/merge previews below) — NOTHING ELSE
 - Example success: "✅ Marked Joe's Water habit done for today (April 9). His streak is now 3 days."
 - Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
 - VERIFICATION (NEVER claim an unverified write): every write tool result carries "success". success:false means the write was read back from the database and was NOT there — the data was NOT saved. Say plainly that it failed and invite them to retry; NEVER say "logged", "saved", "done", or restate the value as if it were stored. This applies to tracker logs exactly like everything else: "logged 24 oz" on a success:false result is a lie about the user's data. Write tools also return a "verification" object; database_record_exists:false after a create/update means the same thing. After a delete, database_record_exists:false means the delete IS confirmed.
-- PROFILE/ASSET UPDATE CONFIRMATION: after update_profile the server writes the confirmation itself from "fieldReceipt" (a FRESH database read after the write): a ✓/✗ line per field and where it was saved. Do NOT restate the fields, the record name or "Saved to" — it would be dropped as a duplicate. Reply with NOTHING about the update unless something else needs saying (an answer to a question in the same message, another action you took, or a field that did not save and what to do about it).
+- PROFILE/ASSET SAVE CONFIRMATION: after update_profile or create_profile the server writes the confirmation itself from "fieldReceipt" (a FRESH database read after the write): a ✓/✗ line per field and where it was saved. Do NOT restate the fields, the record name or "Saved to" — it would be dropped as a duplicate. Reply with NOTHING about the update unless something else needs saying (an answer to a question in the same message, another action you took, or a field that did not save and what to do about it).
   Facts about something the user ALREADY has (their car, house, pet) go to update_profile on THAT record — check the profiles in context first and never create_profile a second car. Every stated fact gets a structured field key (color, mileage, drivetrain, vin, licensePlate, trim, …); a fact with no standard key still gets a descriptive camelCase field — never fold it into notes or drop it.
 - READING A SAVED FACT: "how many miles are on my car?" is answered from the record as it is stored NOW (the profile data in context or get_profile_data), never from what was said earlier in this chat.
 - verification.duplicate_count is DIAGNOSTIC ONLY — never mention it. Duplicates are allowed, and the user logging groceries twice does not need to be told they logged groceries before. Do NOT block, merge, delete, or narrate a "similar entry" note, and NEVER describe when an earlier entry was made ("from today", "yesterday") — the count carries no dates and guessing one states a falsehood about the user's data.
@@ -8331,10 +8332,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       // A FRESH read of the row, after the write, decides field by field what
       // the chat may call saved. `updated` is what the write call returned;
       // it is not a read of the database, so it never earns a ✓ on its own.
-      let readBack: any = null;
-      try { readBack = await storage.getProfile(profile.id); } catch { readBack = null; }
-      const fieldReceipt = buildFieldReceipt({
-        stored: readBack,
+      // A field the read-back doesn't hold is saved again before anything
+      // is reported (server/profile-write-verify).
+      const { receipt: fieldReceipt, readBack } = await verifyProfileWrite(storage as any, {
         profileId: profile.id,
         profileName: renamedTo || profile.name,
         profileType: (changes.type as string) || profile.type,
@@ -17889,6 +17889,31 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
                 : null);
             if (mutation) turnMutations.push(mutation);
           }
+          // Save → verify → confirm for a NEW profile: read it back, re-save
+          // any stated field that is missing, and build the receipt the
+          // reply is composed from. A create may normalize a value (a date,
+          // a unit), so a field counts as saved when the record holds a value
+          // for it; a dedup onto an existing record must hold the new value.
+          if (toolUse.name === "create_profile" && result && !(result as any).error && (result as any).id && !(result as any).fieldReceipt) {
+            try {
+              const asked = canonicalizeProfileFields(flattenAiProfileFields((inputWithCtx as any).fields || {}), {}).fields;
+              const isDedup = (result as any).deduped === true;
+              const { receipt, readBack } = await verifyProfileWrite(storage as any, {
+                profileId: (result as any).id,
+                profileName: (result as any).name || String((inputWithCtx as any).name || ""),
+                profileType: (result as any).type || (inputWithCtx as any).type,
+                requestedFields: asked,
+                action: isDedup ? "updated" : "created",
+                presenceOnly: !isDedup,
+              });
+              if (readBack) {
+                (result as any).fieldReceipt = receipt;
+                (result as any).receiptText = formatFieldReceiptText(receipt);
+              }
+            } catch (e: any) {
+              logger.warn("ai", `[field-receipt] create_profile verify skipped: ${e?.message || e}`);
+            }
+          }
           // A tool that DEDUPED did not create anything — it found the record
           // already there and merged into it. Two things must not happen for
           // one of these:
@@ -17943,6 +17968,10 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               // as "Jim's Honda CRV", never "your Honda CRV" for someone
               // else's item.
               if (ownerInfo && !ownerInfo.isSelf) (result as any).owner = ownerInfo.name;
+              // The confirmation says WHOSE record it was saved to ("Jim's
+              // Honda"), not "your", when it isn't the user's.
+              const rcpt = (result as any).fieldReceipt;
+              if (rcpt && ownerInfo && !ownerInfo.isSelf && rcpt.profileId !== ownerInfo.id) rcpt.ownerName = ownerInfo.name;
             } catch { /* attribution is best-effort */ }
             actionForStream = {
               type: actionType,

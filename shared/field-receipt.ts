@@ -4,16 +4,17 @@
 // database write AND a fresh read of the record afterwards. "My car is white,
 // has 35,000 miles and is all-wheel drive" must come back as three lines —
 // Color, Mileage, Drivetrain — each with a ✓ only if the row read back from
-// the database holds that value, and a ✗ naming the field if it does not.
+// the database holds that value. A field that does not read back is re-saved
+// and read again (server/profile-write-verify.ts) before anything is said.
 //
 // This module is the pure half of that: given what a write ASKED for and the
 // record as READ BACK, it says field by field what is verified. The server
 // (update_profile / create_profile in server/ai-engine.ts) supplies the fresh
-// read; the chat card (client/src/components/chat/FieldReceiptList.tsx) and
-// the model's reply both render from the same receipt, so the two cannot
+// read; the chat message (composeReceiptReply) and the action card
+// (receiptCardSummary) both render from the same receipt, so the two cannot
 // disagree.
 //
-// Pinned by tests/field-receipt.test.ts.
+// Pinned by tests/chat-save-verify-confirm.test.ts.
 
 import { fieldKeyLabel } from "./field-label";
 import { readProfileFieldValue, isReservedFieldKey } from "./profile-field-identity";
@@ -42,6 +43,12 @@ export interface FieldReceipt {
   allVerified: boolean;
   verifiedCount: number;
   failedKeys: string[];
+  /** A new record ("Created a new asset profile…") or an existing one. */
+  action?: "created" | "updated";
+  /** Whose record, when it isn't the user's own ("Jim's Honda"). */
+  ownerName?: string;
+  /** Some field needed a second write before it read back. */
+  retried?: boolean;
 }
 
 // ── Labels ───────────────────────────────────────────────────────────────────
@@ -126,7 +133,13 @@ export function receiptValuesMatch(requested: unknown, stored: unknown): boolean
   const sn = asNumber(stored);
   if (rn !== null && sn !== null) return rn === sn;
   if (typeof requested === "string" && typeof stored === "string") {
-    return requested.trim() === stored.trim();
+    // "black" stored as "Black" is the user's value, saved.
+    return requested.trim().toLowerCase() === stored.trim().toLowerCase();
+  }
+  if (Array.isArray(requested) || Array.isArray(stored)) {
+    const norm = (v: unknown) => (Array.isArray(v) ? v : String(v ?? "").split(","))
+      .map((x) => String(x).trim().toLowerCase()).filter(Boolean).sort().join("|");
+    return norm(requested) === norm(stored);
   }
   if (typeof requested === "boolean" || typeof stored === "boolean") {
     return String(requested).toLowerCase() === String(stored).toLowerCase();
@@ -174,6 +187,10 @@ export interface BuildFieldReceiptInput {
   requestedName?: string;
   /** Notes the write asked to set. */
   requestedNotes?: string | null;
+  action?: "created" | "updated";
+  /** A new record: a field is saved when the record holds a value for it
+   *  (the create may normalize the value). Updates must hold the new value. */
+  presenceOnly?: boolean;
 }
 
 /** Keys the server derives itself, not values the user stated. */
@@ -193,7 +210,8 @@ export function buildFieldReceipt(input: BuildFieldReceiptInput): FieldReceipt {
     if (isReservedFieldKey(key) || DERIVED_KEYS.has(key)) continue;
     if (requested === undefined) continue;
     const storedValue = stored ? readProfileFieldValue(storedFields, key) : undefined;
-    const verified = !!stored && receiptValuesMatch(requested, storedValue);
+    const present = storedValue !== undefined && storedValue !== null && storedValue !== "";
+    const verified = !!stored && (input.presenceOnly ? present : receiptValuesMatch(requested, storedValue));
     lines.push({
       key,
       label: receiptFieldLabel(key),
@@ -226,6 +244,7 @@ export function buildFieldReceipt(input: BuildFieldReceiptInput): FieldReceipt {
     allVerified: lines.length > 0 && failedKeys.length === 0,
     verifiedCount: lines.length - failedKeys.length,
     failedKeys,
+    action: input.action || "updated",
   };
 }
 
@@ -234,8 +253,8 @@ export function buildFieldReceipt(input: BuildFieldReceiptInput): FieldReceipt {
 export function formatFieldReceiptText(r: FieldReceipt): string {
   const out: string[] = [];
   for (const l of r.lines) {
-    if (l.op === "removed") out.push(`• ${l.label}: removed ${l.verified ? "✓" : "✗ (still on the record)"}`);
-    else out.push(`• ${l.label}: ${l.display} ${l.verified ? "✓" : "✗ (not saved)"}`);
+    if (l.op === "removed") out.push(`• ${l.label}: removed ${l.verified ? "✓" : "(NOT confirmed — still on the record)"}`);
+    else out.push(`• ${l.label}: ${l.display} ${l.verified ? "✓" : "(NOT confirmed on the record)"}`);
   }
   out.push(`Saved to: ${r.savedTo}`);
   return out.join("\n");
@@ -251,30 +270,75 @@ export function formatFieldReceiptText(r: FieldReceipt): string {
 
 const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 const countWord = (n: number) => NUMBER_WORDS[n] ?? String(n);
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
-/** Markdown confirmation for one receipt. */
-export function receiptReplyBlock(r: FieldReceipt): string {
-  const total = r.lines.length;
-  const failed = total - r.verifiedCount;
-  const out: string[] = [];
-  if (failed === 0) {
-    out.push(`✅ **${r.name} updated** — saved and verified:`);
-  } else {
-    out.push(`⚠️ **${r.name}: ${r.verifiedCount} of ${total} details saved.** ${failed === 1 ? "One detail" : `${countWord(failed)[0].toUpperCase()}${countWord(failed).slice(1)} details`} did not save — please try ${failed === 1 ? "it" : "them"} again.`);
+/** "asset profile", "pet profile" — what the user calls the record. */
+export function receiptProfileKind(type: string | undefined): string {
+  switch (String(type || "")) {
+    case "vehicle": case "property": case "asset": case "investment": case "account": return "asset profile";
+    case "loan": case "liability": return "liability profile";
+    case "subscription": return "subscription profile";
+    case "pet": return "pet profile";
+    default: return "profile";
   }
-  out.push("");
-  for (const l of r.lines) {
-    if (l.op === "removed") {
-      out.push(l.verified ? `- **${l.label}:** removed ✓` : `- **${l.label}:** still on the record ✗ *(not removed)*`);
-    } else {
-      out.push(l.verified ? `- **${l.label}:** ${l.display} ✓` : `- **${l.label}:** ${l.display} ✗ *(not saved)*`);
+}
+
+/** "the asset profile for your **Honda CR-V**" / "your profile". */
+function receiptSubject(r: FieldReceipt): string {
+  if (r.type === "self") return "your profile";
+  const whose = r.ownerName ? `${r.ownerName}'s` : "your";
+  return `the ${receiptProfileKind(r.type)} for ${whose} **${r.name}**`;
+}
+
+/** A label inside a sentence: "the **color**", "the **VIN**". */
+const inlineLabel = (label: string) => (label === label.toUpperCase() ? label : label.charAt(0).toLowerCase() + label.slice(1));
+
+/**
+ * The chat message for one receipt. Always says WHAT was saved, WHERE (which
+ * record, and where it lives in the app), and that it was read back:
+ *
+ *   ✅ Saved **Black** as the **color** in the asset profile for your **Honda CR-V**.
+ *   📍 Find it in **Assets → Vehicles → Honda CR-V**
+ *   Verified — I read it back from your saved record and it matches.
+ *
+ * Only verified lines are listed as saved. A line that still did not read
+ * back after the automatic re-save is named in a plain sentence asking the
+ * user to send it again — never shown as saved.
+ */
+export function receiptReplyBlock(r: FieldReceipt): string {
+  const saved = r.lines.filter((l) => l.verified);
+  const missing = r.lines.filter((l) => !l.verified);
+  const subject = receiptSubject(r);
+  const created = r.action === "created";
+  const out: string[] = [];
+
+  if (saved.length === 1 && !created) {
+    const l = saved[0];
+    out.push(l.op === "removed"
+      ? `✅ Removed the **${inlineLabel(l.label)}** from ${subject}.`
+      : `✅ Saved **${l.display}** as the **${inlineLabel(l.label)}** in ${subject}.`);
+  } else {
+    const head = created
+      ? `✅ Created a new ${receiptProfileKind(r.type)} for ${r.ownerName ? `${r.ownerName}'s` : "your"} **${r.name}**`
+      : `✅ Saved ${countWord(saved.length)} details in ${subject}`;
+    out.push(saved.length > 0 ? `${head}${created ? ` and saved ${countWord(saved.length)} detail${saved.length === 1 ? "" : "s"}` : ""}:` : `${head}.`);
+    if (saved.length > 0) {
+      out.push("");
+      for (const l of saved) out.push(l.op === "removed" ? `- **${l.label}:** removed ✓` : `- **${l.label}:** ${l.display} ✓`);
     }
   }
   out.push("");
-  out.push(`📍 Saved to: **${r.savedTo}**`);
-  if (failed === 0 && total > 1) {
+  out.push(`📍 Find it in **${r.savedTo}**`);
+  if (saved.length > 0) {
     out.push("");
-    out.push(`${total === 2 ? "Both" : `All ${countWord(total)}`} details were read back from the database after saving and match what you told me.`);
+    out.push(saved.length === 1
+      ? "Verified — I read it back from your saved record and it matches."
+      : `${saved.length === 2 ? "Both" : `All ${countWord(saved.length)}`} verified — I read them back from your saved record and they match.`);
+  }
+  if (missing.length > 0) {
+    const names = missing.map((l) => `**${inlineLabel(l.label)}**${l.op === "removed" ? "" : ` (${l.display})`}`).join(", ");
+    out.push("");
+    out.push(`⚠️ I couldn't confirm the ${names} on the record even after saving it again — send ${missing.length === 1 ? "it" : "them"} once more and I'll redo it.`);
   }
   return out.join("\n");
 }
@@ -287,23 +351,26 @@ export function receiptReplyBlock(r: FieldReceipt): string {
 function isReceiptRestatement(line: string, receipts: FieldReceipt[]): boolean {
   const t = line.trim();
   if (!t) return false;
-  if (/[✓✔✅]/.test(t)) return true;
-  if (/^(?:[-*•]\s*)?(?:📍\s*)?saved\s+to\b/i.test(t)) return true;
+  if (/[✓✔✅✗❌]/.test(t)) return true;
+  if (/^(?:[-*•]\s*)?(?:📍\s*)?(?:saved\s+to|find\s+it\s+in)\b/i.test(t)) return true;
   if (/\bverif/i.test(t)) return true;
   const lower = t.toLowerCase().replace(/\*/g, "");
+  const claimsWrite = /\b(?:updated|saved|changed|set|added|recorded|stored|created|now)\b/.test(lower);
+  if (/^(?:i'?ve|i have)\s+(?:saved|updated|stored|added|set|recorded|created)\b/.test(lower)) return true;
   for (const r of receipts) {
     for (const l of r.lines) {
       if (lower.replace(/^[-*•]\s*/, "").startsWith(`${l.label.toLowerCase()}:`)) return true;
+      const v = String(l.display || "").toLowerCase();
+      if (claimsWrite && v.length >= 3 && lower.includes(v)) return true;
     }
     const name = r.name.toLowerCase();
-    if (name && lower.includes(name) && /\b(?:updated|saved|changed|set|added|recorded|stored|now)\b/.test(lower)) return true;
-    if (/^(?:i'?ve|i have)\s+(?:saved|updated|stored)\b/.test(lower)) return true;
+    if (name && lower.includes(name) && claimsWrite) return true;
   }
   return false;
 }
 
 export function composeReceiptReply(receipts: FieldReceipt[], modelReply: string): string {
-  const blocks = receipts.filter((r) => r.lines.length > 0).map(receiptReplyBlock);
+  const blocks = receipts.filter((r) => r.lines.length > 0 || r.action === "created").map(receiptReplyBlock);
   if (blocks.length === 0) return modelReply;
   const kept = String(modelReply ?? "")
     .split("\n")
@@ -316,15 +383,19 @@ export function composeReceiptReply(receipts: FieldReceipt[], modelReply: string
   return [blocks.join("\n\n"), meaningful].filter(Boolean).join("\n\n");
 }
 
-/** One line for the chat action card: "3 details saved & verified · Assets → Vehicles". */
+/** One line for the chat action card: what was saved and where. */
 export function receiptCardSummary(r: FieldReceipt): string {
-  const total = r.lines.length;
+  const saved = r.lines.filter((l) => l.verified);
   const section = r.savedTo.split(" → ").slice(0, -1).join(" → ");
-  if (r.failedKeys.length === 0) {
-    return `${total} detail${total === 1 ? "" : "s"} saved & verified${section ? ` · ${section}` : ""}`;
-  }
-  const failedLabels = r.lines.filter((l) => !l.verified).map((l) => l.label).join(", ");
-  return `${r.verifiedCount} of ${total} saved · ${failedLabels} didn't save`;
+  const where = section ? ` · ${section}` : "";
+  let what: string;
+  if (saved.length === 0) what = r.action === "created" ? "New profile created" : "Nothing confirmed yet";
+  else if (saved.length === 1) {
+    const l = saved[0];
+    what = l.op === "removed" ? `${l.label} removed` : `${l.label}: ${l.display} saved`;
+  } else what = `${saved.length} details saved & verified`;
+  const missing = r.lines.length - saved.length;
+  return `${what}${where}${missing > 0 ? ` · ${missing} to resend` : ""}`;
 }
 
 export function isFieldReceipt(v: unknown): v is FieldReceipt {

@@ -12,11 +12,12 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { buildFieldReceipt, formatFieldReceiptText, receiptDisplayValue, receiptValuesMatch } from "../shared/field-receipt";
 
 type Row = { id: string; name: string; type: string; fields: Record<string, any>; notes?: string };
-const db: { profiles: Row[]; dropKeys: Set<string>; lieOnReturn: boolean } = { profiles: [], dropKeys: new Set(), lieOnReturn: false };
+const db: { profiles: Row[]; dropKeys: Set<string>; lieOnReturn: boolean; dropOnce: boolean } = { profiles: [], dropKeys: new Set(), lieOnReturn: false, dropOnce: false };
 
 function reseed() {
   db.dropKeys = new Set();
   db.lieOnReturn = false;
+  db.dropOnce = false;
   db.profiles = [
     { id: "p-self", name: "Robert", type: "self", fields: {} },
     { id: "p-car", name: "Honda CR-V", type: "vehicle", fields: { make: "Honda", model: "CR-V", year: 2021 } },
@@ -42,6 +43,7 @@ vi.mock("../server/storage", () => ({
       // Persist everything except the keys this test says the DB loses.
       const kept = { ...(patch.fields || {}) };
       for (const k of db.dropKeys) delete kept[k];
+      if (db.dropOnce) db.dropKeys = new Set();
       Object.assign(p, { ...patch, fields: { ...p.fields, ...kept } });
       // A write call that returns what it was ASKED to write is exactly why
       // its return value can't be trusted as verification.
@@ -80,21 +82,29 @@ describe("update_profile: save, read back, confirm each field", () => {
     expect(byKey.drivetrain).toMatchObject({ label: "Drivetrain", display: "All-wheel drive (AWD)", verified: true });
 
     expect(res.receiptText).toContain("• Mileage: 35,000 miles ✓");
+    expect(res.fieldReceipt.retried).toBeUndefined();
     expect(res.receiptText).toContain("Saved to: Assets → Vehicles → Honda CR-V");
   });
 
-  it("names the field the database did not keep — no ✓ on it, ✓ on the rest", async () => {
+  it("a field lost on the first write is re-saved, then verified", async () => {
     db.dropKeys = new Set(["drivetrain"]);
+    db.dropOnce = true;
     db.lieOnReturn = true; // the write call claims it saved everything
     const res = await executeTool("update_profile", { name: "Honda CR-V", changes: { fields: CAR_FACTS } });
     expect(res.error).toBeUndefined();
+    expect(car().fields.drivetrain).toBe("AWD");
+    expect(res.fieldReceipt.allVerified).toBe(true);
+    expect(res.fieldReceipt.retried).toBe(true);
+  });
+
+  it("a field the database never keeps is not shown as saved", async () => {
+    db.dropKeys = new Set(["drivetrain"]);
+    db.lieOnReturn = true;
+    const res = await executeTool("update_profile", { name: "Honda CR-V", changes: { fields: CAR_FACTS } });
+    expect(res.error).toBeUndefined();
     const r = res.fieldReceipt;
-    expect(r.allVerified).toBe(false);
     expect(r.failedKeys).toEqual(["drivetrain"]);
     expect(r.verifiedCount).toBe(2);
-    const drive = r.lines.find((l: any) => l.key === "drivetrain");
-    expect(drive.verified).toBe(false);
-    expect(res.receiptText).toMatch(/Drivetrain: All-wheel drive \(AWD\) ✗ \(not saved\)/);
     expect(res.receiptText).not.toMatch(/Drivetrain[^\n]*✓/);
   });
 
@@ -139,7 +149,7 @@ describe("buildFieldReceipt (pure)", () => {
       profileId: "c", profileName: "Car", removedFields: ["vin", "licensePlate"],
     });
     expect(r.lines.map(l => [l.key, l.verified])).toEqual([["vin", false], ["licensePlate", true]]);
-    expect(formatFieldReceiptText(r)).toContain("VIN: removed ✗");
+    expect(formatFieldReceiptText(r)).toContain("VIN: removed (NOT confirmed");
   });
 
   it("formats values the way a person reads them", () => {
@@ -158,45 +168,100 @@ const carStored = { id: "c", name: "Honda CR-V", type: "vehicle", fields: { colo
 const fullReceipt = () => buildFieldReceipt({ stored: carStored, profileId: "c", profileName: "Honda CR-V", requestedFields: { color: "white", mileage: 35000, drivetrain: "AWD" } });
 const partialReceipt = () => buildFieldReceipt({ stored: { ...carStored, fields: { color: "white", mileage: 35000 } }, profileId: "c", profileName: "Honda CR-V", requestedFields: { color: "white", mileage: 35000, drivetrain: "AWD" } });
 
-describe("the chat message is built from the receipt", () => {
-  it("lists every field with its value, a ✓ each, and where it was saved", () => {
+describe("the chat message says what was saved and where", () => {
+  it("one field: a sentence naming the value, the field, the record and where to find it", () => {
+    const r = buildFieldReceipt({ stored: carStored, profileId: "c", profileName: "Honda CR-V", requestedFields: { color: "black" } });
+    // stored "white" ≠ "black" → not verified; use a matching store instead
+    const ok = buildFieldReceipt({ stored: { ...carStored, fields: { color: "Black" } }, profileId: "c", profileName: "Honda CR-V", requestedFields: { color: "black" } });
+    expect(r.lines[0].verified).toBe(false);
+    expect(ok.lines[0].verified).toBe(true); // "Black" stored for "black" is the user's value
+    const text = receiptReplyBlock(ok);
+    expect(text).toContain("✅ Saved **Black** as the **color** in the asset profile for your **Honda CR-V**.");
+    expect(text).toContain("📍 Find it in **Assets → Vehicles → Honda CR-V**");
+    expect(text).toContain("Verified — I read it back from your saved record and it matches.");
+    expect(text).not.toMatch(/[✗❌]/);
+  });
+
+  it("several fields: each value listed with ✓, where to find it, all verified", () => {
     const text = receiptReplyBlock(fullReceipt());
-    expect(text).toContain("✅ **Honda CR-V updated** — saved and verified:");
+    expect(text).toContain("✅ Saved three details in the asset profile for your **Honda CR-V**:");
     expect(text).toContain("- **Color:** White ✓");
     expect(text).toContain("- **Mileage:** 35,000 miles ✓");
     expect(text).toContain("- **Drivetrain:** All-wheel drive (AWD) ✓");
-    expect(text).toContain("📍 Saved to: **Assets → Vehicles → Honda CR-V**");
-    expect(text).toContain("All three details were read back from the database");
+    expect(text).toContain("📍 Find it in **Assets → Vehicles → Honda CR-V**");
+    expect(text).toContain("All three verified — I read them back from your saved record and they match.");
   });
 
-  it("a field that did not save: no ✓, named, and no all-verified line", () => {
+  it("someone else's car is named as theirs", () => {
+    const r = { ...fullReceipt(), ownerName: "Jim" };
+    expect(receiptReplyBlock(r)).toContain("in the asset profile for Jim's **Honda CR-V**");
+  });
+
+  it("a new asset says it was created, what it holds and where", () => {
+    const r = buildFieldReceipt({ stored: { id: "d", name: "Dodge Ram", type: "vehicle", fields: { color: "White", driveType: "4WD" } }, profileId: "d", profileName: "Dodge Ram", requestedFields: { color: "white", driveType: "4wd" }, action: "created", presenceOnly: true });
+    const text = receiptReplyBlock(r);
+    expect(text).toContain("✅ Created a new asset profile for your **Dodge Ram** and saved two details:");
+    expect(text).toContain("- **Drivetrain:** Four-wheel drive (4WD) ✓");
+    expect(text).toContain("📍 Find it in **Assets → Vehicles → Dodge Ram**");
+  });
+
+  it("no ✗ lines: an unconfirmed field is never listed as saved, and is named in one sentence", () => {
     const text = receiptReplyBlock(partialReceipt());
-    expect(text).toMatch(/^⚠️ \*\*Honda CR-V: 2 of 3 details saved\.\*\* One detail did not save/);
-    expect(text).toContain("- **Drivetrain:** All-wheel drive (AWD) ✗ *(not saved)*");
+    expect(text).toContain("✅ Saved two details in the asset profile for your **Honda CR-V**:");
     expect(text).not.toMatch(/Drivetrain[^\n]*✓/);
-    expect(text).not.toContain("read back from the database");
+    expect(text).not.toMatch(/[✗❌]/);
+    expect(text).toContain("⚠️ I couldn't confirm the **drivetrain** (All-wheel drive (AWD)) on the record even after saving it again");
   });
 
-  it("replaces the generic model line and the model's own field list, keeps everything else", () => {
+  it("replaces the generic model line and its own restatement, keeps everything else", () => {
     const model = [
       'Updated asset "Honda CR-V".',
       "- Color: White ✓",
       "Mileage: 35,000 miles",
+      "I've saved white as your car's color.",
       "Saved to: Assets → Vehicles → Honda CR-V",
       "All three details have been verified.",
       "Your next oil change is due at 37,500 miles.",
     ].join("\n");
     const out = composeReceiptReply([fullReceipt()], model);
-    expect(out.startsWith("✅ **Honda CR-V updated**")).toBe(true);
+    expect(out.startsWith("✅ Saved three details")).toBe(true);
     expect(out).not.toContain('Updated asset "Honda CR-V"');
+    expect(out).not.toContain("I've saved white");
     expect(out.match(/Color/g)).toHaveLength(1);
-    expect(out.match(/Saved to/g)).toHaveLength(1);
     expect(out.trim().endsWith("Your next oil change is due at 37,500 miles.")).toBe(true);
   });
 
-  it("the card line says how many the database confirmed", () => {
+  it("the card line says what was saved and where", () => {
+    const one = buildFieldReceipt({ stored: { ...carStored, fields: { color: "black" } }, profileId: "c", profileName: "Honda CR-V", requestedFields: { color: "black" } });
+    expect(receiptCardSummary(one)).toBe("Color: Black saved · Assets → Vehicles");
     expect(receiptCardSummary(fullReceipt())).toBe("3 details saved & verified · Assets → Vehicles");
-    expect(receiptCardSummary(partialReceipt())).toBe("2 of 3 saved · Drivetrain didn't save");
+    expect(receiptCardSummary(partialReceipt())).toBe("2 details saved & verified · Assets → Vehicles · 1 to resend");
+  });
+});
+
+describe("verifyProfileWrite re-saves what didn't land", () => {
+  it("a field lost on the first write is written again and then verified", async () => {
+    const { verifyProfileWrite } = await import("../server/profile-write-verify");
+    const row: any = { id: "c", name: "Honda CR-V", type: "vehicle", fields: { color: "white", mileage: 35000 } };
+    const writes: any[] = [];
+    const store = {
+      getProfile: async () => JSON.parse(JSON.stringify(row)),
+      updateProfile: async (_id: string, patch: any) => { writes.push(patch); Object.assign(row.fields, patch.fields || {}); return row; },
+    };
+    const { receipt } = await verifyProfileWrite(store, { profileId: "c", profileName: "Honda CR-V", requestedFields: { color: "white", mileage: 35000, drivetrain: "AWD" } });
+    expect(writes).toEqual([{ fields: { drivetrain: "AWD" } }]); // only the missing field
+    expect(receipt.allVerified).toBe(true);
+    expect(receipt.retried).toBe(true);
+  });
+
+  it("a field the database keeps refusing stays unconfirmed after the retries", async () => {
+    const { verifyProfileWrite } = await import("../server/profile-write-verify");
+    const row: any = { id: "c", name: "Car", type: "vehicle", fields: {} };
+    let n = 0;
+    const store = { getProfile: async () => ({ ...row }), updateProfile: async () => { n++; return row; } };
+    const { receipt } = await verifyProfileWrite(store, { profileId: "c", profileName: "Car", requestedFields: { color: "black" } });
+    expect(n).toBe(2);
+    expect(receipt.failedKeys).toEqual(["color"]);
   });
 });
 
