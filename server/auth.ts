@@ -4,6 +4,7 @@ import type { Request, Response, NextFunction, Express } from "express";
 import { storage, isSupabaseStorage, createScopedStorage, requestStorageContext } from "./storage";
 import { runWithActiveScope } from "./active-scope-context";
 import { ACTIVE_PROFILE_HEADER, parseActiveProfileIds } from "@shared/active-scope";
+import { createSharedRateLimiter } from "./auth-rate-limit";
 
 // Seed a brand-new user's starter data inside a storage instance scoped to
 // THAT user. We deliberately avoid mutating the global storage singleton's
@@ -520,10 +521,15 @@ export function registerAuthRoutes(app: Express) {
     return entry.count > max;
   }
 
-  // Per-email signup limiter, layered on top of the per-IP one. Uses the same
-  // bounded Map (different keyspace) so we don't grow another unbounded store.
-  function checkEmailSignupRateLimit(email: string, max = 3, windowMs = 3600000): boolean {
-    return checkAuthRateLimit(`signup_email:${email.toLowerCase()}`, max, windowMs);
+  // The Map above is per serverless instance, so on its own it never trips in
+  // production (attempts are spread across instances). The sensitive endpoints
+  // also count in the database, which every instance shares. Fail-open: if the
+  // shared store is unavailable the in-memory answer stands (auth-rate-limit.ts).
+  const sharedOverLimit = createSharedRateLimiter(() => getSupabaseAuth());
+  async function overAuthLimit(scope: string, id: string, max: number, windowMs: number): Promise<boolean> {
+    const local = checkAuthRateLimit(id, max, windowMs);
+    const shared = await sharedOverLimit(scope, id, max, windowMs);
+    return local || shared;
   }
 
   // Optional Cloudflare Turnstile verification. No-op if CAPTCHA_SECRET is
@@ -549,7 +555,7 @@ export function registerAuthRoutes(app: Express) {
   // Sign up with email/password
   app.post("/api/auth/signup", async (req: Request, res: Response) => {
     const clientIp = getClientIp(req);
-    if (checkAuthRateLimit(clientIp, 5, 300000)) { // 5 signups per 5 minutes per IP
+    if (await overAuthLimit("signup", clientIp, 5, 300000)) { // 5 signups per 5 minutes per IP
       return res.status(429).json({ error: "Too many signup attempts. Please wait and try again." });
     }
 
@@ -569,7 +575,7 @@ export function registerAuthRoutes(app: Express) {
 
     // Per-email rate limit (stops one IP from cycling addresses, and stops
     // distributed attackers from hammering a single target email).
-    if (checkEmailSignupRateLimit(email)) {
+    if (await overAuthLimit("signup_email", `signup_email:${email.toLowerCase()}`, 3, 3600000)) {
       return res.status(429).json({ error: "Too many signup attempts for this email. Please wait and try again." });
     }
 
@@ -615,7 +621,7 @@ export function registerAuthRoutes(app: Express) {
   // Sign in with email/password
   app.post("/api/auth/signin", async (req: Request, res: Response) => {
     const clientIp = getClientIp(req);
-    if (checkAuthRateLimit(clientIp)) {
+    if (await overAuthLimit("signin", clientIp, 10, 60000)) {
       return res.status(429).json({ error: "Too many login attempts. Please wait a minute and try again." });
     }
 
@@ -704,7 +710,7 @@ export function registerAuthRoutes(app: Express) {
   // Change password (authenticated)
   app.post("/api/auth/change-password", async (req: Request, res: Response) => {
     const clientIp = getClientIp(req);
-    if (checkAuthRateLimit(clientIp, 5, 300000)) {
+    if (await overAuthLimit("change_password", clientIp, 5, 300000)) {
       return res.status(429).json({ error: "Too many password change attempts. Please wait and try again." });
     }
 
@@ -754,7 +760,7 @@ export function registerAuthRoutes(app: Express) {
   // Forgot password — sends a reset link email via Supabase
   app.post("/api/auth/forgot-password", async (req: Request, res: Response) => {
     const clientIp = getClientIp(req);
-    if (checkAuthRateLimit(clientIp, 3, 300000)) {
+    if (await overAuthLimit("forgot_password", clientIp, 3, 300000)) {
       return res.status(429).json({ error: "Too many reset requests. Please wait and try again." });
     }
 
@@ -787,7 +793,7 @@ export function registerAuthRoutes(app: Express) {
   // Only a token minted by the recovery flow is accepted (see isRecoverySession).
   app.post("/api/auth/reset-password", async (req: Request, res: Response) => {
     const clientIp = getClientIp(req);
-    if (checkAuthRateLimit(clientIp, 5, 300000)) {
+    if (await overAuthLimit("reset_password", clientIp, 5, 300000)) {
       return res.status(429).json({ error: "Too many reset attempts. Please wait and try again." });
     }
 

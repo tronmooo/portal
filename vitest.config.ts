@@ -486,6 +486,7 @@ export default defineConfig({
       // Operational guards: one Node version, no deprecated action runtimes,
       // the production watchdog, weekly CI, Dependabot.
       'tests/ops-guards.test.ts',
+      'tests/auth-rate-limit-shared.test.ts',
       'tests/sync-rules-guards.test.ts',
       // 2026-10-16 Item Enrichment Layer: specific foods are refined from
       // product/label data AFTER the base entry is saved; user values win.
