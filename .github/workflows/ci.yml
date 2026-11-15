@@ -12,6 +12,10 @@ on:
     - cron: "41 13 * * 1"
   workflow_dispatch:
 
+# Least privilege: this workflow only reads the repository.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
