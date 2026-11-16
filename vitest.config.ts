@@ -487,6 +487,7 @@ export default defineConfig({
       // the production watchdog, weekly CI, Dependabot.
       'tests/ops-guards.test.ts',
       'tests/auth-rate-limit-shared.test.ts',
+      'tests/destructive-intent-gate.test.ts',
       'tests/sync-rules-guards.test.ts',
       // 2026-10-16 Item Enrichment Layer: specific foods are refined from
       // product/label data AFTER the base entry is saved; user values win.

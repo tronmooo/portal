@@ -183,6 +183,7 @@ import { detectRecurrenceFreq, parseRecurrence, withAnchorDay } from "@shared/re
 import { resolveTaskActor } from "@shared/task-actor";
 import { annualLabelEvent, profileIsNamedBy, personNamedByTitle } from "@shared/birthday-event";
 import { hasExplicitProfileCreateIntent, looksLikeTypoOf, NAMED_BEING_TYPES, type ProfileSuggestion } from "@shared/profile-intent";
+import { isDestructiveToolCall, userAskedForDestruction, destructionRefusal } from "@shared/destructive-intent";
 import { beginProfileSuggestions, noteProfileSuggestion, finishProfileSuggestions } from "./profile-suggestions";
 import { detectDocFieldIntentWithHistory, lookupDocField, looksLikeDocFieldFollowUp, type DocFieldIntent, type DocFieldLookupResult } from "@shared/doc-field-lookup";
 import { detectFactQuestion, lookupStoredFact, type FactSources } from "@shared/fact-lookup";
@@ -7526,6 +7527,18 @@ export async function executeTool(name: string, input: any, userId?: string): Pr
 }
 
 async function executeToolInner(name: string, input: any, userId?: string): Promise<any> {
+  // DESTRUCTIVE RULE (shared/destructive-intent, security audit 2026-11-15):
+  // a delete/merge/undo runs only when the USER'S OWN words asked for it, or
+  // they are answering the assistant's question about one. Every chat path
+  // threads the typed message as `__userMessage`; text from an uploaded file
+  // or a tool result never reaches this check. Internal delegations (no
+  // `__userMessage` key) were already gated at the call that led to them.
+  if (input && typeof input === "object" && "__userMessage" in input && isDestructiveToolCall(name, input)) {
+    if (!userAskedForDestruction((input as any).__userMessage, (input as any).__lastAssistantMessage)) {
+      logger.warn("ai", `destructive tool ${name} refused: the user's message did not ask for it`);
+      return destructionRefusal(name);
+    }
+  }
   // A2 fix: userId scopes the in-memory dedup map; without this two users
   // sending the same command within 30s would collide.
   const dedupUser = userId || "_global";
@@ -16166,6 +16179,15 @@ async function processMessageInner(userMessage: string, conversationHistory: Arr
     logger.info("ai", `[turn ${turnId.slice(0, 8)}] intent ${turnPlan.intents.filter(isActionable).map((i) => `${i.entity}/${i.operation}@${i.confidence}`).join(" + ")}${turnPlan.exhaustive ? "" : " (partial)"}${turnIntent.fields?.name ? ` name="${turnIntent.fields.name}"` : ""}`);
   }
   /** Prior USER messages only — the corpus stale-replay detection matches against. */
+  // The assistant's previous reply, for the destructive-tool gate.
+  const lastAssistantReply: string = (() => {
+    const h = conversationHistory || [];
+    for (let i = h.length - 1; i >= 0; i--) {
+      if (h[i]?.role === "assistant" && typeof h[i].content === "string") return h[i].content;
+      if (h[i]?.role === "user") continue;
+    }
+    return "";
+  })();
   const priorUserMessages: string[] = (conversationHistory || [])
     .filter((m) => m?.role === "user" && typeof m.content === "string")
     .map((m) => m.content);
@@ -17820,6 +17842,9 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
             ...validation.normalized,
             __userMessage: userMessage,
             ...(roundLogsHeartRate ? { __heartRateLoggedSeparately: true } : {}),
+            // Only destructive calls need the assistant's previous reply (to
+            // recognise "yes" as the answer to "delete X?").
+            ...(isDestructiveToolCall(toolUse.name, validation.normalized) ? { __lastAssistantMessage: lastAssistantReply } : {}),
           };
           // Pre-write snapshot for update/delete tools (one list read) — gives
           // the action ledger a `before` for reapply/recreate undo plans.

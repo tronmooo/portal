@@ -66,6 +66,8 @@ export function isInternalDirective(text: unknown): boolean {
 
 /** Generic, honest replacements per failure shape. */
 const GENERIC_BY_TOOL: Array<[RegExp, string]> = [
+  // First: a delete that did not run must never read as "couldn't save".
+  [/^delete_|^undo_|^execute_bulk_action$/i, "Nothing was deleted."],
   [/habit/i, "I didn't create a habit for that."],
   [/tracker/i, "I couldn't log that entry."],
   [/profile|asset/i, "I couldn't save that record."],
