@@ -1,0 +1,1 @@
+{"name":"portol-tutorial-studio","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs","record":"node record.mjs","discover":"node discover.mjs","render":"python3 render.py"},"dependencies":{"playwright":"1.56.1"}}

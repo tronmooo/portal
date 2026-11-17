@@ -1,0 +1,20 @@
+// Run once in a trusted operator environment; never upload the output.
+import {randomBytes} from 'node:crypto';
+import {writeFile} from 'node:fs/promises';
+const base='https://portol.me';
+const email=`tutorial-studio-${Date.now()}-${randomBytes(4).toString('hex')}@example.com`;
+const password=randomBytes(30).toString('base64url')+'aA9!';
+const output=process.env.TUTORIAL_CREDENTIAL_OUTPUT || '/tmp/portol-tutorial-credentials.json';
+await writeFile(output,JSON.stringify({PORTOL_TUTORIAL_EMAIL:email,PORTOL_TUTORIAL_PASSWORD:password,provisioning:'pending'}),{mode:0o600,flag:'wx'});
+const response=await fetch(base+'/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
+if(!response.ok) throw new Error(`Dedicated signup failed: ${response.status()}`);
+const result=await response.json();
+const auth={Authorization:`Bearer ${result.session.access_token}`,'Content-Type':'application/json'};
+const me=await fetch(base+'/api/auth/me',{headers:auth}).then(r=>r.json());
+if(me.user?.id!==result.user.id || me.user.email!==email) throw new Error('New account identity could not be confirmed');
+const profile=await fetch(base+'/api/profiles',{method:'POST',headers:auth,body:JSON.stringify({name:'Tutorial Studio',type:'person',fields:{notes:'Synthetic dedicated tutorial test profile. No customer data.'}})});
+if(!profile.ok) throw new Error('Profile creation failed; account already created. Do not retry signup.');
+const p=await profile.json();
+const config={PORTOL_TUTORIAL_EMAIL:email,PORTOL_TUTORIAL_PASSWORD:password,PORTOL_TUTORIAL_USER_ID:result.user.id,PORTOL_TUTORIAL_PROFILE_ID:p.id};
+await writeFile(output,JSON.stringify(config),{mode:0o600});
+console.log('Dedicated account and Tutorial Studio profile created. Credentials saved privately; never commit or upload them.');
