@@ -12237,7 +12237,7 @@ function LinkedLiabilitiesRelTab({ profileId, profileType }: { profileId: string
 export { ConnectionsTab, HistoryTab } from "@/components/ProfileSharedTabs";
 import { ConnectionsTab, HistoryTab } from "@/components/ProfileSharedTabs";
 
-function getTabsForType(type: string, profile?: any): TabDef[] {
+export function getTabsForType(type: string, profile?: any): TabDef[] {
   const assetSubtype = type === "asset" && profile?.fields?.assetSubtype ? String(profile.fields.assetSubtype) : null;
   const baseTabs = assetSubtype
     ? (ASSET_SUBTYPE_TABS[assetSubtype] || ASSET_SUBTYPE_TABS.high_value_item)
@@ -12271,7 +12271,11 @@ function getTabsForType(type: string, profile?: any): TabDef[] {
         case "loan-detail": return !!(profile.fields?.interestRate || profile.fields?.loanBalance ||
           profile.fields?.monthlyPayment || (profile.relatedObligations || []).length > 0);
         case "notes": return !!(profile.notes && profile.notes.trim());
-        case "timeline": return ((profile.relatedEvents || []).length + (profile.relatedTasks || []).length) > 0;
+        // The Activity tab appears when there IS activity. It lists expenses,
+        // documents and tracker logs too, but this only counted events and
+        // tasks, so an asset whose only activity was an expense had no
+        // Activity tab at all (found by the live walk-through, 2026-11-19).
+        case "timeline": return ((profile.timeline || []).length + (profile.relatedEvents || []).length + (profile.relatedTasks || []).length + (profile.relatedExpenses || []).length) > 0;
         case "billing": return true;
         case "impact": return true;
         case "details": return true;
