@@ -1542,7 +1542,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                       <Input type="number" inputMode="decimal" step="0.01" value={tMonthly} onChange={(e) => setTMonthly(e.target.value)} placeholder="e.g. 1000" data-testid="input-terms-monthly" />
                     </div>
                     <div>
-                      <Label className="text-xs">Remaining term (months)</Label>
+                      <Label className="text-xs">Loan term (months)</Label>
                       <Input type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 60" data-testid="input-terms-term" />
                     </div>
                     <div>
@@ -1593,9 +1593,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                       term they entered vs which is the calculated payoff. The
                       old single row showed "50 mo" while the header KPI showed
                       "58 mo" with no explanation. */}
-                  <Row label="Original term (contract)"
+                  {/* The two numbers answer different questions and must say so:
+                      the term is what was typed into the form; the payoff is
+                      today's balance paid down at the stored payment. "360" beside
+                      "271" with no explanation read as a contradiction. */}
+                  <Row label="Loan term (as entered)"
                     value={terms.remainingTermMonths ? `${terms.remainingTermMonths} mo` : "—"} />
-                  <Row label="Projected payoff (calculated)"
+                  <Row label={(terms.monthlyPayment || summary.monthlyPayment) > 0
+                      ? `Payoff at ${fmtUSD(terms.monthlyPayment || summary.monthlyPayment)}/mo (calculated)`
+                      : "Projected payoff (calculated)"}
                     value={summary.remainingMonths ? `${summary.remainingMonths} mo` : "—"} />
                   <Row label="First payment date" value={fmtDate(terms.firstPaymentDate)} />
                   <Row label="Due day of month"

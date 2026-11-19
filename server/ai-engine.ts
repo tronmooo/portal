@@ -224,9 +224,9 @@ import { signedPrincipal, retractPaymentOfExpense, payBillOccurrence, unpayBillO
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries, stemKey } from "@shared/series-detect";
-import { expenseAttributionName } from "@shared/expense-attribution";
+import { expenseAttributionName, thingNamedInSpend } from "@shared/expense-attribution";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
-import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue } from "@shared/asset-value";
+import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { readMonthlyPayment as sharedReadMonthlyPayment, readBalance as sharedReadBalance } from "@shared/liability-fields";
 import { isRecurringBill as sharedIsRecurringBill } from "@shared/liability-types";
@@ -11042,6 +11042,21 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
             expenseLinkedProfiles.push(target2.id);
             logger.info("ai", `Attribution safety net: recovered forProfile "${target2.name}" for $${parsedAmount} expense from message context`);
           }
+        }
+      }
+      // A THING NAMED OUTRIGHT (shared/expense-attribution thingNamedInSpend):
+      // "$40 on ear pads for my Sony WH-1000XM5" is spent on that asset even
+      // when the model left forProfile off. Only an existing asset whose full
+      // name is in the user's words or the expense's own text, and only one.
+      if (expenseLinkedProfiles.length === 0) {
+        const things = (await storage.getProfiles()).filter((p: any) => isAssetTabProfile(p));
+        const named = thingNamedInSpend(
+          `${String((input as any).__userMessage || "")} . ${input.description || ""} . ${input.vendor || ""}`,
+          things as any[],
+        );
+        if (named) {
+          expenseLinkedProfiles.push(named.id);
+          logger.info("ai", `Expense attribution: "${(named as any).name}" is named in the spend, linking the $${parsedAmount} expense to it`);
         }
       }
       // Default the expense date to today in the user's timezone, not

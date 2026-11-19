@@ -300,6 +300,8 @@ import { isReservedFieldKey } from "@shared/profile-field-identity";
 import { systemFieldEntries } from "@shared/system-fields";
 import { devToolsEnabled } from "@/lib/dev-affordances";
 import { allocatePayment } from "@shared/liability-calc";
+import { expenseShownOnProfile } from "@shared/expense-on-profile";
+import { guessExpenseCategory } from "@shared/expense-category-guess";
 import { deriveLiabilityMetrics, deriveLiabilityAmortization, simulateExtraPayment, payoffProgressPct } from "@shared/liability-derived";
 import { readBalance, readInterestRatePct, readMonthlyPayment, readInterestRateRaw } from "@shared/liability-fields";
 import { calculateStreak } from "@shared/streak";
@@ -4974,6 +4976,14 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
   const [expDesc, setExpDesc] = useState("");
   const [expAmount, setExpAmount] = useState("");
   const [expCategory, setExpCategory] = useState("general");
+  // A category the user PICKED is stored as picked ("General" stays General).
+  // Until they pick, the select follows a guess from the description, the same
+  // way the Finance page's form does, so the choice is visible before saving.
+  const [expCategoryChosen, setExpCategoryChosen] = useState(false);
+  // A required-field error appears once the user has left that field, not the
+  // moment the dialog opens.
+  const [expTouched, setExpTouched] = useState<{ desc: boolean; amount: boolean }>({ desc: false, amount: false });
+  const resetExpenseFormMeta = () => { setExpCategoryChosen(false); setExpTouched({ desc: false, amount: false }); };
   const [expVendor, setExpVendor] = useState("");
   const [expDate, setExpDate] = useState(localTodayISO());
   const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(null);
@@ -5012,10 +5022,10 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
     const source = expensesEmbedCapped && Array.isArray(fullProfileExpenses)
       ? fullProfileExpenses
       : (profile.relatedExpenses || []);
-    return source.filter((e: any) =>
-      Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profileId
-    );
-  }, [profile.relatedExpenses, fullProfileExpenses, expensesEmbedCapped, profileId]);
+    // shared/expense-on-profile: strict ownership on a person's page, every
+    // linked expense on a thing's page.
+    return source.filter((e: any) => expenseShownOnProfile(e, profileId, profile.type));
+  }, [profile.relatedExpenses, fullProfileExpenses, expensesEmbedCapped, profileId, profile.type]);
   const obligations = profile.relatedObligations;
 
   // ── type flags ─────────────────────────────────────────────────
@@ -5168,13 +5178,20 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
   // ── mutations ──────────────────────────────────────────────────
   const createExpenseMutation = useMutation({
     mutationFn: async () => {
+      // The expense is created UNDER this profile, in one write. It used to
+      // be created under the account holder and linked afterwards, which made
+      // this profile the second entry of linkedProfiles, so this tab (which
+      // lists what the profile owns) never showed what it had just saved.
+      // `categoryChosen` tells the server the category is the user's own
+      // pick, so it is stored as picked and not re-categorized.
       const res = await apiRequest("POST", "/api/expenses", {
-        description: expDesc, amount: Number(expAmount), category: expCategory,
+        description: expDesc, amount: Number(expAmount),
+        category: expCategory,
+        ...(expCategoryChosen ? { categoryChosen: true } : {}),
         vendor: expVendor || undefined, date: expDate,
+        linkedProfiles: [profileId],
       });
-      const expense = await res.json();
-      await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "expense", entityId: expense.id });
-      return expense;
+      return res.json();
     },
     onSuccess: () => {
       const saved = expDesc;
@@ -5759,6 +5776,7 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
       {/* Add Expense Dialog */}
       <Dialog open={showAddExpense} onOpenChange={(open) => {
         setShowAddExpense(open);
+        resetExpenseFormMeta();
         if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(localTodayISO()); }
       }}>
         <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-add-expense">
@@ -5770,34 +5788,40 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
             <div>
               <label className="text-xs font-medium text-muted-foreground">Description</label>
               <Input
-                className={`mt-1 ${showAddExpense && expDesc.trim() === "" ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                className={`mt-1 ${expTouched.desc && expDesc.trim() === "" ? "border-destructive focus-visible:ring-destructive" : ""}`}
                 value={expDesc}
-                onChange={e => setExpDesc(e.target.value)}
+                onChange={e => {
+                  const v = e.target.value;
+                  setExpDesc(v);
+                  if (!expCategoryChosen) setExpCategory(guessExpenseCategory(v, expVendor) || "general");
+                }}
+                onBlur={() => setExpTouched(t => ({ ...t, desc: true }))}
                 placeholder="e.g. Vet visit"
                 data-testid="input-expense-desc"
               />
-              {showAddExpense && expDesc.trim() === "" && (
+              {expTouched.desc && expDesc.trim() === "" && (
                 <p className="text-xs text-destructive mt-1">Description is required</p>
               )}
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Amount ($)</label>
               <Input
-                className={`mt-1 ${showAddExpense && (expAmount === "" || Number(expAmount) <= 0) ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                className={`mt-1 ${expTouched.amount && (expAmount === "" || Number(expAmount) <= 0) ? "border-destructive focus-visible:ring-destructive" : ""}`}
                 type="number"
                 step="0.01"
                 value={expAmount}
                 onChange={e => setExpAmount(e.target.value)}
+                onBlur={() => setExpTouched(t => ({ ...t, amount: true }))}
                 placeholder="0.00"
                 data-testid="input-expense-amount"
               />
-              {showAddExpense && (expAmount === "" || Number(expAmount) <= 0) && (
+              {expTouched.amount && (expAmount === "" || Number(expAmount) <= 0) && (
                 <p className="text-xs text-destructive mt-1">Amount must be greater than 0</p>
               )}
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Category</label>
-              <Select value={expCategory} onValueChange={setExpCategory}>
+              <Select value={expCategory} onValueChange={(v) => { setExpCategory(v); setExpCategoryChosen(true); }}>
                 <SelectTrigger className="mt-1" data-testid="select-expense-category"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {expenseCategories.map(c => <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>)}
@@ -12963,7 +12987,12 @@ export default function ProfileDetailPage() {
     // redundant cold refetch when navigating back to a profile you just saw.
     staleTime: 30 * 1000,
     gcTime: 10 * 60 * 1000,
-    refetchOnMount: false,
+    // Re-opening renders from cache — UNLESS a write invalidated this profile
+    // while its page was closed. `false` ignored that too: a payment made
+    // from the Bills popup, the dashboard or the chat marked the detail stale,
+    // nothing was mounted to refetch it, and the reopened header still showed
+    // the pre-payment balance ($3,200 beside a list that said $2,766.64).
+    refetchOnMount: (query) => query.state.isInvalidated,
   });
 
   // Page-level all-profiles — powers the new breadcrumb + summary + tree.
@@ -13264,7 +13293,7 @@ export default function ProfileDetailPage() {
     if (tabSet.has("trackers")) out.push({ label: "Docs", countTo: profile.relatedDocuments.length, icon: FileText, testId: "hero-stat-docs" });
     if (tabSet.has("finances")) out.push({
       label: ptype === 'subscription' ? "Billing" : "Expenses",
-      countTo: (profile.relatedExpenses || []).filter((e: any) => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profile.id).length,
+      countTo: (profile.relatedExpenses || []).filter((e: any) => expenseShownOnProfile(e, profile.id, profile.type)).length,
       icon: DollarSign, testId: "hero-stat-expenses",
     });
     if (tabSet.has("tasks")) out.push({ label: "Tasks", countTo: profile.relatedTasks.length, icon: ListTodo, testId: "hero-stat-tasks" });

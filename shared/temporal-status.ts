@@ -43,7 +43,7 @@ import { normalizeDateString } from "./extraction-normalize";
 import { isRecurringBillRecord, liabilityFamily, liabilityTypeKeyOf } from "./liability-types";
 import { currentBillDueDate, effectiveDueDate, isEndedBillFields, isPausedBillFields, isOneTimeFrequency, isSettledOccurrence } from "./liability-recurrence";
 import { nextLoanDueDate } from "./loan-facts";
-import { readStoredDueDate } from "./liability-fields";
+import { readStoredDueDate, storedDueDateKey } from "./liability-fields";
 import { isActiveObligation } from "./obligation-windows";
 import { taskOccurrenceDates, taskRepeats } from "./task-occurrences";
 import { nextOccurrence as nextEventOccurrence } from "./recurring-dates";
@@ -157,7 +157,16 @@ function liabilityStatus(record: TemporalRecord, todayISO: string, opts: Tempora
 
   const family = liabilityFamily(typeKey);
   if (family === "one_time") {
-    return classifyDate(readStoredDueDate(fields), todayISO, "stored_date", opts);
+    // A FIRST payment date is where the schedule started, not when the next
+    // payment is due. Once it has passed it is history: a debt opened in 2022
+    // read "1601d overdue" the day it was added. Its payment day, counted
+    // from today, is what is owed next.
+    const key = storedDueDateKey(fields);
+    const stored = readStoredDueDate(fields);
+    if (key && /^first_?payment/i.test(key) && stored && stored < String(todayISO).slice(0, 10)) {
+      return classifyDate(nextLoanDueDate(fields, todayISO), todayISO, "loan_schedule", opts);
+    }
+    return classifyDate(stored, todayISO, "stored_date", opts);
   }
   // Loans and cards: the payment day counted from today (never the origin).
   return classifyDate(nextLoanDueDate(fields, todayISO), todayISO, "loan_schedule", opts);

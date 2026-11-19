@@ -27,7 +27,8 @@ import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isHoldingVisible, isOwnershipKnown } from "@/lib/holding-visibility";
-import { countsTowardNetWorth, liabilityFamily } from "@shared/liability-types";
+import { countsTowardNetWorth, liabilityFamily, liabilityTypeKeyOf, isRecurringBillRecord } from "@shared/liability-types";
+import { getRecordTemporalStatus } from "@shared/temporal-status";
 import { getPaymentClassification } from "@shared/domain/payment-classification";
 import { pageTitleFor } from "@shared/domain/route-metadata";
 
@@ -5747,7 +5748,10 @@ export default function TrackersPage() {
       const c = (f.subtype || f.kind || f.category || "Subscription") as string;
       return String(c).trim().replace(/_/g, " ") || "Subscription";
     }
-    const c = (f.subtype || f.liabilityType || f.kind || f.type || f.category || "Other") as string;
+    // The subtype lives in the `type_key` COLUMN (what the detail page reads);
+    // the fields are legacy spellings. Skipping the column made a mortgage read
+    // "Other" here and "Mortgage" on its own page.
+    const c = (liabilityTypeKeyOf(p) || f.kind || f.type || f.category || "Other") as string;
     return String(c).trim().replace(/_/g, " ") || "Other";
   };
 
@@ -7073,9 +7077,16 @@ export default function TrackersPage() {
                 // spelling, else the one the schedule derives from `dueDay` /
                 // the last payment. A loan with only "due on the 15th" read
                 // "No due date" here while the calendar put it on the 15th.
-                const rawDue = resolveLiabilityDueDate({ ...fin, ...fields })
-                  ?? deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(TRACKER_TZ)).nextDueDate
-                  ?? fin.dueDate;
+                // A DEBT (loan, card, one-time balance) asks the same engine its
+                // own page asks (shared/temporal-status): the payment day
+                // counted from today. Reading the stored date first let a loan's
+                // first-payment date from 2022 win, and the card of a loan added
+                // today said "1601d overdue" while its page said "Due in 13d".
+                const rawDue = isRecurringBillRecord(liab)
+                  ? (resolveLiabilityDueDate({ ...fin, ...fields })
+                    ?? deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(TRACKER_TZ)).nextDueDate
+                    ?? fin.dueDate)
+                  : (getRecordTemporalStatus({ kind: "liability", fields: { ...fin, ...fields }, row: liab }, tzUserToday(TRACKER_TZ)).nextOccurrence ?? null);
                 const due = fmtDue(rawDue);
                 const dueIn = daysUntilDue(rawDue);
                 const freqUnit = subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo';

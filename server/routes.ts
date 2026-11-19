@@ -7462,8 +7462,14 @@ Rules:
     if (req.body.vendor) req.body.vendor = sanitize(req.body.vendor);
 
     // Wave 1 #1 — AI categorize when caller didn't provide a meaningful category.
-    // Only fires for missing / "other" / "general" so we don't override deliberate picks.
-    if (!req.body.category || req.body.category === "other" || req.body.category === "general") {
+    // Only fires for missing / "other" / "general" — and never when the form
+    // says the category is the user's own pick (`categoryChosen`). "General" is
+    // both a form's default and a real choice; without that flag a deliberate
+    // "General" was indistinguishable from "not given" and was stored as
+    // Entertainment (2026-11-19).
+    const categoryChosen = req.body.categoryChosen === true;
+    delete req.body.categoryChosen;
+    if (!categoryChosen && (!req.body.category || req.body.category === "other" || req.body.category === "general")) {
       try {
         const decision = await aiPickIndex({
           task: "expense-create-category",

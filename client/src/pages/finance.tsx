@@ -393,7 +393,7 @@ export default function FinancePage() {
   // EMPTIED form (parseFloat("") = NaN → 400). The payload is now built in the
   // click handler and passed as mutation VARIABLES — captured at call time and
   // immune to re-renders. Same fix applied to paycheck + income below.
-  type NewExpenseVars = { description: string; amount: number; category: string; vendor?: string; date: string; profileId?: string; accountId?: string };
+  type NewExpenseVars = { description: string; amount: number; category: string; categoryChosen?: boolean; vendor?: string; date: string; profileId?: string; accountId?: string };
   const addExpenseMutation = useMutation<{ amount: number; description: string; created: any }, Error, NewExpenseVars, { prev: [readonly unknown[], unknown][]; tempId: string }>({
     mutationFn: async (vars) => {
       // Defense-in-depth: validate amount before sending. The submit button
@@ -414,6 +414,8 @@ export default function FinancePage() {
         description: desc,
         amount: vars.amount,
         category: vars.category,
+        // The user's own pick is stored as picked (never re-categorized).
+        ...(vars.categoryChosen ? { categoryChosen: true } : {}),
         vendor: vars.vendor || undefined,
         date: expenseDate,
         tags: [],
@@ -1281,6 +1283,7 @@ export default function FinancePage() {
                         description: newExpense.description,
                         amount: amt,
                         category: newExpense.category,
+                        categoryChosen: categoryPicked || undefined,
                         vendor: newExpense.vendor || undefined,
                         date: newExpense.date,
                         profileId: expenseProfileId || undefined,

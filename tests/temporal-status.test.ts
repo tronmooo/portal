@@ -147,3 +147,31 @@ describe("classifyDate", () => {
     expect(classifyDate("2026-09-30", "not-a-day", "stored_date").status).toBe("none");
   });
 });
+
+// 2026-11-19 (owner report): a loan added that day showed "1601d overdue".
+// 1601 days before Nov 18 2026 is 2022-07-01 — its FIRST payment date. With no
+// recognised subtype the debt is "one_time", and that branch classified the
+// stored first-payment date as if it were the next due date.
+describe("getRecordTemporalStatus — a first payment date is history, not the next due date", () => {
+  const TODAY = "2026-11-18";
+  it("an untyped debt with only a past first payment date is not overdue", () => {
+    const st = getRecordTemporalStatus({ kind: "liability", fields: { firstPaymentDate: "2022-07-01", balance: 312400 }, row: { type: "liability" } }, TODAY);
+    expect(st.status).not.toBe("overdue");
+    expect(st.overdueBy).toBeNull();
+    // The payment day (the 1st), counted from today.
+    expect(st.nextOccurrence).toBe("2026-12-01");
+  });
+  it("a typed mortgage answers the same way (the page and the list agree)", () => {
+    const st = getRecordTemporalStatus({ kind: "liability", fields: { firstPaymentDate: "2022-07-01", balance: 312400 }, row: { type: "liability", type_key: "mortgage" } }, TODAY);
+    expect(st.nextOccurrence).toBe("2026-12-01");
+  });
+  it("a one-time debt's real past due date is still overdue", () => {
+    const st = getRecordTemporalStatus({ kind: "liability", fields: { dueDate: "2026-11-01", balance: 400 }, row: { type: "liability", type_key: "medical_debt" } }, TODAY);
+    expect(st.status).toBe("overdue");
+    expect(st.overdueBy).toBe(17);
+  });
+  it("a first payment date still in the future is when the first payment is due", () => {
+    const st = getRecordTemporalStatus({ kind: "liability", fields: { firstPaymentDate: "2026-12-15", balance: 400 }, row: { type: "liability" } }, TODAY);
+    expect(st.nextOccurrence).toBe("2026-12-15");
+  });
+});
