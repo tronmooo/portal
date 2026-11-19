@@ -228,8 +228,8 @@ import { expenseAttributionName, thingNamedInSpend } from "@shared/expense-attri
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
-import { readMonthlyPayment as sharedReadMonthlyPayment, readBalance as sharedReadBalance } from "@shared/liability-fields";
-import { isRecurringBill as sharedIsRecurringBill } from "@shared/liability-types";
+import { readMonthlyPayment as sharedReadMonthlyPayment, readBalance as sharedReadBalance, liabilityReceiptFields } from "@shared/liability-fields";
+import { isRecurringBill as sharedIsRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
 import { getRecordTemporalStatus as sharedTemporalStatus } from "@shared/temporal-status";
 import { deriveLiabilityMetrics as sharedDeriveLiabilityMetrics } from "@shared/liability-derived";
@@ -3840,7 +3840,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Profiles ---
   {
     name: "create_profile",
-    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty (subtype auto-detected: high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable). Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday.\n\n*** DO NOT use type:'loan' OR create profiles for debts/loans/credit cards/mortgages/student loans/HELOC/BNPL/IRS debt with this tool. Use the dedicated `create_liability` tool instead — it sets the correct subtype, structured fields, and unlocks the Payments/Payoff/Schedule/Linked/Docs/Activity tabs. The 'loan' type here is LEGACY and must not be used for new entries. ***\n\nIMPORTANT: When creating a vehicle, asset, subscription, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.\n\nNAMING: Do NOT put the owner's name in the profile `name`. Name the entity itself — 'Ford F250 2025', NOT 'Craig's Ford F250 2025'; 'Honda Civic', NOT \"Bob's Honda Civic\". Ownership belongs in forProfile, never in the name.",
+    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty (subtype auto-detected: high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable). Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday.\n\n*** DO NOT use type:'loan' OR create profiles for debts/loans/credit cards/mortgages/student loans/HELOC/BNPL/IRS debt with this tool. Use the dedicated `create_liability` tool instead — it sets the correct subtype, structured fields, and unlocks the Payments/Payoff/Schedule/Linked/Docs/Activity tabs. The 'loan' type here is LEGACY and must not be used for new entries. ***\n\nIMPORTANT: When creating a vehicle, asset, subscription, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.\n\nNAMING: Keep the words the user used for the thing, including what kind of thing it is: 'Sony WH-1000XM5 headphones', NOT 'Sony WH-1000XM5'; 'Goodyear tires', NOT 'Goodyear'. Do NOT put the owner's name in the profile `name`. Name the entity itself — 'Ford F250 2025', NOT 'Craig's Ford F250 2025'; 'Honda Civic', NOT \"Bob's Honda Civic\". Ownership belongs in forProfile, never in the name.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -6441,7 +6441,7 @@ CONFIRMATION IS FOR DELETES (and the bulk/merge previews below) — NOTHING ELSE
 - Example success: "✅ Marked Joe's Water habit done for today (April 9). His streak is now 3 days."
 - Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
 - VERIFICATION (NEVER claim an unverified write): every write tool result carries "success". success:false means the write was read back from the database and was NOT there — the data was NOT saved. Say plainly that it failed and invite them to retry; NEVER say "logged", "saved", "done", or restate the value as if it were stored. This applies to tracker logs exactly like everything else: "logged 24 oz" on a success:false result is a lie about the user's data. Write tools also return a "verification" object; database_record_exists:false after a create/update means the same thing. After a delete, database_record_exists:false means the delete IS confirmed.
-- PROFILE/ASSET SAVE CONFIRMATION: after update_profile or create_profile the server writes the confirmation itself from "fieldReceipt" (a FRESH database read after the write): a ✓/✗ line per field and where it was saved. Do NOT restate the fields, the record name or "Saved to" — it would be dropped as a duplicate. Reply with NOTHING about the update unless something else needs saying (an answer to a question in the same message, another action you took, or a field that did not save and what to do about it).
+- PROFILE/ASSET/DEBT SAVE CONFIRMATION: after update_profile, create_profile, create_liability or update_liability the server writes the confirmation itself from "fieldReceipt" (a FRESH database read after the write): a ✓/✗ line per field and where it was saved. Do NOT restate the fields, the record name or "Saved to" — it would be dropped as a duplicate. Reply with NOTHING about the update unless something else needs saying (an answer to a question in the same message, another action you took, or a field that did not save and what to do about it).
   Facts about something the user ALREADY has (their car, house, pet) go to update_profile on THAT record — check the profiles in context first and never create_profile a second car. Every stated fact gets a structured field key (color, mileage, drivetrain, vin, licensePlate, trim, …); a fact with no standard key still gets a descriptive camelCase field — never fold it into notes or drop it.
 - READING A SAVED FACT: "how many miles are on my car?" is answered from the record as it is stored NOW (the profile data in context or get_profile_data), never from what was said earlier in this chat.
 - verification.duplicate_count is DIAGNOSTIC ONLY — never mention it. Duplicates are allowed, and the user logging groceries twice does not need to be told they logged groceries before. Do NOT block, merge, delete, or narrate a "similar entry" note, and NEVER describe when an earlier entry was made ("from today", "yesterday") — the count carries no dates and guessing one states a falsehood about the user's data.
@@ -17964,6 +17964,33 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               }
             } catch (e: any) {
               logger.warn("ai", `[field-receipt] create_profile verify skipped: ${e?.message || e}`);
+            }
+          }
+          // The same save → read back → confirm for a DEBT. Its confirmation
+          // used to be the model's own sentence, which is how a 22.9% APR was
+          // reported as 22.99% and a refinance was announced that never
+          // landed: the reply is now built from what the record holds.
+          if ((toolUse.name === "create_liability" || toolUse.name === "update_liability") && result && !(result as any).error && (result as any).id && !(result as any).fieldReceipt
+              // Only a debt record: a "liability" that was redirected to a
+              // recurring bill stores its amount under the bill's own keys.
+              && ["liability", "loan"].includes(String((result as any).type || "")) && !isRecurringBillProfile(result as any)) {
+            try {
+              const asked = liabilityReceiptFields(toolUse.name, inputWithCtx as any);
+              if (Object.keys(asked).length > 0) {
+                const { receipt, readBack } = await verifyProfileWrite(storage as any, {
+                  profileId: (result as any).id,
+                  profileName: (result as any).name || String((inputWithCtx as any).name || ""),
+                  profileType: "liability",
+                  requestedFields: asked,
+                  action: toolUse.name === "create_liability" && (result as any).deduped !== true ? "created" : "updated",
+                });
+                if (readBack) {
+                  (result as any).fieldReceipt = receipt;
+                  (result as any).receiptText = formatFieldReceiptText(receipt);
+                }
+              }
+            } catch (e: any) {
+              logger.warn("ai", `[field-receipt] ${toolUse.name} verify skipped: ${e?.message || e}`);
             }
           }
           // A tool that DEDUPED did not create anything — it found the record

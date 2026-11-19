@@ -74,7 +74,7 @@ export function receiptFieldLabel(key: string): string {
 
 // ── Display ──────────────────────────────────────────────────────────────────
 
-const MONEY_KEYS = /^(currentvalue|purchaseprice|balance|remainingbalance|originalbalance|monthlypayment|price|cost|value|premium|amount)$/i;
+const MONEY_KEYS = /^(currentvalue|purchaseprice|balance|remainingbalance|originalbalance|monthlypayment|minimumpayment|creditlimit|price|cost|value|premium|amount)$/i;
 
 const DRIVETRAIN_NAMES: Record<string, string> = {
   awd: "All-wheel drive (AWD)",
@@ -108,6 +108,10 @@ export function receiptDisplayValue(key: string, value: unknown): string {
   const lk = key.toLowerCase();
   const num = asNumber(value);
   if (lk === "mileage" && num !== null) return `${num.toLocaleString("en-US")} miles`;
+  // A rate is shown exactly as stored (22.9 is "22.9%", never rounded or padded).
+  if ((lk === "interestrate" || lk === "apr") && num !== null) return `${num}%`;
+  if ((lk === "remainingtermmonths" || lk === "termmonths") && num !== null) return `${num} months`;
+  if (lk === "dueday" && num !== null) return `day ${num} of the month`;
   if (MONEY_KEYS.test(key) && num !== null) {
     return `$${num.toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(num) ? 0 : 2, maximumFractionDigits: 2 })}`;
   }

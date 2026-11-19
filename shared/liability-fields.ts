@@ -191,3 +191,31 @@ export function storedDueDateKey(input: Fields | { fields?: Fields }): string | 
   }
   return null;
 }
+
+/**
+ * What a chat debt tool was asked to save, under the keys the record stores
+ * them by — the "requested" side of the save receipt (shared/field-receipt).
+ * The confirmation for a loan used to be the model's own prose, which is how
+ * a 22.9% APR was reported as 22.99%: the receipt is read back from the
+ * record instead, so the reply can only say what was stored.
+ */
+export function liabilityReceiptFields(
+  tool: "create_liability" | "update_liability",
+  input: Record<string, any> | null | undefined,
+): Record<string, any> {
+  const src: Record<string, any> = tool === "update_liability" ? (input?.changes || {}) : (input || {});
+  const out: Record<string, any> = {};
+  const set = (key: string, value: unknown) => { if (value !== undefined && value !== null && value !== "") out[key] = value; };
+  const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+  set("balance", num(src.currentBalance ?? src.balance));
+  set("originalBalance", num(src.originalBalance));
+  for (const k of ["annualRate", "annualInterestRate", "interestRate", "apr"]) {
+    if (src[k] == null) continue;
+    const pct = rateInputToStoredPct(src[k]);
+    if (pct != null) set("interestRate", pct);
+    break;
+  }
+  for (const k of ["monthlyPayment", "minimumPayment", "creditLimit", "remainingTermMonths", "termMonths", "dueDay"]) set(k, num(src[k]));
+  for (const k of ["lender", "firstPaymentDate"]) set(k, typeof src[k] === "string" ? src[k].trim() : undefined);
+  return out;
+}

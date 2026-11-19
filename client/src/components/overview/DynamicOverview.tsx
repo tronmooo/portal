@@ -675,6 +675,31 @@ export function DynamicOverview({
     retry: false,
   });
 
+  // The read above answers at once from the stored fields. When the server
+  // says a refined layout is still pending (the profile gained or lost a
+  // field), fetch it here and swap it in when it lands. The Overview used to
+  // WAIT for that layout, so an edit that added a field looked unsaved until
+  // a reload.
+  const layoutPending = spec?.layoutPending === true;
+  const layoutFor = spec?.meta?.composedAt;
+  useQuery<OverviewSpec>({
+    queryKey: ["/api/profiles", profileId, "overview", "layout", layoutFor],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${profileId}/overview?layout=wait`);
+      const refined: OverviewSpec = await res.json();
+      // Only if nothing newer replaced the composition this layout was for.
+      const current = queryClient.getQueryData<OverviewSpec>(["/api/profiles", profileId, "overview"]);
+      if (refined?.identity && current?.meta?.composedAt === layoutFor) {
+        queryClient.setQueryData(["/api/profiles", profileId, "overview"], refined);
+      }
+      return refined;
+    },
+    enabled: layoutPending && !!layoutFor,
+    staleTime: Infinity,
+    gcTime: 0,
+    retry: false,
+  });
+
   if (isLoading) {
     return (
       <div className="space-y-3" data-testid="overview-loading">

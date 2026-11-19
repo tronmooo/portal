@@ -317,7 +317,7 @@ export async function getSchemaHints(
   storage: IStorage,
   profileId: string,
   input: ComposeInput,
-  opts: { refresh?: boolean; allowModel?: boolean } = {},
+  opts: { refresh?: boolean; allowModel?: boolean; deferModel?: boolean; out?: { pending?: boolean } } = {},
 ): Promise<OverviewSchemaHints | null> {
   const signature = overviewSignature({
     type: input.entity.type,
@@ -327,12 +327,16 @@ export async function getSchemaHints(
     hasDocuments: (input.documents || []).length > 0,
   });
   const cacheKey = `${SCHEMA_CACHE_PREFIX}${profileId}`;
+  // The last layout answer, kept even when its signature no longer matches:
+  // a deferred read composes with it rather than wait for a new one.
+  let staleHints: OverviewSchemaHints | null = null;
 
   if (!opts.refresh) {
     try {
       const raw = await storage.getPreference(cacheKey);
       if (raw) {
         const cached = JSON.parse(raw) as CachedSchema;
+        try { staleHints = normalizeSchemaHints(cached.hints, Object.keys(input.entity.fields || {})); } catch { staleHints = null; }
         const age = Date.now() - new Date(cached.generatedAt).getTime();
         // Signature mismatch = the entity's SHAPE changed. The layout is stale
         // even though the numbers are always fresh, so re-reason it.
@@ -346,6 +350,17 @@ export async function getSchemaHints(
   }
 
   if (opts.allowModel === false || !process.env.ANTHROPIC_API_KEY) return null;
+
+  // DEFERRED: the page's own read never waits for the model. Adding a field
+  // changes the signature, and the next Overview read used to block on a
+  // model call for seconds: the edit had saved, but the Overview kept showing
+  // the old data until a reload (by which time the answer was cached). The
+  // values are composed now, from the stored fields; only the LAYOUT advice
+  // is pending, and the client asks for it separately (`?layout=wait`).
+  if (opts.deferModel) {
+    if (opts.out) opts.out.pending = true;
+    return staleHints;
+  }
 
   try {
     const spec = selectModel("fast");
@@ -377,10 +392,13 @@ export async function getSchemaHints(
 export async function buildOverviewSpec(
   storage: IStorage,
   profileId: string,
-  opts: { refresh?: boolean; allowModel?: boolean; now?: Date } = {},
+  opts: { refresh?: boolean; allowModel?: boolean; deferModel?: boolean; now?: Date } = {},
 ): Promise<OverviewSpec | null> {
   const input = await buildOverviewInput(storage, profileId, opts.now);
   if (!input) return null;
-  const hints = await getSchemaHints(storage, profileId, input, opts);
-  return composeOverview({ ...input, hints });
+  const out: { pending?: boolean } = {};
+  const hints = await getSchemaHints(storage, profileId, input, { ...opts, out });
+  const spec = composeOverview({ ...input, hints });
+  // Tells the client a refined layout exists to fetch; the values are final.
+  return out.pending ? { ...spec, layoutPending: true } : spec;
 }

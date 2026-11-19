@@ -125,3 +125,44 @@ describe("update_liability replaces the stored value", () => {
     expect(readOriginalBalance(loan())).toBe(312400);
   });
 });
+
+// The confirmation for a debt is built from the record, not from the model's
+// sentence (2026-11-19: a 22.9% APR was reported back as 22.99%).
+import { liabilityReceiptFields } from "../shared/liability-fields";
+import { buildFieldReceipt, receiptDisplayValue } from "../shared/field-receipt";
+
+describe("the debt save receipt", () => {
+  it("names what a create was asked to store, under the stored keys", () => {
+    expect(liabilityReceiptFields("create_liability", { name: "Chase Sapphire", currentBalance: 3200, annualRate: 22.9, minimumPayment: 35, dueDay: 15, lender: "Chase" }))
+      .toEqual({ balance: 3200, interestRate: 22.9, minimumPayment: 35, dueDay: 15, lender: "Chase" });
+  });
+  it("reads an update's changes, whichever spelling the model used for the rate", () => {
+    expect(liabilityReceiptFields("update_liability", { name: "x", changes: { annualRate: 0.055, currentBalance: 300000 } }))
+      .toEqual({ balance: 300000, interestRate: 5.5 });
+    expect(liabilityReceiptFields("update_liability", { name: "x", changes: {} })).toEqual({});
+  });
+  it("prints the rate exactly as stored", () => {
+    expect(receiptDisplayValue("interestRate", 22.9)).toBe("22.9%");
+    expect(receiptDisplayValue("interestRate", 6.25)).toBe("6.25%");
+    expect(receiptDisplayValue("balance", 3200)).toBe("$3,200");
+  });
+  it("a value the record does not hold is not confirmed", () => {
+    const asked = liabilityReceiptFields("update_liability", { changes: { annualRate: 5.5, currentBalance: 300000 } });
+    const receipt = buildFieldReceipt({
+      profileId: "l-wf", profileName: "Wells Fargo Mortgage", profileType: "liability", requestedFields: asked, action: "updated",
+      stored: { id: "l-wf", name: "Wells Fargo Mortgage", type: "liability", fields: { balance: 311172.08, interestRate: 6.25 } },
+    } as any);
+    expect(receipt.verifiedCount).toBe(0);
+    expect(receipt.failedKeys.sort()).toEqual(["balance", "interestRate"]);
+  });
+  it("a refinance through the real tool reads back as saved", async () => {
+    await executeTool("update_liability", { name: "Wells Fargo Mortgage", refinance: true, changes: { annualRate: 5.5, currentBalance: 300000 } }, "u1");
+    const stored = db.profiles.find((p) => p.id === "l-wf");
+    const receipt = buildFieldReceipt({
+      profileId: "l-wf", profileName: stored.name, profileType: "liability", action: "updated", stored,
+      requestedFields: liabilityReceiptFields("update_liability", { changes: { annualRate: 5.5, currentBalance: 300000 } }),
+    } as any);
+    expect(receipt.failedKeys).toEqual([]);
+    expect(receipt.lines.map((l: any) => l.display)).toEqual(["$300,000", "5.5%"]);
+  });
+});

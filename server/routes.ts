@@ -6005,6 +6005,9 @@ ${JSON.stringify(ctx, null, 2)}`;
       const spec = await buildOverviewSpec(storage, id, {
         refresh: req.query.refresh === "true",
         allowModel: req.query.ai !== "0",
+        // The page read answers at once from the stored fields; the layout
+        // advice is fetched separately with ?layout=wait (overview-engine).
+        deferModel: req.query.layout !== "wait" && req.query.refresh !== "true",
       });
       if (!spec) return res.status(404).json({ error: "Not found" });
       res.json(spec);

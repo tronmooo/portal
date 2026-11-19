@@ -301,6 +301,7 @@ import { systemFieldEntries } from "@shared/system-fields";
 import { devToolsEnabled } from "@/lib/dev-affordances";
 import { allocatePayment } from "@shared/liability-calc";
 import { expenseShownOnProfile } from "@shared/expense-on-profile";
+import { pendingProfilePatch, applySavedPatch, type EditFormState } from "@/lib/profile-autosave";
 import { guessExpenseCategory } from "@shared/expense-category-guess";
 import { deriveLiabilityMetrics, deriveLiabilityAmortization, simulateExtraPayment, payoffProgressPct } from "@shared/liability-derived";
 import { readBalance, readInterestRatePct, readMonthlyPayment, readInterestRateRaw } from "@shared/liability-fields";
@@ -8152,69 +8153,94 @@ function EditProfileDialog({
     setFields(result);
   }, [profile.id, open]);
 
-  const validateFields = (): boolean => {
-    const emailKeys = Object.keys(fields).filter(k => k.toLowerCase().includes("email"));
-    for (const key of emailKeys) {
-      if (fields[key] && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields[key])) {
-        toast({ title: "Invalid email", description: `Enter a valid email address for ${key}`, variant: "destructive" });
-        return false;
-      }
+  // ── AUTOSAVE ────────────────────────────────────────────────────────────
+  // The dialog saves by itself: shortly after the user stops typing, at once
+  // when they leave a field or pick from a list, and when the dialog closes.
+  // There is no Save button to forget. Each save sends only what changed since
+  // the last successful save (client/src/lib/profile-autosave.ts).
+  const formOf = (p: ProfileDetail): EditFormState => {
+    const f: Record<string, string> = {};
+    for (const [k, v] of Object.entries(p.fields || {})) {
+      if (v != null && typeof v !== "object") f[k] = String(v);
     }
-    const phoneKeys = Object.keys(fields).filter(k => k.toLowerCase().includes("phone"));
-    for (const key of phoneKeys) {
-      if (fields[key] && !/^\+?[\d\s()-]{7,15}$/.test(fields[key])) {
-        toast({ title: "Invalid phone", description: `Enter a valid phone number for ${key}`, variant: "destructive" });
-        return false;
-      }
-    }
-    if (!name.trim()) {
-      toast({ title: "Name required", variant: "destructive" });
-      return false;
-    }
-    return true;
+    return { name: p.name, notes: p.notes || "", fields: f };
   };
+  const savedRef = useRef<EditFormState>(formOf(profile));
+  const currentRef = useRef<EditFormState>({ name, notes, fields });
+  currentRef.current = { name, notes, fields };
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [blocked, setBlocked] = useState<Record<string, string>>({});
+  const flushing = useRef(false);
+  const flushAgain = useRef(false);
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+  // The baseline follows the profile the dialog was opened for (same trigger
+  // as the form re-seed above).
+  useEffect(() => { savedRef.current = formOf(profile); setSaveState("idle"); setBlocked({}); }, [profile.id, open]);
 
-  const mutation = useMutation({
-    mutationFn: async () => {
-      if (!validateFields()) throw new Error("Validation failed");
-      // Renaming is held to the same rule as the AI path: a name another
-      // profile already answers to is refused, not silently duplicated
-      // (shared/profile-rename.ts).
-      const known: Array<{ id: string; name: string }> =
-        (queryClient.getQueryData(["/api/profiles"]) as any[] | undefined)?.filter(
-          (p: any) => p && typeof p.id === "string" && typeof p.name === "string",
-        ) ?? [];
-      const rename = checkProfileRename(known, profile.id, name, profile.name);
-      if (rename.status === "rejected") {
-        toast({ title: "Couldn't rename", description: rename.error, variant: "destructive" });
-        throw new Error(rename.error);
+  const flush = useCallback(async (): Promise<void> => {
+    if (flushing.current) { flushAgain.current = true; return; }
+    flushing.current = true;
+    try {
+      for (;;) {
+        flushAgain.current = false;
+        const sent = currentRef.current;
+        const pending = pendingProfilePatch(savedRef.current, sent);
+        const held = { ...pending.blocked };
+        let patch = pending.patch;
+        // Renaming is held to the same rule as the AI path: a name another
+        // profile already answers to is refused, not silently duplicated
+        // (shared/profile-rename.ts).
+        if (patch?.name !== undefined) {
+          const known: Array<{ id: string; name: string }> =
+            (queryClient.getQueryData(["/api/profiles"]) as any[] | undefined)?.filter(
+              (p: any) => p && typeof p.id === "string" && typeof p.name === "string",
+            ) ?? [];
+          const rename = checkProfileRename(known, profile.id, patch.name, savedRef.current.name);
+          if (rename.status === "rejected") {
+            held.name = rename.error;
+            const { name: _dropped, ...rest } = patch;
+            patch = Object.keys(rest).length > 0 ? rest : null;
+          } else {
+            patch = { ...patch, name: rename.name };
+          }
+        }
+        if (aliveRef.current) setBlocked((prev) => (JSON.stringify(prev) === JSON.stringify(held) ? prev : held));
+        if (!patch) break;
+        if (aliveRef.current) setSaveState("saving");
+        try {
+          await apiRequest("PATCH", `/api/profiles/${profile.id}`, patch);
+        } catch (err: any) {
+          if (aliveRef.current) setSaveState("error");
+          toast({ title: `Couldn't save "${sent.name || profile.name}"`, description: formatApiError(err), variant: "destructive" });
+          return;
+        }
+        savedRef.current = applySavedPatch(savedRef.current, sent, patch);
+        if (aliveRef.current) setSaveState("saved");
+        // A NAME is drawn by every screen that mentions this record — owner
+        // badges, list rows, search, the profile switcher — none of which sit
+        // under the profiles domain. A rename is rare; refresh everything
+        // rather than leave half the app calling them by the old name.
+        invalidateDomains(patch.name !== undefined ? "everything" : "profiles");
+        onSaved();
+        if (!flushAgain.current) break;
       }
-      const parsedFields: Record<string, any> = {};
-      for (const [k, v] of Object.entries(fields)) {
-        const num = Number(v);
-        parsedFields[k] = v !== "" && !isNaN(num) && v.trim() !== "" ? num : v;
-      }
-      const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
-        name: rename.name,
-        notes,
-        fields: parsedFields,
-      });
-      return { row: await res.json(), renamed: rename.status === "ok" };
-    },
-    onSuccess: (result) => {
-      toast({ title: `"${name}" updated` });
-      // A NAME is drawn by every screen that mentions this record — owner
-      // badges, list rows, search, the profile switcher — none of which sit
-      // under the profiles domain. A rename is rare; refresh everything rather
-      // than leave half the app calling them by the old name.
-      invalidateDomains(result?.renamed ? "everything" : "profiles");
-      onSaved();
-      onClose();
-    },
-    onError: (err: Error) => {
-      toast({ title: `Failed to update "${name}"`, description: formatApiError(err), variant: "destructive" });
-    },
-  });
+    } finally {
+      flushing.current = false;
+    }
+  }, [profile.id, profile.name, onSaved, toast]);
+
+  // Save shortly after the last keystroke.
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => { void flush(); }, 800);
+    return () => clearTimeout(t);
+  }, [open, name, notes, fields, flush]);
+  // …and whatever is still unsaved when the dialog goes away.
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => () => { void flushRef.current(); }, []);
+  const closeAfterSaving = () => { void flush(); onClose(); };
 
   // Type-specific suggested fields that should always be available for editing
   const SUGGESTED_FIELDS: Record<string, { key: string; label: string; placeholder: string }[]> = {
@@ -8303,7 +8329,7 @@ function EditProfileDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) closeAfterSaving(); }}>
       <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-edit-profile">
         <DialogHeader>
           <DialogTitle>Edit {profile.type === "self" ? "My Profile" : profile.name}</DialogTitle>
@@ -8316,8 +8342,10 @@ function EditProfileDialog({
               className="mt-1"
               value={name}
               onChange={e => setName(e.target.value)}
+              onBlur={() => { void flush(); }}
               data-testid="input-profile-name"
             />
+            {blocked.name ? <p className="text-xs text-destructive mt-1" data-testid="edit-blocked-name">Not saved: {blocked.name}</p> : null}
           </div>
           {allFieldKeys.filter(k => !isReservedFieldKey(k)).map(key => {
             const sg = suggested.find(s => s.key === key);
@@ -8334,7 +8362,7 @@ function EditProfileDialog({
                 {enumOptions ? (
                   <Select
                     value={String(fields[key] ?? "")}
-                    onValueChange={v => setFields(prev => ({ ...prev, [key]: v }))}
+                    onValueChange={v => { setFields(prev => ({ ...prev, [key]: v })); setTimeout(() => { void flush(); }, 0); }}
                   >
                     <SelectTrigger className="mt-1" data-testid={`input-field-${key}`}>
                       <SelectValue placeholder="Choose…" />
@@ -8352,9 +8380,11 @@ function EditProfileDialog({
                     value={isDate ? toDateInputValue(fields[key]) : (fields[key] ?? "")}
                     placeholder={sg?.placeholder || ""}
                     onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
+                    onBlur={() => { void flush(); }}
                     data-testid={`input-field-${key}`}
                   />
                 )}
+                {blocked[key] ? <p className="text-xs text-destructive mt-1" data-testid={`edit-blocked-${key}`}>Not saved: {blocked[key]}</p> : null}
               </div>
             );
           })}
@@ -8365,15 +8395,20 @@ function EditProfileDialog({
               value={notes}
               placeholder="Any additional notes..."
               onChange={e => setNotes(e.target.value)}
+              onBlur={() => { void flush(); }}
               data-testid="input-profile-notes"
             />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} data-testid="button-cancel-edit-profile">Cancel</Button>
-          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} data-testid="button-save-profile">
-            {mutation.isPending ? "Saving..." : "Save"}
-          </Button>
+          <p className="text-xs text-muted-foreground mr-auto self-center" role="status" aria-live="polite" data-testid="edit-save-status">
+            {saveState === "saving" ? "Saving…"
+              : saveState === "error" ? "Couldn't save. Your changes are still here; edit again to retry."
+              : Object.keys(blocked).length > 0 ? "Some changes aren't saved yet"
+              : saveState === "saved" ? "All changes saved"
+              : "Changes save automatically"}
+          </p>
+          <Button onClick={closeAfterSaving} data-testid="button-done-edit-profile">Done</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
