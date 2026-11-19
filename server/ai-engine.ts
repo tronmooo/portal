@@ -225,6 +225,7 @@ import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/ha
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries, stemKey } from "@shared/series-detect";
 import { expenseAttributionName, thingNamedInSpend } from "@shared/expense-attribution";
+import { recordProfileEdit } from "./profile-history";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
@@ -8348,6 +8349,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       }
 
       const updated = await storage.updateProfile(profile.id, changes);
+      // History tab: what this chat edit changed (server/profile-history).
+      await recordProfileEdit(storage, userId || (storage as any).userId, profile, updated, "chat");
       // Carry the new name into the titles this app GENERATED from the old one
       // ("Morning Run - Bob QA", "🎂 Bob QA's Birthday"). Best-effort: a
       // rename that landed is never reported as failed because a derived title
@@ -10444,6 +10447,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       }
       updates.fields = newFields;
       const updated = await storage.updateProfile(target.id, updates as any);
+      // History tab: what this chat edit changed (server/profile-history).
+      await recordProfileEdit(storage, userId || (storage as any).userId, target, updated, "chat");
       return { result: updated, actions: [{ type: "update", category: "liability", data: updated }] };
     }
 

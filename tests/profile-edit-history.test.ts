@@ -9,7 +9,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { diffProfileEdit, historyValueText } from "../shared/profile-edit-history";
-import { recordManualProfileEdit, readProfileEditHistory } from "../server/profile-history";
+import { recordManualProfileEdit, recordProfileEdit, readProfileEditHistory } from "../server/profile-history";
 
 /** The slice of the Supabase client the history module uses, over an array. */
 function fakeAuditLog(opts: { failRead?: boolean } = {}) {
@@ -99,24 +99,13 @@ describe("recording and reading a profile's edits", () => {
     expect(await readProfileEditHistory(storage, "u2", "a-sony")).toEqual([]);
   });
 
-  it("a chat edit is read from the action ledger as an AI edit", async () => {
+  it("a chat edit is stored the same way and read back as an AI edit", async () => {
     const log = fakeAuditLog();
-    const calls: any[] = [];
-    const storage = {
-      supabase: log.client,
-      listAiActionLog: async (opts: any) => {
-        calls.push(opts);
-        return [
-          { id: "led-1", tool: "update_profile", actionType: "update_entity", source: "chat", createdAt: "2026-11-18T15:00:00.000Z",
-            before: BEFORE, after: { ...BEFORE, fields: { ...BEFORE.fields, purchasePrice: 549 } } },
-          // A create is not an edit.
-          { id: "led-0", tool: "create_profile", actionType: "create_entity", source: "chat", createdAt: "2026-11-17T15:00:00.000Z", before: null, after: BEFORE },
-        ];
-      },
-    };
+    const storage = { supabase: log.client };
+    await recordProfileEdit(storage, "u1", BEFORE, { ...BEFORE, fields: { ...BEFORE.fields, purchasePrice: 549 } }, "chat");
+    expect(log.rows[0].source).toBe("chat");
     const history = await readProfileEditHistory(storage, "u1", "a-sony");
-    expect(calls[0].entityId).toBe("a-sony");
-    expect(history.map((h) => h.id)).toEqual(["chat-led-1"]);
+    expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({ changedBy: "ai", changes: [{ field: "purchasePrice", from: "599", to: "549" }] });
   });
 
@@ -134,6 +123,15 @@ describe("the wiring", () => {
     const body = routes.slice(start, routes.indexOf('app.delete("/api/profiles/:id"', start));
     expect(start).toBeGreaterThan(0);
     expect(body).toMatch(/recordManualProfileEdit\(/);
+  });
+  it("the chat's profile and debt edit tools record their edits", () => {
+    const engine = readFileSync(resolve(__dirname, "../server/ai-engine.ts"), "utf8");
+    for (const tool of ["update_profile", "update_liability"]) {
+      const start = engine.indexOf(`case "${tool}": {`);
+      const body = engine.slice(start, engine.indexOf("\n    case \"", start + 10));
+      expect(start, tool).toBeGreaterThan(0);
+      expect(body, tool).toMatch(/recordProfileEdit\(storage, .*"chat"\)/);
+    }
   });
   it("the History tab reads the edit history under the profile's cache key", () => {
     expect(routes).toMatch(/app\.get\("\/api\/profiles\/:id\/edit-history"/);
