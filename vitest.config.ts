@@ -18,6 +18,7 @@ export default defineConfig({
       'tests/sync-tasks-scope-notice.dom.test.tsx',
       'tests/date-precision.test.ts',
       'tests/ai-destructive-safety.test.ts',
+      'tests/chat-liability-one-record.test.ts',
       'tests/schema.test.ts',
       'tests/utils.test.ts',
       'tests/recall-match.test.ts',

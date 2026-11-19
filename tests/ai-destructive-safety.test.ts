@@ -63,7 +63,8 @@ vi.mock("../server/storage", () => ({
     updateProfile: async (id: string, patch: any) => {
       const r = liabDb.rows.find((x) => x.id === id);
       if (!r) return undefined;
-      r.fields = { ...r.fields, ...(patch?.fields || {}) };
+      // A `fields` patch replaces the stored object, as production does.
+      if (patch?.fields) r.fields = { ...patch.fields };
       return r;
     },
     mutateProfileFields: async (id: string, fn: any) => {
