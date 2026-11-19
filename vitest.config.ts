@@ -20,6 +20,8 @@ export default defineConfig({
       'tests/ai-destructive-safety.test.ts',
       'tests/chat-liability-one-record.test.ts',
       'tests/profile-autosave.test.ts',
+      'tests/autosave-edit-forms.dom.test.tsx',
+      'tests/liability-qa-2026-11-18-followup.test.ts',
       'tests/chat-asset-create-receipt.test.ts',
       'tests/profile-edit-history.test.ts',
       'tests/asset-expense-money-tab.test.ts',

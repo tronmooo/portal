@@ -115,6 +115,7 @@ import {
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
 import { useConfirmArm } from "@/hooks/useConfirmArm";
+import { useAutosave, autosaveStatusLabel } from "@/hooks/useAutosave";
 import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw, rateInputToStoredPct, rateInputValue } from "@shared/liability-fields";
 import { payoffMissingFields } from "@shared/liability-payoff";
 import { PayoffOutlook } from "@/components/liability/PayoffOutlook";
@@ -488,21 +489,26 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     clearOrSet("lender", v.lender, f2.lender != null, v.lender.trim());
     return fields;
   };
-  const [seededTerms, setSeededTerms] = useState<Parameters<typeof buildTermsFields>[0] | null>(null);
-  const saveTermsMutation = useMutation({
-    mutationFn: async () => {
-      const current = { balance: tBalance, original: tOriginal, rate: tRate, term: tTerm, monthly: tMonthly, dueDay: tDueDay, firstPayment: tFirstPayment, lender: tLender };
-      const fields = seededTerms ? changedFieldsOnly(buildTermsFields(seededTerms), buildTermsFields(current)) : buildTermsFields(current);
+  type TermsForm = Parameters<typeof buildTermsFields>[0];
+  // AUTO-SAVE: every change is saved as it is made (hooks/useAutosave) — only
+  // what changed since the last save is written, so a balance moved by a
+  // payment while the form sat open is still not put back (D246).
+  const termsAutosave = useAutosave<TermsForm>({
+    enabled: editingTerms,
+    snapshot: { balance: tBalance, original: tOriginal, rate: tRate, term: tTerm, monthly: tMonthly, dueDay: tDueDay, firstPayment: tFirstPayment, lender: tLender },
+    save: async (current, saved) => {
+      const fields = changedFieldsOnly(buildTermsFields(saved), buildTermsFields(current));
       if (Object.keys(fields).length === 0) return;
-      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
-    },
-    onSuccess: () => {
-      toast({ title: "Loan terms saved", description: "Calendar will update with the new due date." });
-      setEditingTerms(false);
+      try {
+        await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
+      } catch (err: any) {
+        toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" });
+        throw err;
+      }
       invalidateDomains("liabilities", "events");
     },
-    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
+  const closeTermsEditor = () => { void termsAutosave.flush(); setEditingTerms(false); };
   const openTermsEditor = () => {
     setTBalance(terms.currentBalance ? String(terms.currentBalance) : "");
     setTOriginal(terms.originalBalance ? String(terms.originalBalance) : "");
@@ -514,16 +520,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setTDueDay(terms.dueDay ? String(terms.dueDay) : "");
     setTFirstPayment(terms.firstPaymentDate || "");
     setTLender(terms.lender || "");
-    setSeededTerms({
-      balance: terms.currentBalance ? String(terms.currentBalance) : "",
-      original: terms.originalBalance ? String(terms.originalBalance) : "",
-      rate: rateInputValue(profile),
-      term: terms.remainingTermMonths ? String(terms.remainingTermMonths) : "",
-      monthly: terms.monthlyPayment ? String(terms.monthlyPayment) : "",
-      dueDay: terms.dueDay ? String(terms.dueDay) : "",
-      firstPayment: terms.firstPaymentDate || "",
-      lender: terms.lender || "",
-    });
     setEditingTerms(true);
   };
 
@@ -598,25 +594,28 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
       return fields;
   };
-  const [seededBill, setSeededBill] = useState<Parameters<typeof buildBillFields>[0] | null>(null);
-  const saveBillMutation = useMutation({
-    mutationFn: async () => {
-      const current = { amount: bAmount, frequency: bFrequency, dueDate: bDueDate, count: bCount, end: bEnd, reminder: bReminder, autopay: bAutopay };
-      const fields = seededBill ? changedFieldsOnly(buildBillFields(seededBill), buildBillFields(current)) : buildBillFields(current);
+  type BillForm = Parameters<typeof buildBillFields>[0];
+  // AUTO-SAVE, as for the loan terms above.
+  const billAutosave = useAutosave<BillForm>({
+    enabled: editingBill,
+    snapshot: { amount: bAmount, frequency: bFrequency, dueDate: bDueDate, count: bCount, end: bEnd, reminder: bReminder, autopay: bAutopay },
+    save: async (current, saved) => {
+      const fields = changedFieldsOnly(buildBillFields(saved), buildBillFields(current));
       if (Object.keys(fields).length === 0) return;
-      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
-    },
-    onSuccess: () => {
-      toast({ title: "Bill updated", description: "Schedule and calendar refreshed." });
-      setEditingBill(false);
+      try {
+        await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
+      } catch (err: any) {
+        toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" });
+        throw err;
+      }
       // The schedule key is ["/api/liabilities", id, "schedule"] — the domain
       // bus predicate matches "/api/liabilities/" (with the slash), so this one
       // has to be invalidated by hand or the card keeps the pre-edit series.
       qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "schedule"] });
       invalidateDomains("liabilities", "events");
     },
-    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
+  const closeBillEditor = () => { void billAutosave.flush(); setEditingBill(false); };
   const openBillEditor = () => {
     setBAmount(String(schedule?.amount ?? billMonthly ?? ""));
     setBFrequency(billFrequencyLabel || "monthly");
@@ -625,15 +624,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setBEnd((schedule?.recurrenceEnd || "").slice(0, 10));
     setBReminder(billReminderLead != null ? String(billReminderLead) : "");
     setBAutopay(!!(f2.autopay || f2.autoPay || f2.autoRenew));
-    setSeededBill({
-      amount: String(schedule?.amount ?? billMonthly ?? ""),
-      frequency: billFrequencyLabel || "monthly",
-      dueDate: (schedule?.firstPayment || billNextDueEff || billDueRaw || "").slice(0, 10),
-      count: billTotalTerm != null ? String(billTotalTerm) : "",
-      end: (schedule?.recurrenceEnd || "").slice(0, 10),
-      reminder: billReminderLead != null ? String(billReminderLead) : "",
-      autopay: !!(f2.autopay || f2.autoPay || f2.autoRenew),
-    });
     setEditingBill(true);
   };
 
@@ -647,7 +637,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       );
       toast({ title: "Profile deleted", description: "All linked data has been removed" });
       invalidateDomains("liabilities", "events", "expenses");
-      navigate("/profiles");
+      // Back where the liability was listed — `/profiles` is the Info tab.
+      navigate("/linked?tab=liabilities");
     },
     onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
   });
@@ -1403,8 +1394,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <Card data-testid="bill-details-edit-card">
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Edit bill details</CardTitle>
-                  <Button size="sm" variant="ghost" onClick={() => setEditingBill(false)} data-testid="button-cancel-bill-edit">
-                    Cancel
+                  <Button size="sm" variant="ghost" onClick={closeBillEditor} data-testid="button-cancel-bill-edit">
+                    Done
                   </Button>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -1462,17 +1453,12 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                     <Switch checked={bAutopay} onCheckedChange={setBAutopay} data-testid="switch-bill-autopay" />
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => saveBillMutation.mutate()}
-                      disabled={saveBillMutation.isPending}
-                      data-testid="button-save-bill"
-                    >
-                      {saveBillMutation.isPending ? "Saving…" : "Save bill"}
+                    <Button size="sm" onClick={closeBillEditor} data-testid="button-save-bill">
+                      Done
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setEditingBill(false)} data-testid="button-cancel-bill-edit-2">
-                      Cancel
-                    </Button>
+                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="bill-autosave-status">
+                      {autosaveStatusLabel(billAutosave.status)}
+                    </span>
                   </div>
                 </CardContent>
               </Card>
@@ -1515,8 +1501,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <Card>
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Edit loan terms</CardTitle>
-                  <Button size="sm" variant="ghost" onClick={() => setEditingTerms(false)} data-testid="button-cancel-terms-edit">
-                    Cancel
+                  <Button size="sm" variant="ghost" onClick={closeTermsEditor} data-testid="button-cancel-terms-edit">
+                    Done
                   </Button>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -1555,20 +1541,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                     </div>
                   </div>
                   <p className="text-[11px] text-muted-foreground">
-                    Setting a monthly payment and due day creates a recurring bill that lands on your calendar each month.
+                    A monthly payment and a due day put this loan's payment on your calendar each month.
                   </p>
                   <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => saveTermsMutation.mutate()}
-                      disabled={saveTermsMutation.isPending}
-                      data-testid="button-save-terms"
-                    >
-                      {saveTermsMutation.isPending ? "Saving…" : "Save terms"}
+                    <Button size="sm" onClick={closeTermsEditor} data-testid="button-save-terms">
+                      Done
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setEditingTerms(false)} data-testid="button-cancel-terms-edit-2">
-                      Cancel
-                    </Button>
+                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="terms-autosave-status">
+                      {autosaveStatusLabel(termsAutosave.status)}
+                    </span>
                   </div>
                 </CardContent>
               </Card>

@@ -97,10 +97,11 @@ describe("bill details are editable", () => {
     // The field map is built by buildBillFields (pure, so the seeded and the
     // current form run through the same code — D246); the save sends its diff.
     const save = src.match(/const buildBillFields[\s\S]{0,4000}?openBillEditor/)?.[0] ?? "";
-    expect(save, "buildBillFields/saveBillMutation not found").not.toBe("");
-    expect(save).toContain("const saveBillMutation");
+    expect(save, "buildBillFields/billAutosave not found").not.toBe("");
+    // Edits auto-save (hooks/useAutosave) through the same builder.
+    expect(save).toContain("const billAutosave = useAutosave<BillForm>");
     for (const key of ["firstPaymentDate", "dueDate", "nextDueDate"]) {
-      expect(save, `saveBillMutation does not set ${key}`).toContain(key);
+      expect(save, `the bill save does not set ${key}`).toContain(key);
     }
   });
 
@@ -108,7 +109,7 @@ describe("bill details are editable", () => {
     // The domain bus predicate matches "/api/liabilities/" WITH the slash; the
     // schedule key is ["/api/liabilities", id, "schedule"], so it doesn't
     // match and the card would keep rendering the pre-edit series.
-    const save = src.match(/const saveBillMutation[\s\S]{0,3000}?openBillEditor/)?.[0] ?? "";
+    const save = src.match(/const billAutosave[\s\S]{0,3000}?openBillEditor/)?.[0] ?? "";
     expect(save).toMatch(/queryKey: \["\/api\/liabilities", profile\.id, "schedule"\]/);
   });
 

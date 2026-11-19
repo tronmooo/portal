@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useDeferredValue, useMemo, lazy, memo, Suspense } from "react";
+import { stableStreamText } from "@/lib/stream-text";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, BROWSER_TIMEZONE } from "@/lib/queryClient";
 import { getUserToday } from "@shared/timezone";
@@ -2639,7 +2640,8 @@ export default function ChatPage() {
     liveFlushTimerRef.current = setTimeout(() => {
       liveFlushTimerRef.current = null;
       const cur = liveStreamRef.current;
-      setLiveStream(cur ? { ...cur, actions: [...cur.actions], runningTools: [...cur.runningTools] } : null);
+      // Whole words only — never a half-written figure (lib/stream-text).
+      setLiveStream(cur ? { ...cur, text: stableStreamText(cur.text), actions: [...cur.actions], runningTools: [...cur.runningTools] } : null);
     }, 80);
   }, []);
   const beginLiveStream = useCallback(() => {
