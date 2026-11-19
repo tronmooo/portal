@@ -183,7 +183,15 @@ function valueFor(
   const hint = hints?.fieldHints?.[key];
   const displayType = hint?.displayType || sem.displayType;
   const isMoney = displayType === "money" || displayType === "moneyPerMonth";
-  const value = isMoney && typeof raw !== "number" && hasValue(raw) ? parseMoney(raw) : raw;
+  let value = isMoney && typeof raw !== "number" && hasValue(raw) ? parseMoney(raw) : raw;
+  // A debt's rate is shown as a PERCENT whichever form the row holds: a row
+  // written before the writers agreed stores 0.0625, and printing that raw
+  // under a "%" gave "0.1%" beside a header that said 6.25% (Rule 1: one
+  // reader — shared/liability-fields).
+  if (displayType === "percent" && canonicalFieldKey(key) === "interestRate" && hasValue(raw)) {
+    const pct = readInterestRatePct({ interestRate: raw });
+    if (pct > 0) value = pct;
+  }
   return {
     semanticKey: sem.key,
     label: hint?.label || sem.label,

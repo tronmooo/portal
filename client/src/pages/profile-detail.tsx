@@ -12961,7 +12961,12 @@ export default function ProfileDetailPage() {
     // redundant cold refetch when navigating back to a profile you just saw.
     staleTime: 30 * 1000,
     gcTime: 10 * 60 * 1000,
-    refetchOnMount: false,
+    // No `refetchOnMount: false` here. A write made from another page (a
+    // payment recorded in chat) can only MARK this query stale while the
+    // profile is closed; with the refetch disabled it then rendered the old
+    // balance in the header ($3,200) beside a Payments tab that had refetched
+    // ($2,766.64). Fresh cache still renders instantly — only stale or
+    // invalidated data is refetched on mount.
   });
 
   // Page-level all-profiles — powers the new breadcrumb + summary + tree.

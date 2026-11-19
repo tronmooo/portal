@@ -50,6 +50,28 @@ export function normalizeAnnualRate(r: number | string | undefined | null): numb
   return n > 1 ? n / 100 : n;
 }
 
+/**
+ * The rate a chat tool should STORE, as a PERCENT (the canonical form of
+ * `interestRate`), from whatever the model passed (0.0625, 6.25, "6.25%").
+ * Null when the input names no rate.
+ *
+ * The user's own number wins: when their message states a percentage and the
+ * model's differs from it by a rounding-sized step ("22.9%" typed, 22.99
+ * passed — 2026-11-18), the stated figure is stored. A rate the message never
+ * mentions is left exactly as passed.
+ */
+export function statedRatePct(raw: unknown, userMessage?: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  if (!Number.isFinite(parseFloat(String(raw).replace("%", "").trim()))) return null;
+  let pct = Math.round(normalizeAnnualRate(raw as number | string) * 100 * 1e6) / 1e6;
+  const stated = Array.from(String(userMessage ?? "").matchAll(/(\d+(?:\.\d+)?)\s*(?:%|percent\b)/gi)).map((m) => Number(m[1]));
+  if (stated.length > 0 && !stated.includes(pct)) {
+    const near = stated.filter((v) => Math.abs(v - pct) < 0.1);
+    if (near.length === 1) pct = near[0];
+  }
+  return pct;
+}
+
 /** The precedence every rate reader walks — canonical spelling first. */
 export const INTEREST_RATE_KEYS: readonly string[] = [
   "interestRate", "interest_rate",

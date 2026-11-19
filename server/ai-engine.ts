@@ -190,7 +190,7 @@ import { detectFactQuestion, lookupStoredFact, type FactSources } from "@shared/
 import { startTrace } from "./latency";
 import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-activity";
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution, coerceProfileType } from "@shared/entity-classify";
-import { canonicalizeProfileFields, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
+import { canonicalizeProfileFields, canonicalFieldKey, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange, PROFILE_TYPES } from "@shared/profile-rename";
 import { readProfileFieldValue } from "@shared/profile-field-identity";
 import { buildFieldReceipt, formatFieldReceiptText, composeReceiptReply } from "@shared/field-receipt";
@@ -228,7 +228,7 @@ import { expenseAttributionName } from "@shared/expense-attribution";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
-import { readMonthlyPayment as sharedReadMonthlyPayment } from "@shared/liability-fields";
+import { readMonthlyPayment as sharedReadMonthlyPayment, statedRatePct } from "@shared/liability-fields";
 import { isRecurringBill as sharedIsRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
 import { getRecordTemporalStatus as sharedTemporalStatus } from "@shared/temporal-status";
@@ -6561,10 +6561,10 @@ PAYMENT HISTORY EDITS / UNDO:
 CROSS-PROFILE LIABILITY ASSIGNMENT:
 - "My wife's car loan with Toyota for $25k at 5%" → create_liability(name:"Wife's Toyota Loan", subtype:"auto_loan", lender:"Toyota", currentBalance:25000, annualRate:5, forProfile:"Wife"). The liability nests under the Wife profile.
 - "Add a $4,500 medical bill for my dad with $150 monthly payments" → create_liability(subtype:"medical_debt", currentBalance:4500, monthlyPayment:150, forProfile:"Dad").
-- "The fridge financing is due on the 12th every month, $80/month, $960 total via Synchrony" → create_liability(name:"Fridge Financing", subtype:"bnpl" (or "other"), lender:"Synchrony", currentBalance:960, monthlyPayment:80, dueDay:12, linkAssetName:"Fridge"). The dueDay automatically generates a recurring obligation for the calendar.
+- "The fridge financing is due on the 12th every month, $80/month, $960 total via Synchrony" → create_liability(name:"Fridge Financing", subtype:"bnpl" (or "other"), lender:"Synchrony", currentBalance:960, monthlyPayment:80, dueDay:12, linkAssetName:"Fridge"). The dueDay puts the payment on the calendar from the liability itself — never also call create_obligation for it.
 - "Jane and I both share this credit card debt" → after create_liability, call link_liability_owner(liability, "Me", 50, "owner") AND link_liability_owner(liability, "Jane", 50, "owner").
 
-DUE DAY → CALENDAR: Always pass dueDay (1-31) on create_liability when the user mentions "due on the Xth" or implies a monthly due date. The backend auto-creates a recurring obligation so the payment surfaces on the calendar.
+DUE DAY → CALENDAR: Always pass dueDay (1-31) on create_liability when the user mentions "due on the Xth" or implies a monthly due date. The liability itself then shows its payment on the calendar. ONE debt = ONE record: NEVER also call create_obligation for a loan\'s or card\'s monthly payment ("<name> payment") — the payment amount and due day are fields of the liability.
 
 REFINANCE / RESTRUCTURE:
 - "I refinanced my mortgage at 5.5%, new balance is $410k, 30 years" → update_liability(name:"mortgage", changes:{annualRate:5.5, currentBalance:410000, originalBalance:410000, termMonths:360}, refinance:true).
@@ -10000,9 +10000,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           return { error: `That liability ends (${endish}) before it starts (${startish}) — nothing was created. Check the dates and try again.` };
         }
       }
-      // Normalize annualRate (accept either decimal 0.065 or percent 6.5)
-      let rate = Number(input.annualRate);
-      if (!isNaN(rate) && rate > 1) rate = rate / 100;
+      // The canonical `interestRate` is stored as a PERCENT (6.25), whichever
+      // form the model passed (0.0625 or 6.25) — shared/profile-field-canon.
+      const rate = statedRatePct(input.annualRate, (input as any).__userMessage);
       // Auto-infer subtype if the model omitted it (safety net for NLP coverage).
       // Order matters: most-specific patterns first.
       if (!input.subtype) {
@@ -10082,11 +10082,11 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         (p.type === "liability" || p.type === "loan") &&
         (parentProfileId ? p.parentProfileId === parentProfileId : true)
       );
-      const fields: Record<string, any> = {};
+      let fields: Record<string, any> = {};
       if (input.currentBalance != null) fields.currentBalance = Number(input.currentBalance);
       if (input.originalBalance != null) fields.originalBalance = Number(input.originalBalance);
       else if (input.currentBalance != null) fields.originalBalance = Number(input.currentBalance);
-      if (!isNaN(rate)) fields.annualInterestRate = rate;
+      if (rate != null) fields.interestRate = rate;
       if (input.monthlyPayment != null) fields.monthlyPayment = Number(input.monthlyPayment);
       if (input.minimumPayment != null) fields.minimumPayment = Number(input.minimumPayment);
       if (input.creditLimit != null) fields.creditLimit = Number(input.creditLimit);
@@ -10107,6 +10107,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (input.pslfEligible != null) fields.pslfEligible = !!input.pslfEligible;
       if (input.idrPlan) fields.idrPlan = input.idrPlan;
       if (input.forgivenessDate) fields.forgivenessDate = input.forgivenessDate;
+      // Canonical keys (balance, interestRate…), so re-creating an existing
+      // liability updates its values instead of leaving them shadowed.
+      fields = canonicalizeProfileFields(fields, existing?.fields).fields;
 
       let liability: any;
       if (existing) {
@@ -10367,32 +10370,13 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (suggestedAssetLink && liability) {
         (liability as any).suggestedAssetLink = suggestedAssetLink;
       }
-      // Auto-generate a recurring obligation so the liability appears on the calendar
-      // (mirrors how create_obligation drives subscription calendar entries).
-      // Only do this when we have BOTH a monthly payment and a due-day.
-      if (liability?.id && fields.monthlyPayment && fields.dueDay) {
-        try {
-          const existingObs = await storage.getObligations();
-          const obName = `${input.name} payment`;
-          const dup = existingObs.find((o: any) => o.name.toLowerCase() === obName.toLowerCase());
-          if (!dup) {
-            const today = new Date();
-            const dueDay = Math.max(1, Math.min(31, Number(fields.dueDay)));
-            const next = new Date(today.getFullYear(), today.getMonth(), dueDay);
-            if (next.getTime() < today.getTime()) next.setTime(addMonthsClamped(next, 1, dueDay).getTime());
-            const nextDueDate = next.toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
-            const newOb = await storage.createObligation({
-              name: obName,
-              amount: Number(fields.monthlyPayment),
-              frequency: "monthly",
-              category: "liability",
-              nextDueDate,
-              autopay: false,
-            } as any);
-            try { await directLinkToProfile("obligation", newOb.id, input.name); } catch {}
-          }
-        } catch (e: any) { logger.warn("ai", `auto-create liability obligation failed: ${e?.message}`); }
-      }
+      // ONE debt = ONE liability. This used to also create a "<name> payment"
+      // recurring bill so the payment reached the calendar. A liability is its
+      // own bill now (its payment day + monthly payment generate the schedule,
+      // see shared/liability-schedule `deriveScheduleFields`), so that second
+      // record was a duplicate: "Wells Fargo Mortgage" and a separate "Wells
+      // Fargo Mortgage payment" in the list, with the payment counted twice on
+      // the calendar (2026-11-18). The payment lives on the loan's own profile.
       return { result: liability, actions: [{ type: "create", category: "liability", data: liability }] };
     }
 
@@ -10409,26 +10393,40 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (ch.currentBalance != null && Number(ch.currentBalance) < 0) {
         return { error: `Cannot set a negative balance ($${ch.currentBalance}). If you overpaid and want to track a credit, set the balance to 0 and log a 'reversal' payment for the credit amount instead.` };
       }
-      // Normalize annualRate
-      if (ch.annualRate != null) {
-        let r = Number(ch.annualRate);
-        if (!isNaN(r) && r > 1) r = r / 100;
-        ch.annualInterestRate = r;
-        delete ch.annualRate;
-      }
       const updates: any = {};
       if (ch.subtype) updates.type_key = ch.subtype;
-      const newFields = { ...(target.fields || {}) };
-      // Refinance flow: bump originalBalance to currentBalance, clear cached schedule
-      if (input.refinance) {
-        const newBal = ch.currentBalance != null ? Number(ch.currentBalance) : Number(newFields.currentBalance) || 0;
-        newFields.originalBalance = newBal;
-        newFields.refinancedAt = new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
-      }
-      // Apply all field changes
+      // Every change lands on the record's CANONICAL key (balance,
+      // interestRate, monthlyPayment…). Writing the tool's own spelling
+      // (`currentBalance`, `annualInterestRate`) beside the canonical value
+      // left the old one in place — the storage fold never overwrites a
+      // differing canonical value — so "refinanced to 5.5% on $305,000" was
+      // confirmed and the record still read 6.25% / $311,172 (2026-11-18).
+      const rawChanges: Record<string, any> = {};
       for (const [k, v] of Object.entries(ch)) {
         if (k === "subtype") continue;
-        newFields[k] = v;
+        rawChanges[k] = v;
+      }
+      const rateKey = Object.keys(rawChanges).find((k) => canonicalFieldKey(k) === "interestRate");
+      if (rateKey) {
+        const pct = statedRatePct(rawChanges[rateKey], (input as any).__userMessage);
+        delete rawChanges[rateKey];
+        if (pct != null) rawChanges.interestRate = pct;
+      }
+      const canonChanges = canonicalizeProfileFields(rawChanges, target.fields).fields;
+      const newFields: Record<string, any> = { ...(target.fields || {}) };
+      Object.assign(newFields, canonChanges);
+      // Every other spelling of a changed key already on the record takes the
+      // new value too, so no stale copy can disagree with (and shadow) it; the
+      // storage fold then drops the now-equal duplicates.
+      for (const existingKey of Object.keys(newFields)) {
+        const ck = canonicalFieldKey(existingKey);
+        if (ck !== existingKey && ck in canonChanges) newFields[existingKey] = canonChanges[ck];
+      }
+      // Refinance: the debt restarts at the new balance.
+      if (input.refinance) {
+        const newBal = sharedLiabilityBalance(newFields);
+        if (canonChanges.originalBalance == null && newBal > 0) newFields.originalBalance = newBal;
+        newFields.refinancedAt = new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
       }
       updates.fields = newFields;
       const updated = await storage.updateProfile(target.id, updates as any);

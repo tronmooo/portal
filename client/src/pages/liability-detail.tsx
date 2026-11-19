@@ -108,12 +108,14 @@ import { formatApiError } from "@/lib/formatError";
 import {
   buildAmortization,
   summarizeLiability,
-  allocatePayment,
+  splitDebtPayment,
   type AmortizationRow,
 } from "@shared/liability-calc";
-import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
+import { liabilityFamily, isAmortizable, isRecurringBill, liabilityTypeKeyOf, LIABILITY_SUBTYPE_LABELS } from "@shared/liability-types";
+import { isLiabilityTabProfile } from "@shared/asset-value";
+import { useConfirmArm } from "@/hooks/useConfirmArm";
 import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
-import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw } from "@shared/liability-fields";
+import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw, readInterestRatePct } from "@shared/liability-fields";
 import { payoffMissingFields } from "@shared/liability-payoff";
 import { PayoffOutlook } from "@/components/liability/PayoffOutlook";
 import { getRecordTemporalStatus } from "@shared/temporal-status";
@@ -142,21 +144,8 @@ interface LiabilityPayment {
   createdAt?: string;
 }
 
-const SUBTYPE_LABELS: Record<string, string> = {
-  mortgage: "Mortgage",
-  auto_loan: "Auto loan",
-  credit_card: "Credit card",
-  student_loan: "Student loan",
-  medical_debt: "Medical debt",
-  business_loan: "Business loan",
-  tax_debt: "Tax debt",
-  line_of_credit: "Line of credit",
-  bnpl: "Buy now pay later",
-  personal_loan: "Personal loan",
-  financing: "Financing",
-  utility_plan: "Utility plan",
-  custom: "Other liability",
-};
+// ONE label map for every surface (shared/liability-types).
+const SUBTYPE_LABELS = LIABILITY_SUBTYPE_LABELS;
 
 // ─── Formatting helpers ──────────────────────────────────────────────────────
 
@@ -467,7 +456,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     if (v.original !== "") fields.originalBalance = num(v.original);
     if (v.rate !== "") {
       const r = num(v.rate);
-      if (r != null) fields.annualInterestRate = r > 1 ? r / 100 : r;
+      // The field is labelled "%" and the canonical `interestRate` is a
+      // percent: what is typed is what is stored.
+      if (r != null) fields.interestRate = r;
     }
     if (v.term !== "") fields.remainingTermMonths = num(v.term);
     if (v.monthly !== "") fields.monthlyPayment = num(v.monthly);
@@ -502,8 +493,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const openTermsEditor = () => {
     setTBalance(terms.currentBalance ? String(terms.currentBalance) : "");
     setTOriginal(terms.originalBalance ? String(terms.originalBalance) : "");
-    // annualRate from terms is a percent (e.g. 6 not 0.06) per liability page convention
-    setTRate(terms.annualRate ? String(terms.annualRate) : "");
+    // `terms.annualRate` is a DECIMAL (0.0625); the field is a percent. It
+    // used to open showing 0.0625 under a "%" label.
+    const ratePct = readInterestRatePct(profile.fields || {});
+    setTRate(ratePct ? String(ratePct) : "");
     setTTerm(terms.remainingTermMonths ? String(terms.remainingTermMonths) : "");
     setTMonthly(terms.monthlyPayment ? String(terms.monthlyPayment) : "");
     setTDueDay(terms.dueDay ? String(terms.dueDay) : "");
@@ -512,7 +505,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setSeededTerms({
       balance: terms.currentBalance ? String(terms.currentBalance) : "",
       original: terms.originalBalance ? String(terms.originalBalance) : "",
-      rate: terms.annualRate ? String(terms.annualRate) : "",
+      rate: ratePct ? String(ratePct) : "",
       term: terms.remainingTermMonths ? String(terms.remainingTermMonths) : "",
       monthly: terms.monthlyPayment ? String(terms.monthlyPayment) : "",
       dueDay: terms.dueDay ? String(terms.dueDay) : "",
@@ -642,7 +635,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       );
       toast({ title: "Profile deleted", description: "All linked data has been removed" });
       invalidateDomains("liabilities", "events", "expenses");
-      navigate("/profiles");
+      // Back where the liability was listed — `/profiles` is the Info tab.
+      navigate("/linked?tab=liabilities");
     },
     onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
   });
@@ -934,8 +928,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     let initial = "";
     const monthlyInterest = (terms.currentBalance * terms.annualRate) / 12;
     if (preset === "minimum") initial = (terms.monthlyPayment || summary.monthlyPayment || 0).toFixed(2);
-    else if (preset === "extra")
-      initial = ((terms.monthlyPayment || summary.monthlyPayment || 0) + 100).toFixed(2);
+    // The EXTRA only — principal on top of the regular payment, not the
+    // regular payment plus $100 booked as an ordinary (interest-bearing) one.
+    else if (preset === "extra") initial = "100.00";
     else if (preset === "interest_only") initial = monthlyInterest.toFixed(2);
     setPaymentDialog({
       open: true,
@@ -952,6 +947,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   // (stale by then: it still held the advanced due date the server had just
   // rolled back) plus a balance it computed itself, fees included, though a
   // fee never reduced the balance. Nothing to write here.
+  // Rule 8: reversing a payment changes the balance and the schedule — the
+  // first tap arms the button, the second runs it.
+  const { confirm: confirmReverse, isArmed: isReverseArmed } = useConfirmArm();
   const reversePaymentMutation = useMutation({
     mutationFn: async (payment: LiabilityPayment) => {
       await apiRequest("DELETE", `/api/liability-payments/${payment.id}`);
@@ -972,6 +970,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       amount: number;
       paymentDate: string;
       notes?: string;
+      extraPrincipal?: boolean;
     }) => {
       // The server owns the principal/interest split AND the resulting balance
       // (single source of truth). We send only the raw payment; the server
@@ -981,6 +980,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         paymentDate: input.paymentDate,
         amount: input.amount,
         notes: input.notes || null,
+        ...(input.extraPrincipal ? { paymentType: "extra_principal" } : {}),
       });
       return res.json();
     },
@@ -1010,6 +1010,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       amount: amt,
       paymentDate: paymentDialog.paymentDate,
       notes: paymentDialog.notes,
+      extraPrincipal: paymentDialog.preset === "extra",
     });
   }
 
@@ -1583,9 +1584,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                       term they entered vs which is the calculated payoff. The
                       old single row showed "50 mo" while the header KPI showed
                       "58 mo" with no explanation. */}
-                  <Row label="Original term (contract)"
+                  <Row label="Term on record"
                     value={terms.remainingTermMonths ? `${terms.remainingTermMonths} mo` : "—"} />
-                  <Row label="Projected payoff (calculated)"
+                  <Row label="Payoff at the current payment"
                     value={summary.remainingMonths ? `${summary.remainingMonths} mo` : "—"} />
                   <Row label="First payment date" value={fmtDate(terms.firstPaymentDate)} />
                   <Row label="Due day of month"
@@ -1637,7 +1638,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                           key={p.id}
                           p={p}
                           expanded
-                          onReverse={() => reversePaymentMutation.mutate(p)}
+                          onReverse={() => confirmReverse(p.id, () => reversePaymentMutation.mutate(p))}
+                          reverseArmed={isReverseArmed(p.id)}
                           reversing={reversePaymentMutation.isPending}
                         />
                       ))}
@@ -1745,7 +1747,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 : "Record payment"}
             </DialogTitle>
             <DialogDescription>
-              We'll split this payment into interest and principal automatically.
+              {paymentDialog.preset === "extra"
+                ? "This goes entirely to principal, on top of your regular payment."
+                : "We'll split this payment into interest and principal automatically."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1767,7 +1771,11 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <p className="text-xs text-muted-foreground mt-1">
                 Estimated split: {(() => {
                   const amt = parseFloat(paymentDialog.amount) || 0;
-                  const split = allocatePayment(amt, terms.currentBalance, terms.annualRate, 0);
+                  // The same split the server books (shared/liability-calc).
+                  const split = splitDebtPayment(amt, terms.currentBalance, terms.annualRate, {
+                    typeKey: liabilityTypeKeyOf(profile as any),
+                    extraPrincipal: paymentDialog.preset === "extra",
+                  });
                   return `${fmtUSD(split.principal)} principal · ${fmtUSD(split.interest)} interest`;
                 })()}
               </p>
@@ -1956,11 +1964,13 @@ function PaymentRow({
   p,
   expanded,
   onReverse,
+  reverseArmed,
   reversing,
 }: {
   p: LiabilityPayment;
   expanded?: boolean;
   onReverse?: () => void;
+  reverseArmed?: boolean;
   reversing?: boolean;
 }) {
   return (
@@ -1984,13 +1994,14 @@ function PaymentRow({
           <Button
             variant="ghost"
             size="sm"
-            className="text-muted-foreground hover:text-destructive"
+            className={reverseArmed ? "text-destructive" : "text-muted-foreground hover:text-destructive"}
             onClick={onReverse}
             disabled={reversing}
-            title="Reverse this payment"
+            title={reverseArmed ? "Tap again to reverse" : "Reverse this payment"}
+            aria-label={reverseArmed ? "Tap again to reverse this payment" : "Reverse this payment"}
             data-testid={`reverse-payment-${p.id}`}
           >
-            {reversing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+            {reversing ? <Loader2 className="w-4 h-4 animate-spin" /> : reverseArmed ? "Reverse?" : <RotateCcw className="w-4 h-4" />}
           </Button>
         ) : null}
       </div>
@@ -2870,7 +2881,7 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
 
   // Only surface DIRECTLY related liabilities. Don't bridge through person/self/pet/business
   // nodes — sharing an owner doesn't make two liabilities related.
-  const nestedLiabilities = useMemo(() => {
+  const linkedLiabilities = useMemo(() => {
     const data = graphQuery.data;
     if (!data) return [];
     const root = data.rootId || liabilityId;
@@ -2904,28 +2915,27 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
     }
     return (data.nodes || []).filter((n) => {
       if (!reachable.has(n.id)) return false;
-      const tk = (n.typeKey || n.type || "").toLowerCase();
-      return liabTypes.has(tk);
+      // `typeKey` is the SUBTYPE ("mortgage"); the record kind is `type`.
+      // Testing the subtype dropped every liability that had one.
+      return liabTypes.has(String(n.type || "").toLowerCase());
     });
   }, [graphQuery.data, liabilityId]);
 
-  const SUBTYPE_LABELS_LOCAL: Record<string, string> = {
-    mortgage: "Mortgage",
-    auto_loan: "Auto loan",
-    credit_card: "Credit card",
-    student_loan: "Student loan",
-    medical_debt: "Medical debt",
-    business_loan: "Business loan",
-    tax_debt: "Tax debt",
-    line_of_credit: "Line of credit",
-    bnpl: "Buy now pay later",
-    personal_loan: "Personal loan",
-    financing: "Financing",
-    utility_plan: "Utility plan",
-    custom: "Other liability",
-    liability: "Liability",
-    loan: "Loan",
-  };
+  // A nested liability is stored as a CHILD (`parentProfileId`) — that is what
+  // "Add nested liability" below and the chat both write. The relationship
+  // graph walks only the link tables, so a child was never one of its nodes:
+  // the panel said "Nothing nested" while the same child sat under Linked
+  // records and in the list (2026-11-18). Children come from the profile list.
+  const profilesQuery = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  const nestedLiabilities = useMemo(() => {
+    const children = (profilesQuery.data || [])
+      .filter((p: any) => p?.parentProfileId === liabilityId && isLiabilityTabProfile(p))
+      .map((p: any) => ({ id: String(p.id), name: String(p.name || "Liability"), typeKey: String(liabilityTypeKeyOf(p) || p.type || ""), type: p.type as string | undefined }));
+    const seen = new Set(children.map((c) => c.id));
+    return [...children, ...linkedLiabilities.filter((n) => !seen.has(n.id))];
+  }, [profilesQuery.data, linkedLiabilities, liabilityId]);
+
+  const SUBTYPE_LABELS_LOCAL: Record<string, string> = { ...LIABILITY_SUBTYPE_LABELS, liability: "Liability", loan: "Loan" };
 
   const createChildMut = useMutation({
     mutationFn: async () => {
@@ -2988,7 +2998,7 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
           <Plus className="w-4 h-4 mr-1" />Add nested liability
         </Button>
       )}
-      {graphQuery.isLoading ? (
+      {graphQuery.isLoading && nestedLiabilities.length === 0 ? (
         <Skeleton className="h-40 w-full" />
       ) : nestedLiabilities.length === 0 ? (
         // Stated as the outcome, not as a hole. Nothing nested under a bill is
@@ -3358,6 +3368,24 @@ interface ActivityEntry {
   title: string;
   description?: string;
   timestamp: string; // ISO
+  /** The source named a calendar DAY, not a moment — print no time of day. */
+  dateOnly?: boolean;
+}
+
+/**
+ * An activity timestamp from a stored date. A bare YYYY-MM-DD is a calendar
+ * day in the user's own zone: `new Date("2026-11-18")` reads it as UTC
+ * midnight, which is Nov 17, 7:00 PM in New York — the Activity tab dated a
+ * Nov 18 payment "Nov 17" while the Payments tab said Nov 18 (2026-11-18).
+ */
+function activityStamp(raw: unknown): { timestamp: string; dateOnly?: boolean } {
+  const text = typeof raw === "string" ? raw : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const local = parseLocalDate(text);
+    if (local) return { timestamp: local.toISOString(), dateOnly: true };
+  }
+  const d = new Date((raw as any) || Date.now());
+  return { timestamp: (isNaN(d.getTime()) ? new Date() : d).toISOString() };
 }
 
 function ActivityTimelineCard({
@@ -3396,7 +3424,7 @@ function ActivityTimelineCard({
         type: "payment",
         title: `Payment ${fmtUSD(Number(p.amount) || 0)}`,
         description: `${fmtUSD(Number(p.principalPortion) || 0)} principal · ${fmtUSD(Number(p.interestPortion) || 0)} interest${p.notes ? ` · ${p.notes}` : ""}`,
-        timestamp: new Date(ts).toISOString(),
+        ...activityStamp(ts),
       });
     }
 
@@ -3408,7 +3436,7 @@ function ActivityTimelineCard({
           type: "document",
           title: d.title || d.filename || "Document",
           description: d.summary || d.kind || undefined,
-          timestamp: new Date(d.createdAt || d.uploadedAt || Date.now()).toISOString(),
+          ...activityStamp(d.createdAt || d.uploadedAt),
         });
       }
       for (const e of detail.relatedEvents || []) {
@@ -3417,7 +3445,7 @@ function ActivityTimelineCard({
           type: "event",
           title: e.title || "Event",
           description: e.description || undefined,
-          timestamp: new Date(e.startTime || e.start || e.createdAt || Date.now()).toISOString(),
+          ...activityStamp(e.startTime || e.start || e.createdAt),
         });
       }
       for (const t of detail.relatedTasks || []) {
@@ -3426,7 +3454,7 @@ function ActivityTimelineCard({
           type: "task",
           title: t.title || "Task",
           description: t.description || undefined,
-          timestamp: new Date(t.dueDate || t.createdAt || Date.now()).toISOString(),
+          ...activityStamp(t.dueDate || t.createdAt),
         });
       }
       for (const o of detail.relatedObligations || []) {
@@ -3435,7 +3463,7 @@ function ActivityTimelineCard({
           type: "obligation",
           title: o.title || "Obligation",
           description: o.description || undefined,
-          timestamp: new Date(o.dueDate || o.createdAt || Date.now()).toISOString(),
+          ...activityStamp(o.dueDate || o.createdAt),
         });
       }
     }
@@ -3551,12 +3579,9 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
           <p className="text-xs text-muted-foreground mt-0.5">{entry.description}</p>
         )}
         <p className="text-xs text-muted-foreground mt-1">
-          {new Date(entry.timestamp).toLocaleDateString(undefined, {
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
+          {new Date(entry.timestamp).toLocaleDateString(undefined, entry.dateOnly
+            ? { month: "short", day: "numeric" }
+            : { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
         </p>
       </div>
       <Badge variant="secondary" className="text-xs capitalize shrink-0 h-fit">

@@ -12,8 +12,8 @@
 // different rows depending on whether you typed it into a form or into chat.
 // That is not a synchronization bug, but it is the same disease: two code paths
 // answering one question. Both callers now land here.
-import { allocatePayment, resolveAnnualRate } from "@shared/liability-calc";
-import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName } from "@shared/liability-types";
+import { allocatePayment, resolveAnnualRate, splitDebtPayment } from "@shared/liability-calc";
+import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName, liabilityTypeKeyOf } from "@shared/liability-types";
 import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey, lastSeriesOccurrence } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
@@ -164,9 +164,10 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
     principal = Math.max(0, cashTowardLoan);
     interest = 0;
   } else if (balanceBefore > 0) {
-    // The canonical split — the same function the amortization schedule uses,
-    // so a payment and the schedule that predicted it agree.
-    const split = allocatePayment(amount - escrow, balanceBefore, annualRate, fees);
+    // The canonical split (shared/liability-calc `splitDebtPayment`): the
+    // amortization split for a loan, so a payment and the schedule that
+    // predicted it agree; the full amount off the balance for a card.
+    const split = splitDebtPayment(amount - escrow, balanceBefore, annualRate, { typeKey: liabilityTypeKeyOf(liability), fees });
     principal = split.principal;
     interest = split.interest;
     fees = split.fees;
