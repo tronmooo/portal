@@ -20,6 +20,7 @@ export default defineConfig({
       'tests/ai-destructive-safety.test.ts',
       'tests/liability-chat-one-record.test.ts',
       'tests/liability-qa-2026-11-18.test.ts',
+      'tests/autosave-edit-forms.dom.test.tsx',
       'tests/schema.test.ts',
       'tests/utils.test.ts',
       'tests/recall-match.test.ts',
