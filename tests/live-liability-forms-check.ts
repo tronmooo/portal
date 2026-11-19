@@ -83,16 +83,25 @@ async function main() {
       check(readInterestRatePct(stored.fields) === 5.5, `the stored rate is 5.5 without pressing Save (got ${readInterestRatePct(stored.fields)})`);
       check(Number(stored.fields?.balance ?? stored.fields?.currentBalance) === 305000, `the stored balance is 305000 (got ${stored.fields?.balance ?? stored.fields?.currentBalance})`);
       await page.locator('[data-testid="button-save-terms"]').click();
-      const header = (await page.locator("body").innerText()).replace(/\s+/g, " ");
-      check(/5\.5\s*0?%/.test(header) && /305,000/.test(header), "the page shows the new rate and balance after Done");
+      // The page refetches after the save; poll until it shows the new values.
+      let header = "";
+      for (let i = 0; i < 30; i++) {
+        header = (await page.locator("body").innerText()).replace(/\s+/g, " ");
+        if (/5\.50?\s*%/.test(header) && /305,000/.test(header)) break;
+        await page.waitForTimeout(500);
+      }
+      check(/5\.50?\s*%/.test(header) && /305,000/.test(header), "the page shows the new rate and balance after Done");
+      if (!(/5\.50?\s*%/.test(header) && /305,000/.test(header))) console.log(`page text: ${header.slice(0, 900)}`);
 
       // ── Delete → back on the Liabilities list.
       await page.locator('[data-testid="button-delete-profile"]').click({ timeout: 15000 });
       await page.locator('[data-testid="button-confirm-delete-profile"]').click({ timeout: 15000 });
-      await page.waitForFunction(() => /linked\?tab=liabilities/.test(location.href), null, { timeout: 20000 }).catch(() => undefined);
-      check(/linked\?tab=liabilities/.test(page.url()), `after deleting, the app is on the Liabilities list (at ${page.url().replace(UI_BASE, "")})`);
+      // Hash router: "/linked?tab=liabilities" is the URL "/?tab=liabilities#/linked".
+      const onList = () => /#\/linked/.test(page.url()) && /tab=liabilities/.test(page.url());
+      await page.waitForFunction(() => /#\/linked/.test(location.href) && /tab=liabilities/.test(location.href), null, { timeout: 20000 }).catch(() => undefined);
+      check(onList(), `after deleting, the app is on the Liabilities list (at ${page.url().replace(UI_BASE, "")})`);
       await page.screenshot({ path: `${SHOT}/live-liability-after-delete.png` });
-      if (/linked\?tab=liabilities/.test(page.url())) loanId = null;
+      if (onList()) loanId = null;
     } finally {
       await browser.close();
     }
