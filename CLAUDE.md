@@ -157,8 +157,14 @@ and `npx tsx tests/live-assets-liabilities-check.ts`.
 amount and due day are fields on it, and the schedule/calendar are derived
 from them (`deriveScheduleFields`, `shared/liability-schedule.ts`). Never
 create a second "<name> payment" bill beside a debt, from chat or anywhere
-else. ("Wells Fargo Mortgage" + "Wells Fargo Mortgage payment".)
-*Guards:* `tests/chat-liability-one-record.test.ts`, `tests/liability-rules-guards.test.ts`.
+else. ("Wells Fargo Mortgage" + "Wells Fargo Mortgage payment".) BOTH chat
+doors hold this: `create_liability` creates nothing beside the debt, and
+`create_obligation` for a bill that is the payment of a debt already on file
+writes the amount and due day ONTO that debt instead of creating a bill
+("an auto loan and a payment" = one card). The two tools share a
+`toolInterferenceKey`, so in one model round they take turns.
+*Guards:* `tests/chat-liability-one-record.test.ts`, `tests/chat-debt-and-payment-one-card.test.ts`,
+`tests/liability-rules-guards.test.ts`. *Live:* `npx tsx tests/live-debt-one-card-check.ts`.
 
 **L2. A change is written under the canonical key.** `balance`,
 `interestRate`, `monthlyPayment`, `originalBalance`

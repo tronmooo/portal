@@ -230,7 +230,7 @@ import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitiz
 import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
 import { readMonthlyPayment as sharedReadMonthlyPayment, readBalance as sharedReadBalance, liabilityReceiptFields } from "@shared/liability-fields";
-import { isRecurringBill as sharedIsRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
+import { isRecurringBill as sharedIsRecurringBill, isRecurringBillProfile, normalizeLiabilityName, liabilityFamily, liabilityTypeKeyOf } from "@shared/liability-types";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
 import { getRecordTemporalStatus as sharedTemporalStatus } from "@shared/temporal-status";
 import { deriveLiabilityMetrics as sharedDeriveLiabilityMetrics } from "@shared/liability-derived";
@@ -11986,6 +11986,44 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         const cleaned = input.name.replace(/\s+(bill\s+)?payments?$/i, "").trim();
         if (cleaned) input.name = cleaned;
       }
+      // L1 — ONE debt = ONE record. "My auto loan … and its $553 payment due
+      // the 15th" is one loan: the payment is a FIELD of the debt, not a bill
+      // beside it. create_liability stopped spawning the "<name> payment" bill
+      // (2026-11-19), but the model can still ask for one here, and this path
+      // would store a second liability card under the loan's own name. When
+      // the bill being created is the payment of a debt already on file, the
+      // amount and due day are written onto that debt and nothing is created.
+      {
+        const debtKey = normalizeLiabilityName(String(input.name || ""));
+        const servicedDebt: any = debtKey
+          ? (await storage.getProfiles()).find((p: any) => {
+              if (p.type !== "liability" && p.type !== "loan") return false;
+              if (normalizeLiabilityName(String(p.name || "")) !== debtKey) return false;
+              const fam = liabilityFamily(liabilityTypeKeyOf(p));
+              return fam === "amortizing" || fam === "revolving" || (fam === "one_time" && sharedLiabilityBalance(p) > 0);
+            })
+          : undefined;
+        if (servicedDebt) {
+          const freq = String(input.frequency || "monthly").toLowerCase().trim();
+          if (freq === "once" || freq === "one-time" || freq === "onetime") {
+            return { error: `"${servicedDebt.name}" is already on file as a debt. To record a payment toward it use add_liability_payment — no separate bill was created.` };
+          }
+          const patch: Record<string, any> = {};
+          const amt = Number(input.amount);
+          if (Number.isFinite(amt) && amt > 0) patch.monthlyPayment = Math.round(amt * 100) / 100;
+          const dueISO = String(input.nextDueDate || input.dueDate || "").slice(0, 10);
+          if (/^\d{4}-\d{2}-\d{2}$/.test(dueISO)) patch.dueDay = Number(dueISO.slice(8, 10));
+          const updated = Object.keys(patch).length > 0
+            ? (await storage.updateProfile(servicedDebt.id, { fields: { ...(servicedDebt.fields || {}), ...patch } } as any)) || servicedDebt
+            : servicedDebt;
+          logger.info("ai", `create_obligation: "${input.name}" is the payment of debt ${servicedDebt.id}; stored on it, no second record`);
+          return {
+            result: updated,
+            message: `"${servicedDebt.name}" is one liability: its payment${patch.monthlyPayment ? ` ($${patch.monthlyPayment}/mo)` : ""}${patch.dueDay ? `, due on day ${patch.dueDay}` : ""} is stored on it. No separate bill was created.`,
+            actions: [{ type: "update", category: "liability", data: updated }],
+          };
+        }
+      }
       // BUG FIX (multi-person obligation): Resolve forProfile BEFORE
       // calling storage.createObligation so we can pass linkedProfiles
       // upfront. Otherwise the Supabase storage layer auto-prepends Self
@@ -18967,6 +19005,9 @@ export function toolInterferenceKey(t: { id: string; name: string; input?: any }
     const canon = resolveCanonicalActivity(raw)?.trackerName;
     return `tracker:${trackerIdentityKey(canon || raw) || raw}`;
   }
+  // A debt and a bill for its payment are ONE record (L1): the two creates
+  // must take turns, or both look, find nothing, and each writes its own.
+  if (t.name === "create_liability" || t.name === "create_obligation") return "family:debt-or-bill";
   const family = entityTypeForTool(t.name) || t.name;
   return `family:${family}`;
 }

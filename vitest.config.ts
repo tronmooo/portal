@@ -19,6 +19,7 @@ export default defineConfig({
       'tests/date-precision.test.ts',
       'tests/ai-destructive-safety.test.ts',
       'tests/chat-liability-one-record.test.ts',
+      'tests/chat-debt-and-payment-one-card.test.ts',
       'tests/profile-autosave.test.ts',
       'tests/autosave-edit-forms.dom.test.tsx',
       'tests/liability-rules-guards.test.ts',
