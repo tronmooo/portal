@@ -61,7 +61,7 @@ import { Pill } from "@/components/dashboard/visuals";
 import { MetricCard } from "@/components/ui/metric-card";
 import type { LucideIcon } from "lucide-react";
 import { profileVisual } from "@/lib/profile-visuals";
-import { formatFullDate, formatListDate, parseLocalDate } from "@/lib/format";
+import { formatFullDate, formatListDate, parseLocalDate, timelineStamp, timelineInstant, formatTimelineStamp, isDateOnly } from "@/lib/format";
 import { dayLabel } from "@shared/now-rank";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -109,11 +109,13 @@ import {
   buildAmortization,
   summarizeLiability,
   allocatePayment,
+  interestChargedInMonth,
   type AmortizationRow,
 } from "@shared/liability-calc";
 import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
-import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw } from "@shared/liability-fields";
+import { useConfirmArm } from "@/hooks/useConfirmArm";
+import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw, rateInputToStoredPct, rateInputValue } from "@shared/liability-fields";
 import { payoffMissingFields } from "@shared/liability-payoff";
 import { PayoffOutlook } from "@/components/liability/PayoffOutlook";
 import { getRecordTemporalStatus } from "@shared/temporal-status";
@@ -466,8 +468,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     if (v.balance !== "") fields.currentBalance = num(v.balance);
     if (v.original !== "") fields.originalBalance = num(v.original);
     if (v.rate !== "") {
-      const r = num(v.rate);
-      if (r != null) fields.annualInterestRate = r > 1 ? r / 100 : r;
+      // Stored as a PERCENT under the canonical key. Writing a decimal here
+      // made the Overview print "0.1%" for a 6.25% loan.
+      const r = rateInputToStoredPct(v.rate);
+      if (r != null) fields.interestRate = r;
     }
     if (v.term !== "") fields.remainingTermMonths = num(v.term);
     if (v.monthly !== "") fields.monthlyPayment = num(v.monthly);
@@ -502,8 +506,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   const openTermsEditor = () => {
     setTBalance(terms.currentBalance ? String(terms.currentBalance) : "");
     setTOriginal(terms.originalBalance ? String(terms.originalBalance) : "");
-    // annualRate from terms is a percent (e.g. 6 not 0.06) per liability page convention
-    setTRate(terms.annualRate ? String(terms.annualRate) : "");
+    // The field is labelled "%": show the percent (6.25), not the decimal the
+    // amortization engine works in (0.0625).
+    setTRate(rateInputValue(profile));
     setTTerm(terms.remainingTermMonths ? String(terms.remainingTermMonths) : "");
     setTMonthly(terms.monthlyPayment ? String(terms.monthlyPayment) : "");
     setTDueDay(terms.dueDay ? String(terms.dueDay) : "");
@@ -512,7 +517,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setSeededTerms({
       balance: terms.currentBalance ? String(terms.currentBalance) : "",
       original: terms.originalBalance ? String(terms.originalBalance) : "",
-      rate: terms.annualRate ? String(terms.annualRate) : "",
+      rate: rateInputValue(profile),
       term: terms.remainingTermMonths ? String(terms.remainingTermMonths) : "",
       monthly: terms.monthlyPayment ? String(terms.monthlyPayment) : "",
       dueDay: terms.dueDay ? String(terms.dueDay) : "",
@@ -934,8 +939,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     let initial = "";
     const monthlyInterest = (terms.currentBalance * terms.annualRate) / 12;
     if (preset === "minimum") initial = (terms.monthlyPayment || summary.monthlyPayment || 0).toFixed(2);
-    else if (preset === "extra")
-      initial = ((terms.monthlyPayment || summary.monthlyPayment || 0) + 100).toFixed(2);
+    // Extra principal is the EXTRA money only, on top of the regular payment
+    // (recorded separately). It used to prefill payment + $100 and post it as
+    // an ordinary payment, so interest was charged on an "extra principal" one.
+    else if (preset === "extra") initial = "100.00";
     else if (preset === "interest_only") initial = monthlyInterest.toFixed(2);
     setPaymentDialog({
       open: true,
@@ -972,6 +979,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       amount: number;
       paymentDate: string;
       notes?: string;
+      paymentType?: "extra_principal";
     }) => {
       // The server owns the principal/interest split AND the resulting balance
       // (single source of truth). We send only the raw payment; the server
@@ -981,6 +989,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         paymentDate: input.paymentDate,
         amount: input.amount,
         notes: input.notes || null,
+        ...(input.paymentType ? { paymentType: input.paymentType } : {}),
       });
       return res.json();
     },
@@ -1010,6 +1019,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       amount: amt,
       paymentDate: paymentDialog.paymentDate,
       notes: paymentDialog.notes,
+      ...(paymentDialog.preset === "extra" ? { paymentType: "extra_principal" as const } : {}),
     });
   }
 
@@ -1767,7 +1777,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <p className="text-xs text-muted-foreground mt-1">
                 Estimated split: {(() => {
                   const amt = parseFloat(paymentDialog.amount) || 0;
-                  const split = allocatePayment(amt, terms.currentBalance, terms.annualRate, 0);
+                  // Mirrors the server's rule: extra principal carries no interest,
+                  // and a month's interest is charged once.
+                  const noInterest = paymentDialog.preset === "extra" || interestChargedInMonth(payments, paymentDialog.paymentDate);
+                  const split = allocatePayment(amt, terms.currentBalance, noInterest ? 0 : terms.annualRate, 0);
                   return `${fmtUSD(split.principal)} principal · ${fmtUSD(split.interest)} interest`;
                 })()}
               </p>
@@ -1963,6 +1976,10 @@ function PaymentRow({
   onReverse?: () => void;
   reversing?: boolean;
 }) {
+  // Rule 8: reversing a payment puts money back on the balance. One stray tap
+  // must not do that: the first tap arms the button, the second reverses.
+  const { confirm: confirmReverse, isArmed: isReverseArmed } = useConfirmArm();
+  const reverseArmed = isReverseArmed(`reverse-${p.id}`);
   return (
     <div className="px-3 py-2 flex items-center justify-between gap-3" data-testid={`payment-row-${p.id}`}>
       <div className="min-w-0">
@@ -1984,13 +2001,15 @@ function PaymentRow({
           <Button
             variant="ghost"
             size="sm"
-            className="text-muted-foreground hover:text-destructive"
-            onClick={onReverse}
+            className={reverseArmed ? "text-destructive" : "text-muted-foreground hover:text-destructive"}
+            onClick={() => confirmReverse(`reverse-${p.id}`, onReverse)}
             disabled={reversing}
-            title="Reverse this payment"
+            title={reverseArmed ? "Tap again to reverse this payment" : "Reverse this payment"}
+            aria-label={reverseArmed ? "Tap again to reverse this payment" : "Reverse this payment"}
             data-testid={`reverse-payment-${p.id}`}
           >
             {reversing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+            {reverseArmed ? <span className="ml-1 text-xs">Tap again to reverse</span> : null}
           </Button>
         ) : null}
       </div>
@@ -2870,7 +2889,7 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
 
   // Only surface DIRECTLY related liabilities. Don't bridge through person/self/pet/business
   // nodes — sharing an owner doesn't make two liabilities related.
-  const nestedLiabilities = useMemo(() => {
+  const linkedLiabilities = useMemo(() => {
     const data = graphQuery.data;
     if (!data) return [];
     const root = data.rootId || liabilityId;
@@ -2902,12 +2921,32 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
         queue.push(nb);
       }
     }
+    // A liability's `typeKey` is its SUBTYPE ("mortgage"), so testing it
+    // against {"liability","loan"} rejected every typed debt. The record type
+    // is what says "this is a debt".
     return (data.nodes || []).filter((n) => {
       if (!reachable.has(n.id)) return false;
-      const tk = (n.typeKey || n.type || "").toLowerCase();
-      return liabTypes.has(tk);
+      const t = (n.type || n.typeKey || "").toLowerCase();
+      return liabTypes.has(t);
     });
   }, [graphQuery.data, liabilityId]);
+
+  // The panel's own "add" files the child UNDER this liability
+  // (parentProfileId), which is not a link-table edge, so the graph never
+  // returned it: the child showed under Linked records and in the list while
+  // this panel said "No nested liabilities". Children are read from the
+  // profile list, the same rows the list shows.
+  const profilesQuery = useQuery<any[]>({ queryKey: ["/api/profiles"] });
+  const nestedLiabilities = useMemo(() => {
+    const out = new Map<string, { id: string; name: string; typeKey: string; type?: string }>();
+    for (const p of profilesQuery.data || []) {
+      if (p?.parentProfileId !== liabilityId) continue;
+      if (!["liability", "loan"].includes(String(p.type || "").toLowerCase())) continue;
+      out.set(p.id, { id: p.id, name: p.name, type: p.type, typeKey: p.type_key || p.typeKey || "" });
+    }
+    for (const n of linkedLiabilities) if (!out.has(n.id)) out.set(n.id, n);
+    return [...out.values()];
+  }, [profilesQuery.data, linkedLiabilities, liabilityId]);
 
   const SUBTYPE_LABELS_LOCAL: Record<string, string> = {
     mortgage: "Mortgage",
@@ -3396,7 +3435,7 @@ function ActivityTimelineCard({
         type: "payment",
         title: `Payment ${fmtUSD(Number(p.amount) || 0)}`,
         description: `${fmtUSD(Number(p.principalPortion) || 0)} principal · ${fmtUSD(Number(p.interestPortion) || 0)} interest${p.notes ? ` · ${p.notes}` : ""}`,
-        timestamp: new Date(ts).toISOString(),
+        timestamp: timelineStamp(ts),
       });
     }
 
@@ -3408,7 +3447,7 @@ function ActivityTimelineCard({
           type: "document",
           title: d.title || d.filename || "Document",
           description: d.summary || d.kind || undefined,
-          timestamp: new Date(d.createdAt || d.uploadedAt || Date.now()).toISOString(),
+          timestamp: timelineStamp(d.createdAt || d.uploadedAt),
         });
       }
       for (const e of detail.relatedEvents || []) {
@@ -3417,7 +3456,7 @@ function ActivityTimelineCard({
           type: "event",
           title: e.title || "Event",
           description: e.description || undefined,
-          timestamp: new Date(e.startTime || e.start || e.createdAt || Date.now()).toISOString(),
+          timestamp: timelineStamp(e.startTime || e.start || e.createdAt),
         });
       }
       for (const t of detail.relatedTasks || []) {
@@ -3426,7 +3465,7 @@ function ActivityTimelineCard({
           type: "task",
           title: t.title || "Task",
           description: t.description || undefined,
-          timestamp: new Date(t.dueDate || t.createdAt || Date.now()).toISOString(),
+          timestamp: timelineStamp(t.dueDate || t.createdAt),
         });
       }
       for (const o of detail.relatedObligations || []) {
@@ -3435,7 +3474,7 @@ function ActivityTimelineCard({
           type: "obligation",
           title: o.title || "Obligation",
           description: o.description || undefined,
-          timestamp: new Date(o.dueDate || o.createdAt || Date.now()).toISOString(),
+          timestamp: timelineStamp(o.dueDate || o.createdAt),
         });
       }
     }
@@ -3484,8 +3523,8 @@ function ActivityTimelineCard({
   ];
   for (const e of entries.slice(0, 100)) {
     let d: string;
-    try { d = toLocalDateStr(new Date(e.timestamp), BROWSER_TIMEZONE); } catch { d = String(e.timestamp || "").slice(0, 10); }
-    const t = new Date(e.timestamp).getTime();
+    try { d = isDateOnly(e.timestamp) ? e.timestamp : toLocalDateStr(new Date(e.timestamp), BROWSER_TIMEZONE); } catch { d = String(e.timestamp || "").slice(0, 10); }
+    const t = timelineInstant(e.timestamp).getTime();
     if (d === todayStr) groups[0].items.push(e);
     else if (d === yesterday) groups[1].items.push(e);
     else if (t >= weekAgo) groups[2].items.push(e);
@@ -3551,12 +3590,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
           <p className="text-xs text-muted-foreground mt-0.5">{entry.description}</p>
         )}
         <p className="text-xs text-muted-foreground mt-1">
-          {new Date(entry.timestamp).toLocaleDateString(undefined, {
-            month: "short",
-            day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-          })}
+          {formatTimelineStamp(entry.timestamp)}
         </p>
       </div>
       <Badge variant="secondary" className="text-xs capitalize shrink-0 h-fit">

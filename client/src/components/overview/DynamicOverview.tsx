@@ -46,7 +46,8 @@ function formatValue(v: OverviewValue): string {
       return typeof raw === "number" ? `${formatMoneyCompact(raw)}/mo` : String(raw);
     case "percent": {
       const n = typeof raw === "number" ? raw : Number(String(raw).replace(/[^0-9.-]/g, ""));
-      return Number.isFinite(n) ? `${Math.round(n * 10) / 10}%` : String(raw);
+      // Two decimals: 6.25% is a different loan from 6.3%.
+      return Number.isFinite(n) ? `${Math.round(n * 100) / 100}%` : String(raw);
     }
     case "number":
       return typeof raw === "number" ? raw.toLocaleString() : String(raw);

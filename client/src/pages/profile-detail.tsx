@@ -2,8 +2,8 @@ import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField, previewUnrenderable } from "@/lib/field-display";
-import { enumOptionsForField, humanizeEnumValue, isDateFieldKey, toDateInputValue } from "@shared/field-label";
-import { formatMoney, formatMoneyRound, formatFullDate, parseLocalDate } from "@/lib/format";
+import { enumOptionsForField, humanizeEnumValue, isDateFieldKey, toDateInputValue, fitsDateInput } from "@shared/field-label";
+import { formatMoney, formatMoneyRound, formatFullDate, parseLocalDate, timelineInstant, formatTimelineStamp, isDateOnly } from "@/lib/format";
 import { HeroMetric, StatTile, SectionTitle, MeterRow, CoverageNote, accentScope, tone, trackerTheme } from "@/components/tracker-detail";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CategoryBreakdown, PeriodBars, FINANCE_HS, rankSlices, axisDollars } from "@/components/finance/finance-visuals";
@@ -321,6 +321,9 @@ function monthKeyOf(date: unknown): string {
 // Calendar day of a timestamp in the browser's zone, for Today/Yesterday
 // grouping. The UTC slice put an 8 PM entry under "Today" all the next morning.
 function localDayOfTimestamp(ts: string): string {
+  // A calendar day is already the day; reading it as UTC midnight put a
+  // Nov 18 expense under Nov 17 west of Greenwich.
+  if (isDateOnly(ts)) return ts;
   try { return toLocalDateStr(new Date(ts), BROWSER_TIMEZONE); } catch { return String(ts || "").slice(0, 10); }
 }
 import { habitDayProgress } from "@shared/habit-progress";
@@ -2328,9 +2331,7 @@ const TimelineItem = memo(function TimelineItem({ entry }: { entry: TimelineEntr
           </div>
         )}
         <p className="text-xs text-muted-foreground mt-1">
-          {new Date(entry.timestamp).toLocaleDateString(undefined, {
-            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-          })}
+          {formatTimelineStamp(entry.timestamp)}
         </p>
       </div>
       <Badge variant="secondary" className="text-xs capitalize shrink-0 h-fit">{entry.type}</Badge>
@@ -6001,7 +6002,7 @@ function TrackerCard_Profile({
     return {
       i,
       val: isNaN(num) ? 0 : num,
-      date: e?.timestamp ? new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "",
+      date: e?.timestamp ? timelineInstant(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "",
     };
   }).filter(d => d.val !== 0 || fieldName == null);
 
@@ -6255,7 +6256,7 @@ function TrackerCard_Profile({
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0 ml-2">
                     <span className="text-muted-foreground text-xs">
-                      {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      {timelineInstant(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                     </span>
                     <Button
                       variant="ghost"
@@ -7727,7 +7728,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
   ];
   for (const e of filtered.slice(0, 50)) {
     const d = localDayOfTimestamp(e.timestamp);
-    const t = new Date(e.timestamp).getTime();
+    const t = timelineInstant(e.timestamp).getTime();
     if (d === todayStr) groups[0].items.push(e);
     else if (d === yesterday) groups[1].items.push(e);
     else if (t >= weekAgo) groups[2].items.push(e);
@@ -7769,7 +7770,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
               <div className="divide-y divide-border">
                 {g.items.slice().sort((a, b) => {
                   // Within same date group, keep date-sorted but within same timestamp, sort alphabetically
-                  const timeDiff = new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+                  const timeDiff = timelineInstant(b.timestamp).getTime() - timelineInstant(a.timestamp).getTime();
                   if (timeDiff !== 0) return timeDiff;
                   return (a.title || '').localeCompare(b.title || '');
                 }).map(entry => (
@@ -8301,7 +8302,8 @@ function EditProfileDialog({
             // human labels, and a date key holding the valuation engine's ISO
             // instant is a date input showing the day.
             const enumOptions = enumOptionsForField(key, fields[key]);
-            const isDate = !enumOptions && isDateFieldKey(key);
+            // …unless it holds a partial date ("2024"): a date input would show that as empty.
+            const isDate = !enumOptions && isDateFieldKey(key) && fitsDateInput(fields[key]);
             return (
               <div key={key}>
                 <label className="text-xs font-medium text-muted-foreground">{sg?.label || formatKey(key)}</label>

@@ -175,6 +175,26 @@ export function buildAmortization(terms: LiabilityTerms): AmortizationResult {
 }
 
 /**
+ * Has this month's interest already been paid? True when a standing payment
+ * dated in the same calendar month as `paymentDate` carried an interest
+ * portion. A period's interest is charged ONCE: a second payment in the month
+ * is all principal. Without this, two $500 payments on one day each lost a
+ * month of interest. Derived from the ledger rows (a reversed payment's row is
+ * gone, so its month is chargeable again) — no stored flag.
+ */
+export function interestChargedInMonth(
+  payments: ReadonlyArray<{ paymentDate?: string | null; interestPortion?: number | null; paymentType?: string | null }> | null | undefined,
+  paymentDate: string | null | undefined,
+): boolean {
+  const month = String(paymentDate || "").slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(month)) return false;
+  return (payments || []).some((p) =>
+    String(p?.paymentDate || "").slice(0, 7) === month
+    && p?.paymentType !== "reversal"
+    && Number(p?.interestPortion) > 0);
+}
+
+/**
  * Allocate a one-off payment into principal vs interest vs fees, given
  * the current balance and monthly rate.
  * - Interest is computed from the balance at the time of payment.

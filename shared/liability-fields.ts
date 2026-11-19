@@ -87,6 +87,25 @@ export function readInterestRatePct(input: Fields | { fields?: Fields }): number
 }
 
 /**
+ * What a rate typed into a "%" field means, as the PERCENT that is stored:
+ * "6.25" → 6.25. A value of 1 or less is read as a fraction ("0.0625" → 6.25),
+ * the same rule `normalizeAnnualRate` applies to every stored rate, so the
+ * form and the readers can never disagree. null when the input is not a rate.
+ */
+export function rateInputToStoredPct(input: string | number | null | undefined): number | null {
+  if (input == null || String(input).trim() === "") return null;
+  const n = typeof input === "number" ? input : parseFloat(String(input).replace("%", "").trim());
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(normalizeAnnualRate(n) * 100 * 1e6) / 1e6;
+}
+
+/** The stored rate as the text a "%" field shows: "6.25" for 6.25% however it was stored; "" when none. */
+export function rateInputValue(input: Fields | { fields?: Fields }): string {
+  const pct = readInterestRatePct(input);
+  return pct > 0 ? String(pct) : "";
+}
+
+/**
  * Amount still owed. Delegates to shared/asset-value `resolveLiabilityBalance`
  * (the walk the net-worth model, the chat and the detail page already share),
  * which accepts a profile or a fields object.

@@ -11,7 +11,8 @@
 // into an instant is what breaks it. These tests pin the parse.
 
 import { describe, it, expect, beforeAll } from "vitest";
-import { formatFullDate, formatListDate, parseLocalDate } from "../client/src/lib/format";
+import { formatFullDate, formatListDate, parseLocalDate, timelineStamp, timelineInstant, formatTimelineStamp } from "../client/src/lib/format";
+import { fitsDateInput } from "../shared/field-label";
 import { dayLabel } from "../shared/now-rank";
 
 // The failure only reproduces west of Greenwich, which is why it survived: it
@@ -117,5 +118,48 @@ describe("a date tile never prints the same fact twice", () => {
       expect(caption.toLowerCase(), `offset ${d}: "${value}" over "${caption}"`)
         .not.toBe(value.toLowerCase());
     }
+  });
+});
+
+// 2026-11-19 (owner report): a payment and an expense entered as Nov 18 both
+// listed as Nov 17 on the Activity tab — the row's stamp was built with
+// `new Date("2026-11-18").toISOString()` and rendered in local time.
+describe("an activity row keeps the calendar day of its record", () => {
+  it("a calendar day stays that day through stamp → instant → label", () => {
+    const stamp = timelineStamp("2026-11-18");
+    expect(stamp).toBe("2026-11-18");
+    const at = timelineInstant(stamp);
+    expect([at.getFullYear(), at.getMonth() + 1, at.getDate()]).toEqual([2026, 11, 18]);
+    expect(formatTimelineStamp(stamp)).toBe("Nov 18");
+  });
+
+  it("the old construction really was a day early here (the test can fail)", () => {
+    const old = new Date(new Date("2026-11-18").toISOString()).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    expect(old).toBe("Nov 17");
+  });
+
+  it("a real instant keeps its time of day", () => {
+    const stamp = timelineStamp("2026-11-18T22:30:00Z");
+    expect(stamp).toBe("2026-11-18T22:30:00.000Z");
+    expect(formatTimelineStamp(stamp)).toMatch(/^Nov 18, 0?2:30/);
+  });
+});
+
+// 2026-11-19 (owner report): purchase date "2024" displayed as "Dec 31, 2023"
+// and the Edit form's date box came up empty.
+describe("a partial date shows what was entered", () => {
+  it("a year is that year", () => {
+    expect(formatFullDate("2024")).toBe("2024");
+    expect(parseLocalDate("2024")!.getFullYear()).toBe(2024);
+  });
+  it("a year and month is that month", () => {
+    expect(formatFullDate("2024-03")).toBe("Mar 2024");
+  });
+  it("a partial date is edited as text, a full one in a date input", () => {
+    expect(fitsDateInput("2024")).toBe(false);
+    expect(fitsDateInput("2024-03")).toBe(false);
+    expect(fitsDateInput("2024-03-05")).toBe(true);
+    expect(fitsDateInput("2026-09-16T14:55:48.412Z")).toBe(true);
+    expect(fitsDateInput("")).toBe(true);
   });
 });

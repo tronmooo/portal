@@ -183,7 +183,13 @@ function valueFor(
   const hint = hints?.fieldHints?.[key];
   const displayType = hint?.displayType || sem.displayType;
   const isMoney = displayType === "money" || displayType === "moneyPerMonth";
-  const value = isMoney && typeof raw !== "number" && hasValue(raw) ? parseMoney(raw) : raw;
+  let value = isMoney && typeof raw !== "number" && hasValue(raw) ? parseMoney(raw) : raw;
+  // A loan's rate is shown as the percent it IS, however a writer stored it:
+  // older rows hold the decimal (0.0625), which printed as "0.1%".
+  if (sem.key === "interestRate" && hasValue(raw)) {
+    const pct = readInterestRatePct({ interestRate: raw });
+    if (pct > 0) value = pct;
+  }
   return {
     semanticKey: sem.key,
     label: hint?.label || sem.label,
