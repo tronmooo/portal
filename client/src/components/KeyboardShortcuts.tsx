@@ -27,6 +27,11 @@ const OPEN_LAYER_SELECTOR =
  * focused within the last second (a click that opened something the letter
  * was meant for must never be raced by the shortcut).
  */
+/** Dispatch from a timer: the page (or a test's DOM) may be gone by the time it fires. */
+function laterDispatch(event: Event): void {
+  if (typeof window !== "undefined") window.dispatchEvent(event);
+}
+
 export function singleKeyShortcutsArmed(
   doc: Document,
   lastInteractionAt: number,
@@ -96,13 +101,13 @@ export function KeyboardShortcuts() {
           // Navigate to dashboard — the quick actions are there
           navigate("/dashboard");
           // Dispatch custom event so QuickActionsRow can auto-open the task dialog
-          setTimeout(() => window.dispatchEvent(new CustomEvent("lifeos:quick-task")), 100);
+          setTimeout(() => laterDispatch(new CustomEvent("lifeos:quick-task")), 100);
           break;
         }
         case "j": {
           e.preventDefault();
           navigate("/dashboard");
-          setTimeout(() => window.dispatchEvent(new CustomEvent("lifeos:quick-journal")), 100);
+          setTimeout(() => laterDispatch(new CustomEvent("lifeos:quick-journal")), 100);
           break;
         }
         case "/": {
