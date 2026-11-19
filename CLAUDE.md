@@ -143,6 +143,81 @@ green. After a push to `main`:
     *Guards:* `tests/profile-creation-rules.test.ts`,
     `tests/profile-suggestion-card.dom.test.tsx`.
 
+## Liability rules (a debt reads the same everywhere, and a confirmed change is a stored change)
+
+Every rule below is a bug the owner hit in one session (Liabilities tutorial,
+2026-11-18). Read them before touching `client/src/pages/liability-detail.tsx`,
+the Liabilities list in `client/src/pages/trackers.tsx`, the debt tools in
+`server/ai-engine.ts` or `server/liability-payments.ts`.
+*Guard for the page-level rules:* `tests/liability-rules-guards.test.ts`.
+*Live check (deployed app, smoke account):* `npx tsx tests/live-liability-forms-check.ts`
+and `npx tsx tests/live-assets-liabilities-check.ts`.
+
+**L1. One debt = one record.** A loan or card IS its own bill: its payment
+amount and due day are fields on it, and the schedule/calendar are derived
+from them (`deriveScheduleFields`, `shared/liability-schedule.ts`). Never
+create a second "<name> payment" bill beside a debt, from chat or anywhere
+else. ("Wells Fargo Mortgage" + "Wells Fargo Mortgage payment".)
+*Guards:* `tests/chat-liability-one-record.test.ts`, `tests/liability-rules-guards.test.ts`.
+
+**L2. A change is written under the canonical key.** `balance`,
+`interestRate`, `monthlyPayment`, `originalBalance`
+(`shared/profile-field-canon.ts`). The storage fold keeps the stored
+canonical value when an alias (`currentBalance`, `annualInterestRate`)
+disagrees with it, so an alias write is silently discarded — the chat said
+"refinanced" and the record kept 6.25% / $311,172. The chat's confirmation is
+built from a read-back of the saved record, never from the model's sentence.
+*Guards:* `tests/chat-liability-one-record.test.ts`, `tests/profile-field-canon.test.ts`.
+
+**L3. A rate is a percent.** `interestRate` is stored as a percent (6.25).
+Read it only through `shared/liability-fields.ts` (`readInterestRatePct` to
+show or prefill, `readAnnualRate` for math). Never print the raw field and
+never guess the unit at a write (`r > 1 ? r / 100 : r`): a decimal under a
+"%" label was shown as "0.1%" and a form labelled "%" opened with 0.0625.
+*Guards:* `tests/no-inline-liability-field-chains.test.ts`, `tests/liability-rules-guards.test.ts`.
+
+**L4. The list and the page agree.** A debt's type comes from the `type_key`
+column (`liabilityTypeKeyOf`, `shared/liability-types.ts`), not `fields.*`
+(a mortgage read "Other"). Its next due date comes from the temporal engine
+(`getRecordTemporalStatus` → `nextLoanDueDate`, `shared/loan-facts.ts`),
+counted from today and its payment day — never from a stored
+`firstPaymentDate`, which is the loan's origin ("1601d overdue" on a loan
+added today). A day of the month (`dueDay`) is a number, not a date
+("Jan 1, 2001"); a first-payment date is history, not a deadline
+(`shared/overview-semantics.ts`). A nested liability is a CHILD
+(`parentProfileId`), so a panel that lists them reads children, not only
+link-table edges.
+*Guards:* `tests/liability-rules-guards.test.ts`, `tests/liability-qa-2026-11-18-followup.test.ts`,
+`tests/temporal-status.test.ts`.
+
+**L5. Payments.** The server owns the principal/interest split
+(`planDebtPayment`, `server/liability-payments.ts`); the dialog previews the
+same rule. A month's interest is charged once (`interestChargedInMonth`,
+`shared/liability-calc.ts`) — a second payment in the month is all principal.
+"Extra principal" sends the extra alone as `paymentType: "extra_principal"`
+and carries no interest. Reversing a payment takes two taps (Rule 8).
+*Guards:* `tests/liability-interest-once-per-month.test.ts`, `tests/liability-payment-parity.test.ts`,
+`tests/liability-rules-guards.test.ts`.
+
+**L6. A write made elsewhere shows when the profile is reopened.** A payment
+recorded in chat can only mark the closed profile's query stale; the detail
+query must refetch an invalidated cache on mount (never `refetchOnMount:
+false`), or the header keeps the old balance beside a Payments tab that
+shows the new one. A bare `YYYY-MM-DD` is a calendar day in the user's zone:
+parse it with `parseLocalDate` (`client/src/lib/format.ts`), never
+`new Date("2026-11-18")` (Activity said Nov 17).
+*Guards:* `tests/liability-rules-guards.test.ts`, `tests/format-full-date.test.ts`.
+
+**L7. An edit saves itself.** An edit form has no Save button to forget: the
+Edit dialog saves through `client/src/lib/profile-autosave.ts`, the
+loan-terms and bill-details forms through `client/src/hooks/useAutosave.ts`
+(after a pause in typing, on Done, and on leaving the page; only what changed
+since the last save; nothing on open — Rule 3). A new edit form uses one of
+these. After deleting a liability the app returns to the Liabilities list
+(`/linked?tab=liabilities`), not the Info tab.
+*Guards:* `tests/autosave-edit-forms.dom.test.tsx`, `tests/profile-autosave.test.ts`,
+`tests/liability-qa-2026-11-18-followup.test.ts`.
+
 Dev-only sync logging: `shared/sync-log.ts` (enable in a browser with
 `localStorage.portol_sync_debug = "1"`). Off in production.
 

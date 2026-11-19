@@ -22,6 +22,7 @@ export default defineConfig({
       'tests/profile-activity-tab.dom.test.tsx',
       'tests/profile-autosave.test.ts',
       'tests/autosave-edit-forms.dom.test.tsx',
+      'tests/liability-rules-guards.test.ts',
       'tests/liability-qa-2026-11-18-followup.test.ts',
       'tests/chat-asset-create-receipt.test.ts',
       'tests/profile-edit-history.test.ts',
