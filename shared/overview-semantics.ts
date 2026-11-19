@@ -60,7 +60,15 @@ const ADMIN_EXACT = new Set([
 
 // Role patterns. Order matters — first match wins, so the narrow patterns
 // (a date that is also a money word, e.g. "paymentDueDate") come first.
+/**
+ * A day of the month ("due on the 1st" → `dueDay: 1`) is a number, not a date.
+ * The date pattern below matches "due", so `dueDay: 1` was typed as a date and
+ * printed through `new Date("1")` — "Jan 1, 2001" (2026-11-18).
+ */
+const DAY_OF_MONTH_KEY_RE = /^(payment_?)?due_?(date_?)?day$|day_?of_?month$/i;
+
 const ROLE_PATTERNS: Array<{ re: RegExp; role: FieldRole }> = [
+  { re: DAY_OF_MONTH_KEY_RE, role: "financial" },
   { re: /(date|expires?|expiration|expiry|renew|due|maturit|issued|anniversar|deadline|since|until|term(start|end)|start(ed)?$|end(s|ed)?$)/i, role: "date" },
   { re: /(status|state$|condition|stage|phase|active|closed|lifecycle|disposition)/i, role: "status" },
   { re: /(owner|ownership|share|stake|equity(percent|share)|beneficiar|titleholder|cosigner|co_signer)/i, role: "ownership" },
@@ -77,6 +85,12 @@ const ROLE_PATTERNS: Array<{ re: RegExp; role: FieldRole }> = [
 ];
 
 const DATE_MEANING_PATTERNS: Array<{ re: RegExp; meaning: DateMeaning }> = [
+  // History, not a deadline: a loan's first payment is its origin and a last
+  // payment already happened. Both contain "payment"/"paid", so without these
+  // they read as an actionable payment date — "First Payment Date passed 1601
+  // days ago" on a loan opened in 2022.
+  { re: /first_?payment|originat/i, meaning: "start" },
+  { re: /last_?pa(id|yment)|previous_?payment/i, meaning: "generic" },
   { re: /warrant/i, meaning: "warranty" },
   { re: /registration|registered|tag(expiration|renewal)/i, meaning: "registration" },
   { re: /renew/i, meaning: "renewal" },
@@ -126,6 +140,7 @@ export function isAdministrativeKey(key: string): boolean {
 
 function inferDisplayType(key: string, value: unknown, role: FieldRole): DisplayType {
   if (role === "date") return "date";
+  if (DAY_OF_MONTH_KEY_RE.test(key)) return "number";
   if (RATE_KEY_RE.test(key)) return "percent";
   if (role === "financial" || role === "coverage") {
     if (MONEY_KEY_RE.test(key)) {
