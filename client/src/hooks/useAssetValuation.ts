@@ -244,6 +244,17 @@ export function useAssetValuation(profileId: string | undefined, opts: { enabled
     p.finally(() => { if (mounted.current) setRefreshing(false); });
   }, []);
 
+  // A refresh that is ALREADY running when this card mounts (the Assets-tab
+  // sweep, or one started on a previous visit) is followed to its end. The
+  // flag used to be seeded true from `inFlight` and cleared only by a refresh
+  // this hook started itself; with a fresh snapshot the effect below returns
+  // early, so the card said "Estimating… Refreshing…" forever beside a value.
+  useEffect(() => {
+    const running = profileId ? inFlight.get(profileId) : undefined;
+    if (running) track(running);
+    else setRefreshing(false);
+  }, [profileId, track]);
+
   // FRESHNESS CHECK → BACKGROUND REFRESH: after the stored estimate is on
   // screen, kick off one refresh when the server said it is stale.
   useEffect(() => {

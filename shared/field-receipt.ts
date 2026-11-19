@@ -16,7 +16,7 @@
 //
 // Pinned by tests/chat-save-verify-confirm.test.ts.
 
-import { fieldKeyLabel } from "./field-label";
+import { fieldKeyLabel, humanizeEnumValue, FIELD_ENUM_OPTIONS } from "./field-label";
 import { readProfileFieldValue, isReservedFieldKey } from "./profile-field-identity";
 
 export interface FieldReceiptLine {
@@ -115,6 +115,9 @@ export function receiptDisplayValue(key: string, value: unknown): string {
     const known = DRIVETRAIN_NAMES[String(value).toLowerCase().replace(/[^a-z0-9]/g, "")];
     if (known) return known;
   }
+  // A machine token is never shown raw: "high_value_item" under assetSubtype
+  // reads "High-value item", the same label the profile page uses.
+  if (FIELD_ENUM_OPTIONS[key] || /^[a-z]+(_[a-z]+)+$/.test(String(value))) return humanizeEnumValue(value);
   // Plain words read better capitalized ("white" → "White"); anything with
   // digits or mixed case (a VIN, a plate, "iPhone") is shown exactly.
   const s = String(value);

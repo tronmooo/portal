@@ -19,6 +19,8 @@ export default defineConfig({
       'tests/date-precision.test.ts',
       'tests/ai-destructive-safety.test.ts',
       'tests/chat-liability-one-record.test.ts',
+      'tests/chat-asset-create-receipt.test.ts',
+      'tests/profile-edit-history.test.ts',
       'tests/asset-expense-money-tab.test.ts',
       'tests/liability-interest-once-per-month.test.ts',
       'tests/schema.test.ts',

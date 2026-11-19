@@ -55,7 +55,8 @@ import {
 import { userVisibleMemories } from "@shared/memory-visibility";
 import { entityFamily } from "@shared/entity-shape";
 import { findIdentityMatches } from "@shared/tracker-identity";
-import { canonicalizeProfileFields, looselyEqual } from "@shared/profile-field-canon";
+import { canonicalizeProfileFields, canonicalFieldKey, looselyEqual } from "@shared/profile-field-canon";
+import { recordManualProfileEdit, readProfileEditHistory } from "./profile-history";
 import { checkProfileRename, checkProfileTypeChange } from "@shared/profile-rename";
 import { checkProfileDelete } from "@shared/profile-delete";
 import { cascadeProfileRename } from "./profile-rename-cascade";
@@ -5793,8 +5794,26 @@ ${JSON.stringify(ctx, null, 2)}`;
       }
     }
     const previousName: string | undefined = renamedFromName;
+    // The row as it stands before this edit, for the History tab's diff. The
+    // request memo makes this free when a guard above already read it.
+    const beforeEdit = await storage.getProfile(req.params.id);
     const updated = await storage.updateProfile(req.params.id, req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    // History: what this edit changed, field by field (server/profile-history).
+    // Only fields the request named are compared, so a value a background
+    // job moved between the two reads is never blamed on this edit.
+    {
+      const named = new Set(Object.keys((req.body.fields && typeof req.body.fields === "object") ? req.body.fields : {}));
+      for (const k of (Array.isArray(req.body.fieldsToDelete) ? req.body.fieldsToDelete : [])) named.add(String(k));
+      const pick = (row: any) => ({
+        id: req.params.id,
+        ...(req.body.name !== undefined ? { name: row?.name } : {}),
+        ...(req.body.notes !== undefined ? { notes: row?.notes } : {}),
+        fields: Object.fromEntries(Object.entries(row?.fields || {}).filter(([k]) =>
+          [...named].some((n) => n === k || canonicalFieldKey(n) === canonicalFieldKey(k)))),
+      });
+      await recordManualProfileEdit(storage, (req as AuthenticatedRequest).userId, pick(beforeEdit), pick(updated));
+    }
     // A rename carries into the titles the app generated from the old name —
     // the same follow-up the chat tool does, so both doors leave the data in
     // the same state. Best-effort; the rename itself has already landed.
@@ -12441,6 +12460,14 @@ No emojis. No prose outside the JSON.`,
     } catch (e: any) {
       res.status(400).json({ error: e?.message || "Failed to set owners" });
     }
+  }));
+
+  // Edit history of one profile: manual edits and chat edits, newest first.
+  // The History tab shows these beside the ownership log below.
+  app.get("/api/profiles/:id/edit-history", asyncHandler(async (req, res) => {
+    const profile = await storage.getProfile(req.params.id);
+    if (!profile) return res.status(404).json({ error: "Not found" });
+    res.json(await readProfileEditHistory(storage, (req as AuthenticatedRequest).userId, req.params.id));
   }));
 
   // Ownership history

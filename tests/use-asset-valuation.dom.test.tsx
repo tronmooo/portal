@@ -20,7 +20,7 @@ const { apiRequest, calls, queryClient } = vi.hoisted(() => {
 vi.mock("@/lib/queryClient", () => ({ queryClient, apiRequest, BROWSER_TIMEZONE: "UTC" }));
 
 import { CurrentValueCard } from "@/components/asset/CurrentValueCard";
-import { __resetValuationRefreshState, __resetSweepState, valuationQueryKey, useAssetsValuationSweep, SWEEP_CONCURRENCY } from "@/hooks/useAssetValuation";
+import { __resetValuationRefreshState, __resetSweepState, valuationQueryKey, useAssetsValuationSweep, SWEEP_CONCURRENCY, refreshAssetValuation } from "@/hooks/useAssetValuation";
 import type { ValuationRecord, ValuationSnapshot } from "@shared/valuation/types";
 
 function json(body: any, status = 200) {
@@ -129,6 +129,30 @@ describe("CurrentValueCard + useAssetValuation", () => {
     await waitFor(() => expect(screen.getByTestId("current-value-amount").textContent).toBe("$5,000"));
     expect(screen.queryByTestId("current-value-refreshing")).toBeNull();
     refreshResponder = () => json({ snapshot: snapshot(record(21000), true), ran: true, changed: true });
+  });
+
+  // 2026-11-19 (owner report): the Overview stayed on "Estimating… Refreshing…"
+  // beside a displayed value. A refresh already running when the card mounted
+  // (the Assets-tab sweep) set the flag, and with a FRESH snapshot nothing
+  // ever cleared it.
+  it("a refresh already running when the card opens is followed to its end, then the label clears", async () => {
+    let release!: (r: Response) => void;
+    apiRequest.mockImplementation(async (method: string, url: string, body?: any) => {
+      calls.push({ method, url, body });
+      if (url.endsWith("/refresh")) return new Promise<Response>(r => { release = r; });
+      return json(queryClient.getQueryData(valuationQueryKey("a")) ?? snapshot(null, false));
+    });
+    queryClient.setQueryData(valuationQueryKey("a"), snapshot(record(20000), true));
+    const sweepRun = refreshAssetValuation("a", { force: true });
+    mount("a");
+    expect(screen.getByTestId("current-value-amount").textContent).toBe("$20,000");
+    expect(screen.getByTestId("current-value-refreshing")).toBeTruthy();
+    await waitFor(() => expect(typeof release).toBe("function"));
+    release(json({ snapshot: snapshot(record(20000), true), ran: true, changed: false }));
+    await sweepRun;
+    await waitFor(() => expect(screen.queryByTestId("current-value-refreshing")).toBeNull());
+    expect(screen.getByTestId("current-value-refresh").textContent).toMatch(/^Refresh$/);
+    expect(calls.filter(c => c.url.includes("/refresh"))).toHaveLength(1);
   });
 
   it("insufficient data is stated, never a number; the user's own value is shown as kept", async () => {

@@ -7517,6 +7517,18 @@ export function computeDocProfileLinks(
   return cur.filter(id => !ids.includes(id)); // unlink
 }
 
+/**
+ * The tags a create may carry: what the model passed, but only when the
+ * user's own words ask for tagging ("tag it …", "with the tag …", "#audio").
+ * With no user message (a programmatic caller) the tags are the caller's.
+ */
+export function tagsTheUserAskedFor(tags: unknown, userMessage: unknown): string[] {
+  const list = Array.isArray(tags) ? tags.filter((t): t is string => typeof t === "string" && t.trim() !== "") : [];
+  if (list.length === 0) return [];
+  if (typeof userMessage !== "string" || userMessage.trim() === "") return list;
+  return /\btag(s|ged|ging)?\b|\blabel(s|ed|led)?\b|(^|\s)#[a-z]\w*/i.test(userMessage) ? list : [];
+}
+
 export async function executeTool(name: string, input: any, userId?: string): Promise<any> {
   try {
     return await executeToolInner(name, input, userId);
@@ -8053,7 +8065,10 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         type: resolvedProfileType,
         name: input.name,
         fields: finalFields,
-        tags: input.tags || [],
+        // Tags are the user's own labels: kept only when they asked for one.
+        // The schema offers `tags`, so the model filled it in on its own
+        // ("electronics", "audio") for an asset nobody asked to tag.
+        tags: tagsTheUserAskedFor(input.tags, (input as any).__userMessage),
         notes: input.notes || "",
         parentProfileId,
       }, "profile");

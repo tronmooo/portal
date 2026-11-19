@@ -5279,7 +5279,8 @@ const PROFILE_TYPE_ICONS: Record<string, any> = {
   self: Smile,
   loan: CreditCard,
   investment: TrendingUp,
-  asset: Star,
+  // Not a star: a star on a card reads as a favorite control, and there is none.
+  asset: Box,
 };
 
 export default function TrackersPage() {
@@ -5972,8 +5973,12 @@ export default function TrackersPage() {
             if (sectionFilter === "profiles") {
               return (
                 <div className="flex items-center gap-1">
-                  <Button onClick={() => setAddAccountOpen(true)} size="icon" variant="outline" className="h-7 w-7" data-testid="button-create-account" aria-label="Add Account">
+                  {/* A bare wallet icon read as "open my accounts"; it ADDS one.
+                      The button says what it does. */}
+                  <Button onClick={() => setAddAccountOpen(true)} size="sm" variant="outline" className="h-7 px-2 text-xs gap-1" data-testid="button-create-account" aria-label="Add Account" title="Add a financial account">
+                    <Plus className="h-3 w-3" />
                     <Wallet className="h-3.5 w-3.5" />
+                    <span>Account</span>
                   </Button>
                   <Button onClick={openAssetDialog} size="icon" className="h-7 w-7" data-testid="button-create-asset" aria-label="Add Asset">
                     <Plus className="h-3.5 w-3.5" />
@@ -6462,7 +6467,7 @@ export default function TrackersPage() {
             </div>
           );
         }
-        const kindIcons: Record<Row["kind"], any> = { asset: Star, liability: TrendingDown, document: FileText, tracker: Activity };
+        const kindIcons: Record<Row["kind"], any> = { asset: Box, liability: TrendingDown, document: FileText, tracker: Activity };
         // Per-row visual accent. Trackers are colored by their CATEGORY (so
         // nutrition is orange, fitness green, medication pink, finance amber…)
         // which is what gives the list its scan-at-a-glance variety — the prior
@@ -6767,7 +6772,7 @@ export default function TrackersPage() {
           (typeGroups[group] = typeGroups[group] || []).push(p);
         }
         const sortedGroups = Object.entries(typeGroups).sort(([a], [b]) => a.localeCompare(b));
-        const typeIcons: Record<string, any> = { vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: Wallet };
+        const typeIcons: Record<string, any> = { vehicle: Car, asset: Box, loan: CreditCard, investment: TrendingUp, property: Building2, account: Wallet };
 
         return (
           <div className="space-y-1.5">
@@ -6789,7 +6794,7 @@ export default function TrackersPage() {
             {(!collapsedSections.has("profiles") || (hubEmbedded && sectionFilter !== "all")) && (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 202 }}>
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
-                  const Icon = typeIcons[child.type] || Star;
+                  const Icon = typeIcons[child.type] || Box;
                   const fields = child.fields || {};
                   // Robust value resolver — historical data is stored under several
                   // inconsistent paths (fields.currentValue, fields.housing.currentValue,
