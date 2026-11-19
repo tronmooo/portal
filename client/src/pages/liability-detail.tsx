@@ -61,7 +61,7 @@ import { Pill } from "@/components/dashboard/visuals";
 import { MetricCard } from "@/components/ui/metric-card";
 import type { LucideIcon } from "lucide-react";
 import { profileVisual } from "@/lib/profile-visuals";
-import { formatFullDate, formatListDate, parseLocalDate } from "@/lib/format";
+import { formatFullDate, formatListDate, parseLocalDate, timelineStamp, timelineInstant, formatTimelineStamp, isDateOnly } from "@/lib/format";
 import { dayLabel } from "@shared/now-rank";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
@@ -108,15 +108,14 @@ import { formatApiError } from "@/lib/formatError";
 import {
   buildAmortization,
   summarizeLiability,
-  splitDebtPayment,
+  allocatePayment,
+  interestChargedInMonth,
   type AmortizationRow,
 } from "@shared/liability-calc";
-import { liabilityFamily, isAmortizable, isRecurringBill, liabilityTypeKeyOf, LIABILITY_SUBTYPE_LABELS } from "@shared/liability-types";
-import { isLiabilityTabProfile } from "@shared/asset-value";
-import { useConfirmArm } from "@/hooks/useConfirmArm";
-import { useAutosave, autosaveStatusLabel } from "@/hooks/useAutosave";
+import { liabilityFamily, isAmortizable, isRecurringBill } from "@shared/liability-types";
 import { liabilityBillStatus, BILL_STATUS_META, isWithinOverdueGrace } from "@shared/liability-status";
-import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw, readInterestRatePct } from "@shared/liability-fields";
+import { useConfirmArm } from "@/hooks/useConfirmArm";
+import { readAnnualRate, readBalance, readMonthlyPayment, readInterestRateRaw, rateInputToStoredPct, rateInputValue } from "@shared/liability-fields";
 import { payoffMissingFields } from "@shared/liability-payoff";
 import { PayoffOutlook } from "@/components/liability/PayoffOutlook";
 import { getRecordTemporalStatus } from "@shared/temporal-status";
@@ -145,8 +144,21 @@ interface LiabilityPayment {
   createdAt?: string;
 }
 
-// ONE label map for every surface (shared/liability-types).
-const SUBTYPE_LABELS = LIABILITY_SUBTYPE_LABELS;
+const SUBTYPE_LABELS: Record<string, string> = {
+  mortgage: "Mortgage",
+  auto_loan: "Auto loan",
+  credit_card: "Credit card",
+  student_loan: "Student loan",
+  medical_debt: "Medical debt",
+  business_loan: "Business loan",
+  tax_debt: "Tax debt",
+  line_of_credit: "Line of credit",
+  bnpl: "Buy now pay later",
+  personal_loan: "Personal loan",
+  financing: "Financing",
+  utility_plan: "Utility plan",
+  custom: "Other liability",
+};
 
 // ─── Formatting helpers ──────────────────────────────────────────────────────
 
@@ -456,9 +468,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     if (v.balance !== "") fields.currentBalance = num(v.balance);
     if (v.original !== "") fields.originalBalance = num(v.original);
     if (v.rate !== "") {
-      const r = num(v.rate);
-      // The field is labelled "%" and the canonical `interestRate` is a
-      // percent: what is typed is what is stored.
+      // Stored as a PERCENT under the canonical key. Writing a decimal here
+      // made the Overview print "0.1%" for a 6.25% loan.
+      const r = rateInputToStoredPct(v.rate);
       if (r != null) fields.interestRate = r;
     }
     if (v.term !== "") fields.remainingTermMonths = num(v.term);
@@ -476,38 +488,42 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     clearOrSet("lender", v.lender, f2.lender != null, v.lender.trim());
     return fields;
   };
-  type TermsForm = Parameters<typeof buildTermsFields>[0];
-  // AUTO-SAVE: every change is saved as it is made (hooks/useAutosave) — only
-  // what changed since the last save is written, so a balance moved by a
-  // payment while the form sat open is still not put back (D246).
-  const termsAutosave = useAutosave<TermsForm>({
-    enabled: editingTerms,
-    snapshot: { balance: tBalance, original: tOriginal, rate: tRate, term: tTerm, monthly: tMonthly, dueDay: tDueDay, firstPayment: tFirstPayment, lender: tLender },
-    save: async (current, saved) => {
-      const fields = changedFieldsOnly(buildTermsFields(saved), buildTermsFields(current));
+  const [seededTerms, setSeededTerms] = useState<Parameters<typeof buildTermsFields>[0] | null>(null);
+  const saveTermsMutation = useMutation({
+    mutationFn: async () => {
+      const current = { balance: tBalance, original: tOriginal, rate: tRate, term: tTerm, monthly: tMonthly, dueDay: tDueDay, firstPayment: tFirstPayment, lender: tLender };
+      const fields = seededTerms ? changedFieldsOnly(buildTermsFields(seededTerms), buildTermsFields(current)) : buildTermsFields(current);
       if (Object.keys(fields).length === 0) return;
-      try {
-        await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
-      } catch (err: any) {
-        toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" });
-        throw err;
-      }
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
+    },
+    onSuccess: () => {
+      toast({ title: "Loan terms saved", description: "Calendar will update with the new due date." });
+      setEditingTerms(false);
       invalidateDomains("liabilities", "events");
     },
+    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
-  const closeTermsEditor = () => { void termsAutosave.flush(); setEditingTerms(false); };
   const openTermsEditor = () => {
     setTBalance(terms.currentBalance ? String(terms.currentBalance) : "");
     setTOriginal(terms.originalBalance ? String(terms.originalBalance) : "");
-    // `terms.annualRate` is a DECIMAL (0.0625); the field is a percent. It
-    // used to open showing 0.0625 under a "%" label.
-    const ratePct = readInterestRatePct(profile.fields || {});
-    setTRate(ratePct ? String(ratePct) : "");
+    // The field is labelled "%": show the percent (6.25), not the decimal the
+    // amortization engine works in (0.0625).
+    setTRate(rateInputValue(profile));
     setTTerm(terms.remainingTermMonths ? String(terms.remainingTermMonths) : "");
     setTMonthly(terms.monthlyPayment ? String(terms.monthlyPayment) : "");
     setTDueDay(terms.dueDay ? String(terms.dueDay) : "");
     setTFirstPayment(terms.firstPaymentDate || "");
     setTLender(terms.lender || "");
+    setSeededTerms({
+      balance: terms.currentBalance ? String(terms.currentBalance) : "",
+      original: terms.originalBalance ? String(terms.originalBalance) : "",
+      rate: rateInputValue(profile),
+      term: terms.remainingTermMonths ? String(terms.remainingTermMonths) : "",
+      monthly: terms.monthlyPayment ? String(terms.monthlyPayment) : "",
+      dueDay: terms.dueDay ? String(terms.dueDay) : "",
+      firstPayment: terms.firstPaymentDate || "",
+      lender: terms.lender || "",
+    });
     setEditingTerms(true);
   };
 
@@ -582,28 +598,25 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
 
       return fields;
   };
-  type BillForm = Parameters<typeof buildBillFields>[0];
-  // AUTO-SAVE, as for the loan terms above.
-  const billAutosave = useAutosave<BillForm>({
-    enabled: editingBill,
-    snapshot: { amount: bAmount, frequency: bFrequency, dueDate: bDueDate, count: bCount, end: bEnd, reminder: bReminder, autopay: bAutopay },
-    save: async (current, saved) => {
-      const fields = changedFieldsOnly(buildBillFields(saved), buildBillFields(current));
+  const [seededBill, setSeededBill] = useState<Parameters<typeof buildBillFields>[0] | null>(null);
+  const saveBillMutation = useMutation({
+    mutationFn: async () => {
+      const current = { amount: bAmount, frequency: bFrequency, dueDate: bDueDate, count: bCount, end: bEnd, reminder: bReminder, autopay: bAutopay };
+      const fields = seededBill ? changedFieldsOnly(buildBillFields(seededBill), buildBillFields(current)) : buildBillFields(current);
       if (Object.keys(fields).length === 0) return;
-      try {
-        await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
-      } catch (err: any) {
-        toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" });
-        throw err;
-      }
+      await apiRequest("PATCH", `/api/profiles/${profile.id}`, { fields });
+    },
+    onSuccess: () => {
+      toast({ title: "Bill updated", description: "Schedule and calendar refreshed." });
+      setEditingBill(false);
       // The schedule key is ["/api/liabilities", id, "schedule"] — the domain
       // bus predicate matches "/api/liabilities/" (with the slash), so this one
       // has to be invalidated by hand or the card keeps the pre-edit series.
       qc.invalidateQueries({ queryKey: ["/api/liabilities", profile.id, "schedule"] });
       invalidateDomains("liabilities", "events");
     },
+    onError: (err: Error) => toast({ title: "Failed to save", description: formatApiError(err), variant: "destructive" }),
   });
-  const closeBillEditor = () => { void billAutosave.flush(); setEditingBill(false); };
   const openBillEditor = () => {
     setBAmount(String(schedule?.amount ?? billMonthly ?? ""));
     setBFrequency(billFrequencyLabel || "monthly");
@@ -612,6 +625,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     setBEnd((schedule?.recurrenceEnd || "").slice(0, 10));
     setBReminder(billReminderLead != null ? String(billReminderLead) : "");
     setBAutopay(!!(f2.autopay || f2.autoPay || f2.autoRenew));
+    setSeededBill({
+      amount: String(schedule?.amount ?? billMonthly ?? ""),
+      frequency: billFrequencyLabel || "monthly",
+      dueDate: (schedule?.firstPayment || billNextDueEff || billDueRaw || "").slice(0, 10),
+      count: billTotalTerm != null ? String(billTotalTerm) : "",
+      end: (schedule?.recurrenceEnd || "").slice(0, 10),
+      reminder: billReminderLead != null ? String(billReminderLead) : "",
+      autopay: !!(f2.autopay || f2.autoPay || f2.autoRenew),
+    });
     setEditingBill(true);
   };
 
@@ -625,8 +647,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       );
       toast({ title: "Profile deleted", description: "All linked data has been removed" });
       invalidateDomains("liabilities", "events", "expenses");
-      // Back where the liability was listed — `/profiles` is the Info tab.
-      navigate("/linked?tab=liabilities");
+      navigate("/profiles");
     },
     onError: (err: Error) => toast({ title: "Delete failed", description: formatApiError(err), variant: "destructive" }),
   });
@@ -918,8 +939,9 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
     let initial = "";
     const monthlyInterest = (terms.currentBalance * terms.annualRate) / 12;
     if (preset === "minimum") initial = (terms.monthlyPayment || summary.monthlyPayment || 0).toFixed(2);
-    // The EXTRA only — principal on top of the regular payment, not the
-    // regular payment plus $100 booked as an ordinary (interest-bearing) one.
+    // Extra principal is the EXTRA money only, on top of the regular payment
+    // (recorded separately). It used to prefill payment + $100 and post it as
+    // an ordinary payment, so interest was charged on an "extra principal" one.
     else if (preset === "extra") initial = "100.00";
     else if (preset === "interest_only") initial = monthlyInterest.toFixed(2);
     setPaymentDialog({
@@ -937,9 +959,6 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
   // (stale by then: it still held the advanced due date the server had just
   // rolled back) plus a balance it computed itself, fees included, though a
   // fee never reduced the balance. Nothing to write here.
-  // Rule 8: reversing a payment changes the balance and the schedule — the
-  // first tap arms the button, the second runs it.
-  const { confirm: confirmReverse, isArmed: isReverseArmed } = useConfirmArm();
   const reversePaymentMutation = useMutation({
     mutationFn: async (payment: LiabilityPayment) => {
       await apiRequest("DELETE", `/api/liability-payments/${payment.id}`);
@@ -960,7 +979,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       amount: number;
       paymentDate: string;
       notes?: string;
-      extraPrincipal?: boolean;
+      paymentType?: "extra_principal";
     }) => {
       // The server owns the principal/interest split AND the resulting balance
       // (single source of truth). We send only the raw payment; the server
@@ -970,7 +989,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
         paymentDate: input.paymentDate,
         amount: input.amount,
         notes: input.notes || null,
-        ...(input.extraPrincipal ? { paymentType: "extra_principal" } : {}),
+        ...(input.paymentType ? { paymentType: input.paymentType } : {}),
       });
       return res.json();
     },
@@ -1000,7 +1019,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
       amount: amt,
       paymentDate: paymentDialog.paymentDate,
       notes: paymentDialog.notes,
-      extraPrincipal: paymentDialog.preset === "extra",
+      ...(paymentDialog.preset === "extra" ? { paymentType: "extra_principal" as const } : {}),
     });
   }
 
@@ -1384,8 +1403,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <Card data-testid="bill-details-edit-card">
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Edit bill details</CardTitle>
-                  <Button size="sm" variant="ghost" onClick={closeBillEditor} data-testid="button-cancel-bill-edit">
-                    Done
+                  <Button size="sm" variant="ghost" onClick={() => setEditingBill(false)} data-testid="button-cancel-bill-edit">
+                    Cancel
                   </Button>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -1443,12 +1462,17 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                     <Switch checked={bAutopay} onCheckedChange={setBAutopay} data-testid="switch-bill-autopay" />
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button size="sm" onClick={closeBillEditor} data-testid="button-save-bill">
-                      Done
+                    <Button
+                      size="sm"
+                      onClick={() => saveBillMutation.mutate()}
+                      disabled={saveBillMutation.isPending}
+                      data-testid="button-save-bill"
+                    >
+                      {saveBillMutation.isPending ? "Saving…" : "Save bill"}
                     </Button>
-                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="bill-autosave-status">
-                      {autosaveStatusLabel(billAutosave.status)}
-                    </span>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingBill(false)} data-testid="button-cancel-bill-edit-2">
+                      Cancel
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -1491,8 +1515,8 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <Card>
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
                   <CardTitle className="text-base">Edit loan terms</CardTitle>
-                  <Button size="sm" variant="ghost" onClick={closeTermsEditor} data-testid="button-cancel-terms-edit">
-                    Done
+                  <Button size="sm" variant="ghost" onClick={() => setEditingTerms(false)} data-testid="button-cancel-terms-edit">
+                    Cancel
                   </Button>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -1518,7 +1542,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                       <Input type="number" inputMode="decimal" step="0.01" value={tMonthly} onChange={(e) => setTMonthly(e.target.value)} placeholder="e.g. 1000" data-testid="input-terms-monthly" />
                     </div>
                     <div>
-                      <Label className="text-xs">Remaining term (months)</Label>
+                      <Label className="text-xs">Loan term (months)</Label>
                       <Input type="number" inputMode="numeric" value={tTerm} onChange={(e) => setTTerm(e.target.value)} placeholder="e.g. 60" data-testid="input-terms-term" />
                     </div>
                     <div>
@@ -1531,15 +1555,20 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                     </div>
                   </div>
                   <p className="text-[11px] text-muted-foreground">
-                    A monthly payment and a due day put this loan's payment on your calendar each month.
+                    Setting a monthly payment and due day creates a recurring bill that lands on your calendar each month.
                   </p>
                   <div className="flex items-center gap-2">
-                    <Button size="sm" onClick={closeTermsEditor} data-testid="button-save-terms">
-                      Done
+                    <Button
+                      size="sm"
+                      onClick={() => saveTermsMutation.mutate()}
+                      disabled={saveTermsMutation.isPending}
+                      data-testid="button-save-terms"
+                    >
+                      {saveTermsMutation.isPending ? "Saving…" : "Save terms"}
                     </Button>
-                    <span className="text-xs text-muted-foreground" role="status" aria-live="polite" data-testid="terms-autosave-status">
-                      {autosaveStatusLabel(termsAutosave.status)}
-                    </span>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingTerms(false)} data-testid="button-cancel-terms-edit-2">
+                      Cancel
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -1564,9 +1593,15 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                       term they entered vs which is the calculated payoff. The
                       old single row showed "50 mo" while the header KPI showed
                       "58 mo" with no explanation. */}
-                  <Row label="Term on record"
+                  {/* The two numbers answer different questions and must say so:
+                      the term is what was typed into the form; the payoff is
+                      today's balance paid down at the stored payment. "360" beside
+                      "271" with no explanation read as a contradiction. */}
+                  <Row label="Loan term (as entered)"
                     value={terms.remainingTermMonths ? `${terms.remainingTermMonths} mo` : "—"} />
-                  <Row label="Payoff at the current payment"
+                  <Row label={(terms.monthlyPayment || summary.monthlyPayment) > 0
+                      ? `Payoff at ${fmtUSD(terms.monthlyPayment || summary.monthlyPayment)}/mo (calculated)`
+                      : "Projected payoff (calculated)"}
                     value={summary.remainingMonths ? `${summary.remainingMonths} mo` : "—"} />
                   <Row label="First payment date" value={fmtDate(terms.firstPaymentDate)} />
                   <Row label="Due day of month"
@@ -1618,8 +1653,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                           key={p.id}
                           p={p}
                           expanded
-                          onReverse={() => confirmReverse(p.id, () => reversePaymentMutation.mutate(p))}
-                          reverseArmed={isReverseArmed(p.id)}
+                          onReverse={() => reversePaymentMutation.mutate(p)}
                           reversing={reversePaymentMutation.isPending}
                         />
                       ))}
@@ -1727,9 +1761,7 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
                 : "Record payment"}
             </DialogTitle>
             <DialogDescription>
-              {paymentDialog.preset === "extra"
-                ? "This goes entirely to principal, on top of your regular payment."
-                : "We'll split this payment into interest and principal automatically."}
+              We'll split this payment into interest and principal automatically.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1751,11 +1783,10 @@ export function LiabilityProfilePage({ profile }: LiabilityProfilePageProps) {
               <p className="text-xs text-muted-foreground mt-1">
                 Estimated split: {(() => {
                   const amt = parseFloat(paymentDialog.amount) || 0;
-                  // The same split the server books (shared/liability-calc).
-                  const split = splitDebtPayment(amt, terms.currentBalance, terms.annualRate, {
-                    typeKey: liabilityTypeKeyOf(profile as any),
-                    extraPrincipal: paymentDialog.preset === "extra",
-                  });
+                  // Mirrors the server's rule: extra principal carries no interest,
+                  // and a month's interest is charged once.
+                  const noInterest = paymentDialog.preset === "extra" || interestChargedInMonth(payments, paymentDialog.paymentDate);
+                  const split = allocatePayment(amt, terms.currentBalance, noInterest ? 0 : terms.annualRate, 0);
                   return `${fmtUSD(split.principal)} principal · ${fmtUSD(split.interest)} interest`;
                 })()}
               </p>
@@ -1944,15 +1975,17 @@ function PaymentRow({
   p,
   expanded,
   onReverse,
-  reverseArmed,
   reversing,
 }: {
   p: LiabilityPayment;
   expanded?: boolean;
   onReverse?: () => void;
-  reverseArmed?: boolean;
   reversing?: boolean;
 }) {
+  // Rule 8: reversing a payment puts money back on the balance. One stray tap
+  // must not do that: the first tap arms the button, the second reverses.
+  const { confirm: confirmReverse, isArmed: isReverseArmed } = useConfirmArm();
+  const reverseArmed = isReverseArmed(`reverse-${p.id}`);
   return (
     <div className="px-3 py-2 flex items-center justify-between gap-3" data-testid={`payment-row-${p.id}`}>
       <div className="min-w-0">
@@ -1975,13 +2008,14 @@ function PaymentRow({
             variant="ghost"
             size="sm"
             className={reverseArmed ? "text-destructive" : "text-muted-foreground hover:text-destructive"}
-            onClick={onReverse}
+            onClick={() => confirmReverse(`reverse-${p.id}`, onReverse)}
             disabled={reversing}
-            title={reverseArmed ? "Tap again to reverse" : "Reverse this payment"}
+            title={reverseArmed ? "Tap again to reverse this payment" : "Reverse this payment"}
             aria-label={reverseArmed ? "Tap again to reverse this payment" : "Reverse this payment"}
             data-testid={`reverse-payment-${p.id}`}
           >
-            {reversing ? <Loader2 className="w-4 h-4 animate-spin" /> : reverseArmed ? "Reverse?" : <RotateCcw className="w-4 h-4" />}
+            {reversing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+            {reverseArmed ? <span className="ml-1 text-xs">Tap again to reverse</span> : null}
           </Button>
         ) : null}
       </div>
@@ -2893,29 +2927,50 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
         queue.push(nb);
       }
     }
+    // A liability's `typeKey` is its SUBTYPE ("mortgage"), so testing it
+    // against {"liability","loan"} rejected every typed debt. The record type
+    // is what says "this is a debt".
     return (data.nodes || []).filter((n) => {
       if (!reachable.has(n.id)) return false;
-      // `typeKey` is the SUBTYPE ("mortgage"); the record kind is `type`.
-      // Testing the subtype dropped every liability that had one.
-      return liabTypes.has(String(n.type || "").toLowerCase());
+      const t = (n.type || n.typeKey || "").toLowerCase();
+      return liabTypes.has(t);
     });
   }, [graphQuery.data, liabilityId]);
 
-  // A nested liability is stored as a CHILD (`parentProfileId`) — that is what
-  // "Add nested liability" below and the chat both write. The relationship
-  // graph walks only the link tables, so a child was never one of its nodes:
-  // the panel said "Nothing nested" while the same child sat under Linked
-  // records and in the list (2026-11-18). Children come from the profile list.
+  // The panel's own "add" files the child UNDER this liability
+  // (parentProfileId), which is not a link-table edge, so the graph never
+  // returned it: the child showed under Linked records and in the list while
+  // this panel said "No nested liabilities". Children are read from the
+  // profile list, the same rows the list shows.
   const profilesQuery = useQuery<any[]>({ queryKey: ["/api/profiles"] });
   const nestedLiabilities = useMemo(() => {
-    const children = (profilesQuery.data || [])
-      .filter((p: any) => p?.parentProfileId === liabilityId && isLiabilityTabProfile(p))
-      .map((p: any) => ({ id: String(p.id), name: String(p.name || "Liability"), typeKey: String(liabilityTypeKeyOf(p) || p.type || ""), type: p.type as string | undefined }));
-    const seen = new Set(children.map((c) => c.id));
-    return [...children, ...linkedLiabilities.filter((n) => !seen.has(n.id))];
+    const out = new Map<string, { id: string; name: string; typeKey: string; type?: string }>();
+    for (const p of profilesQuery.data || []) {
+      if (p?.parentProfileId !== liabilityId) continue;
+      if (!["liability", "loan"].includes(String(p.type || "").toLowerCase())) continue;
+      out.set(p.id, { id: p.id, name: p.name, type: p.type, typeKey: p.type_key || p.typeKey || "" });
+    }
+    for (const n of linkedLiabilities) if (!out.has(n.id)) out.set(n.id, n);
+    return [...out.values()];
   }, [profilesQuery.data, linkedLiabilities, liabilityId]);
 
-  const SUBTYPE_LABELS_LOCAL: Record<string, string> = { ...LIABILITY_SUBTYPE_LABELS, liability: "Liability", loan: "Loan" };
+  const SUBTYPE_LABELS_LOCAL: Record<string, string> = {
+    mortgage: "Mortgage",
+    auto_loan: "Auto loan",
+    credit_card: "Credit card",
+    student_loan: "Student loan",
+    medical_debt: "Medical debt",
+    business_loan: "Business loan",
+    tax_debt: "Tax debt",
+    line_of_credit: "Line of credit",
+    bnpl: "Buy now pay later",
+    personal_loan: "Personal loan",
+    financing: "Financing",
+    utility_plan: "Utility plan",
+    custom: "Other liability",
+    liability: "Liability",
+    loan: "Loan",
+  };
 
   const createChildMut = useMutation({
     mutationFn: async () => {
@@ -2978,7 +3033,7 @@ function NestedLiabilitiesCard({ liabilityId }: { liabilityId: string }) {
           <Plus className="w-4 h-4 mr-1" />Add nested liability
         </Button>
       )}
-      {graphQuery.isLoading && nestedLiabilities.length === 0 ? (
+      {graphQuery.isLoading ? (
         <Skeleton className="h-40 w-full" />
       ) : nestedLiabilities.length === 0 ? (
         // Stated as the outcome, not as a hole. Nothing nested under a bill is
@@ -3348,24 +3403,6 @@ interface ActivityEntry {
   title: string;
   description?: string;
   timestamp: string; // ISO
-  /** The source named a calendar DAY, not a moment — print no time of day. */
-  dateOnly?: boolean;
-}
-
-/**
- * An activity timestamp from a stored date. A bare YYYY-MM-DD is a calendar
- * day in the user's own zone: `new Date("2026-11-18")` reads it as UTC
- * midnight, which is Nov 17, 7:00 PM in New York — the Activity tab dated a
- * Nov 18 payment "Nov 17" while the Payments tab said Nov 18 (2026-11-18).
- */
-function activityStamp(raw: unknown): { timestamp: string; dateOnly?: boolean } {
-  const text = typeof raw === "string" ? raw : "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    const local = parseLocalDate(text);
-    if (local) return { timestamp: local.toISOString(), dateOnly: true };
-  }
-  const d = new Date((raw as any) || Date.now());
-  return { timestamp: (isNaN(d.getTime()) ? new Date() : d).toISOString() };
 }
 
 function ActivityTimelineCard({
@@ -3404,7 +3441,7 @@ function ActivityTimelineCard({
         type: "payment",
         title: `Payment ${fmtUSD(Number(p.amount) || 0)}`,
         description: `${fmtUSD(Number(p.principalPortion) || 0)} principal · ${fmtUSD(Number(p.interestPortion) || 0)} interest${p.notes ? ` · ${p.notes}` : ""}`,
-        ...activityStamp(ts),
+        timestamp: timelineStamp(ts),
       });
     }
 
@@ -3416,7 +3453,7 @@ function ActivityTimelineCard({
           type: "document",
           title: d.title || d.filename || "Document",
           description: d.summary || d.kind || undefined,
-          ...activityStamp(d.createdAt || d.uploadedAt),
+          timestamp: timelineStamp(d.createdAt || d.uploadedAt),
         });
       }
       for (const e of detail.relatedEvents || []) {
@@ -3425,7 +3462,7 @@ function ActivityTimelineCard({
           type: "event",
           title: e.title || "Event",
           description: e.description || undefined,
-          ...activityStamp(e.startTime || e.start || e.createdAt),
+          timestamp: timelineStamp(e.startTime || e.start || e.createdAt),
         });
       }
       for (const t of detail.relatedTasks || []) {
@@ -3434,7 +3471,7 @@ function ActivityTimelineCard({
           type: "task",
           title: t.title || "Task",
           description: t.description || undefined,
-          ...activityStamp(t.dueDate || t.createdAt),
+          timestamp: timelineStamp(t.dueDate || t.createdAt),
         });
       }
       for (const o of detail.relatedObligations || []) {
@@ -3443,7 +3480,7 @@ function ActivityTimelineCard({
           type: "obligation",
           title: o.title || "Obligation",
           description: o.description || undefined,
-          ...activityStamp(o.dueDate || o.createdAt),
+          timestamp: timelineStamp(o.dueDate || o.createdAt),
         });
       }
     }
@@ -3492,8 +3529,8 @@ function ActivityTimelineCard({
   ];
   for (const e of entries.slice(0, 100)) {
     let d: string;
-    try { d = toLocalDateStr(new Date(e.timestamp), BROWSER_TIMEZONE); } catch { d = String(e.timestamp || "").slice(0, 10); }
-    const t = new Date(e.timestamp).getTime();
+    try { d = isDateOnly(e.timestamp) ? e.timestamp : toLocalDateStr(new Date(e.timestamp), BROWSER_TIMEZONE); } catch { d = String(e.timestamp || "").slice(0, 10); }
+    const t = timelineInstant(e.timestamp).getTime();
     if (d === todayStr) groups[0].items.push(e);
     else if (d === yesterday) groups[1].items.push(e);
     else if (t >= weekAgo) groups[2].items.push(e);
@@ -3559,9 +3596,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
           <p className="text-xs text-muted-foreground mt-0.5">{entry.description}</p>
         )}
         <p className="text-xs text-muted-foreground mt-1">
-          {new Date(entry.timestamp).toLocaleDateString(undefined, entry.dateOnly
-            ? { month: "short", day: "numeric" }
-            : { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+          {formatTimelineStamp(entry.timestamp)}
         </p>
       </div>
       <Badge variant="secondary" className="text-xs capitalize shrink-0 h-fit">

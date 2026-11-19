@@ -181,6 +181,9 @@ export interface OverviewIdentity {
 }
 
 export interface OverviewSpec {
+  /** True when a refined layout is still being worked out. The values shown
+   *  are final; the client fetches the layout with `?layout=wait`. */
+  layoutPending?: boolean;
   identity: OverviewIdentity;
   summaryMetrics: OverviewValue[];
   sections: OverviewSection[];

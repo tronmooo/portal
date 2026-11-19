@@ -102,39 +102,6 @@ export function liabilityTypeKeyOf(
 }
 
 /**
- * THE display label of a debt subtype. The profile page, the nested-liability
- * panel and the Liabilities list all print this, so a mortgage cannot be a
- * "Mortgage" on its own page and an "Other" in the list (2026-11-18: the list
- * read `fields.subtype`, which the chat never writes — the subtype lives in
- * the `type_key` column).
- */
-export const LIABILITY_SUBTYPE_LABELS: Readonly<Record<string, string>> = {
-  mortgage: "Mortgage",
-  auto_loan: "Auto loan",
-  credit_card: "Credit card",
-  student_loan: "Student loan",
-  medical_debt: "Medical debt",
-  business_loan: "Business loan",
-  tax_debt: "Tax debt",
-  line_of_credit: "Line of credit",
-  heloc: "Home equity line",
-  bnpl: "Buy now pay later",
-  personal_loan: "Personal loan",
-  financing: "Financing",
-  utility_plan: "Utility plan",
-  custom: "Other liability",
-  other: "Other liability",
-};
-
-/** The label for a liability record's debt subtype, or null when it has none we name. */
-export function liabilitySubtypeLabel(
-  record: Parameters<typeof liabilityTypeKeyOf>[0],
-): string | null {
-  const key = liabilityTypeKeyOf(record);
-  return key ? LIABILITY_SUBTYPE_LABELS[String(key).toLowerCase()] ?? null : null;
-}
-
-/**
  * THE "is this a recurring bill?" predicate for a record that may carry its
  * subtype in the column, a legacy field, or (older subscription rows) only in
  * `type`. The chat context, the detail page header and the temporal engine

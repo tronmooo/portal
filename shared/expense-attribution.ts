@@ -45,3 +45,41 @@ export function expenseAttributionName(message: string, amount: number): string 
   if (/^(?:me|myself|us|i)$/i.test(name)) return null;
   return name;
 }
+
+/** Lowercase words only, single-spaced: "Sony WH-1000XM5" → "sony wh 1000xm5". */
+function wordsOf(text: unknown): string {
+  return String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * The ONE thing (asset, vehicle, property…) a spend names outright.
+ *
+ * "I spent $40 on ear pads for my Sony WH-1000XM5" names the asset in full,
+ * but the "for <Name>" net above only reads a capitalized one- or two-word
+ * name, and the model often leaves `forProfile` off for a thing. The expense
+ * was then filed under the account holder alone and the asset's Money tab said
+ * "No expenses logged" (2026-11-19).
+ *
+ * Deliberately narrow, so it can never guess: the profile's FULL name must
+ * appear as whole words, and exactly one thing may match (a longer name that
+ * contains a shorter one wins: "Honda CR-V EX" over "Honda CR-V"). Two
+ * distinct things in one sentence is a tie, and a tie attributes nothing.
+ */
+export function thingNamedInSpend<P extends { id: string; name?: string | null }>(
+  text: string,
+  things: readonly P[],
+): P | null {
+  const hay = ` ${wordsOf(text)} `;
+  if (hay.trim().length === 0) return null;
+  const hits: Array<{ thing: P; needle: string }> = [];
+  for (const t of things) {
+    const needle = wordsOf(t?.name);
+    if (needle.length < 4) continue;
+    if (hay.includes(` ${needle} `)) hits.push({ thing: t, needle });
+  }
+  if (hits.length === 0) return null;
+  // Drop a hit whose name sits wholly inside another hit's longer name.
+  const top = hits.filter((h) => !hits.some((o) => o !== h && o.needle.length > h.needle.length && ` ${o.needle} `.includes(` ${h.needle} `)));
+  const ids = new Set(top.map((h) => h.thing.id));
+  return ids.size === 1 ? top[0].thing : null;
+}

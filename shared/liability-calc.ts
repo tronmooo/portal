@@ -7,7 +7,6 @@
 
 import { addMonthsISO } from "./date-math";
 import { normalizeAnnualRate, readAnnualRate } from "./liability-fields";
-import { liabilityFamily } from "./liability-types";
 
 // The one APR→decimal converter lives with the canonical field readers
 // (shared/liability-fields); re-exported so existing imports keep working.
@@ -176,6 +175,26 @@ export function buildAmortization(terms: LiabilityTerms): AmortizationResult {
 }
 
 /**
+ * Has this month's interest already been paid? True when a standing payment
+ * dated in the same calendar month as `paymentDate` carried an interest
+ * portion. A period's interest is charged ONCE: a second payment in the month
+ * is all principal. Without this, two $500 payments on one day each lost a
+ * month of interest. Derived from the ledger rows (a reversed payment's row is
+ * gone, so its month is chargeable again) — no stored flag.
+ */
+export function interestChargedInMonth(
+  payments: ReadonlyArray<{ paymentDate?: string | null; interestPortion?: number | null; paymentType?: string | null }> | null | undefined,
+  paymentDate: string | null | undefined,
+): boolean {
+  const month = String(paymentDate || "").slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(month)) return false;
+  return (payments || []).some((p) =>
+    String(p?.paymentDate || "").slice(0, 7) === month
+    && p?.paymentType !== "reversal"
+    && Number(p?.interestPortion) > 0);
+}
+
+/**
  * Allocate a one-off payment into principal vs interest vs fees, given
  * the current balance and monthly rate.
  * - Interest is computed from the balance at the time of payment.
@@ -205,37 +224,6 @@ export function allocatePayment(
     fees: round2(safeFees),
     remainingBalanceAfter: round2(newBalance),
   };
-}
-
-/**
- * THE principal/interest split of a plain payment on a debt — what the server
- * books and what the payment dialog previews, so the two cannot disagree.
- *
- *   • an extra-principal payment is principal by definition;
- *   • a payment on REVOLVING credit (a card, a line of credit) comes off the
- *     balance in full. A card's tracked balance already includes whatever
- *     interest the issuer has posted, and nothing here knows the statement
- *     cycle, so charging "a month of interest" at the moment of payment was
- *     invented: $500 paid on a $3,200 card left $2,766.64, and a second
- *     same-day payment was charged a second month (2026-11-18). Interest on a
- *     card is recorded only when the caller states it;
- *   • every other debt takes the amortization split (`allocatePayment`), the
- *     same function its schedule is built from.
- */
-export function splitDebtPayment(
-  paymentAmount: number,
-  currentBalance: number,
-  annualRate: number,
-  opts: { typeKey?: string | null; fees?: number; extraPrincipal?: boolean } = {},
-): { principal: number; interest: number; fees: number; remainingBalanceAfter: number } {
-  const fees = Math.max(0, Number(opts.fees) || 0);
-  if (opts.extraPrincipal || liabilityFamily(opts.typeKey) === "revolving") {
-    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-    const balance = Math.max(0, Number(currentBalance) || 0);
-    const principal = Math.min(Math.max(0, (Number(paymentAmount) || 0) - fees), balance);
-    return { principal: round2(principal), interest: 0, fees: round2(fees), remainingBalanceAfter: round2(balance - principal) };
-  }
-  return allocatePayment(paymentAmount, currentBalance, annualRate, fees);
 }
 
 /**

@@ -27,7 +27,8 @@ import { showUndoToast, recreateDeleted } from "@/lib/undo-delete";
 import { getProfileFilter, subscribeProfileFilter } from "@/lib/profileFilter";
 import { goalsQueryKey } from "@shared/query-keys";
 import { isHoldingVisible, isOwnershipKnown } from "@/lib/holding-visibility";
-import { countsTowardNetWorth, liabilityFamily, liabilityTypeKeyOf, LIABILITY_SUBTYPE_LABELS } from "@shared/liability-types";
+import { countsTowardNetWorth, liabilityFamily, liabilityTypeKeyOf, isRecurringBillRecord } from "@shared/liability-types";
+import { getRecordTemporalStatus } from "@shared/temporal-status";
 import { getPaymentClassification } from "@shared/domain/payment-classification";
 import { pageTitleFor } from "@shared/domain/route-metadata";
 
@@ -5278,7 +5279,8 @@ const PROFILE_TYPE_ICONS: Record<string, any> = {
   self: Smile,
   loan: CreditCard,
   investment: TrendingUp,
-  asset: Star,
+  // Not a star: a star on a card reads as a favorite control, and there is none.
+  asset: Box,
 };
 
 export default function TrackersPage() {
@@ -5747,12 +5749,10 @@ export default function TrackersPage() {
       const c = (f.subtype || f.kind || f.category || "Subscription") as string;
       return String(c).trim().replace(/_/g, " ") || "Subscription";
     }
-    // A debt's subtype lives in the `type_key` column; the profile page labels
-    // it from there, so the list does too (shared/liability-types). Reading
-    // only `fields.*` showed every chat-created mortgage and auto loan as "Other".
-    const debtKey = String(liabilityTypeKeyOf(p) || "").toLowerCase();
-    if (debtKey && debtKey !== "other" && debtKey !== "custom" && LIABILITY_SUBTYPE_LABELS[debtKey]) return LIABILITY_SUBTYPE_LABELS[debtKey];
-    const c = (f.subtype || f.liabilityType || f.kind || f.type || f.category || "Other") as string;
+    // The subtype lives in the `type_key` COLUMN (what the detail page reads);
+    // the fields are legacy spellings. Skipping the column made a mortgage read
+    // "Other" here and "Mortgage" on its own page.
+    const c = (liabilityTypeKeyOf(p) || f.kind || f.type || f.category || "Other") as string;
     return String(c).trim().replace(/_/g, " ") || "Other";
   };
 
@@ -5973,8 +5973,12 @@ export default function TrackersPage() {
             if (sectionFilter === "profiles") {
               return (
                 <div className="flex items-center gap-1">
-                  <Button onClick={() => setAddAccountOpen(true)} size="icon" variant="outline" className="h-7 w-7" data-testid="button-create-account" aria-label="Add Account">
+                  {/* A bare wallet icon read as "open my accounts"; it ADDS one.
+                      The button says what it does. */}
+                  <Button onClick={() => setAddAccountOpen(true)} size="sm" variant="outline" className="h-7 px-2 text-xs gap-1" data-testid="button-create-account" aria-label="Add Account" title="Add a financial account">
+                    <Plus className="h-3 w-3" />
                     <Wallet className="h-3.5 w-3.5" />
+                    <span>Account</span>
                   </Button>
                   <Button onClick={openAssetDialog} size="icon" className="h-7 w-7" data-testid="button-create-asset" aria-label="Add Asset">
                     <Plus className="h-3.5 w-3.5" />
@@ -6463,7 +6467,7 @@ export default function TrackersPage() {
             </div>
           );
         }
-        const kindIcons: Record<Row["kind"], any> = { asset: Star, liability: TrendingDown, document: FileText, tracker: Activity };
+        const kindIcons: Record<Row["kind"], any> = { asset: Box, liability: TrendingDown, document: FileText, tracker: Activity };
         // Per-row visual accent. Trackers are colored by their CATEGORY (so
         // nutrition is orange, fitness green, medication pink, finance amber…)
         // which is what gives the list its scan-at-a-glance variety — the prior
@@ -6768,7 +6772,7 @@ export default function TrackersPage() {
           (typeGroups[group] = typeGroups[group] || []).push(p);
         }
         const sortedGroups = Object.entries(typeGroups).sort(([a], [b]) => a.localeCompare(b));
-        const typeIcons: Record<string, any> = { vehicle: Car, asset: Star, loan: CreditCard, investment: TrendingUp, property: Building2, account: Wallet };
+        const typeIcons: Record<string, any> = { vehicle: Car, asset: Box, loan: CreditCard, investment: TrendingUp, property: Building2, account: Wallet };
 
         return (
           <div className="space-y-1.5">
@@ -6790,7 +6794,7 @@ export default function TrackersPage() {
             {(!collapsedSections.has("profiles") || (hubEmbedded && sectionFilter !== "all")) && (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 items-stretch" style={{ gridAutoRows: 202 }}>
                 {sortedGroups.flatMap(([, items]) => items.slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))).map(child => {
-                  const Icon = typeIcons[child.type] || Star;
+                  const Icon = typeIcons[child.type] || Box;
                   const fields = child.fields || {};
                   // Robust value resolver — historical data is stored under several
                   // inconsistent paths (fields.currentValue, fields.housing.currentValue,
@@ -7078,18 +7082,16 @@ export default function TrackersPage() {
                 // spelling, else the one the schedule derives from `dueDay` /
                 // the last payment. A loan with only "due on the 15th" read
                 // "No due date" here while the calendar put it on the 15th.
-                //
-                // A loan or card is due on its PAYMENT DAY counted from today
-                // (the schedule's answer), never on a stored origin date: the
-                // stored-date reader returns `firstPaymentDate`, so a mortgage
-                // opened in July 2022 was "1601d overdue" the day it was added
-                // while its own page said "Due in 12d" (2026-11-18). Only a
-                // recurring bill's stored date is its due date.
-                const scheduledDue = deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(TRACKER_TZ)).nextDueDate;
-                const isBillRow = isSubscription || liabilityFamily(liab.type_key ?? liab.typeKey) === 'recurring';
-                const rawDue = isBillRow
-                  ? (resolveLiabilityDueDate({ ...fin, ...fields }) ?? scheduledDue ?? fin.dueDate)
-                  : (scheduledDue ?? null);
+                // A DEBT (loan, card, one-time balance) asks the same engine its
+                // own page asks (shared/temporal-status): the payment day
+                // counted from today. Reading the stored date first let a loan's
+                // first-payment date from 2022 win, and the card of a loan added
+                // today said "1601d overdue" while its page said "Due in 13d".
+                const rawDue = isRecurringBillRecord(liab)
+                  ? (resolveLiabilityDueDate({ ...fin, ...fields })
+                    ?? deriveScheduleFields(fields, liab.type_key ?? liab.typeKey, tzUserToday(TRACKER_TZ)).nextDueDate
+                    ?? fin.dueDate)
+                  : (getRecordTemporalStatus({ kind: "liability", fields: { ...fin, ...fields }, row: liab }, tzUserToday(TRACKER_TZ)).nextOccurrence ?? null);
                 const due = fmtDue(rawDue);
                 const dueIn = daysUntilDue(rawDue);
                 const freqUnit = subFreq.startsWith('y') ? 'yr' : subFreq.startsWith('w') ? 'wk' : subFreq.startsWith('q') ? 'qtr' : 'mo';

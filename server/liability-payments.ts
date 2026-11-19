@@ -12,8 +12,8 @@
 // different rows depending on whether you typed it into a form or into chat.
 // That is not a synchronization bug, but it is the same disease: two code paths
 // answering one question. Both callers now land here.
-import { allocatePayment, resolveAnnualRate, splitDebtPayment } from "@shared/liability-calc";
-import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName, liabilityTypeKeyOf } from "@shared/liability-types";
+import { allocatePayment, interestChargedInMonth, resolveAnnualRate } from "@shared/liability-calc";
+import { isRecurringBill, isRecurringBillProfile, normalizeLiabilityName } from "@shared/liability-types";
 import { advanceLiabilityDueDate, advanceLiabilityDueDatePatch, readDueDate, resolveOccurrenceKey, lastSeriesOccurrence } from "@shared/liability-recurrence";
 import { resolveLiabilityBalance } from "@shared/asset-value";
 import { resolveBillingModel, resolveOccurrenceAmount } from "@shared/liability-billing";
@@ -44,6 +44,9 @@ export interface LiabilityPaymentInput {
   paymentType?: LiabilityPaymentType | null;
   notes?: string | null;
   sourceAccount?: string | null;
+  /** Set by applyLiabilityPayment when an earlier payment in the same month
+   *  already carried the period's interest: this one is all principal. */
+  interestAlreadyCharged?: boolean;
 }
 
 export interface LiabilityPaymentResult {
@@ -164,10 +167,11 @@ function planDebtPayment(liability: any, input: LiabilityPaymentInput): DebtPaym
     principal = Math.max(0, cashTowardLoan);
     interest = 0;
   } else if (balanceBefore > 0) {
-    // The canonical split (shared/liability-calc `splitDebtPayment`): the
-    // amortization split for a loan, so a payment and the schedule that
-    // predicted it agree; the full amount off the balance for a card.
-    const split = splitDebtPayment(amount - escrow, balanceBefore, annualRate, { typeKey: liabilityTypeKeyOf(liability), fees });
+    // The canonical split — the same function the amortization schedule uses,
+    // so a payment and the schedule that predicted it agree.
+    // …and a period's interest is charged once: a second payment in the same
+    // month goes wholly to principal (interestChargedInMonth).
+    const split = allocatePayment(amount - escrow, balanceBefore, input.interestAlreadyCharged ? 0 : annualRate, fees);
     principal = split.principal;
     interest = split.interest;
     fees = split.fees;
@@ -303,6 +307,17 @@ export async function resolveServicedDebt(storage: IStorage, bill: any): Promise
   return match;
 }
 
+/** Mark the input when this month's interest is already on the ledger for that debt. */
+async function withInterestState(
+  storage: IStorage, debtId: string, input: LiabilityPaymentInput, paymentDate: string,
+): Promise<LiabilityPaymentInput> {
+  if (input.interestAlreadyCharged != null) return input;
+  const read = (storage as any).getLiabilityPayments;
+  if (typeof read !== "function") return input;
+  const rows = await Promise.resolve(read.call(storage, debtId)).catch(() => [] as any[]);
+  return interestChargedInMonth(rows as any[], paymentDate) ? { ...input, interestAlreadyCharged: true } : input;
+}
+
 /**
  * Record a payment against a liability and bring the liability itself up to
  * date, in one place.
@@ -347,6 +362,7 @@ export async function applyLiabilityPayment(
     let interestPortion = 0;
     let servicedBalance: number | undefined;
     if (linkedDebt) {
+      input = await withInterestState(storage, linkedDebt.id, input, paymentDate);
       let plan = planDebtPayment(linkedDebt, input);
       const mutateLinked = (storage as any).mutateProfileFields as
         | ((id: string, fn: (fresh: any) => any) => Promise<any>) | undefined;
@@ -411,6 +427,7 @@ export async function applyLiabilityPayment(
   // targeted the same, already-paid occurrence and was swallowed) — and two
   // payments in flight together each planned from the same balance, so the
   // debt dropped by one of them.
+  input = await withInterestState(storage, liability.id, input, paymentDate);
   let plan = planDebtPayment(liability, input);
   const balancePatch = (pl: DebtPaymentPlan) => ({
     currentBalance: pl.newBalance, remainingBalance: pl.newBalance, loanBalance: pl.newBalance, lastPaidDate: paymentDate,

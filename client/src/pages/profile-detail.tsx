@@ -2,8 +2,8 @@ import { changedFieldsOnly } from "@shared/field-patch";
 import { formatApiError } from "@/lib/formatError";
 import { flattenProfile } from "@/lib/flattenProfile";
 import { formatFieldKey, stringifyField, previewUnrenderable } from "@/lib/field-display";
-import { enumOptionsForField, humanizeEnumValue, isDateFieldKey, toDateInputValue } from "@shared/field-label";
-import { formatMoney, formatMoneyRound, formatFullDate, parseLocalDate } from "@/lib/format";
+import { enumOptionsForField, humanizeEnumValue, isDateFieldKey, toDateInputValue, fitsDateInput } from "@shared/field-label";
+import { formatMoney, formatMoneyRound, formatFullDate, parseLocalDate, timelineInstant, formatTimelineStamp, isDateOnly } from "@/lib/format";
 import { HeroMetric, StatTile, SectionTitle, MeterRow, CoverageNote, accentScope, tone, trackerTheme } from "@/components/tracker-detail";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CategoryBreakdown, PeriodBars, FINANCE_HS, rankSlices, axisDollars } from "@/components/finance/finance-visuals";
@@ -300,6 +300,9 @@ import { isReservedFieldKey } from "@shared/profile-field-identity";
 import { systemFieldEntries } from "@shared/system-fields";
 import { devToolsEnabled } from "@/lib/dev-affordances";
 import { allocatePayment } from "@shared/liability-calc";
+import { expenseShownOnProfile } from "@shared/expense-on-profile";
+import { pendingProfilePatch, applySavedPatch, type EditFormState } from "@/lib/profile-autosave";
+import { guessExpenseCategory } from "@shared/expense-category-guess";
 import { deriveLiabilityMetrics, deriveLiabilityAmortization, simulateExtraPayment, payoffProgressPct } from "@shared/liability-derived";
 import { readBalance, readInterestRatePct, readMonthlyPayment, readInterestRateRaw } from "@shared/liability-fields";
 import { calculateStreak } from "@shared/streak";
@@ -321,6 +324,9 @@ function monthKeyOf(date: unknown): string {
 // Calendar day of a timestamp in the browser's zone, for Today/Yesterday
 // grouping. The UTC slice put an 8 PM entry under "Today" all the next morning.
 function localDayOfTimestamp(ts: string): string {
+  // A calendar day is already the day; reading it as UTC midnight put a
+  // Nov 18 expense under Nov 17 west of Greenwich.
+  if (isDateOnly(ts)) return ts;
   try { return toLocalDateStr(new Date(ts), BROWSER_TIMEZONE); } catch { return String(ts || "").slice(0, 10); }
 }
 import { habitDayProgress } from "@shared/habit-progress";
@@ -2328,9 +2334,7 @@ const TimelineItem = memo(function TimelineItem({ entry }: { entry: TimelineEntr
           </div>
         )}
         <p className="text-xs text-muted-foreground mt-1">
-          {new Date(entry.timestamp).toLocaleDateString(undefined, {
-            month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-          })}
+          {formatTimelineStamp(entry.timestamp)}
         </p>
       </div>
       <Badge variant="secondary" className="text-xs capitalize shrink-0 h-fit">{entry.type}</Badge>
@@ -4973,6 +4977,14 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
   const [expDesc, setExpDesc] = useState("");
   const [expAmount, setExpAmount] = useState("");
   const [expCategory, setExpCategory] = useState("general");
+  // A category the user PICKED is stored as picked ("General" stays General).
+  // Until they pick, the select follows a guess from the description, the same
+  // way the Finance page's form does, so the choice is visible before saving.
+  const [expCategoryChosen, setExpCategoryChosen] = useState(false);
+  // A required-field error appears once the user has left that field, not the
+  // moment the dialog opens.
+  const [expTouched, setExpTouched] = useState<{ desc: boolean; amount: boolean }>({ desc: false, amount: false });
+  const resetExpenseFormMeta = () => { setExpCategoryChosen(false); setExpTouched({ desc: false, amount: false }); };
   const [expVendor, setExpVendor] = useState("");
   const [expDate, setExpDate] = useState(localTodayISO());
   const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(null);
@@ -5011,10 +5023,10 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
     const source = expensesEmbedCapped && Array.isArray(fullProfileExpenses)
       ? fullProfileExpenses
       : (profile.relatedExpenses || []);
-    return source.filter((e: any) =>
-      Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profileId
-    );
-  }, [profile.relatedExpenses, fullProfileExpenses, expensesEmbedCapped, profileId]);
+    // shared/expense-on-profile: strict ownership on a person's page, every
+    // linked expense on a thing's page.
+    return source.filter((e: any) => expenseShownOnProfile(e, profileId, profile.type));
+  }, [profile.relatedExpenses, fullProfileExpenses, expensesEmbedCapped, profileId, profile.type]);
   const obligations = profile.relatedObligations;
 
   // ── type flags ─────────────────────────────────────────────────
@@ -5167,13 +5179,20 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
   // ── mutations ──────────────────────────────────────────────────
   const createExpenseMutation = useMutation({
     mutationFn: async () => {
+      // The expense is created UNDER this profile, in one write. It used to
+      // be created under the account holder and linked afterwards, which made
+      // this profile the second entry of linkedProfiles, so this tab (which
+      // lists what the profile owns) never showed what it had just saved.
+      // `categoryChosen` tells the server the category is the user's own
+      // pick, so it is stored as picked and not re-categorized.
       const res = await apiRequest("POST", "/api/expenses", {
-        description: expDesc, amount: Number(expAmount), category: expCategory,
+        description: expDesc, amount: Number(expAmount),
+        category: expCategory,
+        ...(expCategoryChosen ? { categoryChosen: true } : {}),
         vendor: expVendor || undefined, date: expDate,
+        linkedProfiles: [profileId],
       });
-      const expense = await res.json();
-      await apiRequest("POST", `/api/profiles/${profileId}/link`, { entityType: "expense", entityId: expense.id });
-      return expense;
+      return res.json();
     },
     onSuccess: () => {
       const saved = expDesc;
@@ -5758,6 +5777,7 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
       {/* Add Expense Dialog */}
       <Dialog open={showAddExpense} onOpenChange={(open) => {
         setShowAddExpense(open);
+        resetExpenseFormMeta();
         if (!open) { setExpDesc(""); setExpAmount(""); setExpCategory("general"); setExpVendor(""); setExpDate(localTodayISO()); }
       }}>
         <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-add-expense">
@@ -5769,34 +5789,40 @@ function FinancesTab({ profile, profileId, onChanged, hideLoanSections = false }
             <div>
               <label className="text-xs font-medium text-muted-foreground">Description</label>
               <Input
-                className={`mt-1 ${showAddExpense && expDesc.trim() === "" ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                className={`mt-1 ${expTouched.desc && expDesc.trim() === "" ? "border-destructive focus-visible:ring-destructive" : ""}`}
                 value={expDesc}
-                onChange={e => setExpDesc(e.target.value)}
+                onChange={e => {
+                  const v = e.target.value;
+                  setExpDesc(v);
+                  if (!expCategoryChosen) setExpCategory(guessExpenseCategory(v, expVendor) || "general");
+                }}
+                onBlur={() => setExpTouched(t => ({ ...t, desc: true }))}
                 placeholder="e.g. Vet visit"
                 data-testid="input-expense-desc"
               />
-              {showAddExpense && expDesc.trim() === "" && (
+              {expTouched.desc && expDesc.trim() === "" && (
                 <p className="text-xs text-destructive mt-1">Description is required</p>
               )}
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Amount ($)</label>
               <Input
-                className={`mt-1 ${showAddExpense && (expAmount === "" || Number(expAmount) <= 0) ? "border-destructive focus-visible:ring-destructive" : ""}`}
+                className={`mt-1 ${expTouched.amount && (expAmount === "" || Number(expAmount) <= 0) ? "border-destructive focus-visible:ring-destructive" : ""}`}
                 type="number"
                 step="0.01"
                 value={expAmount}
                 onChange={e => setExpAmount(e.target.value)}
+                onBlur={() => setExpTouched(t => ({ ...t, amount: true }))}
                 placeholder="0.00"
                 data-testid="input-expense-amount"
               />
-              {showAddExpense && (expAmount === "" || Number(expAmount) <= 0) && (
+              {expTouched.amount && (expAmount === "" || Number(expAmount) <= 0) && (
                 <p className="text-xs text-destructive mt-1">Amount must be greater than 0</p>
               )}
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground">Category</label>
-              <Select value={expCategory} onValueChange={setExpCategory}>
+              <Select value={expCategory} onValueChange={(v) => { setExpCategory(v); setExpCategoryChosen(true); }}>
                 <SelectTrigger className="mt-1" data-testid="select-expense-category"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {expenseCategories.map(c => <SelectItem key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</SelectItem>)}
@@ -6001,7 +6027,7 @@ function TrackerCard_Profile({
     return {
       i,
       val: isNaN(num) ? 0 : num,
-      date: e?.timestamp ? new Date(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "",
+      date: e?.timestamp ? timelineInstant(e.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "",
     };
   }).filter(d => d.val !== 0 || fieldName == null);
 
@@ -6255,7 +6281,7 @@ function TrackerCard_Profile({
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0 ml-2">
                     <span className="text-muted-foreground text-xs">
-                      {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                      {timelineInstant(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
                     </span>
                     <Button
                       variant="ghost"
@@ -7727,7 +7753,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
   ];
   for (const e of filtered.slice(0, 50)) {
     const d = localDayOfTimestamp(e.timestamp);
-    const t = new Date(e.timestamp).getTime();
+    const t = timelineInstant(e.timestamp).getTime();
     if (d === todayStr) groups[0].items.push(e);
     else if (d === yesterday) groups[1].items.push(e);
     else if (t >= weekAgo) groups[2].items.push(e);
@@ -7769,7 +7795,7 @@ const TimelineTab = memo(function TimelineTab({ timeline }: { timeline: Timeline
               <div className="divide-y divide-border">
                 {g.items.slice().sort((a, b) => {
                   // Within same date group, keep date-sorted but within same timestamp, sort alphabetically
-                  const timeDiff = new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+                  const timeDiff = timelineInstant(b.timestamp).getTime() - timelineInstant(a.timestamp).getTime();
                   if (timeDiff !== 0) return timeDiff;
                   return (a.title || '').localeCompare(b.title || '');
                 }).map(entry => (
@@ -8127,69 +8153,94 @@ function EditProfileDialog({
     setFields(result);
   }, [profile.id, open]);
 
-  const validateFields = (): boolean => {
-    const emailKeys = Object.keys(fields).filter(k => k.toLowerCase().includes("email"));
-    for (const key of emailKeys) {
-      if (fields[key] && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields[key])) {
-        toast({ title: "Invalid email", description: `Enter a valid email address for ${key}`, variant: "destructive" });
-        return false;
-      }
+  // ── AUTOSAVE ────────────────────────────────────────────────────────────
+  // The dialog saves by itself: shortly after the user stops typing, at once
+  // when they leave a field or pick from a list, and when the dialog closes.
+  // There is no Save button to forget. Each save sends only what changed since
+  // the last successful save (client/src/lib/profile-autosave.ts).
+  const formOf = (p: ProfileDetail): EditFormState => {
+    const f: Record<string, string> = {};
+    for (const [k, v] of Object.entries(p.fields || {})) {
+      if (v != null && typeof v !== "object") f[k] = String(v);
     }
-    const phoneKeys = Object.keys(fields).filter(k => k.toLowerCase().includes("phone"));
-    for (const key of phoneKeys) {
-      if (fields[key] && !/^\+?[\d\s()-]{7,15}$/.test(fields[key])) {
-        toast({ title: "Invalid phone", description: `Enter a valid phone number for ${key}`, variant: "destructive" });
-        return false;
-      }
-    }
-    if (!name.trim()) {
-      toast({ title: "Name required", variant: "destructive" });
-      return false;
-    }
-    return true;
+    return { name: p.name, notes: p.notes || "", fields: f };
   };
+  const savedRef = useRef<EditFormState>(formOf(profile));
+  const currentRef = useRef<EditFormState>({ name, notes, fields });
+  currentRef.current = { name, notes, fields };
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [blocked, setBlocked] = useState<Record<string, string>>({});
+  const flushing = useRef(false);
+  const flushAgain = useRef(false);
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
+  // The baseline follows the profile the dialog was opened for (same trigger
+  // as the form re-seed above).
+  useEffect(() => { savedRef.current = formOf(profile); setSaveState("idle"); setBlocked({}); }, [profile.id, open]);
 
-  const mutation = useMutation({
-    mutationFn: async () => {
-      if (!validateFields()) throw new Error("Validation failed");
-      // Renaming is held to the same rule as the AI path: a name another
-      // profile already answers to is refused, not silently duplicated
-      // (shared/profile-rename.ts).
-      const known: Array<{ id: string; name: string }> =
-        (queryClient.getQueryData(["/api/profiles"]) as any[] | undefined)?.filter(
-          (p: any) => p && typeof p.id === "string" && typeof p.name === "string",
-        ) ?? [];
-      const rename = checkProfileRename(known, profile.id, name, profile.name);
-      if (rename.status === "rejected") {
-        toast({ title: "Couldn't rename", description: rename.error, variant: "destructive" });
-        throw new Error(rename.error);
+  const flush = useCallback(async (): Promise<void> => {
+    if (flushing.current) { flushAgain.current = true; return; }
+    flushing.current = true;
+    try {
+      for (;;) {
+        flushAgain.current = false;
+        const sent = currentRef.current;
+        const pending = pendingProfilePatch(savedRef.current, sent);
+        const held = { ...pending.blocked };
+        let patch = pending.patch;
+        // Renaming is held to the same rule as the AI path: a name another
+        // profile already answers to is refused, not silently duplicated
+        // (shared/profile-rename.ts).
+        if (patch?.name !== undefined) {
+          const known: Array<{ id: string; name: string }> =
+            (queryClient.getQueryData(["/api/profiles"]) as any[] | undefined)?.filter(
+              (p: any) => p && typeof p.id === "string" && typeof p.name === "string",
+            ) ?? [];
+          const rename = checkProfileRename(known, profile.id, patch.name, savedRef.current.name);
+          if (rename.status === "rejected") {
+            held.name = rename.error;
+            const { name: _dropped, ...rest } = patch;
+            patch = Object.keys(rest).length > 0 ? rest : null;
+          } else {
+            patch = { ...patch, name: rename.name };
+          }
+        }
+        if (aliveRef.current) setBlocked((prev) => (JSON.stringify(prev) === JSON.stringify(held) ? prev : held));
+        if (!patch) break;
+        if (aliveRef.current) setSaveState("saving");
+        try {
+          await apiRequest("PATCH", `/api/profiles/${profile.id}`, patch);
+        } catch (err: any) {
+          if (aliveRef.current) setSaveState("error");
+          toast({ title: `Couldn't save "${sent.name || profile.name}"`, description: formatApiError(err), variant: "destructive" });
+          return;
+        }
+        savedRef.current = applySavedPatch(savedRef.current, sent, patch);
+        if (aliveRef.current) setSaveState("saved");
+        // A NAME is drawn by every screen that mentions this record — owner
+        // badges, list rows, search, the profile switcher — none of which sit
+        // under the profiles domain. A rename is rare; refresh everything
+        // rather than leave half the app calling them by the old name.
+        invalidateDomains(patch.name !== undefined ? "everything" : "profiles");
+        onSaved();
+        if (!flushAgain.current) break;
       }
-      const parsedFields: Record<string, any> = {};
-      for (const [k, v] of Object.entries(fields)) {
-        const num = Number(v);
-        parsedFields[k] = v !== "" && !isNaN(num) && v.trim() !== "" ? num : v;
-      }
-      const res = await apiRequest("PATCH", `/api/profiles/${profile.id}`, {
-        name: rename.name,
-        notes,
-        fields: parsedFields,
-      });
-      return { row: await res.json(), renamed: rename.status === "ok" };
-    },
-    onSuccess: (result) => {
-      toast({ title: `"${name}" updated` });
-      // A NAME is drawn by every screen that mentions this record — owner
-      // badges, list rows, search, the profile switcher — none of which sit
-      // under the profiles domain. A rename is rare; refresh everything rather
-      // than leave half the app calling them by the old name.
-      invalidateDomains(result?.renamed ? "everything" : "profiles");
-      onSaved();
-      onClose();
-    },
-    onError: (err: Error) => {
-      toast({ title: `Failed to update "${name}"`, description: formatApiError(err), variant: "destructive" });
-    },
-  });
+    } finally {
+      flushing.current = false;
+    }
+  }, [profile.id, profile.name, onSaved, toast]);
+
+  // Save shortly after the last keystroke.
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => { void flush(); }, 800);
+    return () => clearTimeout(t);
+  }, [open, name, notes, fields, flush]);
+  // …and whatever is still unsaved when the dialog goes away.
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+  useEffect(() => () => { void flushRef.current(); }, []);
+  const closeAfterSaving = () => { void flush(); onClose(); };
 
   // Type-specific suggested fields that should always be available for editing
   const SUGGESTED_FIELDS: Record<string, { key: string; label: string; placeholder: string }[]> = {
@@ -8278,7 +8329,7 @@ function EditProfileDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) closeAfterSaving(); }}>
       <DialogContent className="max-w-md max-h-[85dvh] overflow-y-auto" data-testid="dialog-edit-profile">
         <DialogHeader>
           <DialogTitle>Edit {profile.type === "self" ? "My Profile" : profile.name}</DialogTitle>
@@ -8291,8 +8342,10 @@ function EditProfileDialog({
               className="mt-1"
               value={name}
               onChange={e => setName(e.target.value)}
+              onBlur={() => { void flush(); }}
               data-testid="input-profile-name"
             />
+            {blocked.name ? <p className="text-xs text-destructive mt-1" data-testid="edit-blocked-name">Not saved: {blocked.name}</p> : null}
           </div>
           {allFieldKeys.filter(k => !isReservedFieldKey(k)).map(key => {
             const sg = suggested.find(s => s.key === key);
@@ -8301,14 +8354,15 @@ function EditProfileDialog({
             // human labels, and a date key holding the valuation engine's ISO
             // instant is a date input showing the day.
             const enumOptions = enumOptionsForField(key, fields[key]);
-            const isDate = !enumOptions && isDateFieldKey(key);
+            // …unless it holds a partial date ("2024"): a date input would show that as empty.
+            const isDate = !enumOptions && isDateFieldKey(key) && fitsDateInput(fields[key]);
             return (
               <div key={key}>
                 <label className="text-xs font-medium text-muted-foreground">{sg?.label || formatKey(key)}</label>
                 {enumOptions ? (
                   <Select
                     value={String(fields[key] ?? "")}
-                    onValueChange={v => setFields(prev => ({ ...prev, [key]: v }))}
+                    onValueChange={v => { setFields(prev => ({ ...prev, [key]: v })); setTimeout(() => { void flush(); }, 0); }}
                   >
                     <SelectTrigger className="mt-1" data-testid={`input-field-${key}`}>
                       <SelectValue placeholder="Choose…" />
@@ -8326,9 +8380,11 @@ function EditProfileDialog({
                     value={isDate ? toDateInputValue(fields[key]) : (fields[key] ?? "")}
                     placeholder={sg?.placeholder || ""}
                     onChange={e => setFields(prev => ({ ...prev, [key]: e.target.value }))}
+                    onBlur={() => { void flush(); }}
                     data-testid={`input-field-${key}`}
                   />
                 )}
+                {blocked[key] ? <p className="text-xs text-destructive mt-1" data-testid={`edit-blocked-${key}`}>Not saved: {blocked[key]}</p> : null}
               </div>
             );
           })}
@@ -8339,15 +8395,20 @@ function EditProfileDialog({
               value={notes}
               placeholder="Any additional notes..."
               onChange={e => setNotes(e.target.value)}
+              onBlur={() => { void flush(); }}
               data-testid="input-profile-notes"
             />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} data-testid="button-cancel-edit-profile">Cancel</Button>
-          <Button onClick={() => mutation.mutate()} disabled={mutation.isPending} data-testid="button-save-profile">
-            {mutation.isPending ? "Saving..." : "Save"}
-          </Button>
+          <p className="text-xs text-muted-foreground mr-auto self-center" role="status" aria-live="polite" data-testid="edit-save-status">
+            {saveState === "saving" ? "Saving…"
+              : saveState === "error" ? "Couldn't save. Your changes are still here; edit again to retry."
+              : Object.keys(blocked).length > 0 ? "Some changes aren't saved yet"
+              : saveState === "saved" ? "All changes saved"
+              : "Changes save automatically"}
+          </p>
+          <Button onClick={closeAfterSaving} data-testid="button-done-edit-profile">Done</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -12961,12 +13022,12 @@ export default function ProfileDetailPage() {
     // redundant cold refetch when navigating back to a profile you just saw.
     staleTime: 30 * 1000,
     gcTime: 10 * 60 * 1000,
-    // No `refetchOnMount: false` here. A write made from another page (a
-    // payment recorded in chat) can only MARK this query stale while the
-    // profile is closed; with the refetch disabled it then rendered the old
-    // balance in the header ($3,200) beside a Payments tab that had refetched
-    // ($2,766.64). Fresh cache still renders instantly — only stale or
-    // invalidated data is refetched on mount.
+    // Re-opening renders from cache — UNLESS a write invalidated this profile
+    // while its page was closed. `false` ignored that too: a payment made
+    // from the Bills popup, the dashboard or the chat marked the detail stale,
+    // nothing was mounted to refetch it, and the reopened header still showed
+    // the pre-payment balance ($3,200 beside a list that said $2,766.64).
+    refetchOnMount: (query) => query.state.isInvalidated,
   });
 
   // Page-level all-profiles — powers the new breadcrumb + summary + tree.
@@ -13267,7 +13328,7 @@ export default function ProfileDetailPage() {
     if (tabSet.has("trackers")) out.push({ label: "Docs", countTo: profile.relatedDocuments.length, icon: FileText, testId: "hero-stat-docs" });
     if (tabSet.has("finances")) out.push({
       label: ptype === 'subscription' ? "Billing" : "Expenses",
-      countTo: (profile.relatedExpenses || []).filter((e: any) => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profile.id).length,
+      countTo: (profile.relatedExpenses || []).filter((e: any) => expenseShownOnProfile(e, profile.id, profile.type)).length,
       icon: DollarSign, testId: "hero-stat-expenses",
     });
     if (tabSet.has("tasks")) out.push({ label: "Tasks", countTo: profile.relatedTasks.length, icon: ListTodo, testId: "hero-stat-tasks" });

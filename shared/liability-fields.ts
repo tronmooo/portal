@@ -50,28 +50,6 @@ export function normalizeAnnualRate(r: number | string | undefined | null): numb
   return n > 1 ? n / 100 : n;
 }
 
-/**
- * The rate a chat tool should STORE, as a PERCENT (the canonical form of
- * `interestRate`), from whatever the model passed (0.0625, 6.25, "6.25%").
- * Null when the input names no rate.
- *
- * The user's own number wins: when their message states a percentage and the
- * model's differs from it by a rounding-sized step ("22.9%" typed, 22.99
- * passed — 2026-11-18), the stated figure is stored. A rate the message never
- * mentions is left exactly as passed.
- */
-export function statedRatePct(raw: unknown, userMessage?: unknown): number | null {
-  if (raw == null || raw === "") return null;
-  if (!Number.isFinite(parseFloat(String(raw).replace("%", "").trim()))) return null;
-  let pct = Math.round(normalizeAnnualRate(raw as number | string) * 100 * 1e6) / 1e6;
-  const stated = Array.from(String(userMessage ?? "").matchAll(/(\d+(?:\.\d+)?)\s*(?:%|percent\b)/gi)).map((m) => Number(m[1]));
-  if (stated.length > 0 && !stated.includes(pct)) {
-    const near = stated.filter((v) => Math.abs(v - pct) < 0.1);
-    if (near.length === 1) pct = near[0];
-  }
-  return pct;
-}
-
 /** The precedence every rate reader walks — canonical spelling first. */
 export const INTEREST_RATE_KEYS: readonly string[] = [
   "interestRate", "interest_rate",
@@ -106,6 +84,25 @@ export function readAnnualRate(input: Fields | { fields?: Fields }): number {
 /** The annual rate as a PERCENT (6.5) — the canonical stored form and the display form. */
 export function readInterestRatePct(input: Fields | { fields?: Fields }): number {
   return Math.round(readAnnualRate(input) * 100 * 1e6) / 1e6;
+}
+
+/**
+ * What a rate typed into a "%" field means, as the PERCENT that is stored:
+ * "6.25" → 6.25. A value of 1 or less is read as a fraction ("0.0625" → 6.25),
+ * the same rule `normalizeAnnualRate` applies to every stored rate, so the
+ * form and the readers can never disagree. null when the input is not a rate.
+ */
+export function rateInputToStoredPct(input: string | number | null | undefined): number | null {
+  if (input == null || String(input).trim() === "") return null;
+  const n = typeof input === "number" ? input : parseFloat(String(input).replace("%", "").trim());
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(normalizeAnnualRate(n) * 100 * 1e6) / 1e6;
+}
+
+/** The stored rate as the text a "%" field shows: "6.25" for 6.25% however it was stored; "" when none. */
+export function rateInputValue(input: Fields | { fields?: Fields }): string {
+  const pct = readInterestRatePct(input);
+  return pct > 0 ? String(pct) : "";
 }
 
 /**
@@ -193,4 +190,32 @@ export function storedDueDateKey(input: Fields | { fields?: Fields }): string | 
     if (normalizeDateString(f[k])) return k;
   }
   return null;
+}
+
+/**
+ * What a chat debt tool was asked to save, under the keys the record stores
+ * them by — the "requested" side of the save receipt (shared/field-receipt).
+ * The confirmation for a loan used to be the model's own prose, which is how
+ * a 22.9% APR was reported as 22.99%: the receipt is read back from the
+ * record instead, so the reply can only say what was stored.
+ */
+export function liabilityReceiptFields(
+  tool: "create_liability" | "update_liability",
+  input: Record<string, any> | null | undefined,
+): Record<string, any> {
+  const src: Record<string, any> = tool === "update_liability" ? (input?.changes || {}) : (input || {});
+  const out: Record<string, any> = {};
+  const set = (key: string, value: unknown) => { if (value !== undefined && value !== null && value !== "") out[key] = value; };
+  const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+  set("balance", num(src.currentBalance ?? src.balance));
+  set("originalBalance", num(src.originalBalance));
+  for (const k of ["annualRate", "annualInterestRate", "interestRate", "apr"]) {
+    if (src[k] == null) continue;
+    const pct = rateInputToStoredPct(src[k]);
+    if (pct != null) set("interestRate", pct);
+    break;
+  }
+  for (const k of ["monthlyPayment", "minimumPayment", "creditLimit", "remainingTermMonths", "termMonths", "dueDay"]) set(k, num(src[k]));
+  for (const k of ["lender", "firstPaymentDate"]) set(k, typeof src[k] === "string" ? src[k].trim() : undefined);
+  return out;
 }

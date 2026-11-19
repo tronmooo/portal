@@ -4,6 +4,7 @@
  * liability-detail.tsx.
  */
 
+import type { ProfileEditEntry, ProfileFieldChange } from "@shared/profile-edit-history";
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Clock, RefreshCw, Share2 } from "lucide-react";
@@ -275,6 +276,15 @@ export function HistoryTab({ profileId }: { profileId: string }) {
       ).then((r) => r.json()),
   });
 
+  // Edits to the profile itself (by hand or in chat). The tab used to read the
+  // ownership log alone, so an asset's history was one "create" however often
+  // it was edited. The key sits under ["/api/profiles", id] so every profile
+  // write refreshes it (cache-bus `profiles` domain).
+  const { data: edits = [], isPending: editsPending, isError: editsFailed } = useQuery<ProfileEditEntry[]>({
+    queryKey: ["/api/profiles", profileId, "edit-history"],
+    queryFn: () => apiRequest("GET", `/api/profiles/${profileId}/edit-history`).then((r) => r.json()),
+  });
+
   const undoMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/ownership-history/${id}`);
@@ -296,7 +306,7 @@ export function HistoryTab({ profileId }: { profileId: string }) {
 
   // A placeholder while the list is in flight — the tab body was blank until
   // the history landed, then jumped to content (QA 2026-09-18, F-63).
-  if (historyPending) {
+  if (historyPending || editsPending) {
     return (
       <div className="space-y-2" data-testid="history-tab-loading" aria-label="Loading history">
         <Skeleton className="h-12 w-full" />
@@ -306,11 +316,13 @@ export function HistoryTab({ profileId }: { profileId: string }) {
     );
   }
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && edits.length === 0) {
     return (
       <div className="text-center py-10">
         <Clock className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-        <p className="text-sm text-muted-foreground">No ownership history</p>
+        <p className="text-sm text-muted-foreground" data-testid="history-empty">
+          {editsFailed ? "The edit history couldn't be loaded. Try again in a moment." : "No history yet"}
+        </p>
       </div>
     );
   }
@@ -328,7 +340,7 @@ export function HistoryTab({ profileId }: { profileId: string }) {
     return Number.isFinite(t) ? t : 0;
   };
   const grouped = new Map<string, any[]>();
-  const sorted = [...entries].sort((a, b) => tsOf(b) - tsOf(a));
+  const sorted = [...entries, ...edits].sort((a, b) => tsOf(b) - tsOf(a));
   for (const e of sorted) {
     const t = tsOf(e);
     if (!t) continue; // skip rows without a usable timestamp
@@ -346,6 +358,11 @@ export function HistoryTab({ profileId }: { profileId: string }) {
 
   return (
     <div className="space-y-4">
+      {editsFailed ? (
+        <p className="text-xs text-muted-foreground" data-testid="history-edits-failed">
+          Edits to this profile couldn't be loaded, so only ownership changes are listed.
+        </p>
+      ) : null}
       {Array.from(grouped.entries()).map(([day, dayEntries]) => (
         <div key={day}>
           <p className="micro-label text-muted-foreground mb-2">
@@ -358,12 +375,18 @@ export function HistoryTab({ profileId }: { profileId: string }) {
                 hour: "numeric",
                 minute: "2-digit",
               });
-              const canUndo = now - tms < ONE_DAY;
+              const isEdit = e.kind === "edit";
+              // "Undo" removes an ownership-log row; an edit is not undone that way.
+              const canUndo = !isEdit && now - tms < ONE_DAY;
               const changedByBadge =
                 (e.changedBy || "user") === "ai" ? "AI" : "user";
 
               let description = "";
-              if (
+              if (isEdit) {
+                description = (e.changes || [])
+                  .map((c: ProfileFieldChange) => `${c.label}: ${c.from ?? "none"} → ${c.to ?? "none"}`)
+                  .join(" · ");
+              } else if (
                 e.fieldChanged &&
                 e.oldValue !== undefined &&
                 e.newValue !== undefined
@@ -378,6 +401,7 @@ export function HistoryTab({ profileId }: { profileId: string }) {
               return (
                 <div
                   key={e.id}
+                  data-testid={isEdit ? "history-edit-row" : "history-ownership-row"}
                   className="flex items-start gap-3 p-2.5 rounded-lg bg-muted/30 hover:bg-muted/50"
                 >
                   <div className="flex-1 min-w-0">

@@ -125,6 +125,17 @@ export function toDateInputValue(value: unknown): string {
   return s;
 }
 
+/**
+ * Can a `<input type="date">` show this value? Only a full day (or nothing).
+ * A partial date the user really entered ("2024", "2024-03", "March 2024")
+ * is rejected by the browser and the box comes up EMPTY, as if the field had
+ * no value; those are edited as text instead.
+ */
+export function fitsDateInput(value: unknown): boolean {
+  const s = String(value ?? "").trim();
+  return s === "" || /^\d{4}-\d{2}-\d{2}(T|$)/.test(s);
+}
+
 // ── Counting a field ────────────────────────────────────────────────────────
 // A tracker entry's activity line was `${value} ${key}` — "1 completions",
 // "1 steps". The key is the plural noun the field was named with; one of a

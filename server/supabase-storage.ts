@@ -1,3 +1,4 @@
+import { expenseShownOnProfile } from "@shared/expense-on-profile";
 import {
   valuationKey, valuationHistoryKey, readValuationRecord, readValuationHistory,
   appendValuationHistory, VALUATION_HISTORY_LIMIT, understandingKey, readUnderstanding,
@@ -621,6 +622,8 @@ export function capProfileDetailLists(input: {
   relatedJournal: JournalEntry[];
   timeline: TimelineEntry[];
   profileId: string;
+  /** The profile's type: a thing's Money tab lists every linked expense, a person's only what they own. */
+  profileType?: string | null;
   /** Exact DB-side entry count when known (head-only count query); falls back to embedded count. */
   trackerEntriesExactTotal?: number;
 }) {
@@ -650,7 +653,7 @@ export function capProfileDetailLists(input: {
   // strict-ownership rule (linkedProfiles[0] === profileId).
   const relatedExpensesTotal = relatedExpenses.length;
   const relatedExpensesSum = sumExpenses(relatedExpenses);
-  const ownedRows = relatedExpenses.filter(e => Array.isArray(e.linkedProfiles) && e.linkedProfiles[0] === profileId);
+  const ownedRows = relatedExpenses.filter(e => expenseShownOnProfile(e, profileId, input.profileType ?? "person"));
   const relatedExpensesOwnedSum = sumExpenses(ownedRows);
   const relatedExpensesOwnedCount = ownedRows.length;
   const cappedExpenses = relatedExpensesTotal <= C.expenses
@@ -1945,6 +1948,7 @@ export class SupabaseStorage implements IStorage {
     const capped = capProfileDetailLists({
       relatedTrackers, relatedExpenses, relatedEvents, relatedDocuments, relatedJournal, timeline,
       profileId: id,
+      profileType: profile.type,
       trackerEntriesExactTotal: trackerEntriesExactTotal as number,
     });
     return { ...profile, ...capped, relatedTasks, relatedObligations, relatedHabits, childProfiles, ownedAssetExpenses } as any;

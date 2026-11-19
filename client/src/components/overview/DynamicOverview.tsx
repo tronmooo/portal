@@ -46,7 +46,8 @@ function formatValue(v: OverviewValue): string {
       return typeof raw === "number" ? `${formatMoneyCompact(raw)}/mo` : String(raw);
     case "percent": {
       const n = typeof raw === "number" ? raw : Number(String(raw).replace(/[^0-9.-]/g, ""));
-      return Number.isFinite(n) ? `${Math.round(n * 10) / 10}%` : String(raw);
+      // Two decimals: 6.25% is a different loan from 6.3%.
+      return Number.isFinite(n) ? `${Math.round(n * 100) / 100}%` : String(raw);
     }
     case "number":
       return typeof raw === "number" ? raw.toLocaleString() : String(raw);
@@ -671,6 +672,31 @@ export function DynamicOverview({
       return res.json();
     },
     staleTime: 0,
+    retry: false,
+  });
+
+  // The read above answers at once from the stored fields. When the server
+  // says a refined layout is still pending (the profile gained or lost a
+  // field), fetch it here and swap it in when it lands. The Overview used to
+  // WAIT for that layout, so an edit that added a field looked unsaved until
+  // a reload.
+  const layoutPending = spec?.layoutPending === true;
+  const layoutFor = spec?.meta?.composedAt;
+  useQuery<OverviewSpec>({
+    queryKey: ["/api/profiles", profileId, "overview", "layout", layoutFor],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/profiles/${profileId}/overview?layout=wait`);
+      const refined: OverviewSpec = await res.json();
+      // Only if nothing newer replaced the composition this layout was for.
+      const current = queryClient.getQueryData<OverviewSpec>(["/api/profiles", profileId, "overview"]);
+      if (refined?.identity && current?.meta?.composedAt === layoutFor) {
+        queryClient.setQueryData(["/api/profiles", profileId, "overview"], refined);
+      }
+      return refined;
+    },
+    enabled: layoutPending && !!layoutFor,
+    staleTime: Infinity,
+    gcTime: 0,
     retry: false,
   });
 

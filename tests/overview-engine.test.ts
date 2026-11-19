@@ -121,3 +121,39 @@ describe("schema hints are cached by shape, values never are", () => {
     expect(after?.identity.headline?.value).toBe(360000);
   });
 });
+
+// 2026-11-19 (owner report): the Overview didn't show an edit until the page
+// was reloaded. An edit that adds a field changes the layout signature, and
+// the Overview read then WAITED for a model call before answering. The page
+// read is now deferred: values at once, layout fetched separately.
+describe("the page's Overview read never waits for the layout model", () => {
+  it("answers from the stored fields and says a layout is pending", async () => {
+    const had = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "test-key-not-used";
+    try {
+      const storage = fakeStorage();
+      const started = Date.now();
+      const spec = await buildOverviewSpec(storage, "house", { deferModel: true });
+      expect(spec).toBeTruthy();
+      expect(spec!.layoutPending).toBe(true);
+      // The values are the stored ones, composed now.
+      expect(JSON.stringify(spec)).toContain("345000");
+      // No model round trip: nothing was cached, and it returned at once.
+      expect(storage.setPreference).not.toHaveBeenCalled();
+      expect(Date.now() - started).toBeLessThan(1000);
+    } finally {
+      if (had === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = had;
+    }
+  });
+
+  it("nothing is pending when no layout model is configured", async () => {
+    const had = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const spec = await buildOverviewSpec(fakeStorage(), "house", { deferModel: true });
+      expect(spec!.layoutPending).toBeUndefined();
+    } finally {
+      if (had !== undefined) process.env.ANTHROPIC_API_KEY = had;
+    }
+  });
+});

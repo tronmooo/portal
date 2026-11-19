@@ -192,7 +192,7 @@ import { resolveCanonicalActivity, redirectWorkoutLog } from "@shared/canonical-
 import { classifyEntity, isValidTrackerCategory, normalizeEntityName, resolveTrackerCategory, categoryNeedsResolution, coerceProfileType } from "@shared/entity-classify";
 import { canonicalizeProfileFields, canonicalFieldKey, sweepRedundantAliases, looselyEqual } from "@shared/profile-field-canon";
 import { checkProfileRename, checkProfileTypeChange, PROFILE_TYPES } from "@shared/profile-rename";
-import { readProfileFieldValue } from "@shared/profile-field-identity";
+import { readProfileFieldValue, fieldIdentity } from "@shared/profile-field-identity";
 import { buildFieldReceipt, formatFieldReceiptText, composeReceiptReply } from "@shared/field-receipt";
 import { verifyProfileWrite } from "./profile-write-verify";
 import { cascadeProfileRename } from "./profile-rename-cascade";
@@ -224,12 +224,13 @@ import { signedPrincipal, retractPaymentOfExpense, payBillOccurrence, unpayBillO
 import { habitDayProgress, latestCheckinOn, checkinAtPosition } from "@shared/habit-progress";
 import { addMonthsClamped, addYearsClamped, addMonthsISO, weekdaySetFor, weekdaySetToRecurrence } from "@shared/date-math";
 import { groupMaterializedSeries, stemKey } from "@shared/series-detect";
-import { expenseAttributionName } from "@shared/expense-attribution";
+import { expenseAttributionName, thingNamedInSpend } from "@shared/expense-attribution";
+import { recordProfileEdit } from "./profile-history";
 import { computeAiSensitiveStripKeys, deepStripKeys } from "./ai-summary-sanitizer";
-import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue } from "@shared/asset-value";
+import { resolveLiabilityBalance as sharedLiabilityBalance, resolveAssetValue as sharedAssetValue, isAssetTabProfile } from "@shared/asset-value";
 import { resolveAnnualRate as sharedAnnualRate } from "@shared/liability-calc";
-import { readMonthlyPayment as sharedReadMonthlyPayment, statedRatePct } from "@shared/liability-fields";
-import { isRecurringBill as sharedIsRecurringBill } from "@shared/liability-types";
+import { readMonthlyPayment as sharedReadMonthlyPayment, readBalance as sharedReadBalance, liabilityReceiptFields } from "@shared/liability-fields";
+import { isRecurringBill as sharedIsRecurringBill, isRecurringBillProfile } from "@shared/liability-types";
 import { liabilityBillStatus as sharedBillStatus } from "@shared/liability-status";
 import { getRecordTemporalStatus as sharedTemporalStatus } from "@shared/temporal-status";
 import { deriveLiabilityMetrics as sharedDeriveLiabilityMetrics } from "@shared/liability-derived";
@@ -3840,7 +3841,7 @@ export const TOOL_DEFINITIONS: Anthropic.Messages.Tool[] = [
   // --- CRUD: Profiles ---
   {
     name: "create_profile",
-    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty (subtype auto-detected: high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable). Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday.\n\n*** DO NOT use type:'loan' OR create profiles for debts/loans/credit cards/mortgages/student loans/HELOC/BNPL/IRS debt with this tool. Use the dedicated `create_liability` tool instead — it sets the correct subtype, structured fields, and unlocks the Payments/Payoff/Schedule/Linked/Docs/Activity tabs. The 'loan' type here is LEGACY and must not be used for new entries. ***\n\nIMPORTANT: When creating a vehicle, asset, subscription, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.\n\nNAMING: Do NOT put the owner's name in the profile `name`. Name the entity itself — 'Ford F250 2025', NOT 'Craig's Ford F250 2025'; 'Honda Civic', NOT \"Bob's Honda Civic\". Ownership belongs in forProfile, never in the name.",
+    description: "Create a new profile. Choose the right type and include entity-specific fields. Pet: breed, species, color, birthday, weight. Vehicle: make, model, year, VIN, mileage, color. Property: address, type, sqft, bedrooms. Asset: brand, model, purchaseDate, purchasePrice, serialNumber, warranty (subtype auto-detected: high_value_item, bank_account, credit_card, digital_asset, business, collectible, loan_receivable). Subscription: provider, plan, cost, renewalDate. Medical: specialty, clinic, phone. Person: phone, email, relationship, birthday.\n\n*** DO NOT use type:'loan' OR create profiles for debts/loans/credit cards/mortgages/student loans/HELOC/BNPL/IRS debt with this tool. Use the dedicated `create_liability` tool instead — it sets the correct subtype, structured fields, and unlocks the Payments/Payoff/Schedule/Linked/Docs/Activity tabs. The 'loan' type here is LEGACY and must not be used for new entries. ***\n\nIMPORTANT: When creating a vehicle, asset, subscription, investment, account, or property FOR a specific person (e.g. \"Bob Johnson's Honda\"), set forProfile to that person's name so the asset is linked as their child profile.\n\nNAMING: Keep the words the user used for the thing, including what kind of thing it is: 'Sony WH-1000XM5 headphones', NOT 'Sony WH-1000XM5'; 'Goodyear tires', NOT 'Goodyear'. Do NOT put the owner's name in the profile `name`. Name the entity itself — 'Ford F250 2025', NOT 'Craig's Ford F250 2025'; 'Honda Civic', NOT \"Bob's Honda Civic\". Ownership belongs in forProfile, never in the name.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -4242,7 +4243,7 @@ RULES: Always include at least 2 fields. Use select type with options in parenth
         creditLimit: { type: "number", description: "Credit limit (credit_card / heloc only). Used to compute utilization on the Overview tab." },
         remainingTermMonths: { type: "number", description: "Months remaining on a fixed-term loan. Omit for revolving (credit_card)." },
         firstPaymentDate: { type: "string", description: "YYYY-MM-DD of the first scheduled payment." },
-        dueDay: { type: "number", description: "Day-of-month the payment is due (1-31). Drives auto-generated calendar reminders." },
+        dueDay: { type: "number", description: "Day-of-month the payment is due (1-31). The loan appears on the calendar from this." },
         lender: { type: "string", description: "Lender / bank / servicer name. e.g. 'Chase', 'Sallie Mae', 'Wells Fargo', 'Affirm', 'IRS'." },
         accountNumberLast4: { type: "string", description: "Last 4 digits of the account/loan number (NEVER store the full number)." },
         // Mortgage-specific
@@ -6441,7 +6442,7 @@ CONFIRMATION IS FOR DELETES (and the bulk/merge previews below) — NOTHING ELSE
 - Example success: "✅ Marked Joe's Water habit done for today (April 9). His streak is now 3 days."
 - Example failure: "❌ Couldn't find a task called 'stretching' for Joe. Do you want to check all his tasks?"
 - VERIFICATION (NEVER claim an unverified write): every write tool result carries "success". success:false means the write was read back from the database and was NOT there — the data was NOT saved. Say plainly that it failed and invite them to retry; NEVER say "logged", "saved", "done", or restate the value as if it were stored. This applies to tracker logs exactly like everything else: "logged 24 oz" on a success:false result is a lie about the user's data. Write tools also return a "verification" object; database_record_exists:false after a create/update means the same thing. After a delete, database_record_exists:false means the delete IS confirmed.
-- PROFILE/ASSET SAVE CONFIRMATION: after update_profile or create_profile the server writes the confirmation itself from "fieldReceipt" (a FRESH database read after the write): a ✓/✗ line per field and where it was saved. Do NOT restate the fields, the record name or "Saved to" — it would be dropped as a duplicate. Reply with NOTHING about the update unless something else needs saying (an answer to a question in the same message, another action you took, or a field that did not save and what to do about it).
+- PROFILE/ASSET/DEBT SAVE CONFIRMATION: after update_profile, create_profile, create_liability or update_liability the server writes the confirmation itself from "fieldReceipt" (a FRESH database read after the write): a ✓/✗ line per field and where it was saved. Do NOT restate the fields, the record name or "Saved to" — it would be dropped as a duplicate. Reply with NOTHING about the update unless something else needs saying (an answer to a question in the same message, another action you took, or a field that did not save and what to do about it).
   Facts about something the user ALREADY has (their car, house, pet) go to update_profile on THAT record — check the profiles in context first and never create_profile a second car. Every stated fact gets a structured field key (color, mileage, drivetrain, vin, licensePlate, trim, …); a fact with no standard key still gets a descriptive camelCase field — never fold it into notes or drop it.
 - READING A SAVED FACT: "how many miles are on my car?" is answered from the record as it is stored NOW (the profile data in context or get_profile_data), never from what was said earlier in this chat.
 - verification.duplicate_count is DIAGNOSTIC ONLY — never mention it. Duplicates are allowed, and the user logging groceries twice does not need to be told they logged groceries before. Do NOT block, merge, delete, or narrate a "similar entry" note, and NEVER describe when an earlier entry was made ("from today", "yesterday") — the count carries no dates and guessing one states a falsehood about the user's data.
@@ -6561,10 +6562,10 @@ PAYMENT HISTORY EDITS / UNDO:
 CROSS-PROFILE LIABILITY ASSIGNMENT:
 - "My wife's car loan with Toyota for $25k at 5%" → create_liability(name:"Wife's Toyota Loan", subtype:"auto_loan", lender:"Toyota", currentBalance:25000, annualRate:5, forProfile:"Wife"). The liability nests under the Wife profile.
 - "Add a $4,500 medical bill for my dad with $150 monthly payments" → create_liability(subtype:"medical_debt", currentBalance:4500, monthlyPayment:150, forProfile:"Dad").
-- "The fridge financing is due on the 12th every month, $80/month, $960 total via Synchrony" → create_liability(name:"Fridge Financing", subtype:"bnpl" (or "other"), lender:"Synchrony", currentBalance:960, monthlyPayment:80, dueDay:12, linkAssetName:"Fridge"). The dueDay puts the payment on the calendar from the liability itself — never also call create_obligation for it.
+- "The fridge financing is due on the 12th every month, $80/month, $960 total via Synchrony" → create_liability(name:"Fridge Financing", subtype:"bnpl" (or "other"), lender:"Synchrony", currentBalance:960, monthlyPayment:80, dueDay:12, linkAssetName:"Fridge"). The loan itself shows on the calendar from its dueDay — never also call create_obligation for the same debt.
 - "Jane and I both share this credit card debt" → after create_liability, call link_liability_owner(liability, "Me", 50, "owner") AND link_liability_owner(liability, "Jane", 50, "owner").
 
-DUE DAY → CALENDAR: Always pass dueDay (1-31) on create_liability when the user mentions "due on the Xth" or implies a monthly due date. The liability itself then shows its payment on the calendar. ONE debt = ONE record: NEVER also call create_obligation for a loan\'s or card\'s monthly payment ("<name> payment") — the payment amount and due day are fields of the liability.
+DUE DAY → CALENDAR: Always pass dueDay (1-31) on create_liability when the user mentions "due on the Xth" or implies a monthly due date. The loan's own schedule surfaces the payment on the calendar; ONE create_liability call is the whole job — do NOT also create an obligation or bill for its payment.
 
 REFINANCE / RESTRUCTURE:
 - "I refinanced my mortgage at 5.5%, new balance is $410k, 30 years" → update_liability(name:"mortgage", changes:{annualRate:5.5, currentBalance:410000, originalBalance:410000, termMonths:360}, refinance:true).
@@ -7517,6 +7518,18 @@ export function computeDocProfileLinks(
   return cur.filter(id => !ids.includes(id)); // unlink
 }
 
+/**
+ * The tags a create may carry: what the model passed, but only when the
+ * user's own words ask for tagging ("tag it …", "with the tag …", "#audio").
+ * With no user message (a programmatic caller) the tags are the caller's.
+ */
+export function tagsTheUserAskedFor(tags: unknown, userMessage: unknown): string[] {
+  const list = Array.isArray(tags) ? tags.filter((t): t is string => typeof t === "string" && t.trim() !== "") : [];
+  if (list.length === 0) return [];
+  if (typeof userMessage !== "string" || userMessage.trim() === "") return list;
+  return /\btag(s|ged|ging)?\b|\blabel(s|ed|led)?\b|(^|\s)#[a-z]\w*/i.test(userMessage) ? list : [];
+}
+
 export async function executeTool(name: string, input: any, userId?: string): Promise<any> {
   try {
     return await executeToolInner(name, input, userId);
@@ -8053,7 +8066,10 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         type: resolvedProfileType,
         name: input.name,
         fields: finalFields,
-        tags: input.tags || [],
+        // Tags are the user's own labels: kept only when they asked for one.
+        // The schema offers `tags`, so the model filled it in on its own
+        // ("electronics", "audio") for an asset nobody asked to tag.
+        tags: tagsTheUserAskedFor(input.tags, (input as any).__userMessage),
         notes: input.notes || "",
         parentProfileId,
       }, "profile");
@@ -8333,6 +8349,8 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       }
 
       const updated = await storage.updateProfile(profile.id, changes);
+      // History tab: what this chat edit changed (server/profile-history).
+      await recordProfileEdit(storage, userId || (storage as any).userId, profile, updated, "chat");
       // Carry the new name into the titles this app GENERATED from the old one
       // ("Morning Run - Bob QA", "🎂 Bob QA's Birthday"). Best-effort: a
       // rename that landed is never reported as failed because a derived title
@@ -10000,9 +10018,9 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
           return { error: `That liability ends (${endish}) before it starts (${startish}) — nothing was created. Check the dates and try again.` };
         }
       }
-      // The canonical `interestRate` is stored as a PERCENT (6.25), whichever
-      // form the model passed (0.0625 or 6.25) — shared/profile-field-canon.
-      const rate = statedRatePct(input.annualRate, (input as any).__userMessage);
+      // Normalize annualRate (accept either decimal 0.065 or percent 6.5)
+      let rate = Number(input.annualRate);
+      if (!isNaN(rate) && rate > 1) rate = rate / 100;
       // Auto-infer subtype if the model omitted it (safety net for NLP coverage).
       // Order matters: most-specific patterns first.
       if (!input.subtype) {
@@ -10082,11 +10100,13 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
         (p.type === "liability" || p.type === "loan") &&
         (parentProfileId ? p.parentProfileId === parentProfileId : true)
       );
-      let fields: Record<string, any> = {};
+      const fields: Record<string, any> = {};
       if (input.currentBalance != null) fields.currentBalance = Number(input.currentBalance);
       if (input.originalBalance != null) fields.originalBalance = Number(input.originalBalance);
       else if (input.currentBalance != null) fields.originalBalance = Number(input.currentBalance);
-      if (rate != null) fields.interestRate = rate;
+      // Stored as a PERCENT under the canonical key (shared/profile-field-canon):
+      // a decimal here printed as "0.1%" wherever the stored value is shown as-is.
+      if (!isNaN(rate)) fields.interestRate = Math.round(rate * 100 * 1e6) / 1e6;
       if (input.monthlyPayment != null) fields.monthlyPayment = Number(input.monthlyPayment);
       if (input.minimumPayment != null) fields.minimumPayment = Number(input.minimumPayment);
       if (input.creditLimit != null) fields.creditLimit = Number(input.creditLimit);
@@ -10107,9 +10127,6 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (input.pslfEligible != null) fields.pslfEligible = !!input.pslfEligible;
       if (input.idrPlan) fields.idrPlan = input.idrPlan;
       if (input.forgivenessDate) fields.forgivenessDate = input.forgivenessDate;
-      // Canonical keys (balance, interestRate…), so re-creating an existing
-      // liability updates its values instead of leaving them shadowed.
-      fields = canonicalizeProfileFields(fields, existing?.fields).fields;
 
       let liability: any;
       if (existing) {
@@ -10370,13 +10387,13 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (suggestedAssetLink && liability) {
         (liability as any).suggestedAssetLink = suggestedAssetLink;
       }
-      // ONE debt = ONE liability. This used to also create a "<name> payment"
-      // recurring bill so the payment reached the calendar. A liability is its
-      // own bill now (its payment day + monthly payment generate the schedule,
-      // see shared/liability-schedule `deriveScheduleFields`), so that second
-      // record was a duplicate: "Wells Fargo Mortgage" and a separate "Wells
-      // Fargo Mortgage payment" in the list, with the payment counted twice on
-      // the calendar (2026-11-18). The payment lives on the loan's own profile.
+      // ONE COMMAND = ONE RECORD. This used to also create a "<name> payment"
+      // bill whenever a monthly payment and a due day were given, so "add my
+      // Wells Fargo mortgage, $2,155/mo due the 1st" produced the mortgage AND
+      // a second liability called "Wells Fargo Mortgage payment" (General).
+      // The loan itself carries its payment and due day, and the calendar and
+      // bills readers derive its schedule from those (seriesFromLiabilityProfiles,
+      // getLiabilitySchedule) — a second record only double-counts the payment.
       return { result: liability, actions: [{ type: "create", category: "liability", data: liability }] };
     }
 
@@ -10393,43 +10410,45 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
       if (ch.currentBalance != null && Number(ch.currentBalance) < 0) {
         return { error: `Cannot set a negative balance ($${ch.currentBalance}). If you overpaid and want to track a credit, set the balance to 0 and log a 'reversal' payment for the credit amount instead.` };
       }
+      // The rate is stored as a PERCENT (6.25) under the canonical key. The
+      // model may pass a percent (5.5) or a fraction (0.055); a value of 1 or
+      // less is read as a fraction, as normalizeAnnualRate does everywhere.
+      for (const rateKey of ["annualRate", "annualInterestRate", "interestRate", "apr"]) {
+        if (ch[rateKey] == null) continue;
+        const r = Number(ch[rateKey]);
+        if (isNaN(r)) continue;
+        ch[rateKey] = Math.round((r > 1 ? r : r * 100) * 1e6) / 1e6;
+      }
       const updates: any = {};
       if (ch.subtype) updates.type_key = ch.subtype;
-      // Every change lands on the record's CANONICAL key (balance,
-      // interestRate, monthlyPayment…). Writing the tool's own spelling
-      // (`currentBalance`, `annualInterestRate`) beside the canonical value
-      // left the old one in place — the storage fold never overwrites a
-      // differing canonical value — so "refinanced to 5.5% on $305,000" was
-      // confirmed and the record still read 6.25% / $311,172 (2026-11-18).
-      const rawChanges: Record<string, any> = {};
+      const newFields = { ...(target.fields || {}) };
+      // A change REPLACES the stored value of that field, whatever spelling
+      // either side uses. Writing `annualInterestRate` / `currentBalance`
+      // beside the stored canonical `interestRate` / `balance` made the
+      // storage fold keep the OLD value and park the new one as stale — the
+      // chat said "refinanced" while the APR and balance never moved.
+      const setField = (key: string, value: unknown) => {
+        const canon = canonicalFieldKey(key);
+        const id = fieldIdentity(canon);
+        for (const existing of Object.keys(newFields)) {
+          if (existing !== canon && !existing.startsWith("_") && fieldIdentity(existing) === id) delete newFields[existing];
+        }
+        newFields[canon] = value;
+      };
+      // Apply all field changes
       for (const [k, v] of Object.entries(ch)) {
         if (k === "subtype") continue;
-        rawChanges[k] = v;
+        setField(k, v);
       }
-      const rateKey = Object.keys(rawChanges).find((k) => canonicalFieldKey(k) === "interestRate");
-      if (rateKey) {
-        const pct = statedRatePct(rawChanges[rateKey], (input as any).__userMessage);
-        delete rawChanges[rateKey];
-        if (pct != null) rawChanges.interestRate = pct;
-      }
-      const canonChanges = canonicalizeProfileFields(rawChanges, target.fields).fields;
-      const newFields: Record<string, any> = { ...(target.fields || {}) };
-      Object.assign(newFields, canonChanges);
-      // Every other spelling of a changed key already on the record takes the
-      // new value too, so no stale copy can disagree with (and shadow) it; the
-      // storage fold then drops the now-equal duplicates.
-      for (const existingKey of Object.keys(newFields)) {
-        const ck = canonicalFieldKey(existingKey);
-        if (ck !== existingKey && ck in canonChanges) newFields[existingKey] = canonChanges[ck];
-      }
-      // Refinance: the debt restarts at the new balance.
+      // Refinance flow: the new loan starts at the new balance.
       if (input.refinance) {
-        const newBal = sharedLiabilityBalance(newFields);
-        if (canonChanges.originalBalance == null && newBal > 0) newFields.originalBalance = newBal;
+        if (ch.originalBalance == null) setField("originalBalance", sharedReadBalance(newFields));
         newFields.refinancedAt = new Date().toLocaleDateString('en-CA', { timeZone: aiUserTimezone() });
       }
       updates.fields = newFields;
       const updated = await storage.updateProfile(target.id, updates as any);
+      // History tab: what this chat edit changed (server/profile-history).
+      await recordProfileEdit(storage, userId || (storage as any).userId, target, updated, "chat");
       return { result: updated, actions: [{ type: "update", category: "liability", data: updated }] };
     }
 
@@ -11043,6 +11062,21 @@ async function executeToolInner(name: string, input: any, userId?: string): Prom
             expenseLinkedProfiles.push(target2.id);
             logger.info("ai", `Attribution safety net: recovered forProfile "${target2.name}" for $${parsedAmount} expense from message context`);
           }
+        }
+      }
+      // A THING NAMED OUTRIGHT (shared/expense-attribution thingNamedInSpend):
+      // "$40 on ear pads for my Sony WH-1000XM5" is spent on that asset even
+      // when the model left forProfile off. Only an existing asset whose full
+      // name is in the user's words or the expense's own text, and only one.
+      if (expenseLinkedProfiles.length === 0) {
+        const things = (await storage.getProfiles()).filter((p: any) => isAssetTabProfile(p));
+        const named = thingNamedInSpend(
+          `${String((input as any).__userMessage || "")} . ${input.description || ""} . ${input.vendor || ""}`,
+          things as any[],
+        );
+        if (named) {
+          expenseLinkedProfiles.push(named.id);
+          logger.info("ai", `Expense attribution: "${(named as any).name}" is named in the spend, linking the $${parsedAmount} expense to it`);
         }
       }
       // Default the expense date to today in the user's timezone, not
@@ -17935,6 +17969,33 @@ Respond with strict JSON only: {"indices":[0,3], "reason":"..."} — no prose, n
               }
             } catch (e: any) {
               logger.warn("ai", `[field-receipt] create_profile verify skipped: ${e?.message || e}`);
+            }
+          }
+          // The same save → read back → confirm for a DEBT. Its confirmation
+          // used to be the model's own sentence, which is how a 22.9% APR was
+          // reported as 22.99% and a refinance was announced that never
+          // landed: the reply is now built from what the record holds.
+          if ((toolUse.name === "create_liability" || toolUse.name === "update_liability") && result && !(result as any).error && (result as any).id && !(result as any).fieldReceipt
+              // Only a debt record: a "liability" that was redirected to a
+              // recurring bill stores its amount under the bill's own keys.
+              && ["liability", "loan"].includes(String((result as any).type || "")) && !isRecurringBillProfile(result as any)) {
+            try {
+              const asked = liabilityReceiptFields(toolUse.name, inputWithCtx as any);
+              if (Object.keys(asked).length > 0) {
+                const { receipt, readBack } = await verifyProfileWrite(storage as any, {
+                  profileId: (result as any).id,
+                  profileName: (result as any).name || String((inputWithCtx as any).name || ""),
+                  profileType: "liability",
+                  requestedFields: asked,
+                  action: toolUse.name === "create_liability" && (result as any).deduped !== true ? "created" : "updated",
+                });
+                if (readBack) {
+                  (result as any).fieldReceipt = receipt;
+                  (result as any).receiptText = formatFieldReceiptText(receipt);
+                }
+              }
+            } catch (e: any) {
+              logger.warn("ai", `[field-receipt] ${toolUse.name} verify skipped: ${e?.message || e}`);
             }
           }
           // A tool that DEDUPED did not create anything — it found the record

@@ -92,10 +92,57 @@ export function formatMoneyCompact(n: number | null | undefined): string {
  */
 export function parseLocalDate(input: string | Date | null | undefined): Date | null {
   if (!input) return null;
+  if (typeof input === "string") {
+    // A partial date is a calendar value too: "2024" parsed as an instant is
+    // UTC Jan 1, which rendered as "Dec 31, 2023" west of Greenwich.
+    const partial = partialDateParts(input);
+    if (partial) return new Date(partial.year, (partial.month ?? 1) - 1, 1);
+  }
   const d = typeof input === "string"
     ? new Date(input.length === 10 ? input + "T00:00:00" : input)
     : input;
   return isNaN(d.getTime()) ? null : d;
+}
+
+/** "2024" → {year}; "2024-03" → {year, month}. null for a full date or anything else. */
+export function partialDateParts(input: unknown): { year: number; month?: number } | null {
+  const m = typeof input === "string" ? /^(\d{4})(?:-(\d{2}))?$/.exec(input.trim()) : null;
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = m[2] ? Number(m[2]) : undefined;
+  if (year < 1000 || (month != null && (month < 1 || month > 12))) return null;
+  return month != null ? { year, month } : { year };
+}
+
+/** A bare calendar day ("2026-11-18"): a date with no time and no zone. */
+export function isDateOnly(input: unknown): input is string {
+  return typeof input === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input);
+}
+
+/**
+ * The stamp an activity row carries for a raw record date. A calendar day
+ * stays a calendar day; anything else becomes an ISO instant. Converting a
+ * day through `new Date(day).toISOString()` made it UTC midnight, which is
+ * the PREVIOUS evening west of Greenwich: a Nov 18 payment listed as Nov 17.
+ */
+export function timelineStamp(raw: string | number | Date | null | undefined): string {
+  if (isDateOnly(raw)) return raw;
+  const d = raw == null || (typeof raw === "string" && raw === "") ? new Date() : new Date(raw);
+  return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+}
+
+/** The instant an activity stamp sorts and groups by: local midnight for a calendar day. */
+export function timelineInstant(stamp: string | null | undefined): Date {
+  return (isDateOnly(stamp) ? parseLocalDate(stamp) : null) ?? new Date(stamp || "");
+}
+
+/** "Nov 18" for a calendar day (it has no time of day); "Nov 18, 02:30 PM" for an instant. */
+export function formatTimelineStamp(stamp: string | null | undefined): string {
+  const d = timelineInstant(stamp);
+  if (isNaN(d.getTime())) return "";
+  return isDateOnly(stamp)
+    ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : d.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 /**
@@ -109,6 +156,9 @@ export function formatFullDate(
 ): string {
   const d = parseLocalDate(input);
   if (!d) return empty;
+  // Show the precision that was entered: a year is a year, not "Jan 1".
+  const partial = partialDateParts(input);
+  if (partial) return partial.month != null ? dateFormat({ month: "short", year: "numeric" }).format(d) : String(partial.year);
   return dateFormat({ month: "short", day: "numeric", year: "numeric" }).format(d);
 }
 
